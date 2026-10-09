@@ -1300,6 +1300,10 @@ test.describe("run history import", () => {
       await bad({ run: [] }, /run must be an object/);
       await bad({ run: { status: "Done" } }, /run\.status/);
       await bad({ run: { startedAt: "not a date" } }, /run\.startedAt/);
+      // Date.parse alone would read "1" as the year 2001.
+      await bad({ run: { startedAt: "1" } }, /run\.startedAt/);
+      await bad({ run: { endedAt: "2024-13-45" } }, /run\.endedAt/);
+      await bad({ results: [{ testcaseId: caseIds[0], executedAt: "2024" }] }, /executedAt/);
       await bad({ run: { createdAt: null } }, /createdAt cannot be null/);
       await bad({ run: { timeSpentMs: -1 } }, /timeSpentMs/);
       await bad({ run: { timeSpentMs: 1.5 } }, /timeSpentMs/);

@@ -5388,7 +5388,7 @@ export class LegacyService implements OnModuleInit {
   // Extracted for the same reason as insertTestCaseWithClient above — lets a multi-row Zyra
   // review-batch save run several updates atomically with each other (and with any creates in the
   // same batch) against one shared client, instead of one transaction per row.
-  private async updateTestCaseWithClient(client: PoolClient, projectId: string, id: string, uid: string, body: Body) {
+  private async updateTestCaseWithClient(client: PoolClient, projectId: string, id: string, uid: string, body: Body, newExternalId: string | null = null) {
     /*
      * jiraIssueKey/jiraUrl and linearIssueKey/linearUrl were COALESCE-only, like every other field
      * here — but unlike the rest, there was genuinely no way to ever clear them: `body.jiraIssueKey
@@ -5421,7 +5421,7 @@ export class LegacyService implements OnModuleInit {
        notion_url=CASE WHEN $33::boolean THEN NULL ELSE COALESCE($32,notion_url) END,
        attachments=COALESCE($25,attachments), updated_by=$26,
        estimated_duration=COALESCE($27,estimated_duration),
-       source_refs=COALESCE($28::jsonb,source_refs), updated_at=now()
+       source_refs=COALESCE($28::jsonb,source_refs), external_id=COALESCE($34,external_id), updated_at=now()
        WHERE id=$1 AND deleted_at IS NULL
        RETURNING *`,
       [
@@ -5461,7 +5461,8 @@ export class LegacyService implements OnModuleInit {
         clearsLinear,
         body.notionPageId ?? null,
         body.notionUrl ?? null,
-        clearsNotion
+        clearsNotion,
+        newExternalId
       ]
     );
     const row = res.rows[0];
@@ -5485,13 +5486,15 @@ export class LegacyService implements OnModuleInit {
    * check is case-insensitive and also sees soft-deleted rows (they still hold their id). Any
    * non-blank, whitespace-free value is accepted (length is bounded by assertTestcaseFieldLengths),
    * which is what lets a bulk renumber park cases on a scratch id first, since the index is not
-   * deferrable. Run snapshots carry a copy of the id, so they follow it.
+   * deferrable. Only checks and returns the new id: updateTestCaseWithClient writes it in the same
+   * UPDATE as the rest of the edit, so the version trigger records one snapshot, attributed to the
+   * editor. The caller updates the run snapshots, which carry a copy of the id.
    */
-  private async changeTestCaseExternalId(client: PoolClient, projectId: string, id: string, current: string, raw: unknown): Promise<void> {
-    if (raw === undefined) return;
+  private async checkTestCaseExternalIdChange(client: PoolClient, projectId: string, id: string, current: string, raw: unknown): Promise<string | null> {
+    if (raw === undefined) return null;
     const next = typeof raw === "string" ? raw.trim() : "";
     if (!next || /\s/.test(next)) throw new BadRequestException({ error: "Test case ID must be a non-empty value without spaces" });
-    if (next === current) return;
+    if (next === current) return null;
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`testcase-external-id:${projectId}`]);
     const taken = await client.query("SELECT 1 FROM testcases WHERE project_id = $1 AND lower(external_id) = lower($2) AND id <> $3 LIMIT 1", [
       projectId,
@@ -5499,8 +5502,7 @@ export class LegacyService implements OnModuleInit {
       id
     ]);
     if (taken.rows[0]) throw new ConflictException({ error: `Test case ID ${next} is already used in this project` });
-    await client.query("UPDATE testcases SET external_id = $2 WHERE id = $1", [id, next]);
-    await client.query("UPDATE cycle_items SET snapshot_external_id = $2 WHERE testcase_id = $1", [id, next]);
+    return next;
   }
 
   async updateTestCase(id: string, actorId: string | null | undefined, body: Body) {
@@ -5511,8 +5513,10 @@ export class LegacyService implements OnModuleInit {
     if (!before.rows[0]) throw new NotFoundException({ error: "Test case not found" });
     const projectId = before.rows[0].project_id;
     const after = await this.db.transaction(async (client) => {
-      await this.changeTestCaseExternalId(client, projectId, id, before.rows[0].external_id, body.externalId);
-      return this.updateTestCaseWithClient(client, projectId, id, uid, body);
+      const newExternalId = await this.checkTestCaseExternalIdChange(client, projectId, id, before.rows[0].external_id, body.externalId);
+      const row = await this.updateTestCaseWithClient(client, projectId, id, uid, body, newExternalId);
+      if (newExternalId) await client.query("UPDATE cycle_items SET snapshot_external_id = $2 WHERE testcase_id = $1", [id, newExternalId]);
+      return row;
     });
     await this.logProjectActivity(projectId, uid, "testcase_updated", "testcase", id, `${after?.external_id} - ${after?.title}`, {
       before: toCamel(before.rows[0]),
@@ -6923,7 +6927,8 @@ export class LegacyService implements OnModuleInit {
   private static historyTimestamp(raw: unknown, label: string): string | null {
     if (raw === null) return null;
     const text = typeof raw === "string" ? raw.trim() : "";
-    const time = Date.parse(text);
+    // Date.parse alone is lenient ("1" reads as the year 2001), so the shape is checked first.
+    const time = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(text) ? Date.parse(text) : NaN;
     if (!text || Number.isNaN(time)) throw new BadRequestException({ error: `${label} must be an ISO 8601 date-time or null` });
     return new Date(time).toISOString();
   }

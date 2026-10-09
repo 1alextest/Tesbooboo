@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, request as newRequestContext, test } from "@playwright/test";
 import { env } from "../utils/env";
+import { dbControlAvailable, literal, scalar } from "../utils/psql";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 
@@ -2063,6 +2064,34 @@ test.describe("editing a test case ID", () => {
       const ok = await request.put(caseUrl(tc.id), { data: { externalId: edge }, failOnStatusCode: false });
       expect(ok.status(), await ok.text()).toBeLessThan(300);
       expect(await idOf(request, tc.id)).toBe(edge);
+    } finally {
+      await deleteCase(request, tc.id);
+    }
+  });
+
+  test("an ID edit leaves exactly one history snapshot of the case as it was, not two", async ({ request }) => {
+    test.skip(!dbControlAvailable(), "needs psql access to read testcase_versions");
+    const p = `Z${Date.now()}`;
+    const tc = await createCase(request, { title: `E2E ID History ${p}` });
+    try {
+      const put = await request.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-3`, title: `E2E ID History ${p} edited` } });
+      expect(put.ok(), await put.text()).toBeTruthy();
+      const rows = scalar(`SELECT count(*) || ':' || count(*) FILTER (WHERE snapshot->>'external_id' = ${literal(tc.externalId)} AND snapshot->>'title' = ${literal(`E2E ID History ${p}`)}) FROM testcase_versions WHERE testcase_id = ${literal(tc.id)};`);
+      // One snapshot, holding the case as it was before the edit (old id AND old title).
+      expect(rows).toBe("1:1");
+    } finally {
+      await deleteCase(request, tc.id);
+    }
+  });
+
+  test("an ID edit on its own (nothing else sent) is also a single snapshot", async ({ request }) => {
+    test.skip(!dbControlAvailable(), "needs psql access to read testcase_versions");
+    const p = `Z${Date.now()}`;
+    const tc = await createCase(request, { title: `E2E ID Only ${p}` });
+    try {
+      const put = await request.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-4` } });
+      expect(put.ok(), await put.text()).toBeTruthy();
+      expect(scalar(`SELECT count(*) FROM testcase_versions WHERE testcase_id = ${literal(tc.id)};`)).toBe("1");
     } finally {
       await deleteCase(request, tc.id);
     }
