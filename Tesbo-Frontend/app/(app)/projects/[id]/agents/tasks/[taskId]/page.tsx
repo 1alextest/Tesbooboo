@@ -38,6 +38,7 @@ import { SUITE_NAME_MAX_LENGTH, validateSuiteName } from "@/lib/validation";
 import { isMarkdownSource, renderMarkdown } from "@/lib/markdown";
 import { TechniqueBadges } from "@/components/agents/ZyraChatReviewPanel";
 import { ZyraSeverityBadge } from "@/components/agents/ZyraContextDrawer";
+import { sortActivitiesNewestFirst } from "@/components/agents/TaskQuickViewPanel";
 import { ZyraLanguageContext, zyraLanguage, zyraText } from "@/lib/zyra-i18n";
 import { formatDateTime } from "@/lib/date";
 import { useAppData } from "@/components/app/AppDataProvider";
@@ -914,8 +915,8 @@ export default function ZyraTaskDetailPage() {
 
       {activeTab === "activities" && (
         <Card className="p-4 space-y-3">
-          {task.activities.map((activity, index) => (
-            <div key={`${activity.title}-${index}`} className="rounded-lg border border-[var(--border)] p-3">
+          {sortActivitiesNewestFirst(task.activities).map(({ activity, index }) => (
+            <div key={`${activity.title}-${index}`} data-testid="task-activity-entry" className="rounded-lg border border-[var(--border)] p-3">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted-soft)]">{activity.actor} - {(activity.stage || "").replaceAll("_", " ")}</span>
                 <span className="text-[11px] text-[var(--muted-soft)]">{activity.createdAt ? formatDateTime(activity.createdAt, t.locale) : ""}</span>
