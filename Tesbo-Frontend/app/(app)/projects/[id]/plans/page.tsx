@@ -20,6 +20,8 @@ import {
   Card,
   EmptyStateBlock,
   PageLoader,
+  ListPagination,
+  useListPagination,
 } from "@/components/ui";
 import { PageHeader, ListWorkspaceLayout, Breadcrumbs } from "@/components/workflows";
 import { PlanCard, planStatus, type PlanStatus } from "@/components/testplans/PlanCard";
@@ -249,6 +251,8 @@ export default function PlansPage() {
     }
     return sorted;
   }, [plans, searchQuery, statusFilter, sortBy]);
+
+  const pagination = useListPagination(filteredPlans, `${searchQuery}|${statusFilter}|${sortBy}`);
 
   const hasActiveFilters = Boolean(searchQuery.trim() || statusFilter !== "all");
 
@@ -506,7 +510,7 @@ export default function PlansPage() {
                   : "mt-4 flex flex-col gap-3"
               }
             >
-              {filteredPlans.map((plan) => (
+              {pagination.pageItems.map((plan) => (
                 <PlanCard
                   key={plan.id}
                   plan={plan}
@@ -518,6 +522,17 @@ export default function PlansPage() {
               ))}
             </div>
           )}
+
+          <ListPagination
+            testId="plans-pagination"
+            noun="plans"
+            page={pagination.page}
+            pageSize={pagination.pageSize}
+            totalPages={pagination.totalPages}
+            totalItems={pagination.totalItems}
+            onPageChange={pagination.setPage}
+            onPageSizeChange={pagination.setPageSize}
+          />
         </>
       )}
     </ListWorkspaceLayout>

@@ -114,12 +114,17 @@ const MAX_PAGE_SIZE = 500;
 const BULK_NO_CHANGE = "";
 const DEFAULT_PAGE_SIZE = 25;
 const TESTCASE_STATUSES = ["Draft", "In Review", "Approved", "Deprecated", "Archived"];
-const TESTCASE_PRIORITIES = ["P0", "P1", "P2", "P3"];
+// "Not set" is a real stored value (a case nobody has prioritised yet, e.g. one migrated from a tool
+// whose priority was blank). It is last so it never reads as a rank, and sorts after P3.
+const TESTCASE_PRIORITIES = ["P0", "P1", "P2", "P3", "Not set"];
 const TESTCASE_TYPES = [
   "Functional", "Regression", "Smoke", "Sanity", "Integration",
   "API", "UI", "Performance", "Security",
+  "Acceptance", "Usability", "Compatibility", "Exploratory", "Other",
 ];
-const TESTCASE_AUTOMATION_TYPES = ["Automated", "Not Automated", "Can't Automate"];
+const TESTCASE_AUTOMATION_TYPES = ["Automated", "Not Automated", "To Be Automated", "Can't Automate"];
+/* Matches SUITE_TEXT_MAX_LENGTH in legacy.service.ts: the most a suite description / preconditions may hold. */
+const SUITE_TEXT_MAX_LENGTH = 20000;
 /* Create-form-only sentinel for an unselected Suite: "" is already the real "No suite" value
  * (see `suiteId || undefined` in handlePanelSubmit), so an unpicked suite needs a distinct value
  * to render as an unselected "Select" placeholder rather than pre-selecting "No suite". */
@@ -190,7 +195,13 @@ function sortTestCases(cases: TestCaseListItem[], sort: RepoTcSort): TestCaseLis
   const direction = sort.direction === "asc" ? 1 : -1;
   return [...cases].sort((a, b) => {
     if (sort.column === "id") return direction * compareExternalId(a.externalId || "", b.externalId || "");
-    if (sort.column === "priority") return direction * comparePriority(a.priority || "", b.priority || "");
+    if (sort.column === "priority") {
+      // A case with no priority ("" or "Not set") sorts last in BOTH directions, like the server sort.
+      const unsetA = !a.priority || a.priority === "Not set";
+      const unsetB = !b.priority || b.priority === "Not set";
+      if (unsetA !== unsetB) return unsetA ? 1 : -1;
+      return direction * comparePriority(a.priority || "", b.priority || "");
+    }
     return direction * compareTestCaseTitle(a.title || "", b.title || "");
   });
 }
@@ -427,6 +438,8 @@ export default function TestCasesPage() {
 
   const [isAddSuiteModalOpen, setIsAddSuiteModalOpen] = useState(false);
   const [newSuiteName, setNewSuiteName] = useState("");
+  const [newSuiteDescription, setNewSuiteDescription] = useState("");
+  const [newSuitePreconditions, setNewSuitePreconditions] = useState("");
   const [newSuiteParentId, setNewSuiteParentId] = useState("");
   const [isCreatingSuite, setIsCreatingSuite] = useState(false);
   const [newSuiteNameError, setNewSuiteNameError] = useState("");
@@ -508,6 +521,8 @@ export default function TestCasesPage() {
   const [isRenameSuiteModalOpen, setIsRenameSuiteModalOpen] = useState(false);
   const [renameSuiteId, setRenameSuiteId] = useState<string | null>(null);
   const [renameSuiteInputValue, setRenameSuiteInputValue] = useState("");
+  const [renameSuiteDescription, setRenameSuiteDescription] = useState("");
+  const [renameSuitePreconditions, setRenameSuitePreconditions] = useState("");
   const [isRenamingSuite, setIsRenamingSuite] = useState(false);
   const [renameSuiteError, setRenameSuiteError] = useState("");
 
@@ -1265,6 +1280,8 @@ export default function TestCasesPage() {
 
   function openAddSuiteModal(parentId?: string) {
     setNewSuiteName("");
+    setNewSuiteDescription("");
+    setNewSuitePreconditions("");
     setNewSuiteParentId(parentId ?? "");
     setNewSuiteNameError("");
     setIsAddSuiteModalOpen(true);
@@ -1289,9 +1306,16 @@ export default function TestCasesPage() {
     setIsCreatingSuite(true);
     setNewSuiteNameError("");
     try {
-      const created = await createSuite(projectId, { name: newSuiteName.trim(), parentId: newSuiteParentId || undefined });
+      const created = await createSuite(projectId, {
+        name: newSuiteName.trim(),
+        description: newSuiteDescription.trim(),
+        preconditions: newSuitePreconditions.trim(),
+        parentId: newSuiteParentId || undefined,
+      });
       if (created.parentId) setExpandedSuiteIds((prev) => new Set(prev).add(created.parentId as string));
       setNewSuiteName("");
+      setNewSuiteDescription("");
+      setNewSuitePreconditions("");
       setNewSuiteParentId("");
       setIsAddSuiteModalOpen(false);
       // A new suite starts empty (testCaseCount/recursiveTestCaseCount both 0, guaranteed by the
@@ -1308,8 +1332,11 @@ export default function TestCasesPage() {
   }
 
   function handleRenameSuite(suiteId: string, currentName: string) {
+    const current = suites.find((suite) => suite.id === suiteId);
     setRenameSuiteId(suiteId);
     setRenameSuiteInputValue(currentName);
+    setRenameSuiteDescription(current?.description ?? "");
+    setRenameSuitePreconditions(current?.preconditions ?? "");
     setRenameSuiteError("");
     setIsRenameSuiteModalOpen(true);
   }
@@ -1325,7 +1352,15 @@ export default function TestCasesPage() {
     setRenameSuiteError("");
     try {
       const trimmedName = renameSuiteInputValue.trim();
-      await updateSuite(renameSuiteId, { name: trimmedName });
+      // The backend writes parent_id verbatim (no COALESCE), so an edit that omits it would move the
+      // suite to the root. Sending the current parent back keeps the suite where it is.
+      const current = suites.find((suite) => suite.id === renameSuiteId);
+      await updateSuite(renameSuiteId, {
+        name: trimmedName,
+        description: renameSuiteDescription.trim(),
+        preconditions: renameSuitePreconditions.trim(),
+        parentId: current?.parentId ?? null,
+      });
       setIsRenameSuiteModalOpen(false);
       setRenameSuiteId(null);
       // NOT patched client-side, deliberately, unlike suite create: the backend's updateSuite writes
@@ -2263,6 +2298,25 @@ export default function TestCasesPage() {
                         </span>
                       </div>
                     )}
+                    {selectedSuite && (selectedSuite.description || selectedSuite.preconditions) && (
+                      <div
+                        data-testid="suite-details"
+                        className="mb-3 space-y-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-4 py-3 text-[12.5px]"
+                      >
+                        {selectedSuite.description && (
+                          <div>
+                            <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--muted-soft)]">Description</div>
+                            <p className="mt-0.5 whitespace-pre-wrap break-words text-[var(--foreground)]">{selectedSuite.description}</p>
+                          </div>
+                        )}
+                        {selectedSuite.preconditions && (
+                          <div>
+                            <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--muted-soft)]">Preconditions</div>
+                            <p className="mt-0.5 whitespace-pre-wrap break-words text-[var(--foreground)]">{selectedSuite.preconditions}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <RepositoryTestCaseTable
                       key={projectId}
                       projectId={projectId}
@@ -2906,6 +2960,26 @@ export default function TestCasesPage() {
             ))}
           </Select>
         </Field>
+        <Field className="mt-4">
+          <FieldLabel>Description (optional)</FieldLabel>
+          <Textarea
+            value={newSuiteDescription}
+            onChange={(e) => setNewSuiteDescription(e.target.value)}
+            rows={3}
+            maxLength={SUITE_TEXT_MAX_LENGTH}
+            placeholder="What does this suite cover?"
+          />
+        </Field>
+        <Field className="mt-4">
+          <FieldLabel>Preconditions (optional)</FieldLabel>
+          <Textarea
+            value={newSuitePreconditions}
+            onChange={(e) => setNewSuitePreconditions(e.target.value)}
+            rows={3}
+            maxLength={SUITE_TEXT_MAX_LENGTH}
+            placeholder="What must be true before running these test cases?"
+          />
+        </Field>
         <div className="mt-5 flex justify-end gap-2">
           <Button
             variant="secondary"
@@ -3124,6 +3198,26 @@ export default function TestCasesPage() {
               </FieldHint>
             )
           )}
+        </Field>
+        <Field className="mt-4">
+          <FieldLabel>Description (optional)</FieldLabel>
+          <Textarea
+            value={renameSuiteDescription}
+            onChange={(e) => setRenameSuiteDescription(e.target.value)}
+            rows={3}
+            maxLength={SUITE_TEXT_MAX_LENGTH}
+            placeholder="What does this suite cover?"
+          />
+        </Field>
+        <Field className="mt-4">
+          <FieldLabel>Preconditions (optional)</FieldLabel>
+          <Textarea
+            value={renameSuitePreconditions}
+            onChange={(e) => setRenameSuitePreconditions(e.target.value)}
+            rows={3}
+            maxLength={SUITE_TEXT_MAX_LENGTH}
+            placeholder="What must be true before running these test cases?"
+          />
         </Field>
         <div className="mt-5 flex justify-end gap-2">
           <Button

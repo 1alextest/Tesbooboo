@@ -547,6 +547,57 @@ test.describe("role-based permissions", () => {
     }
   });
 
+  test("changing a test case ID is owner-and-manager only; a QA engineer can still edit everything else", async () => {
+    // By consistency: the ID is what runs, CI results and exports quote, so renaming it is an
+    // administrative action like renaming the project. Ordinary authoring stays open to a QA engineer.
+    const suffix = Date.now();
+    const created = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/testcases`, {
+      data: { title: `E2E RBAC ID ${suffix}` },
+    });
+    expect(created.ok()).toBeTruthy();
+    const tc = await created.json();
+    const url = `/api/projects/${tenant!.mainProjectId}/testcases/${tc.id}`;
+    try {
+      const refused = await asQa.put(url, { data: { externalId: `QA${suffix}-TC-1` }, failOnStatusCode: false });
+      expect(refused.status()).toBe(403);
+      expect((await (await asOwner.get(url)).json()).externalId).toBe(tc.externalId);
+
+      const authoring = await asQa.put(url, { data: { title: `E2E RBAC ID ${suffix} edited` }, failOnStatusCode: false });
+      expect(authoring.ok(), "a QA engineer must still be able to edit a case").toBeTruthy();
+
+      const byManager = await asManager.put(url, { data: { externalId: `MG${suffix}-TC-1` }, failOnStatusCode: false });
+      expect(byManager.ok(), await byManager.text()).toBeTruthy();
+      const byOwner = await asOwner.put(url, { data: { externalId: `OW${suffix}-TC-1` }, failOnStatusCode: false });
+      expect(byOwner.ok(), await byOwner.text()).toBeTruthy();
+      expect((await (await asOwner.get(url)).json()).externalId).toBe(`OW${suffix}-TC-1`);
+    } finally {
+      await asOwner.delete(url, { failOnStatusCode: false });
+    }
+  });
+
+  test("importing run history is owner-and-manager only", async () => {
+    // By consistency: it rewrites a run's recorded past (times, results, history) and silences the
+    // notifications a normal edit would send, so it is an administrative action, not authoring.
+    const suffix = Date.now();
+    const cycle = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles`, { data: { name: `E2E RBAC History ${suffix}` } });
+    expect(cycle.ok()).toBeTruthy();
+    const cycleId = (await cycle.json()).id;
+    const url = `/api/cycles/${cycleId}/history-import`;
+    try {
+      const refused = await asQa.post(url, { data: { run: { tags: ["qa"] } }, failOnStatusCode: false });
+      expect(refused.status()).toBe(403);
+      expect((await (await asOwner.get(`/api/cycles/${cycleId}`)).json()).tags).toEqual([]);
+
+      const byManager = await asManager.post(url, { data: { run: { tags: ["manager"] } }, failOnStatusCode: false });
+      expect(byManager.ok(), await byManager.text()).toBeTruthy();
+      const byOwner = await asOwner.post(url, { data: { run: { tags: ["owner"] } }, failOnStatusCode: false });
+      expect(byOwner.ok(), await byOwner.text()).toBeTruthy();
+      expect((await (await asOwner.get(`/api/cycles/${cycleId}`)).json()).tags).toEqual(["owner"]);
+    } finally {
+      await asOwner.delete(`/api/cycles/${cycleId}`, { failOnStatusCode: false });
+    }
+  });
+
   test("undeleting a knowledge base folder is owner-and-manager only", { tag: '@tesbo.testId("TES-TC-457")' }, async () => {
     // Explicit, and narrower than it first looks: kbRequireOwnerOrManager is applied at exactly
     // three call sites — restoreKnowledgeFolder, restoreKnowledgeDocument and restoreKnowledgeFile.

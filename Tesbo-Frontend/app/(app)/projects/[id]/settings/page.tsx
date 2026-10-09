@@ -1047,7 +1047,8 @@ export default function ProjectSettingsPage() {
                   {linearStatus.connectedProjects && linearStatus.connectedProjects.length > 0 ? (
                     <p className="text-xs text-[var(--muted)]">
                       {linearStatus.connectedProjects.length} Linear team{linearStatus.connectedProjects.length > 1 ? "s" : ""} linked to this project:{" "}
-                      {linearStatus.connectedProjects.map((p) => p.linearTeamKey).join(", ")}
+                      {/* The name, not the key: for a Linear Project the key is an opaque slugId (4081f3c6e1df). */}
+                      {linearStatus.connectedProjects.map((p) => p.linearTeamName || p.linearTeamKey).join(", ")}
                     </p>
                   ) : (
                     <p className="text-xs text-[var(--muted-soft)]">No Linear team linked to this project yet.</p>

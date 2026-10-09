@@ -1104,3 +1104,90 @@ test.describe("run card is one click target", () => {
     }
   });
 });
+
+// A run carried over from another tool keeps its time spent and tags, and each result keeps its step
+// outcomes, earlier results and stack trace. A plain manual result must look exactly as it did.
+test.describe("imported run history in the UI", () => {
+  test("the runs list and the run header show time spent and tags", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const { cycleId, testcaseIds } = await seedRunWithStatuses(api, "E2E UI History", ["Passed"]);
+    try {
+      const tag = `ui-tag-${Date.now()}`;
+      const res = await api.post(`/api/cycles/${cycleId}/history-import`, {
+        data: { run: { timeSpentMs: 2 * 86_400_000 + 3 * 3_600_000, tags: [tag, "second tag"] } },
+      });
+      expect(res.ok(), await res.text()).toBeTruthy();
+
+      await page.goto(`/projects/${ctx.projectId}/cycles`);
+      const card = runCard(page, cycleId);
+      await expect(card.getByTestId("run-time-spent")).toContainText("2d 3h");
+      await expect(card.getByTestId("run-tags")).toContainText(tag);
+      await expect(card.getByTestId("run-tags")).toContainText("second tag");
+
+      await page.goto(`/projects/${ctx.projectId}/cycles/${cycleId}`);
+      await expect(page.getByTestId("run-time-spent")).toContainText("2d 3h");
+      await expect(page.getByTestId("run-tags")).toContainText(tag);
+    } finally {
+      await cleanUpRun(api, cycleId, testcaseIds);
+      await api.dispose();
+    }
+  });
+
+  test("a result's drawer shows step results, earlier results and the stack trace; a plain result shows none of it", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const { cycleId, testcaseIds } = await seedRunWithStatuses(api, "E2E UI History Drawer", ["Passed", "Passed"]);
+    try {
+      const rows = await (await api.get(`/api/cycles/${cycleId}/executions`)).json();
+      const imported = rows.find((r: { testcaseId: string }) => r.testcaseId === testcaseIds[0]);
+      const plain = rows.find((r: { testcaseId: string }) => r.testcaseId === testcaseIds[1]);
+      const res = await api.post(`/api/cycles/${cycleId}/history-import`, {
+        data: {
+          results: [
+            {
+              testcaseId: testcaseIds[0],
+              status: "Failed",
+              executedAt: "2024-03-08T09:30:00Z",
+              durationMs: 2100,
+              errorStack: "TypeError: x is undefined\n    at checkout (cart.js:42:7)",
+              stepResults: [
+                { position: 1, status: "Passed" },
+                { position: 2, status: "Failed", comment: "button missing from the page" },
+              ],
+              history: [{ status: "Retest", executedAt: "2024-03-08T09:00:00Z", comment: "first attempt note" }],
+            },
+          ],
+        },
+      });
+      expect(res.ok(), await res.text()).toBeTruthy();
+
+      await page.goto(`/projects/${ctx.projectId}/cycles/${cycleId}`);
+      await page.getByText(imported.title).first().click();
+      const meta = page.getByTestId("result-meta");
+      await expect(meta).toBeVisible();
+      await expect(meta.getByText("2.1s")).toBeVisible();
+      await expect(meta.getByText(/Executed 08 Mar 2024/)).toBeVisible();
+
+      const steps = meta.getByTestId("result-step-results");
+      await expect(steps).toContainText("Step 1");
+      await expect(steps).toContainText("Step 2");
+      await expect(steps).toContainText("button missing from the page");
+
+      // Collapsed until asked for.
+      await expect(meta.getByTestId("result-stack")).toBeHidden();
+      await meta.getByText("Stack trace").click();
+      await expect(meta.getByTestId("result-stack")).toContainText("at checkout (cart.js:42:7)");
+
+      await meta.getByText(/Earlier results \(1\)/).click();
+      await expect(meta.getByTestId("result-history")).toContainText("first attempt note");
+
+      // Close the drawer, open the plain result: nothing extra.
+      await page.keyboard.press("Escape");
+      await page.getByText(plain.title).first().click();
+      await expect(page.getByText(plain.title).first()).toBeVisible();
+      await expect(page.getByTestId("result-meta")).toHaveCount(0);
+    } finally {
+      await cleanUpRun(api, cycleId, testcaseIds);
+      await api.dispose();
+    }
+  });
+});

@@ -82,6 +82,7 @@ const REPORT_LONG_HEADERS = ["section", "label", "metric", "value"];
 // Which columns of each generated file carry a fixed vocabulary that a non-English export translates
 // (see common/export-i18n.ts). Keyed by the internal column key; columns absent here pass through.
 const TESTCASE_EXPORT_VALUE_FIELDS: Partial<Record<string, ExportValueField>> = {
+  priority: "priority",
   status: "testcaseStatus",
   type: "type",
   severity: "severity",
@@ -89,6 +90,7 @@ const TESTCASE_EXPORT_VALUE_FIELDS: Partial<Record<string, ExportValueField>> = 
 };
 
 const CYCLE_EXPORT_VALUE_FIELDS: Partial<Record<string, ExportValueField>> = {
+  priority: "priority",
   status: "executionStatus",
   type: "type"
 };
@@ -830,6 +832,12 @@ export class LegacyController {
   @Post("/api/cycles/:cycleId/executions/bulk-status")
   bulkStatus(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.bulkUpdateExecutionStatus(cycleId, req.userId, body);
+  }
+
+  /** Owner-or-manager: applies a run's and its results' past state from another tool onto this run. See importRunHistory. */
+  @Post("/api/cycles/:cycleId/history-import")
+  importRunHistory(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
+    return this.legacy.importRunHistory(req.userId, cycleId, body);
   }
 
   @Post("/api/cycles/:cycleId/share")

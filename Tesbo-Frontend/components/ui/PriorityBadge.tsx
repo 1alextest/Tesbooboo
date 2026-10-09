@@ -1,7 +1,7 @@
 import type { HTMLAttributes } from "react";
 import StatusChip, { type StatusChipProps } from "@/components/ui/StatusChip";
 
-export type Priority = "P0" | "P1" | "P2" | "P3";
+export type Priority = "P0" | "P1" | "P2" | "P3" | "Not set";
 
 /*
  * Basecamp 10259699278 — Test case/bug priority (P0–P3) was rendered three different ways across
@@ -15,6 +15,7 @@ const PRIORITY_TONE: Record<Priority, StatusChipProps["tone"]> = {
   P1: "warning",
   P2: "info",
   P3: "neutral",
+  "Not set": "neutral",
 };
 
 export type PriorityBadgeProps = Omit<HTMLAttributes<HTMLSpanElement>, "children"> & {

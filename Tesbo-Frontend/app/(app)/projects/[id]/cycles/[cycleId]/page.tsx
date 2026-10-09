@@ -62,6 +62,7 @@ import { Button, StatusChip, Input, PageLoader, Select, Textarea, Drawer, Priori
 import Modal from "@/components/ui/Modal";
 import ExecutionEvidencePanel from "@/components/ExecutionEvidencePanel";
 import { AutomationResultMeta, AutomationRunProvenance } from "@/components/AutomationResultMeta";
+import { formatSpent, RunTags } from "@/components/testruns/runDisplay";
 import { useLogBugDialog } from "@/components/LogBugDialog";
 import { useTopBarSlots } from "@/components/TopBarSlots";
 import { Breadcrumbs } from "@/components/workflows";
@@ -73,7 +74,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:7000";
 /* ───── Constants ───── */
 const EXEC_STATUSES = ["Untested", "Passed", "Failed", "Skipped", "Blocked", "Retest"] as const;
 const RUN_TABS = ["All", "Passed", "Failed", "Blocked", "Skipped", "Pending"] as const;
-const CANONICAL_PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
+const CANONICAL_PRIORITIES = ["P0", "P1", "P2", "P3", "Not set"] as const;
 type RunTab = (typeof RUN_TABS)[number];
 const PAGE_SIZE = 10;
 
@@ -1052,7 +1053,13 @@ export default function TestRunDetailPage() {
       const direction = runSort.direction === "asc" ? 1 : -1;
       list = [...list].sort((a, b) => {
         if (runSort.column === "id") return direction * compareExternalId(a.externalId || "", b.externalId || "");
-        if (runSort.column === "priority") return direction * comparePriority(a.priority || "", b.priority || "");
+        if (runSort.column === "priority") {
+          // No priority ("" or "Not set") sorts last in BOTH directions, like the server sort.
+          const unsetA = !a.priority || a.priority === "Not set";
+          const unsetB = !b.priority || b.priority === "Not set";
+          if (unsetA !== unsetB) return unsetA ? 1 : -1;
+          return direction * comparePriority(a.priority || "", b.priority || "");
+        }
         return direction * compareTestCaseTitle(a.title || a.snapshotTitle || "", b.title || b.snapshotTitle || "");
       });
     }
@@ -1186,6 +1193,12 @@ export default function TestRunDetailPage() {
             <span className="flex items-center gap-1.5 text-[12px] text-[var(--muted)]">
               <IconClock size={13} stroke={1.75} className="text-[var(--muted-soft)]" /> <span className="font-mono">{formatDuration(run.startedAt, run.endedAt)}</span>
             </span>
+            {run.timeSpentMs != null && (
+              <span className="flex items-center gap-1.5 text-[12px] text-[var(--muted)]" title="Time spent working on this run" data-testid="run-time-spent">
+                Time spent <span className="font-mono">{formatSpent(run.timeSpentMs)}</span>
+              </span>
+            )}
+            <RunTags tags={run.tags} />
             <span className="flex items-center gap-1.5 text-[12px] text-[var(--muted)]">
               <IconCalendarEvent size={13} stroke={1.75} className="text-[var(--muted-soft)]" /> Created {formatDate(run.createdAt)}
             </span>
@@ -1644,6 +1657,7 @@ export default function TestRunDetailPage() {
             <option value="P1">P1 - High</option>
             <option value="P2">P2 - Medium</option>
             <option value="P3">P3 - Low</option>
+            <option value="Not set">Not set</option>
           </Select>
           <Select
             value={filterType}
@@ -1653,10 +1667,16 @@ export default function TestRunDetailPage() {
             <option value="Functional">Functional</option>
             <option value="Regression">Regression</option>
             <option value="Smoke">Smoke</option>
+            <option value="Sanity">Sanity</option>
             <option value="Integration">Integration</option>
+            <option value="API">API</option>
+            <option value="UI">UI</option>
             <option value="Performance">Performance</option>
             <option value="Security">Security</option>
+            <option value="Acceptance">Acceptance</option>
             <option value="Usability">Usability</option>
+            <option value="Compatibility">Compatibility</option>
+            <option value="Exploratory">Exploratory</option>
             <option value="Other">Other</option>
           </Select>
           <Select

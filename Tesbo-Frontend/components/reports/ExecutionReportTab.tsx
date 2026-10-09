@@ -127,6 +127,7 @@ export function ExecutionReportTab({
             <option value="P1">P1 - High</option>
             <option value="P2">P2 - Medium</option>
             <option value="P3">P3 - Low</option>
+            <option value="Not set">Not set</option>
           </Select>
         )}
         {filterBy === "tags" && (tags.length > 0 || filtersLoading) && (
