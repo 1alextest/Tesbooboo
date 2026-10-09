@@ -166,3 +166,60 @@ test.describe("reports export controls", () => {
     expect(href).toContain(`filterValue=${encodeURIComponent(option)}`);
   });
 });
+
+/*
+ * "[Insights] UI issue in Priority and status labels". On the Traceability table the Priority and
+ * Status columns were 70px / 90px in a fixed-layout table, so a "Medium" or "Approved" chip spilled
+ * into the next column. A priority outside P0-P3 also rendered with no tone at all.
+ */
+test.describe("traceability priority and status labels", () => {
+  let api: APIRequestContext;
+  let projectId: string;
+  let runId: string;
+
+  test.beforeAll(async () => {
+    if (skipReason) return;
+    api = await screensApi();
+    projectId = (await createProject(api)).id;
+    const stamp = Date.now();
+    const caseIds: string[] = [];
+    for (const [i, priority] of ["P2", "Medium"].entries()) {
+      const res = await api.post(`/api/projects/${projectId}/testcases`, {
+        data: { title: `E2E Trace Label ${i} ${stamp}`, priority, status: "Approved" },
+      });
+      caseIds.push((await res.json()).id);
+    }
+    const run = await (await api.post(`/api/projects/${projectId}/cycles`, { data: { name: `E2E Trace Run ${stamp}` } })).json();
+    runId = run.id;
+    await api.post(`/api/cycles/${runId}/testcases`, { data: { testcaseIds: caseIds } });
+  });
+
+  test.afterAll(async () => {
+    if (api) {
+      await deleteProjects(api, [projectId]);
+      await api.dispose();
+    }
+  });
+
+  test("RPT-U-TRACE-1 priority and status chips sit inside their own cells, and an off-scale priority still shows its label", async ({ page }) => {
+    test.skip(skipReason !== null, skipReason ?? "");
+    await page.goto(`/projects/${projectId}/reports`);
+    await page.getByRole("button", { name: /Traceability/i }).first().click();
+
+    const rows = page.locator("tbody tr").filter({ hasText: "E2E Trace Label" });
+    await expect(rows).toHaveCount(2);
+
+    // "Medium" has no P-level tone; it must still be shown as written.
+    await expect(page.locator("tbody").getByText("Medium", { exact: true })).toBeVisible();
+    await expect(page.locator("tbody").getByText("P2", { exact: true })).toBeVisible();
+
+    for (const label of ["P2", "Medium", "Approved"]) {
+      const chip = page.locator("tbody").getByText(label, { exact: true }).first();
+      const cell = chip.locator("xpath=ancestor::td[1]");
+      const c = (await chip.boundingBox())!;
+      const k = (await cell.boundingBox())!;
+      expect(c.x, `${label} starts inside its cell`).toBeGreaterThanOrEqual(k.x - 0.5);
+      expect(c.x + c.width, `${label} ends inside its cell`).toBeLessThanOrEqual(k.x + k.width + 0.5);
+    }
+  });
+});
