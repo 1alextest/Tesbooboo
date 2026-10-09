@@ -481,7 +481,8 @@ test.describe("side navigation — page cache", () => {
       await page.getByLabel("Email *", { exact: true }).fill(member.email);
       await page.getByLabel("Password *", { exact: true }).fill(member.password);
       await page.getByRole("button", { name: "Sign in" }).click();
-      await page.waitForURL(/\/projects/, { timeout: 30_000 });
+      // Logout goes to a bare /login, so the sign-in lands on the default: the workspace Dashboard.
+      await page.waitForURL(/\/dashboard$/, { timeout: 30_000 });
 
       // Same tab, same JS module realm as before logout — if the cache survived, this would render
       // instantly from the previous session's warmed entry despite the network being cut off. 10s
