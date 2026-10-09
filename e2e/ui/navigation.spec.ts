@@ -1032,6 +1032,30 @@ test.describe("top bar — notifications", () => {
     }
   });
 
+  test("NOTIF-UI-13 every notification shows when it happened, linked or not", async ({ page }) => {
+    test.skip(!dbControlAvailable(), "needs psql access to seed a real notification row");
+    const stamp = Date.now();
+    const linked = seedNotification({ title: `Dated linked ${stamp}`, linkEntityType: "project", linkEntityId: tenant!.projectId });
+    const inert = seedNotification({ title: `Dated inert ${stamp}`, linkEntityType: null, linkEntityId: null });
+    try {
+      await bell(page).click();
+      // The app-wide shape (lib/date.ts formatDateTime): "05 Oct 2026, 06:21 PM".
+      const shape = /^\d{2} [A-Z][a-z]{2} \d{4}, \d{2}:\d{2} (AM|PM)$/;
+      for (const title of [`Dated linked ${stamp}`, `Dated inert ${stamp}`]) {
+        const item = panel(page).getByRole("menuitem", { name: new RegExp(title) });
+        await expect(item).toBeVisible();
+        const time = item.locator("time");
+        await expect(time).toHaveText(shape);
+        // A machine-readable instant too, and it is the row's real creation time (just now).
+        const iso = await time.getAttribute("datetime");
+        expect(Math.abs(Date.now() - Date.parse(iso ?? "")), `${title} should carry its creation time`).toBeLessThan(10 * 60_000);
+      }
+    } finally {
+      deleteNotification(linked);
+      deleteNotification(inert);
+    }
+  });
+
   test("NOTIF-UI-12 Mark all as read clears the badge and persists", async ({ page }) => {
     test.skip(!dbControlAvailable(), "needs psql access to seed a real notification row");
     const ids = [

@@ -8,6 +8,7 @@ import { listNotifications, markAllNotificationsRead, markNotificationRead } fro
 import { useTopBarSlots } from "@/components/TopBarSlots";
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useLogout } from "@/lib/useLogout";
+import { formatDateTime } from "@/lib/date";
 import ThemeToggle from "@/components/ThemeToggle";
 import { ConfirmModal } from "@/components/ui";
 
@@ -431,6 +432,10 @@ export default function TopBar() {
                     <>
                       <p className="font-medium text-[var(--foreground)]">{n.title}</p>
                       {n.body && <p className="mt-0.5 text-[var(--muted-soft)]">{n.body}</p>}
+                      {/* When it happened — through lib/date like every other timestamp in the app. */}
+                      <time dateTime={n.created_at} className="mt-1 block text-[11px] text-[var(--muted-soft)]">
+                        {formatDateTime(n.created_at)}
+                      </time>
                     </>
                   );
                   // No resolvable link (an unrecognized type, or an older/malformed row missing
