@@ -564,8 +564,8 @@ test.describe("Notion integration: workspace Integrations tab (UI)", () => {
     const notion = page.getByTestId("integration-card-notion");
     await expect(notion.getByText("Connected", { exact: true })).toBeVisible();
     await expect(notion.getByRole("link", { name: "https://www.notion.so" })).toHaveAttribute("href", "https://www.notion.so");
-    // Labelled by the live project name, with the immutable key as a disambiguator.
-    await expect(notion.getByText("Used by 1 project: Checkout (CHK)")).toBeVisible();
+    // Labelled by the live project name only; the key is just the blank-name fallback.
+    await expect(notion.getByText("Used by 1 project: Checkout")).toBeVisible();
     await expect(page.getByTestId("integration-manage-notion")).toHaveAttribute("href", "/settings/integrations/notion");
     await expect(page.getByTestId("integration-disconnect-notion")).toBeEnabled();
     // Connected replaces Configure; it does not sit beside it.
@@ -589,13 +589,37 @@ test.describe("Notion integration: workspace Integrations tab (UI)", () => {
     await mockTab(context, { notion });
     await page.goto(TAB_URL);
     const card = page.getByTestId("integration-card-notion");
-    await expect(card.getByText("Used by 2 projects: Checkout (CHK), BLANK")).toBeVisible();
+    await expect(card.getByText("Used by 2 projects: Checkout, BLANK")).toBeVisible();
 
     // The rename lands server-side (the status route is the source of truth); the next load must show it.
     notion.connectedProjects[0].projectName = "Checkout v2";
     await page.reload();
-    await expect(card.getByText("Used by 2 projects: Checkout v2 (CHK), BLANK")).toBeVisible();
-    await expect(card.getByText("Checkout (CHK)")).toHaveCount(0);
+    await expect(card.getByText("Used by 2 projects: Checkout v2, BLANK")).toBeVisible();
+    await expect(card.getByText("Used by 2 projects: Checkout, BLANK")).toHaveCount(0);
+  });
+
+  test("INT-U-30 same-named projects both list by name, and a long or markup-laden name renders as plain text", async ({ page, context }) => {
+    const longName = "Checkout ".repeat(40).trim();
+    await mockTab(context, {
+      notion: {
+        connected: true,
+        siteUrl: "https://www.notion.so",
+        connectedProjects: [
+          { projectId: "p1", projectName: "Checkout", projectKey: "CHK1" },
+          { projectId: "p2", projectName: "Checkout", projectKey: "CHK2" },
+          { projectId: "p3", projectName: "<b>Bold</b> & <img src=x>", projectKey: "XSS" },
+          { projectId: "p4", projectName: longName, projectKey: "LONG" },
+        ],
+      },
+    });
+    await page.goto(TAB_URL);
+    const card = page.getByTestId("integration-card-notion");
+    await expect(card.getByText("Used by 4 projects:")).toBeVisible();
+    await expect(card.getByText("Checkout, Checkout, <b>Bold</b> & <img src=x>, ", { exact: false })).toBeVisible();
+    // Markup is text, never parsed: no injected elements inside the card.
+    await expect(card.locator("b, img[src='x']")).toHaveCount(0);
+    // A long name must not push the card's actions off screen.
+    await expect(page.getByTestId("integration-manage-notion")).toBeInViewport();
   });
 
   test("INT-U-11 disconnecting Notion from the tab calls only Notion's route, then offers Configure again", async ({ page, context }) => {
@@ -1169,6 +1193,41 @@ test.describe("Integration screens: Go to Requirements after a sync (UI)", () =>
         await expect(page.getByRole("heading", { name: "Jira Integration" })).toBeVisible();
         await expect(button, `run status ${run?.status ?? "none"}`).toHaveCount(0);
       }
+    } finally {
+      if (projectId) await api.delete(`/api/projects/${projectId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+});
+
+/*
+ * "[Project Settings] Linear integration displays project key instead of project name". A Linear
+ * Project's key is an opaque slugId, so the project's Integrations tab named it as "4081f3c6e1df".
+ */
+test.describe("Project settings: Linear card names the linked item (UI)", () => {
+  test("the Linear card shows the linked team/project's name, not its key", async ({ page, context }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: path.join(__dirname, "../.auth/state.json") });
+    let projectId: string | undefined;
+    try {
+      const suffix = Date.now().toString().slice(-8);
+      projectId = (await (await api.post("/api/projects", { data: { name: `UI Linear Name ${suffix}`, key: `E2EL${suffix}` } })).json()).id;
+      await context.route(`**/api/projects/${projectId}/linear/status`, (route) =>
+        route.fulfill({
+          json: {
+            connected: true,
+            siteUrl: "https://linear.app",
+            connectedProjects: [
+              { id: "m1", linearTeamId: "p-1", linearTeamKey: "4081f3c6e1df", linearTeamName: "Checkout Revamp", entityType: "project", createdAt: new Date().toISOString() },
+            ],
+            history: [],
+          },
+        })
+      );
+      await page.goto(`/projects/${projectId}/settings?tab=integrations`);
+
+      const linked = page.getByText(/Linear team linked to this project/);
+      await expect(linked).toContainText("Checkout Revamp");
+      await expect(linked).not.toContainText("4081f3c6e1df");
     } finally {
       if (projectId) await api.delete(`/api/projects/${projectId}`, { failOnStatusCode: false });
       await api.dispose();

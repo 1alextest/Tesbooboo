@@ -30,6 +30,7 @@ import {
   type KnowledgeBreadcrumbEntry,
   integrationProviderLabel,
 } from "@/lib/api";
+import { canModifyKnowledgeItem } from "@/lib/knowledge-permissions";
 import { Button, Input, Modal, PageLoader, StatusChip } from "@/components/ui";
 import RichTextEditor from "@/components/knowledge-base/RichTextEditor";
 import { DocumentComments } from "@/components/knowledge-base/DocumentComments";
@@ -540,6 +541,9 @@ export default function KnowledgeDocumentPage() {
   // ZyraMemoryEntries instead; the API refuses direct content edits and version restores too.
   const isZyraMemory = Boolean(doc.isManagedByZyra);
   const bodyLocked = isSyncedMirror || isZyraMemory;
+  // The API's rule for delete (kbRequireMutateAccess): owner/manager, or this document's creator.
+  // canApprove is exactly "owner or manager" for this project.
+  const canModifyDoc = canModifyKnowledgeItem(canApprove, doc.createdBy, currentUserId);
 
   // Update History is the same data and component everywhere — the Knowledge Base list's
   // info-icon popover and this modal never drift into showing different things for the same
@@ -657,7 +661,7 @@ export default function KnowledgeDocumentPage() {
                 <button onClick={handleCopyLink} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-[var(--surface-secondary)]">
                   <IconLink size={14} /> {linkCopied ? "Copied!" : "Copy link"}
                 </button>
-                {!isZyraMemory && (
+                {!isZyraMemory && canModifyDoc && (
                   <button onClick={handleDelete} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-[var(--error-foreground)] hover:bg-[var(--error-soft)]">
                     <IconTrash size={14} /> Delete
                   </button>

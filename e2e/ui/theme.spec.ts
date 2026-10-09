@@ -584,3 +584,65 @@ test.describe("every screen follows the theme", () => {
     }
   });
 });
+
+/*
+ * ── THM-16/17: the app-wide slim scrollbar ──
+ *
+ * ::-webkit-scrollbar pseudo-elements are not readable through getComputedStyle, so these assert the
+ * two things that are: the theme tokens the thumb is painted from, and the layout width the custom
+ * bar occupies. The width check is what proves the global rule is live — a native Chromium classic
+ * scrollbar is ~15px, ours is 10px — and the .no-scrollbar contrast proves opt-out regions still hide.
+ */
+test.describe("scrollbar styling", () => {
+  test.skip(!!skipReason, skipReason ?? "");
+
+  const TOKENS = ["--scrollbar-thumb", "--scrollbar-thumb-near", "--scrollbar-thumb-hover", "--scrollbar-thumb-active"];
+
+  test("THM-16 scrollbar thumb tokens exist in both themes and differ between them", async ({ page }) => {
+    const read = async (theme: "light" | "dark") => {
+      await setStoredTheme(page, theme);
+      await page.goto("/projects");
+      return page.evaluate(
+        (names) => names.map((n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim()),
+        TOKENS,
+      );
+    };
+
+    const light = await read("light");
+    const dark = await read("dark");
+
+    for (const [i, name] of TOKENS.entries()) {
+      expect(light[i], `${name} is not defined in light`).not.toBe("");
+      expect(dark[i], `${name} is not defined in dark`).not.toBe("");
+      expect(dark[i], `${name} is identical in both themes, so it cannot complement either`).not.toBe(light[i]);
+    }
+    // Rest -> near -> hover -> active must firm up, never the other way round.
+    const alpha = (v: string) => parseFloat(v.match(/,\s*([\d.]+)\)$/)?.[1] ?? "NaN");
+    for (const set of [light, dark]) {
+      const a = set.map(alpha);
+      expect(a).toEqual([...a].sort((x, y) => x - y));
+    }
+  });
+
+  test("THM-17 the global slim bar applies, and .no-scrollbar still hides it", async ({ page, browserName }) => {
+    test.skip(browserName !== "chromium", "layout width of the ::-webkit-scrollbar rule is asserted on Chromium only");
+    await page.goto("/projects");
+
+    const widths = await page.evaluate(() => {
+      const make = (cls: string) => {
+        const el = document.createElement("div");
+        el.className = cls;
+        el.style.cssText = "position:fixed;top:0;left:0;width:100px;height:50px;overflow-y:scroll";
+        el.innerHTML = '<div style="height:500px"></div>';
+        document.body.appendChild(el);
+        const gutter = el.offsetWidth - el.clientWidth;
+        el.remove();
+        return gutter;
+      };
+      return { styled: make(""), hidden: make("no-scrollbar") };
+    });
+
+    expect(widths.styled, "global scrollbar rule is not applied (native bar is ~15px)").toBe(10);
+    expect(widths.hidden, ".no-scrollbar no longer hides the scrollbar").toBe(0);
+  });
+});

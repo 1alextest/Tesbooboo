@@ -14,6 +14,7 @@ export function FolderTreeNodeRow({
   onAction,
   expanded,
   toggleExpanded,
+  canModify,
 }: {
   node: KnowledgeFolderTreeNode;
   depth: number;
@@ -22,9 +23,12 @@ export function FolderTreeNodeRow({
   onAction: (action: FolderAction, folder: KnowledgeFolderTreeNode) => void;
   expanded: Set<string>;
   toggleExpanded: (id: string) => void;
+  /** Whether the current user may rename/move/delete this folder (see canModifyKnowledgeItem). */
+  canModify: (folder: KnowledgeFolderTreeNode) => boolean;
 }) {
   const isOpen = expanded.has(node.id) || node.isRoot;
   const hasChildren = node.children.length > 0;
+  const modifiable = canModify(node);
 
   return (
     <div>
@@ -73,15 +77,20 @@ export function FolderTreeNodeRow({
                 <MenuItem onClick={() => { onAction("create-subfolder", node); close(); }}>
                   <IconFolderPlus size={14} /> Create subfolder
                 </MenuItem>
-                <MenuItem onClick={() => { onAction("rename", node); close(); }}>
-                  <IconPencil size={14} /> Rename
-                </MenuItem>
-                <MenuItem onClick={() => { onAction("move", node); close(); }}>
-                  <IconArrowRight size={14} /> Move
-                </MenuItem>
-                <MenuItem danger onClick={() => { onAction("delete", node); close(); }}>
-                  <IconTrash size={14} /> Delete
-                </MenuItem>
+                {/* Creating a subfolder is open to every member; changing this one is not. */}
+                {modifiable && (
+                  <>
+                    <MenuItem onClick={() => { onAction("rename", node); close(); }}>
+                      <IconPencil size={14} /> Rename
+                    </MenuItem>
+                    <MenuItem onClick={() => { onAction("move", node); close(); }}>
+                      <IconArrowRight size={14} /> Move
+                    </MenuItem>
+                    <MenuItem danger onClick={() => { onAction("delete", node); close(); }}>
+                      <IconTrash size={14} /> Delete
+                    </MenuItem>
+                  </>
+                )}
               </>
             )}
           </Menu>
@@ -99,6 +108,7 @@ export function FolderTreeNodeRow({
               onAction={onAction}
               expanded={expanded}
               toggleExpanded={toggleExpanded}
+              canModify={canModify}
             />
           ))}
         </div>

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { authMe, getSetupStatus, loginWithPassword, requestOtp } from "@/lib/api";
 import {
   clearRedirectAttempts,
+  DEFAULT_SIGNED_IN_PATH,
   isRedirectBounce,
   noteRedirectAttempt,
   safeRedirectPath,
@@ -80,7 +81,7 @@ function LoginForm() {
           setCheckingSetup(false);
           return;
         }
-        const target = redirect || "/projects";
+        const target = redirect || DEFAULT_SIGNED_IN_PATH;
         /*
          * Arriving back with a session still intact means the destination refused us. Redirecting
          * again would refuse us again, so stop and hand the user the form: the redirect below never
@@ -166,7 +167,7 @@ function LoginForm() {
         router.push(`/verify-otp?${qp.toString()}`);
       } else {
         await loginWithPassword(emailToUse, password);
-        router.push(redirect || "/projects");
+        router.push(redirect || DEFAULT_SIGNED_IN_PATH);
         router.refresh();
       }
     } catch (err) {

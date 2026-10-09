@@ -14,6 +14,7 @@ import {
 import { Button, Card, CardBody, CardHeader, CardTitle } from "@/components/ui";
 import { BrandLogo } from "@/components/BrandLogo";
 import { formatDate } from "@/lib/date";
+import { DEFAULT_SIGNED_IN_PATH } from "@/lib/redirect";
 
 function roleLabel(role: string): string {
   const n = (role ?? "").trim().toLowerCase();
@@ -71,7 +72,7 @@ export default function InviteAcceptancePage() {
     setAccepting(true);
     try {
       await acceptInvitation(token);
-      router.push("/projects");
+      router.push(DEFAULT_SIGNED_IN_PATH);
       router.refresh();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to accept invitation";
