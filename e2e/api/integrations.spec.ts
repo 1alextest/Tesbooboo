@@ -2567,4 +2567,31 @@ test.describe("integrations — Jira and Linear", () => {
       scalar("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'integration_ticket_comments_provider_check';"),
     ).toContain("notion");
   });
+
+  test("INT-A-86 renaming a project is reflected on every provider's workspace status, with the key unchanged", async () => {
+    const jira = seedConnection("jira");
+    seedJiraMapping(jira);
+    const linear = seedConnection("linear");
+    seedLinearMapping(linear);
+    const notion = seedConnection("notion", "https://www.notion.so");
+    seedNotionMapping(notion, tenant!.mainProjectId);
+
+    const before = await (await asOwner.get(`/api/projects/${tenant!.mainProjectId}`)).json();
+    const renamed = `E2E Renamed ${Date.now()}`;
+    try {
+      const patch = await asOwner.patch(`/api/projects/${tenant!.mainProjectId}`, { data: { name: renamed } });
+      expect(patch.ok(), await patch.text()).toBeTruthy();
+
+      for (const provider of ["jira", "linear", "notion"]) {
+        const body = await (await asOwner.get(`/api/workspace/integrations/${provider}/status`)).json();
+        const mapped = body.connectedProjects.find((p: any) => p.projectId === tenant!.mainProjectId);
+        expect(mapped, `${provider} status lost the mapped project`).toBeTruthy();
+        expect(mapped.projectName, `${provider} status kept the pre-rename name`).toBe(renamed);
+        // The key is immutable: a rename must never touch it.
+        expect(mapped.projectKey).toBe(before.key);
+      }
+    } finally {
+      await asOwner.patch(`/api/projects/${tenant!.mainProjectId}`, { data: { name: before.name }, failOnStatusCode: false });
+    }
+  });
 });

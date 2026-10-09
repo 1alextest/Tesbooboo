@@ -50,6 +50,44 @@ test.describe("project settings", () => {
     }
   });
 
+  test("the General tab's save result sits above the Danger zone, for success and for failure", async ({ page }) => {
+    const api = await apiContext();
+    let projectId: string | undefined;
+
+    try {
+      const suffix = Date.now().toString().slice(-8);
+      const created = await (
+        await api.post("/api/projects", { data: { name: `UI Banner Project ${suffix}`, key: `E2EUIBAN${suffix}` } })
+      ).json();
+      projectId = created.id;
+
+      await page.goto(`/projects/${projectId}/settings`);
+      // The Danger zone has no role; its heading is the stable anchor. The banner used to render
+      // below it, off-screen on a short viewport, so a save looked like it did nothing.
+      const dangerTop = async () => (await page.getByRole("heading", { name: "Danger zone" }).boundingBox())!.y;
+
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      const ok = page.getByRole("status").filter({ hasText: "Project settings saved." });
+      await expect(ok).toBeVisible();
+      expect((await ok.boundingBox())!.y).toBeLessThan(await dangerTop());
+
+      // Failure path: the server rejects the save, and the error banner takes the same slot.
+      await page.route(`**/api/projects/${projectId}`, (route) =>
+        route.request().method() === "PATCH"
+          ? route.fulfill({ status: 500, json: { error: "E2E forced save failure" } })
+          : route.continue()
+      );
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      const failed = page.getByRole("alert").filter({ hasText: "E2E forced save failure" });
+      await expect(failed).toBeVisible();
+      await expect(ok).toHaveCount(0);
+      expect((await failed.boundingBox())!.y).toBeLessThan(await dangerTop());
+    } finally {
+      if (projectId) await api.delete(`/api/projects/${projectId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
   test("a user can set a project's icon from settings, and clear it back to automatic", async ({ page }) => {
     const api = await apiContext();
     let projectId: string | undefined;

@@ -478,6 +478,19 @@ export default function ProjectSettingsPage() {
 
   const projectName = typeof project.name === "string" ? project.name : "";
 
+  const messageBanner = message ? (
+    <p
+      role={messageIsError ? "alert" : "status"}
+      className={`rounded-lg border px-3 py-2 text-sm ${
+        messageIsError
+          ? "border-[var(--error-border)] bg-[var(--error-soft)] text-[var(--error-foreground)]"
+          : "border-[var(--success-border)] bg-[var(--success-soft)] text-[var(--success-foreground)]"
+      }`}
+    >
+      {message}
+    </p>
+  ) : null;
+
   return (
     <main className="tc-fullbleed flex flex-col pb-4 pr-4 pt-4" style={{ height: "calc(100vh - 3.5rem)" }}>
       <div className="flex min-h-0 flex-1 flex-col">
@@ -618,6 +631,8 @@ export default function ProjectSettingsPage() {
                   {saving ? "Saving…" : "Save"}
                 </Button>
               </Card>
+              {/* Right under the Save button, above the Danger zone, so the result is seen without scrolling past it. */}
+              {messageBanner}
               <div className="rounded-xl border border-[var(--error-border)] bg-[var(--error-soft)] p-4 space-y-2">
                 <h3 className="text-sm font-semibold text-[var(--error-foreground)]">Danger zone</h3>
                 <p className="text-sm text-[var(--error-foreground)]">
@@ -733,18 +748,7 @@ export default function ProjectSettingsPage() {
             </Card>
           )}
 
-          {message && (
-            <p
-              role={messageIsError ? "alert" : "status"}
-              className={`rounded-lg border px-3 py-2 text-sm ${
-                messageIsError
-                  ? "border-[var(--error-border)] bg-[var(--error-soft)] text-[var(--error-foreground)]"
-                  : "border-[var(--success-border)] bg-[var(--success-soft)] text-[var(--success-foreground)]"
-              }`}
-            >
-              {message}
-            </p>
-          )}
+          {activeTab !== "general" && messageBanner}
           {activeTab !== "general" && (
             <Button type="submit" disabled={saving}>
               {saving ? "Saving…" : "Save"}
