@@ -71,6 +71,49 @@ export class CustomTagsService {
     return dto;
   }
 
+  /**
+   * Renames a tag. Assignments reference the tag by id (testcase_custom_tags.tag_id), so every place
+   * that shows it — repository rows, the test case panel, the tag filter, Execution Report's
+   * Group by Tags — reads the new name; only the cached repository pages need clearing.
+   * A case-only change of the tag's own name ("smoke" → "Smoke") is a rename, not a clash.
+   */
+  async updateTag(userId: string | null | undefined, projectId: string, tagId: string, body: Body): Promise<CustomTagDto> {
+    await this.requireManageAccess(userId, projectId);
+    requireTagId(tagId);
+
+    const name = String(body.name ?? "").trim();
+    requireTagName(name);
+
+    const current = await this.db.query("SELECT * FROM custom_tags WHERE id = $1 AND project_id = $2", [tagId, projectId]);
+    if (!current.rows[0]) throw new NotFoundException({ error: "Custom tag not found" });
+    const before = mapTagRow(current.rows[0]);
+    if (before.name === name) return before;
+
+    const clash = await this.db.query("SELECT 1 FROM custom_tags WHERE project_id = $1 AND lower(name) = lower($2) AND id <> $3", [
+      projectId,
+      name,
+      tagId
+    ]);
+    if (clash.rows[0]) throw new BadRequestException({ error: "A tag with this name already exists" });
+
+    let res;
+    try {
+      res = await this.db.query("UPDATE custom_tags SET name = $3 WHERE id = $1 AND project_id = $2 RETURNING *", [tagId, projectId, name]);
+    } catch (err) {
+      // Two renames racing to the same name: the unique index is the real guard, the check above only
+      // gives the common case a clean message.
+      if ((err as { code?: string })?.code === "23505") throw new BadRequestException({ error: "A tag with this name already exists" });
+      throw err;
+    }
+    // Deleted between the read above and this write.
+    if (!res.rows[0]) throw new NotFoundException({ error: "Custom tag not found" });
+    const dto = mapTagRow(res.rows[0]);
+    // Cached repository pages carry each case's tag names (listTestCasesUncached).
+    await this.testcasesListCache.invalidate(projectId);
+    await this.legacy.logProjectActivity(projectId, userId ?? null, "custom_tag_updated", "custom_tag", dto.id, dto.name, { before, after: dto });
+    return dto;
+  }
+
   async deleteTag(userId: string | null | undefined, projectId: string, tagId: string): Promise<{ success: true }> {
     await this.requireManageAccess(userId, projectId);
     requireTagId(tagId);
