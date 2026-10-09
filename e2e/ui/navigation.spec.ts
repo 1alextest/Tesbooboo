@@ -1032,6 +1032,96 @@ test.describe("top bar — notifications", () => {
     }
   });
 
+  test("NOTIF-UI-14 a long list scrolls inside the panel, which stays on screen, with Mark all as read pinned", async ({ page }) => {
+    test.skip(!dbControlAvailable(), "needs psql access to seed real notification rows");
+    const stamp = Date.now();
+    const ids = Array.from({ length: 16 }, (_, i) =>
+      seedNotification({ title: `Scroll ${String(i + 1).padStart(2, "0")} ${stamp}`, linkEntityType: "project", linkEntityId: tenant!.projectId }),
+    );
+    try {
+      await page.setViewportSize({ width: 1280, height: 720 });
+      await page.reload();
+      await bell(page).click();
+      const box = panel(page);
+      await expect(box).toBeVisible();
+
+      // It is limited to the viewport, and the content is taller than the box (so it must scroll).
+      const metrics = await box.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, bottom: el.getBoundingClientRect().bottom, vh: window.innerHeight }));
+      expect(metrics.scrollHeight, "16 notifications should overflow the panel").toBeGreaterThan(metrics.clientHeight);
+      expect(metrics.bottom, "the panel must not run off the bottom of the screen").toBeLessThanOrEqual(metrics.vh);
+
+      // The oldest seeded row (listed last) is not in view until scrolled to, and then it is reachable.
+      const last = box.getByRole("menuitem", { name: new RegExp(`Scroll 01 ${stamp}`) });
+      await last.scrollIntoViewIfNeeded();
+      await expect(last).toBeInViewport();
+      expect(await box.evaluate((el) => el.scrollTop), "scrolling moved the list").toBeGreaterThan(0);
+
+      // Still reachable after scrolling to the bottom.
+      await expect(box.getByRole("button", { name: "Mark all as read" })).toBeInViewport();
+
+      // The pinned header sits flush at the top of the panel: nothing scrolled shows in a gap above it.
+      // (A sticky child sticks below its scroller's padding, so top padding on the panel left a strip.)
+      const flush = await box.evaluate((el) => {
+        const panelRect = el.getBoundingClientRect();
+        const header = el.querySelector<HTMLElement>(".sticky");
+        if (!header) return { ok: false, gap: -1, coveredByHeader: false };
+        const headerRect = header.getBoundingClientRect();
+        // What is painted just inside the panel's top edge (past its 1px border) must be the header itself.
+        const hit = document.elementFromPoint(panelRect.left + panelRect.width / 2, panelRect.top + 3);
+        return { ok: true, gap: headerRect.top - panelRect.top, coveredByHeader: !!hit && header.contains(hit) };
+      });
+      expect(flush.ok, "the panel should have a pinned header").toBe(true);
+      expect(flush.gap, "no gap between the panel's top edge and the pinned header").toBeLessThanOrEqual(2);
+      expect(flush.coveredByHeader, "the top edge of the panel must be the header, not scrolled content").toBe(true);
+    } finally {
+      ids.forEach(deleteNotification);
+    }
+  });
+
+  test("NOTIF-UI-15 Mark all as read is visible even when everything is already read, but disabled", async ({ page }) => {
+    test.skip(!dbControlAvailable(), "needs psql access to seed a real notification row");
+    const id = seedNotification({ title: `Already read ${Date.now()}`, linkEntityType: "project", linkEntityId: tenant!.projectId });
+    exec(`UPDATE notifications SET read_at = now() WHERE id = ${literal(id)};`);
+    const api = await screensApi();
+    try {
+      // Everything of this user's is read, so the badge is gone too.
+      await api.post("/api/notifications/read-all");
+      await page.reload();
+      await bell(page).click();
+      const control = panel(page).getByRole("button", { name: "Mark all as read" });
+      await expect(control).toBeVisible();
+      await expect(control).toBeDisabled();
+      await expect(panel(page).getByText("All caught up")).toBeVisible();
+    } finally {
+      await api.dispose();
+      deleteNotification(id);
+    }
+  });
+
+  test("NOTIF-UI-13 every notification shows when it happened, linked or not", async ({ page }) => {
+    test.skip(!dbControlAvailable(), "needs psql access to seed a real notification row");
+    const stamp = Date.now();
+    const linked = seedNotification({ title: `Dated linked ${stamp}`, linkEntityType: "project", linkEntityId: tenant!.projectId });
+    const inert = seedNotification({ title: `Dated inert ${stamp}`, linkEntityType: null, linkEntityId: null });
+    try {
+      await bell(page).click();
+      // The app-wide shape (lib/date.ts formatDateTime): "05 Oct 2026, 06:21 PM".
+      const shape = /^\d{2} [A-Z][a-z]{2} \d{4}, \d{2}:\d{2} (AM|PM)$/;
+      for (const title of [`Dated linked ${stamp}`, `Dated inert ${stamp}`]) {
+        const item = panel(page).getByRole("menuitem", { name: new RegExp(title) });
+        await expect(item).toBeVisible();
+        const time = item.locator("time");
+        await expect(time).toHaveText(shape);
+        // A machine-readable instant too, and it is the row's real creation time (just now).
+        const iso = await time.getAttribute("datetime");
+        expect(Math.abs(Date.now() - Date.parse(iso ?? "")), `${title} should carry its creation time`).toBeLessThan(10 * 60_000);
+      }
+    } finally {
+      deleteNotification(linked);
+      deleteNotification(inert);
+    }
+  });
+
   test("NOTIF-UI-12 Mark all as read clears the badge and persists", async ({ page }) => {
     test.skip(!dbControlAvailable(), "needs psql access to seed a real notification row");
     const ids = [
@@ -1045,8 +1135,9 @@ test.describe("top bar — notifications", () => {
       await panel(page).getByRole("button", { name: "Mark all as read" }).click();
 
       await expect(page.getByTestId("notification-badge")).toHaveCount(0);
-      // The control goes away once there is nothing unread.
-      await expect(panel(page).getByRole("button", { name: "Mark all as read" })).toHaveCount(0);
+      // The control stays (so it is always findable) but is disabled once there is nothing unread.
+      await expect(panel(page).getByRole("button", { name: "Mark all as read" })).toBeDisabled();
+      await expect(panel(page).getByText("All caught up")).toBeVisible();
 
       // Persisted, not just painted: a fresh load has no unread rows.
       const api = await screensApi();

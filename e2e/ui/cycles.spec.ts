@@ -1067,3 +1067,40 @@ test.describe("Test Environment dropdown: runs list and test plan", () => {
     await expect(page.getByRole("button", { name: "Create Test Run", exact: true })).toBeDisabled();
   });
 });
+
+/*
+ * Test Runs list: the whole run card opens the run, not just the name and the arrow icon. The name
+ * link is stretched over the card (::after), with the edit/delete controls lifted above it.
+ */
+test.describe("run card is one click target", () => {
+  test("clicking blank space or the results row opens the run, while Edit still opens its own dialog", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const { cycleId, testcaseIds } = await seedRunWithStatuses(api, "E2E Card Click", ["Passed", "Failed", "Untested"]);
+    try {
+      const runUrl = new RegExp(`/projects/${ctx.projectId}/cycles/${cycleId}$`);
+      const listUrl = `/projects/${ctx.projectId}/cycles`;
+      await page.goto(listUrl);
+      const card = runCard(page, cycleId);
+      await expect(card).toContainText("1 passed");
+      const box = (await card.boundingBox())!;
+
+      // Bottom-left of the card is the progress / counts strip: nothing there was a link before.
+      await card.click({ position: { x: 40, y: box.height - 12 } });
+      await expect(page).toHaveURL(runUrl);
+
+      // Right of the header row, clear of the action icons and the name.
+      await page.goto(listUrl);
+      await runCard(page, cycleId).click({ position: { x: (box.width * 2) / 3, y: 20 } });
+      await expect(page).toHaveURL(runUrl);
+
+      // The pencil is above the stretched link: it opens the edit form and does not navigate.
+      await page.goto(listUrl);
+      await runCard(page, cycleId).getByTitle("Edit run").click();
+      await expect(page).toHaveURL(new RegExp(`${listUrl}$`));
+      await expect(page.getByRole("button", { name: /Save/i }).first()).toBeVisible();
+    } finally {
+      await cleanUpRun(api, cycleId, testcaseIds);
+      await api.dispose();
+    }
+  });
+});

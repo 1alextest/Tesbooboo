@@ -37,6 +37,11 @@ export const RAG_CONTEXT_CHAR_BUDGET = 6000;
 // opening. A requirement stated past the opening used to never reach the model at all.
 export const RAG_PASSAGE_CHARS = 1600;
 
+// Budget for Zyra's drafting context: room for every one of RAG_MAX_SOURCES at a full passage each.
+// RAG_CONTEXT_CHAR_BUDGET (6000) fits under four, so a request spanning several requirement tickets
+// was drafted from the first three or four that ranked, however many were relevant.
+export const RAG_GENERATION_CHAR_BUDGET = RAG_MAX_SOURCES * RAG_PASSAGE_CHARS;
+
 // Words that describe the REQUEST rather than the product ("generate test cases for session
 // timeout"). Keyword search matches on content terms, and these appear in almost no requirements
 // document — left in, they either sink an AND query or, in an OR query, match any doc that happens

@@ -38,6 +38,9 @@ export type RbacTenantKind =
   | "custom-fields"
   | "custom-field-values"
   | "custom-fields-ui"
+  // Project settings' General / Test Environments / Delete controls per role (ui/projects.spec.ts).
+  // Its own tenant because the tests flip the QA user's project role and seed environments.
+  | "project-settings-ui"
   | "custom-tags"
   | "custom-tags-ui"
   | "reports"

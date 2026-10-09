@@ -8,6 +8,7 @@ import { listNotifications, markAllNotificationsRead, markNotificationRead } fro
 import { useTopBarSlots } from "@/components/TopBarSlots";
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useLogout } from "@/lib/useLogout";
+import { formatDateTime } from "@/lib/date";
 import ThemeToggle from "@/components/ThemeToggle";
 import { ConfirmModal } from "@/components/ui";
 
@@ -394,7 +395,11 @@ export default function TopBar() {
             <div
               role="menu"
               aria-label="Notifications"
-              className="absolute right-0 top-full z-40 mt-1 w-[320px] max-w-[calc(100vw-2rem)] rounded-xl border border-[var(--border)] bg-[var(--surface)] py-1 shadow-[var(--shadow-elevated)]"
+              // max-h + overflow: up to 50 notifications can come back, far more than fit on screen. Without
+              // a height limit the panel grew past the viewport with nothing to scroll.
+              // No top padding (pb-1, not py-1): a sticky child sticks BELOW its scroller's padding, so a
+              // top padding left a strip above the pinned header that scrolled text showed through.
+              className="absolute right-0 top-full z-40 mt-1 max-h-[min(70vh,520px)] w-[320px] max-w-[calc(100vw-2rem)] overflow-y-auto overscroll-contain rounded-xl border border-[var(--border)] bg-[var(--surface)] pb-1 shadow-[var(--shadow-elevated)]"
             >
               {notifLoading ? (
                 <p className="px-3 py-2 text-[13px] text-[var(--muted-soft)]">Loading…</p>
@@ -413,24 +418,30 @@ export default function TopBar() {
                 <p className="px-3 py-2 text-[13px] text-[var(--muted-soft)]">No notifications</p>
               ) : (
                 <>
-                  {unreadCount > 0 && (
-                    <div className="flex items-center justify-between border-b border-[var(--border)] px-3 pb-1.5 pt-1">
-                      <span className="text-[12px] text-[var(--muted-soft)]">{unreadCount} unread</span>
-                      <button
-                        type="button"
-                        onClick={handleMarkAllRead}
-                        className="text-[12px] font-medium text-[var(--brand-primary)] hover:underline"
-                      >
-                        Mark all as read
-                      </button>
-                    </div>
-                  )}
+                  {/* Always present once there is a list, and pinned so it stays in reach however far
+                      the list is scrolled. Greyed out (not removed) when nothing is unread: a control
+                      that vanishes reads as a missing feature. */}
+                  <div className="sticky top-0 z-10 flex items-center justify-between border-b border-[var(--border)] bg-[var(--surface)] px-3 pb-1.5 pt-1">
+                    <span className="text-[12px] text-[var(--muted-soft)]">{unreadCount > 0 ? `${unreadCount} unread` : "All caught up"}</span>
+                    <button
+                      type="button"
+                      onClick={handleMarkAllRead}
+                      disabled={unreadCount === 0}
+                      className="text-[12px] font-medium text-[var(--brand-primary)] hover:underline disabled:cursor-default disabled:text-[var(--muted-soft)] disabled:no-underline disabled:opacity-60"
+                    >
+                      Mark all as read
+                    </button>
+                  </div>
                 {notifItems.map((n) => {
                   const href = resolveNotificationHref(n);
                   const body = (
                     <>
                       <p className="font-medium text-[var(--foreground)]">{n.title}</p>
                       {n.body && <p className="mt-0.5 text-[var(--muted-soft)]">{n.body}</p>}
+                      {/* When it happened — through lib/date like every other timestamp in the app. */}
+                      <time dateTime={n.created_at} className="mt-1 block text-[11px] text-[var(--muted-soft)]">
+                        {formatDateTime(n.created_at)}
+                      </time>
                     </>
                   );
                   // No resolvable link (an unrecognized type, or an older/malformed row missing

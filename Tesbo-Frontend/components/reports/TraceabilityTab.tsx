@@ -10,8 +10,10 @@ import { statusTone, LoadingBlock } from "./shared";
 const MATRIX_COLUMNS = [
   { key: "tcId", label: "Test Case ID", defaultWidth: 110, minWidth: 80 },
   { key: "title", label: "Title", defaultWidth: 260, minWidth: 140 },
-  { key: "priority", label: "Priority", defaultWidth: 70, minWidth: 60 },
-  { key: "tcStatus", label: "Status", defaultWidth: 90, minWidth: 70 },
+  // Wide enough for a chip, not just "P2": rows can carry "Medium" and the table is fixed-layout, so a
+  // chip wider than its column spills into the neighbouring cell instead of growing it.
+  { key: "priority", label: "Priority", defaultWidth: 110, minWidth: 90 },
+  { key: "tcStatus", label: "Status", defaultWidth: 120, minWidth: 100 },
   { key: "suite", label: "Suite", defaultWidth: 120, minWidth: 70 },
   { key: "run", label: "Run", defaultWidth: 150, minWidth: 90 },
   { key: "runStatus", label: "Result", defaultWidth: 90, minWidth: 70 },

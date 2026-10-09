@@ -408,7 +408,9 @@ export default function TestRunsPage() {
               const ownerName = r.ownerId ? ownerNames[r.ownerId] : null;
               const planName = r.planId ? planNames[r.planId] : null;
               return (
-                <Card key={r.id} className="p-0 transition-colors hover:border-[var(--border-strong)]">
+                // `relative` anchors the name link's ::after, which stretches over the whole card so any click on it
+                // opens the run. The controls below sit above it (`relative z-10`) and keep their own actions.
+                <Card key={r.id} className="relative cursor-pointer p-0 transition-colors hover:border-[var(--border-strong)]">
                   <div className="flex items-center gap-3 p-4">
                     <RunAvatar name={r.name} />
 
@@ -416,7 +418,7 @@ export default function TestRunsPage() {
                       <div className="mb-0.5 flex flex-wrap items-center gap-2">
                         <Link
                           href={`/projects/${projectId}/cycles/${r.id}`}
-                          className="text-[14.5px] font-semibold text-[var(--foreground)] hover:text-[var(--accent-light)]"
+                          className="text-[14.5px] font-semibold text-[var(--foreground)] after:absolute after:inset-0 after:content-[''] hover:text-[var(--accent-light)]"
                         >
                           {r.name}
                         </Link>
@@ -470,7 +472,7 @@ export default function TestRunsPage() {
 
                     {ownerName && <OwnerAvatar name={ownerName} seed={r.ownerId} />}
 
-                    <div className="flex shrink-0 items-center gap-1">
+                    <div className="relative z-10 flex shrink-0 items-center gap-1">
                       <Link
                         href={`/projects/${projectId}/cycles/${r.id}`}
                         title="View run"

@@ -35,7 +35,7 @@ import {
 import { ApiTokenService } from "../auth/api-token.service";
 import { RagIngestionService } from "../rag/rag-ingestion.service";
 import { RagRetrievalService } from "../rag/rag-retrieval.service";
-import { TESTCASE_UPDATE_THRESHOLD } from "../rag/rag.constants";
+import { RAG_GENERATION_CHAR_BUDGET, TESTCASE_UPDATE_THRESHOLD } from "../rag/rag.constants";
 import type { RagRetrievalConfidence } from "../rag/rag.types";
 import { IntegrationSyncService } from "../integration-sync/integration-sync.service";
 import { INTEGRATION_SYNC_FETCH_TIMEOUT_MS, JIRA_PAGE_SIZE, NOTION_API_BASE, NOTION_API_VERSION, NOTION_PAGE_SIZE, NOTION_RICH_TEXT_LIMIT, PROVIDER_FOLDER_NAMES } from "../integration-sync/integration-sync.constants";
@@ -346,6 +346,9 @@ type ZyraChatDecision = {
     // update only: why authorZyraUpdates could not write this op's content (timeout/provider error),
     // so the turn says that instead of "the update changed nothing".
     authoringError?: string;
+    // update only: the sources authorZyraUpdates' drafting call cited for this change (already
+    // resolved against this turn's prompt by sanitizeZyraSourceRefs) — the card's "Context used".
+    sourceRefs?: ZyraSourceRef[];
   }>;
   testcases: Body[];
   // Set only when a provider call genuinely never answered within its budget (see
@@ -14691,7 +14694,7 @@ export class LegacyService implements OnModuleInit {
     const zyraAgentSettings = await this.zyraAgentSettings(projectId);
     const capabilities = this.normalizeZyraCapabilities(zyraAgentSettings.capabilities);
     const kbEnabled = capabilities.knowledgeBase;
-    const [history, knowledgeFallback, ragDiagnostics, folderKnowledge, existingTestcases, allocation, projectSnapshot, ownJira, lastCompletedPlanRes, ownBugs, pendingCreateBatches, carriedSources] = await Promise.all([
+    const [history, knowledgeFallback, ragDiagnostics, folderKnowledge, ticketKnowledge, existingTestcases, allocation, projectSnapshot, ownJira, lastCompletedPlanRes, ownBugs, pendingCreateBatches, carriedSources] = await Promise.all([
       this.db.query(
         `SELECT role, content, reasoning_summary, action_type, testcases
          FROM zyra_chat_messages
@@ -14709,11 +14712,13 @@ export class LegacyService implements OnModuleInit {
       // every failure mode, so "no embeddings key" and "nothing relevant" are indistinguishable —
       // which is how the vector half of this search stayed off in production unnoticed.
       kbEnabled
-        ? this.ragRetrieval.retrieveWithDiagnostics(projectId, message, { traceSeed: zyraTurnTraceSeed })
+        ? this.ragRetrieval.retrieveWithDiagnostics(projectId, message, { traceSeed: zyraTurnTraceSeed, charBudget: RAG_GENERATION_CHAR_BUDGET })
         : Promise.resolve(LegacyService.zyraKnowledgeDisabledRetrieval()),
       // Direct folder-name lookup — recency/embeddings never match on a folder's name alone
       // (e.g. "knowledge base 'EAD-11215' folder"), only on document content.
       kbEnabled ? this.knowledgeFolderSnapshot(projectId, message, ownJiraKeys) : Promise.resolve([]),
+      // Every ticket the message names, by its synced document — for any provider, not only Jira.
+      kbEnabled ? this.knowledgeTicketSnapshot(projectId, message) : Promise.resolve([]),
       this.existingTestcaseSnapshot(projectId, message, ""),
       this.zyraAiAllocation(projectId),
       this.zyraChatProjectSnapshot(projectId),
@@ -14733,6 +14738,12 @@ export class LegacyService implements OnModuleInit {
       this.zyraPriorTurnContextRefs(projectId, sessionId).then((refs) => this.zyraResolveContextRefs(projectId, refs, kbEnabled))
     ]);
     const ragKnowledge = ragDiagnostics.items;
+    // Named outright (a folder, a ticket key), so never scored and never displaced by search ranking.
+    const explicitKnowledge = LegacyService.dedupeZyraKnowledgeItems([...folderKnowledge, ...ticketKnowledge]);
+    // A broad request is also shown the project's tickets — see knowledgeTicketCatalogue.
+    const broadTickets = kbEnabled && LegacyService.zyraIsBroadRequest(explicitKnowledge.length, ragDiagnostics.confidence)
+      ? await this.knowledgeTicketCatalogue(projectId, message)
+      : [];
     // Every lookup above is keyed on this message alone, so a follow-up that names nothing ("yes",
     // "generate them") resolves nothing — and the ticket the previous turn identified is then absent
     // from the generation prompt, and every draft citing it loses that citation in
@@ -14747,8 +14758,10 @@ export class LegacyService implements OnModuleInit {
       {
         jiraIssueKeys: ownJiraKeys,
         jira: ownJira,
-        knowledge: [...folderKnowledge, ...ragKnowledge],
-        knowledgeConfidence: folderKnowledge.length > 0 ? "strong" : ragDiagnostics.confidence,
+        // Deduplicated so a ticket both named (or catalogued) and found by search is shown once,
+        // with the search's fuller passage.
+        knowledge: LegacyService.dedupeZyraKnowledgeItems([...explicitKnowledge, ...ragKnowledge, ...broadTickets]),
+        knowledgeConfidence: explicitKnowledge.length > 0 ? "strong" : ragDiagnostics.confidence,
         bugs: ownBugs
       },
       carriedSources
@@ -14758,7 +14771,7 @@ export class LegacyService implements OnModuleInit {
     const mentionedJira = turnSources.jira;
     const bugs = turnSources.bugs;
     const knowledgeConfidence: RagRetrievalConfidence = turnSources.knowledgeConfidence;
-    const usedRecencyFallback = !ragKnowledge.length && turnSources.knowledge.length === folderKnowledge.length;
+    const usedRecencyFallback = !ragKnowledge.length && turnSources.knowledge.length === explicitKnowledge.length;
     const knowledge = [...turnSources.knowledge, ...(usedRecencyFallback ? knowledgeFallback : [])];
 
     // Opened once the gathered context exists, so the trace carries what Zyra actually read rather
@@ -15107,7 +15120,10 @@ export class LegacyService implements OnModuleInit {
       // here, in its own batched calls (see authorZyraUpdates). Failures are recorded per op, never
       // thrown, so a slow batch can't take the whole turn down with it.
       if (normalizeJsonArray(raw.operations).some((op) => op?.type === "update")) {
-        raw = await this.authorZyraUpdates({ projectId, provider, model, key, message, raw, onStage, trace });
+        raw = await this.authorZyraUpdates({
+          projectId, provider, model, key, message, raw, onStage, trace,
+          sources: { knowledge: knowledgeForChat, jira: mentionedJira, existingTestcases, bugs: bugsForChat }
+        });
       }
       return this.normalizeZyraChatDecision(raw, message, existingTestcases, modelIntent);
     } catch (err) {
@@ -15579,11 +15595,13 @@ export class LegacyService implements OnModuleInit {
           continue;
         }
         // Staged only — the real row is untouched until zyraSave applies `fields` to it.
-        proposals.push({ opType: op.type, testcaseId: found.id, externalId: row.externalId, fields, reason: op.reason || "" });
+        // sourceRefs: what informed THIS change (authorZyraUpdates). Stored beside `fields`, not in
+        // them — they describe the proposal, and Save applies `fields` only, exactly as before.
+        proposals.push({ opType: op.type, testcaseId: found.id, externalId: row.externalId, fields, reason: op.reason || "", ...(op.sourceRefs?.length ? { sourceRefs: op.sourceRefs } : {}) });
         const action = op.type === "archive" ? "proposed-archive" : "proposed-update";
         // The review row previews what the case will look like AFTER saving (row + fields merged),
         // not its current state — `row` alone would show what's about to change as if it already had.
-        const preview = { ...row, ...(fields.stepsJson !== undefined ? { steps: fields.stepsJson } : {}), ...fields };
+        const preview = { ...row, ...(fields.stepsJson !== undefined ? { steps: fields.stepsJson } : {}), ...fields, ...(op.sourceRefs?.length ? { sourceRefs: op.sourceRefs } : {}) };
         testcases.push({ ...this.chatTestcaseRow(preview, action, op.reason), draftIndex: proposals.length - 1 });
         activity.push({ actor: "agent", title: `Drafted ${op.type} for review`, detail: `${row.externalId} ${row.title}`, createdAt: new Date().toISOString() });
       } else if (op.type === "create_suite" && op.suiteName) {
@@ -16265,6 +16283,11 @@ export class LegacyService implements OnModuleInit {
             reason: `Generated by AI from Zyra chat context; redirected to update — closely matches an existing test case (similarity ${updateTarget.cosineSimilarity.toFixed(2)}).`
           };
         }
+        // Linked to the named ticket this draft actually cites. Every draft used to take the FIRST
+        // named key, so a request naming several tickets linked all of its cases to one of them.
+        const citedKey = normalizeJsonArray(draft.sourceRefs)
+          .map((ref) => ref as ZyraSourceRef)
+          .find((ref) => ref?.type === "jira_ticket" && params.jiraIssueKeys.includes(ref.id))?.id;
         return {
           type: "create",
           // A suite the router named but that does not exist yet carries only a name — it is
@@ -16273,7 +16296,7 @@ export class LegacyService implements OnModuleInit {
           suiteName: matchedSuite?.id ? undefined : matchedSuite?.name,
           draft: {
             ...draft,
-            jiraIssueKey: params.jiraIssueKeys[0] || draft.jiraIssueKey || null
+            jiraIssueKey: citedKey || params.jiraIssueKeys[0] || draft.jiraIssueKey || null
           },
           reason: "Generated by AI from Zyra chat context."
         };
@@ -16398,14 +16421,16 @@ export class LegacyService implements OnModuleInit {
   }> {
     // Same rule as buildZyraChatDecision: with knowledge-base access OFF, the lookups never run.
     const kbEnabled = capabilities.knowledgeBase;
-    const [knowledgeFallback, ragDiagnostics, folderKnowledge, existingTestcases, suites, ownJira, ownBugs, carriedSources] = await Promise.all([
+    const [knowledgeFallback, ragDiagnostics, folderKnowledge, ticketKnowledge, existingTestcases, suites, ownJira, ownBugs, carriedSources] = await Promise.all([
       kbEnabled ? this.knowledgeSnapshot(projectId) : Promise.resolve([]),
       // retrieveWithDiagnostics, not the plain retrieveKnowledgeContext wrapper — this is a
       // background plan batch (continueZyraChatPlan), which previously carried no confidence signal
       // through at all (see generateZyraChatTestcasesWithAi's own doc comment on `trace` for the
       // same "background batches lag behind the interactive path" pattern this closes for RAG too).
-      kbEnabled ? this.ragRetrieval.retrieveWithDiagnostics(projectId, message) : Promise.resolve(LegacyService.zyraKnowledgeDisabledRetrieval()),
+      kbEnabled ? this.ragRetrieval.retrieveWithDiagnostics(projectId, message, { charBudget: RAG_GENERATION_CHAR_BUDGET }) : Promise.resolve(LegacyService.zyraKnowledgeDisabledRetrieval()),
       kbEnabled ? this.knowledgeFolderSnapshot(projectId, message, jiraIssueKeys) : Promise.resolve([]),
+      // Re-resolved from the plan's original message on every batch, so no named ticket ages out.
+      kbEnabled ? this.knowledgeTicketSnapshot(projectId, message) : Promise.resolve([]),
       this.existingTestcaseSnapshot(projectId, message, ""),
       this.projectSuiteSummaries(projectId),
       // Relevance-matched, not just explicitly-named — see relevantJiraSnapshot.
@@ -16416,7 +16441,12 @@ export class LegacyService implements OnModuleInit {
       this.zyraResolveContextRefs(projectId, carriedRefs, kbEnabled)
     ]);
     const ragKnowledge = ragDiagnostics.items;
-    // Same folder-match-overrides-confidence rule and same carried-source merge as
+    const explicitKnowledge = LegacyService.dedupeZyraKnowledgeItems([...folderKnowledge, ...ticketKnowledge]);
+    // Same broad-request rule as decideZyraChatTurn, so every batch of a broad plan sees the tickets.
+    const broadTickets = kbEnabled && LegacyService.zyraIsBroadRequest(explicitKnowledge.length, ragDiagnostics.confidence)
+      ? await this.knowledgeTicketCatalogue(projectId, message)
+      : [];
+    // Same explicit-match-overrides-confidence rule and same carried-source merge as
     // decideZyraChatTurn's own computation — kept in sync there rather than factored out, since the
     // two call sites gather from different Promise.all shapes and a shared helper would need to take
     // both apart again anyway.
@@ -16424,8 +16454,8 @@ export class LegacyService implements OnModuleInit {
       {
         jiraIssueKeys,
         jira: ownJira,
-        knowledge: [...folderKnowledge, ...ragKnowledge],
-        knowledgeConfidence: folderKnowledge.length > 0 ? "strong" : ragDiagnostics.confidence,
+        knowledge: LegacyService.dedupeZyraKnowledgeItems([...explicitKnowledge, ...ragKnowledge, ...broadTickets]),
+        knowledgeConfidence: explicitKnowledge.length > 0 ? "strong" : ragDiagnostics.confidence,
         bugs: ownBugs
       },
       carriedSources
@@ -16433,7 +16463,7 @@ export class LegacyService implements OnModuleInit {
     const jira = turnSources.jira;
     const bugs = turnSources.bugs;
     const knowledgeConfidence: RagRetrievalConfidence = turnSources.knowledgeConfidence;
-    const usedRecencyFallback = !ragKnowledge.length && turnSources.knowledge.length === folderKnowledge.length;
+    const usedRecencyFallback = !ragKnowledge.length && turnSources.knowledge.length === explicitKnowledge.length;
     const knowledge = [...turnSources.knowledge, ...(usedRecencyFallback ? knowledgeFallback : [])];
     return {
       knowledge: capabilities.knowledgeBase ? knowledge : [],
@@ -18681,7 +18711,7 @@ export class LegacyService implements OnModuleInit {
     }
     const [knowledgeFallback, ragDiagnostics] = await Promise.all([
       this.knowledgeSnapshot(projectId),
-      this.ragRetrieval.retrieveWithDiagnostics(projectId, query)
+      this.ragRetrieval.retrieveWithDiagnostics(projectId, query, { charBudget: RAG_GENERATION_CHAR_BUDGET })
     ]);
     return {
       knowledge: ragDiagnostics.items.length ? ragDiagnostics.items : knowledgeFallback,
@@ -18831,6 +18861,76 @@ export class LegacyService implements OnModuleInit {
       return [{ title: `Knowledge base folder: ${folderNames}`, content: "This folder was found by name but currently has no documents or files in it." }];
     }
     return [{ title: `Knowledge base folder: ${folderNames}`, content: "" }, ...documents, ...files];
+  }
+
+  /** How many of the project's tickets a broad request is shown (see knowledgeTicketCatalogue). */
+  private static readonly ZYRA_BROAD_TICKET_LIMIT = 25;
+  /** Each catalogue ticket's share of the prompt — enough to judge relevance and draft from. */
+  private static readonly ZYRA_BROAD_TICKET_CHARS = 600;
+
+  // The project's synced tickets ("<KEY>: summary" documents, any provider) for a BROAD request —
+  // one naming no ticket or folder whose search matched weakly or not at all. "Generate API test
+  // cases for the main endpoints" shares almost no words with requirement tickets, so keyword search
+  // found one ticket and every draft was written from it. The drafting call is shown the tickets
+  // instead and judges which apply (zyraDynamicTaskPrompt already tells it to check each source).
+  // Most recently updated first; each narrowed to its passage most relevant to the request.
+  private async knowledgeTicketCatalogue(projectId: string, message: string): Promise<Array<{ title: string; content: string; citation: ZyraKnowledgeCitation }>> {
+    const res = await this.db.query<{ id: string; title: string; content_text: string | null }>(
+      `SELECT id, title, content_text
+       FROM knowledge_documents
+       WHERE project_id = $1 AND is_deleted = false AND (document_type != 'ai_memory' OR status = 'approved')
+         AND title ~ '^[A-Za-z][A-Za-z0-9]*-[0-9]+\\s*:'
+       ORDER BY updated_at DESC
+       LIMIT $2`,
+      [projectId, LegacyService.ZYRA_BROAD_TICKET_LIMIT]
+    ).catch(() => ({ rows: [] as Array<{ id: string; title: string; content_text: string | null }> }));
+    if (!res.rows.length) return [];
+    const focused = await this.ragRetrieval.focusOnQuery(res.rows.map((row) => String(row.content_text || "")), message);
+    const cap = LegacyService.ZYRA_BROAD_TICKET_CHARS;
+    return res.rows.map((row, i) => {
+      const text = String(focused[i] ?? "");
+      return {
+        title: row.title || "Knowledge base item",
+        content: text.length > cap ? `${text.slice(0, cap)}...` : text,
+        citation: { sourceType: "document" as const, sourceId: String(row.id) }
+      };
+    });
+  }
+
+  /** Broad: nothing named outright, and search found no confident match. */
+  private static zyraIsBroadRequest(explicitCount: number, confidence: RagRetrievalConfidence): boolean {
+    return explicitCount === 0 && confidence !== "strong";
+  }
+
+  /** How many tickets one request can name and have each read as its own source (see knowledgeTicketSnapshot). */
+  private static readonly ZYRA_NAMED_TICKET_LIMIT = 20;
+
+  // Tickets the message names by key ("generate API tests for QAB-241 and QAB-242"), read from the
+  // documents the integration sync mirrors them into, titled "<KEY>: summary" (see
+  // IntegrationSyncDocumentBuilder). resolveJiraIssueKeysDetailed only accepts keys of a mapped
+  // *Jira* project, so a Linear or Notion ticket named outright was dropped before retrieval and
+  // could only reach the prompt by winning a search slot — which, for more than a few, it could not.
+  // A key with no synced document matches nothing; one per key, the most recently updated.
+  private async knowledgeTicketSnapshot(projectId: string, message: string): Promise<Array<{ title: string; content: string; citation: ZyraKnowledgeCitation }>> {
+    const keys = this.extractJiraIssueKeys(message).slice(0, LegacyService.ZYRA_NAMED_TICKET_LIMIT);
+    if (!keys.length) return [];
+    const res = await this.db.query<{ id: string; title: string; content_text: string | null }>(
+      `SELECT DISTINCT ON (upper(trim(split_part(title, ':', 1)))) id, title, content_text
+       FROM knowledge_documents
+       WHERE project_id = $1 AND is_deleted = false AND (document_type != 'ai_memory' OR status = 'approved')
+         AND upper(trim(split_part(title, ':', 1))) = ANY($2::text[])
+       ORDER BY upper(trim(split_part(title, ':', 1))), updated_at DESC`,
+      [projectId, keys]
+    ).catch(() => ({ rows: [] as Array<{ id: string; title: string; content_text: string | null }> }));
+    if (!res.rows.length) return [];
+    // In the order the message named them, so the first ticket asked about is "KB 1".
+    const rows = [...res.rows].sort((a, b) => keys.indexOf(a.title.split(":")[0].trim().toUpperCase()) - keys.indexOf(b.title.split(":")[0].trim().toUpperCase()));
+    const focused = await this.ragRetrieval.focusOnQuery(rows.map((row) => String(row.content_text || "")), message);
+    return rows.map((row, i) => ({
+      title: row.title || "Knowledge base item",
+      content: focused[i],
+      citation: { sourceType: "document" as const, sourceId: String(row.id) }
+    }));
   }
 
   private async existingTestcaseSnapshot(
@@ -19971,6 +20071,22 @@ export class LegacyService implements OnModuleInit {
       if (!item.id) return;
       index.set(`BUG ${i + 1}`, { type: "bug", id: item.id, title: item.title });
     });
+    // Aliases for a KB item: its own title, and the ticket-style key its title starts with. Synced
+    // Jira/Linear documents are titled like "QAB-242: LIN-02: Add a New Employee", and the test cases
+    // they produced say "[QAB-242] …", so a model citing that document writes "QAB-242" or the title
+    // as often as "KB 2" — every one of those was dropped, and the card read "No specific source
+    // cited". An alias only ever points at an item that was shown, and never displaces a real label
+    // (a Jira key, a test case id, "KB N", "BUG N"), which are all set above first.
+    input.knowledge.forEach((item, i) => {
+      if (!item.citation) return;
+      const ref = index.get(`KB ${i + 1}`);
+      if (!ref) return;
+      const title = String(item.title || "").trim();
+      const leadingKey = /^([A-Za-z][A-Za-z0-9]*-\d+)\b/.exec(title)?.[1];
+      for (const alias of [title, leadingKey]) {
+        if (alias && !index.has(alias)) index.set(alias, ref);
+      }
+    });
     return index;
   }
 
@@ -20008,9 +20124,13 @@ export class LegacyService implements OnModuleInit {
       const text = String(value).trim();
       if (!text) continue;
       const label = resolve(text);
-      if (!label || seen.has(label)) continue;
-      seen.add(label);
-      resolved.push(knownRefs.get(label)!);
+      if (!label) continue;
+      // De-duplicated by the source itself: "KB 2" and its alias "QAB-242" are one citation.
+      const ref = knownRefs.get(label)!;
+      const key = `${ref.type}:${ref.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      resolved.push(ref);
     }
     return resolved;
   }
@@ -20916,6 +21036,8 @@ export class LegacyService implements OnModuleInit {
     raw: Body;
     onStage?: ZyraOnStage;
     trace: Parameters<typeof recordGeneration>[0];
+    /** This turn's gathered sources — the same ones a create draft is generated (and cites) from. */
+    sources: Pick<ZyraGenerationInput, "knowledge" | "jira" | "existingTestcases" | "bugs">;
   }): Promise<Body> {
     const operations = normalizeJsonArray(params.raw.operations).map((op) => (op && typeof op === "object" ? { ...op } : op)) as Body[];
     const targets: Array<{ op: Body; row: Body }> = [];
@@ -20934,15 +21056,97 @@ export class LegacyService implements OnModuleInit {
 
     const system = [
       "You revise existing test cases in a test management tool. For each test case below, apply the requested change and return the new values.",
-      "Return only a JSON object: {\"updates\":[{\"externalId\":\"\",\"fields\":{}}]} with one entry per test case you were given, using its exact externalId.",
+      "Return only a JSON object: {\"updates\":[{\"externalId\":\"\",\"fields\":{},\"sourceRefs\":[\"\"]}]} with one entry per test case you were given, using its exact externalId.",
       "fields uses exactly these keys (camelCase): title, description, preconditions, postconditions, stepsJson, testData, priority, severity, type, automationStatus, automationTags, component, status. Include only fields you actually change, each with its complete new value, and only when it genuinely differs from the current value.",
       "To change any step, set fields.stepsJson to the FULL step list as an array of {\"stepNumber\":1,\"action\":\"...\",\"expectedResult\":\"...\"} — every step, including unchanged ones copied exactly. Every expected result must state the specific, observable outcome of its own step; never leave a placeholder or vague result in a step you were asked to fix.",
-      "Keep each test case's existing language and terminology. If a test case genuinely needs no change, return it with an empty fields object."
+      "Keep each test case's existing language and terminology. If a test case genuinely needs no change, return it with an empty fields object.",
+      "A test case's `requirement` lists the source label(s) of the requirement it was written from — base its new values on that requirement first.",
+      "Base the new values on the project sources in the user message wherever they apply. Each source has a label (e.g. 'KB 2', 'HBP-14', 'AIP-TC-73', 'BUG 3'). sourceRefs is REQUIRED on every update: list the labels of the sources that change draws on, written exactly as the label is shown (e.g. \"KB 2\") — not the document's title — never invented, and never the test case being revised itself. Use an empty array only when no listed source informs that change."
     ].join("\n");
 
+    /*
+     * The turn's sources were retrieved with the user's MESSAGE as the query. For a review request
+     * ("rewrite any weak or vague expected results") those words match no requirement document, so
+     * the drafting call saw only unrelated recent documents and could cite nothing — every update
+     * card read "No specific source cited" while the document describing those very cases ("QAB-242:
+     * LIN-02: Add a New Employee" for "[QAB-242] …" cases) sat unseen in the knowledge base. Each
+     * batch therefore also retrieves knowledge with ITS OWN cases' titles/descriptions as the query
+     * (zyraTaskKnowledge — the same retrieval task-board generation uses), merged ahead of the turn's
+     * items. Retrieval failing only falls back to the turn's sources; it never fails the batch.
+     */
+    /*
+     * Each case's OWN requirement document, found by the ticket it declares: its linear/jira issue key,
+     * or the "[QAB-242]" key its title starts with. Synced tickets live in the knowledge base titled
+     * "<KEY>: …" ("QAB-242: LIN-02: Add a New Employee"). Measured on a live run: with the right
+     * documents in its prompt, the drafting call still returned sourceRefs: [] for every case — so
+     * "Context used" can't rest on the model choosing to cite. The linked document is always put in
+     * the batch's prompt, named as that case's requirement, and attributed to the update below.
+     */
+    const caseKeys = (row: Body): string[] =>
+      Array.from(new Set(
+        [row.linearIssueKey, row.jiraIssueKey, /^\s*\[([A-Za-z][A-Za-z0-9]*-\d+)\]/.exec(String(row.title || ""))?.[1]]
+          .filter((key): key is string => typeof key === "string" && Boolean(key.trim()))
+          .map((key) => key.trim().toUpperCase())
+      ));
+    const requirementDocs = async (batch: typeof targets): Promise<Map<string, typeof params.sources.knowledge[number]>> => {
+      const keys = Array.from(new Set(batch.flatMap(({ row }) => caseKeys(row))));
+      const byKey = new Map<string, typeof params.sources.knowledge[number]>();
+      if (!keys.length) return byKey;
+      try {
+        const res = await this.db.query<{ id: string; title: string; content_text: string | null; key: string }>(
+          `SELECT id, title, content_text, upper(trim(split_part(title, ':', 1))) AS key
+           FROM knowledge_documents
+           WHERE project_id = $1 AND is_deleted = false AND upper(trim(split_part(title, ':', 1))) = ANY($2::text[])
+           ORDER BY updated_at DESC`,
+          [params.projectId, keys]
+        );
+        const query = batch.map(({ row }) => [row.title, row.description].filter(Boolean).join(" ")).join("\n");
+        const focused = await this.ragRetrieval.focusOnQuery(res.rows.map((row) => String(row.content_text || "")), query);
+        res.rows.forEach((row, i) => {
+          if (byKey.has(row.key)) return; // most recently updated wins for a duplicated key
+          byKey.set(row.key, { title: row.title, content: focused[i] ?? "", citation: { sourceType: "document", sourceId: row.id } });
+        });
+      } catch (err) {
+        this.logger.warn(`Update drafting: requirement lookup failed for project ${params.projectId}: ${err instanceof Error ? err.message : err}`);
+      }
+      return byKey;
+    };
+
+    const batchSources = async (batch: typeof targets): Promise<{ sources: typeof params.sources; requirements: Map<string, typeof params.sources.knowledge[number]> }> => {
+      const query = batch.map(({ row }) => [row.title, row.description].filter(Boolean).join(" ")).join("\n");
+      let retrieved: typeof params.sources.knowledge = [];
+      try {
+        retrieved = (await this.zyraTaskKnowledge(params.projectId, [], [query])).knowledge;
+      } catch (err) {
+        this.logger.warn(`Update drafting: knowledge retrieval failed for project ${params.projectId}, using the turn's sources only: ${err instanceof Error ? err.message : err}`);
+      }
+      const requirements = await requirementDocs(batch);
+      const seen = new Set<string>();
+      // Requirement documents first, so the cap below can never push a case's own requirement out.
+      const knowledge = [...requirements.values(), ...retrieved, ...params.sources.knowledge].filter((item) => {
+        const key = item.citation ? `${item.citation.sourceType}:${item.citation.sourceId}` : `title:${item.title}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, 12);
+      return { sources: { ...params.sources, knowledge }, requirements };
+    };
+
     const authorBatch = async (batch: typeof targets): Promise<void> => {
+      const { sources, requirements } = await batchSources(batch);
+      // Labels built from exactly the list this batch's prompt shows, so "KB 2" means what it was shown as.
+      const sourceRefIndex = this.zyraSourceRefIndex(sources);
+      const sourcesShown = sources.knowledge.map((item) => item.title);
+      // A case's requirement document(s), as the "KB N" labels this batch's prompt shows them under.
+      const requirementLabels = (row: Body): string[] =>
+        caseKeys(row)
+          .map((key) => requirements.get(key)?.citation?.sourceId)
+          .map((sourceId) => sources.knowledge.findIndex((item) => item.citation?.sourceId === sourceId))
+          .filter((index) => index >= 0)
+          .map((index) => `KB ${index + 1}`);
       const cases = batch.map(({ op, row }) => ({
         externalId: row.externalId,
+        ...(requirementLabels(row).length ? { requirement: requirementLabels(row) } : {}),
         requestedChange: String(op.reason || params.message),
         current: {
           title: row.title,
@@ -20957,11 +21161,17 @@ export class LegacyService implements OnModuleInit {
           stepsJson: (this.safeSteps(row.steps) as Body[]).map((step, index) => ({ stepNumber: index + 1, action: step?.action || "", expectedResult: step?.expectedResult || "" }))
         }
       }));
-      const user = `The user asked: ${params.message}\n\nTest cases to revise:\n${JSON.stringify(cases, null, 2)}`;
+      const user = [
+        `The user asked: ${params.message}`,
+        "",
+        `Test cases to revise:\n${JSON.stringify(cases, null, 2)}`,
+        "",
+        this.zyraStaticSourcePrompt({ ...sources, linear: [] } as unknown as ZyraGenerationInput)
+      ].join("\n");
       try {
         const { parsed, usage, rawText } = await this.zyraAuthorJson(params.key, params.provider, params.model, system, user, Math.min(16000, 2000 + batch.length * 2000));
         await this.recordZyraTokenUsage(params.projectId, "chat_generate", params.provider, params.model, usage);
-        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: params.model, input: { cases: cases.length }, output: parsed, rawOutput: parsed ? undefined : rawText, usage });
+        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: params.model, input: { cases: cases.length, sourcesShown }, output: parsed, rawOutput: parsed ? undefined : rawText, usage });
         const byId = new Map<string, Body>();
         for (const entry of normalizeJsonArray(parsed?.updates)) {
           if (entry && typeof entry === "object" && entry.externalId) byId.set(String(entry.externalId).toUpperCase(), entry);
@@ -20974,10 +21184,19 @@ export class LegacyService implements OnModuleInit {
           }
           const authoredFields = authored.fields && typeof authored.fields === "object" ? authored.fields : {};
           op.fields = { ...(op.fields && typeof op.fields === "object" ? op.fields : {}), ...authoredFields };
+          // The case's own requirement document — shown in this prompt as its "requirement" — first,
+          // then whatever else the model cited; one entry per source. A case never cites itself.
+          op.__sourceRefs = LegacyService.sanitizeZyraSourceRefs([...requirementLabels(row), ...normalizeJsonArray(authored.sourceRefs)], sourceRefIndex)
+            .filter((ref) => !(ref.type === "testcase" && String(ref.id).toUpperCase() === String(row.externalId).toUpperCase()));
+          // What the model cited vs. what resolved — the one fact a "No specific source cited" card
+          // needs to be diagnosed, and otherwise lost (traces are optional). No content, labels only.
+          this.logger.log(
+            `Update drafting ${row.externalId}: shown ${sourcesShown.length} KB source(s); requirement ${JSON.stringify(requirementLabels(row))}; cited ${JSON.stringify(authored.sourceRefs ?? null).slice(0, 300)}; resolved ${(op.__sourceRefs as ZyraSourceRef[]).length}`
+          );
         }
       } catch (err) {
         const reason = this.isZyraTimeoutError(err) ? "drafting it timed out" : `drafting it failed (${this.extractAiErrorMessage(err)})`;
-        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: params.model, input: { cases: cases.length }, errorMessage: reason });
+        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: params.model, input: { cases: cases.length, sourcesShown }, errorMessage: reason });
         for (const { op, row } of batch) op.__authoringError = `${row.externalId}: ${reason}, so nothing was staged for it — ask again to retry.`;
       }
     };
@@ -21096,7 +21315,8 @@ export class LegacyService implements OnModuleInit {
           draft: op?.draft && typeof op.draft === "object" ? op.draft : undefined,
           fields: op?.fields && typeof op.fields === "object" ? op.fields : undefined,
           reason: op?.reason ? String(op.reason).slice(0, 500) : undefined,
-          authoringError: op?.__authoringError ? String(op.__authoringError) : undefined
+          authoringError: op?.__authoringError ? String(op.__authoringError) : undefined,
+          sourceRefs: Array.isArray(op?.__sourceRefs) ? (op.__sourceRefs as ZyraSourceRef[]) : undefined
         };
       })
       .filter((op) => {
@@ -22784,7 +23004,13 @@ export class LegacyService implements OnModuleInit {
       return this.chatDraftRow({ externalId, title: externalId ? `${externalId} (no longer exists)` : "Test case no longer exists" }, action, entry.reason);
     }
     const fields = (entry.fields || {}) as Body;
-    const preview = { ...current, ...(fields.stepsJson !== undefined ? { steps: fields.stepsJson } : {}), ...fields };
+    const preview = {
+      ...current,
+      ...(fields.stepsJson !== undefined ? { steps: fields.stepsJson } : {}),
+      ...fields,
+      // The update's own citations (see applyZyraChatOperations), same as the chat turn's preview.
+      ...(Array.isArray(entry.sourceRefs) && entry.sourceRefs.length ? { sourceRefs: entry.sourceRefs } : {})
+    };
     return this.chatTestcaseRow(preview, action, entry.reason);
   }
 

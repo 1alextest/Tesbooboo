@@ -24,7 +24,9 @@ export type PriorityBadgeProps = Omit<HTMLAttributes<HTMLSpanElement>, "children
 
 export default function PriorityBadge({ priority, className, ...props }: PriorityBadgeProps) {
   return (
-    <StatusChip tone={PRIORITY_TONE[priority]} className={className} {...props}>
+    // A value outside P0-P3 (older or imported rows hold words like "Medium") has no tone; fall back
+    // to neutral and show it as written rather than rendering a chip with an undefined colour.
+    <StatusChip tone={PRIORITY_TONE[priority] ?? "neutral"} className={className} {...props}>
       {priority}
     </StatusChip>
   );
