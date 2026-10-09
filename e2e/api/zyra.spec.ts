@@ -2585,7 +2585,11 @@ test.describe("zyra chat — citations (fake provider)", () => {
     exec(`DELETE FROM suites WHERE project_id = ${project};`);
     exec(`DELETE FROM bugs WHERE project_id = ${project};`);
     exec(`DELETE FROM jira_tickets WHERE project_id = ${project};`);
+    // ZYR-A-159 maps a Jira project so its typed keys resolve as Jira keys.
+    exec(`DELETE FROM jira_project_mappings WHERE project_id = ${project};`);
     exec(`DELETE FROM knowledge_documents WHERE project_id = ${project};`);
+    // ZYR-A-158 seeds a same-key document in the second project to prove it is never read.
+    exec(`DELETE FROM knowledge_documents WHERE project_id = ${literal(tenant!.secondProjectId)} AND title LIKE 'LQ%';`);
     // ZYR-A-65 creates a non-root folder to exercise knowledgeFolderSnapshot's quoted-name lookup;
     // the root folder itself must survive (it cannot be recreated through the API — see
     // knowledge-base.spec.ts's purgeKb doc comment for the same constraint).
@@ -3576,6 +3580,332 @@ test.describe("zyra chat — citations (fake provider)", () => {
       expect((entry.fields.stepsJson as Array<Record<string, string>>).map((s) => s.expectedResult)).toEqual(improved(i).map((s) => s.expectedResult));
     }
     expect(await lastAssistantReply(sessionId)).toContain("7 of them are staged for your review");
+  });
+
+  // Update cards always said "No specific source cited": the card only showed the test case's own
+  // saved citations, and the drafting step was never shown the turn's sources, so it could cite none.
+  test("ZYR-A-154 an update card's Context used shows the sources its drafted change cites — never the case itself or an unoffered label", async () => {
+    await allocateFakeAiKey();
+    const { kbDocId, testcaseExternalId } = await seedCitableSources();
+    const sessionId = await newSession("E2E update citations");
+    ai.queueReply({
+      reply: "Rewriting the biometric login test case's vague expected result.", reasoningSummary: "Update.", action: "update", actionType: "update", testcases: [],
+      operations: [{ type: "update", externalId: testcaseExternalId, reason: "Make the expected result specific to the password fallback rule." }],
+    });
+    ai.queueReply({
+      updates: [{
+        externalId: testcaseExternalId,
+        fields: { stepsJson: [{ stepNumber: 1, action: "Fail biometric auth 3 times", expectedResult: "The password field appears after the third failure" }] },
+        sourceRefs: ["KB 1", testcaseExternalId, "GENERATED-999"],
+      }],
+    });
+    const turn = await asOwner.post(url(`/chat/sessions/${sessionId}/messages`), {
+      data: { message: "Rewrite the vague expected result of the biometric login test case using the knowledge base." },
+      failOnStatusCode: false,
+    });
+    expect(turn.status(), `the update turn — ${await turn.text()}`).toBeLessThan(300);
+
+    // The drafting call was shown the project's sources, with the KB doc labelled for citing.
+    const drafting = ai.requests.find((r) => r.messages.some((m) => m.content.includes("Test cases to revise:")));
+    expect(drafting, "the drafting call ran").toBeTruthy();
+    const draftingPrompt = drafting!.messages.map((m) => m.content).join("\n");
+    expect(draftingPrompt).toContain("KB 1: Biometric login policy");
+
+    const kb = { type: "knowledge_document", id: kbDocId, title: "Biometric login policy" };
+    const staged = JSON.parse(scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE chat_session_id = ${literal(sessionId)} ORDER BY created_at DESC LIMIT 1;`));
+    expect(staged[0].sourceRefs, "the case itself and the invented label are dropped").toEqual([kb]);
+    const card = (await lastAssistantTestcases(sessionId))[0];
+    expect(card.sourceRefs).toEqual([kb]);
+    // The review panel reads the live batch (formatAiTask) — the citation must survive that path too.
+    const reviewId = scalar(`SELECT id FROM ai_generation_requests WHERE chat_session_id = ${literal(sessionId)} ORDER BY created_at DESC LIMIT 1;`);
+    const task = await (await asOwner.get(url(`/tasks/${reviewId}`))).json();
+    expect(task.drafts[0].sourceRefs).toEqual([kb]);
+  });
+
+  // A generic review request ("rewrite any weak or vague expected results") matches no requirement
+  // document, so the turn's own sources were just the most recent documents and the drafting call
+  // cited nothing. Each drafting batch now also retrieves knowledge with its own cases' content.
+  test("ZYR-A-155 for a generic review request, the drafting step is shown — and cites — the document that matches the test case, not just recent ones", async () => {
+    await allocateFakeAiKey();
+    const kbDoc = async (title: string, contentText: string) => {
+      const res = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/knowledge-base/documents`, {
+        data: { folderId: rootFolderId(), documentType: "general", title, contentText, contentHtml: `<p>${contentText}</p>` },
+        failOnStatusCode: false,
+      });
+      expect(res.status(), `seeding KB doc ${title} — ${await res.text()}`).toBe(201);
+      return (await res.json()).id as string;
+    };
+    const policyId = await kbDoc("Expense claim approval policy", "Every expense claim needs a receipt. A claim amount above 5000 requires manager approval before reimbursement.");
+    // Newer, unrelated documents: a recency-only selection (what the generic message got) is these.
+    for (let i = 0; i < 13; i += 1) await kbDoc(`E2E unrelated note ${i}`, `Office plants are watered on Fridays, note ${i}.`);
+    const tc = await seedCase(`Submit an expense claim amount above 5000 for manager approval ${Date.now()}`);
+    const sessionId = await newSession("E2E update batch retrieval");
+
+    ai.queueReply({
+      reply: "Rewriting the vague expected results.", reasoningSummary: "Update.", action: "update", actionType: "update", testcases: [],
+      operations: [{ type: "update", externalId: tc.externalId, reason: "Steps 1 and 2 have placeholder expected results." }],
+    });
+    // Cites every label it could have been shown; only the ones genuinely shown survive.
+    ai.queueReply({
+      updates: [{ externalId: tc.externalId, fields: { title: `${tc.externalId} reviewed` }, sourceRefs: Array.from({ length: 12 }, (_, i) => `KB ${i + 1}`) }],
+    });
+    const turn = await asOwner.post(url(`/chat/sessions/${sessionId}/messages`), {
+      data: { message: "Review existing test cases and rewrite any weak or vague expected results to be more specific." },
+      failOnStatusCode: false,
+    });
+    expect(turn.status(), `the update turn — ${await turn.text()}`).toBeLessThan(300);
+
+    const drafting = ai.requests.find((r) => r.messages.some((m) => m.content.includes("Test cases to revise:")));
+    const draftingPrompt = drafting!.messages.map((m) => m.content).join("\n");
+    expect(draftingPrompt, "the matching policy document must reach the drafting call").toContain("Expense claim approval policy");
+
+    const staged = JSON.parse(scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE chat_session_id = ${literal(sessionId)} ORDER BY created_at DESC LIMIT 1;`));
+    const refs = (staged[0].sourceRefs ?? []) as Array<{ id: string }>;
+    expect(refs.map((r) => r.id), "the policy document is cited on the update card").toContain(policyId);
+  });
+
+  // Measured live: shown the right documents, the drafting call still returned sourceRefs: [] for
+  // every case. A case's own requirement — the ticket it declares ("[QAB-242] …" / linear_issue_key),
+  // synced into the KB as "QAB-242: …" — is now always given to the drafting call and attributed.
+  test("ZYR-A-156 an update cites the test case's own linked requirement document even when the model cites nothing; an unlinked case stays uncited", async () => {
+    await allocateFakeAiKey();
+    const key = `ZK${Date.now() % 100000}-7`;
+    const docRes = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/knowledge-base/documents`, {
+      data: { folderId: rootFolderId(), documentType: "general", title: `${key}: Add a new employee`, contentText: "First and last name are mandatory; each accepts at most 30 characters." },
+      failOnStatusCode: false,
+    });
+    expect(docRes.status(), await docRes.text()).toBe(201);
+    const reqDocId = (await docRes.json()).id;
+    const linked = await seedCase(`[${key}] Verify long first and last names ${Date.now()}`);
+    const unlinked = await seedCase(`[NOPE-${Date.now() % 1000}] Verify an unrelated thing ${Date.now()}`);
+    const sessionId = await newSession("E2E linked requirement citation");
+
+    await updateTurn(
+      sessionId,
+      [
+        { type: "update", externalId: linked.externalId, reason: "Placeholders." },
+        { type: "update", externalId: unlinked.externalId, reason: "Placeholders." },
+      ],
+      "Rewriting placeholders.",
+      // The model cites nothing at all — the behaviour measured live.
+      { updates: [linked, unlinked].map((tc) => ({ externalId: tc.externalId, fields: { title: `${tc.externalId} reviewed` }, sourceRefs: [] })) },
+    );
+
+    const drafting = ai.requests.find((r) => r.messages.some((m) => m.content.includes("Test cases to revise:")));
+    const draftingPrompt = drafting!.messages.map((m) => m.content).join("\n");
+    expect(draftingPrompt, "the linked requirement is in the drafting prompt").toContain(`${key}: Add a new employee`);
+    expect(draftingPrompt, "and is named as that case's requirement").toMatch(/"requirement": \[\s*"KB \d+"/);
+
+    const staged = JSON.parse(scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE chat_session_id = ${literal(sessionId)} ORDER BY created_at DESC LIMIT 1;`)) as Array<{ externalId: string; sourceRefs?: Array<{ id: string }> }>;
+    const refsOf = (externalId: string) => (staged.find((e) => e.externalId === externalId)?.sourceRefs ?? []).map((r) => r.id);
+    expect(refsOf(linked.externalId)).toEqual([reqDocId]);
+    expect(refsOf(unlinked.externalId), "no linked document, nothing cited — never borrowed from another case").toEqual([]);
+  });
+
+  // ─── Every relevant ticket reaches the drafting call ──────────────────────────────────────────
+  // A request spanning several requirement tickets was drafted from the first one or few that
+  // ranked: one long ticket filled the whole 6000-character retrieval budget, so every generated
+  // card cited that ticket alone. These pin the whole set reaching the prompt, once each, and each
+  // card's "Context used" resolving to its own ticket.
+
+  /** The drafting (not routing) call: the only one carrying zyraDynamicTaskPrompt's draft rule. */
+  function generationPrompt(): string {
+    const call = ai.requests.find((r) => r.messages.some((m) => m.content.includes("For every draft, use the selected knowledge")));
+    expect(call, "the drafting call ran").toBeTruthy();
+    return call!.messages.map((m) => m.content).join("\n");
+  }
+
+  /** How many times `title` is listed as a "KB N: <title>" source in the prompt. */
+  function kbListings(prompt: string, title: string): number {
+    const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return (prompt.match(new RegExp(`KB \\d+: ${escaped}\\n`, "g")) ?? []).length;
+  }
+
+  async function seedKbDoc(title: string, contentText: string, projectId = tenant!.mainProjectId): Promise<string> {
+    let folderId = rootFolderId();
+    if (projectId !== tenant!.mainProjectId) {
+      folderId = scalar(`SELECT id FROM knowledge_folders WHERE project_id = ${literal(projectId)} AND is_root = true;`);
+      if (!folderId) {
+        exec(
+          "INSERT INTO knowledge_folders (organization_id, project_id, parent_folder_id, name, is_root) " +
+            `VALUES (${literal(tenant!.organizationId)}, ${literal(projectId)}, NULL, 'Knowledge base', true);`,
+        );
+        folderId = scalar(`SELECT id FROM knowledge_folders WHERE project_id = ${literal(projectId)} AND is_root = true;`);
+      }
+    }
+    const res = await asOwner.post(`/api/projects/${projectId}/knowledge-base/documents`, {
+      data: { folderId, documentType: "general", title, contentText, contentHtml: `<p>${contentText}</p>` },
+      failOnStatusCode: false,
+    });
+    expect(res.status(), `seeding KB doc ${title} — ${await res.text()}`).toBe(201);
+    return (await res.json()).id as string;
+  }
+
+  function draftCiting(title: string, ref: string): Record<string, unknown> {
+    return {
+      title,
+      preconditions: "The API is reachable.",
+      stepsJson: JSON.stringify([{ stepNumber: 1, action: `Exercise ${ref}`, expectedResult: `${ref} behaves as specified` }]),
+      testData: "",
+      expectedSummary: `${ref} behaves as specified.`,
+      priority: "P2",
+      tags: ["zyra"],
+      sourceRefs: [ref],
+    };
+  }
+
+  async function createTurn(sessionId: string, message: string, drafts: Array<Record<string, unknown>>): Promise<void> {
+    ai.queueReply({ reply: "", reasoningSummary: "Creating.", action: "create", actionType: "create", operations: [], testcases: [], requestedCount: drafts.length, exhaustive: false });
+    ai.queueReply({ drafts });
+    const turn = await asOwner.post(url(`/chat/sessions/${sessionId}/messages`), { data: { message }, failOnStatusCode: false });
+    expect(turn.status(), `the create turn — ${await turn.text()}`).toBeLessThan(300);
+  }
+
+  function stagedDrafts(sessionId: string): Array<{ draft: { title: string; jiraIssueKey?: string | null; sourceRefs?: Array<{ type: string; id: string }> } }> {
+    return JSON.parse(scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE chat_session_id = ${literal(sessionId)} ORDER BY created_at DESC LIMIT 1;`));
+  }
+
+  test("ZYR-A-157 a request spanning several long, relevant tickets drafts from all of them, and each card cites its own ticket", async () => {
+    await allocateFakeAiKey();
+    const prefix = `EMP${Date.now() % 100000}`;
+    // Each document is longer than one passage and relevant throughout, so each fills a full share
+    // of the context — six of them overflowed the old 6000-character budget after three or four.
+    const docs: Array<{ key: string; title: string; id: string }> = [];
+    for (let i = 1; i <= 6; i += 1) {
+      const key = `${prefix}-${i}`;
+      const title = `${key}: Employee API endpoint ${i}`;
+      const body = Array.from({ length: 30 }, (_, n) => `Employee API endpoint ${i} rule ${n}: the endpoint validates employee field ${n} and returns 400 on a bad value.`).join(" ");
+      docs.push({ key, title, id: await seedKbDoc(title, body) });
+    }
+    const sessionId = await newSession("E2E multi-ticket generation");
+    await createTurn(
+      sessionId,
+      "Generate API test cases for the employee endpoints covering success, error and boundary scenarios.",
+      docs.map((doc) => draftCiting(`Employee endpoint ${doc.key} rejects a bad field`, doc.key)),
+    );
+
+    const prompt = generationPrompt();
+    for (const doc of docs) expect(kbListings(prompt, doc.title), `${doc.title} must be shown to the drafting call, once`).toBe(1);
+
+    const staged = stagedDrafts(sessionId);
+    expect(staged).toHaveLength(docs.length);
+    for (const doc of docs) {
+      const card = staged.find((entry) => entry.draft.title.includes(doc.key));
+      expect(card?.draft.sourceRefs?.map((ref) => ref.id), `${doc.key}'s card cites its own ticket`).toEqual([doc.id]);
+    }
+  });
+
+  test("ZYR-A-158 every ticket a request names is read — more than a search can return, once each, never from another project", async () => {
+    await allocateFakeAiKey();
+    const prefix = `LQ${Date.now() % 100000}`;
+    // No Jira mapping: these stand for Linear/Notion tickets, which resolveJiraIssueKeysDetailed
+    // never accepted. Content shares nothing with the request, so only the named key can find them.
+    const docs: Array<{ key: string; title: string; id: string }> = [];
+    for (let i = 1; i <= 10; i += 1) {
+      const key = `${prefix}-${i}`;
+      const title = `${key}: Leave policy ${i}`;
+      docs.push({ key, title, id: await seedKbDoc(title, `Annual leave carries over at most ${i} days into the next calendar year.`) });
+    }
+    // Same key, other project: the lookup is project-scoped and must never read it.
+    await seedKbDoc(`${prefix}-1: OTHER PROJECT leave policy`, "Must never reach this project's prompt.", tenant!.secondProjectId);
+    const sessionId = await newSession("E2E named tickets");
+    await createTurn(
+      sessionId,
+      // A key with no synced document (-99) simply matches nothing.
+      `Generate test cases for ${docs.map((doc) => doc.key).join(", ")} and ${prefix}-99.`,
+      docs.map((doc) => draftCiting(`Leave carry-over for ${doc.key}`, doc.key)),
+    );
+
+    const prompt = generationPrompt();
+    for (const doc of docs) expect(kbListings(prompt, doc.title), `${doc.title} must be shown once`).toBe(1);
+    expect(prompt, "a document from another project must never be read").not.toContain("OTHER PROJECT");
+
+    const staged = stagedDrafts(sessionId);
+    for (const doc of docs) {
+      const card = staged.find((entry) => entry.draft.title.endsWith(doc.key));
+      expect(card?.draft.sourceRefs?.map((ref) => ref.id), `${doc.key}'s card cites its own ticket`).toEqual([doc.id]);
+    }
+  });
+
+  test("ZYR-A-159 with several Jira tickets named, each card links to the ticket it cites — not always the first", async () => {
+    await allocateFakeAiKey();
+    exec(
+      `INSERT INTO integration_connections (organization_id, provider, external_id, site_url, access_token, refresh_token, token_expires_at) ` +
+        `VALUES (${literal(tenant!.organizationId)}, 'jira', 'e2e-zyra-citations', 'https://e2e-zyra-citations.invalid', 'e2e', '', now() + interval '365 days') ` +
+        `ON CONFLICT (organization_id, provider) DO NOTHING;`,
+    );
+    const connectionId = scalar(`SELECT id FROM integration_connections WHERE organization_id = ${literal(tenant!.organizationId)} AND provider = 'jira';`);
+    const projectKey = `JL${Date.now() % 100000}`;
+    exec(
+      "INSERT INTO jira_project_mappings (project_id, jira_connection_id, jira_project_id, jira_project_key, jira_project_name, enabled) " +
+        `VALUES (${literal(tenant!.mainProjectId)}, ${literal(connectionId)}, ${literal(`jira-${projectKey}`)}, ${literal(projectKey)}, 'E2E link project', true);`,
+    );
+    const [first, second] = [`${projectKey}-1`, `${projectKey}-2`];
+    for (const key of [first, second]) {
+      exec(
+        `INSERT INTO jira_tickets (project_id, jira_connection_id, jira_issue_id, jira_issue_key, summary, issue_type, status) ` +
+          `VALUES (${literal(tenant!.mainProjectId)}, ${literal(connectionId)}, ${literal(key)}, ${literal(key)}, ${literal(`Payroll export ${key}`)}, 'Story', 'Open');`,
+      );
+    }
+    const sessionId = await newSession("E2E per-draft ticket link");
+    await createTurn(sessionId, `Generate test cases for ${first} and ${second}.`, [
+      draftCiting(`Payroll export case for ${second}`, second),
+      draftCiting(`Payroll export case for ${first}`, first),
+      // Cites nothing: falls back to the first named ticket, as before.
+      { ...draftCiting("Payroll export uncited case", first), sourceRefs: [] },
+    ]);
+
+    const byTitle = (title: string) => stagedDrafts(sessionId).find((entry) => entry.draft.title === title)?.draft.jiraIssueKey;
+    expect(byTitle(`Payroll export case for ${second}`)).toBe(second);
+    expect(byTitle(`Payroll export case for ${first}`)).toBe(first);
+    expect(byTitle("Payroll export uncited case")).toBe(first);
+  });
+
+  // A broad request ("the main endpoints") shares almost no words with requirement tickets, so search
+  // found one ticket and every card was drafted from — and cited — that one. A broad request is now
+  // shown the project's tickets and the drafting call judges which apply.
+  test("ZYR-A-160 a broad request is shown the project's tickets — not just the one search matched — and each card cites its own", async () => {
+    await allocateFakeAiKey();
+    const prefix = `BRD${Date.now() % 100000}`;
+    const docs: Array<{ key: string; title: string; id: string }> = [];
+    for (let i = 1; i <= 5; i += 1) {
+      const key = `${prefix}-${i}`;
+      const title = `${key}: Manage leave type ${i}`;
+      docs.push({ key, title, id: await seedKbDoc(title, `An administrator can add, rename and delete leave type ${i}; names must be unique.`) });
+    }
+    // Not a ticket (no "KEY:" title): the catalogue must not pull ordinary notes in.
+    await seedKbDoc(`E2E office note ${prefix}`, "Office plants are watered on Fridays.");
+    const sessionId = await newSession("E2E broad request");
+    await createTurn(
+      sessionId,
+      "Generate API test cases for the main endpoints covering success, error, and boundary scenarios.",
+      docs.map((doc) => draftCiting(`Leave type API case for ${doc.key}`, doc.key)),
+    );
+
+    const prompt = generationPrompt();
+    for (const doc of docs) expect(kbListings(prompt, doc.title), `${doc.title} must be shown once`).toBe(1);
+    expect(prompt, "a non-ticket note is not part of the ticket catalogue").not.toContain(`E2E office note ${prefix}`);
+
+    const staged = stagedDrafts(sessionId);
+    for (const doc of docs) {
+      const card = staged.find((entry) => entry.draft.title.endsWith(doc.key));
+      expect(card?.draft.sourceRefs?.map((ref) => ref.id), `${doc.key}'s card cites its own ticket`).toEqual([doc.id]);
+    }
+  });
+
+  test("ZYR-A-161 a request that names a ticket is not widened to the whole catalogue", async () => {
+    await allocateFakeAiKey();
+    const prefix = `NRW${Date.now() % 100000}`;
+    const named = { key: `${prefix}-1`, title: `${prefix}-1: Approve a leave request` };
+    const id = await seedKbDoc(named.title, "A supervisor approves or rejects a pending leave request.");
+    await seedKbDoc(`${prefix}-2: Unrelated payroll export`, "Payroll is exported monthly as CSV.");
+    const sessionId = await newSession("E2E named, not broad");
+    await createTurn(sessionId, `Generate test cases for ${named.key}.`, [draftCiting(`Leave approval for ${named.key}`, named.key)]);
+
+    const prompt = generationPrompt();
+    expect(kbListings(prompt, named.title)).toBe(1);
+    expect(prompt, "an unnamed ticket must not be added").not.toContain(`${prefix}-2: Unrelated payroll export`);
+    expect(stagedDrafts(sessionId)[0].draft.sourceRefs?.map((ref) => ref.id)).toEqual([id]);
   });
 
   test("ZYR-A-153 a drafting call that returns nothing usable stages nothing for those cases and says why — never a false 'staged'", async () => {
