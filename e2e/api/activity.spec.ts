@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
-import { exec, execAllowingAuditImmutability, literal } from "../utils/psql";
+import { exec, execAllowingAuditImmutability, literal, scalar } from "../utils/psql";
 import {
   anonymousContext,
   loginAs,
@@ -624,5 +624,153 @@ test.describe("activity feed", () => {
       updatedAfterDelete,
       `the run's rename entry lost its record when the run was deleted — got ${JSON.stringify(list.map((i) => i.entityName))}`,
     ).toBeTruthy();
+  });
+
+  // ─── Volume: the zyra de-duplication must scale linearly ───────────────────
+
+  /**
+   * Seeds testcase_* audit rows directly, since creating thousands through the API is minutes of
+   * round trips. audit_logs is append-only (see purgeActivity), so these rows are permanent: seed only
+   * the shortfall, which keeps repeated runs from growing the table without bound.
+   */
+  function seedBulkTestcaseAudit(total: number): void {
+    const have = Number(
+      scalar(
+        `SELECT count(*) FROM audit_logs WHERE project_id = ${literal(tenant!.mainProjectId)} AND entity_name LIKE 'E2E ACT BULK %' AND created_at > now() - interval '5 days';`,
+      ) || "0",
+    );
+    const missing = total - have;
+    if (missing <= 0) return;
+    exec(
+      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, entity_name, project_id, organization_id, created_at)
+       SELECT ${literal(tenant!.owner.userId)},
+              CASE WHEN g % 2 = 0 THEN 'testcase_created' ELSE 'testcase_updated' END,
+              'testcase', 'e2e-act-bulk-' || ${literal(String(Date.now()))} || '-' || g, 'E2E ACT BULK ' || g,
+              ${literal(tenant!.mainProjectId)}, ${literal(tenant!.organizationId)},
+              now() - (g || ' seconds')::interval
+       FROM generate_series(1, ${missing}) g;`,
+    );
+  }
+
+  test("ACT-A-19 a project with thousands of test-case audit rows still answers the feed and summary promptly", async () => {
+    /*
+     * Regression for the project dashboard's 500 + redirect to All Projects. The zyra de-duplication
+     * was a correlated NOT (… AND EXISTS (SELECT … FROM activity_events z …)) that full-scanned the
+     * materialized CTE once per testcase_created/updated row — O(testcase rows × all rows). Measured
+     * on a 7k-row project that was 2.9s; at 8k testcase rows it is well past the 30s statement_timeout
+     * and the endpoint answered 500. The shipped shape is a hash anti-join (~0.5s here).
+     *
+     * The budget is a regression tripwire, not a benchmark: ~10x the fixed latency over a hosted
+     * database, and far below the quadratic plan's time at this volume.
+     */
+    test.setTimeout(120_000);
+    seedBulkTestcaseAudit(8000);
+
+    const t0 = Date.now();
+    const page = await feed({ limit: 10 });
+    const feedMs = Date.now() - t0;
+    expect(page.list.length, "limit=10 must return 10 entries").toBe(10);
+    expect(page.total, "total counts every seeded row").toBeGreaterThanOrEqual(8000);
+    expect(feedMs, `GET /activity?limit=10 took ${feedMs}ms with 8000 testcase audit rows`).toBeLessThan(8000);
+
+    const s0 = Date.now();
+    const res = await asOwner.get(`/api/projects/${tenant!.mainProjectId}/activity/summary`, { failOnStatusCode: false });
+    const summaryMs = Date.now() - s0;
+    expect(res.status(), `summary — ${await res.text()}`).toBe(200);
+    expect((await res.json()).weekly.total, "summary sees the 7-day rows").toBeGreaterThanOrEqual(8000);
+    expect(summaryMs, `GET /activity/summary took ${summaryMs}ms with 8000 testcase audit rows`).toBeLessThan(8000);
+
+    // The workspace rollup shares the same SQL builder.
+    const w0 = Date.now();
+    const ws = await workspaceFeed({ limit: 10 });
+    expect(Date.now() - w0, "GET /workspace/activity at volume").toBeLessThan(8000);
+    expect(ws.list).toHaveLength(10);
+
+    // Paging deep into the set still works and stays bounded.
+    const deep = await feed({ limit: 100, offset: 7000 });
+    expect(deep.list.length, "a deep page is a full page").toBe(100);
+  });
+
+  test("ACT-A-20 a testcase_* row is dropped only for a zyra_* sibling on the same entity within 5 seconds", async () => {
+    /*
+     * Pins the de-duplication semantics the performance rewrite must not change. Rows are inserted
+     * directly with chosen created_at values, so the 5s window is exact rather than racy.
+     */
+    const tag = stamp("Dedup");
+    const proj = literal(tenant!.mainProjectId);
+    const org = literal(tenant!.organizationId);
+    const owner = literal(tenant!.owner.userId);
+    const base = `now() - interval '2 hours'`;
+    // [entity suffix, action, actor SQL, seconds after base, entity type]
+    const rows: [string, string, string, number, string][] = [
+      // E1: zyra 2s after the testcase row -> the plain row is dropped, the zyra row stays.
+      ["e1", "testcase_updated", owner, 0, "testcase"],
+      ["e1", "zyra_updated", "NULL", 2, "testcase"],
+      // E2: zyra 6s away -> outside the window, both stay.
+      ["e2", "testcase_updated", owner, 0, "testcase"],
+      ["e2", "zyra_updated", "NULL", 6, "testcase"],
+      // E3: no zyra sibling at all -> stays.
+      ["e3", "testcase_created", owner, 0, "testcase"],
+      // E4: sibling is hidden by the actor filter below, but must still de-duplicate.
+      ["e4", "testcase_created", owner, 0, "testcase"],
+      ["e4", "zyra_created", "NULL", 1, "testcase"],
+      // E5: not a testcase_* action -> never dropped, even with a zyra sibling in the window.
+      ["e5", "suite_renamed", owner, 0, "suite"],
+      ["e5", "zyra_created", "NULL", 1, "testcase"],
+      // E6: two zyra siblings in the window -> one drop, and no duplicated rows from the join.
+      ["e6", "testcase_created", owner, 0, "testcase"],
+      ["e6", "zyra_created", "NULL", 1, "testcase"],
+      ["e6", "zyra_updated", "NULL", 2, "testcase"],
+      // E7: a zyra row for a DIFFERENT entity in the window does not suppress this one.
+      ["e7", "testcase_created", owner, 0, "testcase"],
+      ["e8", "zyra_created", "NULL", 0, "testcase"],
+      // E9: zyra sibling BEFORE the testcase row (abs window, both directions).
+      ["e9", "zyra_archived", "NULL", 0, "testcase"],
+      ["e9", "testcase_updated", owner, 3, "testcase"],
+    ];
+    exec(
+      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, entity_name, project_id, organization_id, created_at) VALUES ` +
+        rows
+          .map(
+            ([e, action, actor, secs, type]) =>
+              `(${actor}, ${literal(action)}, ${literal(type)}, ${literal(`${tag}-${e}`)}, ${literal(`${tag}-${e}`)}, ${proj}, ${org}, ${base} + interval '${secs} seconds')`,
+          )
+          .join(", ") +
+        ";",
+    );
+
+    const seen = async (extra: Record<string, string | number> = {}) =>
+      (await feed({ search: tag, limit: 100, ...extra })).list.map((i) => `${i.entityName!.slice(tag.length + 1)}:${i.action}`).sort();
+
+    expect(await seen()).toEqual(
+      [
+        "e1:zyra_updated",
+        "e2:testcase_updated",
+        "e2:zyra_updated",
+        "e3:testcase_created",
+        "e4:zyra_created", // e4's testcase_created is dropped
+        "e5:suite_renamed",
+        "e5:zyra_created",
+        "e6:zyra_created",
+        "e6:zyra_updated", // exactly one drop for e6, each zyra row once
+        "e7:testcase_created",
+        "e8:zyra_created",
+        "e9:zyra_archived", // e9's testcase_updated is dropped
+      ].sort(),
+    );
+
+    // The sibling is hidden by this filter (its actor is NULL), yet e4's plain row is still dropped:
+    // de-duplication looks at the unfiltered event set, not at what the filter lets through.
+    const mine = await seen({ actorId: tenant!.owner.userId });
+    expect(mine, "e4's testcase_created must stay dropped when its zyra sibling is filtered out").not.toContain("e4:testcase_created");
+    expect(mine).toContain("e3:testcase_created");
+
+    // total agrees with the rows returned, so COUNT and the list use the same de-duplication.
+    const all = await feed({ search: tag, limit: 100 });
+    expect(all.total).toBe(all.list.length);
+
+    // The workspace rollup de-duplicates identically.
+    const ws = (await workspaceFeed({ search: tag, limit: 100 })).list.map((i) => `${i.entityName!.slice(tag.length + 1)}:${i.action}`).sort();
+    expect(ws).toEqual(await seen());
   });
 });

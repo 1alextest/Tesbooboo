@@ -9240,18 +9240,26 @@ export class LegacyService implements OnModuleInit {
       -- as duplicate feed rows for the same mutation. Drop the plain testcase_* row whenever a
       -- zyra_* sibling exists for the same entity within a few seconds; the zyra_* row carries
       -- the AI-specific action label and reason, and actor attribution already says who/what did it.
+      --
+      -- Shape matters for speed: this must stay a top-level AND NOT EXISTS whose only correlation
+      -- to ae is z.entity_id = ae.entity_id. Postgres then plans a hash anti-join (linear). The
+      -- earlier NOT (action IN (...) AND EXISTS (...)) put the sublink under an OR, which cannot be
+      -- pulled up, so it ran as a correlated SubPlan that full-scanned the (unindexed, materialized)
+      -- CTE once per testcase_* row: O(testcase rows x all rows), 30s+ on a project with thousands
+      -- of test cases, which the 30s statement_timeout turned into a 500 on the project dashboard.
+      -- The action guard sits inside the subquery (outer-only qual): for any other action the
+      -- subquery is empty, so NOT EXISTS stays true and the row is kept, as before.
+      -- z is deliberately NOT narrowed by outerWhere: a sibling hidden by a filter must still dedup.
       SELECT ae.*, pr.name AS project_name
       FROM activity_events ae
       LEFT JOIN projects pr ON pr.id = ae.project_id
       WHERE ${outerWhere}
-        AND NOT (
-          ae.action IN ('testcase_created', 'testcase_updated')
-          AND EXISTS (
-            SELECT 1 FROM activity_events z
-            WHERE z.entity_id = ae.entity_id
-              AND z.action IN ('zyra_created', 'zyra_updated', 'zyra_archived')
-              AND abs(extract(epoch FROM z.created_at - ae.created_at)) < 5
-          )
+        AND NOT EXISTS (
+          SELECT 1 FROM activity_events z
+          WHERE ae.action IN ('testcase_created', 'testcase_updated')
+            AND z.entity_id = ae.entity_id
+            AND z.action IN ('zyra_created', 'zyra_updated', 'zyra_archived')
+            AND abs(extract(epoch FROM z.created_at - ae.created_at)) < 5
         )
     `;
   }

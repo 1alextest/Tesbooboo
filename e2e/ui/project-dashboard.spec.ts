@@ -705,6 +705,55 @@ test.describe("project dashboard — loading, errors and navigation", () => {
     }
   });
 
+  /*
+   * Regression: the activity feed query ran past the 30s statement_timeout on a project with thousands
+   * of test-case audit rows, answered 500, and the dashboard's all-or-nothing Promise.all bounced the
+   * user to /projects after a 30s spinner. Only the summary gates the page; runs and activity are side
+   * panels that must degrade to their empty state. Pathname-anchored so `/activity/summary` and the
+   * project record itself are not swallowed by the stub.
+   */
+  for (const panel of [
+    { id: "DSH-U-38b", name: "recent activity", path: "activity", empty: "No activity yet." },
+    { id: "DSH-U-38c", name: "recent runs", path: "cycles", empty: null },
+  ]) {
+    test(`${panel.id} a failing ${panel.name} panel does not send the user back to the list`, async ({ page }) => {
+      const project = await createProject(api);
+      try {
+        await page.route(
+          (url) => url.pathname === `/api/projects/${project.id}/${panel.path}`,
+          (route) => route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"boom"}' }),
+        );
+        await page.goto(`/projects/${project.id}/dashboard`);
+
+        // The dashboard itself renders: header, plus both panels' headings.
+        await expect(page.getByRole("heading", { name: project.name })).toBeVisible();
+        await expect(page.getByText("Recent activity")).toBeVisible();
+        await expect(page.getByText("Recent test runs")).toBeVisible();
+        if (panel.empty) await expect(page.getByText(panel.empty)).toBeVisible();
+        // Well past any redirect the old code would have made; the URL must not have moved.
+        await page.waitForTimeout(1500);
+        expect(page.url()).toContain(`/projects/${project.id}/dashboard`);
+      } finally {
+        await deleteProjects(api, [project.id]);
+      }
+    });
+  }
+
+  test("DSH-U-38d a failing dashboard summary still sends the user back to the list", async ({ page }) => {
+    // The summary is the one call the page cannot render without, so the redirect stays for it.
+    const project = await createProject(api);
+    try {
+      await page.route(
+        (url) => url.pathname === `/api/projects/${project.id}/dashboard`,
+        (route) => route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"boom"}' }),
+      );
+      await page.goto(`/projects/${project.id}/dashboard`);
+      await page.waitForURL("**/projects");
+    } finally {
+      await deleteProjects(api, [project.id]);
+    }
+  });
+
   test("DSH-U-39 an unauthenticated visitor is sent to login", { tag: '@tesbo.testId("TES-TC-752")' }, async ({ browser }) => {
     const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     try {
