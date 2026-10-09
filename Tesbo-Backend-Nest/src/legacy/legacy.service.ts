@@ -7093,7 +7093,7 @@ export class LegacyService implements OnModuleInit {
         const params: unknown[] = [cycleId];
         const sets = [...runFields].map(([col, value]) => {
           params.push(value);
-          return `${col} = ${params.length}`;
+          return `${col} = $${params.length}`;
         });
         await client.query(`UPDATE cycles SET ${sets.join(", ")}, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`, params);
       }

@@ -467,7 +467,7 @@ export default function TestCasesPage() {
   const [estimatedDuration, setEstimatedDuration] = useState("");
   const [attachments, setAttachments] = useState("");
   const [type, setType] = useState("Functional");
-  const [priority, setPriority] = useState("P2");
+  const [priority, setPriority] = useState("Not set");
   const [status, setStatus] = useState("Draft");
   const [automationStatus, setAutomationStatus] = useState("Not Automated");
   const [component, setComponent] = useState("");
@@ -1005,7 +1005,8 @@ export default function TestCasesPage() {
     setEstimatedDuration("");
     setAttachments("");
     setType("");
-    setPriority("");
+    // New cases start as "Not set", not blank and not P2: the person has not chosen one yet.
+    setPriority("Not set");
     setStatus("Draft");
     setAutomationStatus("");
     setComponent("");
@@ -2250,6 +2251,27 @@ export default function TestCasesPage() {
                   </div>
                 )}
 
+                {/* Suite description and preconditions: above every state below (table, empty suite, error), so a suite that has no cases yet still shows what it is for. */}
+                {selectedSuite && (selectedSuite.description || selectedSuite.preconditions) && (
+                  <div
+                    data-testid="suite-details"
+                    className="mx-4 mt-3 shrink-0 space-y-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-4 py-3 text-[12.5px]"
+                  >
+                    {selectedSuite.description && (
+                      <div>
+                        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--muted-soft)]">Description</div>
+                        <p className="mt-0.5 whitespace-pre-wrap break-words text-[var(--foreground)]">{selectedSuite.description}</p>
+                      </div>
+                    )}
+                    {selectedSuite.preconditions && (
+                      <div>
+                        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--muted-soft)]">Preconditions</div>
+                        <p className="mt-0.5 whitespace-pre-wrap break-words text-[var(--foreground)]">{selectedSuite.preconditions}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Content */}
                 {suiteCasesError ? (
                   <p className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-[var(--error-foreground)]">
@@ -2296,25 +2318,6 @@ export default function TestCasesPage() {
                           <IconLoader2 size={12} stroke={2} className="animate-spin" />
                           Updating…
                         </span>
-                      </div>
-                    )}
-                    {selectedSuite && (selectedSuite.description || selectedSuite.preconditions) && (
-                      <div
-                        data-testid="suite-details"
-                        className="mb-3 space-y-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-4 py-3 text-[12.5px]"
-                      >
-                        {selectedSuite.description && (
-                          <div>
-                            <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--muted-soft)]">Description</div>
-                            <p className="mt-0.5 whitespace-pre-wrap break-words text-[var(--foreground)]">{selectedSuite.description}</p>
-                          </div>
-                        )}
-                        {selectedSuite.preconditions && (
-                          <div>
-                            <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--muted-soft)]">Preconditions</div>
-                            <p className="mt-0.5 whitespace-pre-wrap break-words text-[var(--foreground)]">{selectedSuite.preconditions}</p>
-                          </div>
-                        )}
                       </div>
                     )}
                     <RepositoryTestCaseTable

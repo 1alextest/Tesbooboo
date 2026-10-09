@@ -102,6 +102,8 @@ test.describe("test case creation", () => {
     }
   });
 
+  // Priority is the one exception to the blank defaults below: it opens on "Not set" and saves as
+  // "Not set" (a case whose priority nobody has chosen yet), not "" and not P2.
   // Suite, Type, Priority, Automation Type, Component and Severity are all optional on Create:
   // Create Test Case must open with the dropdowns on "Select"/"No suite" and Component empty,
   // and leaving every one of them untouched must both (a) succeed, and (b) persist them as blank/
@@ -121,7 +123,7 @@ test.describe("test case creation", () => {
 
     await expect(fieldControl(page, "Suite").locator("option:checked")).toHaveText("Select");
     await expect(fieldControl(page, "Type").locator("option:checked")).toHaveText("Select");
-    await expect(fieldControl(page, "Priority").locator("option:checked")).toHaveText("Select");
+    await expect(fieldControl(page, "Priority").locator("option:checked")).toHaveText("Not set");
     await expect(fieldControl(page, "Automation Type").locator("option:checked")).toHaveText("Select");
     await expect(fieldControl(page, "Component")).toHaveValue("");
     await expect(fieldControl(page, "Severity").locator("option:checked")).toHaveText("Select");
@@ -145,7 +147,7 @@ test.describe("test case creation", () => {
       expect(match).toBeTruthy();
       expect(match.suiteId).toBeNull();
       expect(match.type).toBeNull();
-      expect(match.priority).toBe("");
+      expect(match.priority).toBe("Not set");
       expect(match.automationStatus).toBeNull();
       expect(match.component).toBeFalsy();
       expect(match.severity).toBeFalsy();
