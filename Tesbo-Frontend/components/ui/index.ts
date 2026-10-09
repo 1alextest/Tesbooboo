@@ -15,6 +15,7 @@ export { default as ConfirmModal } from "@/components/ui/ConfirmModal";
 export { default as CopyButton } from "@/components/ui/CopyButton";
 export type { CopyButtonProps } from "@/components/ui/CopyButton";
 export { default as Drawer } from "@/components/ui/Drawer";
+export { ListPagination, useListPagination } from "@/components/ui/ListPagination";
 export { default as EmptyStateBlock } from "@/components/ui/EmptyStateBlock";
 export { PageLoader } from "@/components/ui/PageLoader";
 export type { PageLoaderProps } from "@/components/ui/PageLoader";
