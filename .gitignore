@@ -78,3 +78,5 @@ Zyra Workflow Agents/
 
 # Superpowers brainstorming/spec working docs (not for the repo)
 docs/superpowers/
+# Qase to Tesbo migration scripts and ledgers (local only)
+migration-nevvon/
