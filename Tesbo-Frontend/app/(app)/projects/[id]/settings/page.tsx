@@ -584,6 +584,14 @@ export default function ProjectSettingsPage() {
                     maxLength={PROJECT_NAME_MAX_LENGTH}
                   />
                   {nameError && <FieldError>{nameError}</FieldError>}
+                  {/* Plain text, not an input: keeps `form input[type=text]` selectors on the name field. */}
+                  <p className="mt-1.5 text-xs text-[var(--muted)]" data-testid="project-key-note">
+                    Project key{" "}
+                    <span className="font-mono uppercase text-[var(--foreground)]" data-testid="project-key">
+                      {String(project.key ?? "")}
+                    </span>{" "}
+                    is set when the project is created and stays the same when you rename it. It appears in URLs and integrations.
+                  </p>
                 </Field>
                 <Field>
                   <div className="flex items-baseline justify-between">
