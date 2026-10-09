@@ -59,6 +59,7 @@ import { Menu, MenuItem } from "@/components/knowledge-base/Menu";
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
 import { FolderTreeNodeRow, flattenFolders, findAncestorIds, type FolderAction } from "@/components/knowledge-base/FolderTree";
+import { canModifyKnowledgeItem, isKnowledgeOwnerOrManager } from "@/lib/knowledge-permissions";
 import {
   KB_ACCEPT_ATTR,
   KB_MAX_FILES_PER_UPLOAD,
@@ -924,8 +925,13 @@ function KnowledgeBasePageInner() {
   const searchParams = useSearchParams();
   const projectId = params.id as string;
   const { currentUser } = useAppData();
-  const { project } = useProjectData();
+  const { project, projectMembers } = useProjectData();
   const projectName = String(project.name || "");
+  // Same rule the API enforces on rename/move/delete (kbRequireMutateAccess) — actions that would
+  // only be refused are not offered. Files are checked against their uploader, as the API does.
+  const isOwnerOrManager = isKnowledgeOwnerOrManager(projectMembers.find((m) => m.userId === currentUser?.userId)?.role);
+  const canModify = (creatorId: string | null | undefined) => canModifyKnowledgeItem(isOwnerOrManager, creatorId, currentUser?.userId);
+  const itemCreatorId = (item: KnowledgeItem) => ("uploadedBy" in item ? item.uploadedBy : item.createdBy);
   const folderParam = searchParams.get("folder");
   const appliedFolderParam = useRef<string | null>(null);
 
@@ -1539,6 +1545,7 @@ function KnowledgeBasePageInner() {
                       onAction={handleFolderAction}
                       expanded={expanded}
                       toggleExpanded={toggleExpanded}
+                      canModify={(folder) => canModify(folder.createdBy)}
                     />
                   )}
                   <button
@@ -1760,14 +1767,16 @@ function KnowledgeBasePageInner() {
                                       <IconDownload size={14} /> Download
                                     </MenuItem>
                                   )}
-                                  {item.type !== "folder" && (
+                                  {item.type !== "folder" && canModify(itemCreatorId(item)) && (
                                     <MenuItem onClick={() => { setMoveTarget({ kind: item.type, id: item.id }); close(); }}>
                                       <IconArrowRight size={14} /> Move
                                     </MenuItem>
                                   )}
-                                  <MenuItem danger onClick={() => { handleDeleteItem(item); close(); }}>
-                                    <IconTrash size={14} /> Delete
-                                  </MenuItem>
+                                  {canModify(itemCreatorId(item)) && (
+                                    <MenuItem danger onClick={() => { handleDeleteItem(item); close(); }}>
+                                      <IconTrash size={14} /> Delete
+                                    </MenuItem>
+                                  )}
                                 </>
                               )}
                             </Menu>

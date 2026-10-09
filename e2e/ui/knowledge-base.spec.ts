@@ -1131,18 +1131,31 @@ test.describe("knowledge base (UI)", () => {
   test("KBU-34 a permission refusal on rename floats above the still-open dialog as a toast, not a hidden page banner", { tag: '@tesbo.testId("TES-TC-1341")' }, async ({
     browser,
   }) => {
+    // A QA engineer is no longer offered Rename on someone else's folder, so the refusal is reached
+    // the way it still can be: they open Rename on a folder they created, and it changes hands
+    // before they save (a stale page). kbRequireMutateAccess (legacy.service.ts) then refuses with
+    // "You can only modify items you created".
     const ownersFolder = stamp("OwnersFolder");
-    const created = await api.post(kbUrl("/folders"), { data: { name: ownersFolder, parentFolderId: rootFolderId } });
-    expect(created.status()).toBe(201);
+    const asQa = await loginAs(tenant!.qa);
+    let folderId = "";
+    try {
+      const created = await asQa.post(kbUrl("/folders"), { data: { name: ownersFolder, parentFolderId: rootFolderId } });
+      expect(created.status(), await created.text()).toBe(201);
+      folderId = (await created.json()).id;
+    } finally {
+      await asQa.dispose();
+    }
 
-    // qa_engineer: not owner/manager, and did not create this folder — kbRequireMutateAccess
-    // (legacy.service.ts) refuses with "You can only modify items you created".
     const page = await openKb(browser, "qa");
     await expect(row(page, ownersFolder)).toBeVisible();
 
     await openTreeMenu(page, ownersFolder, "Rename");
     const dialog = modal(page, "Rename folder");
     await dialog.locator("input").fill(stamp("Attempted"));
+    exec(
+      `UPDATE knowledge_folders SET created_by = (SELECT created_by FROM knowledge_folders WHERE id = ${literal(rootFolderId)}) ` +
+        `WHERE id = ${literal(folderId)};`,
+    );
     await dialog.getByRole("button", { name: "Save" }).click();
 
     const toast = errorToast(page).filter({ hasText: "You can only modify items you created" });
@@ -1162,6 +1175,140 @@ test.describe("knowledge base (UI)", () => {
       scalar(`SELECT name FROM knowledge_folders WHERE project_id = ${literal(tenant!.mainProjectId)} AND name = ${literal(ownersFolder)};`),
       "the refused rename must not have been persisted",
     ).toBe(ownersFolder);
+  });
+
+  // ─── Actions offered match what the API allows (kbRequireMutateAccess) ─────────────────────────
+  // A QA engineer was offered Delete (and Rename/Move) on owners' items, confirmed, and only then
+  // got "You can only modify items you created". Owners/managers may change anything; anyone else
+  // only what they created — the UI now offers exactly that.
+
+  /** An owner-created folder, document and file in the root, plus the owner's user id. */
+  async function seedOwnersItems(): Promise<{ folder: string; doc: string; docId: string; file: string }> {
+    const folder = stamp("Owners folder");
+    const folderRes = await api.post(kbUrl("/folders"), { data: { name: folder, parentFolderId: rootFolderId } });
+    expect(folderRes.status(), await folderRes.text()).toBe(201);
+    const ownerId = scalar(`SELECT created_by FROM knowledge_folders WHERE id = ${literal((await folderRes.json()).id)};`);
+    const doc = stamp("Owners doc");
+    const docRes = await api.post(kbUrl("/documents"), {
+      data: { folderId: rootFolderId, documentType: "general", title: doc, contentText: "Owner's notes.", contentHtml: "<p>Owner's notes.</p>" },
+    });
+    expect(docRes.status(), await docRes.text()).toBe(201);
+    // No upload helper exists in the suite; a row is all the list renders for a file.
+    const file = `${stamp("Owners file")}.txt`;
+    exec(
+      "INSERT INTO knowledge_files (organization_id, project_id, folder_id, file_name, original_file_name, uploaded_by) " +
+        `VALUES (${literal(tenant!.organizationId)}, ${literal(tenant!.mainProjectId)}, ${literal(rootFolderId)}, ${literal(file)}, ${literal(file)}, ${literal(ownerId)});`,
+    );
+    return { folder, doc, docId: (await docRes.json()).id, file };
+  }
+
+  async function rowMenuItems(page: Page, name: string): Promise<string[]> {
+    await rowMenu(page, name).click();
+    const items = (await menuPanel(page).getByRole("button").allInnerTexts()).map((t) => t.trim());
+    await page.keyboard.press("Escape");
+    return items;
+  }
+
+  test("KBU-P1 a QA engineer is not offered Move or Delete on an owner's document, file or folder — read actions stay", async ({ browser }) => {
+    const { folder, doc, file } = await seedOwnersItems();
+    const page = await openKb(browser, "qa");
+
+    const docItems = await rowMenuItems(page, doc);
+    expect(docItems).toEqual(expect.arrayContaining(["Open", "Duplicate"]));
+    expect(docItems).not.toContain("Move");
+    expect(docItems).not.toContain("Delete");
+
+    const fileItems = await rowMenuItems(page, file);
+    expect(fileItems).toEqual(expect.arrayContaining(["Open", "Download"]));
+    expect(fileItems).not.toContain("Move");
+    expect(fileItems).not.toContain("Delete");
+
+    expect(await rowMenuItems(page, folder)).not.toContain("Delete");
+
+    // The folder tree: subfolders can still be created by anyone; changing the folder cannot.
+    await treeRow(page, folder).locator("button:has(svg)").last().click();
+    const treeItems = (await menuPanel(page).getByRole("button").allInnerTexts()).map((t) => t.trim());
+    expect(treeItems).toContain("Create subfolder");
+    for (const action of ["Rename", "Move", "Delete"]) expect(treeItems).not.toContain(action);
+  });
+
+  test("KBU-P2 a QA engineer keeps every action on items they created, and Delete really deletes", async ({ browser }) => {
+    const asQa = await loginAs(tenant!.qa);
+    const folder = stamp("QA folder");
+    const doc = stamp("QA doc");
+    try {
+      expect((await asQa.post(kbUrl("/folders"), { data: { name: folder, parentFolderId: rootFolderId } })).status()).toBe(201);
+      const docRes = await asQa.post(kbUrl("/documents"), {
+        data: { folderId: rootFolderId, documentType: "general", title: doc, contentText: "QA notes.", contentHtml: "<p>QA notes.</p>" },
+      });
+      expect(docRes.status(), await docRes.text()).toBe(201);
+    } finally {
+      await asQa.dispose();
+    }
+    const page = await openKb(browser, "qa");
+
+    expect(await rowMenuItems(page, doc)).toEqual(expect.arrayContaining(["Move", "Delete"]));
+    await treeRow(page, folder).locator("button:has(svg)").last().click();
+    expect((await menuPanel(page).getByRole("button").allInnerTexts()).map((t) => t.trim())).toEqual(
+      expect.arrayContaining(["Rename", "Move", "Delete"]),
+    );
+    await page.keyboard.press("Escape");
+
+    // A document delete confirms with window.confirm (handleDeleteItem), not a modal.
+    page.once("dialog", (d) => d.accept());
+    await rowMenu(page, doc).click();
+    await menuPanel(page).getByRole("button", { name: "Delete", exact: true }).click();
+    await expect
+      .poll(() => scalar(`SELECT is_deleted::text FROM knowledge_documents WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(doc)};`))
+      .toBe("true");
+  });
+
+  test("KBU-P3 an owner is offered every action on everyone's items", async ({ browser }) => {
+    const asQa = await loginAs(tenant!.qa);
+    const doc = stamp("QA-made doc");
+    try {
+      const res = await asQa.post(kbUrl("/documents"), {
+        data: { folderId: rootFolderId, documentType: "general", title: doc, contentText: "x", contentHtml: "<p>x</p>" },
+      });
+      expect(res.status(), await res.text()).toBe(201);
+    } finally {
+      await asQa.dispose();
+    }
+    const { folder } = await seedOwnersItems();
+    const page = await openKb(browser, "owner");
+    expect(await rowMenuItems(page, doc)).toEqual(expect.arrayContaining(["Move", "Delete"]));
+    await treeRow(page, folder).locator("button:has(svg)").last().click();
+    expect((await menuPanel(page).getByRole("button").allInnerTexts()).map((t) => t.trim())).toEqual(
+      expect.arrayContaining(["Rename", "Move", "Delete"]),
+    );
+  });
+
+  test("KBU-P4 the document page offers Delete to the owner and to the document's QA creator, never to another QA engineer", async ({ browser }) => {
+    const { docId } = await seedOwnersItems();
+
+    const qaPage = await openDocument(browser, docId, "qa");
+    await qaPage.getByRole("button", { name: "More actions" }).click();
+    await expect(qaPage.getByRole("button", { name: "View history" })).toBeVisible();
+    await expect(qaPage.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
+
+    const ownerPage = await openDocument(browser, docId, "owner");
+    await ownerPage.getByRole("button", { name: "More actions" }).click();
+    await expect(ownerPage.getByRole("button", { name: "Delete", exact: true })).toBeVisible();
+
+    const asQa = await loginAs(tenant!.qa);
+    let qaDocId = "";
+    try {
+      const res = await asQa.post(kbUrl("/documents"), {
+        data: { folderId: rootFolderId, documentType: "general", title: stamp("QA own doc"), contentText: "x", contentHtml: "<p>x</p>" },
+      });
+      expect(res.status(), await res.text()).toBe(201);
+      qaDocId = (await res.json()).id;
+    } finally {
+      await asQa.dispose();
+    }
+    const ownDocPage = await openDocument(browser, qaDocId, "qa");
+    await ownDocPage.getByRole("button", { name: "More actions" }).click();
+    await expect(ownDocPage.getByRole("button", { name: "Delete", exact: true })).toBeVisible();
   });
 
   // ─── Nightly sync cron follow-through: "Added on", "Last updated", and the change-history popover ──
