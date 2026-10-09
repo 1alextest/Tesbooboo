@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, request as newRequestContext, test } from "@playwright/test";
+import { env } from "../utils/env";
+import { dbControlAvailable, literal, scalar } from "../utils/psql";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 
@@ -206,7 +208,8 @@ test.describe("test case CRUD", () => {
   test("defaults are applied when optional fields are omitted on create", { tag: '@tesbo.testId("TES-TC-552")' }, async ({ request }) => {
     const created = await createCase(request);
     try {
-      expect(created.priority).toBe("P2");
+      // A case nobody prioritised is "Not set", not a P2 nobody chose.
+      expect(created.priority).toBe("Not set");
       expect(created.type).toBe("Functional");
       expect(created.status).toBe("Draft");
       expect(created.automationStatus).toBe("Not Automated");
@@ -1768,6 +1771,420 @@ test.describe("sort", () => {
       expect((await bogus.json()).map((tc: { id: string }) => tc.id)).toEqual(newestFirst);
     } finally {
       for (const id of created) await deleteCase(request, id);
+    }
+  });
+});
+
+// "Not set" priority, the extra Type values and "To Be Automated" exist so a case migrated from a tool
+// whose vocabulary is wider than P0-P3 / Functional..Security / Automated..Can't Automate keeps its real
+// value instead of showing "Select" in the UI. They are stored verbatim: the columns are free text.
+test.describe("Not set priority, extra types and To Be Automated", () => {
+  const NEW_TYPES = ["Other", "Acceptance", "Usability", "Compatibility", "Exploratory"];
+
+  test("an explicit 'Not set' priority is stored, listed and filtered like any other priority", async ({ request }) => {
+    const marker = `E2E NotSet ${Date.now()}`;
+    const created: string[] = [];
+    try {
+      const notSet = await createCase(request, { title: `${marker} notset`, priority: "Not set" });
+      const p1 = await createCase(request, { title: `${marker} p1`, priority: "P1" });
+      created.push(notSet.id, p1.id);
+      expect(notSet.priority).toBe("Not set");
+
+      const got = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${notSet.id}`)).json();
+      expect(got.priority).toBe("Not set");
+
+      const filtered = await (
+        await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: marker, priority: "Not set" } })
+      ).json();
+      expect(filtered.map((tc: { id: string }) => tc.id)).toEqual([notSet.id]);
+
+      // Edit both ways: onto a real priority, and back to Not set.
+      const toP2 = await request.put(`/api/projects/${ctx.projectId}/testcases/${notSet.id}`, { data: { priority: "P2" } });
+      expect(toP2.ok()).toBeTruthy();
+      expect((await (await request.get(`/api/projects/${ctx.projectId}/testcases/${notSet.id}`)).json()).priority).toBe("P2");
+      const back = await request.put(`/api/projects/${ctx.projectId}/testcases/${notSet.id}`, { data: { priority: "Not set" } });
+      expect(back.ok()).toBeTruthy();
+      expect((await (await request.get(`/api/projects/${ctx.projectId}/testcases/${notSet.id}`)).json()).priority).toBe("Not set");
+
+      // Bulk update can set it too.
+      const bulk = await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-update`, {
+        data: { testcaseIds: [p1.id], priority: "Not set" },
+      });
+      expect(bulk.ok(), await bulk.text()).toBeTruthy();
+      expect((await (await request.get(`/api/projects/${ctx.projectId}/testcases/${p1.id}`)).json()).priority).toBe("Not set");
+    } finally {
+      for (const id of created) await deleteCase(request, id);
+    }
+  });
+
+  test("'Not set' fits the 8-character priority limit and a 9-character value is still refused", async ({ request }) => {
+    const ok = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+      data: { title: `E2E NotSet Limit ${Date.now()}`, priority: "Not set" },
+      failOnStatusCode: false,
+    });
+    expect(ok.status(), await ok.text()).toBe(201);
+    await deleteCase(request, (await ok.json()).id);
+
+    const tooLong = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+      data: { title: `E2E NotSet TooLong ${Date.now()}`, priority: "Not set!!" },
+      failOnStatusCode: false,
+    });
+    expect(tooLong.status(), "a 9-character priority is refused").toBe(400);
+  });
+
+  test("sortBy=priority puts Not set and blank last in BOTH directions", async ({ request }) => {
+    const marker = `E2E Sort NotSet ${Date.now()}`;
+    const created: string[] = [];
+    try {
+      const notSet = (await createCase(request, { title: `${marker} notset` })).id; // default is Not set
+      const blank = (await createCase(request, { title: `${marker} blank`, priority: "" })).id;
+      const p3 = (await createCase(request, { title: `${marker} p3`, priority: "P3" })).id;
+      const p0 = (await createCase(request, { title: `${marker} p0`, priority: "P0" })).id;
+      created.push(notSet, blank, p3, p0);
+
+      for (const sortDir of ["asc", "desc"] as const) {
+        const res = await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: marker, sortBy: "priority", sortDir } });
+        expect(res.ok(), await res.text()).toBeTruthy();
+        const ids: string[] = (await res.json()).map((tc: { id: string }) => tc.id);
+        const ranked = sortDir === "asc" ? [p0, p3] : [p3, p0];
+        expect(ids.slice(0, 2), `${sortDir}: the real priorities come first`).toEqual(ranked);
+        expect(new Set(ids.slice(2)), `${sortDir}: Not set and blank are the last two`).toEqual(new Set([notSet, blank]));
+      }
+    } finally {
+      for (const id of created) await deleteCase(request, id);
+    }
+  });
+
+  test("an explicit blank priority is still saved blank, and omitted is Not set (the two are different on purpose)", async ({ request }) => {
+    const omitted = await createCase(request);
+    const blank = await createCase(request, { priority: "" });
+    try {
+      expect(omitted.priority).toBe("Not set");
+      expect(blank.priority).toBe("");
+    } finally {
+      await deleteCase(request, omitted.id);
+      await deleteCase(request, blank.id);
+    }
+  });
+
+  test("REST bulk-create applies the Not set default per row and keeps an explicit value", async ({ request }) => {
+    const marker = `E2E BulkNotSet ${Date.now()}`;
+    const res = await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-create`, {
+      data: { testcases: [{ title: `${marker} a` }, { title: `${marker} b`, priority: "P0" }] },
+    });
+    expect(res.ok(), await res.text()).toBeTruthy();
+    const list = await (await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: marker } })).json();
+    try {
+      const byTitle = new Map<string, { priority: string }>(list.map((tc: { title: string; priority: string }) => [tc.title, tc]));
+      expect(byTitle.get(`${marker} a`)?.priority).toBe("Not set");
+      expect(byTitle.get(`${marker} b`)?.priority).toBe("P0");
+    } finally {
+      for (const tc of list) await deleteCase(request, tc.id);
+    }
+  });
+
+  test("every added Type value is stored verbatim and found by a case-insensitive type filter", async ({ request }) => {
+    const marker = `E2E Types ${Date.now()}`;
+    const created: string[] = [];
+    try {
+      for (const type of NEW_TYPES) {
+        const tc = await createCase(request, { title: `${marker} ${type}`, type });
+        created.push(tc.id);
+        expect(tc.type).toBe(type);
+        const hit = await (
+          await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: marker, type: type.toUpperCase() } })
+        ).json();
+        expect(hit.map((x: { id: string }) => x.id), `type filter ${type}`).toEqual([tc.id]);
+      }
+    } finally {
+      for (const id of created) await deleteCase(request, id);
+    }
+  });
+
+  test("'To Be Automated' is stored and filterable as an Automation Type", async ({ request }) => {
+    const marker = `E2E TBA ${Date.now()}`;
+    const tba = await createCase(request, { title: `${marker} tba`, automationStatus: "To Be Automated" });
+    const manual = await createCase(request, { title: `${marker} manual` });
+    try {
+      expect(tba.automationStatus).toBe("To Be Automated");
+      const hit = await (
+        await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: marker, automationStatus: "To Be Automated" } })
+      ).json();
+      expect(hit.map((x: { id: string }) => x.id)).toEqual([tba.id]);
+    } finally {
+      await deleteCase(request, tba.id);
+      await deleteCase(request, manual.id);
+    }
+  });
+
+  test("import: a blank priority becomes Not set, 'Not set' and the Russian 'Не задан' are stored as Not set, a Russian type and automation round-trip", async ({ request }) => {
+    const marker = `E2E ImportNotSet ${Date.now()}`;
+    const res = await request.post(`/api/projects/${ctx.projectId}/testcases/import`, {
+      data: {
+        rows: [
+          { rowNumber: 1, title: `${marker} blank`, priority: "" },
+          { rowNumber: 2, title: `${marker} english`, priority: "Not set" },
+          { rowNumber: 3, title: `${marker} russian`, priority: "Не задан", type: "Другое", automationStatus: "Будет автоматизирован" },
+        ],
+      },
+    });
+    expect(res.ok(), await res.text()).toBeTruthy();
+    expect((await res.json()).errors).toEqual([]);
+    const list = await (await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: marker } })).json();
+    try {
+      const byTitle = new Map<string, { priority: string; type: string; automationStatus: string }>(
+        list.map((tc: { title: string }) => [tc.title, tc]),
+      );
+      expect(byTitle.get(`${marker} blank`)?.priority).toBe("Not set");
+      expect(byTitle.get(`${marker} english`)?.priority).toBe("Not set");
+      const ru = byTitle.get(`${marker} russian`);
+      expect(ru?.priority).toBe("Not set");
+      expect(ru?.type).toBe("Other");
+      expect(ru?.automationStatus).toBe("To Be Automated");
+    } finally {
+      for (const tc of list) await deleteCase(request, tc.id);
+    }
+  });
+
+  test("creating a test case without a token is refused", async ({ playwright }) => {
+    const anon = await playwright.request.newContext({ baseURL: env.apiBaseUrl });
+    try {
+      const res = await anon.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: "E2E anon", priority: "Not set" }, failOnStatusCode: false });
+      expect([401, 403]).toContain(res.status());
+    } finally {
+      await anon.dispose();
+    }
+  });
+});
+
+// A case's ID (NAP-TC-12) can be changed so a project migrated from another tool can carry its numbering
+// across. It is the handle runs, CI results and exports quote, so the rules are strict: unique per
+// project (case-insensitively, deleted cases included), never blank, and a rejected edit changes nothing.
+// Renames go to a scratch `Z<stamp>-TC-n` id so these runs stay out of the shared project's real sequence;
+// the allocator test uses its own project for the same reason.
+test.describe("editing a test case ID", () => {
+  const caseUrl = (id: string) => `/api/projects/${ctx.projectId}/testcases/${id}`;
+  const idOf = async (request: import("@playwright/test").APIRequestContext, id: string) =>
+    (await (await request.get(caseUrl(id))).json()).externalId as string;
+
+  test("renames a case, finds it under the new ID only, and keeps the rest of the edit", async ({ request }) => {
+    const p = `Z${Date.now()}`;
+    const tc = await createCase(request, { title: `E2E Rename ${p}` });
+    try {
+      const put = await request.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-50`, title: `E2E Rename ${p} edited` } });
+      expect(put.ok(), await put.text()).toBeTruthy();
+      const after = await (await request.get(caseUrl(tc.id))).json();
+      expect([after.externalId, after.title]).toEqual([`${p}-TC-50`, `E2E Rename ${p} edited`]);
+
+      const search = async (term: string) =>
+        (await (await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: term } })).json()).map((c: { id: string }) => c.id);
+      expect(await search(`${p}-TC-50`)).toEqual([tc.id]);
+      expect(await search(tc.externalId)).not.toContain(tc.id);
+    } finally {
+      await deleteCase(request, tc.id);
+    }
+  });
+
+  test("the next auto-assigned ID continues after the highest number in the project", async ({ request }) => {
+    const stamp = Date.now();
+    const key = `ZA${String(stamp).slice(-8)}`;
+    const project = await (await request.post("/api/projects", { data: { name: `E2E ID Sequence ${stamp}`, key } })).json();
+    const url = (suffix = "") => `/api/projects/${project.id}/testcases${suffix}`;
+    try {
+      const first = await (await request.post(url(), { data: { title: "first" } })).json();
+      const key1 = first.externalId.replace(/-TC-\d+$/, "");
+      const put = await request.put(url(`/${first.id}`), { data: { externalId: `${key1}-TC-50` } });
+      expect(put.ok(), await put.text()).toBeTruthy();
+      const next = await (await request.post(url(), { data: { title: "second" } })).json();
+      expect(next.externalId).toBe(`${key1}-TC-51`);
+    } finally {
+      await request.delete(`/api/projects/${project.id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("sending the ID a case already has is not an error, and changing only the letter case is allowed", async ({ request }) => {
+    const tc = await createCase(request, { title: `E2E Same ID ${Date.now()}` });
+    try {
+      const same = await request.put(caseUrl(tc.id), { data: { externalId: tc.externalId } });
+      expect(same.ok(), await same.text()).toBeTruthy();
+      expect(await idOf(request, tc.id)).toBe(tc.externalId);
+
+      const lower = await request.put(caseUrl(tc.id), { data: { externalId: tc.externalId.toLowerCase() } });
+      expect(lower.ok(), await lower.text()).toBeTruthy();
+      expect(await idOf(request, tc.id)).toBe(tc.externalId.toLowerCase());
+    } finally {
+      await deleteCase(request, tc.id);
+    }
+  });
+
+  test("an ID another case holds is refused with 409, exactly or in another letter case, and nothing else in the edit lands", async ({ request }) => {
+    const stamp = Date.now();
+    const a = await createCase(request, { title: `E2E Dup A ${stamp}` });
+    const b = await createCase(request, { title: `E2E Dup B ${stamp}` });
+    try {
+      const exact = await request.put(caseUrl(b.id), { data: { externalId: a.externalId, title: "must not be saved" }, failOnStatusCode: false });
+      expect(exact.status()).toBe(409);
+      expect((await exact.json()).error).toContain(a.externalId);
+      const folded = await request.put(caseUrl(b.id), { data: { externalId: a.externalId.toLowerCase() }, failOnStatusCode: false });
+      expect(folded.status()).toBe(409);
+
+      const unchanged = await (await request.get(caseUrl(b.id))).json();
+      expect([unchanged.externalId, unchanged.title]).toEqual([b.externalId, `E2E Dup B ${stamp}`]);
+    } finally {
+      await deleteCase(request, a.id);
+      await deleteCase(request, b.id);
+    }
+  });
+
+  test("a deleted case still holds its ID, so it cannot be claimed", async ({ request }) => {
+    const stamp = Date.now();
+    const dead = await createCase(request, { title: `E2E Dead ${stamp}` });
+    const live = await createCase(request, { title: `E2E Live ${stamp}` });
+    try {
+      await deleteCase(request, dead.id);
+      const res = await request.put(caseUrl(live.id), { data: { externalId: dead.externalId }, failOnStatusCode: false });
+      expect(res.status()).toBe(409);
+    } finally {
+      await deleteCase(request, live.id);
+    }
+  });
+
+  test("blank, whitespace, over-long and non-string IDs are refused with 400 and the ID is untouched", async ({ request }) => {
+    const p = `Z${Date.now()}`;
+    const tc = await createCase(request, { title: `E2E Bad ID ${p}` });
+    try {
+      for (const bad of ["", "   ", `${p} -TC-9`, "X".repeat(33), 12, null, ["a"]]) {
+        const res = await request.put(caseUrl(tc.id), { data: { externalId: bad }, failOnStatusCode: false });
+        expect(res.status(), `externalId ${JSON.stringify(bad)}`).toBe(400);
+      }
+      expect(await idOf(request, tc.id)).toBe(tc.externalId);
+
+      // 32 characters is the column width and is accepted.
+      const edge = `${p}-`.padEnd(32, "9");
+      const ok = await request.put(caseUrl(tc.id), { data: { externalId: edge }, failOnStatusCode: false });
+      expect(ok.status(), await ok.text()).toBeLessThan(300);
+      expect(await idOf(request, tc.id)).toBe(edge);
+    } finally {
+      await deleteCase(request, tc.id);
+    }
+  });
+
+  test("an ID edit leaves exactly one history snapshot of the case as it was, not two", async ({ request }) => {
+    test.skip(!dbControlAvailable(), "needs psql access to read testcase_versions");
+    const p = `Z${Date.now()}`;
+    const tc = await createCase(request, { title: `E2E ID History ${p}` });
+    try {
+      const put = await request.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-3`, title: `E2E ID History ${p} edited` } });
+      expect(put.ok(), await put.text()).toBeTruthy();
+      const rows = scalar(`SELECT count(*) || ':' || count(*) FILTER (WHERE snapshot->>'external_id' = ${literal(tc.externalId)} AND snapshot->>'title' = ${literal(`E2E ID History ${p}`)}) FROM testcase_versions WHERE testcase_id = ${literal(tc.id)};`);
+      // One snapshot, holding the case as it was before the edit (old id AND old title).
+      expect(rows).toBe("1:1");
+    } finally {
+      await deleteCase(request, tc.id);
+    }
+  });
+
+  test("an ID edit on its own (nothing else sent) is also a single snapshot", async ({ request }) => {
+    test.skip(!dbControlAvailable(), "needs psql access to read testcase_versions");
+    const p = `Z${Date.now()}`;
+    const tc = await createCase(request, { title: `E2E ID Only ${p}` });
+    try {
+      const put = await request.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-4` } });
+      expect(put.ok(), await put.text()).toBeTruthy();
+      expect(scalar(`SELECT count(*) FROM testcase_versions WHERE testcase_id = ${literal(tc.id)};`)).toBe("1");
+    } finally {
+      await deleteCase(request, tc.id);
+    }
+  });
+
+  test("two cases can swap IDs by parking one on a scratch ID, which is how a bulk renumber works", async ({ request }) => {
+    const stamp = Date.now();
+    const a = await createCase(request, { title: `E2E Swap A ${stamp}` });
+    const b = await createCase(request, { title: `E2E Swap B ${stamp}` });
+    try {
+      // A direct swap is impossible: the first rename collides with the other case.
+      const direct = await request.put(caseUrl(a.id), { data: { externalId: b.externalId }, failOnStatusCode: false });
+      expect(direct.status()).toBe(409);
+
+      for (const [id, to] of [
+        [a.id, `Z${stamp}-TMP-1`],
+        [b.id, a.externalId],
+        [a.id, b.externalId],
+      ] as const) {
+        const res = await request.put(caseUrl(id), { data: { externalId: to } });
+        expect(res.ok(), await res.text()).toBeTruthy();
+      }
+      expect([await idOf(request, a.id), await idOf(request, b.id)]).toEqual([b.externalId, a.externalId]);
+    } finally {
+      await deleteCase(request, a.id);
+      await deleteCase(request, b.id);
+    }
+  });
+
+  test("two renames racing for the same ID: one wins, the other gets 409", async ({ request }) => {
+    const p = `Z${Date.now()}`;
+    const a = await createCase(request, { title: `E2E Race A ${p}` });
+    const b = await createCase(request, { title: `E2E Race B ${p}` });
+    try {
+      const target = `${p}-TC-77`;
+      const [ra, rb] = await Promise.all([
+        request.put(caseUrl(a.id), { data: { externalId: target }, failOnStatusCode: false }),
+        request.put(caseUrl(b.id), { data: { externalId: target }, failOnStatusCode: false }),
+      ]);
+      expect([ra.status(), rb.status()].sort()).toEqual([200, 409]);
+      const ids = [await idOf(request, a.id), await idOf(request, b.id)];
+      expect(ids.filter((id) => id === target)).toHaveLength(1);
+    } finally {
+      await deleteCase(request, a.id);
+      await deleteCase(request, b.id);
+    }
+  });
+
+  test("a run that already holds the case shows the new ID, including after the case is deleted", async ({ request }) => {
+    const p = `Z${Date.now()}`;
+    const tc = await createCase(request, { title: `E2E Run Snapshot ${p}` });
+    const cycle = await (await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Run Snapshot ${p}` } })).json();
+    try {
+      await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [tc.id] } });
+      const before = await (await request.get(`/api/cycles/${cycle.id}/executions`)).json();
+      expect(before[0].externalId).toBe(tc.externalId);
+
+      const put = await request.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-9` } });
+      expect(put.ok(), await put.text()).toBeTruthy();
+      expect((await (await request.get(`/api/cycles/${cycle.id}/executions`)).json())[0].externalId).toBe(`${p}-TC-9`);
+
+      await deleteCase(request, tc.id);
+      expect((await (await request.get(`/api/cycles/${cycle.id}/executions`)).json())[0].externalId).toBe(`${p}-TC-9`);
+    } finally {
+      await deleteCase(request, tc.id);
+      await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("bulk-update cannot change IDs, and another account or no session cannot change one either", async ({ request }) => {
+    const p = `Z${Date.now()}`;
+    const tc = await createCase(request, { title: `E2E ID Auth ${p}` });
+    const asB = await newRequestContext.newContext({
+      baseURL: env.apiBaseUrl,
+      storageState: path.join(__dirname, "../.auth/state-b.json"),
+    });
+    const anon = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
+    try {
+      await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-update`, {
+        data: { testcaseIds: [tc.id], externalId: `${p}-TC-5`, priority: "P2" },
+        failOnStatusCode: false,
+      });
+      expect(await idOf(request, tc.id)).toBe(tc.externalId);
+
+      const other = await asB.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-6` }, failOnStatusCode: false });
+      expect([400, 401, 403, 404]).toContain(other.status());
+      const noSession = await anon.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-7` }, failOnStatusCode: false });
+      expect([400, 401, 403, 404]).toContain(noSession.status());
+      expect(await idOf(request, tc.id)).toBe(tc.externalId);
+    } finally {
+      await deleteCase(request, tc.id);
+      await asB.dispose();
+      await anon.dispose();
     }
   });
 });

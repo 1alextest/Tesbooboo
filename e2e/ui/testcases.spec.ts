@@ -972,3 +972,218 @@ test.describe("test case repository table and detail panel — Context column", 
     }
   });
 });
+
+// The Create/Edit panel's Priority, Type and Automation Type dropdowns are fixed lists. A case whose
+// stored value is not in the list shows "Select" and can never be saved back as that value, so the
+// values a migrated case can carry have to be offered.
+test.describe("Not set priority and the added Type / Automation Type values", () => {
+  test("Create Test Case offers Not set, the added Types and To Be Automated, and saves the chosen values", async ({ page }) => {
+    const title = `UI new values test case ${Date.now()}`;
+    await page.goto(`/projects/${ctx.projectId}/testcases`);
+    await page.getByRole("button", { name: "Add test case" }).first().click();
+    const panel = page.locator("aside");
+    await panel.getByPlaceholder("Describe what this test case validates").fill(title);
+
+    const options = async (label: string) => fieldControl(page, label).locator("option").allTextContents();
+    expect(await options("Priority")).toEqual(["Select", "P0", "P1", "P2", "P3", "Not set"]);
+    const types = await options("Type");
+    for (const t of ["Other", "Acceptance", "Usability", "Compatibility", "Exploratory"]) expect(types).toContain(t);
+    expect(await options("Automation Type")).toContain("To Be Automated");
+
+    await fieldControl(page, "Suite").selectOption({ label: "No suite" });
+    await fieldControl(page, "Type").selectOption("Other");
+    await fieldControl(page, "Priority").selectOption("Not set");
+    await fieldControl(page, "Automation Type").selectOption("To Be Automated");
+    await panel.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(panel.getByText("Test case created successfully.")).toBeVisible();
+
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    try {
+      const list = await (await api.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: title } })).json();
+      const match = list.find((tc: { title: string }) => tc.title === title);
+      expect(match, "the created case is listed").toBeTruthy();
+      expect(match.priority).toBe("Not set");
+      expect(match.type).toBe("Other");
+      expect(match.automationStatus).toBe("To Be Automated");
+      await api.delete(`/api/projects/${ctx.projectId}/testcases/${match.id}`, { failOnStatusCode: false });
+    } finally {
+      await api.dispose();
+    }
+  });
+
+  test("Edit Test Case shows a case stored as Not set / Exploratory / To Be Automated as exactly those values, and saving with no changes keeps them", async ({ page }) => {
+    const title = `UI edit new values test case ${Date.now()}`;
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    let testcaseId = "";
+    try {
+      const created = await (
+        await api.post(`/api/projects/${ctx.projectId}/testcases`, {
+          data: { title, priority: "Not set", type: "Exploratory", automationStatus: "To Be Automated" },
+        })
+      ).json();
+      testcaseId = created.id;
+
+      await page.goto(`/projects/${ctx.projectId}/testcases`);
+      await page.getByRole("button", { name: title }).click();
+      const panel = page.locator("aside");
+      await expect(fieldControl(page, "Priority").locator("option:checked")).toHaveText("Not set");
+      await expect(fieldControl(page, "Type").locator("option:checked")).toHaveText("Exploratory");
+      await expect(fieldControl(page, "Automation Type").locator("option:checked")).toHaveText("To Be Automated");
+
+      await panel.getByRole("button", { name: "Save changes" }).click();
+      await expect(panel.getByText("Test case updated successfully.")).toBeVisible();
+      const after = await (await api.get(`/api/projects/${ctx.projectId}/testcases/${testcaseId}`)).json();
+      expect(after.priority).toBe("Not set");
+      expect(after.type).toBe("Exploratory");
+      expect(after.automationStatus).toBe("To Be Automated");
+    } finally {
+      if (testcaseId) await api.delete(`/api/projects/${ctx.projectId}/testcases/${testcaseId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
+  test("the Add Test Cases picker's Priority and Type filters offer Not set and the added Types, and filtering by Not set keeps only those cases", async ({ page }) => {
+    const stamp = Date.now();
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const caseIds: string[] = [];
+    let cycleId = "";
+    try {
+      const notSet = await (
+        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker NotSet ${stamp}`, priority: "Not set", type: "Exploratory" } })
+      ).json();
+      const p1 = await (
+        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker P1 ${stamp}`, priority: "P1" } })
+      ).json();
+      caseIds.push(notSet.id, p1.id);
+      const cycle = await (
+        await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI picker filters ${stamp}` } })
+      ).json();
+      cycleId = cycle.id;
+
+      await page.goto(`/projects/${ctx.projectId}/cycles/${cycleId}`);
+      await page.getByRole("button", { name: "Add Test Cases" }).click();
+      await expect(page.getByText("Add Test Cases to Run")).toBeVisible();
+      // The picker's selects are the last ones on the page (the run table's own filters sit behind a popover).
+      const priority = page.locator("select").filter({ hasText: "All Priorities" }).last();
+      const type = page.locator("select").filter({ hasText: "All Types" }).last();
+      expect(await priority.locator("option").allTextContents()).toContain("Not set");
+      const typeOptions = await type.locator("option").allTextContents();
+      for (const t of ["Sanity", "API", "UI", "Acceptance", "Usability", "Compatibility", "Exploratory", "Other"]) expect(typeOptions).toContain(t);
+
+      await page.getByPlaceholder("Search by title or ID…").fill(`UI picker ${stamp}`);
+      await priority.selectOption("Not set");
+      await expect(page.getByText(`UI picker NotSet ${stamp}`)).toBeVisible();
+      await expect(page.getByText(`UI picker P1 ${stamp}`)).toHaveCount(0);
+    } finally {
+      if (cycleId) await api.delete(`/api/cycles/${cycleId}`, { failOnStatusCode: false });
+      for (const id of caseIds) await api.delete(`/api/projects/${ctx.projectId}/testcases/${id}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+});
+
+test.describe("suite description and preconditions in the repository", () => {
+  test("Add suite saves a description and preconditions, and the suite header shows them", async ({ page }) => {
+    const stamp = Date.now();
+    const suiteName = `UI Suite Text ${stamp}`;
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    let suiteId = "";
+    try {
+      await page.goto(`/projects/${ctx.projectId}/testcases`);
+      await page.getByTitle("Add suite").click();
+      await page.getByPlaceholder("Enter suite name").fill(suiteName);
+      await page.getByPlaceholder("What does this suite cover?").fill("Login and session flows\nSecond line");
+      await page.getByPlaceholder("What must be true before running these test cases?").fill("An agency account exists");
+      await page.getByRole("button", { name: "Create", exact: true }).click();
+      await expect(page.getByPlaceholder("Enter suite name")).toHaveCount(0);
+
+      const row = (await (await api.get(`/api/projects/${ctx.projectId}/suites`)).json()).find((s: { name: string }) => s.name === suiteName);
+      suiteId = row.id;
+      expect(row.description).toBe("Login and session flows\nSecond line");
+      expect(row.preconditions).toBe("An agency account exists");
+
+      await page.getByRole("button", { name: suiteName, exact: true }).click();
+      const details = page.getByTestId("suite-details");
+      await expect(details).toContainText("Login and session flows");
+      await expect(details).toContainText("Second line");
+      await expect(details).toContainText("An agency account exists");
+    } finally {
+      if (suiteId) await api.delete(`/api/suites/${suiteId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
+  test("a suite with no text shows no details block", async ({ page }) => {
+    const suiteName = `UI Suite No Text ${Date.now()}`;
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    let suiteId = "";
+    try {
+      suiteId = (await (await api.post(`/api/projects/${ctx.projectId}/suites`, { data: { name: suiteName } })).json()).id;
+      await page.goto(`/projects/${ctx.projectId}/testcases`);
+      await page.getByRole("button", { name: suiteName, exact: true }).click();
+      await expect(page.getByText(suiteName, { exact: true }).first()).toBeVisible();
+      await expect(page.getByTestId("suite-details")).toHaveCount(0);
+    } finally {
+      if (suiteId) await api.delete(`/api/suites/${suiteId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
+  test("Rename suite opens with the saved text, saves edits, clears them, and a child suite stays under its parent", async ({ page }) => {
+    const stamp = Date.now();
+    const parentName = `UI Suite Parent ${stamp}`;
+    const childName = `UI Suite Child ${stamp}`;
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    let parentId = "";
+    let childId = "";
+    try {
+      parentId = (await (await api.post(`/api/projects/${ctx.projectId}/suites`, { data: { name: parentName } })).json()).id;
+      childId = (
+        await (
+          await api.post(`/api/projects/${ctx.projectId}/suites`, {
+            data: { name: childName, parentId, description: "Saved description", preconditions: "Saved preconditions" },
+          })
+        ).json()
+      ).id;
+
+      await page.goto(`/projects/${ctx.projectId}/testcases`);
+      await page.getByTestId(`suite-expand-${parentId}`).click();
+      const childRow = page.getByRole("button", { name: new RegExp(childName) }).first();
+      await childRow.hover();
+      await page.getByTitle("Rename suite").click();
+
+      const description = page.getByPlaceholder("What does this suite cover?");
+      const preconditions = page.getByPlaceholder("What must be true before running these test cases?");
+      await expect(description).toHaveValue("Saved description");
+      await expect(preconditions).toHaveValue("Saved preconditions");
+
+      await description.fill("Edited description");
+      await preconditions.fill("");
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await expect(page.getByPlaceholder("Enter suite name")).toHaveCount(0);
+
+      const after = (await (await api.get(`/api/projects/${ctx.projectId}/suites`)).json()).find((s: { id: string }) => s.id === childId);
+      expect(after.description).toBe("Edited description");
+      expect(after.preconditions).toBe("");
+      expect(after.parentId, "editing the text must not move the suite to the root").toBe(parentId);
+
+      await page.getByRole("button", { name: new RegExp(childName) }).first().click();
+      const details = page.getByTestId("suite-details");
+      await expect(details).toContainText("Edited description");
+      await expect(details).not.toContainText("Preconditions");
+    } finally {
+      if (parentId) await api.delete(`/api/suites/${parentId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
+  test("the suite text fields cap at 20000 characters instead of overflowing", async ({ page }) => {
+    await page.goto(`/projects/${ctx.projectId}/testcases`);
+    await page.getByTitle("Add suite").click();
+    const description = page.getByPlaceholder("What does this suite cover?");
+    await description.fill("y".repeat(20500));
+    await expect(description).toHaveValue("y".repeat(20000));
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.getByPlaceholder("Enter suite name")).toHaveCount(0);
+  });
+});

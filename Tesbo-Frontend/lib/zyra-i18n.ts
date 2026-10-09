@@ -855,10 +855,16 @@ const RU_VALUES = {
     Integration: "Интеграционный",
     Performance: "Производительность",
     Security: "Безопасность",
+    Acceptance: "Приёмочный",
+    Usability: "Юзабилити",
+    Compatibility: "Совместимость",
+    Exploratory: "Исследовательский",
+    Other: "Другое",
   },
   automationStatus: {
     Automated: "Автоматизирован",
     "Not Automated": "Не автоматизирован",
+    "To Be Automated": "Будет автоматизирован",
     "Can't Automate": "Невозможно автоматизировать",
   },
 } satisfies Record<string, Record<string, string>>;

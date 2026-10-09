@@ -46,9 +46,11 @@ import {
   FieldLabel,
   PageLoader,
   Textarea,
+  ListPagination,
+  useListPagination,
 } from "@/components/ui";
 import { PageHeader, ListWorkspaceLayout, Breadcrumbs } from "@/components/workflows";
-import { getInitials, statusTone, formatDuration, formatDate, RunAvatar, RunProgressBar } from "@/components/testruns/runDisplay";
+import { getInitials, statusTone, formatDuration, formatSpent, formatDate, RunAvatar, RunProgressBar, RunTags } from "@/components/testruns/runDisplay";
 import { getPageCache, setPageCache } from "@/lib/pageDataCache";
 
 interface CyclesData {
@@ -221,6 +223,8 @@ export default function TestRunsPage() {
     const passRate = computePassRate({ passed, failed, blocked });
     return { totalRuns, inProgress, passRate, openFailures };
   }, [visibleRuns]);
+
+  const pagination = useListPagination(visibleRuns, `${statusFilter}|${sortBy}`);
 
   /* create */
   async function handleCreate(e: React.FormEvent) {
@@ -402,7 +406,7 @@ export default function TestRunsPage() {
 
           {/* Run cards */}
           <div className="grid gap-3">
-            {visibleRuns.map((r) => {
+            {pagination.pageItems.map((r) => {
               const total = r.totalCases;
               const executed = r.passed + r.failed + r.blocked + r.skipped;
               const ownerName = r.ownerId ? ownerNames[r.ownerId] : null;
@@ -463,6 +467,12 @@ export default function TestRunsPage() {
                           <IconClock size={12} stroke={1.75} />
                           <span className="font-mono">{formatDuration(r.startedAt, r.endedAt)}</span>
                         </span>
+                        {r.timeSpentMs != null && (
+                          <span className="flex items-center gap-1" title="Time spent working on this run" data-testid="run-time-spent">
+                            Time spent <span className="font-mono">{formatSpent(r.timeSpentMs)}</span>
+                          </span>
+                        )}
+                        <RunTags tags={r.tags} />
                         <span className="flex items-center gap-1">
                           <IconCalendarEvent size={12} stroke={1.75} />
                           {formatDate(r.createdAt)}
@@ -540,6 +550,17 @@ export default function TestRunsPage() {
               <p className="py-8 text-center text-[13px] text-[var(--muted)]">No test runs match this filter.</p>
             )}
           </div>
+
+          <ListPagination
+            testId="runs-pagination"
+            noun="runs"
+            page={pagination.page}
+            pageSize={pagination.pageSize}
+            totalPages={pagination.totalPages}
+            totalItems={pagination.totalItems}
+            onPageChange={pagination.setPage}
+            onPageSizeChange={pagination.setPageSize}
+          />
         </>
       )}
 

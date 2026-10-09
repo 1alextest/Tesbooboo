@@ -455,7 +455,7 @@ export default function ImportTestCasesModal({ projectId, open, onClose, onImpor
           postconditions: valueFor("postconditions"),
           steps,
           testData: valueFor("testData"),
-          priority: valueFor("priority") || "P2",
+          priority: valueFor("priority") || "Not set",
           severity: valueFor("severity") || undefined,
           type: valueFor("type") || "Functional",
           status: valueFor("status") || "Draft",
