@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, request as newRequestContext, test } from "@playwright/test";
 import { env } from "../utils/env";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
@@ -1951,6 +1951,210 @@ test.describe("Not set priority, extra types and To Be Automated", () => {
       const res = await anon.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: "E2E anon", priority: "Not set" }, failOnStatusCode: false });
       expect([401, 403]).toContain(res.status());
     } finally {
+      await anon.dispose();
+    }
+  });
+});
+
+// A case's ID (NAP-TC-12) can be changed so a project migrated from another tool can carry its numbering
+// across. It is the handle runs, CI results and exports quote, so the rules are strict: unique per
+// project (case-insensitively, deleted cases included), never blank, and a rejected edit changes nothing.
+// Renames go to a scratch `Z<stamp>-TC-n` id so these runs stay out of the shared project's real sequence;
+// the allocator test uses its own project for the same reason.
+test.describe("editing a test case ID", () => {
+  const caseUrl = (id: string) => `/api/projects/${ctx.projectId}/testcases/${id}`;
+  const idOf = async (request: import("@playwright/test").APIRequestContext, id: string) =>
+    (await (await request.get(caseUrl(id))).json()).externalId as string;
+
+  test("renames a case, finds it under the new ID only, and keeps the rest of the edit", async ({ request }) => {
+    const p = `Z${Date.now()}`;
+    const tc = await createCase(request, { title: `E2E Rename ${p}` });
+    try {
+      const put = await request.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-50`, title: `E2E Rename ${p} edited` } });
+      expect(put.ok(), await put.text()).toBeTruthy();
+      const after = await (await request.get(caseUrl(tc.id))).json();
+      expect([after.externalId, after.title]).toEqual([`${p}-TC-50`, `E2E Rename ${p} edited`]);
+
+      const search = async (term: string) =>
+        (await (await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: term } })).json()).map((c: { id: string }) => c.id);
+      expect(await search(`${p}-TC-50`)).toEqual([tc.id]);
+      expect(await search(tc.externalId)).not.toContain(tc.id);
+    } finally {
+      await deleteCase(request, tc.id);
+    }
+  });
+
+  test("the next auto-assigned ID continues after the highest number in the project", async ({ request }) => {
+    const stamp = Date.now();
+    const key = `ZA${String(stamp).slice(-8)}`;
+    const project = await (await request.post("/api/projects", { data: { name: `E2E ID Sequence ${stamp}`, key } })).json();
+    const url = (suffix = "") => `/api/projects/${project.id}/testcases${suffix}`;
+    try {
+      const first = await (await request.post(url(), { data: { title: "first" } })).json();
+      const key1 = first.externalId.replace(/-TC-\d+$/, "");
+      const put = await request.put(url(`/${first.id}`), { data: { externalId: `${key1}-TC-50` } });
+      expect(put.ok(), await put.text()).toBeTruthy();
+      const next = await (await request.post(url(), { data: { title: "second" } })).json();
+      expect(next.externalId).toBe(`${key1}-TC-51`);
+    } finally {
+      await request.delete(`/api/projects/${project.id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("sending the ID a case already has is not an error, and changing only the letter case is allowed", async ({ request }) => {
+    const tc = await createCase(request, { title: `E2E Same ID ${Date.now()}` });
+    try {
+      const same = await request.put(caseUrl(tc.id), { data: { externalId: tc.externalId } });
+      expect(same.ok(), await same.text()).toBeTruthy();
+      expect(await idOf(request, tc.id)).toBe(tc.externalId);
+
+      const lower = await request.put(caseUrl(tc.id), { data: { externalId: tc.externalId.toLowerCase() } });
+      expect(lower.ok(), await lower.text()).toBeTruthy();
+      expect(await idOf(request, tc.id)).toBe(tc.externalId.toLowerCase());
+    } finally {
+      await deleteCase(request, tc.id);
+    }
+  });
+
+  test("an ID another case holds is refused with 409, exactly or in another letter case, and nothing else in the edit lands", async ({ request }) => {
+    const stamp = Date.now();
+    const a = await createCase(request, { title: `E2E Dup A ${stamp}` });
+    const b = await createCase(request, { title: `E2E Dup B ${stamp}` });
+    try {
+      const exact = await request.put(caseUrl(b.id), { data: { externalId: a.externalId, title: "must not be saved" }, failOnStatusCode: false });
+      expect(exact.status()).toBe(409);
+      expect((await exact.json()).error).toContain(a.externalId);
+      const folded = await request.put(caseUrl(b.id), { data: { externalId: a.externalId.toLowerCase() }, failOnStatusCode: false });
+      expect(folded.status()).toBe(409);
+
+      const unchanged = await (await request.get(caseUrl(b.id))).json();
+      expect([unchanged.externalId, unchanged.title]).toEqual([b.externalId, `E2E Dup B ${stamp}`]);
+    } finally {
+      await deleteCase(request, a.id);
+      await deleteCase(request, b.id);
+    }
+  });
+
+  test("a deleted case still holds its ID, so it cannot be claimed", async ({ request }) => {
+    const stamp = Date.now();
+    const dead = await createCase(request, { title: `E2E Dead ${stamp}` });
+    const live = await createCase(request, { title: `E2E Live ${stamp}` });
+    try {
+      await deleteCase(request, dead.id);
+      const res = await request.put(caseUrl(live.id), { data: { externalId: dead.externalId }, failOnStatusCode: false });
+      expect(res.status()).toBe(409);
+    } finally {
+      await deleteCase(request, live.id);
+    }
+  });
+
+  test("blank, whitespace, over-long and non-string IDs are refused with 400 and the ID is untouched", async ({ request }) => {
+    const p = `Z${Date.now()}`;
+    const tc = await createCase(request, { title: `E2E Bad ID ${p}` });
+    try {
+      for (const bad of ["", "   ", `${p} -TC-9`, "X".repeat(33), 12, null, ["a"]]) {
+        const res = await request.put(caseUrl(tc.id), { data: { externalId: bad }, failOnStatusCode: false });
+        expect(res.status(), `externalId ${JSON.stringify(bad)}`).toBe(400);
+      }
+      expect(await idOf(request, tc.id)).toBe(tc.externalId);
+
+      // 32 characters is the column width and is accepted.
+      const edge = `${p}-`.padEnd(32, "9");
+      const ok = await request.put(caseUrl(tc.id), { data: { externalId: edge }, failOnStatusCode: false });
+      expect(ok.status(), await ok.text()).toBeLessThan(300);
+      expect(await idOf(request, tc.id)).toBe(edge);
+    } finally {
+      await deleteCase(request, tc.id);
+    }
+  });
+
+  test("two cases can swap IDs by parking one on a scratch ID, which is how a bulk renumber works", async ({ request }) => {
+    const stamp = Date.now();
+    const a = await createCase(request, { title: `E2E Swap A ${stamp}` });
+    const b = await createCase(request, { title: `E2E Swap B ${stamp}` });
+    try {
+      // A direct swap is impossible: the first rename collides with the other case.
+      const direct = await request.put(caseUrl(a.id), { data: { externalId: b.externalId }, failOnStatusCode: false });
+      expect(direct.status()).toBe(409);
+
+      for (const [id, to] of [
+        [a.id, `Z${stamp}-TMP-1`],
+        [b.id, a.externalId],
+        [a.id, b.externalId],
+      ] as const) {
+        const res = await request.put(caseUrl(id), { data: { externalId: to } });
+        expect(res.ok(), await res.text()).toBeTruthy();
+      }
+      expect([await idOf(request, a.id), await idOf(request, b.id)]).toEqual([b.externalId, a.externalId]);
+    } finally {
+      await deleteCase(request, a.id);
+      await deleteCase(request, b.id);
+    }
+  });
+
+  test("two renames racing for the same ID: one wins, the other gets 409", async ({ request }) => {
+    const p = `Z${Date.now()}`;
+    const a = await createCase(request, { title: `E2E Race A ${p}` });
+    const b = await createCase(request, { title: `E2E Race B ${p}` });
+    try {
+      const target = `${p}-TC-77`;
+      const [ra, rb] = await Promise.all([
+        request.put(caseUrl(a.id), { data: { externalId: target }, failOnStatusCode: false }),
+        request.put(caseUrl(b.id), { data: { externalId: target }, failOnStatusCode: false }),
+      ]);
+      expect([ra.status(), rb.status()].sort()).toEqual([200, 409]);
+      const ids = [await idOf(request, a.id), await idOf(request, b.id)];
+      expect(ids.filter((id) => id === target)).toHaveLength(1);
+    } finally {
+      await deleteCase(request, a.id);
+      await deleteCase(request, b.id);
+    }
+  });
+
+  test("a run that already holds the case shows the new ID, including after the case is deleted", async ({ request }) => {
+    const p = `Z${Date.now()}`;
+    const tc = await createCase(request, { title: `E2E Run Snapshot ${p}` });
+    const cycle = await (await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Run Snapshot ${p}` } })).json();
+    try {
+      await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [tc.id] } });
+      const before = await (await request.get(`/api/cycles/${cycle.id}/executions`)).json();
+      expect(before[0].externalId).toBe(tc.externalId);
+
+      const put = await request.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-9` } });
+      expect(put.ok(), await put.text()).toBeTruthy();
+      expect((await (await request.get(`/api/cycles/${cycle.id}/executions`)).json())[0].externalId).toBe(`${p}-TC-9`);
+
+      await deleteCase(request, tc.id);
+      expect((await (await request.get(`/api/cycles/${cycle.id}/executions`)).json())[0].externalId).toBe(`${p}-TC-9`);
+    } finally {
+      await deleteCase(request, tc.id);
+      await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("bulk-update cannot change IDs, and another account or no session cannot change one either", async ({ request }) => {
+    const p = `Z${Date.now()}`;
+    const tc = await createCase(request, { title: `E2E ID Auth ${p}` });
+    const asB = await newRequestContext.newContext({
+      baseURL: env.apiBaseUrl,
+      storageState: path.join(__dirname, "../.auth/state-b.json"),
+    });
+    const anon = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
+    try {
+      await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-update`, {
+        data: { testcaseIds: [tc.id], externalId: `${p}-TC-5`, priority: "P2" },
+        failOnStatusCode: false,
+      });
+      expect(await idOf(request, tc.id)).toBe(tc.externalId);
+
+      const other = await asB.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-6` }, failOnStatusCode: false });
+      expect([400, 401, 403, 404]).toContain(other.status());
+      const noSession = await anon.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-7` }, failOnStatusCode: false });
+      expect([400, 401, 403, 404]).toContain(noSession.status());
+      expect(await idOf(request, tc.id)).toBe(tc.externalId);
+    } finally {
+      await deleteCase(request, tc.id);
+      await asB.dispose();
       await anon.dispose();
     }
   });

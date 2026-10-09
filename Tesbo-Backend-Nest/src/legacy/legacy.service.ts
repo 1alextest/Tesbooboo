@@ -6069,6 +6069,13 @@ export class LegacyService implements OnModuleInit {
     };
   }
 
+  /** toCamel, plus the BIGINT run times as numbers: node-pg returns int8 as a string, and the API promises numbers. */
+  private static cycleRow(row: QueryResultRow): Body {
+    const out = toCamel(row);
+    for (const key of ["timeSpentMs", "elapsedMs"]) if (out[key] != null) out[key] = Number(out[key]);
+    return out;
+  }
+
   async listCyclesForUser(userId: string | null | undefined, projectId: string) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     return this.listCycles(projectId);
@@ -6089,7 +6096,7 @@ export class LegacyService implements OnModuleInit {
        ORDER BY c.created_at DESC`,
       [projectId]
     );
-    return res.rows.map(toCamel);
+    return res.rows.map(LegacyService.cycleRow);
   }
 
   async createCycleForUser(userId: string | null | undefined, projectId: string, body: Body) {
@@ -6160,7 +6167,7 @@ export class LegacyService implements OnModuleInit {
     await this.requireCycleAccess(userId, cycleId);
     const res = await this.db.query("SELECT * FROM cycles WHERE id = $1 AND deleted_at IS NULL", [cycleId]);
     if (!res.rows[0]) throw new NotFoundException({ error: "Cycle not found" });
-    return toCamel(res.rows[0]);
+    return LegacyService.cycleRow(res.rows[0]);
   }
 
   async shareCycle(cycleId: string, userId: string | null | undefined, body: Body) {
@@ -6563,7 +6570,7 @@ export class LegacyService implements OnModuleInit {
      */
     const res = await this.db.query(
       `SELECT e.id, e.status, e.assignee_id, e.actual_result, e.executed_at, e.defect_key, e.defect_url,
-              e.duration_ms, e.retry_count, e.error_message, e.error_stack, e.reported_by,
+              e.duration_ms, e.retry_count, e.error_message, e.error_stack, e.reported_by, e.step_results, e.history,
               ci.id AS cycle_item_id, ci.testcase_id, ci.snapshot_title,
               COALESCE(NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Untitled test case') AS title,
               COALESCE(ci.snapshot_external_id, t.external_id) AS external_id,
@@ -6888,6 +6895,262 @@ export class LegacyService implements OnModuleInit {
     if (after && (after.assignee_id !== before.rows[0].assignee_id || after.status !== before.rows[0].status)) {
       await this.notifyExecutionChange(executionId, uid, { status: before.rows[0].status ?? null, assigneeId: before.rows[0].assignee_id ?? null }, opts);
     }
+  }
+
+  /*
+   * Historical import: applies the state a run and its results had in another test tool onto an
+   * EXISTING run, so the run keeps its place in the product and the import can be repeated.
+   *
+   * Everything the normal write paths refuse or overwrite is settable here, because a record of
+   * something that already happened is not a new action: past start/end/close times and a run that
+   * is In Progress or Completed with no cases or with its end time still set (updateCycle clears
+   * both), a result's own executed time, duration, error text and stack (the CI ingest caps those),
+   * per-step outcomes and the earlier results of the case. In return it is owner-or-manager only,
+   * writes straight to the tables so no assignee, mention or run-lifecycle notification fires for
+   * thousands of old results, and leaves one audit entry with the counts instead of one per row.
+   *
+   * Idempotent: every field it receives is SET, never added to, so sending the same payload again
+   * (a delta sync of a run that kept growing) leaves the same state. A field the payload omits is
+   * left as it is; an explicit null clears it. executed_by and assignee_id are never touched, so
+   * the original authors stay unassigned until someone maps them.
+   */
+  private static readonly HISTORY_IMPORT_MAX_RESULTS = 500;
+  private static readonly HISTORY_IMPORT_MAX_TEXT = 1_000_000;
+  private static readonly HISTORY_IMPORT_MAX_STEPS = 500;
+  private static readonly HISTORY_IMPORT_MAX_HISTORY = 100;
+  private static readonly RUN_STATUSES = ["Planning", "In Progress", "Completed"];
+
+  private static historyTimestamp(raw: unknown, label: string): string | null {
+    if (raw === null) return null;
+    const text = typeof raw === "string" ? raw.trim() : "";
+    const time = Date.parse(text);
+    if (!text || Number.isNaN(time)) throw new BadRequestException({ error: `${label} must be an ISO 8601 date-time or null` });
+    return new Date(time).toISOString();
+  }
+
+  private static historyInt(raw: unknown, label: string, max: number): number | null {
+    if (raw === null) return null;
+    if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0 || raw > max) {
+      throw new BadRequestException({ error: `${label} must be a whole number from 0 to ${max} or null` });
+    }
+    return raw;
+  }
+
+  private static historyText(raw: unknown, label: string): string | null {
+    if (raw === null) return null;
+    if (typeof raw !== "string") throw new BadRequestException({ error: `${label} must be a string or null` });
+    if (raw.length > LegacyService.HISTORY_IMPORT_MAX_TEXT) {
+      throw new BadRequestException({ error: `${label} is too long (${raw.length} characters, the limit is ${LegacyService.HISTORY_IMPORT_MAX_TEXT})` });
+    }
+    return raw;
+  }
+
+  private static historyStatus(raw: unknown, label: string): string {
+    if (typeof raw !== "string" || !LegacyService.EXECUTION_STATUSES.includes(raw)) {
+      throw new BadRequestException({ error: `${label} must be one of: ${LegacyService.EXECUTION_STATUSES.join(", ")}` });
+    }
+    return raw;
+  }
+
+  private static normalizeRunHistory(run: Body): Map<string, unknown> {
+    const out = new Map<string, unknown>();
+    const has = (key: string) => run[key] !== undefined;
+    if (has("status")) {
+      if (typeof run.status !== "string" || !LegacyService.RUN_STATUSES.includes(run.status)) {
+        throw new BadRequestException({ error: `run.status must be one of: ${LegacyService.RUN_STATUSES.join(", ")}` });
+      }
+      out.set("status", run.status);
+    }
+    for (const [key, col] of [["createdAt", "created_at"], ["startedAt", "started_at"], ["endedAt", "ended_at"], ["closedAt", "closed_at"]] as const) {
+      if (!has(key)) continue;
+      // created_at is NOT NULL: it can be moved to another date, never cleared.
+      if (key === "createdAt" && run[key] === null) throw new BadRequestException({ error: "run.createdAt cannot be null" });
+      out.set(col, LegacyService.historyTimestamp(run[key], `run.${key}`));
+    }
+    if (has("closeStatus")) {
+      if (run.closeStatus !== null && run.closeStatus !== "completed" && run.closeStatus !== "incomplete") {
+        throw new BadRequestException({ error: "run.closeStatus must be completed, incomplete or null" });
+      }
+      out.set("close_status", run.closeStatus);
+    }
+    // 10^13 ms is about 317 years: far past any real run, and inside BIGINT and a JS safe integer.
+    if (has("timeSpentMs")) out.set("time_spent_ms", LegacyService.historyInt(run.timeSpentMs, "run.timeSpentMs", 10_000_000_000_000));
+    if (has("elapsedMs")) out.set("elapsed_ms", LegacyService.historyInt(run.elapsedMs, "run.elapsedMs", 10_000_000_000_000));
+    if (has("tags")) {
+      if (!Array.isArray(run.tags)) throw new BadRequestException({ error: "run.tags must be an array of strings" });
+      const seen = new Set<string>();
+      const tags: string[] = [];
+      for (const raw of run.tags) {
+        const tag = typeof raw === "string" ? raw.trim() : "";
+        if (!tag || tag.length > 40) throw new BadRequestException({ error: "Each run tag must be 1 to 40 characters" });
+        if (seen.has(tag.toLowerCase())) continue;
+        seen.add(tag.toLowerCase());
+        tags.push(tag);
+      }
+      if (tags.length > 20) throw new BadRequestException({ error: "A run can have at most 20 tags" });
+      out.set("tags", tags);
+    }
+    return out;
+  }
+
+  private static normalizeResultHistory(raw: unknown, label: string): Body[] | null {
+    if (raw === null) return null;
+    if (!Array.isArray(raw) || raw.length > LegacyService.HISTORY_IMPORT_MAX_HISTORY) {
+      throw new BadRequestException({ error: `${label} must be an array of at most ${LegacyService.HISTORY_IMPORT_MAX_HISTORY} entries or null` });
+    }
+    return raw.map((entry, i) => {
+      const where = `${label}[${i}]`;
+      if (!entry || typeof entry !== "object") throw new BadRequestException({ error: `${where} must be an object` });
+      const e = entry as Body;
+      const item: Body = { status: LegacyService.historyStatus(e.status, `${where}.status`) };
+      if (e.executedAt !== undefined) item.executedAt = LegacyService.historyTimestamp(e.executedAt, `${where}.executedAt`);
+      if (e.durationMs !== undefined) item.durationMs = LegacyService.historyInt(e.durationMs, `${where}.durationMs`, 2_147_483_647);
+      if (e.comment !== undefined) item.comment = LegacyService.historyText(e.comment, `${where}.comment`);
+      if (e.errorStack !== undefined) item.errorStack = LegacyService.historyText(e.errorStack, `${where}.errorStack`);
+      if (e.reportedBy !== undefined) {
+        if (e.reportedBy !== "human" && e.reportedBy !== "automation") throw new BadRequestException({ error: `${where}.reportedBy must be human or automation` });
+        item.reportedBy = e.reportedBy;
+      }
+      return item;
+    });
+  }
+
+  private static normalizeStepResults(raw: unknown, label: string): Body[] | null {
+    if (raw === null) return null;
+    if (!Array.isArray(raw) || raw.length > LegacyService.HISTORY_IMPORT_MAX_STEPS) {
+      throw new BadRequestException({ error: `${label} must be an array of at most ${LegacyService.HISTORY_IMPORT_MAX_STEPS} steps or null` });
+    }
+    const positions = new Set<number>();
+    return raw.map((entry, i) => {
+      const where = `${label}[${i}]`;
+      if (!entry || typeof entry !== "object") throw new BadRequestException({ error: `${where} must be an object` });
+      const s = entry as Body;
+      if (typeof s.position !== "number" || !Number.isInteger(s.position) || s.position < 1 || s.position > 10_000) {
+        throw new BadRequestException({ error: `${where}.position must be a whole number from 1 to 10000` });
+      }
+      if (positions.has(s.position)) throw new BadRequestException({ error: `${where}.position ${s.position} appears twice` });
+      positions.add(s.position);
+      const item: Body = { position: s.position, status: LegacyService.historyStatus(s.status, `${where}.status`) };
+      if (s.comment !== undefined && s.comment !== null && s.comment !== "") item.comment = LegacyService.historyText(s.comment, `${where}.comment`);
+      return item;
+    });
+  }
+
+  async importRunHistory(userId: string | null | undefined, cycleId: string, body: Body) {
+    const uid = this.requireUser(userId);
+    const projectId = await this.requireCycleAccess(uid, cycleId);
+    const project = await this.requireProjectAccess(uid, projectId);
+    if (this.normalizeRole(project.caller_role) === "qa_engineer") {
+      throw new ForbiddenException({ error: "QA Engineers cannot import run history" });
+    }
+
+    if (body.run !== undefined && (body.run === null || typeof body.run !== "object" || Array.isArray(body.run))) {
+      throw new BadRequestException({ error: "run must be an object" });
+    }
+    const runFields = body.run === undefined ? new Map<string, unknown>() : LegacyService.normalizeRunHistory(body.run);
+    const rawResults = body.results === undefined ? [] : body.results;
+    if (!Array.isArray(rawResults) || rawResults.length > LegacyService.HISTORY_IMPORT_MAX_RESULTS) {
+      throw new BadRequestException({ error: `results must be an array of at most ${LegacyService.HISTORY_IMPORT_MAX_RESULTS} items` });
+    }
+
+    // Validated and reduced to exactly the keys the caller sent, so the UPDATE below can tell
+    // "omitted" (leave alone) from "null" (clear).
+    const seen = new Set<string>();
+    const results = rawResults.map((entry, i) => {
+      const where = `results[${i}]`;
+      if (!entry || typeof entry !== "object") throw new BadRequestException({ error: `${where} must be an object` });
+      const r = entry as Body;
+      const testcaseId = typeof r.testcaseId === "string" ? r.testcaseId.toLowerCase() : "";
+      if (!isUuid(testcaseId)) throw new BadRequestException({ error: `${where}.testcaseId must be a test case id` });
+      // Two rows for one case would make the UPDATE pick one at random.
+      if (seen.has(testcaseId)) throw new BadRequestException({ error: `${where}.testcaseId appears twice` });
+      seen.add(testcaseId);
+      const d: Body = { testcaseId };
+      if (r.status !== undefined) d.status = LegacyService.historyStatus(r.status, `${where}.status`);
+      if (r.actualResult !== undefined) d.actualResult = LegacyService.historyText(r.actualResult, `${where}.actualResult`);
+      if (r.executedAt !== undefined) d.executedAt = LegacyService.historyTimestamp(r.executedAt, `${where}.executedAt`);
+      // executions.duration_ms is a 32-bit INTEGER.
+      if (r.durationMs !== undefined) d.durationMs = LegacyService.historyInt(r.durationMs, `${where}.durationMs`, 2_147_483_647);
+      if (r.errorMessage !== undefined) d.errorMessage = LegacyService.historyText(r.errorMessage, `${where}.errorMessage`);
+      if (r.errorStack !== undefined) d.errorStack = LegacyService.historyText(r.errorStack, `${where}.errorStack`);
+      if (r.reportedBy !== undefined) {
+        if (r.reportedBy !== "human" && r.reportedBy !== "automation") throw new BadRequestException({ error: `${where}.reportedBy must be human or automation` });
+        d.reportedBy = r.reportedBy;
+      }
+      if (r.stepResults !== undefined) d.stepResults = LegacyService.normalizeStepResults(r.stepResults, `${where}.stepResults`);
+      if (r.history !== undefined) d.history = LegacyService.normalizeResultHistory(r.history, `${where}.history`);
+      return d;
+    });
+
+    const refreshSnapshots = body.refreshSnapshots === true;
+    const outcome = await this.db.transaction(async (client) => {
+      if (runFields.size) {
+        const params: unknown[] = [cycleId];
+        const sets = [...runFields].map(([col, value]) => {
+          params.push(value);
+          return `${col} = ${params.length}`;
+        });
+        await client.query(`UPDATE cycles SET ${sets.join(", ")}, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`, params);
+      }
+
+      let matched = new Set<string>();
+      if (results.length) {
+        const upd = await client.query<{ testcase_id: string }>(
+          `WITH input AS (SELECT x AS d, (x->>'testcaseId')::uuid AS testcase_id FROM jsonb_array_elements($2::jsonb) x),
+                target AS (
+                  SELECT i.d, i.testcase_id, e.id AS execution_id
+                    FROM input i
+                    JOIN cycle_items ci ON ci.cycle_id = $1 AND ci.testcase_id = i.testcase_id AND ci.deleted_at IS NULL
+                    JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
+                )
+           UPDATE executions e SET
+             status = CASE WHEN t.d ? 'status' THEN t.d->>'status' ELSE e.status END,
+             actual_result = CASE WHEN t.d ? 'actualResult' THEN t.d->>'actualResult' ELSE e.actual_result END,
+             executed_at = CASE WHEN t.d ? 'executedAt' THEN (t.d->>'executedAt')::timestamptz ELSE e.executed_at END,
+             duration_ms = CASE WHEN t.d ? 'durationMs' THEN (t.d->>'durationMs')::int ELSE e.duration_ms END,
+             error_message = CASE WHEN t.d ? 'errorMessage' THEN t.d->>'errorMessage' ELSE e.error_message END,
+             error_stack = CASE WHEN t.d ? 'errorStack' THEN t.d->>'errorStack' ELSE e.error_stack END,
+             reported_by = CASE WHEN t.d ? 'reportedBy' THEN t.d->>'reportedBy' ELSE e.reported_by END,
+             step_results = CASE WHEN t.d ? 'stepResults' THEN NULLIF(t.d->'stepResults', 'null'::jsonb) ELSE e.step_results END,
+             history = CASE WHEN t.d ? 'history' THEN NULLIF(t.d->'history', 'null'::jsonb) ELSE e.history END,
+             updated_at = now()
+           FROM target t
+           WHERE e.id = t.execution_id
+           RETURNING t.testcase_id`,
+          [cycleId, JSON.stringify(results)]
+        );
+        matched = new Set(upd.rows.map((row) => row.testcase_id));
+      }
+
+      let refreshed = 0;
+      if (refreshSnapshots) {
+        // Same column list addCycleTestCases captures, re-read from the live case: the case fixes made
+        // after a run was created otherwise stay invisible in the run's filters and screens.
+        const snap = await client.query(
+          `UPDATE cycle_items ci SET
+             snapshot_title = t.title, snapshot_external_id = t.external_id, snapshot_priority = t.priority,
+             snapshot_type = t.type, snapshot_suite_id = t.suite_id, snapshot_description = t.description,
+             snapshot_preconditions = t.preconditions, snapshot_postconditions = t.postconditions,
+             snapshot_steps = t.steps, snapshot_test_data = t.test_data,
+             snapshot_automation_status = t.automation_status, snapshot_automation_tags = t.automation_tags
+           FROM testcases t
+           WHERE t.id = ci.testcase_id AND t.deleted_at IS NULL AND ci.cycle_id = $1 AND ci.deleted_at IS NULL`,
+          [cycleId]
+        );
+        refreshed = snap.rowCount ?? 0;
+      }
+      return { matched, refreshed };
+    });
+
+    const unmatched = results.map((r) => r.testcaseId as string).filter((id) => !outcome.matched.has(id));
+    await this.logProjectActivity(projectId, uid, "cycle_history_imported", "cycle", cycleId, null, {
+      runFields: [...runFields.keys()],
+      results: results.length,
+      applied: outcome.matched.size,
+      unmatched: unmatched.length,
+      refreshedSnapshots: outcome.refreshed
+    });
+    return { applied: outcome.matched.size, unmatched, refreshedSnapshots: outcome.refreshed, runFields: [...runFields.keys()] };
   }
 
   private bugSelect(where: string): string {

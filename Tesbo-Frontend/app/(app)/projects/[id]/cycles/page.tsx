@@ -48,7 +48,7 @@ import {
   Textarea,
 } from "@/components/ui";
 import { PageHeader, ListWorkspaceLayout, Breadcrumbs } from "@/components/workflows";
-import { getInitials, statusTone, formatDuration, formatDate, RunAvatar, RunProgressBar } from "@/components/testruns/runDisplay";
+import { getInitials, statusTone, formatDuration, formatSpent, formatDate, RunAvatar, RunProgressBar, RunTags } from "@/components/testruns/runDisplay";
 import { getPageCache, setPageCache } from "@/lib/pageDataCache";
 
 interface CyclesData {
@@ -463,6 +463,12 @@ export default function TestRunsPage() {
                           <IconClock size={12} stroke={1.75} />
                           <span className="font-mono">{formatDuration(r.startedAt, r.endedAt)}</span>
                         </span>
+                        {r.timeSpentMs != null && (
+                          <span className="flex items-center gap-1" title="Time spent working on this run" data-testid="run-time-spent">
+                            Time spent <span className="font-mono">{formatSpent(r.timeSpentMs)}</span>
+                          </span>
+                        )}
+                        <RunTags tags={r.tags} />
                         <span className="flex items-center gap-1">
                           <IconCalendarEvent size={12} stroke={1.75} />
                           {formatDate(r.createdAt)}

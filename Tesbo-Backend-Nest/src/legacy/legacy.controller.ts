@@ -834,6 +834,12 @@ export class LegacyController {
     return this.legacy.bulkUpdateExecutionStatus(cycleId, req.userId, body);
   }
 
+  /** Owner-or-manager: applies a run's and its results' past state from another tool onto this run. See importRunHistory. */
+  @Post("/api/cycles/:cycleId/history-import")
+  importRunHistory(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
+    return this.legacy.importRunHistory(req.userId, cycleId, body);
+  }
+
   @Post("/api/cycles/:cycleId/share")
   shareCycle(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.shareCycle(cycleId, req.userId, body);

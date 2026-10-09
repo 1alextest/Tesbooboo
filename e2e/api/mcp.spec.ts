@@ -4365,3 +4365,46 @@ test.describe("MCP suite description and preconditions", () => {
     }
   });
 });
+
+test.describe("MCP test case ID", () => {
+  test("update_testcase changes the ID, refuses a taken or malformed one, and leaves it alone when omitted", async ({ request }) => {
+    const stamp = Date.now();
+    let tokenId: string | undefined;
+    const caseIds: string[] = [];
+    const mcpApi = await newRequestContext.newContext({
+      baseURL: env.apiBaseUrl,
+      storageState: { cookies: [], origins: [] },
+    });
+    try {
+      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+        data: { name: `E2E MCP case id token ${stamp}`, scopes: ["read", "write"] },
+      });
+      expect(tokenRes.ok()).toBeTruthy();
+      const tokenBody = await tokenRes.json();
+      tokenId = tokenBody.id;
+      const token = tokenBody.token as string;
+
+      const a = await createCase(request, { title: `E2E MCP ID A ${stamp}` });
+      const b = await createCase(request, { title: `E2E MCP ID B ${stamp}` });
+      caseIds.push(a.id, b.id);
+
+      const renamed = await callMcpTool(mcpApi, token, "update_testcase", { testcaseId: a.id, externalId: `Z${stamp}-TC-3` });
+      expect(renamed.externalId).toBe(`Z${stamp}-TC-3`);
+      expect((await callMcpTool(mcpApi, token, "get_testcase", { testcaseId: a.id })).externalId).toBe(`Z${stamp}-TC-3`);
+
+      const taken = await callMcpToolExpectError(mcpApi, token, "update_testcase", { testcaseId: b.id, externalId: `Z${stamp}-TC-3` });
+      expect(taken.message).toMatch(/already used/i);
+      const blank = await callMcpToolExpectError(mcpApi, token, "update_testcase", { testcaseId: b.id, externalId: "  " });
+      expect(blank.message).toMatch(/non-empty|spaces/i);
+      expect((await callMcpTool(mcpApi, token, "get_testcase", { testcaseId: b.id })).externalId).toBe(b.externalId);
+
+      // Omitting it leaves it alone.
+      const kept = await callMcpTool(mcpApi, token, "update_testcase", { testcaseId: a.id, title: `E2E MCP ID A ${stamp} edited` });
+      expect(kept.externalId).toBe(`Z${stamp}-TC-3`);
+    } finally {
+      for (const id of caseIds) await deleteCase(request, id);
+      if (tokenId) await request.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
+      await mcpApi.dispose();
+    }
+  });
+});

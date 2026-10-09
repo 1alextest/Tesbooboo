@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, request as newRequestContext, test } from "@playwright/test";
 import { env } from "../utils/env";
 import { column, exec, literal, scalar } from "../utils/psql";
 
@@ -1048,6 +1048,318 @@ test.describe("cycles read-path gap sweep (hard-delete remediation Phase 2)", ()
       exec(`DELETE FROM cycle_items WHERE cycle_id = ${literal(cycle.id)};`);
       exec(`DELETE FROM cycles WHERE id = ${literal(cycle.id)};`);
       await request.delete(`/api/projects/${ctx.projectId}/testcases/${testcase.id}`, { failOnStatusCode: false });
+    }
+  });
+});
+
+// Historical import: applies a run's and its results' past state from another tool (start/end/close
+// times, time spent, tags, per-result executed time, duration, error stack, step results and earlier
+// results) onto an EXISTING run. It exists so a migrated run keeps what the source tool recorded,
+// including states the normal write paths refuse (In Progress with no cases, an end time on a run
+// that is still In Progress) and values they cap (a stack trace over the CI limit).
+test.describe("run history import", () => {
+  const importUrl = (cycleId: string) => `/api/cycles/${cycleId}/history-import`;
+
+  async function seedRun(request: any, caseCount: number) {
+    const stamp = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    const cycle = await (await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E History ${stamp}` } })).json();
+    const caseIds: string[] = [];
+    for (let i = 0; i < caseCount; i++) caseIds.push(await addCase(request, cycle.id));
+    return { cycleId: cycle.id as string, caseIds };
+  }
+
+  async function cleanUp(request: any, cycleId: string, caseIds: string[]) {
+    await request.delete(`/api/cycles/${cycleId}`, { failOnStatusCode: false });
+    for (const id of caseIds) await request.delete(`/api/projects/${ctx.projectId}/testcases/${id}`, { failOnStatusCode: false });
+  }
+
+  test("sets the run's past times, time spent and tags, and the run and the runs list return them", async ({ request }) => {
+    const { cycleId, caseIds } = await seedRun(request, 1);
+    try {
+      const res = await request.post(importUrl(cycleId), {
+        data: {
+          run: {
+            status: "Completed",
+            createdAt: "2024-03-07T10:00:00Z",
+            startedAt: "2024-03-07T15:25:19Z",
+            endedAt: "2024-03-13T15:18:01Z",
+            closedAt: "2024-03-13T15:18:01Z",
+            closeStatus: "completed",
+            timeSpentMs: 220745125,
+            elapsedMs: 2668268000, // over 32 bits: the column is BIGINT
+            tags: ["learning paths", "  Smoke  ", "SMOKE"],
+          },
+        },
+      });
+      expect(res.ok(), await res.text()).toBeTruthy();
+      expect((await res.json()).runFields).toEqual(
+        expect.arrayContaining(["status", "created_at", "started_at", "ended_at", "closed_at", "close_status", "time_spent_ms", "elapsed_ms", "tags"]),
+      );
+
+      const run = await (await request.get(`/api/cycles/${cycleId}`)).json();
+      expect(run).toMatchObject({
+        status: "Completed",
+        closeStatus: "completed",
+        timeSpentMs: 220745125,
+        elapsedMs: 2668268000,
+        tags: ["learning paths", "Smoke"],
+      });
+      expect(new Date(run.startedAt).toISOString()).toBe("2024-03-07T15:25:19.000Z");
+      expect(new Date(run.endedAt).toISOString()).toBe("2024-03-13T15:18:01.000Z");
+      expect(new Date(run.createdAt).toISOString()).toBe("2024-03-07T10:00:00.000Z");
+
+      const listed = (await (await request.get(`/api/projects/${ctx.projectId}/cycles`)).json()).find((c: { id: string }) => c.id === cycleId);
+      expect([listed.timeSpentMs, listed.tags]).toEqual([220745125, ["learning paths", "Smoke"]]);
+    } finally {
+      await cleanUp(request, cycleId, caseIds);
+    }
+  });
+
+  test("a run with no cases can be In Progress or Completed, and an In Progress run keeps its end time", async ({ request }) => {
+    const { cycleId } = await seedRun(request, 0);
+    try {
+      // The normal route refuses this, which is why the import path exists.
+      const refused = await request.patch(`/api/cycles/${cycleId}`, { data: { status: "In Progress" }, failOnStatusCode: false });
+      expect(refused.status()).toBe(400);
+
+      const res = await request.post(importUrl(cycleId), {
+        data: { run: { status: "In Progress", startedAt: "2024-05-01T08:00:00Z", endedAt: "2024-05-02T08:00:00Z" } },
+      });
+      expect(res.ok(), await res.text()).toBeTruthy();
+      const run = await (await request.get(`/api/cycles/${cycleId}`)).json();
+      expect(run.status).toBe("In Progress");
+      expect(new Date(run.endedAt).toISOString()).toBe("2024-05-02T08:00:00.000Z");
+
+      const done = await request.post(importUrl(cycleId), { data: { run: { status: "Completed" } } });
+      expect(done.ok()).toBeTruthy();
+      expect((await (await request.get(`/api/cycles/${cycleId}`)).json()).status).toBe("Completed");
+    } finally {
+      await cleanUp(request, cycleId, []);
+    }
+  });
+
+  test("a result takes its own executed time, duration, error text, stack over the CI limit, step results and history", async ({ request }) => {
+    const { cycleId, caseIds } = await seedRun(request, 1);
+    try {
+      const stack = `Error: boom\n${"    at frame (file.js:1:1)\n".repeat(5000)}`; // ~130k characters
+      expect(stack.length).toBeGreaterThan(100_000);
+      const res = await request.post(importUrl(cycleId), {
+        data: {
+          results: [
+            {
+              testcaseId: caseIds[0],
+              status: "Passed",
+              actualResult: "Passed on the third try",
+              executedAt: "2024-03-08T09:30:00Z",
+              durationMs: 2_100_000_000, // 24+ days, still inside the 32-bit column
+              errorMessage: "Timeout",
+              errorStack: stack,
+              reportedBy: "automation",
+              stepResults: [
+                { position: 2, status: "Failed", comment: "button missing" },
+                { position: 1, status: "Passed" },
+                { position: 3, status: "Untested" },
+              ],
+              history: [
+                { status: "Failed", executedAt: "2024-03-08T09:00:00Z", durationMs: 1200, comment: "first try", reportedBy: "automation" },
+                { status: "Retest", executedAt: "2024-03-08T09:15:00Z" },
+              ],
+            },
+          ],
+        },
+      });
+      expect(res.ok(), await res.text()).toBeTruthy();
+      expect(await res.json()).toMatchObject({ applied: 1, unmatched: [] });
+
+      const [row] = await (await request.get(`/api/cycles/${cycleId}/executions`)).json();
+      expect(row).toMatchObject({
+        status: "Passed",
+        actualResult: "Passed on the third try",
+        durationMs: 2_100_000_000,
+        errorMessage: "Timeout",
+        reportedBy: "automation",
+      });
+      expect(new Date(row.executedAt).toISOString()).toBe("2024-03-08T09:30:00.000Z");
+      expect(row.errorStack).toBe(stack); // nothing truncated
+      expect(row.stepResults).toEqual([
+        { position: 2, status: "Failed", comment: "button missing" },
+        { position: 1, status: "Passed" },
+        { position: 3, status: "Untested" },
+      ]);
+      expect(row.history).toHaveLength(2);
+      expect(row.history[0]).toMatchObject({ status: "Failed", comment: "first try", durationMs: 1200 });
+    } finally {
+      await cleanUp(request, cycleId, caseIds);
+    }
+  });
+
+  test("is repeatable: the same payload twice leaves the same state, an omitted field is kept, null clears it", async ({ request }) => {
+    const { cycleId, caseIds } = await seedRun(request, 1);
+    try {
+      const payload = {
+        run: { timeSpentMs: 5000, tags: ["a"] },
+        results: [{ testcaseId: caseIds[0], status: "Failed", stepResults: [{ position: 1, status: "Failed" }], history: [{ status: "Retest" }] }],
+      };
+      const first = await request.post(importUrl(cycleId), { data: payload });
+      const second = await request.post(importUrl(cycleId), { data: payload });
+      expect(first.ok() && second.ok()).toBeTruthy();
+      const read = async () => ({
+        run: await (await request.get(`/api/cycles/${cycleId}`)).json(),
+        rows: await (await request.get(`/api/cycles/${cycleId}/executions`)).json(),
+      });
+      const once = await read();
+      expect(once.rows).toHaveLength(1); // no second execution, no second history entry
+      expect(once.rows[0].history).toHaveLength(1);
+      expect(once.run.tags).toEqual(["a"]);
+
+      // Omitted fields stay; null clears just that field.
+      await request.post(importUrl(cycleId), { data: { results: [{ testcaseId: caseIds[0], actualResult: "note" }] } });
+      let now = await read();
+      expect([now.rows[0].status, now.rows[0].actualResult, now.rows[0].stepResults.length]).toEqual(["Failed", "note", 1]);
+      await request.post(importUrl(cycleId), {
+        data: { run: { timeSpentMs: null, tags: [] }, results: [{ testcaseId: caseIds[0], stepResults: null, history: null, actualResult: null }] },
+      });
+      now = await read();
+      expect([now.run.timeSpentMs, now.run.tags, now.rows[0].stepResults, now.rows[0].history, now.rows[0].actualResult]).toEqual([null, [], null, null, null]);
+    } finally {
+      await cleanUp(request, cycleId, caseIds);
+    }
+  });
+
+  test("a case that is not in the run is reported back as unmatched and creates nothing; the rest still apply", async ({ request }) => {
+    const { cycleId, caseIds } = await seedRun(request, 1);
+    const stray = await (await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E History Stray ${Date.now()}` } })).json();
+    try {
+      const ghost = "11111111-1111-4111-8111-111111111111";
+      const res = await request.post(importUrl(cycleId), {
+        data: {
+          results: [
+            { testcaseId: caseIds[0], status: "Blocked" },
+            { testcaseId: stray.id, status: "Passed" },
+            { testcaseId: ghost, status: "Passed" },
+          ],
+        },
+      });
+      const body = await res.json();
+      expect(res.ok(), JSON.stringify(body)).toBeTruthy();
+      expect(body.applied).toBe(1);
+      expect([...body.unmatched].sort()).toEqual([stray.id, ghost].sort());
+      const rows = await (await request.get(`/api/cycles/${cycleId}/executions`)).json();
+      expect(rows.map((r: { status: string }) => r.status)).toEqual(["Blocked"]);
+    } finally {
+      await cleanUp(request, cycleId, [...caseIds, stray.id]);
+    }
+  });
+
+  test("refreshSnapshots copies the live case onto the run's frozen copy, and is off unless asked", async ({ request }) => {
+    const { cycleId, caseIds } = await seedRun(request, 1);
+    try {
+      await request.put(`/api/projects/${ctx.projectId}/testcases/${caseIds[0]}`, { data: { priority: "P3", type: "Usability" } });
+      const frozen = (await (await request.get(`/api/cycles/${cycleId}/executions`)).json())[0];
+      expect([frozen.priority, frozen.type]).not.toEqual(["P3", "Usability"]);
+
+      const plain = await request.post(importUrl(cycleId), { data: { results: [{ testcaseId: caseIds[0], status: "Passed" }] } });
+      expect((await plain.json()).refreshedSnapshots).toBe(0);
+      expect((await (await request.get(`/api/cycles/${cycleId}/executions`)).json())[0].priority).toBe(frozen.priority);
+
+      const refreshed = await request.post(importUrl(cycleId), { data: { refreshSnapshots: true } });
+      expect((await refreshed.json()).refreshedSnapshots).toBe(1);
+      const after = (await (await request.get(`/api/cycles/${cycleId}/executions`)).json())[0];
+      expect([after.priority, after.type, after.status]).toEqual(["P3", "Usability", "Passed"]);
+    } finally {
+      await cleanUp(request, cycleId, caseIds);
+    }
+  });
+
+  test("it does not touch who the result is assigned to or who recorded it", async ({ request }) => {
+    const { cycleId, caseIds } = await seedRun(request, 1);
+    try {
+      await request.post(importUrl(cycleId), { data: { results: [{ testcaseId: caseIds[0], status: "Passed", reportedBy: "human" }] } });
+      const [row] = await (await request.get(`/api/cycles/${cycleId}/executions`)).json();
+      expect(row.assigneeId).toBeNull();
+      // Ordinary editing keeps working on an imported result.
+      const edit = await request.patch(`/api/cycles/${cycleId}/executions/${row.id}`, { data: { status: "Failed" } });
+      expect(edit.ok()).toBeTruthy();
+      const after = (await (await request.get(`/api/cycles/${cycleId}/executions`)).json())[0];
+      expect([after.status, after.stepResults]).toEqual(["Failed", null]);
+    } finally {
+      await cleanUp(request, cycleId, caseIds);
+    }
+  });
+
+  test("bad input is a 400 that names the field, and a payload with one bad row applies nothing", async ({ request }) => {
+    const { cycleId, caseIds } = await seedRun(request, 2);
+    try {
+      const bad = async (data: unknown, pattern: RegExp) => {
+        const res = await request.post(importUrl(cycleId), { data: data as object, failOnStatusCode: false });
+        expect(res.status(), JSON.stringify(data).slice(0, 120)).toBe(400);
+        expect((await res.json()).error).toMatch(pattern);
+      };
+      const ok = { testcaseId: caseIds[0], status: "Passed" };
+      await bad({ run: "x" }, /run must be an object/);
+      await bad({ run: [] }, /run must be an object/);
+      await bad({ run: { status: "Done" } }, /run\.status/);
+      await bad({ run: { startedAt: "not a date" } }, /run\.startedAt/);
+      await bad({ run: { createdAt: null } }, /createdAt cannot be null/);
+      await bad({ run: { timeSpentMs: -1 } }, /timeSpentMs/);
+      await bad({ run: { timeSpentMs: 1.5 } }, /timeSpentMs/);
+      await bad({ run: { elapsedMs: "5" } }, /elapsedMs/);
+      await bad({ run: { closeStatus: "weird" } }, /closeStatus/);
+      await bad({ run: { tags: "a" } }, /tags/);
+      await bad({ run: { tags: ["x".repeat(41)] } }, /1 to 40/);
+      await bad({ run: { tags: [""] } }, /1 to 40/);
+      await bad({ run: { tags: Array.from({ length: 21 }, (_, i) => `t${i}`) } }, /at most 20/);
+      await bad({ results: {} }, /results must be an array/);
+      await bad({ results: Array.from({ length: 501 }, () => ok) }, /at most 500/);
+      await bad({ results: [{ status: "Passed" }] }, /testcaseId/);
+      await bad({ results: [{ testcaseId: "nope", status: "Passed" }] }, /testcaseId/);
+      await bad({ results: [ok, ok] }, /appears twice/);
+      await bad({ results: [{ ...ok, status: "pass" }] }, /status must be one of/);
+      await bad({ results: [{ ...ok, executedAt: "yesterday" }] }, /executedAt/);
+      await bad({ results: [{ ...ok, durationMs: 2_147_483_648 }] }, /durationMs/);
+      await bad({ results: [{ ...ok, errorStack: "x".repeat(1_000_001) }] }, /too long/);
+      await bad({ results: [{ ...ok, reportedBy: "bot" }] }, /reportedBy/);
+      await bad({ results: [{ ...ok, stepResults: [{ position: 0, status: "Passed" }] }] }, /position/);
+      await bad({ results: [{ ...ok, stepResults: [{ position: 1, status: "Passed" }, { position: 1, status: "Failed" }] }] }, /appears twice/);
+      await bad({ results: [{ ...ok, stepResults: [{ position: 1, status: "Great" }] }] }, /status must be one of/);
+      await bad({ results: [{ ...ok, stepResults: Array.from({ length: 501 }, (_, i) => ({ position: i + 1, status: "Passed" })) }] }, /at most 500/);
+      await bad({ results: [{ ...ok, history: [{ comment: "no status" }] }] }, /history\[0\]\.status/);
+      await bad({ results: [{ ...ok, history: Array.from({ length: 101 }, () => ({ status: "Passed" })) }] }, /at most 100/);
+
+      // One good row next to one bad row: nothing lands.
+      await bad({ run: { tags: ["leak"] }, results: [ok, { testcaseId: caseIds[1], status: "nope" }] }, /status must be one of/);
+      const rows = await (await request.get(`/api/cycles/${cycleId}/executions`)).json();
+      expect(rows.map((r: { status: string }) => r.status)).toEqual(["Untested", "Untested"]);
+      expect((await (await request.get(`/api/cycles/${cycleId}`)).json()).tags).toEqual([]);
+
+      // 500 rows is the allowed maximum, and an empty body is a valid no-op.
+      const empty = await request.post(importUrl(cycleId), { data: {} });
+      expect(await empty.json()).toMatchObject({ applied: 0, unmatched: [], refreshedSnapshots: 0, runFields: [] });
+    } finally {
+      await cleanUp(request, cycleId, caseIds);
+    }
+  });
+
+  test("another account, no session, an unknown run and a deleted run are all refused", async ({ request }) => {
+    const { cycleId, caseIds } = await seedRun(request, 1);
+    const asB = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: path.join(__dirname, "../.auth/state-b.json") });
+    const anon = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
+    try {
+      const data = { run: { tags: ["intruder"] } };
+      const other = await asB.post(importUrl(cycleId), { data, failOnStatusCode: false });
+      expect([400, 401, 403, 404]).toContain(other.status());
+      const none = await anon.post(importUrl(cycleId), { data, failOnStatusCode: false });
+      expect([400, 401, 403, 404]).toContain(none.status());
+      expect((await request.post(importUrl("not-a-uuid"), { data, failOnStatusCode: false })).status()).toBe(404);
+      expect((await request.post(importUrl("11111111-1111-4111-8111-111111111111"), { data, failOnStatusCode: false })).status()).toBe(404);
+      expect((await (await request.get(`/api/cycles/${cycleId}`)).json()).tags).toEqual([]);
+
+      await request.delete(`/api/cycles/${cycleId}`);
+      expect((await request.post(importUrl(cycleId), { data, failOnStatusCode: false })).status()).toBe(404);
+    } finally {
+      await cleanUp(request, cycleId, caseIds);
+      await asB.dispose();
+      await anon.dispose();
     }
   });
 });

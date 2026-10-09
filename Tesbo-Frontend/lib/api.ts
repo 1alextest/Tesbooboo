@@ -2455,6 +2455,10 @@ export interface TestRunListItem {
   closedAt?: string | null;
   closeStatus?: "completed" | "incomplete" | null;
   lastResultAt?: string | null;
+  /** Carried over from another test tool: work time (not wall clock), wall-clock length, and free labels. */
+  timeSpentMs?: number | null;
+  elapsedMs?: number | null;
+  tags?: string[];
 }
 
 export interface TestRunDetail {
@@ -2487,6 +2491,10 @@ export interface TestRunDetail {
   closedAt?: string | null;
   closeStatus?: "completed" | "incomplete" | null;
   lastResultAt?: string | null;
+  /** Carried over from another test tool: work time (not wall clock), wall-clock length, and free labels. */
+  timeSpentMs?: number | null;
+  elapsedMs?: number | null;
+  tags?: string[];
 }
 
 export interface ExecutionItem {
@@ -2526,6 +2534,9 @@ export interface ExecutionItem {
   errorMessage?: string | null;
   errorStack?: string | null;
   reportedBy?: "human" | "automation";
+  /** Carried over from another test tool: each step's outcome, and the earlier results of this case in this run (oldest first). */
+  stepResults?: Array<{ position: number; status: string; comment?: string }> | null;
+  history?: Array<{ status: string; executedAt?: string | null; durationMs?: number | null; comment?: string | null; errorStack?: string | null; reportedBy?: "human" | "automation" }> | null;
   /** Count only -- the file list is fetched per execution via listExecutionEvidence. */
   evidenceCount?: number;
 }

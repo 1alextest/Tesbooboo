@@ -62,6 +62,7 @@ import { Button, StatusChip, Input, PageLoader, Select, Textarea, Drawer, Priori
 import Modal from "@/components/ui/Modal";
 import ExecutionEvidencePanel from "@/components/ExecutionEvidencePanel";
 import { AutomationResultMeta, AutomationRunProvenance } from "@/components/AutomationResultMeta";
+import { formatSpent, RunTags } from "@/components/testruns/runDisplay";
 import { useLogBugDialog } from "@/components/LogBugDialog";
 import { useTopBarSlots } from "@/components/TopBarSlots";
 import { Breadcrumbs } from "@/components/workflows";
@@ -1192,6 +1193,12 @@ export default function TestRunDetailPage() {
             <span className="flex items-center gap-1.5 text-[12px] text-[var(--muted)]">
               <IconClock size={13} stroke={1.75} className="text-[var(--muted-soft)]" /> <span className="font-mono">{formatDuration(run.startedAt, run.endedAt)}</span>
             </span>
+            {run.timeSpentMs != null && (
+              <span className="flex items-center gap-1.5 text-[12px] text-[var(--muted)]" title="Time spent working on this run" data-testid="run-time-spent">
+                Time spent <span className="font-mono">{formatSpent(run.timeSpentMs)}</span>
+              </span>
+            )}
+            <RunTags tags={run.tags} />
             <span className="flex items-center gap-1.5 text-[12px] text-[var(--muted)]">
               <IconCalendarEvent size={13} stroke={1.75} className="text-[var(--muted-soft)]" /> Created {formatDate(run.createdAt)}
             </span>
