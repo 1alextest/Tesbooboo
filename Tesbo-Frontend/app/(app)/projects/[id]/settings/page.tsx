@@ -180,6 +180,10 @@ export default function ProjectSettingsPage() {
     ? normalizeRole(projectMembers.find((m) => m.userId === currentUserId)?.role ?? "qa_engineer")
     : "qa_engineer";
   const canManageCustomFields = currentUserRole === "owner" || currentUserRole === "manager";
+  // General + Test Environments save through PATCH /api/projects/:id and Delete through DELETE —
+  // both refused for qa_engineer server-side (updateProjectForUser/deleteProjectForUser). The
+  // controls stay visible but disabled, so a QA engineer can still read the settings.
+  const canEditProjectSettings = canManageCustomFields;
   const visibleTabs = useMemo<Array<{ key: SettingsTab; label: string }>>(
     () => [
       { key: "general", label: "General" },
@@ -277,6 +281,7 @@ export default function ProjectSettingsPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!canEditProjectSettings) return;
     setMessage(null);
     const nameValidationError = validateProjectName(name);
     if (nameValidationError) {
@@ -340,6 +345,7 @@ export default function ProjectSettingsPage() {
   }
 
   async function handleDeleteProject() {
+    if (!canEditProjectSettings) return;
     const projectName = String(project?.name ?? "").trim();
     if (!projectName) {
       setDeleteProjectError("Project name is unavailable. Refresh and try again.");
@@ -528,6 +534,16 @@ export default function ProjectSettingsPage() {
         // intercepts Save's submit before handleSubmit ever runs, so the styled inline validation
         // above never gets a chance to show (same class of bug as the login/signup email fields).
         <form onSubmit={handleSubmit} className="space-y-5" noValidate>
+          {currentUserId && !canEditProjectSettings && (
+            <Card className="p-4">
+              <p className="text-sm text-[var(--muted)]">
+                Only project managers and owners can change project settings or delete the project.
+              </p>
+            </Card>
+          )}
+          {/* A disabled fieldset natively disables every input and button inside it — Save, Add,
+              Remove, the icon picker and Delete project — for a QA engineer. Reset to no box. */}
+          <fieldset disabled={!canEditProjectSettings} className="m-0 min-w-0 space-y-5 border-0 p-0">
           {activeTab === "general" && (
             <>
               <Card className="p-4 space-y-4">
@@ -734,6 +750,7 @@ export default function ProjectSettingsPage() {
               {saving ? "Saving…" : "Save"}
             </Button>
           )}
+          </fieldset>
         </form>
       )}
 

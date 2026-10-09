@@ -18,6 +18,7 @@ export const PRIORITY_COLORS: Record<string, string> = {
   P1: "var(--warning)",
   P2: "var(--info)",
   P3: "var(--muted-soft)",
+  "Not set": "var(--muted)",
 };
 
 export { AVATAR_COLORS as SUITE_PALETTE } from "@/lib/avatarColors";

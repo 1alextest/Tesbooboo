@@ -304,8 +304,12 @@ export default function RequirementsPage() {
   // level) are offered as tabs. "All Sources" is always shown alongside them — with zero linked
   // trackers it's the only tab, since it's the default view the empty/connect states render under.
   const connectedProviders = PROVIDERS.filter((p) => connectedSources.includes(p.id));
+  // With exactly one tracker linked the aggregate tab shows that same tracker's items, so "All
+  // Sources" would overpromise; it reads "Source" until a second one is linked (with none it is the
+  // only tab, and keeps "All Sources").
+  const allTab = connectedProviders.length === 1 ? { ...ALL_TAB, label: "Source" } : ALL_TAB;
   const sourceTabs: Array<{ id: Source; label: string; logoBg: string; logoLetter: string }> =
-    [ALL_TAB, ...connectedProviders];
+    [allTab, ...connectedProviders];
   const anyConnected = connectedProviders.length > 0;
   const sourceConnected = source === "all" ? anyConnected : connectedSources.includes(source);
   const stats = summary?.[source] ?? EMPTY_STATS;

@@ -1460,6 +1460,123 @@ test.describe("zyra / agents (UI)", () => {
     await expect(page.getByRole("button", { name: "Sources (1)" })).toBeVisible();
   });
 
+  // ─── Activity timeline order: newest first ──────────────────────────────────
+  //
+  // "[Zyra Task] Latest Activity Should Be Displayed on Top": activity_log is an append-only jsonb
+  // array returned verbatim, and both the task page and the quick-view panel rendered it in that
+  // (oldest-first) order. The UI now sorts by createdAt itself. The seeded log below is deliberately
+  // NOT in chronological order, so a plain reverse() of the array would fail these tests — only a
+  // real timestamp sort passes. It also carries two entries sharing one timestamp (written in one
+  // call, like "Task created" + "Waiting for Zyra") and one without createdAt at all.
+
+  /** Replaces a task's activity_log wholesale. */
+  function setActivityLog(taskId: string, entries: Array<Record<string, unknown>>): void {
+    exec(
+      `UPDATE ai_generation_requests SET activity_log = ${literal(JSON.stringify(entries))}::jsonb WHERE id = ${literal(taskId)};`,
+    );
+  }
+
+  function minutesAgo(minutes: number): string {
+    return new Date(Date.now() - minutes * 60_000).toISOString();
+  }
+
+  function shuffledActivityLog(): Array<Record<string, unknown>> {
+    const created = minutesAgo(30);
+    return [
+      // Same timestamp, written together: array position breaks the tie, so "Waiting for Zyra" is newer.
+      { actor: "user", stage: "todo", title: "Task created", detail: "E2E order", createdAt: created },
+      { actor: "agent", stage: "todo", title: "Waiting for Zyra", detail: "E2E order", createdAt: created },
+      { actor: "agent", stage: "in_review", title: "Generated drafts", detail: "E2E order", createdAt: minutesAgo(5) },
+      { actor: "system", stage: "info", title: "Entry without timestamp", detail: "E2E order" },
+      { actor: "agent", stage: "in_progress", title: "Picked up task", detail: "E2E order", createdAt: minutesAgo(20) },
+      { actor: "agent", stage: "in_progress", title: "Read available sources", detail: "E2E order", createdAt: minutesAgo(10) },
+    ];
+  }
+
+  const NEWEST_FIRST_TITLES = [
+    "Generated drafts",
+    "Read available sources",
+    "Picked up task",
+    "Waiting for Zyra",
+    "Task created",
+    "Entry without timestamp",
+  ];
+
+  async function activityTitles(scope: Page | Locator): Promise<string[]> {
+    return scope.getByTestId("task-activity-entry").locator("h3").allTextContents();
+  }
+
+  test("ZYU-142 the task page lists activities newest first by timestamp, not by stored order", async ({ browser }) => {
+    const taskId = seedTask();
+    setActivityLog(taskId, shuffledActivityLog());
+
+    const page = await open(browser, `/agents/tasks/${taskId}`);
+    await page.getByRole("button", { name: "Activities (6)" }).click();
+    await expect(page.getByTestId("task-activity-entry")).toHaveCount(6);
+
+    expect(await activityTitles(page), "newest first; ties by write order; undated entries last").toEqual(NEWEST_FIRST_TITLES);
+  });
+
+  test("ZYU-143 the quick-view panel lists activities newest first by timestamp, not by stored order", async ({ browser }) => {
+    const userStory = stamp("Activity order story");
+    const taskId = seedTask({ userStory });
+    setActivityLog(taskId, shuffledActivityLog());
+
+    const page = await open(browser, "/agents/tasks");
+    await page.getByRole("tab", { name: "Kanban board" }).click();
+    await page.locator("button", { has: page.getByText(userStory) }).click();
+    const panel = page.locator(".slide-in-right");
+    await panel.getByRole("button", { name: "Activity (6)" }).click();
+    await expect(panel.getByTestId("task-activity-entry")).toHaveCount(6);
+
+    expect(await activityTitles(panel), "same order as the full task page").toEqual(NEWEST_FIRST_TITLES);
+  });
+
+  test("ZYU-144 an activity appended while the task page is open appears on top on the next poll", async ({ browser }) => {
+    // in_progress keeps the page's 5s refresh running; nothing server-side picks a seeded task up.
+    const taskId = seedTask({ status: "in_progress" });
+    setActivityLog(taskId, [
+      { actor: "user", stage: "todo", title: "Task created", detail: "E2E live", createdAt: minutesAgo(10) },
+      { actor: "agent", stage: "in_progress", title: "Picked up task", detail: "E2E live", createdAt: minutesAgo(5) },
+    ]);
+
+    const page = await open(browser, `/agents/tasks/${taskId}`);
+    await page.getByRole("button", { name: "Activities (2)" }).click();
+    expect(await activityTitles(page)).toEqual(["Picked up task", "Task created"]);
+
+    exec(
+      "UPDATE ai_generation_requests SET activity_log = activity_log || " +
+        `${literal(JSON.stringify([{ actor: "agent", stage: "in_progress", title: "Read available sources", detail: "E2E live", createdAt: new Date().toISOString() }]))}::jsonb ` +
+        `WHERE id = ${literal(taskId)};`,
+    );
+
+    // No reload: the poll replaces the task and the new entry must land first, not at the bottom.
+    await expect(page.getByRole("button", { name: "Activities (3)" })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("task-activity-entry").first().locator("h3")).toHaveText("Read available sources");
+    expect(await activityTitles(page)).toEqual(["Read available sources", "Picked up task", "Task created"]);
+  });
+
+  test("ZYU-145 sorting the Activities tab leaves the failure banner and the Feedback tab unchanged", async ({ browser }) => {
+    // latestFailureDetail reads the raw log from its end; it must still find the latest failure,
+    // and the Feedback tab must still hold only the reviewer's words.
+    const taskId = seedTask({ status: "failed" });
+    setActivityLog(taskId, [
+      { actor: "agent", stage: "failed", title: "Generation failed", detail: "E2E older failure", createdAt: minutesAgo(10) },
+      { actor: "user", stage: "todo", kind: "feedback", title: "Review feedback submitted", detail: "E2E reviewer words", createdAt: minutesAgo(5) },
+      { actor: "agent", stage: "failed", title: "Regeneration failed", detail: "E2E latest failure", createdAt: minutesAgo(1) },
+    ]);
+
+    const page = await open(browser, `/agents/tasks/${taskId}`);
+    await expect(page.getByText("E2E latest failure").first(), "the banner shows the most recent failure").toBeVisible();
+    await expect(page.getByText("E2E older failure"), "the older failure is not in the banner").toHaveCount(0);
+
+    await page.getByRole("button", { name: "Feedback (1)" }).click();
+    await expect(page.getByText("E2E reviewer words")).toBeVisible();
+
+    await page.getByRole("button", { name: "Activities (3)" }).click();
+    expect(await activityTitles(page)).toEqual(["Regeneration failed", "Review feedback submitted", "Generation failed"]);
+  });
+
   /*
    * ZYU-77/78/79: technique badges (TechniqueBadges, shared by TaskQuickViewPanel and this same
    * [taskId] page — see ZYRA_IMPLEMENTATION_LOG.md's "surface techniques to human reviewers"

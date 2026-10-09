@@ -12,7 +12,7 @@ const STATUS_DONUT_COLORS: Record<string, string> = {
   Archived: "var(--muted-soft)",
 };
 
-const PRIORITY_LABELS: Record<string, string> = { P0: "P0 - Critical", P1: "P1 - High", P2: "P2 - Medium", P3: "P3 - Low" };
+const PRIORITY_LABELS: Record<string, string> = { P0: "P0 - Critical", P1: "P1 - High", P2: "P2 - Medium", P3: "P3 - Low", "Not set": "Not set" };
 
 export function RepositoryTab({ summary, loading }: { summary: RepositorySummary | null; loading: boolean }) {
   if (loading) return <LoadingBlock label="Loading summary…" />;

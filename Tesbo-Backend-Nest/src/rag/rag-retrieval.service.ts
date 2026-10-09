@@ -429,14 +429,30 @@ export class RagRetrievalService {
   private fuse(annRows: AnnRow[], ftsRows: FtsRow[]): FusedSource[] {
     const bySource = new Map<string, FusedSource>();
 
+    // ANN rows are chunks, and one long document can own most of the RAG_ANN_CANDIDATES. Each source
+    // is therefore ranked once, by its best chunk, and keeps only as many of its chunks as fit in
+    // RAG_PASSAGE_CHARS. Summing every chunk's RRF score and keeping every chunk let one large ticket
+    // rank first AND fill the whole context budget, so every other relevant ticket was cut.
     const annRanked = [...annRows].sort((a, b) => b.cosine_similarity - a.cosine_similarity);
-    annRanked.forEach((row, rank) => {
+    let annRank = 0;
+    for (const row of annRanked) {
       const key = `${row.source_type}:${row.source_id}`;
-      const existing = bySource.get(key) || { key, sourceType: row.source_type, sourceId: row.source_id, title: row.title, score: 0, chunks: [] };
-      existing.score += 1 / (RAG_RRF_K + rank + 1);
-      existing.chunks.push({ content: row.content, headingPath: row.heading_path });
-      bySource.set(key, existing);
-    });
+      const existing = bySource.get(key);
+      if (existing) {
+        const used = existing.chunks.reduce((sum, chunk) => sum + chunk.content.length, 0);
+        if (used + row.content.length <= RAG_PASSAGE_CHARS) existing.chunks.push({ content: row.content, headingPath: row.heading_path });
+        continue;
+      }
+      bySource.set(key, {
+        key,
+        sourceType: row.source_type,
+        sourceId: row.source_id,
+        title: row.title,
+        score: 1 / (RAG_RRF_K + annRank + 1),
+        chunks: [{ content: row.content, headingPath: row.heading_path }]
+      });
+      annRank += 1;
+    }
 
     ftsRows.forEach((row, rank) => {
       const key = `${row.source_type}:${row.source_id}`;
@@ -455,7 +471,10 @@ export class RagRetrievalService {
     const items: RetrievedKnowledgeItem[] = [];
     let used = 0;
     for (const source of fused.slice(0, maxSources)) {
-      const content = source.chunks.map((c) => c.content).join("\n...\n");
+      // Each source is held to its own RAG_PASSAGE_CHARS share, so the first one can never consume
+      // the budget meant for the rest (a single oversized chunk could still exceed it otherwise).
+      const joined = source.chunks.map((c) => c.content).join("\n...\n");
+      const content = joined.length > RAG_PASSAGE_CHARS ? `${joined.slice(0, RAG_PASSAGE_CHARS)}...` : joined;
       if (used >= charBudget) break;
       const remaining = charBudget - used;
       const trimmed = content.length > remaining ? `${content.slice(0, remaining)}...` : content;

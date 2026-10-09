@@ -1,6 +1,14 @@
 import path from "node:path";
-import { expect, request as pwRequest, test } from "@playwright/test";
+import { expect, request as pwRequest, test, type APIRequestContext, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { env } from "../utils/env";
+import {
+  loginAs,
+  provisionRbacTenant,
+  rbacSuiteSkipReason,
+  setProjectRole,
+  writeStorageState,
+  type RbacTenant,
+} from "../utils/rbac-tenant";
 
 const STATE_PATH = path.join(__dirname, "../.auth/state.json");
 
@@ -120,6 +128,173 @@ test.describe("project settings", () => {
       // Best-effort: only fires if an assertion above failed before the real delete happened.
       await api.delete(`/api/projects/${projectId}`, { failOnStatusCode: false });
       await api.dispose();
+    }
+  });
+});
+
+/*
+ * "[Project Settings] Edit Project Settings and Delete Project Buttons Should Be Disabled for QA
+ * Engineer Role". The API already refuses a QA engineer's PATCH/DELETE /api/projects/:id (see
+ * api/rbac.spec.ts, TES-TC-453/454); the settings page still offered every control and only failed
+ * after the click. These pin what the page *offers* per project role — the role comes from
+ * project_members, so promoting the same user must re-enable everything with no other change.
+ */
+test.describe("project settings controls by role (UI)", () => {
+  const NOTICE = "Only project managers and owners can change project settings or delete the project.";
+  let tenant: RbacTenant | null = null;
+  let ownerApi: APIRequestContext;
+  const states = new Map<string, string>();
+  const contexts: BrowserContext[] = [];
+
+  test.beforeAll(async () => {
+    tenant = await provisionRbacTenant("project-settings-ui");
+    if (!tenant) return;
+    ownerApi = await loginAs(tenant.owner);
+    states.set("owner", await writeStorageState(tenant.owner, "project-settings-ui-owner"));
+    states.set("manager", await writeStorageState(tenant.manager, "project-settings-ui-manager"));
+    states.set("qa", await writeStorageState(tenant.qa, "project-settings-ui-qa"));
+  });
+
+  test.afterAll(async () => {
+    if (tenant) setProjectRole(tenant.mainProjectId, tenant.qa.userId, "qa_engineer");
+    if (ownerApi) await ownerApi.dispose();
+    await Promise.all(contexts.map((ctx) => ctx.close()));
+  });
+
+  test.beforeEach(() => {
+    const reason = rbacSuiteSkipReason(tenant);
+    test.skip(reason !== null, reason ?? "");
+    // A test that promotes the QA user restores it in its own finally; this guards a crashed one.
+    setProjectRole(tenant!.mainProjectId, tenant!.qa.userId, "qa_engineer");
+  });
+
+  async function settingsAs(browser: Browser, label: "owner" | "manager" | "qa"): Promise<Page> {
+    const context = await browser.newContext({ baseURL: env.webBaseUrl, storageState: states.get(label)! });
+    contexts.push(context);
+    const page = await context.newPage();
+    await page.goto(`/projects/${tenant!.mainProjectId}/settings`);
+    await expect(page.getByRole("heading", { name: "General", level: 2 })).toBeVisible();
+    return page;
+  }
+
+  /** The General / Test Environments form; every control the role gate covers lives inside it. */
+  function settingsForm(page: Page) {
+    return page.locator("form fieldset");
+  }
+
+  async function projectSnapshot(): Promise<{ name: string; description: string; settings: Record<string, unknown> }> {
+    const project = await (await ownerApi.get(`/api/projects/${tenant!.mainProjectId}`)).json();
+    const settings = typeof project.settings === "string" ? JSON.parse(project.settings || "{}") : (project.settings ?? {});
+    return { name: project.name, description: project.description ?? "", settings };
+  }
+
+  test("PSU-01 a QA engineer sees General read-only: inputs, Save and Delete project disabled, with a notice", async ({ browser }) => {
+    const before = await projectSnapshot();
+    const page = await settingsAs(browser, "qa");
+    const form = settingsForm(page);
+
+    await expect(page.getByText(NOTICE)).toBeVisible();
+    await expect(form).toBeDisabled();
+    // The values are still readable — read-only, not hidden.
+    await expect(form.getByRole("textbox").first()).toHaveValue(before.name);
+    for (const box of await form.getByRole("textbox").all()) await expect(box).toBeDisabled();
+    await expect(form.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    const deleteButton = page.getByRole("button", { name: "Delete project", exact: true });
+    await expect(deleteButton).toBeVisible();
+    await expect(deleteButton).toBeDisabled();
+
+    // A forced click on a disabled button dispatches nothing: the confirmation must not open.
+    await deleteButton.click({ force: true });
+    await expect(page.getByRole("heading", { name: "Confirm project deletion" })).toHaveCount(0);
+
+    const after = await projectSnapshot();
+    expect(after.name).toBe(before.name);
+    expect(after.description).toBe(before.description);
+  });
+
+  test("PSU-02 a QA engineer sees Test Environments read-only: Add, Remove and Save disabled", async ({ browser }) => {
+    const original = await projectSnapshot();
+    const envName = `E2E Env ${Date.now()}`;
+    const seeded = { ...original.settings, testRunEnvironments: [{ name: envName, url: "https://e2e.example.com" }] };
+    await ownerApi.patch(`/api/projects/${tenant!.mainProjectId}`, { data: { settings: JSON.stringify(seeded) } });
+    try {
+      const page = await settingsAs(browser, "qa");
+      await page.getByRole("button", { name: "Test Environments" }).click();
+      const form = settingsForm(page);
+      await expect(form.getByText(envName)).toBeVisible();
+
+      await expect(page.getByText(NOTICE)).toBeVisible();
+      await expect(form.getByPlaceholder("Environment name")).toBeDisabled();
+      await expect(form.getByPlaceholder("https://staging.example.com")).toBeDisabled();
+      await expect(form.getByRole("button", { name: "Add", exact: true })).toBeDisabled();
+      await expect(form.getByRole("button", { name: "Remove", exact: true })).toBeDisabled();
+      await expect(form.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+
+      const after = await projectSnapshot();
+      expect(after.settings.testRunEnvironments).toEqual(seeded.testRunEnvironments);
+    } finally {
+      await ownerApi.patch(`/api/projects/${tenant!.mainProjectId}`, {
+        data: { settings: JSON.stringify(original.settings) },
+        failOnStatusCode: false,
+      });
+    }
+  });
+
+  for (const role of ["owner", "manager"] as const) {
+    test(`PSU-03 ${role === "owner" ? "an owner" : "a manager"} keeps every General and Test Environments control enabled`, async ({ browser }) => {
+      const page = await settingsAs(browser, role);
+      const form = settingsForm(page);
+
+      await expect(page.getByText(NOTICE)).toHaveCount(0);
+      await expect(form).toBeEnabled();
+      for (const box of await form.getByRole("textbox").all()) await expect(box).toBeEnabled();
+      await expect(form.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
+      await expect(page.getByRole("button", { name: "Delete project", exact: true })).toBeEnabled();
+
+      await page.getByRole("button", { name: "Test Environments" }).click();
+      await expect(form.getByPlaceholder("Environment name")).toBeEnabled();
+      await expect(form.getByRole("button", { name: "Add", exact: true })).toBeEnabled();
+      await expect(form.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
+    });
+  }
+
+  test("PSU-04 a manager can still save General settings, and the change persists", async ({ browser }) => {
+    const original = await projectSnapshot();
+    const description = `E2E manager description ${Date.now()}`;
+    try {
+      const page = await settingsAs(browser, "manager");
+      const form = settingsForm(page);
+      await form.locator("textarea").fill(description);
+      await form.getByRole("button", { name: "Save", exact: true }).click();
+      await expect.poll(async () => (await projectSnapshot()).description).toBe(description);
+    } finally {
+      await ownerApi.patch(`/api/projects/${tenant!.mainProjectId}`, {
+        data: { description: original.description },
+        failOnStatusCode: false,
+      });
+    }
+  });
+
+  test("PSU-05 an owner's Delete project still opens the confirmation", async ({ browser }) => {
+    const page = await settingsAs(browser, "owner");
+    await page.getByRole("button", { name: "Delete project", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Confirm project deletion" })).toBeVisible();
+    // Not confirmed: the tenant's main project is shared by the rest of this describe.
+  });
+
+  test("PSU-06 the gate follows the stored project role: promoting the same QA user re-enables the controls", async ({ browser }) => {
+    const qaPage = await settingsAs(browser, "qa");
+    await expect(settingsForm(qaPage)).toBeDisabled();
+
+    setProjectRole(tenant!.mainProjectId, tenant!.qa.userId, "manager");
+    try {
+      await qaPage.reload();
+      await expect(qaPage.getByRole("heading", { name: "General", level: 2 })).toBeVisible();
+      await expect(settingsForm(qaPage)).toBeEnabled();
+      await expect(qaPage.getByText(NOTICE)).toHaveCount(0);
+      await expect(qaPage.getByRole("button", { name: "Delete project", exact: true })).toBeEnabled();
+    } finally {
+      setProjectRole(tenant!.mainProjectId, tenant!.qa.userId, "qa_engineer");
     }
   });
 });

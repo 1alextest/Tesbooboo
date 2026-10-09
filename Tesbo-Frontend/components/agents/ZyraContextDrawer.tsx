@@ -87,7 +87,7 @@ function TestcaseDetail({ data, customFields }: { data: Record<string, unknown>;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-1.5">
-        {(["P0", "P1", "P2", "P3"] as Priority[]).includes(priority as Priority) && <PriorityBadge priority={priority as Priority} />}
+        {(["P0", "P1", "P2", "P3", "Not set"] as Priority[]).includes(priority as Priority) && <PriorityBadge priority={priority as Priority} />}
         <StatusChip tone="brand">{t.value("testcaseStatus", String(data.status || "Draft"))}</StatusChip>
         {data.externalId ? <span className="font-mono text-[11px] text-[var(--muted)]">{String(data.externalId)}</span> : null}
       </div>

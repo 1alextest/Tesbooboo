@@ -35,7 +35,7 @@ import {
 import { ApiTokenService } from "../auth/api-token.service";
 import { RagIngestionService } from "../rag/rag-ingestion.service";
 import { RagRetrievalService } from "../rag/rag-retrieval.service";
-import { TESTCASE_UPDATE_THRESHOLD } from "../rag/rag.constants";
+import { RAG_GENERATION_CHAR_BUDGET, TESTCASE_UPDATE_THRESHOLD } from "../rag/rag.constants";
 import type { RagRetrievalConfidence } from "../rag/rag.types";
 import { IntegrationSyncService } from "../integration-sync/integration-sync.service";
 import { INTEGRATION_SYNC_FETCH_TIMEOUT_MS, JIRA_PAGE_SIZE, NOTION_API_BASE, NOTION_API_VERSION, NOTION_PAGE_SIZE, NOTION_RICH_TEXT_LIMIT, PROVIDER_FOLDER_NAMES } from "../integration-sync/integration-sync.constants";
@@ -115,6 +115,10 @@ export const BUG_SEVERITIES = ["Critical", "High", "Medium", "Low"] as const;
  * "someone decided it is P2".
  */
 const BUG_PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
+// A test case whose priority nobody has chosen. A stored value like P0–P3 (VARCHAR(8), so "Not set" fits),
+// the default for new cases, and what a tool that has no priority (Qase "Not set") migrates to.
+// Deliberately NOT a bug priority: BUG_PRIORITIES stays P0–P3.
+const TESTCASE_PRIORITY_NOT_SET = "Not set";
 
 /** Sentinel `suiteId` query value meaning "test cases with no suite assigned" (suite_id IS NULL). */
 export const UNASSIGNED_SUITE_ID = "none";
@@ -342,6 +346,9 @@ type ZyraChatDecision = {
     // update only: why authorZyraUpdates could not write this op's content (timeout/provider error),
     // so the turn says that instead of "the update changed nothing".
     authoringError?: string;
+    // update only: the sources authorZyraUpdates' drafting call cited for this change (already
+    // resolved against this turn's prompt by sanitizeZyraSourceRefs) — the card's "Context used".
+    sourceRefs?: ZyraSourceRef[];
   }>;
   testcases: Body[];
   // Set only when a provider call genuinely never answered within its budget (see
@@ -765,6 +772,7 @@ function validateWorkspaceName(name: string, field: "orgName" | "name"): string 
  * projects and workspaces first; this is that pattern finished off.
  */
 const SUITE_NAME_MAX_LENGTH = 255;           // suites.name
+const SUITE_TEXT_MAX_LENGTH = 20000;         // suites.description / suites.preconditions (TEXT, capped so one request cannot store megabytes)
 const CYCLE_NAME_MAX_LENGTH = 255;           // cycles.name
 const CYCLE_LABEL_MAX_LENGTH = 128;          // cycles.environment / build_version / release_name
 const PLAN_NAME_MAX_LENGTH = 255;            // plans.name
@@ -3762,7 +3770,7 @@ export class LegacyService implements OnModuleInit {
          LEFT JOIN testcases t ON t.suite_id = d.node_id AND t.deleted_at IS NULL
          GROUP BY d.root_id
        )
-       SELECT s.id, s.parent_id, s.name, s.position, s.created_at,
+       SELECT s.id, s.parent_id, s.name, s.description, s.preconditions, s.position, s.created_at,
               COUNT(t.id)::int AS test_case_count,
               COALESCE(
                 (SELECT rc.recursive_test_case_count FROM recursive_counts rc WHERE rc.root_id = s.id),
@@ -3804,15 +3812,33 @@ export class LegacyService implements OnModuleInit {
     if (!res.rows[0]) throw new BadRequestException({ error: "parentId does not reference a suite in this project" });
   }
 
+  /**
+   * A suite's free-text fields (description, preconditions). `undefined` means "the caller did not send it"
+   * and comes back as null, which updateSuite COALESCEs away so the stored text is kept; a string is trimmed
+   * and stored ("" clears it); `null` is an explicit clear. Anything else is a client bug, not text.
+   */
+  private normalizeSuiteText(value: unknown, label: string): string | null {
+    if (value === undefined) return null;
+    if (value === null) return "";
+    if (typeof value !== "string") throw new BadRequestException({ error: `${label} must be a string` });
+    const text = value.trim();
+    if (text.length > SUITE_TEXT_MAX_LENGTH) {
+      throw new BadRequestException({ error: `${label} is too long (${text.length} characters, the limit is ${SUITE_TEXT_MAX_LENGTH})` });
+    }
+    return text;
+  }
+
   async createSuite(projectId: string, body: Body) {
     const name = String(body.name || "").trim();
     if (!name) throw new BadRequestException({ error: "name is required" });
     validateBoundedField(name, "Suite name", SUITE_NAME_MAX_LENGTH);
+    const description = this.normalizeSuiteText(body.description, "Suite description") ?? "";
+    const preconditions = this.normalizeSuiteText(body.preconditions, "Suite preconditions") ?? "";
     const parentId = body.parentId || null;
     if (parentId) await this.requireLiveSuiteInProject(projectId, parentId);
     const res = await this.db.query(
-      "INSERT INTO suites (project_id, parent_id, name, position) VALUES ($1, $2, $3, $4) RETURNING id, parent_id, name, position, created_at",
-      [projectId, parentId, name, Number(body.position || 0)]
+      "INSERT INTO suites (project_id, parent_id, name, description, preconditions, position) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, parent_id, name, description, preconditions, position, created_at",
+      [projectId, parentId, name, description, preconditions, Number(body.position || 0)]
     );
     await this.suitesCache.invalidate(projectId);
     await this.testcasesListCache.invalidate(projectId);
@@ -3822,11 +3848,13 @@ export class LegacyService implements OnModuleInit {
   async updateSuite(userId: string | null | undefined, suiteId: string, body: Body) {
     const projectId = await this.requireSuiteAccess(userId, suiteId);
     validateBoundedField(body.name, "Suite name", SUITE_NAME_MAX_LENGTH);
+    const description = this.normalizeSuiteText(body.description, "Suite description");
+    const preconditions = this.normalizeSuiteText(body.preconditions, "Suite preconditions");
     const parentId = body.parentId ?? null;
     if (parentId) await this.requireLiveSuiteInProject(projectId, parentId);
     await this.db.query(
-      "UPDATE suites SET name = COALESCE($2, name), parent_id = $3, position = COALESCE($4, position), updated_at = now() WHERE id = $1",
-      [suiteId, body.name ?? null, parentId, body.position ?? null]
+      "UPDATE suites SET name = COALESCE($2, name), parent_id = $3, position = COALESCE($4, position), description = COALESCE($5, description), preconditions = COALESCE($6, preconditions), updated_at = now() WHERE id = $1",
+      [suiteId, body.name ?? null, parentId, body.position ?? null, description, preconditions]
     );
     await this.suitesCache.invalidate(projectId);
     await this.testcasesListCache.invalidate(projectId);
@@ -4181,7 +4209,7 @@ export class LegacyService implements OnModuleInit {
    *   - "priority": ranked P0 (Critical) -> P3 (Low) the same way the priority filter dropdown and
    *     the frontend's comparePriority() already do, not alphabetically (which would put P10-style
    *     values ahead of P2). A legacy/imported value outside P0-P3 sorts after the canonical set;
-   *     a missing priority sorts last of all regardless of direction.
+   *     a missing priority (blank or "Not set") sorts last of all regardless of direction.
    *   - "title": case-insensitive, matching compareTestCaseTitle() on the frontend.
    * `testcases.id` is always the final tiebreaker so paging (and re-exporting the same data) stays
    * stable across identical sort keys.
@@ -4206,8 +4234,10 @@ export class LegacyService implements OnModuleInit {
     }
     if (query.sortBy === "priority") {
       return (
-        `(CASE WHEN testcases.priority IS NULL OR testcases.priority = '' THEN 5 ` +
-        `WHEN testcases.priority IN ('P0','P1','P2','P3') THEN ` +
+        // A case with no priority (blank, or the explicit "Not set") sorts after every other case in BOTH
+        // directions: it is outside the ranking being reversed, not the lowest rank in it.
+        `(CASE WHEN testcases.priority IS NULL OR testcases.priority IN ('', '${TESTCASE_PRIORITY_NOT_SET}') THEN 1 ELSE 0 END) ASC, ` +
+        `(CASE WHEN testcases.priority IN ('P0','P1','P2','P3') THEN ` +
         `(CASE testcases.priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 END) ` +
         `ELSE 4 END) ${sortDir}, testcases.priority ${sortDir}, testcases.id ${sortDir}`
       );
@@ -4413,6 +4443,13 @@ export class LegacyService implements OnModuleInit {
 
   async updateTestCaseForUser(userId: string | null | undefined, projectId: string, testcaseId: string, body: Body) {
     await this.requireTestCaseAccess(userId, projectId, testcaseId);
+    // A case id is the handle runs, CI results and exports quote, so changing one is a project-admin
+    // action, not part of ordinary authoring (same owner-or-manager line as the project settings).
+    if (body.externalId !== undefined) {
+      const project = await this.requireProjectAccess(userId, projectId);
+      if (this.normalizeRole(project.caller_role) === "qa_engineer")
+        throw new ForbiddenException({ error: "QA Engineers cannot change a test case ID" });
+    }
     return this.updateTestCase(testcaseId, userId, body);
   }
 
@@ -4608,7 +4645,7 @@ export class LegacyService implements OnModuleInit {
         // priority is NOT NULL (V2_test_cases_and_suites.sql), so "explicitly blank" is "" here,
         // not null; type/automation_status are nullable and use null the same way severity/
         // component already do below.
-        body.priority !== undefined ? body.priority || "" : "P2",
+        body.priority !== undefined ? body.priority || "" : TESTCASE_PRIORITY_NOT_SET,
         body.severity || null,
         body.type !== undefined ? body.type || null : "Functional",
         body.automationStatus !== undefined ? body.automationStatus || null : "Not Automated",
@@ -4717,7 +4754,7 @@ export class LegacyService implements OnModuleInit {
         postconditions: row.postconditions || "",
         steps: row.steps || row.stepsJson || [],
         test_data: row.testData || "",
-        priority: row.priority || "P2",
+        priority: row.priority || TESTCASE_PRIORITY_NOT_SET,
         severity: row.severity || null,
         type: row.type || "Functional",
         automation_status: row.automationStatus || "Not Automated",
@@ -4979,7 +5016,7 @@ export class LegacyService implements OnModuleInit {
     const title = String(raw?.title ?? "").trim();
     if (!title) return { rowNumber, error: "Title is required" };
 
-    const priority = String(raw?.priority ?? "").trim() || "P2";
+    const priority = canonicalizeImportValue("priority", String(raw?.priority ?? "").trim()) || TESTCASE_PRIORITY_NOT_SET;
     // A Russian export or template carries translated labels ("Черновик", "Высокая"). These columns
     // are stored unvalidated, so without mapping them back a re-import would create "Черновик" as a
     // status every count and filter (which match 'Draft') silently misses. Anything that isn't a
@@ -5351,7 +5388,7 @@ export class LegacyService implements OnModuleInit {
   // Extracted for the same reason as insertTestCaseWithClient above — lets a multi-row Zyra
   // review-batch save run several updates atomically with each other (and with any creates in the
   // same batch) against one shared client, instead of one transaction per row.
-  private async updateTestCaseWithClient(client: PoolClient, projectId: string, id: string, uid: string, body: Body) {
+  private async updateTestCaseWithClient(client: PoolClient, projectId: string, id: string, uid: string, body: Body, newExternalId: string | null = null) {
     /*
      * jiraIssueKey/jiraUrl and linearIssueKey/linearUrl were COALESCE-only, like every other field
      * here — but unlike the rest, there was genuinely no way to ever clear them: `body.jiraIssueKey
@@ -5384,7 +5421,7 @@ export class LegacyService implements OnModuleInit {
        notion_url=CASE WHEN $33::boolean THEN NULL ELSE COALESCE($32,notion_url) END,
        attachments=COALESCE($25,attachments), updated_by=$26,
        estimated_duration=COALESCE($27,estimated_duration),
-       source_refs=COALESCE($28::jsonb,source_refs), updated_at=now()
+       source_refs=COALESCE($28::jsonb,source_refs), external_id=COALESCE($34,external_id), updated_at=now()
        WHERE id=$1 AND deleted_at IS NULL
        RETURNING *`,
       [
@@ -5424,7 +5461,8 @@ export class LegacyService implements OnModuleInit {
         clearsLinear,
         body.notionPageId ?? null,
         body.notionUrl ?? null,
-        clearsNotion
+        clearsNotion,
+        newExternalId
       ]
     );
     const row = res.rows[0];
@@ -5440,6 +5478,33 @@ export class LegacyService implements OnModuleInit {
     return row;
   }
 
+  /**
+   * Renames a case's `<KEY>-TC-<n>` id. `undefined` = not sent, leave it.
+   *
+   * Takes the same advisory lock as id allocation, so a create cannot hand out the id being claimed.
+   * The unique index is case-sensitive but CI ingest resolves cases by lower(external_id), so the
+   * check is case-insensitive and also sees soft-deleted rows (they still hold their id). Any
+   * non-blank, whitespace-free value is accepted (length is bounded by assertTestcaseFieldLengths),
+   * which is what lets a bulk renumber park cases on a scratch id first, since the index is not
+   * deferrable. Only checks and returns the new id: updateTestCaseWithClient writes it in the same
+   * UPDATE as the rest of the edit, so the version trigger records one snapshot, attributed to the
+   * editor. The caller updates the run snapshots, which carry a copy of the id.
+   */
+  private async checkTestCaseExternalIdChange(client: PoolClient, projectId: string, id: string, current: string, raw: unknown): Promise<string | null> {
+    if (raw === undefined) return null;
+    const next = typeof raw === "string" ? raw.trim() : "";
+    if (!next || /\s/.test(next)) throw new BadRequestException({ error: "Test case ID must be a non-empty value without spaces" });
+    if (next === current) return null;
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`testcase-external-id:${projectId}`]);
+    const taken = await client.query("SELECT 1 FROM testcases WHERE project_id = $1 AND lower(external_id) = lower($2) AND id <> $3 LIMIT 1", [
+      projectId,
+      next,
+      id
+    ]);
+    if (taken.rows[0]) throw new ConflictException({ error: `Test case ID ${next} is already used in this project` });
+    return next;
+  }
+
   async updateTestCase(id: string, actorId: string | null | undefined, body: Body) {
     const uid = this.requireUser(actorId);
     // Same guard as create: an over-long value here hit the bounded column and answered 500.
@@ -5447,7 +5512,12 @@ export class LegacyService implements OnModuleInit {
     const before = await this.db.query("SELECT * FROM testcases WHERE id = $1 AND deleted_at IS NULL", [id]);
     if (!before.rows[0]) throw new NotFoundException({ error: "Test case not found" });
     const projectId = before.rows[0].project_id;
-    const after = await this.db.transaction(async (client) => this.updateTestCaseWithClient(client, projectId, id, uid, body));
+    const after = await this.db.transaction(async (client) => {
+      const newExternalId = await this.checkTestCaseExternalIdChange(client, projectId, id, before.rows[0].external_id, body.externalId);
+      const row = await this.updateTestCaseWithClient(client, projectId, id, uid, body, newExternalId);
+      if (newExternalId) await client.query("UPDATE cycle_items SET snapshot_external_id = $2 WHERE testcase_id = $1", [id, newExternalId]);
+      return row;
+    });
     await this.logProjectActivity(projectId, uid, "testcase_updated", "testcase", id, `${after?.external_id} - ${after?.title}`, {
       before: toCamel(before.rows[0]),
       after: toCamel(after)
@@ -6003,6 +6073,13 @@ export class LegacyService implements OnModuleInit {
     };
   }
 
+  /** toCamel, plus the BIGINT run times as numbers: node-pg returns int8 as a string, and the API promises numbers. */
+  private static cycleRow(row: QueryResultRow): Body {
+    const out = toCamel(row);
+    for (const key of ["timeSpentMs", "elapsedMs"]) if (out[key] != null) out[key] = Number(out[key]);
+    return out;
+  }
+
   async listCyclesForUser(userId: string | null | undefined, projectId: string) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     return this.listCycles(projectId);
@@ -6023,7 +6100,7 @@ export class LegacyService implements OnModuleInit {
        ORDER BY c.created_at DESC`,
       [projectId]
     );
-    return res.rows.map(toCamel);
+    return res.rows.map(LegacyService.cycleRow);
   }
 
   async createCycleForUser(userId: string | null | undefined, projectId: string, body: Body) {
@@ -6094,7 +6171,7 @@ export class LegacyService implements OnModuleInit {
     await this.requireCycleAccess(userId, cycleId);
     const res = await this.db.query("SELECT * FROM cycles WHERE id = $1 AND deleted_at IS NULL", [cycleId]);
     if (!res.rows[0]) throw new NotFoundException({ error: "Cycle not found" });
-    return toCamel(res.rows[0]);
+    return LegacyService.cycleRow(res.rows[0]);
   }
 
   async shareCycle(cycleId: string, userId: string | null | undefined, body: Body) {
@@ -6497,7 +6574,7 @@ export class LegacyService implements OnModuleInit {
      */
     const res = await this.db.query(
       `SELECT e.id, e.status, e.assignee_id, e.actual_result, e.executed_at, e.defect_key, e.defect_url,
-              e.duration_ms, e.retry_count, e.error_message, e.error_stack, e.reported_by,
+              e.duration_ms, e.retry_count, e.error_message, e.error_stack, e.reported_by, e.step_results, e.history,
               ci.id AS cycle_item_id, ci.testcase_id, ci.snapshot_title,
               COALESCE(NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Untitled test case') AS title,
               COALESCE(ci.snapshot_external_id, t.external_id) AS external_id,
@@ -6822,6 +6899,263 @@ export class LegacyService implements OnModuleInit {
     if (after && (after.assignee_id !== before.rows[0].assignee_id || after.status !== before.rows[0].status)) {
       await this.notifyExecutionChange(executionId, uid, { status: before.rows[0].status ?? null, assigneeId: before.rows[0].assignee_id ?? null }, opts);
     }
+  }
+
+  /*
+   * Historical import: applies the state a run and its results had in another test tool onto an
+   * EXISTING run, so the run keeps its place in the product and the import can be repeated.
+   *
+   * Everything the normal write paths refuse or overwrite is settable here, because a record of
+   * something that already happened is not a new action: past start/end/close times and a run that
+   * is In Progress or Completed with no cases or with its end time still set (updateCycle clears
+   * both), a result's own executed time, duration, error text and stack (the CI ingest caps those),
+   * per-step outcomes and the earlier results of the case. In return it is owner-or-manager only,
+   * writes straight to the tables so no assignee, mention or run-lifecycle notification fires for
+   * thousands of old results, and leaves one audit entry with the counts instead of one per row.
+   *
+   * Idempotent: every field it receives is SET, never added to, so sending the same payload again
+   * (a delta sync of a run that kept growing) leaves the same state. A field the payload omits is
+   * left as it is; an explicit null clears it. executed_by and assignee_id are never touched, so
+   * the original authors stay unassigned until someone maps them.
+   */
+  private static readonly HISTORY_IMPORT_MAX_RESULTS = 500;
+  private static readonly HISTORY_IMPORT_MAX_TEXT = 1_000_000;
+  private static readonly HISTORY_IMPORT_MAX_STEPS = 500;
+  private static readonly HISTORY_IMPORT_MAX_HISTORY = 100;
+  private static readonly RUN_STATUSES = ["Planning", "In Progress", "Completed"];
+
+  private static historyTimestamp(raw: unknown, label: string): string | null {
+    if (raw === null) return null;
+    const text = typeof raw === "string" ? raw.trim() : "";
+    // Date.parse alone is lenient ("1" reads as the year 2001), so the shape is checked first.
+    const time = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(text) ? Date.parse(text) : NaN;
+    if (!text || Number.isNaN(time)) throw new BadRequestException({ error: `${label} must be an ISO 8601 date-time or null` });
+    return new Date(time).toISOString();
+  }
+
+  private static historyInt(raw: unknown, label: string, max: number): number | null {
+    if (raw === null) return null;
+    if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0 || raw > max) {
+      throw new BadRequestException({ error: `${label} must be a whole number from 0 to ${max} or null` });
+    }
+    return raw;
+  }
+
+  private static historyText(raw: unknown, label: string): string | null {
+    if (raw === null) return null;
+    if (typeof raw !== "string") throw new BadRequestException({ error: `${label} must be a string or null` });
+    if (raw.length > LegacyService.HISTORY_IMPORT_MAX_TEXT) {
+      throw new BadRequestException({ error: `${label} is too long (${raw.length} characters, the limit is ${LegacyService.HISTORY_IMPORT_MAX_TEXT})` });
+    }
+    return raw;
+  }
+
+  private static historyStatus(raw: unknown, label: string): string {
+    if (typeof raw !== "string" || !LegacyService.EXECUTION_STATUSES.includes(raw)) {
+      throw new BadRequestException({ error: `${label} must be one of: ${LegacyService.EXECUTION_STATUSES.join(", ")}` });
+    }
+    return raw;
+  }
+
+  private static normalizeRunHistory(run: Body): Map<string, unknown> {
+    const out = new Map<string, unknown>();
+    const has = (key: string) => run[key] !== undefined;
+    if (has("status")) {
+      if (typeof run.status !== "string" || !LegacyService.RUN_STATUSES.includes(run.status)) {
+        throw new BadRequestException({ error: `run.status must be one of: ${LegacyService.RUN_STATUSES.join(", ")}` });
+      }
+      out.set("status", run.status);
+    }
+    for (const [key, col] of [["createdAt", "created_at"], ["startedAt", "started_at"], ["endedAt", "ended_at"], ["closedAt", "closed_at"]] as const) {
+      if (!has(key)) continue;
+      // created_at is NOT NULL: it can be moved to another date, never cleared.
+      if (key === "createdAt" && run[key] === null) throw new BadRequestException({ error: "run.createdAt cannot be null" });
+      out.set(col, LegacyService.historyTimestamp(run[key], `run.${key}`));
+    }
+    if (has("closeStatus")) {
+      if (run.closeStatus !== null && run.closeStatus !== "completed" && run.closeStatus !== "incomplete") {
+        throw new BadRequestException({ error: "run.closeStatus must be completed, incomplete or null" });
+      }
+      out.set("close_status", run.closeStatus);
+    }
+    // 10^13 ms is about 317 years: far past any real run, and inside BIGINT and a JS safe integer.
+    if (has("timeSpentMs")) out.set("time_spent_ms", LegacyService.historyInt(run.timeSpentMs, "run.timeSpentMs", 10_000_000_000_000));
+    if (has("elapsedMs")) out.set("elapsed_ms", LegacyService.historyInt(run.elapsedMs, "run.elapsedMs", 10_000_000_000_000));
+    if (has("tags")) {
+      if (!Array.isArray(run.tags)) throw new BadRequestException({ error: "run.tags must be an array of strings" });
+      const seen = new Set<string>();
+      const tags: string[] = [];
+      for (const raw of run.tags) {
+        const tag = typeof raw === "string" ? raw.trim() : "";
+        if (!tag || tag.length > 40) throw new BadRequestException({ error: "Each run tag must be 1 to 40 characters" });
+        if (seen.has(tag.toLowerCase())) continue;
+        seen.add(tag.toLowerCase());
+        tags.push(tag);
+      }
+      if (tags.length > 20) throw new BadRequestException({ error: "A run can have at most 20 tags" });
+      out.set("tags", tags);
+    }
+    return out;
+  }
+
+  private static normalizeResultHistory(raw: unknown, label: string): Body[] | null {
+    if (raw === null) return null;
+    if (!Array.isArray(raw) || raw.length > LegacyService.HISTORY_IMPORT_MAX_HISTORY) {
+      throw new BadRequestException({ error: `${label} must be an array of at most ${LegacyService.HISTORY_IMPORT_MAX_HISTORY} entries or null` });
+    }
+    return raw.map((entry, i) => {
+      const where = `${label}[${i}]`;
+      if (!entry || typeof entry !== "object") throw new BadRequestException({ error: `${where} must be an object` });
+      const e = entry as Body;
+      const item: Body = { status: LegacyService.historyStatus(e.status, `${where}.status`) };
+      if (e.executedAt !== undefined) item.executedAt = LegacyService.historyTimestamp(e.executedAt, `${where}.executedAt`);
+      if (e.durationMs !== undefined) item.durationMs = LegacyService.historyInt(e.durationMs, `${where}.durationMs`, 2_147_483_647);
+      if (e.comment !== undefined) item.comment = LegacyService.historyText(e.comment, `${where}.comment`);
+      if (e.errorStack !== undefined) item.errorStack = LegacyService.historyText(e.errorStack, `${where}.errorStack`);
+      if (e.reportedBy !== undefined) {
+        if (e.reportedBy !== "human" && e.reportedBy !== "automation") throw new BadRequestException({ error: `${where}.reportedBy must be human or automation` });
+        item.reportedBy = e.reportedBy;
+      }
+      return item;
+    });
+  }
+
+  private static normalizeStepResults(raw: unknown, label: string): Body[] | null {
+    if (raw === null) return null;
+    if (!Array.isArray(raw) || raw.length > LegacyService.HISTORY_IMPORT_MAX_STEPS) {
+      throw new BadRequestException({ error: `${label} must be an array of at most ${LegacyService.HISTORY_IMPORT_MAX_STEPS} steps or null` });
+    }
+    const positions = new Set<number>();
+    return raw.map((entry, i) => {
+      const where = `${label}[${i}]`;
+      if (!entry || typeof entry !== "object") throw new BadRequestException({ error: `${where} must be an object` });
+      const s = entry as Body;
+      if (typeof s.position !== "number" || !Number.isInteger(s.position) || s.position < 1 || s.position > 10_000) {
+        throw new BadRequestException({ error: `${where}.position must be a whole number from 1 to 10000` });
+      }
+      if (positions.has(s.position)) throw new BadRequestException({ error: `${where}.position ${s.position} appears twice` });
+      positions.add(s.position);
+      const item: Body = { position: s.position, status: LegacyService.historyStatus(s.status, `${where}.status`) };
+      if (s.comment !== undefined && s.comment !== null && s.comment !== "") item.comment = LegacyService.historyText(s.comment, `${where}.comment`);
+      return item;
+    });
+  }
+
+  async importRunHistory(userId: string | null | undefined, cycleId: string, body: Body) {
+    const uid = this.requireUser(userId);
+    const projectId = await this.requireCycleAccess(uid, cycleId);
+    const project = await this.requireProjectAccess(uid, projectId);
+    if (this.normalizeRole(project.caller_role) === "qa_engineer") {
+      throw new ForbiddenException({ error: "QA Engineers cannot import run history" });
+    }
+
+    if (body.run !== undefined && (body.run === null || typeof body.run !== "object" || Array.isArray(body.run))) {
+      throw new BadRequestException({ error: "run must be an object" });
+    }
+    const runFields = body.run === undefined ? new Map<string, unknown>() : LegacyService.normalizeRunHistory(body.run);
+    const rawResults = body.results === undefined ? [] : body.results;
+    if (!Array.isArray(rawResults) || rawResults.length > LegacyService.HISTORY_IMPORT_MAX_RESULTS) {
+      throw new BadRequestException({ error: `results must be an array of at most ${LegacyService.HISTORY_IMPORT_MAX_RESULTS} items` });
+    }
+
+    // Validated and reduced to exactly the keys the caller sent, so the UPDATE below can tell
+    // "omitted" (leave alone) from "null" (clear).
+    const seen = new Set<string>();
+    const results = rawResults.map((entry, i) => {
+      const where = `results[${i}]`;
+      if (!entry || typeof entry !== "object") throw new BadRequestException({ error: `${where} must be an object` });
+      const r = entry as Body;
+      const testcaseId = typeof r.testcaseId === "string" ? r.testcaseId.toLowerCase() : "";
+      if (!isUuid(testcaseId)) throw new BadRequestException({ error: `${where}.testcaseId must be a test case id` });
+      // Two rows for one case would make the UPDATE pick one at random.
+      if (seen.has(testcaseId)) throw new BadRequestException({ error: `${where}.testcaseId appears twice` });
+      seen.add(testcaseId);
+      const d: Body = { testcaseId };
+      if (r.status !== undefined) d.status = LegacyService.historyStatus(r.status, `${where}.status`);
+      if (r.actualResult !== undefined) d.actualResult = LegacyService.historyText(r.actualResult, `${where}.actualResult`);
+      if (r.executedAt !== undefined) d.executedAt = LegacyService.historyTimestamp(r.executedAt, `${where}.executedAt`);
+      // executions.duration_ms is a 32-bit INTEGER.
+      if (r.durationMs !== undefined) d.durationMs = LegacyService.historyInt(r.durationMs, `${where}.durationMs`, 2_147_483_647);
+      if (r.errorMessage !== undefined) d.errorMessage = LegacyService.historyText(r.errorMessage, `${where}.errorMessage`);
+      if (r.errorStack !== undefined) d.errorStack = LegacyService.historyText(r.errorStack, `${where}.errorStack`);
+      if (r.reportedBy !== undefined) {
+        if (r.reportedBy !== "human" && r.reportedBy !== "automation") throw new BadRequestException({ error: `${where}.reportedBy must be human or automation` });
+        d.reportedBy = r.reportedBy;
+      }
+      if (r.stepResults !== undefined) d.stepResults = LegacyService.normalizeStepResults(r.stepResults, `${where}.stepResults`);
+      if (r.history !== undefined) d.history = LegacyService.normalizeResultHistory(r.history, `${where}.history`);
+      return d;
+    });
+
+    const refreshSnapshots = body.refreshSnapshots === true;
+    const outcome = await this.db.transaction(async (client) => {
+      if (runFields.size) {
+        const params: unknown[] = [cycleId];
+        const sets = [...runFields].map(([col, value]) => {
+          params.push(value);
+          return `${col} = ${params.length}`;
+        });
+        await client.query(`UPDATE cycles SET ${sets.join(", ")}, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`, params);
+      }
+
+      let matched = new Set<string>();
+      if (results.length) {
+        const upd = await client.query<{ testcase_id: string }>(
+          `WITH input AS (SELECT x AS d, (x->>'testcaseId')::uuid AS testcase_id FROM jsonb_array_elements($2::jsonb) x),
+                target AS (
+                  SELECT i.d, i.testcase_id, e.id AS execution_id
+                    FROM input i
+                    JOIN cycle_items ci ON ci.cycle_id = $1 AND ci.testcase_id = i.testcase_id AND ci.deleted_at IS NULL
+                    JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
+                )
+           UPDATE executions e SET
+             status = CASE WHEN t.d ? 'status' THEN t.d->>'status' ELSE e.status END,
+             actual_result = CASE WHEN t.d ? 'actualResult' THEN t.d->>'actualResult' ELSE e.actual_result END,
+             executed_at = CASE WHEN t.d ? 'executedAt' THEN (t.d->>'executedAt')::timestamptz ELSE e.executed_at END,
+             duration_ms = CASE WHEN t.d ? 'durationMs' THEN (t.d->>'durationMs')::int ELSE e.duration_ms END,
+             error_message = CASE WHEN t.d ? 'errorMessage' THEN t.d->>'errorMessage' ELSE e.error_message END,
+             error_stack = CASE WHEN t.d ? 'errorStack' THEN t.d->>'errorStack' ELSE e.error_stack END,
+             reported_by = CASE WHEN t.d ? 'reportedBy' THEN t.d->>'reportedBy' ELSE e.reported_by END,
+             step_results = CASE WHEN t.d ? 'stepResults' THEN NULLIF(t.d->'stepResults', 'null'::jsonb) ELSE e.step_results END,
+             history = CASE WHEN t.d ? 'history' THEN NULLIF(t.d->'history', 'null'::jsonb) ELSE e.history END,
+             updated_at = now()
+           FROM target t
+           WHERE e.id = t.execution_id
+           RETURNING t.testcase_id`,
+          [cycleId, JSON.stringify(results)]
+        );
+        matched = new Set(upd.rows.map((row) => row.testcase_id));
+      }
+
+      let refreshed = 0;
+      if (refreshSnapshots) {
+        // Same column list addCycleTestCases captures, re-read from the live case: the case fixes made
+        // after a run was created otherwise stay invisible in the run's filters and screens.
+        const snap = await client.query(
+          `UPDATE cycle_items ci SET
+             snapshot_title = t.title, snapshot_external_id = t.external_id, snapshot_priority = t.priority,
+             snapshot_type = t.type, snapshot_suite_id = t.suite_id, snapshot_description = t.description,
+             snapshot_preconditions = t.preconditions, snapshot_postconditions = t.postconditions,
+             snapshot_steps = t.steps, snapshot_test_data = t.test_data,
+             snapshot_automation_status = t.automation_status, snapshot_automation_tags = t.automation_tags
+           FROM testcases t
+           WHERE t.id = ci.testcase_id AND t.deleted_at IS NULL AND ci.cycle_id = $1 AND ci.deleted_at IS NULL`,
+          [cycleId]
+        );
+        refreshed = snap.rowCount ?? 0;
+      }
+      return { matched, refreshed };
+    });
+
+    const unmatched = results.map((r) => r.testcaseId as string).filter((id) => !outcome.matched.has(id));
+    await this.logProjectActivity(projectId, uid, "cycle_history_imported", "cycle", cycleId, null, {
+      runFields: [...runFields.keys()],
+      results: results.length,
+      applied: outcome.matched.size,
+      unmatched: unmatched.length,
+      refreshedSnapshots: outcome.refreshed
+    });
+    return { applied: outcome.matched.size, unmatched, refreshedSnapshots: outcome.refreshed, runFields: [...runFields.keys()] };
   }
 
   private bugSelect(where: string): string {
@@ -11457,7 +11791,7 @@ export class LegacyService implements OnModuleInit {
               COUNT(DISTINCT om.user_id)::int AS member_count,
               COUNT(DISTINCT p.id)::int AS project_count,
               COUNT(DISTINCT t.id)::int AS test_case_count,
-              COUNT(DISTINCT t.id) FILTER (WHERE t.automation_status <> 'Not Automated')::int AS automated_count,
+              COUNT(DISTINCT t.id) FILTER (WHERE t.automation_status NOT IN ('Not Automated', 'To Be Automated'))::int AS automated_count,
               MAX(GREATEST(o.updated_at, p.updated_at, t.updated_at)) AS last_activity_at
        FROM organizations o
        LEFT JOIN organization_members om ON om.organization_id = o.id
@@ -14628,7 +14962,7 @@ export class LegacyService implements OnModuleInit {
     const zyraAgentSettings = await this.zyraAgentSettings(projectId);
     const capabilities = this.normalizeZyraCapabilities(zyraAgentSettings.capabilities);
     const kbEnabled = capabilities.knowledgeBase;
-    const [history, knowledgeFallback, ragDiagnostics, folderKnowledge, existingTestcases, allocation, projectSnapshot, ownJira, lastCompletedPlanRes, ownBugs, pendingCreateBatches, carriedSources] = await Promise.all([
+    const [history, knowledgeFallback, ragDiagnostics, folderKnowledge, ticketKnowledge, existingTestcases, allocation, projectSnapshot, ownJira, lastCompletedPlanRes, ownBugs, pendingCreateBatches, carriedSources] = await Promise.all([
       this.db.query(
         `SELECT role, content, reasoning_summary, action_type, testcases
          FROM zyra_chat_messages
@@ -14646,11 +14980,13 @@ export class LegacyService implements OnModuleInit {
       // every failure mode, so "no embeddings key" and "nothing relevant" are indistinguishable —
       // which is how the vector half of this search stayed off in production unnoticed.
       kbEnabled
-        ? this.ragRetrieval.retrieveWithDiagnostics(projectId, message, { traceSeed: zyraTurnTraceSeed })
+        ? this.ragRetrieval.retrieveWithDiagnostics(projectId, message, { traceSeed: zyraTurnTraceSeed, charBudget: RAG_GENERATION_CHAR_BUDGET })
         : Promise.resolve(LegacyService.zyraKnowledgeDisabledRetrieval()),
       // Direct folder-name lookup — recency/embeddings never match on a folder's name alone
       // (e.g. "knowledge base 'EAD-11215' folder"), only on document content.
       kbEnabled ? this.knowledgeFolderSnapshot(projectId, message, ownJiraKeys) : Promise.resolve([]),
+      // Every ticket the message names, by its synced document — for any provider, not only Jira.
+      kbEnabled ? this.knowledgeTicketSnapshot(projectId, message) : Promise.resolve([]),
       this.existingTestcaseSnapshot(projectId, message, ""),
       this.zyraAiAllocation(projectId),
       this.zyraChatProjectSnapshot(projectId),
@@ -14670,6 +15006,12 @@ export class LegacyService implements OnModuleInit {
       this.zyraPriorTurnContextRefs(projectId, sessionId).then((refs) => this.zyraResolveContextRefs(projectId, refs, kbEnabled))
     ]);
     const ragKnowledge = ragDiagnostics.items;
+    // Named outright (a folder, a ticket key), so never scored and never displaced by search ranking.
+    const explicitKnowledge = LegacyService.dedupeZyraKnowledgeItems([...folderKnowledge, ...ticketKnowledge]);
+    // A broad request is also shown the project's tickets — see knowledgeTicketCatalogue.
+    const broadTickets = kbEnabled && LegacyService.zyraIsBroadRequest(explicitKnowledge.length, ragDiagnostics.confidence)
+      ? await this.knowledgeTicketCatalogue(projectId, message)
+      : [];
     // Every lookup above is keyed on this message alone, so a follow-up that names nothing ("yes",
     // "generate them") resolves nothing — and the ticket the previous turn identified is then absent
     // from the generation prompt, and every draft citing it loses that citation in
@@ -14684,8 +15026,10 @@ export class LegacyService implements OnModuleInit {
       {
         jiraIssueKeys: ownJiraKeys,
         jira: ownJira,
-        knowledge: [...folderKnowledge, ...ragKnowledge],
-        knowledgeConfidence: folderKnowledge.length > 0 ? "strong" : ragDiagnostics.confidence,
+        // Deduplicated so a ticket both named (or catalogued) and found by search is shown once,
+        // with the search's fuller passage.
+        knowledge: LegacyService.dedupeZyraKnowledgeItems([...explicitKnowledge, ...ragKnowledge, ...broadTickets]),
+        knowledgeConfidence: explicitKnowledge.length > 0 ? "strong" : ragDiagnostics.confidence,
         bugs: ownBugs
       },
       carriedSources
@@ -14695,7 +15039,7 @@ export class LegacyService implements OnModuleInit {
     const mentionedJira = turnSources.jira;
     const bugs = turnSources.bugs;
     const knowledgeConfidence: RagRetrievalConfidence = turnSources.knowledgeConfidence;
-    const usedRecencyFallback = !ragKnowledge.length && turnSources.knowledge.length === folderKnowledge.length;
+    const usedRecencyFallback = !ragKnowledge.length && turnSources.knowledge.length === explicitKnowledge.length;
     const knowledge = [...turnSources.knowledge, ...(usedRecencyFallback ? knowledgeFallback : [])];
 
     // Opened once the gathered context exists, so the trace carries what Zyra actually read rather
@@ -15044,7 +15388,10 @@ export class LegacyService implements OnModuleInit {
       // here, in its own batched calls (see authorZyraUpdates). Failures are recorded per op, never
       // thrown, so a slow batch can't take the whole turn down with it.
       if (normalizeJsonArray(raw.operations).some((op) => op?.type === "update")) {
-        raw = await this.authorZyraUpdates({ projectId, provider, model, key, message, raw, onStage, trace });
+        raw = await this.authorZyraUpdates({
+          projectId, provider, model, key, message, raw, onStage, trace,
+          sources: { knowledge: knowledgeForChat, jira: mentionedJira, existingTestcases, bugs: bugsForChat }
+        });
       }
       return this.normalizeZyraChatDecision(raw, message, existingTestcases, modelIntent);
     } catch (err) {
@@ -15420,7 +15767,7 @@ export class LegacyService implements OnModuleInit {
           preconditions: op.draft.preconditions || "",
           stepsJson: this.safeSteps(op.draft.stepsJson || op.draft.steps),
           testData: op.draft.testData || "",
-          priority: op.draft.priority || "P2",
+          priority: op.draft.priority || TESTCASE_PRIORITY_NOT_SET,
           severity: op.draft.severity || null,
           type: op.draft.type || "Functional",
           status: op.draft.status || "Draft",
@@ -15516,11 +15863,13 @@ export class LegacyService implements OnModuleInit {
           continue;
         }
         // Staged only — the real row is untouched until zyraSave applies `fields` to it.
-        proposals.push({ opType: op.type, testcaseId: found.id, externalId: row.externalId, fields, reason: op.reason || "" });
+        // sourceRefs: what informed THIS change (authorZyraUpdates). Stored beside `fields`, not in
+        // them — they describe the proposal, and Save applies `fields` only, exactly as before.
+        proposals.push({ opType: op.type, testcaseId: found.id, externalId: row.externalId, fields, reason: op.reason || "", ...(op.sourceRefs?.length ? { sourceRefs: op.sourceRefs } : {}) });
         const action = op.type === "archive" ? "proposed-archive" : "proposed-update";
         // The review row previews what the case will look like AFTER saving (row + fields merged),
         // not its current state — `row` alone would show what's about to change as if it already had.
-        const preview = { ...row, ...(fields.stepsJson !== undefined ? { steps: fields.stepsJson } : {}), ...fields };
+        const preview = { ...row, ...(fields.stepsJson !== undefined ? { steps: fields.stepsJson } : {}), ...fields, ...(op.sourceRefs?.length ? { sourceRefs: op.sourceRefs } : {}) };
         testcases.push({ ...this.chatTestcaseRow(preview, action, op.reason), draftIndex: proposals.length - 1 });
         activity.push({ actor: "agent", title: `Drafted ${op.type} for review`, detail: `${row.externalId} ${row.title}`, createdAt: new Date().toISOString() });
       } else if (op.type === "create_suite" && op.suiteName) {
@@ -16194,7 +16543,7 @@ export class LegacyService implements OnModuleInit {
               preconditions: draft.preconditions || "",
               stepsJson: draft.stepsJson || draft.steps || "[]",
               testData: draft.testData || "",
-              priority: draft.priority || "P2",
+              priority: draft.priority || TESTCASE_PRIORITY_NOT_SET,
               severity: severityAlreadySet ? undefined : (draft.severity || null),
               type: draft.type || "Functional",
               component: componentAlreadySet ? undefined : (draft.component || null)
@@ -16202,6 +16551,11 @@ export class LegacyService implements OnModuleInit {
             reason: `Generated by AI from Zyra chat context; redirected to update — closely matches an existing test case (similarity ${updateTarget.cosineSimilarity.toFixed(2)}).`
           };
         }
+        // Linked to the named ticket this draft actually cites. Every draft used to take the FIRST
+        // named key, so a request naming several tickets linked all of its cases to one of them.
+        const citedKey = normalizeJsonArray(draft.sourceRefs)
+          .map((ref) => ref as ZyraSourceRef)
+          .find((ref) => ref?.type === "jira_ticket" && params.jiraIssueKeys.includes(ref.id))?.id;
         return {
           type: "create",
           // A suite the router named but that does not exist yet carries only a name — it is
@@ -16210,7 +16564,7 @@ export class LegacyService implements OnModuleInit {
           suiteName: matchedSuite?.id ? undefined : matchedSuite?.name,
           draft: {
             ...draft,
-            jiraIssueKey: params.jiraIssueKeys[0] || draft.jiraIssueKey || null
+            jiraIssueKey: citedKey || params.jiraIssueKeys[0] || draft.jiraIssueKey || null
           },
           reason: "Generated by AI from Zyra chat context."
         };
@@ -16335,14 +16689,16 @@ export class LegacyService implements OnModuleInit {
   }> {
     // Same rule as buildZyraChatDecision: with knowledge-base access OFF, the lookups never run.
     const kbEnabled = capabilities.knowledgeBase;
-    const [knowledgeFallback, ragDiagnostics, folderKnowledge, existingTestcases, suites, ownJira, ownBugs, carriedSources] = await Promise.all([
+    const [knowledgeFallback, ragDiagnostics, folderKnowledge, ticketKnowledge, existingTestcases, suites, ownJira, ownBugs, carriedSources] = await Promise.all([
       kbEnabled ? this.knowledgeSnapshot(projectId) : Promise.resolve([]),
       // retrieveWithDiagnostics, not the plain retrieveKnowledgeContext wrapper — this is a
       // background plan batch (continueZyraChatPlan), which previously carried no confidence signal
       // through at all (see generateZyraChatTestcasesWithAi's own doc comment on `trace` for the
       // same "background batches lag behind the interactive path" pattern this closes for RAG too).
-      kbEnabled ? this.ragRetrieval.retrieveWithDiagnostics(projectId, message) : Promise.resolve(LegacyService.zyraKnowledgeDisabledRetrieval()),
+      kbEnabled ? this.ragRetrieval.retrieveWithDiagnostics(projectId, message, { charBudget: RAG_GENERATION_CHAR_BUDGET }) : Promise.resolve(LegacyService.zyraKnowledgeDisabledRetrieval()),
       kbEnabled ? this.knowledgeFolderSnapshot(projectId, message, jiraIssueKeys) : Promise.resolve([]),
+      // Re-resolved from the plan's original message on every batch, so no named ticket ages out.
+      kbEnabled ? this.knowledgeTicketSnapshot(projectId, message) : Promise.resolve([]),
       this.existingTestcaseSnapshot(projectId, message, ""),
       this.projectSuiteSummaries(projectId),
       // Relevance-matched, not just explicitly-named — see relevantJiraSnapshot.
@@ -16353,7 +16709,12 @@ export class LegacyService implements OnModuleInit {
       this.zyraResolveContextRefs(projectId, carriedRefs, kbEnabled)
     ]);
     const ragKnowledge = ragDiagnostics.items;
-    // Same folder-match-overrides-confidence rule and same carried-source merge as
+    const explicitKnowledge = LegacyService.dedupeZyraKnowledgeItems([...folderKnowledge, ...ticketKnowledge]);
+    // Same broad-request rule as decideZyraChatTurn, so every batch of a broad plan sees the tickets.
+    const broadTickets = kbEnabled && LegacyService.zyraIsBroadRequest(explicitKnowledge.length, ragDiagnostics.confidence)
+      ? await this.knowledgeTicketCatalogue(projectId, message)
+      : [];
+    // Same explicit-match-overrides-confidence rule and same carried-source merge as
     // decideZyraChatTurn's own computation — kept in sync there rather than factored out, since the
     // two call sites gather from different Promise.all shapes and a shared helper would need to take
     // both apart again anyway.
@@ -16361,8 +16722,8 @@ export class LegacyService implements OnModuleInit {
       {
         jiraIssueKeys,
         jira: ownJira,
-        knowledge: [...folderKnowledge, ...ragKnowledge],
-        knowledgeConfidence: folderKnowledge.length > 0 ? "strong" : ragDiagnostics.confidence,
+        knowledge: LegacyService.dedupeZyraKnowledgeItems([...explicitKnowledge, ...ragKnowledge, ...broadTickets]),
+        knowledgeConfidence: explicitKnowledge.length > 0 ? "strong" : ragDiagnostics.confidence,
         bugs: ownBugs
       },
       carriedSources
@@ -16370,7 +16731,7 @@ export class LegacyService implements OnModuleInit {
     const jira = turnSources.jira;
     const bugs = turnSources.bugs;
     const knowledgeConfidence: RagRetrievalConfidence = turnSources.knowledgeConfidence;
-    const usedRecencyFallback = !ragKnowledge.length && turnSources.knowledge.length === folderKnowledge.length;
+    const usedRecencyFallback = !ragKnowledge.length && turnSources.knowledge.length === explicitKnowledge.length;
     const knowledge = [...turnSources.knowledge, ...(usedRecencyFallback ? knowledgeFallback : [])];
     return {
       knowledge: capabilities.knowledgeBase ? knowledge : [],
@@ -18102,7 +18463,7 @@ export class LegacyService implements OnModuleInit {
         // "[Zyra] Test Steps... Missing After Saving Generated Test Cases".
         stepsJson: JSON.stringify(this.safeSteps(draft.stepsJson)),
         testData: draft.testData || "",
-        priority: draft.priority || "P2",
+        priority: draft.priority || TESTCASE_PRIORITY_NOT_SET,
         // Filled from the draft only when there's nothing to protect: a brand-new row (no
         // existingLinkedRow) always takes the draft's value; regenerating an already-linked row
         // (existingLinkedRow set) keeps its current severity/component untouched if either is
@@ -18225,7 +18586,7 @@ export class LegacyService implements OnModuleInit {
         // "[Zyra] Test Steps... Missing After Saving Generated Test Cases".
         stepsJson: JSON.stringify(this.safeSteps(draft.stepsJson)),
         testData: draft.testData || "",
-        priority: draft.priority || "P2",
+        priority: draft.priority || TESTCASE_PRIORITY_NOT_SET,
         // Same "only fill if blank" rule as processZyraSaveEntriesSequential's identical payload —
         // see that function's comment.
         severity: existingLinkedRow?.severity ? null : (draft.severity || null),
@@ -18330,7 +18691,7 @@ export class LegacyService implements OnModuleInit {
       postconditions: "",
       steps: payload.stepsJson || [],
       test_data: payload.testData || "",
-      priority: payload.priority || "P2",
+      priority: payload.priority || TESTCASE_PRIORITY_NOT_SET,
       // payload.severity/component (processZyraSaveEntriesBatched) already resolved the "only fill
       // if blank against an existing linked row" rule before this ever runs — this insert path is
       // reached only for genuinely-new rows, so there's nothing to protect and the payload value
@@ -18618,7 +18979,7 @@ export class LegacyService implements OnModuleInit {
     }
     const [knowledgeFallback, ragDiagnostics] = await Promise.all([
       this.knowledgeSnapshot(projectId),
-      this.ragRetrieval.retrieveWithDiagnostics(projectId, query)
+      this.ragRetrieval.retrieveWithDiagnostics(projectId, query, { charBudget: RAG_GENERATION_CHAR_BUDGET })
     ]);
     return {
       knowledge: ragDiagnostics.items.length ? ragDiagnostics.items : knowledgeFallback,
@@ -18770,6 +19131,76 @@ export class LegacyService implements OnModuleInit {
     return [{ title: `Knowledge base folder: ${folderNames}`, content: "" }, ...documents, ...files];
   }
 
+  /** How many of the project's tickets a broad request is shown (see knowledgeTicketCatalogue). */
+  private static readonly ZYRA_BROAD_TICKET_LIMIT = 25;
+  /** Each catalogue ticket's share of the prompt — enough to judge relevance and draft from. */
+  private static readonly ZYRA_BROAD_TICKET_CHARS = 600;
+
+  // The project's synced tickets ("<KEY>: summary" documents, any provider) for a BROAD request —
+  // one naming no ticket or folder whose search matched weakly or not at all. "Generate API test
+  // cases for the main endpoints" shares almost no words with requirement tickets, so keyword search
+  // found one ticket and every draft was written from it. The drafting call is shown the tickets
+  // instead and judges which apply (zyraDynamicTaskPrompt already tells it to check each source).
+  // Most recently updated first; each narrowed to its passage most relevant to the request.
+  private async knowledgeTicketCatalogue(projectId: string, message: string): Promise<Array<{ title: string; content: string; citation: ZyraKnowledgeCitation }>> {
+    const res = await this.db.query<{ id: string; title: string; content_text: string | null }>(
+      `SELECT id, title, content_text
+       FROM knowledge_documents
+       WHERE project_id = $1 AND is_deleted = false AND (document_type != 'ai_memory' OR status = 'approved')
+         AND title ~ '^[A-Za-z][A-Za-z0-9]*-[0-9]+\\s*:'
+       ORDER BY updated_at DESC
+       LIMIT $2`,
+      [projectId, LegacyService.ZYRA_BROAD_TICKET_LIMIT]
+    ).catch(() => ({ rows: [] as Array<{ id: string; title: string; content_text: string | null }> }));
+    if (!res.rows.length) return [];
+    const focused = await this.ragRetrieval.focusOnQuery(res.rows.map((row) => String(row.content_text || "")), message);
+    const cap = LegacyService.ZYRA_BROAD_TICKET_CHARS;
+    return res.rows.map((row, i) => {
+      const text = String(focused[i] ?? "");
+      return {
+        title: row.title || "Knowledge base item",
+        content: text.length > cap ? `${text.slice(0, cap)}...` : text,
+        citation: { sourceType: "document" as const, sourceId: String(row.id) }
+      };
+    });
+  }
+
+  /** Broad: nothing named outright, and search found no confident match. */
+  private static zyraIsBroadRequest(explicitCount: number, confidence: RagRetrievalConfidence): boolean {
+    return explicitCount === 0 && confidence !== "strong";
+  }
+
+  /** How many tickets one request can name and have each read as its own source (see knowledgeTicketSnapshot). */
+  private static readonly ZYRA_NAMED_TICKET_LIMIT = 20;
+
+  // Tickets the message names by key ("generate API tests for QAB-241 and QAB-242"), read from the
+  // documents the integration sync mirrors them into, titled "<KEY>: summary" (see
+  // IntegrationSyncDocumentBuilder). resolveJiraIssueKeysDetailed only accepts keys of a mapped
+  // *Jira* project, so a Linear or Notion ticket named outright was dropped before retrieval and
+  // could only reach the prompt by winning a search slot — which, for more than a few, it could not.
+  // A key with no synced document matches nothing; one per key, the most recently updated.
+  private async knowledgeTicketSnapshot(projectId: string, message: string): Promise<Array<{ title: string; content: string; citation: ZyraKnowledgeCitation }>> {
+    const keys = this.extractJiraIssueKeys(message).slice(0, LegacyService.ZYRA_NAMED_TICKET_LIMIT);
+    if (!keys.length) return [];
+    const res = await this.db.query<{ id: string; title: string; content_text: string | null }>(
+      `SELECT DISTINCT ON (upper(trim(split_part(title, ':', 1)))) id, title, content_text
+       FROM knowledge_documents
+       WHERE project_id = $1 AND is_deleted = false AND (document_type != 'ai_memory' OR status = 'approved')
+         AND upper(trim(split_part(title, ':', 1))) = ANY($2::text[])
+       ORDER BY upper(trim(split_part(title, ':', 1))), updated_at DESC`,
+      [projectId, keys]
+    ).catch(() => ({ rows: [] as Array<{ id: string; title: string; content_text: string | null }> }));
+    if (!res.rows.length) return [];
+    // In the order the message named them, so the first ticket asked about is "KB 1".
+    const rows = [...res.rows].sort((a, b) => keys.indexOf(a.title.split(":")[0].trim().toUpperCase()) - keys.indexOf(b.title.split(":")[0].trim().toUpperCase()));
+    const focused = await this.ragRetrieval.focusOnQuery(rows.map((row) => String(row.content_text || "")), message);
+    return rows.map((row, i) => ({
+      title: row.title || "Knowledge base item",
+      content: focused[i],
+      citation: { sourceType: "document" as const, sourceId: String(row.id) }
+    }));
+  }
+
   private async existingTestcaseSnapshot(
     projectId: string,
     story: string,
@@ -18816,7 +19247,7 @@ export class LegacyService implements OnModuleInit {
       externalId: row.external_id || "",
       title: String(row.title || "Untitled testcase").slice(0, 240),
       description: String(row.description || "").slice(0, isNamed ? 4000 : 500),
-      priority: String(row.priority || "P2"),
+      priority: String(row.priority || TESTCASE_PRIORITY_NOT_SET),
       status: String(row.status || "Draft"),
       // safeSteps(), not normalizeJsonArray() — same reasoning as exportTestcases: `row.steps` may
       // be a JSON-encoded string, not a genuine array.
@@ -19908,6 +20339,22 @@ export class LegacyService implements OnModuleInit {
       if (!item.id) return;
       index.set(`BUG ${i + 1}`, { type: "bug", id: item.id, title: item.title });
     });
+    // Aliases for a KB item: its own title, and the ticket-style key its title starts with. Synced
+    // Jira/Linear documents are titled like "QAB-242: LIN-02: Add a New Employee", and the test cases
+    // they produced say "[QAB-242] …", so a model citing that document writes "QAB-242" or the title
+    // as often as "KB 2" — every one of those was dropped, and the card read "No specific source
+    // cited". An alias only ever points at an item that was shown, and never displaces a real label
+    // (a Jira key, a test case id, "KB N", "BUG N"), which are all set above first.
+    input.knowledge.forEach((item, i) => {
+      if (!item.citation) return;
+      const ref = index.get(`KB ${i + 1}`);
+      if (!ref) return;
+      const title = String(item.title || "").trim();
+      const leadingKey = /^([A-Za-z][A-Za-z0-9]*-\d+)\b/.exec(title)?.[1];
+      for (const alias of [title, leadingKey]) {
+        if (alias && !index.has(alias)) index.set(alias, ref);
+      }
+    });
     return index;
   }
 
@@ -19945,9 +20392,13 @@ export class LegacyService implements OnModuleInit {
       const text = String(value).trim();
       if (!text) continue;
       const label = resolve(text);
-      if (!label || seen.has(label)) continue;
-      seen.add(label);
-      resolved.push(knownRefs.get(label)!);
+      if (!label) continue;
+      // De-duplicated by the source itself: "KB 2" and its alias "QAB-242" are one citation.
+      const ref = knownRefs.get(label)!;
+      const key = `${ref.type}:${ref.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      resolved.push(ref);
     }
     return resolved;
   }
@@ -20853,6 +21304,8 @@ export class LegacyService implements OnModuleInit {
     raw: Body;
     onStage?: ZyraOnStage;
     trace: Parameters<typeof recordGeneration>[0];
+    /** This turn's gathered sources — the same ones a create draft is generated (and cites) from. */
+    sources: Pick<ZyraGenerationInput, "knowledge" | "jira" | "existingTestcases" | "bugs">;
   }): Promise<Body> {
     const operations = normalizeJsonArray(params.raw.operations).map((op) => (op && typeof op === "object" ? { ...op } : op)) as Body[];
     const targets: Array<{ op: Body; row: Body }> = [];
@@ -20871,15 +21324,97 @@ export class LegacyService implements OnModuleInit {
 
     const system = [
       "You revise existing test cases in a test management tool. For each test case below, apply the requested change and return the new values.",
-      "Return only a JSON object: {\"updates\":[{\"externalId\":\"\",\"fields\":{}}]} with one entry per test case you were given, using its exact externalId.",
+      "Return only a JSON object: {\"updates\":[{\"externalId\":\"\",\"fields\":{},\"sourceRefs\":[\"\"]}]} with one entry per test case you were given, using its exact externalId.",
       "fields uses exactly these keys (camelCase): title, description, preconditions, postconditions, stepsJson, testData, priority, severity, type, automationStatus, automationTags, component, status. Include only fields you actually change, each with its complete new value, and only when it genuinely differs from the current value.",
       "To change any step, set fields.stepsJson to the FULL step list as an array of {\"stepNumber\":1,\"action\":\"...\",\"expectedResult\":\"...\"} — every step, including unchanged ones copied exactly. Every expected result must state the specific, observable outcome of its own step; never leave a placeholder or vague result in a step you were asked to fix.",
-      "Keep each test case's existing language and terminology. If a test case genuinely needs no change, return it with an empty fields object."
+      "Keep each test case's existing language and terminology. If a test case genuinely needs no change, return it with an empty fields object.",
+      "A test case's `requirement` lists the source label(s) of the requirement it was written from — base its new values on that requirement first.",
+      "Base the new values on the project sources in the user message wherever they apply. Each source has a label (e.g. 'KB 2', 'HBP-14', 'AIP-TC-73', 'BUG 3'). sourceRefs is REQUIRED on every update: list the labels of the sources that change draws on, written exactly as the label is shown (e.g. \"KB 2\") — not the document's title — never invented, and never the test case being revised itself. Use an empty array only when no listed source informs that change."
     ].join("\n");
 
+    /*
+     * The turn's sources were retrieved with the user's MESSAGE as the query. For a review request
+     * ("rewrite any weak or vague expected results") those words match no requirement document, so
+     * the drafting call saw only unrelated recent documents and could cite nothing — every update
+     * card read "No specific source cited" while the document describing those very cases ("QAB-242:
+     * LIN-02: Add a New Employee" for "[QAB-242] …" cases) sat unseen in the knowledge base. Each
+     * batch therefore also retrieves knowledge with ITS OWN cases' titles/descriptions as the query
+     * (zyraTaskKnowledge — the same retrieval task-board generation uses), merged ahead of the turn's
+     * items. Retrieval failing only falls back to the turn's sources; it never fails the batch.
+     */
+    /*
+     * Each case's OWN requirement document, found by the ticket it declares: its linear/jira issue key,
+     * or the "[QAB-242]" key its title starts with. Synced tickets live in the knowledge base titled
+     * "<KEY>: …" ("QAB-242: LIN-02: Add a New Employee"). Measured on a live run: with the right
+     * documents in its prompt, the drafting call still returned sourceRefs: [] for every case — so
+     * "Context used" can't rest on the model choosing to cite. The linked document is always put in
+     * the batch's prompt, named as that case's requirement, and attributed to the update below.
+     */
+    const caseKeys = (row: Body): string[] =>
+      Array.from(new Set(
+        [row.linearIssueKey, row.jiraIssueKey, /^\s*\[([A-Za-z][A-Za-z0-9]*-\d+)\]/.exec(String(row.title || ""))?.[1]]
+          .filter((key): key is string => typeof key === "string" && Boolean(key.trim()))
+          .map((key) => key.trim().toUpperCase())
+      ));
+    const requirementDocs = async (batch: typeof targets): Promise<Map<string, typeof params.sources.knowledge[number]>> => {
+      const keys = Array.from(new Set(batch.flatMap(({ row }) => caseKeys(row))));
+      const byKey = new Map<string, typeof params.sources.knowledge[number]>();
+      if (!keys.length) return byKey;
+      try {
+        const res = await this.db.query<{ id: string; title: string; content_text: string | null; key: string }>(
+          `SELECT id, title, content_text, upper(trim(split_part(title, ':', 1))) AS key
+           FROM knowledge_documents
+           WHERE project_id = $1 AND is_deleted = false AND upper(trim(split_part(title, ':', 1))) = ANY($2::text[])
+           ORDER BY updated_at DESC`,
+          [params.projectId, keys]
+        );
+        const query = batch.map(({ row }) => [row.title, row.description].filter(Boolean).join(" ")).join("\n");
+        const focused = await this.ragRetrieval.focusOnQuery(res.rows.map((row) => String(row.content_text || "")), query);
+        res.rows.forEach((row, i) => {
+          if (byKey.has(row.key)) return; // most recently updated wins for a duplicated key
+          byKey.set(row.key, { title: row.title, content: focused[i] ?? "", citation: { sourceType: "document", sourceId: row.id } });
+        });
+      } catch (err) {
+        this.logger.warn(`Update drafting: requirement lookup failed for project ${params.projectId}: ${err instanceof Error ? err.message : err}`);
+      }
+      return byKey;
+    };
+
+    const batchSources = async (batch: typeof targets): Promise<{ sources: typeof params.sources; requirements: Map<string, typeof params.sources.knowledge[number]> }> => {
+      const query = batch.map(({ row }) => [row.title, row.description].filter(Boolean).join(" ")).join("\n");
+      let retrieved: typeof params.sources.knowledge = [];
+      try {
+        retrieved = (await this.zyraTaskKnowledge(params.projectId, [], [query])).knowledge;
+      } catch (err) {
+        this.logger.warn(`Update drafting: knowledge retrieval failed for project ${params.projectId}, using the turn's sources only: ${err instanceof Error ? err.message : err}`);
+      }
+      const requirements = await requirementDocs(batch);
+      const seen = new Set<string>();
+      // Requirement documents first, so the cap below can never push a case's own requirement out.
+      const knowledge = [...requirements.values(), ...retrieved, ...params.sources.knowledge].filter((item) => {
+        const key = item.citation ? `${item.citation.sourceType}:${item.citation.sourceId}` : `title:${item.title}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, 12);
+      return { sources: { ...params.sources, knowledge }, requirements };
+    };
+
     const authorBatch = async (batch: typeof targets): Promise<void> => {
+      const { sources, requirements } = await batchSources(batch);
+      // Labels built from exactly the list this batch's prompt shows, so "KB 2" means what it was shown as.
+      const sourceRefIndex = this.zyraSourceRefIndex(sources);
+      const sourcesShown = sources.knowledge.map((item) => item.title);
+      // A case's requirement document(s), as the "KB N" labels this batch's prompt shows them under.
+      const requirementLabels = (row: Body): string[] =>
+        caseKeys(row)
+          .map((key) => requirements.get(key)?.citation?.sourceId)
+          .map((sourceId) => sources.knowledge.findIndex((item) => item.citation?.sourceId === sourceId))
+          .filter((index) => index >= 0)
+          .map((index) => `KB ${index + 1}`);
       const cases = batch.map(({ op, row }) => ({
         externalId: row.externalId,
+        ...(requirementLabels(row).length ? { requirement: requirementLabels(row) } : {}),
         requestedChange: String(op.reason || params.message),
         current: {
           title: row.title,
@@ -20894,11 +21429,17 @@ export class LegacyService implements OnModuleInit {
           stepsJson: (this.safeSteps(row.steps) as Body[]).map((step, index) => ({ stepNumber: index + 1, action: step?.action || "", expectedResult: step?.expectedResult || "" }))
         }
       }));
-      const user = `The user asked: ${params.message}\n\nTest cases to revise:\n${JSON.stringify(cases, null, 2)}`;
+      const user = [
+        `The user asked: ${params.message}`,
+        "",
+        `Test cases to revise:\n${JSON.stringify(cases, null, 2)}`,
+        "",
+        this.zyraStaticSourcePrompt({ ...sources, linear: [] } as unknown as ZyraGenerationInput)
+      ].join("\n");
       try {
         const { parsed, usage, rawText } = await this.zyraAuthorJson(params.key, params.provider, params.model, system, user, Math.min(16000, 2000 + batch.length * 2000));
         await this.recordZyraTokenUsage(params.projectId, "chat_generate", params.provider, params.model, usage);
-        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: params.model, input: { cases: cases.length }, output: parsed, rawOutput: parsed ? undefined : rawText, usage });
+        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: params.model, input: { cases: cases.length, sourcesShown }, output: parsed, rawOutput: parsed ? undefined : rawText, usage });
         const byId = new Map<string, Body>();
         for (const entry of normalizeJsonArray(parsed?.updates)) {
           if (entry && typeof entry === "object" && entry.externalId) byId.set(String(entry.externalId).toUpperCase(), entry);
@@ -20911,10 +21452,19 @@ export class LegacyService implements OnModuleInit {
           }
           const authoredFields = authored.fields && typeof authored.fields === "object" ? authored.fields : {};
           op.fields = { ...(op.fields && typeof op.fields === "object" ? op.fields : {}), ...authoredFields };
+          // The case's own requirement document — shown in this prompt as its "requirement" — first,
+          // then whatever else the model cited; one entry per source. A case never cites itself.
+          op.__sourceRefs = LegacyService.sanitizeZyraSourceRefs([...requirementLabels(row), ...normalizeJsonArray(authored.sourceRefs)], sourceRefIndex)
+            .filter((ref) => !(ref.type === "testcase" && String(ref.id).toUpperCase() === String(row.externalId).toUpperCase()));
+          // What the model cited vs. what resolved — the one fact a "No specific source cited" card
+          // needs to be diagnosed, and otherwise lost (traces are optional). No content, labels only.
+          this.logger.log(
+            `Update drafting ${row.externalId}: shown ${sourcesShown.length} KB source(s); requirement ${JSON.stringify(requirementLabels(row))}; cited ${JSON.stringify(authored.sourceRefs ?? null).slice(0, 300)}; resolved ${(op.__sourceRefs as ZyraSourceRef[]).length}`
+          );
         }
       } catch (err) {
         const reason = this.isZyraTimeoutError(err) ? "drafting it timed out" : `drafting it failed (${this.extractAiErrorMessage(err)})`;
-        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: params.model, input: { cases: cases.length }, errorMessage: reason });
+        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: params.model, input: { cases: cases.length, sourcesShown }, errorMessage: reason });
         for (const { op, row } of batch) op.__authoringError = `${row.externalId}: ${reason}, so nothing was staged for it — ask again to retry.`;
       }
     };
@@ -21033,7 +21583,8 @@ export class LegacyService implements OnModuleInit {
           draft: op?.draft && typeof op.draft === "object" ? op.draft : undefined,
           fields: op?.fields && typeof op.fields === "object" ? op.fields : undefined,
           reason: op?.reason ? String(op.reason).slice(0, 500) : undefined,
-          authoringError: op?.__authoringError ? String(op.__authoringError) : undefined
+          authoringError: op?.__authoringError ? String(op.__authoringError) : undefined,
+          sourceRefs: Array.isArray(op?.__sourceRefs) ? (op.__sourceRefs as ZyraSourceRef[]) : undefined
         };
       })
       .filter((op) => {
@@ -22595,7 +23146,7 @@ export class LegacyService implements OnModuleInit {
       id: value.id || null,
       externalId: value.externalId || value.external_id || "",
       title: value.title || "Untitled testcase",
-      priority: value.priority || "P2",
+      priority: value.priority || TESTCASE_PRIORITY_NOT_SET,
       status: value.status || "Draft",
       type: value.type || "Functional",
       preconditions: value.preconditions || "",
@@ -22721,7 +23272,13 @@ export class LegacyService implements OnModuleInit {
       return this.chatDraftRow({ externalId, title: externalId ? `${externalId} (no longer exists)` : "Test case no longer exists" }, action, entry.reason);
     }
     const fields = (entry.fields || {}) as Body;
-    const preview = { ...current, ...(fields.stepsJson !== undefined ? { steps: fields.stepsJson } : {}), ...fields };
+    const preview = {
+      ...current,
+      ...(fields.stepsJson !== undefined ? { steps: fields.stepsJson } : {}),
+      ...fields,
+      // The update's own citations (see applyZyraChatOperations), same as the chat turn's preview.
+      ...(Array.isArray(entry.sourceRefs) && entry.sourceRefs.length ? { sourceRefs: entry.sourceRefs } : {})
+    };
     return this.chatTestcaseRow(preview, action, entry.reason);
   }
 

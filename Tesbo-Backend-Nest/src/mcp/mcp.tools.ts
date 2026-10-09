@@ -270,12 +270,13 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "update_testcase",
       description:
-        "Update a test case in the token's project. Required: testcaseId. Optional: suiteId, title, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult}), testData, priority, severity, type, automationStatus, component, status, estimatedDuration, customFieldValues. Only fields you pass are changed; omitted fields keep their current value. To archive or restore a test case, prefer archive_testcase/restore_testcase over setting status here directly. The write is attributed to the Tesbo MCP agent actor.",
+        "Update a test case in the token's project. Required: testcaseId. Optional: externalId (the case's ID such as NAP-TC-12; must stay unique in the project, no spaces, up to 32 characters; past runs show the new ID), suiteId, title, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult}), testData, priority, severity, type, automationStatus, component, status, estimatedDuration, customFieldValues. Only fields you pass are changed; omitted fields keep their current value. To archive or restore a test case, prefer archive_testcase/restore_testcase over setting status here directly. The write is attributed to the Tesbo MCP agent actor.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
         properties: {
           testcaseId: { type: "string" },
+          externalId: { type: "string" },
           suiteId: { type: "string" },
           title: { type: "string" },
           description: { type: "string" },
@@ -641,7 +642,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "list_suites",
       description:
-        "List every suite (folder) in the token's project. Returned flat, not nested — each row carries parentId (null for a root suite) so a client can build the tree itself, plus testCaseCount (direct children only) and recursiveTestCaseCount (the whole subtree), matching the app's Test Case Repository sidebar. No filters or pagination: the project's suites are always returned in full, ordered by position then name.",
+        "List every suite (folder) in the token's project. Returned flat, not nested — each row carries parentId (null for a root suite) so a client can build the tree itself, plus description, preconditions, testCaseCount (direct children only) and recursiveTestCaseCount (the whole subtree), matching the app's Test Case Repository sidebar. No filters or pagination: the project's suites are always returned in full, ordered by position then name.",
       requiredScope: "read",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       handler: async (_args, ctx) => ({ suites: await ctx.legacy.listSuites(ctx.projectId) })
@@ -649,7 +650,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "get_suite",
       description:
-        "Get one suite (folder) by id in the token's project: name, parentId, position, testCaseCount (direct children) and recursiveTestCaseCount (whole subtree). Required: suiteId.",
+        "Get one suite (folder) by id in the token's project: name, description, preconditions, parentId, position, testCaseCount (direct children) and recursiveTestCaseCount (whole subtree). Required: suiteId.",
       requiredScope: "read",
       inputSchema: {
         type: "object",
@@ -668,12 +669,14 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "create_suite",
       description:
-        "Create a suite (folder) in the token's project. Required: name. Optional: parentId (nest under another suite), position.",
+        "Create a suite (folder) in the token's project. Required: name. Optional: description, preconditions (free text, up to 20000 characters each), parentId (nest under another suite), position.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
         properties: {
           name: { type: "string" },
+          description: { type: "string" },
+          preconditions: { type: "string" },
           parentId: { type: "string" },
           position: { type: "number" }
         },
@@ -688,13 +691,15 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "update_suite",
       description:
-        "Rename, move, or reposition a suite in the token's project. Required: suiteId. Optional: name, parentId, position. IMPORTANT: the app's own update always sets the parent from what you send — omitting parentId does NOT keep the current parent the way omitting a field does on update_testcase. This tool defaults parentId to the suite's current parent when you don't pass it, so a rename-only or position-only call won't silently move the suite to the project's root; pass parentId: null explicitly to move it to the root, or another suite's id to reparent it.",
+        "Rename, move, reposition or describe a suite in the token's project. Required: suiteId. Optional: name, description, preconditions (omit to keep the current text, send an empty string to clear it), parentId, position. IMPORTANT: the app's own update always sets the parent from what you send — omitting parentId does NOT keep the current parent the way omitting a field does on update_testcase. This tool defaults parentId to the suite's current parent when you don't pass it, so a rename-only or position-only call won't silently move the suite to the project's root; pass parentId: null explicitly to move it to the root, or another suite's id to reparent it.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
         properties: {
           suiteId: { type: "string" },
           name: { type: "string" },
+          description: { type: "string" },
+          preconditions: { type: "string" },
           parentId: { type: ["string", "null"] },
           position: { type: "number" }
         },
@@ -713,7 +718,13 @@ export function buildMcpTools(): McpTool[] {
         // updateSuite writes parent_id verbatim (no COALESCE) — default to the current parent so an
         // omitted parentId doesn't un-parent the suite. See this tool's description.
         const parentId = args.parentId !== undefined ? (args.parentId as string | null) : existing.parentId;
-        await ctx.legacy.updateSuite(ctx.userId, suiteId, { name: args.name, parentId, position: args.position });
+        await ctx.legacy.updateSuite(ctx.userId, suiteId, {
+          name: args.name,
+          description: args.description,
+          preconditions: args.preconditions,
+          parentId,
+          position: args.position
+        });
         return (await ctx.legacy.listSuites(ctx.projectId)).find((s) => s.id === suiteId);
       }
     },
@@ -795,6 +806,8 @@ export function buildMcpTools(): McpTool[] {
             : idMap.get(node.parentId as string) || null;
           const created = (await ctx.legacy.createSuite(ctx.projectId, {
             name: isRoot ? (typeof args.name === "string" && args.name ? args.name : `${node.name} (copy)`) : node.name,
+            description: node.description,
+            preconditions: node.preconditions,
             parentId: newParentId,
             position: node.position
           })) as Record<string, any>;

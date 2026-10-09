@@ -7,7 +7,7 @@ import { useZyraText } from "@/lib/zyra-i18n";
 
 type Step = { action: string; expectedResult: string };
 
-const PRIORITIES = ["P0", "P1", "P2", "P3"];
+const PRIORITIES = ["P0", "P1", "P2", "P3", "Not set"];
 // Same vocabulary as testcases/page.tsx's TESTCASE_SEVERITIES and the backend's BUG_SEVERITIES
 // allow-list (normalizeZyraSeverity) — keeps this Select from ever offering a value the server
 // would silently drop back to null.
