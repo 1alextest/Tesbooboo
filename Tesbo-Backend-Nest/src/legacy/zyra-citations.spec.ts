@@ -113,6 +113,24 @@ describe("Zyra citation guards", () => {
       expect(index.size).toBe(0);
     });
 
+    it("also resolves a KB item by its title and by the ticket-style key its title starts with, without displacing a real label", () => {
+      const index = internals(svc).zyraSourceRefIndex({
+        knowledge: [
+          { title: "QAB-242: LIN-02: Add a New Employee", content: "...", citation: { sourceType: "document", sourceId: "doc-242" } },
+          { title: "HBP-14: mirror of the ticket", content: "...", citation: { sourceType: "document", sourceId: "doc-14" } }
+        ],
+        jira: [{ key: "HBP-14", summary: "Card-first settlement", description: "" }],
+        existingTestcases: []
+      });
+      const doc242 = { type: "knowledge_document", id: "doc-242", title: "QAB-242: LIN-02: Add a New Employee" };
+      expect(index.get("QAB-242")).toEqual(doc242);
+      expect(index.get("QAB-242: LIN-02: Add a New Employee")).toEqual(doc242);
+      // The real Jira label keeps its meaning.
+      expect(index.get("HBP-14")).toEqual({ type: "jira_ticket", id: "HBP-14", title: "Card-first settlement" });
+      // "KB 1" and its alias are one source, cited once.
+      expect(statics().sanitizeZyraSourceRefs(["KB 1", "QAB-242", "qab-242 — Add a New Employee"], index)).toEqual([doc242]);
+    });
+
     it("labels Jira tickets by their own key and existing testcases by their own external id", () => {
       const index = internals(svc).zyraSourceRefIndex({
         knowledge: [],
