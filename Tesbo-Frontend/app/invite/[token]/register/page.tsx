@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 import { BrandLogo } from "@/components/BrandLogo";
 import { Button, Card, CardBody, CardHeader, CardTitle, Field, FieldError, FieldLabel, FieldHint, Input, PhoneInput } from "@/components/ui";
+import { DEFAULT_SIGNED_IN_PATH } from "@/lib/redirect";
 import {
   MOBILE_NUMBER_MAX_LENGTH,
   SIGNUP_NAME_MAX_LENGTH,
@@ -146,7 +147,7 @@ export default function RegisterFromInvitePage() {
     setSubmitting(true);
     try {
       await verifyInviteRegistration(token, code.trim());
-      router.push("/projects");
+      router.push(DEFAULT_SIGNED_IN_PATH);
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Invalid or expired code");
@@ -193,7 +194,7 @@ export default function RegisterFromInvitePage() {
     setSubmitting(true);
     try {
       await verifyInviteOtpRegistration(token, code.trim());
-      router.push("/projects");
+      router.push(DEFAULT_SIGNED_IN_PATH);
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Invalid or expired code");

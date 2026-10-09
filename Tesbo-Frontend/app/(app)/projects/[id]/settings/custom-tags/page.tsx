@@ -91,10 +91,12 @@ export default function CustomTagsSettingsPage() {
 
   // `.ct-fixed-page` pins this page to the viewport (see globals.css), so the app shell's own
   // scrollbar stays still and only the tag list scrolls, however many tags the project has.
+  // The card is sized to its content rather than stretched (no flex-1) — with a few tags it used to
+  // fill the screen with an empty bordered box; min-h-0 still lets it shrink when the list is long.
   return (
     <div className="ct-fixed-page flex h-full min-h-0 w-full flex-col">
       {header}
-      <Card className="flex min-h-0 flex-1 flex-col gap-4 p-4">
+      <Card className="flex min-h-0 flex-col gap-4 p-4">
         <p className="text-sm text-[var(--muted)]">
           Tags created here become selectable on this project&apos;s test cases, and can be used to group and filter
           Insights &rarr; Execution Report.

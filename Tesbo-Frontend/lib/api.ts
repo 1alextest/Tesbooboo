@@ -1865,6 +1865,10 @@ export async function createCustomTag(projectId: string, data: { name: string })
   return api<CustomTag>(`/api/projects/${projectId}/custom-tags`, { method: "POST", body: data });
 }
 
+export async function updateCustomTag(projectId: string, tagId: string, data: { name: string }): Promise<CustomTag> {
+  return api<CustomTag>(`/api/projects/${projectId}/custom-tags/${tagId}`, { method: "PATCH", body: data });
+}
+
 export async function deleteCustomTag(projectId: string, tagId: string): Promise<void> {
   await api(`/api/projects/${projectId}/custom-tags/${tagId}`, { method: "DELETE" });
 }

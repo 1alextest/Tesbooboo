@@ -55,6 +55,13 @@ function readAttempt(): Attempt | null {
 }
 
 /**
+ * Where a signed-in user lands when nothing asked for a specific page: the workspace Dashboard.
+ * Every sign-in path (password, OTP via onboarding, `/`, invite accept/register) falls back to this;
+ * a safe `?redirect=` deep link still wins over it.
+ */
+export const DEFAULT_SIGNED_IN_PATH = "/dashboard";
+
+/**
  * A path on this origin, or `null` for anything the router must not be handed.
  *
  * Rejects `/login` itself as well: a redirect back to the page doing the redirecting is never what
