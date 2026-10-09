@@ -564,7 +564,8 @@ test.describe("Notion integration: workspace Integrations tab (UI)", () => {
     const notion = page.getByTestId("integration-card-notion");
     await expect(notion.getByText("Connected", { exact: true })).toBeVisible();
     await expect(notion.getByRole("link", { name: "https://www.notion.so" })).toHaveAttribute("href", "https://www.notion.so");
-    await expect(notion.getByText("Used by 1 project: CHK")).toBeVisible();
+    // Labelled by the live project name, with the immutable key as a disambiguator.
+    await expect(notion.getByText("Used by 1 project: Checkout (CHK)")).toBeVisible();
     await expect(page.getByTestId("integration-manage-notion")).toHaveAttribute("href", "/settings/integrations/notion");
     await expect(page.getByTestId("integration-disconnect-notion")).toBeEnabled();
     // Connected replaces Configure; it does not sit beside it.
@@ -574,6 +575,27 @@ test.describe("Notion integration: workspace Integrations tab (UI)", () => {
     const jira = page.getByTestId("integration-card-jira");
     await expect(jira.getByText("Connected", { exact: true })).toHaveCount(0);
     await expect(page.getByTestId("integration-configure-jira")).toBeVisible();
+  });
+
+  test("INT-U-29 a renamed project shows its new name on the card after a reload, and a blank name falls back to the key", async ({ page, context }) => {
+    const notion = {
+      connected: true,
+      siteUrl: "https://www.notion.so",
+      connectedProjects: [
+        { projectId: "p1", projectName: "Checkout", projectKey: "CHK" },
+        { projectId: "p2", projectName: "   ", projectKey: "BLANK" },
+      ],
+    };
+    await mockTab(context, { notion });
+    await page.goto(TAB_URL);
+    const card = page.getByTestId("integration-card-notion");
+    await expect(card.getByText("Used by 2 projects: Checkout (CHK), BLANK")).toBeVisible();
+
+    // The rename lands server-side (the status route is the source of truth); the next load must show it.
+    notion.connectedProjects[0].projectName = "Checkout v2";
+    await page.reload();
+    await expect(card.getByText("Used by 2 projects: Checkout v2 (CHK), BLANK")).toBeVisible();
+    await expect(card.getByText("Checkout (CHK)")).toHaveCount(0);
   });
 
   test("INT-U-11 disconnecting Notion from the tab calls only Notion's route, then offers Configure again", async ({ page, context }) => {
