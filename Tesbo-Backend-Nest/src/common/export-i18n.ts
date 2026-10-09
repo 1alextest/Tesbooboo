@@ -170,8 +170,9 @@ const RU_REPORT_METRICS: Dictionary = {
   pct: "% покрытия"
 };
 
-/** Which vocabulary a cell's value belongs to. Priority (P0–P3) is deliberately absent: it reads the same in every language. */
+/** Which vocabulary a cell's value belongs to. Priority is here only for its one word value, "Not set": P0–P3 read the same in every language and pass through. */
 export type ExportValueField =
+  | "priority"
   | "testcaseStatus"
   | "type"
   | "severity"
@@ -183,6 +184,7 @@ export type ExportValueField =
   | "flakinessLabel";
 
 const RU_VALUES: Record<ExportValueField, Dictionary> = {
+  priority: { "Not set": "Не задан" },
   testcaseStatus: {
     Draft: "Черновик",
     "In Review": "На проверке",
@@ -198,12 +200,18 @@ const RU_VALUES: Record<ExportValueField, Dictionary> = {
     Integration: "Интеграционный",
     // API / UI are the same word in Russian QA usage, so they export unchanged.
     Performance: "Производительность",
-    Security: "Безопасность"
+    Security: "Безопасность",
+    Acceptance: "Приёмочный",
+    Usability: "Юзабилити",
+    Compatibility: "Совместимость",
+    Exploratory: "Исследовательский",
+    Other: "Другое"
   },
   severity: { Critical: "Критическая", High: "Высокая", Medium: "Средняя", Low: "Низкая" },
   automationStatus: {
     Automated: "Автоматизирован",
     "Not Automated": "Не автоматизирован",
+    "To Be Automated": "Будет автоматизирован",
     "Can't Automate": "Невозможно автоматизировать"
   },
   executionStatus: {

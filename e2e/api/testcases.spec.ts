@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
+import { env } from "../utils/env";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 
@@ -206,7 +207,8 @@ test.describe("test case CRUD", () => {
   test("defaults are applied when optional fields are omitted on create", { tag: '@tesbo.testId("TES-TC-552")' }, async ({ request }) => {
     const created = await createCase(request);
     try {
-      expect(created.priority).toBe("P2");
+      // A case nobody prioritised is "Not set", not a P2 nobody chose.
+      expect(created.priority).toBe("Not set");
       expect(created.type).toBe("Functional");
       expect(created.status).toBe("Draft");
       expect(created.automationStatus).toBe("Not Automated");
@@ -1768,6 +1770,188 @@ test.describe("sort", () => {
       expect((await bogus.json()).map((tc: { id: string }) => tc.id)).toEqual(newestFirst);
     } finally {
       for (const id of created) await deleteCase(request, id);
+    }
+  });
+});
+
+// "Not set" priority, the extra Type values and "To Be Automated" exist so a case migrated from a tool
+// whose vocabulary is wider than P0-P3 / Functional..Security / Automated..Can't Automate keeps its real
+// value instead of showing "Select" in the UI. They are stored verbatim: the columns are free text.
+test.describe("Not set priority, extra types and To Be Automated", () => {
+  const NEW_TYPES = ["Other", "Acceptance", "Usability", "Compatibility", "Exploratory"];
+
+  test("an explicit 'Not set' priority is stored, listed and filtered like any other priority", async ({ request }) => {
+    const marker = `E2E NotSet ${Date.now()}`;
+    const created: string[] = [];
+    try {
+      const notSet = await createCase(request, { title: `${marker} notset`, priority: "Not set" });
+      const p1 = await createCase(request, { title: `${marker} p1`, priority: "P1" });
+      created.push(notSet.id, p1.id);
+      expect(notSet.priority).toBe("Not set");
+
+      const got = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${notSet.id}`)).json();
+      expect(got.priority).toBe("Not set");
+
+      const filtered = await (
+        await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: marker, priority: "Not set" } })
+      ).json();
+      expect(filtered.map((tc: { id: string }) => tc.id)).toEqual([notSet.id]);
+
+      // Edit both ways: onto a real priority, and back to Not set.
+      const toP2 = await request.put(`/api/projects/${ctx.projectId}/testcases/${notSet.id}`, { data: { priority: "P2" } });
+      expect(toP2.ok()).toBeTruthy();
+      expect((await (await request.get(`/api/projects/${ctx.projectId}/testcases/${notSet.id}`)).json()).priority).toBe("P2");
+      const back = await request.put(`/api/projects/${ctx.projectId}/testcases/${notSet.id}`, { data: { priority: "Not set" } });
+      expect(back.ok()).toBeTruthy();
+      expect((await (await request.get(`/api/projects/${ctx.projectId}/testcases/${notSet.id}`)).json()).priority).toBe("Not set");
+
+      // Bulk update can set it too.
+      const bulk = await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-update`, {
+        data: { testcaseIds: [p1.id], priority: "Not set" },
+      });
+      expect(bulk.ok(), await bulk.text()).toBeTruthy();
+      expect((await (await request.get(`/api/projects/${ctx.projectId}/testcases/${p1.id}`)).json()).priority).toBe("Not set");
+    } finally {
+      for (const id of created) await deleteCase(request, id);
+    }
+  });
+
+  test("'Not set' fits the 8-character priority limit and a 9-character value is still refused", async ({ request }) => {
+    const ok = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+      data: { title: `E2E NotSet Limit ${Date.now()}`, priority: "Not set" },
+      failOnStatusCode: false,
+    });
+    expect(ok.status(), await ok.text()).toBe(201);
+    await deleteCase(request, (await ok.json()).id);
+
+    const tooLong = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+      data: { title: `E2E NotSet TooLong ${Date.now()}`, priority: "Not set!!" },
+      failOnStatusCode: false,
+    });
+    expect(tooLong.status(), "a 9-character priority is refused").toBe(400);
+  });
+
+  test("sortBy=priority puts Not set and blank last in BOTH directions", async ({ request }) => {
+    const marker = `E2E Sort NotSet ${Date.now()}`;
+    const created: string[] = [];
+    try {
+      const notSet = (await createCase(request, { title: `${marker} notset` })).id; // default is Not set
+      const blank = (await createCase(request, { title: `${marker} blank`, priority: "" })).id;
+      const p3 = (await createCase(request, { title: `${marker} p3`, priority: "P3" })).id;
+      const p0 = (await createCase(request, { title: `${marker} p0`, priority: "P0" })).id;
+      created.push(notSet, blank, p3, p0);
+
+      for (const sortDir of ["asc", "desc"] as const) {
+        const res = await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: marker, sortBy: "priority", sortDir } });
+        expect(res.ok(), await res.text()).toBeTruthy();
+        const ids: string[] = (await res.json()).map((tc: { id: string }) => tc.id);
+        const ranked = sortDir === "asc" ? [p0, p3] : [p3, p0];
+        expect(ids.slice(0, 2), `${sortDir}: the real priorities come first`).toEqual(ranked);
+        expect(new Set(ids.slice(2)), `${sortDir}: Not set and blank are the last two`).toEqual(new Set([notSet, blank]));
+      }
+    } finally {
+      for (const id of created) await deleteCase(request, id);
+    }
+  });
+
+  test("an explicit blank priority is still saved blank, and omitted is Not set (the two are different on purpose)", async ({ request }) => {
+    const omitted = await createCase(request);
+    const blank = await createCase(request, { priority: "" });
+    try {
+      expect(omitted.priority).toBe("Not set");
+      expect(blank.priority).toBe("");
+    } finally {
+      await deleteCase(request, omitted.id);
+      await deleteCase(request, blank.id);
+    }
+  });
+
+  test("REST bulk-create applies the Not set default per row and keeps an explicit value", async ({ request }) => {
+    const marker = `E2E BulkNotSet ${Date.now()}`;
+    const res = await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-create`, {
+      data: { testcases: [{ title: `${marker} a` }, { title: `${marker} b`, priority: "P0" }] },
+    });
+    expect(res.ok(), await res.text()).toBeTruthy();
+    const list = await (await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: marker } })).json();
+    try {
+      const byTitle = new Map<string, { priority: string }>(list.map((tc: { title: string; priority: string }) => [tc.title, tc]));
+      expect(byTitle.get(`${marker} a`)?.priority).toBe("Not set");
+      expect(byTitle.get(`${marker} b`)?.priority).toBe("P0");
+    } finally {
+      for (const tc of list) await deleteCase(request, tc.id);
+    }
+  });
+
+  test("every added Type value is stored verbatim and found by a case-insensitive type filter", async ({ request }) => {
+    const marker = `E2E Types ${Date.now()}`;
+    const created: string[] = [];
+    try {
+      for (const type of NEW_TYPES) {
+        const tc = await createCase(request, { title: `${marker} ${type}`, type });
+        created.push(tc.id);
+        expect(tc.type).toBe(type);
+        const hit = await (
+          await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: marker, type: type.toUpperCase() } })
+        ).json();
+        expect(hit.map((x: { id: string }) => x.id), `type filter ${type}`).toEqual([tc.id]);
+      }
+    } finally {
+      for (const id of created) await deleteCase(request, id);
+    }
+  });
+
+  test("'To Be Automated' is stored and filterable as an Automation Type", async ({ request }) => {
+    const marker = `E2E TBA ${Date.now()}`;
+    const tba = await createCase(request, { title: `${marker} tba`, automationStatus: "To Be Automated" });
+    const manual = await createCase(request, { title: `${marker} manual` });
+    try {
+      expect(tba.automationStatus).toBe("To Be Automated");
+      const hit = await (
+        await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: marker, automationStatus: "To Be Automated" } })
+      ).json();
+      expect(hit.map((x: { id: string }) => x.id)).toEqual([tba.id]);
+    } finally {
+      await deleteCase(request, tba.id);
+      await deleteCase(request, manual.id);
+    }
+  });
+
+  test("import: a blank priority becomes Not set, 'Not set' and the Russian 'Не задан' are stored as Not set, a Russian type and automation round-trip", async ({ request }) => {
+    const marker = `E2E ImportNotSet ${Date.now()}`;
+    const res = await request.post(`/api/projects/${ctx.projectId}/testcases/import`, {
+      data: {
+        rows: [
+          { rowNumber: 1, title: `${marker} blank`, priority: "" },
+          { rowNumber: 2, title: `${marker} english`, priority: "Not set" },
+          { rowNumber: 3, title: `${marker} russian`, priority: "Не задан", type: "Другое", automationStatus: "Будет автоматизирован" },
+        ],
+      },
+    });
+    expect(res.ok(), await res.text()).toBeTruthy();
+    expect((await res.json()).errors).toEqual([]);
+    const list = await (await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: marker } })).json();
+    try {
+      const byTitle = new Map<string, { priority: string; type: string; automationStatus: string }>(
+        list.map((tc: { title: string }) => [tc.title, tc]),
+      );
+      expect(byTitle.get(`${marker} blank`)?.priority).toBe("Not set");
+      expect(byTitle.get(`${marker} english`)?.priority).toBe("Not set");
+      const ru = byTitle.get(`${marker} russian`);
+      expect(ru?.priority).toBe("Not set");
+      expect(ru?.type).toBe("Other");
+      expect(ru?.automationStatus).toBe("To Be Automated");
+    } finally {
+      for (const tc of list) await deleteCase(request, tc.id);
+    }
+  });
+
+  test("creating a test case without a token is refused", async ({ playwright }) => {
+    const anon = await playwright.request.newContext({ baseURL: env.apiBaseUrl });
+    try {
+      const res = await anon.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: "E2E anon", priority: "Not set" }, failOnStatusCode: false });
+      expect([401, 403]).toContain(res.status());
+    } finally {
+      await anon.dispose();
     }
   });
 });

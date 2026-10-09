@@ -4300,3 +4300,68 @@ test.describe("MCP get_test_execution_summary", () => {
     }
   });
 });
+
+test.describe("MCP suite description and preconditions", () => {
+  test("create_suite, get_suite, list_suites, update_suite and clone_test_suite carry the text", async ({ request }) => {
+    const stamp = Date.now();
+    let tokenId: string | undefined;
+    const suiteIds: string[] = [];
+    const mcpApi = await newRequestContext.newContext({
+      baseURL: env.apiBaseUrl,
+      storageState: { cookies: [], origins: [] },
+    });
+    try {
+      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+        data: { name: `E2E MCP suite text token ${stamp}`, scopes: ["read", "write"] },
+      });
+      expect(tokenRes.ok()).toBeTruthy();
+      const tokenBody = await tokenRes.json();
+      tokenId = tokenBody.id;
+      const token = tokenBody.token as string;
+
+      const created = await callMcpTool(mcpApi, token, "create_suite", {
+        name: `E2E MCP Suite Text ${stamp}`,
+        description: "Created by an agent",
+        preconditions: "Seed data loaded",
+      });
+      suiteIds.push(created.id);
+      expect(created.description).toBe("Created by an agent");
+      expect(created.preconditions).toBe("Seed data loaded");
+
+      const got = await callMcpTool(mcpApi, token, "get_suite", { suiteId: created.id });
+      expect([got.description, got.preconditions]).toEqual(["Created by an agent", "Seed data loaded"]);
+      const listed = (await callMcpTool(mcpApi, token, "list_suites", {})).suites.find((s: { id: string }) => s.id === created.id);
+      expect(listed.description).toBe("Created by an agent");
+
+      // A rename that omits the text keeps it; an empty string clears just that field.
+      const renamed = await callMcpTool(mcpApi, token, "update_suite", { suiteId: created.id, name: `E2E MCP Suite Text ${stamp} renamed` });
+      expect([renamed.description, renamed.preconditions]).toEqual(["Created by an agent", "Seed data loaded"]);
+      const cleared = await callMcpTool(mcpApi, token, "update_suite", { suiteId: created.id, preconditions: "" });
+      expect([cleared.description, cleared.preconditions]).toEqual(["Created by an agent", ""]);
+      const edited = await callMcpTool(mcpApi, token, "update_suite", { suiteId: created.id, description: "Edited", preconditions: "Back again" });
+      expect([edited.description, edited.preconditions]).toEqual(["Edited", "Back again"]);
+
+      // A child suite and a deep clone: the clone and its sub-suite keep their own text.
+      const child = await callMcpTool(mcpApi, token, "create_suite", {
+        name: `E2E MCP Suite Child ${stamp}`,
+        parentId: created.id,
+        description: "Child text",
+      });
+      suiteIds.push(child.id);
+      const cloned = await callMcpTool(mcpApi, token, "clone_test_suite", { suiteId: created.id, name: `E2E MCP Suite Clone ${stamp}` });
+      for (const s of cloned.suites) suiteIds.push(s.id);
+      const byName = new Map<string, { description: string; preconditions: string }>(cloned.suites.map((s: { name: string }) => [s.name, s]));
+      expect(byName.get(`E2E MCP Suite Clone ${stamp}`)).toMatchObject({ description: "Edited", preconditions: "Back again" });
+      expect(byName.get(`E2E MCP Suite Child ${stamp}`)).toMatchObject({ description: "Child text", preconditions: "" });
+
+      // Over the limit is refused as a tool error, and nothing is written.
+      const tooLong = await callMcpToolExpectError(mcpApi, token, "update_suite", { suiteId: created.id, description: "x".repeat(20001) });
+      expect(tooLong.message).toMatch(/too long|limit/i);
+      expect((await callMcpTool(mcpApi, token, "get_suite", { suiteId: created.id })).description).toBe("Edited");
+    } finally {
+      for (const id of suiteIds.reverse()) await request.delete(`/api/suites/${id}`, { failOnStatusCode: false });
+      if (tokenId) await request.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
+      await mcpApi.dispose();
+    }
+  });
+});

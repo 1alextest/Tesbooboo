@@ -115,6 +115,10 @@ export const BUG_SEVERITIES = ["Critical", "High", "Medium", "Low"] as const;
  * "someone decided it is P2".
  */
 const BUG_PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
+// A test case whose priority nobody has chosen. A stored value like P0–P3 (VARCHAR(8), so "Not set" fits),
+// the default for new cases, and what a tool that has no priority (Qase "Not set") migrates to.
+// Deliberately NOT a bug priority: BUG_PRIORITIES stays P0–P3.
+const TESTCASE_PRIORITY_NOT_SET = "Not set";
 
 /** Sentinel `suiteId` query value meaning "test cases with no suite assigned" (suite_id IS NULL). */
 export const UNASSIGNED_SUITE_ID = "none";
@@ -765,6 +769,7 @@ function validateWorkspaceName(name: string, field: "orgName" | "name"): string 
  * projects and workspaces first; this is that pattern finished off.
  */
 const SUITE_NAME_MAX_LENGTH = 255;           // suites.name
+const SUITE_TEXT_MAX_LENGTH = 20000;         // suites.description / suites.preconditions (TEXT, capped so one request cannot store megabytes)
 const CYCLE_NAME_MAX_LENGTH = 255;           // cycles.name
 const CYCLE_LABEL_MAX_LENGTH = 128;          // cycles.environment / build_version / release_name
 const PLAN_NAME_MAX_LENGTH = 255;            // plans.name
@@ -3762,7 +3767,7 @@ export class LegacyService implements OnModuleInit {
          LEFT JOIN testcases t ON t.suite_id = d.node_id AND t.deleted_at IS NULL
          GROUP BY d.root_id
        )
-       SELECT s.id, s.parent_id, s.name, s.position, s.created_at,
+       SELECT s.id, s.parent_id, s.name, s.description, s.preconditions, s.position, s.created_at,
               COUNT(t.id)::int AS test_case_count,
               COALESCE(
                 (SELECT rc.recursive_test_case_count FROM recursive_counts rc WHERE rc.root_id = s.id),
@@ -3804,15 +3809,33 @@ export class LegacyService implements OnModuleInit {
     if (!res.rows[0]) throw new BadRequestException({ error: "parentId does not reference a suite in this project" });
   }
 
+  /**
+   * A suite's free-text fields (description, preconditions). `undefined` means "the caller did not send it"
+   * and comes back as null, which updateSuite COALESCEs away so the stored text is kept; a string is trimmed
+   * and stored ("" clears it); `null` is an explicit clear. Anything else is a client bug, not text.
+   */
+  private normalizeSuiteText(value: unknown, label: string): string | null {
+    if (value === undefined) return null;
+    if (value === null) return "";
+    if (typeof value !== "string") throw new BadRequestException({ error: `${label} must be a string` });
+    const text = value.trim();
+    if (text.length > SUITE_TEXT_MAX_LENGTH) {
+      throw new BadRequestException({ error: `${label} is too long (${text.length} characters, the limit is ${SUITE_TEXT_MAX_LENGTH})` });
+    }
+    return text;
+  }
+
   async createSuite(projectId: string, body: Body) {
     const name = String(body.name || "").trim();
     if (!name) throw new BadRequestException({ error: "name is required" });
     validateBoundedField(name, "Suite name", SUITE_NAME_MAX_LENGTH);
+    const description = this.normalizeSuiteText(body.description, "Suite description") ?? "";
+    const preconditions = this.normalizeSuiteText(body.preconditions, "Suite preconditions") ?? "";
     const parentId = body.parentId || null;
     if (parentId) await this.requireLiveSuiteInProject(projectId, parentId);
     const res = await this.db.query(
-      "INSERT INTO suites (project_id, parent_id, name, position) VALUES ($1, $2, $3, $4) RETURNING id, parent_id, name, position, created_at",
-      [projectId, parentId, name, Number(body.position || 0)]
+      "INSERT INTO suites (project_id, parent_id, name, description, preconditions, position) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, parent_id, name, description, preconditions, position, created_at",
+      [projectId, parentId, name, description, preconditions, Number(body.position || 0)]
     );
     await this.suitesCache.invalidate(projectId);
     await this.testcasesListCache.invalidate(projectId);
@@ -3822,11 +3845,13 @@ export class LegacyService implements OnModuleInit {
   async updateSuite(userId: string | null | undefined, suiteId: string, body: Body) {
     const projectId = await this.requireSuiteAccess(userId, suiteId);
     validateBoundedField(body.name, "Suite name", SUITE_NAME_MAX_LENGTH);
+    const description = this.normalizeSuiteText(body.description, "Suite description");
+    const preconditions = this.normalizeSuiteText(body.preconditions, "Suite preconditions");
     const parentId = body.parentId ?? null;
     if (parentId) await this.requireLiveSuiteInProject(projectId, parentId);
     await this.db.query(
-      "UPDATE suites SET name = COALESCE($2, name), parent_id = $3, position = COALESCE($4, position), updated_at = now() WHERE id = $1",
-      [suiteId, body.name ?? null, parentId, body.position ?? null]
+      "UPDATE suites SET name = COALESCE($2, name), parent_id = $3, position = COALESCE($4, position), description = COALESCE($5, description), preconditions = COALESCE($6, preconditions), updated_at = now() WHERE id = $1",
+      [suiteId, body.name ?? null, parentId, body.position ?? null, description, preconditions]
     );
     await this.suitesCache.invalidate(projectId);
     await this.testcasesListCache.invalidate(projectId);
@@ -4181,7 +4206,7 @@ export class LegacyService implements OnModuleInit {
    *   - "priority": ranked P0 (Critical) -> P3 (Low) the same way the priority filter dropdown and
    *     the frontend's comparePriority() already do, not alphabetically (which would put P10-style
    *     values ahead of P2). A legacy/imported value outside P0-P3 sorts after the canonical set;
-   *     a missing priority sorts last of all regardless of direction.
+   *     a missing priority (blank or "Not set") sorts last of all regardless of direction.
    *   - "title": case-insensitive, matching compareTestCaseTitle() on the frontend.
    * `testcases.id` is always the final tiebreaker so paging (and re-exporting the same data) stays
    * stable across identical sort keys.
@@ -4206,8 +4231,10 @@ export class LegacyService implements OnModuleInit {
     }
     if (query.sortBy === "priority") {
       return (
-        `(CASE WHEN testcases.priority IS NULL OR testcases.priority = '' THEN 5 ` +
-        `WHEN testcases.priority IN ('P0','P1','P2','P3') THEN ` +
+        // A case with no priority (blank, or the explicit "Not set") sorts after every other case in BOTH
+        // directions: it is outside the ranking being reversed, not the lowest rank in it.
+        `(CASE WHEN testcases.priority IS NULL OR testcases.priority IN ('', '${TESTCASE_PRIORITY_NOT_SET}') THEN 1 ELSE 0 END) ASC, ` +
+        `(CASE WHEN testcases.priority IN ('P0','P1','P2','P3') THEN ` +
         `(CASE testcases.priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 END) ` +
         `ELSE 4 END) ${sortDir}, testcases.priority ${sortDir}, testcases.id ${sortDir}`
       );
@@ -4413,6 +4440,13 @@ export class LegacyService implements OnModuleInit {
 
   async updateTestCaseForUser(userId: string | null | undefined, projectId: string, testcaseId: string, body: Body) {
     await this.requireTestCaseAccess(userId, projectId, testcaseId);
+    // A case id is the handle runs, CI results and exports quote, so changing one is a project-admin
+    // action, not part of ordinary authoring (same owner-or-manager line as the project settings).
+    if (body.externalId !== undefined) {
+      const project = await this.requireProjectAccess(userId, projectId);
+      if (this.normalizeRole(project.caller_role) === "qa_engineer")
+        throw new ForbiddenException({ error: "QA Engineers cannot change a test case ID" });
+    }
     return this.updateTestCase(testcaseId, userId, body);
   }
 
@@ -4608,7 +4642,7 @@ export class LegacyService implements OnModuleInit {
         // priority is NOT NULL (V2_test_cases_and_suites.sql), so "explicitly blank" is "" here,
         // not null; type/automation_status are nullable and use null the same way severity/
         // component already do below.
-        body.priority !== undefined ? body.priority || "" : "P2",
+        body.priority !== undefined ? body.priority || "" : TESTCASE_PRIORITY_NOT_SET,
         body.severity || null,
         body.type !== undefined ? body.type || null : "Functional",
         body.automationStatus !== undefined ? body.automationStatus || null : "Not Automated",
@@ -4717,7 +4751,7 @@ export class LegacyService implements OnModuleInit {
         postconditions: row.postconditions || "",
         steps: row.steps || row.stepsJson || [],
         test_data: row.testData || "",
-        priority: row.priority || "P2",
+        priority: row.priority || TESTCASE_PRIORITY_NOT_SET,
         severity: row.severity || null,
         type: row.type || "Functional",
         automation_status: row.automationStatus || "Not Automated",
@@ -4979,7 +5013,7 @@ export class LegacyService implements OnModuleInit {
     const title = String(raw?.title ?? "").trim();
     if (!title) return { rowNumber, error: "Title is required" };
 
-    const priority = String(raw?.priority ?? "").trim() || "P2";
+    const priority = canonicalizeImportValue("priority", String(raw?.priority ?? "").trim()) || TESTCASE_PRIORITY_NOT_SET;
     // A Russian export or template carries translated labels ("Черновик", "Высокая"). These columns
     // are stored unvalidated, so without mapping them back a re-import would create "Черновик" as a
     // status every count and filter (which match 'Draft') silently misses. Anything that isn't a
@@ -5440,6 +5474,32 @@ export class LegacyService implements OnModuleInit {
     return row;
   }
 
+  /**
+   * Renames a case's `<KEY>-TC-<n>` id. `undefined` = not sent, leave it.
+   *
+   * Takes the same advisory lock as id allocation, so a create cannot hand out the id being claimed.
+   * The unique index is case-sensitive but CI ingest resolves cases by lower(external_id), so the
+   * check is case-insensitive and also sees soft-deleted rows (they still hold their id). Any
+   * non-blank, whitespace-free value is accepted (length is bounded by assertTestcaseFieldLengths),
+   * which is what lets a bulk renumber park cases on a scratch id first, since the index is not
+   * deferrable. Run snapshots carry a copy of the id, so they follow it.
+   */
+  private async changeTestCaseExternalId(client: PoolClient, projectId: string, id: string, current: string, raw: unknown): Promise<void> {
+    if (raw === undefined) return;
+    const next = typeof raw === "string" ? raw.trim() : "";
+    if (!next || /\s/.test(next)) throw new BadRequestException({ error: "Test case ID must be a non-empty value without spaces" });
+    if (next === current) return;
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`testcase-external-id:${projectId}`]);
+    const taken = await client.query("SELECT 1 FROM testcases WHERE project_id = $1 AND lower(external_id) = lower($2) AND id <> $3 LIMIT 1", [
+      projectId,
+      next,
+      id
+    ]);
+    if (taken.rows[0]) throw new ConflictException({ error: `Test case ID ${next} is already used in this project` });
+    await client.query("UPDATE testcases SET external_id = $2 WHERE id = $1", [id, next]);
+    await client.query("UPDATE cycle_items SET snapshot_external_id = $2 WHERE testcase_id = $1", [id, next]);
+  }
+
   async updateTestCase(id: string, actorId: string | null | undefined, body: Body) {
     const uid = this.requireUser(actorId);
     // Same guard as create: an over-long value here hit the bounded column and answered 500.
@@ -5447,7 +5507,10 @@ export class LegacyService implements OnModuleInit {
     const before = await this.db.query("SELECT * FROM testcases WHERE id = $1 AND deleted_at IS NULL", [id]);
     if (!before.rows[0]) throw new NotFoundException({ error: "Test case not found" });
     const projectId = before.rows[0].project_id;
-    const after = await this.db.transaction(async (client) => this.updateTestCaseWithClient(client, projectId, id, uid, body));
+    const after = await this.db.transaction(async (client) => {
+      await this.changeTestCaseExternalId(client, projectId, id, before.rows[0].external_id, body.externalId);
+      return this.updateTestCaseWithClient(client, projectId, id, uid, body);
+    });
     await this.logProjectActivity(projectId, uid, "testcase_updated", "testcase", id, `${after?.external_id} - ${after?.title}`, {
       before: toCamel(before.rows[0]),
       after: toCamel(after)
@@ -11457,7 +11520,7 @@ export class LegacyService implements OnModuleInit {
               COUNT(DISTINCT om.user_id)::int AS member_count,
               COUNT(DISTINCT p.id)::int AS project_count,
               COUNT(DISTINCT t.id)::int AS test_case_count,
-              COUNT(DISTINCT t.id) FILTER (WHERE t.automation_status <> 'Not Automated')::int AS automated_count,
+              COUNT(DISTINCT t.id) FILTER (WHERE t.automation_status NOT IN ('Not Automated', 'To Be Automated'))::int AS automated_count,
               MAX(GREATEST(o.updated_at, p.updated_at, t.updated_at)) AS last_activity_at
        FROM organizations o
        LEFT JOIN organization_members om ON om.organization_id = o.id
@@ -15420,7 +15483,7 @@ export class LegacyService implements OnModuleInit {
           preconditions: op.draft.preconditions || "",
           stepsJson: this.safeSteps(op.draft.stepsJson || op.draft.steps),
           testData: op.draft.testData || "",
-          priority: op.draft.priority || "P2",
+          priority: op.draft.priority || TESTCASE_PRIORITY_NOT_SET,
           severity: op.draft.severity || null,
           type: op.draft.type || "Functional",
           status: op.draft.status || "Draft",
@@ -16194,7 +16257,7 @@ export class LegacyService implements OnModuleInit {
               preconditions: draft.preconditions || "",
               stepsJson: draft.stepsJson || draft.steps || "[]",
               testData: draft.testData || "",
-              priority: draft.priority || "P2",
+              priority: draft.priority || TESTCASE_PRIORITY_NOT_SET,
               severity: severityAlreadySet ? undefined : (draft.severity || null),
               type: draft.type || "Functional",
               component: componentAlreadySet ? undefined : (draft.component || null)
@@ -18102,7 +18165,7 @@ export class LegacyService implements OnModuleInit {
         // "[Zyra] Test Steps... Missing After Saving Generated Test Cases".
         stepsJson: JSON.stringify(this.safeSteps(draft.stepsJson)),
         testData: draft.testData || "",
-        priority: draft.priority || "P2",
+        priority: draft.priority || TESTCASE_PRIORITY_NOT_SET,
         // Filled from the draft only when there's nothing to protect: a brand-new row (no
         // existingLinkedRow) always takes the draft's value; regenerating an already-linked row
         // (existingLinkedRow set) keeps its current severity/component untouched if either is
@@ -18225,7 +18288,7 @@ export class LegacyService implements OnModuleInit {
         // "[Zyra] Test Steps... Missing After Saving Generated Test Cases".
         stepsJson: JSON.stringify(this.safeSteps(draft.stepsJson)),
         testData: draft.testData || "",
-        priority: draft.priority || "P2",
+        priority: draft.priority || TESTCASE_PRIORITY_NOT_SET,
         // Same "only fill if blank" rule as processZyraSaveEntriesSequential's identical payload —
         // see that function's comment.
         severity: existingLinkedRow?.severity ? null : (draft.severity || null),
@@ -18330,7 +18393,7 @@ export class LegacyService implements OnModuleInit {
       postconditions: "",
       steps: payload.stepsJson || [],
       test_data: payload.testData || "",
-      priority: payload.priority || "P2",
+      priority: payload.priority || TESTCASE_PRIORITY_NOT_SET,
       // payload.severity/component (processZyraSaveEntriesBatched) already resolved the "only fill
       // if blank against an existing linked row" rule before this ever runs — this insert path is
       // reached only for genuinely-new rows, so there's nothing to protect and the payload value
@@ -18816,7 +18879,7 @@ export class LegacyService implements OnModuleInit {
       externalId: row.external_id || "",
       title: String(row.title || "Untitled testcase").slice(0, 240),
       description: String(row.description || "").slice(0, isNamed ? 4000 : 500),
-      priority: String(row.priority || "P2"),
+      priority: String(row.priority || TESTCASE_PRIORITY_NOT_SET),
       status: String(row.status || "Draft"),
       // safeSteps(), not normalizeJsonArray() — same reasoning as exportTestcases: `row.steps` may
       // be a JSON-encoded string, not a genuine array.
@@ -22595,7 +22658,7 @@ export class LegacyService implements OnModuleInit {
       id: value.id || null,
       externalId: value.externalId || value.external_id || "",
       title: value.title || "Untitled testcase",
-      priority: value.priority || "P2",
+      priority: value.priority || TESTCASE_PRIORITY_NOT_SET,
       status: value.status || "Draft",
       type: value.type || "Functional",
       preconditions: value.preconditions || "",

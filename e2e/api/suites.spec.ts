@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, test, type APIRequestContext } from "@playwright/test";
+import { env } from "../utils/env";
 import { literal, scalar } from "../utils/psql";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
@@ -554,6 +555,149 @@ test.describe("recursive descendant rollup (parent suites show their sub-suites'
       for (const s of [child, parent]) {
         await request.delete(`/api/suites/${s.id}`, { failOnStatusCode: false });
       }
+    }
+  });
+});
+
+// A suite carries the same two free-text fields a test case does: a description ("what this folder
+// covers") and preconditions ("what must be true before running its cases"). "" means none.
+test.describe("suite description and preconditions", () => {
+  async function suiteRow(request: APIRequestContext, id: string) {
+    const list = await (await request.get(`/api/projects/${ctx.projectId}/suites`)).json();
+    return list.find((s: { id: string }) => s.id === id);
+  }
+  async function createSuite(request: APIRequestContext, data: Record<string, unknown>) {
+    const res = await request.post(`/api/projects/${ctx.projectId}/suites`, { data, failOnStatusCode: false });
+    return { res, body: res.ok() ? await res.json() : null };
+  }
+
+  test("create stores both texts trimmed, the list returns them, and omitted fields are empty strings", async ({ request }) => {
+    const stamp = Date.now();
+    const created: string[] = [];
+    try {
+      const withText = await createSuite(request, {
+        name: `E2E Suite Text ${stamp}`,
+        description: "  Covers login.\nSecond line  ",
+        preconditions: "\tAgency access required ",
+      });
+      expect(withText.res.status(), await withText.res.text()).toBe(201);
+      created.push(withText.body.id);
+      expect(withText.body.description).toBe("Covers login.\nSecond line");
+      expect(withText.body.preconditions).toBe("Agency access required");
+
+      const plain = await createSuite(request, { name: `E2E Suite No Text ${stamp}` });
+      created.push(plain.body.id);
+      expect(plain.body.description).toBe("");
+      expect(plain.body.preconditions).toBe("");
+
+      const listed = await suiteRow(request, withText.body.id);
+      expect(listed.description).toBe("Covers login.\nSecond line");
+      expect(listed.preconditions).toBe("Agency access required");
+      expect((await suiteRow(request, plain.body.id)).description).toBe("");
+    } finally {
+      for (const id of created) await request.delete(`/api/suites/${id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("an update keeps the text when the fields are omitted, replaces it when sent, and clears it with an empty or blank string", async ({ request }) => {
+    const { body } = await createSuite(request, { name: `E2E Suite Edit ${Date.now()}`, description: "First", preconditions: "Pre one" });
+    try {
+      // Rename only: both texts stay.
+      await request.patch(`/api/suites/${body.id}`, { data: { name: `${body.name} renamed` } });
+      let row = await suiteRow(request, body.id);
+      expect([row.description, row.preconditions]).toEqual(["First", "Pre one"]);
+
+      // Only description sent: preconditions untouched.
+      await request.patch(`/api/suites/${body.id}`, { data: { description: "Second" } });
+      row = await suiteRow(request, body.id);
+      expect([row.description, row.preconditions]).toEqual(["Second", "Pre one"]);
+
+      // Empty string clears; whitespace-only clears too.
+      await request.patch(`/api/suites/${body.id}`, { data: { preconditions: "" } });
+      await request.patch(`/api/suites/${body.id}`, { data: { description: "   \n " } });
+      row = await suiteRow(request, body.id);
+      expect([row.description, row.preconditions]).toEqual(["", ""]);
+
+      // An explicit null clears as well.
+      await request.patch(`/api/suites/${body.id}`, { data: { description: "Again" } });
+      await request.patch(`/api/suites/${body.id}`, { data: { description: null } });
+      expect((await suiteRow(request, body.id)).description).toBe("");
+    } finally {
+      await request.delete(`/api/suites/${body.id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("multi-line, unicode and markdown text round-trips unchanged", async ({ request }) => {
+    const text = "Агентство ✓ `code` **bold**\n- item one\n- item two\n\nLast line: https://example.com/a?b=1&c=2";
+    const { body } = await createSuite(request, { name: `E2E Suite Unicode ${Date.now()}`, description: text, preconditions: text });
+    try {
+      const row = await suiteRow(request, body.id);
+      expect(row.description).toBe(text);
+      expect(row.preconditions).toBe(text);
+    } finally {
+      await request.delete(`/api/suites/${body.id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("20000 characters are accepted, 20001 are refused on create and on update, and a non-string is refused", async ({ request }) => {
+    const stamp = Date.now();
+    const atLimit = "x".repeat(20000);
+    const over = "x".repeat(20001);
+    const ok = await createSuite(request, { name: `E2E Suite Limit ${stamp}`, description: atLimit, preconditions: atLimit });
+    expect(ok.res.status(), "exactly 20000 characters is accepted").toBe(201);
+    try {
+      expect((await suiteRow(request, ok.body.id)).description).toHaveLength(20000);
+
+      for (const field of ["description", "preconditions"] as const) {
+        const tooLong = await createSuite(request, { name: `E2E Suite TooLong ${field} ${stamp}`, [field]: over });
+        expect(tooLong.res.status(), `${field} over the limit is refused on create`).toBe(400);
+        const patched = await request.patch(`/api/suites/${ok.body.id}`, { data: { [field]: over }, failOnStatusCode: false });
+        expect(patched.status(), `${field} over the limit is refused on update`).toBe(400);
+        const notText = await request.patch(`/api/suites/${ok.body.id}`, { data: { [field]: 42 }, failOnStatusCode: false });
+        expect(notText.status(), `a number for ${field} is refused`).toBe(400);
+        const asArray = await request.patch(`/api/suites/${ok.body.id}`, { data: { [field]: ["a"] }, failOnStatusCode: false });
+        expect(asArray.status(), `an array for ${field} is refused`).toBe(400);
+      }
+      // The refused writes left the stored text alone.
+      expect((await suiteRow(request, ok.body.id)).description).toHaveLength(20000);
+    } finally {
+      await request.delete(`/api/suites/${ok.body.id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("editing the text with the current parent sent keeps a child suite where it is", async ({ request }) => {
+    const stamp = Date.now();
+    const parent = (await createSuite(request, { name: `E2E Suite Parent ${stamp}` })).body;
+    const child = (await createSuite(request, { name: `E2E Suite Child ${stamp}`, parentId: parent.id })).body;
+    try {
+      const res = await request.patch(`/api/suites/${child.id}`, { data: { description: "Child text", parentId: parent.id } });
+      expect(res.ok(), await res.text()).toBeTruthy();
+      const row = await suiteRow(request, child.id);
+      expect(row.parentId).toBe(parent.id);
+      expect(row.description).toBe("Child text");
+    } finally {
+      await request.delete(`/api/suites/${parent.id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("a deleted suite is no longer listed, text and all", async ({ request }) => {
+    const { body } = await createSuite(request, { name: `E2E Suite Gone ${Date.now()}`, description: "Soon deleted" });
+    await request.delete(`/api/suites/${body.id}`);
+    expect(await suiteRow(request, body.id)).toBeUndefined();
+  });
+
+  test("an unauthenticated caller cannot create or edit a suite's text", async ({ playwright, request }) => {
+    const { body } = await createSuite(request, { name: `E2E Suite Anon ${Date.now()}`, description: "Private" });
+    const anon = await playwright.request.newContext({ baseURL: env.apiBaseUrl });
+    try {
+      const create = await anon.post(`/api/projects/${ctx.projectId}/suites`, { data: { name: "E2E anon suite", description: "x" }, failOnStatusCode: false });
+      expect([401, 403]).toContain(create.status());
+      const patch = await anon.patch(`/api/suites/${body.id}`, { data: { description: "hacked" }, failOnStatusCode: false });
+      expect([401, 403]).toContain(patch.status());
+      expect((await suiteRow(request, body.id)).description).toBe("Private");
+    } finally {
+      await anon.dispose();
+      await request.delete(`/api/suites/${body.id}`, { failOnStatusCode: false });
     }
   });
 });

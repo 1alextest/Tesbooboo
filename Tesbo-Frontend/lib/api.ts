@@ -1506,6 +1506,10 @@ export interface SuiteNode {
   id: string;
   parentId: string | null;
   name: string;
+  /** Free text shown on the suite; "" when none. */
+  description: string;
+  /** What must be true before running the suite's cases; "" when none. */
+  preconditions: string;
   position: number;
   createdAt: string;
   /** Direct children of this suite only. For the tree badge / rollup math, use recursiveTestCaseCount instead. */
@@ -1518,11 +1522,18 @@ export async function listSuites(projectId: string): Promise<SuiteNode[]> {
   return api<SuiteNode[]>(`/api/projects/${projectId}/suites`);
 }
 
-export async function createSuite(projectId: string, data: { name: string; parentId?: string; position?: number }): Promise<SuiteNode> {
+export async function createSuite(
+  projectId: string,
+  data: { name: string; description?: string; preconditions?: string; parentId?: string; position?: number },
+): Promise<SuiteNode> {
   return api<SuiteNode>(`/api/projects/${projectId}/suites`, { method: "POST", body: data });
 }
 
-export async function updateSuite(suiteId: string, data: { name?: string; parentId?: string; position?: number }): Promise<void> {
+/** parentId: the backend writes it verbatim (no COALESCE), so always send the current parent (or null for root) with any edit that should not move the suite. */
+export async function updateSuite(
+  suiteId: string,
+  data: { name?: string; description?: string; preconditions?: string; parentId?: string | null; position?: number },
+): Promise<void> {
   await api(`/api/suites/${suiteId}`, { method: "PATCH", body: data });
 }
 
