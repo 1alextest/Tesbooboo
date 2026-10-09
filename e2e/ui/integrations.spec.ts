@@ -1175,3 +1175,38 @@ test.describe("Integration screens: Go to Requirements after a sync (UI)", () =>
     }
   });
 });
+
+/*
+ * "[Project Settings] Linear integration displays project key instead of project name". A Linear
+ * Project's key is an opaque slugId, so the project's Integrations tab named it as "4081f3c6e1df".
+ */
+test.describe("Project settings: Linear card names the linked item (UI)", () => {
+  test("the Linear card shows the linked team/project's name, not its key", async ({ page, context }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: path.join(__dirname, "../.auth/state.json") });
+    let projectId: string | undefined;
+    try {
+      const suffix = Date.now().toString().slice(-8);
+      projectId = (await (await api.post("/api/projects", { data: { name: `UI Linear Name ${suffix}`, key: `E2EL${suffix}` } })).json()).id;
+      await context.route(`**/api/projects/${projectId}/linear/status`, (route) =>
+        route.fulfill({
+          json: {
+            connected: true,
+            siteUrl: "https://linear.app",
+            connectedProjects: [
+              { id: "m1", linearTeamId: "p-1", linearTeamKey: "4081f3c6e1df", linearTeamName: "Checkout Revamp", entityType: "project", createdAt: new Date().toISOString() },
+            ],
+            history: [],
+          },
+        })
+      );
+      await page.goto(`/projects/${projectId}/settings?tab=integrations`);
+
+      const linked = page.getByText(/Linear team linked to this project/);
+      await expect(linked).toContainText("Checkout Revamp");
+      await expect(linked).not.toContainText("4081f3c6e1df");
+    } finally {
+      if (projectId) await api.delete(`/api/projects/${projectId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+});
