@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useParams as useNextParams } from "next/navigation";
 import { api } from "@/lib/api";
+import { routeResolveKey, takePrefetched } from "@/lib/projectPrefetch";
 import { PageLoader } from "@/components/ui";
 
 /*
@@ -103,7 +104,10 @@ export function RouteParamsProvider({ children }: { children: React.ReactNode })
   useEffect(() => {
     if (cached || !refs.project) return;
     let cancelled = false;
-    api<Resolved>(`/api/route-resolve?${new URLSearchParams(refs).toString()}`)
+    // Only a bare-project URL matches what the AppDataProvider prefetch asked for; anything with a
+    // bug/cycle/task/testcase ref has a different query and always makes its own request.
+    const prefetched = Object.keys(refs).length === 1 ? takePrefetched<Resolved>(routeResolveKey(refs.project)) : undefined;
+    (prefetched ?? api<Resolved>(`/api/route-resolve?${new URLSearchParams(refs).toString()}`))
       .then((res) => {
         resolvedCache.set(key, res);
         // Seed the canonical spelling too, so the rewritten URL resolves synchronously.

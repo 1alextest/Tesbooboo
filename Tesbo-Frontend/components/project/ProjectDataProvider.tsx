@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { useRouter } from "next/navigation";
 import { getProject, listProjectMembers } from "@/lib/api";
 import { PageLoader } from "@/components/ui";
+import { membersKey, projectKey, takePrefetched } from "@/lib/projectPrefetch";
 
 type ProjectRecord = Record<string, unknown>;
 type ProjectMember = { userId: string; email: string; name: string; role: string; joinedAt: string };
@@ -58,7 +59,11 @@ export function ProjectDataProvider({ projectId, children }: { projectId: string
     let cancelled = false;
     setReady(false);
     setProject(null);
-    Promise.all([getProject(projectId), listProjectMembers(projectId).catch(() => [])])
+    // Prefetched on a hard load (lib/projectPrefetch.ts); undefined on every other mount, which
+    // falls through to the normal request.
+    const projectRequest = takePrefetched<ProjectRecord>(projectKey(projectId)) ?? getProject(projectId);
+    const membersRequest = takePrefetched<ProjectMember[]>(membersKey(projectId)) ?? listProjectMembers(projectId);
+    Promise.all([projectRequest, membersRequest.catch(() => [])])
       .then(([p, m]) => {
         if (cancelled) return;
         setProject(p);

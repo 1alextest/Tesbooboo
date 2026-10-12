@@ -640,13 +640,14 @@ describe("Zyra generation timeout scales with how much was requested", () => {
     expect(staticInternals().zyraGenerateTimeoutMs(10)).toBe(180_000);
   });
 
-  it("grows for a larger batch and caps at 360s", () => {
-    // 40 = the new "30-50" tier's requestedCount.
-    expect(staticInternals().zyraGenerateTimeoutMs(40)).toBe(315_000);
-    // 50 = the "all" tier's requestedCount — the point the new formula caps at.
-    expect(staticInternals().zyraGenerateTimeoutMs(50)).toBe(360_000);
+  it("grows 9s a testcase for a larger batch and caps at 20 minutes", () => {
+    // max_tokens is no longer held at 16000, so a batch writes as much as it needs.
+    expect(staticInternals().zyraGenerateTimeoutMs(40)).toBe(450_000);
+    expect(staticInternals().zyraGenerateTimeoutMs(50)).toBe(540_000);
+    // 100 = the "all" range's batch size.
+    expect(staticInternals().zyraGenerateTimeoutMs(100)).toBe(990_000);
     // A malformed/oversized requestedCount must never demand an unbounded wait.
-    expect(staticInternals().zyraGenerateTimeoutMs(999)).toBe(360_000);
+    expect(staticInternals().zyraGenerateTimeoutMs(999)).toBe(1_200_000);
   });
 
   it("OpenAI: a 40-testcase request gets a longer provider timeout than a 10-testcase one", async () => {
@@ -658,7 +659,7 @@ describe("Zyra generation timeout scales with how much was requested", () => {
     }) as unknown as typeof fetch;
 
     await internals(svc).generateZyraWithOpenAi({ provider: "openai", model: "gpt-4o-mini", apiKey: "sk-test", projectId: "p1", input: { ...emptyInput(), requestedCount: 40 } });
-    expect(timeoutSpy).toHaveBeenCalledWith(315_000);
+    expect(timeoutSpy).toHaveBeenCalledWith(450_000);
 
     timeoutSpy.mockClear();
     await internals(svc).generateZyraWithOpenAi({ provider: "openai", model: "gpt-4o-mini", apiKey: "sk-test", projectId: "p1", input: { ...emptyInput(), requestedCount: 10 } });
@@ -667,15 +668,24 @@ describe("Zyra generation timeout scales with how much was requested", () => {
 
   it("Anthropic: a 40-testcase request gets a longer provider timeout than a 10-testcase one", async () => {
     const timeoutSpy = jest.spyOn(AbortSignal, "timeout");
+    // A batch above 10 is streamed (see zyra-plan-batching.spec.ts), so the 40-testcase call answers with SSE.
+    const streamed = new TextEncoder().encode([
+      `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: JSON.stringify({ drafts: [{ title: "x", stepsJson: "[]" }] }) } })}\n\n`
+    ].join(""));
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => null },
+      body: (async function* () { yield streamed; })()
+    }) as unknown as typeof fetch;
+
+    await internals(svc).generateZyraWithAnthropic({ provider: "anthropic", model: "claude-sonnet", apiKey: "sk-test", projectId: "p1", input: { ...emptyInput(), requestedCount: 40 } });
+    expect(timeoutSpy).toHaveBeenCalledWith(450_000);
+
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       headers: { get: () => null },
       json: () => Promise.resolve({ content: [{ type: "text", text: JSON.stringify({ drafts: [{ title: "x", stepsJson: "[]" }] }) }], usage: {} })
     }) as unknown as typeof fetch;
-
-    await internals(svc).generateZyraWithAnthropic({ provider: "anthropic", model: "claude-sonnet", apiKey: "sk-test", projectId: "p1", input: { ...emptyInput(), requestedCount: 40 } });
-    expect(timeoutSpy).toHaveBeenCalledWith(315_000);
-
     timeoutSpy.mockClear();
     await internals(svc).generateZyraWithAnthropic({ provider: "anthropic", model: "claude-sonnet", apiKey: "sk-test", projectId: "p1", input: { ...emptyInput(), requestedCount: 10 } });
     expect(timeoutSpy).toHaveBeenCalledWith(180_000);

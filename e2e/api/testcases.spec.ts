@@ -2188,3 +2188,141 @@ test.describe("editing a test case ID", () => {
     }
   });
 });
+
+/*
+ * Server-side paging for the repository table (testcases/page.tsx sends limit/offset/sortBy for every
+ * page instead of loading 500 rows and paging them in the browser). These pin the three backend
+ * behaviours that screen now leans on.
+ */
+test.describe("repository paging", () => {
+  const REFUSED = [400, 401, 403, 404];
+  const listUrl = `/api/projects/${ctx.projectId}/testcases`;
+
+  test("an unfiltered sorted page is not answered from the default-order list cache", async ({ request }) => {
+    // The no-filter list cache is keyed on (project, limit, offset) only. Before sortBy was excluded
+    // from it, the sorted request below came back as the cached default-order rows, so ascending and
+    // descending returned the same first row.
+    const marker = `E2E CacheSort ${Date.now()}`;
+    const created: string[] = [];
+    try {
+      created.push((await createCase(request, { title: `${marker} aaa` })).id);
+      created.push((await createCase(request, { title: `${marker} zzz` })).id);
+
+      const params = { limit: 50, offset: 0 };
+      const defaultOrder = await request.get(listUrl, { params }); // primes the cache for these params
+      expect(defaultOrder.ok()).toBeTruthy();
+      const asc = await (await request.get(listUrl, { params: { ...params, sortBy: "title", sortDir: "asc" } })).json();
+      const desc = await (await request.get(listUrl, { params: { ...params, sortBy: "title", sortDir: "desc" } })).json();
+
+      expect(asc.length).toBeGreaterThan(1);
+      expect(asc[0].id, "ascending and descending title sorts must not return the same first row").not.toBe(desc[0].id);
+    } finally {
+      for (const id of created) await deleteCase(request, id);
+    }
+  });
+
+  test("a page past the end is empty but still reports the real total", async ({ request }) => {
+    // total_count rides on the returned rows, so an empty page used to report 0 — which the screen
+    // read as "no matches" when the last row of the last page had just been deleted.
+    const suite = await createSuite(request, `E2E PastEnd ${Date.now()}`);
+    const created: string[] = [];
+    try {
+      for (let i = 0; i < 3; i++) created.push((await createCase(request, { title: `E2E PastEnd case ${Date.now()}-${i}`, suiteId: suite.id })).id);
+
+      const at = async (offset: number) => {
+        const res = await request.get(listUrl, { params: { suiteId: suite.id, limit: 2, offset } });
+        expect(res.ok(), `offset=${offset} — ${await res.text()}`).toBeTruthy();
+        return { rows: await res.json(), total: res.headers()["x-total-count"] };
+      };
+
+      const lastPartial = await at(2);
+      expect(lastPartial.rows).toHaveLength(1);
+      expect(lastPartial.total).toBe("3");
+
+      const exactlyAtEnd = await at(3);
+      expect(exactlyAtEnd.rows).toEqual([]);
+      expect(exactlyAtEnd.total, "offset == total is past the end, not an empty project").toBe("3");
+
+      const farPast = await at(4000);
+      expect(farPast.rows).toEqual([]);
+      expect(farPast.total).toBe("3");
+
+      // Unfiltered too (the cacheable path), and an empty project/filter stays 0.
+      const unfiltered = await request.get(listUrl, { params: { limit: 2, offset: 9_000_000 } });
+      expect(await unfiltered.json()).toEqual([]);
+      expect(Number(unfiltered.headers()["x-total-count"])).toBeGreaterThanOrEqual(3);
+      const none = await request.get(listUrl, { params: { search: `no-such-${Date.now()}`, limit: 2, offset: 4 } });
+      expect(none.headers()["x-total-count"]).toBe("0");
+    } finally {
+      for (const id of created) await deleteCase(request, id);
+      await deleteSuite(request, suite.id);
+    }
+  });
+
+  test("sorted pages, taken one after another, cover every row exactly once and keep the sort across pages", async ({ request }) => {
+    const suite = await createSuite(request, `E2E SortPages ${Date.now()}`);
+    const marker = `sp${Date.now()}`;
+    // Created out of order and mixed case so only a real ORDER BY (not insertion order) passes.
+    const titles = [`${marker} E`, `${marker} b`, `${marker} D`, `${marker} a`, `${marker} C`];
+    const created: string[] = [];
+    try {
+      for (const title of titles) created.push((await createCase(request, { title, suiteId: suite.id })).id);
+
+      const walk = async (sortDir: "asc" | "desc") => {
+        const seen: string[] = [];
+        for (let offset = 0; offset < 5; offset += 2) {
+          const res = await request.get(listUrl, { params: { suiteId: suite.id, sortBy: "title", sortDir, limit: 2, offset } });
+          expect(res.headers()["x-total-count"], `total on the page at offset ${offset}`).toBe("5");
+          seen.push(...(await res.json()).map((tc: { title: string }) => tc.title));
+        }
+        return seen;
+      };
+
+      const sortedAsc = [...titles].sort((x, y) => x.toLowerCase().localeCompare(y.toLowerCase()));
+      expect(await walk("asc")).toEqual(sortedAsc);
+      expect(await walk("desc")).toEqual([...sortedAsc].reverse());
+    } finally {
+      for (const id of created) await deleteCase(request, id);
+      await deleteSuite(request, suite.id);
+    }
+  });
+
+  test("a page of exactly limit rows and one more row give 1 and 2 pages' worth of total", async ({ request }) => {
+    const suite = await createSuite(request, `E2E Boundary ${Date.now()}`);
+    const created: string[] = [];
+    try {
+      for (let i = 0; i < 4; i++) created.push((await createCase(request, { title: `E2E Boundary ${Date.now()}-${i}`, suiteId: suite.id })).id);
+      const exact = await request.get(listUrl, { params: { suiteId: suite.id, limit: 4, offset: 0 } });
+      expect(await exact.json()).toHaveLength(4);
+      expect(exact.headers()["x-total-count"]).toBe("4");
+      const next = await request.get(listUrl, { params: { suiteId: suite.id, limit: 4, offset: 4 } });
+      expect(await next.json()).toEqual([]);
+      expect(next.headers()["x-total-count"]).toBe("4");
+    } finally {
+      for (const id of created) await deleteCase(request, id);
+      await deleteSuite(request, suite.id);
+    }
+  });
+
+  test("the paged list is refused without a session and to another tenant's session", async ({ request }) => {
+    const asB = await newRequestContext.newContext({
+      baseURL: env.apiBaseUrl,
+      storageState: path.join(__dirname, "../.auth/state-b.json"),
+    });
+    const anon = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
+    const params = { limit: 5, offset: 5, sortBy: "title", sortDir: "desc" };
+    try {
+      for (const [who, ctxReq] of [["another tenant", asB], ["no session", anon]] as const) {
+        const res = await ctxReq.get(listUrl, { params, failOnStatusCode: false });
+        expect(REFUSED, `${who} got ${res.status()}`).toContain(res.status());
+        const body = await res.text();
+        expect(body, `${who} must not receive rows`).not.toContain("externalId");
+      }
+      // Sanity: the owner's identical request works, so the refusals above are about the caller.
+      expect((await request.get(listUrl, { params })).ok()).toBeTruthy();
+    } finally {
+      await asB.dispose();
+      await anon.dispose();
+    }
+  });
+});

@@ -50,8 +50,10 @@ export class ZyraProgressService implements OnModuleDestroy {
   // A turn that somehow never reaches complete()/completeWithError() (a bug here, a process
   // restart mid-turn) must not accumulate forever in a long-lived process. This is the backstop —
   // normal operation always cleans up via the POST handler's own finally block before this ever
-  // fires. Generous on purpose: real turns finish well inside ZYRA_GENERATE_TIMEOUT_MS (180s).
-  private static readonly ABANDONED_AFTER_MS = 10 * 60 * 1000;
+  // fires. Generous on purpose: it sits above the longest a turn can run — the router, a scenario plan,
+  // and a 100-testcase generation call (zyraGenerateTimeoutMs caps at 20 minutes) — so a slow turn is
+  // never swept while it is still working.
+  private static readonly ABANDONED_AFTER_MS = 30 * 60 * 1000;
   private readonly sweepInterval = setInterval(() => this.sweep(), 60 * 1000);
 
   onModuleDestroy(): void {
