@@ -75,6 +75,9 @@ export const ZYRA_RU = {
   planNoteUnmapped: (count: number) => ` По ${n(count)} сценари(ям) этого пакета тест-кейс не получился.`,
   planBatchMore: (drafted: number, covered: number, total: number, notes: string, remaining: number) =>
     `Вот ещё ${n(drafted)} тест-кейс(ов) — покрыто сценариев: ${n(covered)}/${n(total)}.${notes} Работаю над оставшимися (${n(remaining)}); следующий пакет скоро.`,
+  planBatchMoreTickets: (drafted: number, covered: number, total: number, notes: string) =>
+    `Вот ещё ${n(drafted)} тест-кейс(ов) — покрыто сценариев: ${n(covered)}/${n(total)} по уже распланированным тикетам.${notes} Остальные тикеты ещё предстоит спланировать; следующий пакет скоро.`,
+  planMorePagedTickets: " Это только первые тикеты — остальные я спланирую по ходу работы.",
   planBatchFinalAll: (drafted: number, total: number) =>
     `Вот последние ${n(drafted)} тест-кейс(ов) — все ${n(total)} сценариев покрыты. Проверьте их и скажите, если нужны изменения.`,
   planBatchFinalPartial: (drafted: number, covered: number, total: number, notes: string) =>

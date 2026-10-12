@@ -14783,7 +14783,8 @@ export class LegacyService implements OnModuleInit {
     const sessionLanguage = LegacyService.zyraStoredLanguage(sessionRes.rows[0].language);
     const plan = sessionRes.rows[0].active_plan as Body | undefined;
     const remainingScenarios = normalizeJsonArray(plan?.remainingScenarios).map(String);
-    if (!plan || plan.status !== "paused" || !remainingScenarios.length) {
+    // A paged plan paused while planning its next ticket page has an empty queue but is still resumable.
+    if (!plan || plan.status !== "paused" || (!remainingScenarios.length && !plan.ticketsHasMore)) {
       return this.zyraChatSession(projectId, userId, sessionId);
     }
     const planId = randomUUID();
@@ -14797,7 +14798,7 @@ export class LegacyService implements OnModuleInit {
       doneCount = LegacyService.zyraPlanCovered(current);
       totalCount = Number(current.totalCount || 0);
       scenariosRemaining = normalizeJsonArray(current.remainingScenarios).length;
-      if (current.status !== "paused" || !scenariosRemaining) throw new Error("ZYRA_PLAN_NOT_PAUSED");
+      if (current.status !== "paused" || (!scenariosRemaining && !current.ticketsHasMore)) throw new Error("ZYRA_PLAN_NOT_PAUSED");
       await client.query(
         "UPDATE zyra_chat_sessions SET active_plan = $2::jsonb, updated_at = now() WHERE id = $1",
         [sessionId, JSON.stringify({ ...current, planId, status: "running" })]
@@ -15492,8 +15493,10 @@ export class LegacyService implements OnModuleInit {
         // Recomputed rather than threaded through the call above — chatTestcasePlan is pure and
         // this must resolve to exactly the requestedCount generateZyraChatCreateDecision just used,
         // so the reported budget matches the one the failed call actually ran under.
+        // A plan's first batch is sized by the project's range (startZyraChatPlan), not by requestedCount.
+        const timedPlan = this.chatTestcasePlan(message, projectTestcaseRange, routedCount);
         const generateTimeoutMs = LegacyService.zyraGenerateTimeoutMs(
-          this.chatTestcasePlan(message, projectTestcaseRange, routedCount).requestedCount
+          timedPlan.testcaseRange === "all" ? LegacyService.zyraBatchSize(projectTestcaseRange) : timedPlan.requestedCount
         );
         await this.logProjectActivity(projectId, userId, "zyra_chat_timeout", "zyra_chat", sessionId, "Zyra chat", { stage: "generation", timeoutMs: generateTimeoutMs });
         onStage?.("generating", { status: "timed_out", timeoutMs: generateTimeoutMs }, "update");
@@ -16756,12 +16759,23 @@ export class LegacyService implements OnModuleInit {
     };
   }
 
+  // Only the fallback for a plan stored before batchSize followed the project's range (it was a flat 5).
   private static readonly ZYRA_PLAN_BATCH_SIZE = 5;
-  // The "all" tier's ceiling — one testcase per planned scenario, so up to 100 cases over 20 batches
-  // of ZYRA_PLAN_BATCH_SIZE. It was 40, below the 30-50 tier's own 50, so "all" produced fewer cases
-  // than "extensive". Each batch is its own generation call, so a larger plan only adds batches; it
-  // never enlarges any single call. The planner's output budget in zyraJsonCompletion is sized for it.
+  // Test cases per plan batch, by the project's "Test cases per task" range: each range's own ceiling
+  // (the "all" tier's is 100). A batch is one review message and one generation call.
+  private static readonly ZYRA_BATCH_BY_RANGE: Record<string, number> = { "1-10": 10, "10-30": 30, "30-50": 50, all: 100 };
+  // Unset or unrecognised ranges resolve to the 30-50 default, as testcaseRangeConfig does.
+  private static zyraBatchSize(range: string): number {
+    // Own keys only: a range read from stored settings must not resolve through Object.prototype ("constructor").
+    return Object.hasOwn(LegacyService.ZYRA_BATCH_BY_RANGE, range) ? LegacyService.ZYRA_BATCH_BY_RANGE[range] : LegacyService.ZYRA_BATCH_BY_RANGE["30-50"];
+  }
+  // Scenarios planned per round: one planner call (planZyraChatScenarios), and the cap on one ticket
+  // page's plan. A paged plan (see zyraPlanTicketPage) runs many rounds, so the total is not bounded by it.
   private static readonly ZYRA_PLAN_MAX_SCENARIOS = 100;
+  // Tickets handed to the planner per round of a paged plan.
+  private static readonly ZYRA_PLAN_TICKET_PAGE = 25;
+  // Planner rounds one fill makes before saving its cursor, and the first (inline) fill's bound.
+  private static readonly ZYRA_PLAN_FILL_ROUNDS = 4;
   // A plan below this share of ZYRA_PLAN_MAX_SCENARIOS gets one top-up planning call (planZyraChatScenarios).
   private static readonly ZYRA_PLAN_TOPUP_BELOW = 0.9;
   // What the planner works through before it may stop short of the target.
@@ -16774,7 +16788,8 @@ export class LegacyService implements OnModuleInit {
   // (requestedCount 40) and routed counts up to 50 were introduced, so a default-range request
   // generated 40 drafts and staged only 25 of them. Raising it is cheap: a create op is staged in
   // memory, never written, until zyraSave commits the batch in one transaction.
-  private static readonly ZYRA_CHAT_MAX_OPERATIONS = LegacyService.ZYRA_CHAT_MAX_REQUESTED;
+  // …and at the largest plan batch (the "all" range's 100), so a full batch is staged whole.
+  private static readonly ZYRA_CHAT_MAX_OPERATIONS = Math.max(LegacyService.ZYRA_CHAT_MAX_REQUESTED, ...Object.values(LegacyService.ZYRA_BATCH_BY_RANGE));
   /*
    * The knowledge document Zyra keeps its project memory in.
    *
@@ -16849,13 +16864,14 @@ export class LegacyService implements OnModuleInit {
    * internal cursor and zyraPlanTransition's guard, not progress. A batch that fully delivered keeps
    * the original wording; anything retried, given up or unaccounted for is said, never implied covered.
    */
-  private static zyraPlanBatchReply(p: { drafted: number; covered: number; totalCount: number; remaining: number; requeued: number; skipped: number; unmapped: number }): string {
+  private static zyraPlanBatchReply(p: { drafted: number; covered: number; totalCount: number; remaining: number; requeued: number; skipped: number; unmapped: number; moreTickets?: boolean }): string {
     if (zyraReplyLanguage() === "ru") {
       const notesRu = [
         p.requeued ? ZYRA_RU.planNoteRequeued(p.requeued) : "",
         p.skipped ? ZYRA_RU.planNoteSkipped(p.skipped) : "",
         p.unmapped ? ZYRA_RU.planNoteUnmapped(p.unmapped) : ""
       ].join("");
+      if (p.moreTickets) return ZYRA_RU.planBatchMoreTickets(p.drafted, p.covered, p.totalCount, notesRu);
       if (p.remaining) return ZYRA_RU.planBatchMore(p.drafted, p.covered, p.totalCount, notesRu, p.remaining);
       if (p.covered >= p.totalCount) return ZYRA_RU.planBatchFinalAll(p.drafted, p.totalCount);
       return ZYRA_RU.planBatchFinalPartial(p.drafted, p.covered, p.totalCount, notesRu);
@@ -16865,6 +16881,10 @@ export class LegacyService implements OnModuleInit {
       p.skipped ? ` ${p.skipped} scenario(s) still produced no test case after a retry and were skipped.` : "",
       p.unmapped ? ` ${p.unmapped} scenario(s) in this batch did not produce a test case.` : ""
     ].join("");
+    // A paged plan's total only counts the tickets planned so far, so it is not a finish line.
+    if (p.moreTickets) {
+      return `Here are ${p.drafted} more test case(s) — ${p.covered}/${p.totalCount} scenarios covered so far, from the tickets planned so far.${notes} More tickets are still to be planned; I'll post the next batch shortly.`;
+    }
     if (p.remaining) {
       return `Here are ${p.drafted} more test case(s) — ${p.covered}/${p.totalCount} scenarios covered so far.${notes} Still working on the remaining ${p.remaining}; I'll post the next batch shortly.`;
     }
@@ -16872,6 +16892,143 @@ export class LegacyService implements OnModuleInit {
       return `Here are the final ${p.drafted} test case(s) — all ${p.totalCount} scenarios are now covered. Feel free to review and let me know if you'd like any changes.`;
     }
     return `Here are the final ${p.drafted} test case(s) — ${p.covered} of ${p.totalCount} scenarios are covered; ${p.totalCount - p.covered} produced no test case.${notes} Feel free to review and let me know if you'd like any changes.`;
+  }
+
+  /*
+   * One round of a paged plan: the next page of the project's synced tickets ("<KEY>: summary"
+   * documents, any provider), planned into scenarios. A broad "all tickets" request used to plan from
+   * the ~25 tickets knowledgeTicketCatalogue shows, so a project with thousands of tickets got at most
+   * ZYRA_PLAN_MAX_SCENARIOS scenarios in total. Pages run in id order, so the cursor stays valid across
+   * restarts and tickets synced or deleted mid-plan, and every round advances it — the plan always ends.
+   * A page shorter than ZYRA_PLAN_TICKET_PAGE is the last one. Throws on a database or provider failure:
+   * the caller pauses the plan rather than mistake a failed page for the end of the tickets.
+   */
+  private async zyraPlanTicketRound(params: {
+    projectId: string;
+    provider: string;
+    model: string;
+    key: Body;
+    message: string;
+    cursor: string | null;
+  }): Promise<{ scenarios: string[]; cursor: string | null; hasMore: boolean; tickets: number }> {
+    const size = LegacyService.ZYRA_PLAN_TICKET_PAGE;
+    const res = await this.db.query<{ id: string; title: string; content_text: string | null }>(
+      `SELECT id, title, content_text
+       FROM knowledge_documents
+       WHERE project_id = $1 AND is_deleted = false AND (document_type != 'ai_memory' OR status = 'approved')
+         AND title ~ '^[A-Za-z][A-Za-z0-9]*-[0-9]+\\s*:'
+         AND ($2::uuid IS NULL OR id > $2::uuid)
+       ORDER BY id
+       LIMIT $3`,
+      [params.projectId, params.cursor, size]
+    );
+    if (!res.rows.length) return { scenarios: [], cursor: params.cursor, hasMore: false, tickets: 0 };
+    const knowledge = res.rows.map((row) => ({ title: row.title, content: String(row.content_text || "").slice(0, LegacyService.ZYRA_BROAD_TICKET_CHARS) }));
+    const existingTestcases = await this.existingTestcaseSnapshot(params.projectId, knowledge.map((ticket) => ticket.title).join(" "), "");
+    const scenarios = await this.planZyraChatScenarios({
+      projectId: params.projectId,
+      provider: params.provider,
+      model: params.model,
+      key: params.key,
+      message: params.message,
+      knowledge,
+      existingTestcases,
+      maxScenarios: LegacyService.ZYRA_PLAN_MAX_SCENARIOS
+    });
+    return { scenarios, cursor: res.rows[res.rows.length - 1].id, hasMore: res.rows.length === size, tickets: res.rows.length };
+  }
+
+  // Plans ticket pages onto `scenarios` until it holds `target` of them or the tickets run out.
+  // `maxRounds` bounds one call (a page whose scenarios all exist already adds none); the caller
+  // saves the returned cursor and calls again, so progress is kept either way.
+  private async zyraPlanFill(params: {
+    projectId: string;
+    provider: string;
+    model: string;
+    key: Body;
+    message: string;
+    scenarios: string[];
+    cursor: string | null;
+    target: number;
+    maxRounds: number;
+  }): Promise<{ scenarios: string[]; cursor: string | null; hasMore: boolean; tickets: number }> {
+    let { scenarios, cursor } = params;
+    let hasMore = true;
+    let tickets = 0;
+    for (let round = 0; round < params.maxRounds && hasMore && scenarios.length < params.target; round++) {
+      const next = await this.zyraPlanTicketRound({ projectId: params.projectId, provider: params.provider, model: params.model, key: params.key, message: params.message, cursor });
+      scenarios = LegacyService.mergeZyraScenarios(scenarios, next.scenarios, Number.MAX_SAFE_INTEGER);
+      cursor = next.cursor;
+      hasMore = next.hasMore;
+      tickets += next.tickets;
+    }
+    return { scenarios, cursor, hasMore, tickets };
+  }
+
+  // A request that is about the project's tickets as a whole, not one feature or one named ticket.
+  private static readonly ZYRA_ALL_TICKETS_RE = /\b(tickets?|issues?|user stories|stories|requirements?|jira|epics?)\b/i;
+
+  /*
+   * Plans the next ticket page(s) for a running paged plan whose queue ran below one batch, and saves
+   * the result. Returns true when the plan advanced and is still current; false when it was superseded
+   * or stale (nothing written) or planning failed (the plan is paused with a message, nothing lost —
+   * the cursor is unchanged, so "continue" retries the same page).
+   */
+  private async zyraRefillPlan(projectId: string, userId: string | null, sessionId: string, plan: Body, batchSize: number): Promise<boolean> {
+    const planId = String(plan.planId || "");
+    const doneCount = Number(plan.doneCount || 0);
+    const queue = normalizeJsonArray(plan.remainingScenarios).map(String);
+    const cursor = typeof plan.ticketCursor === "string" ? plan.ticketCursor : null;
+    const recorder = new ZyraTurnTraceRecorder();
+    recorder.onStage("plan:tickets", { fromScenario: Math.min(doneCount + 1, Number(plan.totalCount || 0)), totalCount: Number(plan.totalCount || 0) });
+    try {
+      const capabilities = await this.zyraProjectCapabilities(projectId);
+      let filled: { scenarios: string[]; cursor: string | null; hasMore: boolean } = { scenarios: queue, cursor, hasMore: false };
+      // Knowledge-base access turned off mid-plan: the tickets can't be read, so what is queued is what is left.
+      if (capabilities.knowledgeBase) {
+        const allocation = await this.zyraAiAllocation(projectId);
+        if (!allocation.key) throw new Error(allocation.reason || "No AI key is available for this project.");
+        const provider = String(allocation.key.provider || "openai").toLowerCase();
+        filled = await this.zyraPlanFill({
+          projectId,
+          provider,
+          model: normalizeProviderModel(provider, allocation.key.default_model),
+          key: allocation.key,
+          message: String(plan.originalMessage || ""),
+          scenarios: queue,
+          cursor,
+          target: batchSize,
+          maxRounds: LegacyService.ZYRA_PLAN_FILL_ROUNDS
+        });
+      }
+      return await this.zyraPlanTransition(sessionId, planId, doneCount, async (client, current) => {
+        await client.query(
+          "UPDATE zyra_chat_sessions SET active_plan = $2::jsonb, updated_at = now() WHERE id = $1",
+          [sessionId, JSON.stringify({
+            ...current,
+            remainingScenarios: filled.scenarios,
+            totalCount: Number(current.totalCount || 0) + (filled.scenarios.length - queue.length),
+            ticketCursor: filled.cursor,
+            ticketsHasMore: filled.hasMore
+          })]
+        );
+      });
+    } catch (err) {
+      const detail = this.extractAiErrorMessage(err);
+      const covered = LegacyService.zyraPlanCovered(plan);
+      const totalCount = Number(plan.totalCount || 0);
+      await this.zyraPlanTransition(sessionId, planId, doneCount, async (client, current) => {
+        await this.postZyraPlanMessage(client, projectId, sessionId, userId, zyraReplyLanguage() === "ru" ? ZYRA_RU.planPausedOnError(detail, covered, totalCount) : `I ran into an issue planning the next tickets (${detail}). Pausing here — ${covered}/${totalCount} scenarios covered. Say "continue" and I'll retry.`, [], [], "answer", recorder.fail(detail || "Planning the next tickets did not complete."));
+        await client.query("UPDATE zyra_chat_sessions SET active_plan = $2::jsonb WHERE id = $1", [sessionId, JSON.stringify({ ...current, status: "paused" })]);
+      });
+      await this.notifyUsers([userId], {
+        type: "zyra_task_failed",
+        title: notificationMessages.zyraTaskFailed(),
+        link: notificationLinks.zyraTaskBoard(projectId),
+        memberOf: { projectId }
+      });
+      return false;
+    }
   }
 
   // "All possible cases" no longer asks the model for everything in one shot (that instruction
@@ -16902,23 +17059,61 @@ export class LegacyService implements OnModuleInit {
     contextRefs?: ZyraTurnContextRefs;
     // The session's language, read by generateZyraChatCreateDecision.
     language?: ExportLocale;
+    // The project's "Test cases per task" range: sets how many test cases each batch holds.
+    projectTestcaseRange?: string;
   }): Promise<ZyraChatDecision> {
+    const batchSize = LegacyService.zyraBatchSize(String(params.projectTestcaseRange || "30-50"));
     let scenarios: string[] = [];
+    // Set when the plan walks the project's tickets page by page (zyraPlanTicketRound) instead of
+    // planning once from what the search matched.
+    let paging: { cursor: string | null; hasMore: boolean } | null = null;
     try {
-      scenarios = await this.planZyraChatScenarios({
-        projectId: params.projectId,
-        provider: params.provider,
-        model: params.model,
-        key: params.key,
-        message: params.message,
-        knowledge: params.knowledge,
-        existingTestcases: params.existingTestcases,
-        maxScenarios: LegacyService.ZYRA_PLAN_MAX_SCENARIOS
-      });
+      // Paged only for a request about the tickets as a whole: nothing named outright, no confident
+      // search match. A named ticket or folder, or one feature, plans from what it matched.
+      const wantsAllTickets = params.knowledgeConfidence !== "strong"
+        && !params.jiraIssueKeys.length
+        && !this.extractJiraIssueKeys(params.message).length
+        && !this.extractQuotedPhrases(params.message).length
+        && LegacyService.ZYRA_ALL_TICKETS_RE.test(`${params.message}\n${params.conversation || ""}`)
+        && (await this.zyraProjectCapabilities(params.projectId)).knowledgeBase;
+      if (wantsAllTickets) {
+        const filled = await this.zyraPlanFill({
+          projectId: params.projectId,
+          provider: params.provider,
+          model: params.model,
+          key: params.key,
+          message: params.message,
+          scenarios: [],
+          cursor: null,
+          target: batchSize,
+          maxRounds: LegacyService.ZYRA_PLAN_FILL_ROUNDS
+        });
+        // No synced tickets at all: plan from the matched knowledge, as before.
+        if (filled.tickets) {
+          scenarios = filled.scenarios;
+          paging = { cursor: filled.cursor, hasMore: filled.hasMore };
+        }
+      }
+      if (!paging) {
+        scenarios = await this.planZyraChatScenarios({
+          projectId: params.projectId,
+          provider: params.provider,
+          model: params.model,
+          key: params.key,
+          message: params.message,
+          knowledge: params.knowledge,
+          existingTestcases: params.existingTestcases,
+          maxScenarios: LegacyService.ZYRA_PLAN_MAX_SCENARIOS
+        });
+      }
     } catch {
       scenarios = [];
+      paging = null;
     }
 
+    // ponytail: a paged plan whose first ZYRA_PLAN_FILL_ROUNDS pages add under 2 scenarios (those tickets
+    // are already covered) falls back like any thin plan, and an ask repeated later starts from the first
+    // ticket again. A resume cursor kept across asks would fix that; add it if projects hit this.
     if (scenarios.length < 2) {
       // Planning failed or found too little to plan around — fall back to one bounded batch
       // rather than risk the same truncation the "generate as many as possible" prompt caused.
@@ -16944,7 +17139,7 @@ export class LegacyService implements OnModuleInit {
       });
     }
 
-    const firstBatch = scenarios.slice(0, LegacyService.ZYRA_PLAN_BATCH_SIZE);
+    const firstBatch = scenarios.slice(0, batchSize);
     const decision = await this.generateZyraChatTestcasesWithAi({
       projectId: params.projectId,
       userId: params.userId,
@@ -16968,8 +17163,8 @@ export class LegacyService implements OnModuleInit {
 
     // A first-batch scenario that came back without a draft goes to the end of the queue for one retry.
     const first = LegacyService.zyraPlanBatchOutcome(firstBatch, decision.draftScenarios ?? [], []);
-    const remaining = [...scenarios.slice(LegacyService.ZYRA_PLAN_BATCH_SIZE), ...first.requeue];
-    if (!remaining.length) return decision;
+    const remaining = [...scenarios.slice(batchSize), ...first.requeue];
+    if (!remaining.length && !paging?.hasMore) return decision;
 
     const planId = randomUUID();
     await this.db.query(
@@ -16984,7 +17179,9 @@ export class LegacyService implements OnModuleInit {
         contextRefs: params.contextRefs || null,
         routedSuite: params.routedSuite || null,
         remainingScenarios: remaining,
-        batchSize: LegacyService.ZYRA_PLAN_BATCH_SIZE,
+        batchSize,
+        // Only a paged plan has these: where the next ticket page starts, and whether there is one.
+        ...(paging ? { ticketCursor: paging.cursor, ticketsHasMore: paging.hasMore } : {}),
         doneCount: firstBatch.length,
         totalCount: scenarios.length,
         // Scenarios that have a test case — what progress shows (see zyraPlanBatchReply). doneCount
@@ -17002,7 +17199,7 @@ export class LegacyService implements OnModuleInit {
         : first.unmapped
           ? ZYRA_RU.planFirstIntroUnmapped(decision.testcases.length, firstBatch.length, first.unmapped)
           : ZYRA_RU.planFirstIntro(firstBatch.length);
-      return { ...decision, reply: ZYRA_RU.planStarted(scenarios.length, intro, remaining.length, decision.reply) };
+      return { ...decision, reply: ZYRA_RU.planStarted(scenarios.length, intro, remaining.length, decision.reply) + (paging?.hasMore ? ZYRA_RU.planMorePagedTickets : "") };
     }
     const firstIntro = first.requeue.length
       ? `Here are ${decision.testcases.length} test case(s) for the first ${firstBatch.length} — ${first.requeue.length} scenario(s) came back without a test case and will be retried in a later batch.`
@@ -17011,7 +17208,7 @@ export class LegacyService implements OnModuleInit {
         : `Here are the first ${firstBatch.length}.`;
     return {
       ...decision,
-      reply: `I identified ${scenarios.length} distinct scenarios to cover. ${firstIntro} I'll keep generating the rest (${remaining.length} more) and post them here as they're ready; feel free to review these in the meantime.\n\n${decision.reply}`
+      reply: `I identified ${scenarios.length} distinct scenarios to cover${paging?.hasMore ? " from the first tickets, and I'll plan the rest of the tickets as I go" : ""}. ${firstIntro} I'll keep generating the rest (${remaining.length} more${paging?.hasMore ? " so far" : ""}) and post them here as they're ready; feel free to review these in the meantime.\n\n${decision.reply}`
     };
   }
 
@@ -17150,6 +17347,12 @@ export class LegacyService implements OnModuleInit {
 
       const remainingScenarios = normalizeJsonArray(plan.remainingScenarios).map(String);
       const batchSize = Number(plan.batchSize) || LegacyService.ZYRA_PLAN_BATCH_SIZE;
+      // A paged plan plans its next tickets whenever the queue can't fill a batch. The refill saves its
+      // cursor, so re-reading the plan here always makes progress, and it ends when the tickets do.
+      if (plan.ticketsHasMore && remainingScenarios.length < batchSize) {
+        if (!(await this.zyraRefillPlan(projectId, userId, sessionId, plan, batchSize))) return;
+        continue;
+      }
       const batch = remainingScenarios.slice(0, batchSize);
       const doneCount = Number(plan.doneCount || 0);
       const totalCount = Number(plan.totalCount || 0);
@@ -17278,7 +17481,7 @@ export class LegacyService implements OnModuleInit {
               outcome.requeue.length ? `${outcome.requeue.length} of them will be retried in a later batch.` : "",
               remaining.length ? `Continuing with the remaining ${remaining.length}.` : "That was the last batch."
             ].filter(Boolean).join(" ")
-          : LegacyService.zyraPlanBatchReply({ drafted: testcases.length, covered: newCovered, totalCount, remaining: remaining.length, requeued: outcome.requeue.length, skipped: outcome.skipped, unmapped: outcome.unmapped });
+          : LegacyService.zyraPlanBatchReply({ drafted: testcases.length, covered: newCovered, totalCount, remaining: remaining.length, requeued: outcome.requeue.length, skipped: outcome.skipped, unmapped: outcome.unmapped, moreTickets: Boolean(plan.ticketsHasMore) });
 
         // The atomic commit: re-checks planId AND doneCount under the row lock, then posts the
         // message and advances (or clears) active_plan in the same transaction. If this returns
@@ -17290,7 +17493,7 @@ export class LegacyService implements OnModuleInit {
           // (testcases.length === 0) gets 'answer' via the default, matching how a zero-mutation
           // reply is classified everywhere else in this file.
           await this.postZyraPlanMessage(client, projectId, sessionId, userId, reply, testcases, applied.activity, testcases.length ? "create" : "answer", batchTrace, applied.reviewRequestId);
-          if (!remaining.length) {
+          if (!remaining.length && !plan.ticketsHasMore) {
             await client.query("UPDATE zyra_chat_sessions SET active_plan = NULL WHERE id = $1", [sessionId]);
           } else {
             // Spread the LOCKED read (`current`), not the outer closure's `plan` from before this
@@ -17304,7 +17507,7 @@ export class LegacyService implements OnModuleInit {
             );
           }
         });
-        if (!stillCurrent || !remaining.length) return;
+        if (!stillCurrent || (!remaining.length && !plan.ticketsHasMore)) return;
       } catch (err) {
         const detail = this.extractAiErrorMessage(err);
         // A batch whose provider response arrived (and was billed) but failed to parse still
@@ -21060,37 +21263,55 @@ export class LegacyService implements OnModuleInit {
     let lastMessage = "";
     const anthropicUrl = normalizeAnthropicMessagesUrl(params.baseUrl);
     const anthropicHeaders = this.buildAnthropicAuthHeaders(params.apiKey, params.authHeaderName ?? null, params.authScheme ?? null);
+    // A batch this size is streamed: a plain request returns no headers until it is finished, and
+    // Node's fetch gives up on that after 5 minutes however long the abort signal allows.
+    const stream = params.input.requestedCount > LegacyService.ZYRA_STREAM_ABOVE;
+    let maxTokens = Math.min(LegacyService.ZYRA_GEN_MAX_TOKENS, 2000 + params.input.requestedCount * 1500);
+    const send = (model: string) => fetch(anthropicUrl, {
+      method: "POST",
+      headers: anthropicHeaders,
+      body: JSON.stringify({
+        model,
+        // 4000 was a fixed ceiling regardless of how many testcases were requested — a
+        // batch of just 5 detailed drafts could already exceed it, truncating the JSON
+        // mid-array and failing to parse. Scale with requestedCount instead; the ceiling is
+        // ZYRA_GEN_MAX_TOKENS, lowered to the model's own when it names a smaller one (below).
+        max_tokens: maxTokens,
+        ...(stream ? { stream: true } : {}),
+        // No temperature: Claude Sonnet 5 / Opus 5 / Opus 4.7+ reject a non-default
+        // sampling parameter with a 400, and the model picker can now surface those.
+        // It bought little anyway — temperature never guaranteed identical outputs.
+        system: [
+          {
+            type: "text",
+            text: `${this.zyraSystemPrompt()}\n\n${this.zyraStaticSourcePrompt(params.input)}`,
+            cache_control: { type: "ephemeral" }
+          }
+        ],
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: this.zyraDynamicTaskPrompt(params.input) }]
+          }
+        ]
+      }),
+      // A fresh budget per attempt (see zyraProviderSignal).
+      signal: LegacyService.zyraProviderSignal(LegacyService.zyraGenerateTimeoutMs(params.input.requestedCount))
+    });
+    // The streamed answer comes back shaped like the plain one, so everything below reads both alike.
+    const readBody = async (response: Response): Promise<Body> =>
+      response.ok && stream ? LegacyService.readAnthropicStream(response) : (await response.json().catch(() => ({} as Body))) as Body;
     for (const model of providerModelCandidates(params.provider, params.model)) {
-      const response = await fetch(anthropicUrl, {
-        method: "POST",
-        headers: anthropicHeaders,
-        body: JSON.stringify({
-          model,
-          // 4000 was a fixed ceiling regardless of how many testcases were requested — a
-          // batch of just 5 detailed drafts could already exceed it, truncating the JSON
-          // mid-array and failing to parse. Scale with requestedCount instead, capped at
-          // 16000 (the threshold above which the SDK guidance calls for streaming).
-          max_tokens: Math.min(16000, 2000 + params.input.requestedCount * 1500),
-          // No temperature: Claude Sonnet 5 / Opus 5 / Opus 4.7+ reject a non-default
-          // sampling parameter with a 400, and the model picker can now surface those.
-          // It bought little anyway — temperature never guaranteed identical outputs.
-          system: [
-            {
-              type: "text",
-              text: `${this.zyraSystemPrompt()}\n\n${this.zyraStaticSourcePrompt(params.input)}`,
-              cache_control: { type: "ephemeral" }
-            }
-          ],
-          messages: [
-            {
-              role: "user",
-              content: [{ type: "text", text: this.zyraDynamicTaskPrompt(params.input) }]
-            }
-          ]
-        }),
-        signal: LegacyService.zyraProviderSignal(LegacyService.zyraGenerateTimeoutMs(params.input.requestedCount))
-      });
-      const body = await response.json().catch(() => ({} as Body)) as Body;
+      let response = await send(model);
+      let body = await readBody(response);
+      // A model whose own output ceiling is below maxTokens rejects the request and names that ceiling:
+      // repeat it once at the ceiling rather than fail a generation that would have fit.
+      const ceiling = response.ok ? null : LegacyService.zyraModelTokenCeiling(String(body.error?.message || ""));
+      if (ceiling && ceiling < maxTokens) {
+        maxTokens = ceiling;
+        response = await send(model);
+        body = await readBody(response);
+      }
       if (!response.ok) {
         const rawMessage = String(body.error?.message || body.error || response.statusText);
         const friendly = this.describeProviderError("anthropic", response.status, rawMessage);
@@ -22158,7 +22379,44 @@ export class LegacyService implements OnModuleInit {
   // for the "1-10" tier and the generation_retry batch, and several call sites still reason about it
   // by name.
   private static readonly ZYRA_GENERATE_TIMEOUT_MS = 180_000;
-  private static readonly ZYRA_GENERATE_TIMEOUT_MAX_MS = 360_000;
+  private static readonly ZYRA_GENERATE_TIMEOUT_MAX_MS = 1_200_000;
+  // The most output tokens one generation call may ask for. A 100-testcase batch (the "all" range) writes
+  // tens of thousands of tokens; the old 16000 truncated it. A model with a lower ceiling of its own is
+  // retried at that ceiling (zyraModelTokenCeiling).
+  private static readonly ZYRA_GEN_MAX_TOKENS = 100_000;
+  // Batches above this size are streamed (see generateZyraWithAnthropic).
+  private static readonly ZYRA_STREAM_ABOVE = 10;
+
+  // Anthropic's rejection of an oversized max_tokens names the model's ceiling: "max_tokens: 100000 > 64000, ...".
+  private static zyraModelTokenCeiling(message: string): number | null {
+    const match = message.match(/max_tokens:\s*\d+\s*>\s*(\d+)/i);
+    return match ? Number(match[1]) : null;
+  }
+
+  // Reads a streamed Messages response into the shape a plain one has ({ content, usage }); a stream that
+  // reports an error throws it. Usage arrives in two events: input at the start, output at the end.
+  private static async readAnthropicStream(response: Response): Promise<Body> {
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let text = "";
+    const usage: Body = {};
+    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+      buffer += decoder.decode(chunk, { stream: true });
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (!line.startsWith("data:")) continue;
+        let event: Body;
+        try { event = JSON.parse(line.slice(5)) as Body; } catch { continue; }
+        if (event.type === "content_block_delta" && event.delta?.type === "text_delta") text += String(event.delta.text || "");
+        else if (event.type === "message_start") Object.assign(usage, event.message?.usage || {});
+        else if (event.type === "message_delta") Object.assign(usage, event.usage || {});
+        else if (event.type === "error") throw new Error(String(event.error?.message || "The AI provider's stream failed."));
+      }
+    }
+    return { content: [{ type: "text", text }], usage };
+  }
 
   /*
    * The generate-stage budget scales with how much was actually asked for. This used to be the flat
@@ -22167,11 +22425,12 @@ export class LegacyService implements OnModuleInit {
    * produce because it actually fills that token budget instead of finishing well under it, so the
    * fixed 180s was already tight for "all" and became the common case once the default range moved
    * from "1-10" (this function's floor) to "30-50" (Basecamp: 30-50 default generation now times
-   * out at the old 180s ceiling). Linear between the 180s floor at 10 and the 360s ceiling at 50,
-   * i.e. roughly matching max_tokens's own growth over that same range.
+   * out at the old 180s ceiling). Linear from the 180s floor at 10, at 9s a testcase now that max_tokens
+   * is no longer held at 16000 and a batch writes as much as it needs (50 -> 540s, the "all" range's 100
+   * -> 990s), up to the 20-minute ceiling.
    */
   private static zyraGenerateTimeoutMs(requestedCount: number): number {
-    const extra = Math.max(0, requestedCount - 10) * 4_500;
+    const extra = Math.max(0, requestedCount - 10) * 9_000;
     return Math.min(LegacyService.ZYRA_GENERATE_TIMEOUT_MAX_MS, LegacyService.ZYRA_GENERATE_TIMEOUT_MS + extra);
   }
 
@@ -22763,7 +23022,8 @@ export class LegacyService implements OnModuleInit {
         trace: params.trace,
         knowledgeConfidence: params.knowledgeConfidence,
         contextRefs: params.contextRefs,
-        language
+        language,
+        projectTestcaseRange: params.projectTestcaseRange
       });
     }
     return this.generateZyraChatTestcasesWithAi({

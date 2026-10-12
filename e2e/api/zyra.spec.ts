@@ -7453,37 +7453,45 @@ test.describe("zyra — writes in the language the user writes in (fake provider
 
   test("ZYR-L-05 an exhaustive plan's background batches, and its plan messages, are Russian", async () => {
     await allocateFakeAiKey();
-    const sessionId = await newSession("E2E language plan");
-    const scenarioDraft = (title: string) => ({ ...draft(title), severity: undefined });
+    // A batch holds as many test cases as the project's range allows; 1-10 keeps it at 10, so 12
+    // scenarios are two batches. The default range's 50 would hold them all in one.
+    const rangeRes = await asOwner.patch(url("/settings"), { data: { testcaseRange: "1-10" }, failOnStatusCode: false });
+    expect(rangeRes.status(), await rangeRes.text()).toBe(200);
+    try {
+      const sessionId = await newSession("E2E language plan");
+      const scenarioDraft = (title: string) => ({ ...draft(title), severity: undefined });
 
-    // Same seven-scenario, two-batch shape as ZCC-B-08 (api/zyra-chat-consistency.spec.ts).
-    ai.queueReply({ reply: "", reasoningSummary: "Planning exhaustive coverage.", action: "create", actionType: "create", operations: [], testcases: [], exhaustive: true });
-    ai.queueReply({ scenarios: Array.from({ length: 7 }, (_, i) => `Scenario ${i + 1}`) });
-    ai.queueReply({ scenarios: [] });
-    ai.queueReply({ drafts: Array.from({ length: 5 }, (_, i) => scenarioDraft(`Scenario ${i + 1}`)) });
-    ai.queueReply("Noted."); // the first batch's rememberZyraTurn — see ZCC-B-08
-    ai.queueReply({ drafts: Array.from({ length: 2 }, (_, i) => scenarioDraft(`Scenario ${i + 6}`)) });
+      // Same twelve-scenario, two-batch shape as ZCC-B-08 (api/zyra-chat-consistency.spec.ts).
+      ai.queueReply({ reply: "", reasoningSummary: "Planning exhaustive coverage.", action: "create", actionType: "create", operations: [], testcases: [], exhaustive: true });
+      ai.queueReply({ scenarios: Array.from({ length: 12 }, (_, i) => `Scenario ${i + 1}`) });
+      ai.queueReply({ scenarios: [] });
+      ai.queueReply({ drafts: Array.from({ length: 10 }, (_, i) => scenarioDraft(`Scenario ${i + 1}`)) });
+      ai.queueReply("Noted."); // the first batch's rememberZyraTurn — see ZCC-B-08
+      ai.queueReply({ drafts: Array.from({ length: 2 }, (_, i) => scenarioDraft(`Scenario ${i + 11}`)) });
 
-    const turn = await send(sessionId, "Сгенерируй все возможные тест-кейсы для входа в систему.");
-    expect(turn.status(), await turn.text()).toBeLessThan(300);
-    await expect
-      .poll(() => scalar(`SELECT active_plan FROM zyra_chat_sessions WHERE id = ${literal(sessionId)};`), {
-        message: "the plan must run its background batch to completion",
-        timeout: 30_000,
-      })
-      .toBeNull();
+      const turn = await send(sessionId, "Сгенерируй все возможные тест-кейсы для входа в систему.");
+      expect(turn.status(), await turn.text()).toBeLessThan(300);
+      await expect
+        .poll(() => scalar(`SELECT active_plan FROM zyra_chat_sessions WHERE id = ${literal(sessionId)};`), {
+          message: "the plan must run its background batch to completion",
+          timeout: 30_000,
+        })
+        .toBeNull();
 
-    const generations = generationRequests();
-    expect(generations.length, "the inline batch and the background batch").toBe(2);
-    for (const [index, request] of generations.entries()) {
-      expect(JSON.stringify(request.messages), `batch ${index + 1}`).toContain(DRAFTS_IN_RUSSIAN);
+      const generations = generationRequests();
+      expect(generations.length, "the inline batch and the background batch").toBe(2);
+      for (const [index, request] of generations.entries()) {
+        expect(JSON.stringify(request.messages), `batch ${index + 1}`).toContain(DRAFTS_IN_RUSSIAN);
+      }
+      const session = await (await asOwner.get(url(`/chat/sessions/${sessionId}`))).json();
+      const assistant = (session.messages as Array<Record<string, any>>).filter((m) => m.role === "assistant");
+      expect(assistant).toHaveLength(2);
+      expect(String(assistant[0].content)).toContain("Я выделил(а) 12 отдельных сценариев");
+      expect(String(assistant[1].content)).toContain("все 12 сценариев покрыты");
+      expect(JSON.stringify(session.messages)).not.toContain("all 12 scenarios are now covered");
+    } finally {
+      await asOwner.patch(url("/settings"), { data: { testcaseRange: "30-50" }, failOnStatusCode: false });
     }
-    const session = await (await asOwner.get(url(`/chat/sessions/${sessionId}`))).json();
-    const assistant = (session.messages as Array<Record<string, any>>).filter((m) => m.role === "assistant");
-    expect(assistant).toHaveLength(2);
-    expect(String(assistant[0].content)).toContain("Я выделил(а) 7 отдельных сценариев");
-    expect(String(assistant[1].content)).toContain("все 7 сценариев покрыты");
-    expect(JSON.stringify(session.messages)).not.toContain("all 7 scenarios are now covered");
   });
 
   test("ZYR-L-06 'продолжить' resumes a paused plan, and the resume message is Russian", async () => {

@@ -76,7 +76,7 @@ Test case volume comes from Zyra → Settings → Test case range (`minimum`, `1
 - An explicit user request wins: the router reports `requestedCount` (so "fifteen" works, not just
   "15") or `exhaustive: true` ("all possible cases", "as many as you can").
 - A message-level regex remains as fallback only when the router reports neither.
-- Hard ceiling of 25 per message (`ZYRA_CHAT_MAX_OPERATIONS`); anything above goes through batching.
+- Hard ceiling of 100 per message (`ZYRA_CHAT_MAX_OPERATIONS`, the largest plan batch); a count the user names is clamped to 50 (`ZYRA_CHAT_MAX_REQUESTED`).
 
 ## 4. Test cases appear in the table, and nowhere else
 
@@ -98,11 +98,25 @@ those are true until the user separately reviews and saves the batch.
 
 ## 5. Batching for volume
 
-Large asks are planned then executed in batches (`ZYRA_PLAN_BATCH_SIZE = 5`,
-`ZYRA_PLAN_MAX_SCENARIOS = 100`, the "all" tier only) rather than one oversized call that truncates past the provider's
-output ceiling and returns invalid JSON.
+Large asks are planned then executed in batches rather than one oversized call that truncates past the
+provider's output ceiling and returns invalid JSON.
 
+- **Batch size follows the project's "Test cases per task" range** (`ZYRA_BATCH_BY_RANGE`): `1-10` → 10,
+  `10-30` → 30, `30-50` → 50, `all` → 100. It used to be a flat 5. An "exhaustive" ask on any range runs
+  the plan flow with that range's batch size; only the `all` range runs it without the user saying so.
+- A batch is one model call. Anthropic generation asks for up to `ZYRA_GEN_MAX_TOKENS` (100000) output tokens,
+  drops to the model's own ceiling if it rejects that, and streams any batch above 10 (a plain request
+  returns no headers until it finishes, and Node's fetch gives up on that after 5 minutes). The generation
+  timeout is 9s a test case, up to 20 minutes. OpenAI-wire providers are not streamed and set no token cap.
 - Scenarios are planned first, then each batch is generated, saved, and posted as its own message.
+- **A request about all the tickets is paged.** A broad ask (no ticket or folder named, no confident search
+  match) whose text mentions tickets/issues/stories/requirements/Jira walks the project's synced tickets
+  (`"KEY-n: summary"` knowledge documents) `ZYRA_PLAN_TICKET_PAGE` (25) at a time, in id order: plan a page
+  into scenarios (`zyraPlanTicketRound`), generate batches, and when the queue drops below one batch plan
+  the next page (`zyraRefillPlan`). The plan stores `ticketCursor` / `ticketsHasMore`; `totalCount` grows as
+  pages are planned, so "X/Y covered" only counts the tickets planned so far and the reply says more are
+  coming. A plan that fails planning a page pauses with the cursor unchanged ("continue" retries it, even
+  with an empty queue). Without paging, the plan is capped at `ZYRA_PLAN_MAX_SCENARIOS` (100) scenarios.
 - The plan is persisted (`zyra_chat_sessions.active_plan`), so it survives a backend restart and
   resumes on boot.
 - A new user message supersedes an in-flight plan; the loop checks the plan id before each batch.
