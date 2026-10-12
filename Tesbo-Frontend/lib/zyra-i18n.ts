@@ -343,7 +343,7 @@ const EN = {
   "drawer.failedLoad": "Failed to load this item.",
 
   // ── Task quick view + task detail ───────────────────────────────────────────
-  "taskStatus.todo": "Pending",
+  "taskStatus.todo": "To Do",
   "taskStatus.in_progress": "In Progress",
   "taskStatus.in_review": "In Review",
   "taskStatus.failed": "Failed",
@@ -381,7 +381,7 @@ const EN = {
   "task.commentStillFailed": (p) => `Comment still couldn't be posted on ${p.label} ${p.key}${p.reason ? `: ${p.reason}` : "."}`,
   "task.err.retryComment": "Failed to retry the ticket comment.",
   "task.feedbackSent":
-    "Feedback sent. Zyra moved the task to Todo and is regenerating the testcase drafts now — this can take a minute.",
+    "Feedback sent. Zyra moved the task to To Do and is regenerating the testcase drafts now — this can take a minute.",
   "task.err.feedback": "Failed to send feedback.",
   "task.draftDeleted": "Generated testcase draft deleted.",
   "task.err.deleteDraft": "Failed to delete testcase draft.",
@@ -736,7 +736,7 @@ const RU: Record<ZyraTextKey, Entry> = {
   "drawer.loading": "Загрузка…",
   "drawer.failedLoad": "Не удалось загрузить этот элемент.",
 
-  "taskStatus.todo": "В ожидании",
+  "taskStatus.todo": "К выполнению",
   "taskStatus.in_progress": "В работе",
   "taskStatus.in_review": "На проверке",
   "taskStatus.failed": "Ошибка",

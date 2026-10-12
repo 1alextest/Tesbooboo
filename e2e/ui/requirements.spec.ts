@@ -170,14 +170,14 @@ test.describe("requirements page — Zyra status label", () => {
         const rejected = `E2ESCR-${uniqueSuffix()}`;
         seedJiraRequirements(tenant!.organizationId, project.id, [failed, rejected]);
         seedZyraTaskStatus(project.id, "jira", failed, "failed");
-        // "rejected" normalizes to "todo" (taskStatusLabel -> "Pending") — the reviewer sent the
+        // "rejected" normalizes to "todo" (taskStatusLabel -> "To Do") — the reviewer sent the
         // draft back, so the pipeline reads as restarted rather than finished.
         seedZyraTaskStatus(project.id, "jira", rejected, "rejected");
 
         await page.goto(`/projects/${project.id}/requirements`);
 
         await expect(page.locator("tr", { hasText: failed }).getByText("Failed", { exact: true })).toBeVisible();
-        await expect(page.locator("tr", { hasText: rejected }).getByText("Pending", { exact: true })).toBeVisible();
+        await expect(page.locator("tr", { hasText: rejected }).getByText("To Do", { exact: true })).toBeVisible();
       } finally {
         await deleteProjects(api, [project.id]);
       }

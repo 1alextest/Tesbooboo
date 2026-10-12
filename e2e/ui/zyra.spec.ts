@@ -1273,7 +1273,9 @@ test.describe("zyra / agents (UI)", () => {
 
     await expect(kanbanColumn(page, "Failed").getByText(userStory)).toBeVisible();
     // Before the fix a failed task normalized to 'todo' and landed here instead.
-    await expect(kanbanColumn(page, "Pending").getByText(userStory)).toHaveCount(0);
+    // The column is "To Do" — there was never a "Pending" column, so asserting against that name
+    // matched nothing and passed whatever the board showed.
+    await expect(kanbanColumn(page, "To Do").getByText(userStory)).toHaveCount(0);
   });
 
   // ─── The full task page's description (fix for "[Task] Jira/Linear – Task Description Missing in
@@ -2558,6 +2560,75 @@ test.describe("zyra / agents (UI)", () => {
     }
   });
 
+  // ─── Status label after feedback (fix for "[Zyra Task] Incorrect 'Pending' Status Displayed After
+  // Feedback Submission") ─────────────────────────────────────────────────────────────────────────
+
+  test("ZYU-146 after feedback the task reads 'To Do' everywhere — the status the confirmation names — never 'Pending'", async ({
+    browser,
+  }) => {
+    /*
+     * Regression test: zyraFeedback really does move the task to 'todo', and the confirmation says
+     * "moved the task to Todo", and the Kanban column is "To Do" — but every status chip rendered
+     * 'todo' as "Pending", so the reviewer saw a status the app had just told them it wasn't in.
+     *
+     * Regeneration after feedback stays at 'todo' until the drafts come back (processZyraFeedback
+     * never passes through 'in_progress'), so holding the fake provider's reply keeps the task in
+     * exactly that state long enough to read every surface deterministically.
+     */
+    const ai = await startFakeAiServer();
+    try {
+      await allocateFakeProviderKey(ai);
+      const userStory = stamp("Feedback status story");
+      const taskId = seedTask({ userStory });
+      const page = await openFeedbackTab(browser, taskId);
+      await expect(page.getByText("In Review", { exact: true })).toBeVisible();
+
+      ai.delayNextReplyMs(20_000);
+      ai.queueReply({
+        drafts: [{
+          title: "Regenerated after feedback",
+          preconditions: "",
+          stepsJson: JSON.stringify([{ stepNumber: 1, action: "Do it", expectedResult: "It is done" }]),
+          testData: "",
+          expectedSummary: "It is done.",
+          priority: "P2",
+          tags: ["zyra"],
+          sourceRefs: [],
+        }],
+      });
+      await page.getByPlaceholder("Ask Zyra to improve coverage, add edge cases, remove duplicates, or focus on a missed rule.").fill("Improve expected results");
+      const responded = page.waitForResponse((res) => isFeedbackRequest(res.url(), res.request().method()));
+      await page.getByRole("button", { name: "Send feedback" }).click();
+      const response = await responded;
+      expect((await response.json()).task.taskStatus, "the API returns the task already moved to todo").toBe("todo");
+      await expect(page.getByText(/Feedback sent\. Zyra moved the task to To Do/)).toBeVisible();
+      expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("todo");
+
+      // Full task page header chip.
+      await expect(page.getByText("To Do", { exact: true })).toBeVisible();
+      await expect(page.getByText("Pending", { exact: true })).toHaveCount(0);
+
+      // Task list, Kanban board and the quick-view panel all share the same label.
+      const board = await open(browser, "/agents/tasks");
+      const row = board.getByRole("button", { name: new RegExp(userStory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) });
+      await expect(row).toContainText("To Do");
+      await expect(row).not.toContainText("Pending");
+
+      await board.getByRole("tab", { name: "Kanban board" }).click();
+      const column = kanbanColumn(board, "To Do");
+      await expect(column.getByText(userStory)).toBeVisible();
+      await column.locator("button", { has: board.getByText(userStory) }).click();
+      const panel = board.locator(".slide-in-right");
+      await expect(panel.getByText("To Do", { exact: true })).toBeVisible();
+      await expect(panel.getByText("Pending", { exact: true })).toHaveCount(0);
+
+      expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`), "still regenerating while every surface was read").toBe("todo");
+      expect(await waitForTaskSettled(taskId)).toBe("in_review");
+    } finally {
+      await ai.close();
+    }
+  });
+
   test("ZYU-115 no ticket picker is shown for a provider that is not connected or has no tickets in the mapped scope", async ({ browser }) => {
     const taskId = seedTask();
 
@@ -3160,12 +3231,12 @@ test.describe("zyra / agents (UI)", () => {
 
     const row = page.getByRole("listitem").filter({ hasText: "Sign in with a wrong password" });
     await row.getByRole("button", { name: "Edit" }).click();
-    // Field order in ZyraDraftEditor: Title (textbox 0), Priority (combobox 0), Severity
-    // (combobox 1), Component (textbox 1), Preconditions/Description/Test Data/Steps after that.
+    // Reached by label rather than position — the editor's field order follows the repository's
+    // edit panel (ZYU-147), so a positional index would silently land on a different field.
     // The seeded draft has no severity, so the placeholder option must read "Select", not "No severity".
-    await expect(row.getByRole("combobox").nth(1).locator("option:checked")).toHaveText("Select");
-    await row.getByRole("combobox").nth(1).selectOption("Medium");
-    await row.getByRole("textbox").nth(1).fill("Search");
+    await expect(editorControl(row, "Severity").locator("option:checked")).toHaveText("Select");
+    await editorControl(row, "Severity").selectOption("Medium");
+    await editorControl(row, "Component").fill("Search");
     await row.getByRole("button", { name: "Save edit" }).click();
 
     await expect(row.getByText("Medium")).toBeVisible();
@@ -3192,6 +3263,11 @@ test.describe("zyra / agents (UI)", () => {
    */
   function editorTextarea(row: Locator, label: string): Locator {
     return row.locator("label", { hasText: new RegExp(`^${label}$`) }).locator("xpath=following-sibling::textarea[1]");
+  }
+
+  /** Same label-sibling lookup as editorTextarea, for whichever control (input/select/textarea) follows. */
+  function editorControl(row: Locator, label: string): Locator {
+    return row.locator("label", { hasText: new RegExp(`^${label}$`) }).locator("xpath=following-sibling::*[1]");
   }
 
   function readDraftField(taskId: string, title: string, field: string): string {
@@ -3229,6 +3305,67 @@ test.describe("zyra / agents (UI)", () => {
     // Reopening shows the edited value (the panel's local row was updated, not only the server).
     await row.getByRole("button", { name: "Edit" }).click();
     await expect(editorTextarea(row, "Test Data")).toHaveValue("post: Edited Buzz");
+  });
+
+  /*
+   * "[Zyra] Edit Test Case View Fields Are Displayed in the Wrong Sequence" — the draft editor listed
+   * Title, Priority, Severity, Component, Preconditions, Description, Test Data, Steps, while the
+   * repository's edit panel (testcases/page.tsx Overview tab, then its Steps tab) reads Title,
+   * Description, Preconditions, …, Test Data, …, Priority, …, Component, Severity. The expected list
+   * is that order restricted to the fields a draft edit carries.
+   */
+  test("ZYU-147 the draft editor lists its fields in the repository edit panel's order, and every field still loads and saves", async ({ browser }) => {
+    const title = stamp("Chat field order case");
+    const { taskId } = seedChatReviewBatch({
+      entries: [
+        {
+          opType: "create",
+          draft: {
+            suiteId: null, title, description: "Order description", preconditions: "Order preconditions",
+            stepsJson: JSON.stringify([{ stepNumber: 1, action: "Order action", expectedResult: "Order expected" }]),
+            testData: "Order test data", priority: "P1", severity: "High", component: "Order component",
+          },
+        },
+      ],
+    });
+    const page = await open(browser, "/agents/zyra");
+
+    const row = page.getByRole("listitem").filter({ hasText: title });
+    await row.getByRole("button", { name: "Edit" }).click();
+    await expect(row.getByRole("button", { name: "Save edit" })).toBeVisible();
+
+    await expect(row.locator("label")).toHaveText([
+      "Title", "Description", "Preconditions", "Test Data", "Priority", "Component", "Severity", "Steps",
+    ]);
+
+    // Reordering must not disconnect a value from its field: each loads under its own label.
+    await expect(editorControl(row, "Title")).toHaveValue(title);
+    await expect(editorControl(row, "Description")).toHaveValue("Order description");
+    await expect(editorControl(row, "Preconditions")).toHaveValue("Order preconditions");
+    await expect(editorControl(row, "Test Data")).toHaveValue("Order test data");
+    await expect(editorControl(row, "Priority")).toHaveValue("P1");
+    await expect(editorControl(row, "Component")).toHaveValue("Order component");
+    await expect(editorControl(row, "Severity")).toHaveValue("High");
+    await expect(row.getByPlaceholder("Expected result")).toHaveValue("Order expected");
+
+    // …and each still saves to its own draft field.
+    await editorControl(row, "Description").fill("Order description edited");
+    await editorControl(row, "Preconditions").fill("Order preconditions edited");
+    await editorControl(row, "Test Data").fill("Order test data edited");
+    await editorControl(row, "Priority").selectOption("P0");
+    await editorControl(row, "Component").fill("Order component edited");
+    await editorControl(row, "Severity").selectOption("Low");
+    await row.getByRole("button", { name: "Save edit" }).click();
+    await expect(row.getByRole("button", { name: "Save edit" })).toHaveCount(0);
+
+    await expect
+      .poll(() => readDraftField(taskId, title, "description"), { message: "the edit must persist, not just render client-side" })
+      .toBe("Order description edited");
+    expect(readDraftField(taskId, title, "preconditions")).toBe("Order preconditions edited");
+    expect(readDraftField(taskId, title, "testData")).toBe("Order test data edited");
+    expect(readDraftField(taskId, title, "priority")).toBe("P0");
+    expect(readDraftField(taskId, title, "component")).toBe("Order component edited");
+    expect(readDraftField(taskId, title, "severity")).toBe("Low");
   });
 
   test("ZYU-134 editing another field of a proposal staged before test data was on the row does not wipe its test data", async ({ browser }) => {
