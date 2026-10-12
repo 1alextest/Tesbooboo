@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page, type Request } from "@playwright/test";
 import { env } from "../utils/env";
 
 /*
@@ -109,5 +109,119 @@ test.describe("readable URLs", () => {
 
     await page.goto(`/projects/${projectKey}/bugs/ZZZ-BUG-99999999`);
     await expect(page.getByRole("alert")).toContainText("Page not found");
+  });
+});
+
+/*
+ * Hard-load prefetch (Tesbo-Frontend/lib/projectPrefetch.ts).
+ *
+ * AppDataProvider starts the project requests while the session check is still in flight, and the
+ * project providers consume them. What has to hold: the project is still fetched exactly once (the
+ * prefetch is consumed, not duplicated), the requests really do overlap the session check, and the
+ * speculative calls never get anyone into a project they cannot open.
+ */
+test.describe("project prefetch on a hard load", () => {
+  const ctxB = () => path.join(__dirname, "../.auth/state-b.json");
+
+  /** Counts GETs to the project endpoints for the smoke project, ignoring nested paths like /bugs. */
+  function trackProjectRequests(page: Page) {
+    const seen: { project: Request[]; members: Request[]; resolve: Request[] } = { project: [], members: [], resolve: [] };
+    page.on("request", (req) => {
+      if (req.method() !== "GET") return;
+      const { pathname, search } = new URL(req.url());
+      if (pathname === `/api/projects/${ctx.projectId}`) seen.project.push(req);
+      else if (pathname === `/api/projects/${ctx.projectId}/members`) seen.members.push(req);
+      else if (pathname === "/api/route-resolve" && search === `?project=${projectKey}`) seen.resolve.push(req);
+    });
+    return seen;
+  }
+
+  test("a project-key URL fetches the project, its members and the key lookup once each", async ({ page }) => {
+    const seen = trackProjectRequests(page);
+    await page.goto(`/projects/${projectKey}/bugs`);
+    await expect(page.getByRole("button", { name: "Report Bug" }).first()).toBeVisible();
+    // Let any late duplicate land before counting.
+    await page.waitForLoadState("networkidle");
+    expect(seen.project).toHaveLength(1);
+    expect(seen.members).toHaveLength(1);
+    expect(seen.resolve).toHaveLength(1);
+  });
+
+  test("a uuid URL fetches the project and its members once each", async ({ page }) => {
+    const seen = trackProjectRequests(page);
+    await page.goto(`/projects/${ctx.projectId}/bugs`);
+    await expect(page.getByRole("button", { name: "Report Bug" }).first()).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    expect(seen.project).toHaveLength(1);
+    expect(seen.members).toHaveLength(1);
+  });
+
+  for (const [label, ref] of [
+    ["project-key", () => projectKey],
+    ["uuid", () => ctx.projectId],
+  ] as const) {
+    test(`the ${label} URL's project requests start before a slow session check answers`, async ({ page }) => {
+      // Hold the first /api/auth/me for 2s. Without the prefetch the project requests are only
+      // issued after that answer, so they could not possibly have started inside the window.
+      let meReleasedAt = 0;
+      await page.route("**/api/auth/me", async (route) => {
+        await new Promise((r) => setTimeout(r, 2000));
+        if (!meReleasedAt) meReleasedAt = Date.now();
+        await route.continue();
+      });
+      const startedAt: number[] = [];
+      page.on("request", (req) => {
+        if (req.method() === "GET" && new URL(req.url()).pathname === `/api/projects/${ctx.projectId}`) startedAt.push(Date.now());
+      });
+
+      await page.goto(`/projects/${ref()}/bugs`);
+      await expect(page.getByRole("button", { name: "Report Bug" }).first()).toBeVisible();
+      expect(meReleasedAt).toBeGreaterThan(0);
+      expect(startedAt.length).toBeGreaterThan(0);
+      expect(startedAt[0]).toBeLessThan(meReleasedAt);
+    });
+  }
+
+  test("signed out: the project URL still ends at /login and the speculative calls are refused", async ({ browser }) => {
+    const anon = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    try {
+      const page = await anon.newPage();
+      const statuses: number[] = [];
+      page.on("response", (res) => {
+        if (new URL(res.url()).pathname === `/api/projects/${ctx.projectId}`) statuses.push(res.status());
+      });
+      await page.goto(`/projects/${ctx.projectId}/bugs`);
+      await expect.poll(() => new URL(page.url()).pathname, { timeout: 15_000 }).toBe("/login");
+      expect(statuses.every((s) => s >= 400)).toBe(true);
+      await expect(page.getByRole("button", { name: "Report Bug" })).toHaveCount(0);
+    } finally {
+      await anon.close();
+    }
+  });
+
+  test("another tenant's session cannot open this project by uuid or by key", async ({ browser }) => {
+    const b = await browser.newContext({ storageState: ctxB() });
+    try {
+      const page = await b.newPage();
+      const statuses: number[] = [];
+      page.on("response", (res) => {
+        const { pathname } = new URL(res.url());
+        if (pathname === `/api/projects/${ctx.projectId}` || pathname === `/api/projects/${ctx.projectId}/members`) statuses.push(res.status());
+      });
+
+      // uuid: the project fetch is refused, and the provider sends the user back to the list.
+      await page.goto(`/projects/${ctx.projectId}/bugs`);
+      await expect.poll(() => new URL(page.url()).pathname, { timeout: 15_000 }).toBe("/projects");
+      await expect(page.getByRole("button", { name: "Report Bug" })).toHaveCount(0);
+
+      // key: the lookup is refused, so the user sees not-found rather than anyone's project.
+      await page.goto(`/projects/${projectKey}/bugs`);
+      await expect(page.getByRole("alert")).toContainText("Page not found");
+
+      // Nothing the speculative requests asked for ever came back as data.
+      expect(statuses.every((s) => s >= 400)).toBe(true);
+    } finally {
+      await b.close();
+    }
   });
 });

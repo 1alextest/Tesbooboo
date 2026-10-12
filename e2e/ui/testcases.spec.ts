@@ -636,15 +636,13 @@ test.describe("test case repository table — column drag-and-drop removed", () 
   });
 });
 
-// The repository's ID/Test case title/Priority column sort, added to match the Test Runs table's
-// own column sort (testcases/page.tsx toggleSuiteCasesSort). listTestCases's sortBy/sortDir
-// (legacy.service.ts, see api/testcases.spec.ts's "sort" describe) is a real, tested server
-// capability, but the screen no longer calls it for this: an initial report that sorting "took too
-// long" traced back to every click being its own full refetch, so the page now loads the whole
-// filtered batch once (up to MAX_PAGE_SIZE) and sorts/paginates it entirely client-side afterward —
-// same architecture the Test Runs table already used. These UI tests cover what the API tests
-// can't: that a click actually reorders what's on screen with no fetch at all, and that the one
-// thing that still does refetch (an actual filter change) doesn't blank the table while in flight.
+// The repository's ID/Test case title/Priority column sort (testcases/page.tsx toggleSuiteCasesSort).
+// Paging and sorting are server-side (limit/offset/sortBy on the list endpoint, see
+// api/testcases.spec.ts's "sort" and "repository paging" describes), so a header click is a request
+// for the first page in that order. It briefly used to sort a 500-row batch in the browser; that
+// capped the table at 500 rows, which is why it moved back. These UI tests cover what the API tests
+// can't: that a click reorders what's on screen, asks the server for the sort, and that the
+// refetch doesn't blank the table while in flight.
 test.describe("test case repository table — column sort", () => {
   test("the Test case title header sorts the visible rows ascending, then descending on a second click", async ({ page }) => {
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
@@ -664,13 +662,12 @@ test.describe("test case repository table — column sort", () => {
       const titleButtons = () => page.locator("table.tc-repo-table tbody tr td button", { hasText: marker });
       await expect(titleButtons()).toHaveCount(3);
 
-      // Once the filtered batch has landed, sorting must not issue any further request to the
-      // testcases list endpoint at all — this is the whole point of the fix (a sort click used to be
-      // its own full refetch, which is what made it feel slow).
-      let listRequestsAfterInitialLoad = 0;
+      // The server does the sorting, so each click must reach the list endpoint with that sort.
+      const sortRequests: string[] = [];
       page.on("request", (req) => {
-        if (req.method() === "GET" && new URL(req.url()).pathname === `/api/projects/${ctx.projectId}/testcases`) {
-          listRequestsAfterInitialLoad += 1;
+        const url = new URL(req.url());
+        if (req.method() === "GET" && url.pathname === `/api/projects/${ctx.projectId}/testcases` && url.searchParams.has("sortBy")) {
+          sortRequests.push(`${url.searchParams.get("sortBy")}:${url.searchParams.get("sortDir")}`);
         }
       });
 
@@ -679,16 +676,14 @@ test.describe("test case repository table — column sort", () => {
       await sortByTitle.click();
 
       await expect(page.getByRole("button", { name: "Sort by Test case title, currently ascending" })).toBeVisible();
-      // Polled rather than a one-shot read: the row order updates the instant the click is handled
-      // (a client-side derive, not awaiting any response), and while that's effectively synchronous
-      // with the click, polling avoids any flakiness in exactly when Playwright observes it.
+      // Polled: the new order lands when the sorted page's response does.
       await expect.poll(() => titleButtons().allTextContents()).toEqual([`${marker} Alpha`, `${marker} Mango`, `${marker} Zeta`]);
 
       await sortByTitle.click();
       await expect(page.getByRole("button", { name: "Sort by Test case title, currently descending" })).toBeVisible();
       await expect.poll(() => titleButtons().allTextContents()).toEqual([`${marker} Zeta`, `${marker} Mango`, `${marker} Alpha`]);
 
-      expect(listRequestsAfterInitialLoad, "sorting should not refetch the list from the server").toBe(0);
+      expect(sortRequests, "each click asks the server for that sort").toEqual(expect.arrayContaining(["title:asc", "title:desc"]));
     } finally {
       for (const id of created) await api.delete(`/api/projects/${ctx.projectId}/testcases/${id}`, { failOnStatusCode: false });
       await api.dispose();
@@ -714,8 +709,7 @@ test.describe("test case repository table — column sort", () => {
       }
     );
 
-    // Sort and pagination no longer touch the network at all (see the test above), so a filter
-    // change is the one thing left that still refetches — this is what exercises that refetch path.
+    // A filter change refetches (as do sort and paging); this exercises that refetch path.
     await page.getByPlaceholder("Search by ID, title, or type").fill("zzz-unlikely-to-match-anything-at-all");
 
     // While that delayed request is in flight: the table's own rows are still there — not torn down

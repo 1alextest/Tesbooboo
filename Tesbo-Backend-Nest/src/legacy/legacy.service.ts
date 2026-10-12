@@ -4006,6 +4006,9 @@ export class LegacyService implements OnModuleInit {
       !query.notionPageId &&
       !query.search &&
       !query.customFieldFilters &&
+      // The cache key is (project, limit, offset) with no sort in it: a sorted page would be answered
+      // with the cached default-order rows, so a column sort is never cacheable.
+      !query.sortBy &&
       LegacyService.parseCustomTagIdsParam(query.customTagIds).length === 0 &&
       LegacyService.parseCommaSeparatedIdsParam(query.ids).length === 0 &&
       String(query.includeArchived ?? "").toLowerCase() !== "true"
@@ -4277,7 +4280,17 @@ export class LegacyService implements OnModuleInit {
        ORDER BY ${orderBySql} LIMIT $${values.length - 1} OFFSET $${values.length}`,
       values
     );
-    const total = Number(res.rows[0]?.total_count || 0);
+    let total = Number(res.rows[0]?.total_count || 0);
+    if (res.rows.length === 0 && offset > 0) {
+      // total_count rides on the returned rows, so a page past the end reports 0 — which a client
+      // paging through (or one whose last page was just emptied by a delete) would read as "no
+      // matches at all". Ask for the real count so it can step back to the last page that exists.
+      const counted = await this.db.query(
+        `${suiteSubtreeCteSql}SELECT COUNT(*) AS n FROM testcases ${customFieldJoinSql} WHERE ${where}`,
+        values.slice(0, -2)
+      );
+      total = Number(counted.rows[0]?.n || 0);
+    }
     // total_count is transport for the header, not part of a test case.
     return { rows: res.rows.map(({ total_count, ...row }) => toCamel(row)), total };
   }
