@@ -3231,12 +3231,12 @@ test.describe("zyra / agents (UI)", () => {
 
     const row = page.getByRole("listitem").filter({ hasText: "Sign in with a wrong password" });
     await row.getByRole("button", { name: "Edit" }).click();
-    // Field order in ZyraDraftEditor: Title (textbox 0), Priority (combobox 0), Severity
-    // (combobox 1), Component (textbox 1), Preconditions/Description/Test Data/Steps after that.
+    // Reached by label rather than position — the editor's field order follows the repository's
+    // edit panel (ZYU-147), so a positional index would silently land on a different field.
     // The seeded draft has no severity, so the placeholder option must read "Select", not "No severity".
-    await expect(row.getByRole("combobox").nth(1).locator("option:checked")).toHaveText("Select");
-    await row.getByRole("combobox").nth(1).selectOption("Medium");
-    await row.getByRole("textbox").nth(1).fill("Search");
+    await expect(editorControl(row, "Severity").locator("option:checked")).toHaveText("Select");
+    await editorControl(row, "Severity").selectOption("Medium");
+    await editorControl(row, "Component").fill("Search");
     await row.getByRole("button", { name: "Save edit" }).click();
 
     await expect(row.getByText("Medium")).toBeVisible();
@@ -3263,6 +3263,11 @@ test.describe("zyra / agents (UI)", () => {
    */
   function editorTextarea(row: Locator, label: string): Locator {
     return row.locator("label", { hasText: new RegExp(`^${label}$`) }).locator("xpath=following-sibling::textarea[1]");
+  }
+
+  /** Same label-sibling lookup as editorTextarea, for whichever control (input/select/textarea) follows. */
+  function editorControl(row: Locator, label: string): Locator {
+    return row.locator("label", { hasText: new RegExp(`^${label}$`) }).locator("xpath=following-sibling::*[1]");
   }
 
   function readDraftField(taskId: string, title: string, field: string): string {
@@ -3300,6 +3305,67 @@ test.describe("zyra / agents (UI)", () => {
     // Reopening shows the edited value (the panel's local row was updated, not only the server).
     await row.getByRole("button", { name: "Edit" }).click();
     await expect(editorTextarea(row, "Test Data")).toHaveValue("post: Edited Buzz");
+  });
+
+  /*
+   * "[Zyra] Edit Test Case View Fields Are Displayed in the Wrong Sequence" — the draft editor listed
+   * Title, Priority, Severity, Component, Preconditions, Description, Test Data, Steps, while the
+   * repository's edit panel (testcases/page.tsx Overview tab, then its Steps tab) reads Title,
+   * Description, Preconditions, …, Test Data, …, Priority, …, Component, Severity. The expected list
+   * is that order restricted to the fields a draft edit carries.
+   */
+  test("ZYU-147 the draft editor lists its fields in the repository edit panel's order, and every field still loads and saves", async ({ browser }) => {
+    const title = stamp("Chat field order case");
+    const { taskId } = seedChatReviewBatch({
+      entries: [
+        {
+          opType: "create",
+          draft: {
+            suiteId: null, title, description: "Order description", preconditions: "Order preconditions",
+            stepsJson: JSON.stringify([{ stepNumber: 1, action: "Order action", expectedResult: "Order expected" }]),
+            testData: "Order test data", priority: "P1", severity: "High", component: "Order component",
+          },
+        },
+      ],
+    });
+    const page = await open(browser, "/agents/zyra");
+
+    const row = page.getByRole("listitem").filter({ hasText: title });
+    await row.getByRole("button", { name: "Edit" }).click();
+    await expect(row.getByRole("button", { name: "Save edit" })).toBeVisible();
+
+    await expect(row.locator("label")).toHaveText([
+      "Title", "Description", "Preconditions", "Test Data", "Priority", "Component", "Severity", "Steps",
+    ]);
+
+    // Reordering must not disconnect a value from its field: each loads under its own label.
+    await expect(editorControl(row, "Title")).toHaveValue(title);
+    await expect(editorControl(row, "Description")).toHaveValue("Order description");
+    await expect(editorControl(row, "Preconditions")).toHaveValue("Order preconditions");
+    await expect(editorControl(row, "Test Data")).toHaveValue("Order test data");
+    await expect(editorControl(row, "Priority")).toHaveValue("P1");
+    await expect(editorControl(row, "Component")).toHaveValue("Order component");
+    await expect(editorControl(row, "Severity")).toHaveValue("High");
+    await expect(row.getByPlaceholder("Expected result")).toHaveValue("Order expected");
+
+    // …and each still saves to its own draft field.
+    await editorControl(row, "Description").fill("Order description edited");
+    await editorControl(row, "Preconditions").fill("Order preconditions edited");
+    await editorControl(row, "Test Data").fill("Order test data edited");
+    await editorControl(row, "Priority").selectOption("P0");
+    await editorControl(row, "Component").fill("Order component edited");
+    await editorControl(row, "Severity").selectOption("Low");
+    await row.getByRole("button", { name: "Save edit" }).click();
+    await expect(row.getByRole("button", { name: "Save edit" })).toHaveCount(0);
+
+    await expect
+      .poll(() => readDraftField(taskId, title, "description"), { message: "the edit must persist, not just render client-side" })
+      .toBe("Order description edited");
+    expect(readDraftField(taskId, title, "preconditions")).toBe("Order preconditions edited");
+    expect(readDraftField(taskId, title, "testData")).toBe("Order test data edited");
+    expect(readDraftField(taskId, title, "priority")).toBe("P0");
+    expect(readDraftField(taskId, title, "component")).toBe("Order component edited");
+    expect(readDraftField(taskId, title, "severity")).toBe("Low");
   });
 
   test("ZYU-134 editing another field of a proposal staged before test data was on the row does not wipe its test data", async ({ browser }) => {
