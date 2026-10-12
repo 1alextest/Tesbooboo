@@ -78,7 +78,7 @@ export function sortActivitiesNewestFirst(
 // English labels for the task list / requirements pages; the quick view itself renders the
 // localized "taskStatus.<status>" key from lib/zyra-i18n.ts (same English text).
 const TASK_STATUS_LABELS: Record<string, string> = {
-  todo: "Pending",
+  todo: "To Do",
   in_progress: "In Progress",
   in_review: "In Review",
   failed: "Failed",
