@@ -39,7 +39,7 @@ jest.mock("../observability/embedding-trace", () => ({
 
 import { RagRetrievalService } from "./rag-retrieval.service";
 import type { DatabaseService } from "../database/database.service";
-import { RAG_CONFIDENT_SIMILARITY, RAG_MIN_SIMILARITY, RAG_PASSAGE_CHARS, TESTCASE_SIMILARITY_THRESHOLD } from "./rag.constants";
+import { RAG_CONFIDENT_SIMILARITY, RAG_GENERATION_CHAR_BUDGET, RAG_MAX_SOURCES, RAG_MIN_SIMILARITY, RAG_PASSAGE_CHARS, TESTCASE_SIMILARITY_THRESHOLD } from "./rag.constants";
 
 type AnnRow = { source_type: string; source_id: string; heading_path: string | null; content: string; title: string; cosine_similarity: number };
 type FtsRow = { id: string; title: string; content: string; rank: number };
@@ -121,6 +121,33 @@ describe("RagRetrievalService.retrieveWithDiagnostics", () => {
     expect(result.topScore).toBeCloseTo(0.92);
     expect(result.items.map((item) => item.citation.sourceId)).toEqual(["a"]);
     expect(result.items[0].content).toContain("content for a");
+  });
+
+  // One long ticket owning most of the ANN candidates used to fill the whole budget by itself, so the
+  // drafting call saw that one ticket — every generated case cited it, however many were relevant.
+  it("a source with many matching chunks does not crowd every other relevant source out of the context", async () => {
+    const chunk = (id: string, score: number, n: number): AnnRow => ({ source_type: "document", source_id: id, heading_path: null, content: `${id} passage ${n} `.padEnd(1500, "x"), title: `Ticket ${id}`, cosine_similarity: score });
+    const big = Array.from({ length: 10 }, (_, n) => chunk("big", 0.8 - n * 0.001, n));
+    const svc = new RagRetrievalService(makeDb([...big, chunk("second", 0.7, 0), chunk("third", 0.69, 0)]));
+    const result = await svc.retrieveWithDiagnostics("project-1", "employee api endpoints", { charBudget: RAG_GENERATION_CHAR_BUDGET });
+    expect(result.items.map((item) => item.citation.sourceId)).toEqual(["big", "second", "third"]);
+    for (const item of result.items) expect(item.content.length).toBeLessThanOrEqual(RAG_PASSAGE_CHARS + 3);
+  });
+
+  it("ranks a source once, by its best chunk — having more matching chunks does not outrank a better match", async () => {
+    const row = (id: string, score: number, n: number): AnnRow => ({ source_type: "document", source_id: id, heading_path: null, content: `${id} ${n}`, title: id, cosine_similarity: score });
+    const many = Array.from({ length: 5 }, (_, n) => row("many", 0.8 - n * 0.01, n));
+    const svc = new RagRetrievalService(makeDb([row("best", 0.9, 0), ...many]));
+    const result = await svc.retrieveWithDiagnostics("project-1", "employee api endpoints");
+    expect(result.items.map((item) => item.citation.sourceId)).toEqual(["best", "many"]);
+  });
+
+  it("with the generation budget, every one of RAG_MAX_SOURCES full-passage sources reaches the context", async () => {
+    const rows = Array.from({ length: RAG_MAX_SOURCES }, (_, i): AnnRow => ({ source_type: "document", source_id: `t${i}`, heading_path: null, content: `t${i} `.padEnd(RAG_PASSAGE_CHARS, "y"), title: `t${i}`, cosine_similarity: 0.9 - i * 0.01 }));
+    const svc = new RagRetrievalService(makeDb(rows));
+    const result = await svc.retrieveWithDiagnostics("project-1", "employee api endpoints", { charBudget: RAG_GENERATION_CHAR_BUDGET });
+    expect(result.items).toHaveLength(RAG_MAX_SOURCES);
+    expect(result.items.every((item) => !item.content.endsWith("..."))).toBe(true);
   });
 
   it("degrades to keyword-only results (confidence 'none', no crash) when the embeddings call itself fails mid-query", async () => {

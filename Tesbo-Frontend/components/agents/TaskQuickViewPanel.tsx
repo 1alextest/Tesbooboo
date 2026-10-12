@@ -54,10 +54,31 @@ export function isFeedbackActivity(activity: ZyraTask["activities"][number]): bo
   return activity.kind === "feedback" || activity.title === "Review feedback submitted";
 }
 
+// The Activity tab shows the newest entry first. activity_log is append-only server-side, but the
+// order is decided here from createdAt rather than trusted from the array. Entries written in one
+// call share a timestamp ("Task created" + "Waiting for Zyra"), so ties fall back to array position
+// (later = newer); an entry without a parseable createdAt sinks to the bottom. Returns copies paired
+// with their original index, which stays stable as new entries arrive and so serves as the React key.
+// Callers that read the log chronologically (latestFailureDetail) keep using the raw array.
+export function sortActivitiesNewestFirst(
+  activities: ZyraTask["activities"],
+): Array<{ activity: ZyraTask["activities"][number]; index: number }> {
+  return activities
+    .map((activity, index) => ({ activity, index, time: Date.parse(activity?.createdAt ?? "") }))
+    .sort((a, b) => {
+      const aValid = Number.isFinite(a.time);
+      const bValid = Number.isFinite(b.time);
+      if (aValid !== bValid) return aValid ? -1 : 1;
+      if (aValid && a.time !== b.time) return b.time - a.time;
+      return aValid ? b.index - a.index : a.index - b.index;
+    })
+    .map(({ activity, index }) => ({ activity, index }));
+}
+
 // English labels for the task list / requirements pages; the quick view itself renders the
 // localized "taskStatus.<status>" key from lib/zyra-i18n.ts (same English text).
 const TASK_STATUS_LABELS: Record<string, string> = {
-  todo: "Pending",
+  todo: "To Do",
   in_progress: "In Progress",
   in_review: "In Review",
   failed: "Failed",
@@ -368,8 +389,8 @@ export default function TaskQuickViewPanel({ task, projectId, onClose, onTaskUpd
 
           {activeTab === "activity" && (
             <div className="flex flex-col gap-2.5">
-              {activities.map((activity, index) => (
-                <div key={`${task.id}-activity-${index}`} className="rounded-lg border border-[var(--border)] p-3.5">
+              {sortActivitiesNewestFirst(activities).map(({ activity, index }) => (
+                <div key={`${task.id}-activity-${index}`} data-testid="task-activity-entry" className="rounded-lg border border-[var(--border)] p-3.5">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--muted-soft)]">
                       {activity.actor} · {(activity.stage || "").replaceAll("_", " ")}

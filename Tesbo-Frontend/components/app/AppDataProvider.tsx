@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { authMe, getWorkspace, listProjects, type ProjectSummary, type WorkspaceInfo } from "@/lib/api";
+import { clearProjectPrefetch, prefetchProjectForPath } from "@/lib/projectPrefetch";
 
 type CurrentUser = Awaited<ReturnType<typeof authMe>>;
 
@@ -76,10 +77,14 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    // Speculative and read-only: overlaps the project requests with the session check below. The
+    // gate itself is unchanged, see lib/projectPrefetch.ts.
+    prefetchProjectForPath(window.location.pathname);
     Promise.all([authMe(), getWorkspace().catch(() => null), listProjects().catch(() => [])]).then(
       ([me, ws, projectList]) => {
         if (cancelled) return;
         if (!me) {
+          clearProjectPrefetch();
           const target = `${window.location.pathname}${window.location.search}`;
           router.replace(`/login?redirect=${encodeURIComponent(target)}`);
           return;

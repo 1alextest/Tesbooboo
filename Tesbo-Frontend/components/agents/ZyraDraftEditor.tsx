@@ -7,7 +7,7 @@ import { useZyraText } from "@/lib/zyra-i18n";
 
 type Step = { action: string; expectedResult: string };
 
-const PRIORITIES = ["P0", "P1", "P2", "P3"];
+const PRIORITIES = ["P0", "P1", "P2", "P3", "Not set"];
 // Same vocabulary as testcases/page.tsx's TESTCASE_SEVERITIES and the backend's BUG_SEVERITIES
 // allow-list (normalizeZyraSeverity) — keeps this Select from ever offering a value the server
 // would silently drop back to null.
@@ -99,9 +99,26 @@ export function ZyraDraftEditor({
 
   return (
     <div className="space-y-3 rounded-lg border border-[var(--brand-border)] bg-[var(--surface)] p-3">
+      {/* Field order follows the repository's edit panel (testcases/page.tsx, Overview tab, then the
+          Steps tab), minus the fields a draft edit doesn't carry: Title, Description, Preconditions,
+          Test Data, Priority, Component, Severity, Steps. */}
       <Field>
         <FieldLabel>{t("col.title")}</FieldLabel>
         <Input value={title} onChange={(event) => setTitle(event.target.value)} />
+      </Field>
+      {/* Bound to the draft's description — what zyraSave writes to the test case's Description
+          column, and what the repository's edit form shows under that same label. */}
+      <Field>
+        <FieldLabel>{t("col.description")}</FieldLabel>
+        <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={2} />
+      </Field>
+      <Field>
+        <FieldLabel>{t("col.preconditions")}</FieldLabel>
+        <Textarea value={preconditions} onChange={(event) => setPreconditions(event.target.value)} rows={2} />
+      </Field>
+      <Field>
+        <FieldLabel>{t("col.testData")}</FieldLabel>
+        <Textarea value={testData} onChange={(event) => setTestData(event.target.value)} rows={2} placeholder={t("editor.testDataPlaceholder")} />
       </Field>
       <Field>
         <FieldLabel>{t("col.priority")}</FieldLabel>
@@ -112,6 +129,10 @@ export function ZyraDraftEditor({
         </Select>
       </Field>
       <Field>
+        <FieldLabel>{t("col.component")}</FieldLabel>
+        <Input value={component} onChange={(event) => setComponent(event.target.value)} placeholder={t("editor.componentPlaceholder")} />
+      </Field>
+      <Field>
         <FieldLabel>{t("col.severity")}</FieldLabel>
         <Select value={severity} onChange={(event) => setSeverity(event.target.value)}>
           <option value="">{t("editor.select")}</option>
@@ -120,24 +141,6 @@ export function ZyraDraftEditor({
             <option key={s} value={s}>{t.value("severity", s)}</option>
           ))}
         </Select>
-      </Field>
-      <Field>
-        <FieldLabel>{t("col.component")}</FieldLabel>
-        <Input value={component} onChange={(event) => setComponent(event.target.value)} placeholder={t("editor.componentPlaceholder")} />
-      </Field>
-      <Field>
-        <FieldLabel>{t("col.preconditions")}</FieldLabel>
-        <Textarea value={preconditions} onChange={(event) => setPreconditions(event.target.value)} rows={2} />
-      </Field>
-      {/* Bound to the draft's description — what zyraSave writes to the test case's Description
-          column, and what the repository's edit form shows under that same label. */}
-      <Field>
-        <FieldLabel>{t("col.description")}</FieldLabel>
-        <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={2} />
-      </Field>
-      <Field>
-        <FieldLabel>{t("col.testData")}</FieldLabel>
-        <Textarea value={testData} onChange={(event) => setTestData(event.target.value)} rows={2} placeholder={t("editor.testDataPlaceholder")} />
       </Field>
       <div>
         <FieldLabel>{t("col.steps")}</FieldLabel>

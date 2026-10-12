@@ -108,7 +108,7 @@ function describe(item: ActivityLogItem): ReactNode {
 }
 
 /**
- * The bug's history, oldest first, in the Activity tab of Bug Details (BugDiscussion). Reads the
+ * The bug's history, newest first, in the Activity tab of Bug Details (BugDiscussion). Reads the
  * project activity feed filtered to this bug rather than a bug-specific endpoint — the rows are the same audit_logs rows
  * the Activity stream shows. `refreshKey` changes whenever the caller knows the bug has changed
  * (edited, file removed, comment posted) so the list is re-read.
@@ -138,7 +138,8 @@ export default function BugActivity({
         all.push(...data.list);
         if (data.list.length < PAGE_SIZE || all.length >= data.total) break;
       }
-      setItems(all.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()));
+      // Newest first, like the project Activity stream: the latest change is the one being looked for.
+      setItems(all.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Failed to load activity.");
     } finally {

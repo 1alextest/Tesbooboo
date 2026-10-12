@@ -114,12 +114,17 @@ const MAX_PAGE_SIZE = 500;
 const BULK_NO_CHANGE = "";
 const DEFAULT_PAGE_SIZE = 25;
 const TESTCASE_STATUSES = ["Draft", "In Review", "Approved", "Deprecated", "Archived"];
-const TESTCASE_PRIORITIES = ["P0", "P1", "P2", "P3"];
+// "Not set" is a real stored value (a case nobody has prioritised yet, e.g. one migrated from a tool
+// whose priority was blank). It is last so it never reads as a rank, and sorts after P3.
+const TESTCASE_PRIORITIES = ["P0", "P1", "P2", "P3", "Not set"];
 const TESTCASE_TYPES = [
   "Functional", "Regression", "Smoke", "Sanity", "Integration",
   "API", "UI", "Performance", "Security",
+  "Acceptance", "Usability", "Compatibility", "Exploratory", "Other",
 ];
-const TESTCASE_AUTOMATION_TYPES = ["Automated", "Not Automated", "Can't Automate"];
+const TESTCASE_AUTOMATION_TYPES = ["Automated", "Not Automated", "To Be Automated", "Can't Automate"];
+/* Matches SUITE_TEXT_MAX_LENGTH in legacy.service.ts: the most a suite description / preconditions may hold. */
+const SUITE_TEXT_MAX_LENGTH = 20000;
 /* Create-form-only sentinel for an unselected Suite: "" is already the real "No suite" value
  * (see `suiteId || undefined` in handlePanelSubmit), so an unpicked suite needs a distinct value
  * to render as an unselected "Select" placeholder rather than pre-selecting "No suite". */
@@ -147,52 +152,6 @@ interface TestCasesPageData {
 
 function normalizeTestcaseIdPrefix(value: string): string {
   return value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3);
-}
-
-/*
- * Client-side mirrors of the ORDER BY the repository's ID/Test case title/Priority column sort
- * applies server-side (legacy.service.ts listTestCases) — same logic as cycles/[cycleId]/page.tsx's
- * compareExternalId/comparePriority/compareTestCaseTitle for the Test Runs table's own column sort.
- *
- * Used only to optimistically re-order the rows already on screen the instant a sort header is
- * clicked (see toggleSuiteCasesSort below), so the table reorders immediately instead of sitting on
- * the round trip — the repository is server-paginated, so that round trip still has to happen for
- * the authoritative order across the whole filtered set, not just this page, but the click no longer
- * has to wait for it to feel like something happened.
- */
-function compareExternalId(a: string, b: string): number {
-  const numOf = (id: string) => {
-    const match = id.match(/(\d+)(?!.*\d)/);
-    return match ? parseInt(match[1], 10) : NaN;
-  };
-  const na = numOf(a);
-  const nb = numOf(b);
-  if (!Number.isNaN(na) && !Number.isNaN(nb) && na !== nb) return na - nb;
-  return a.localeCompare(b);
-}
-
-const CANONICAL_PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
-const PRIORITY_RANK: Record<string, number> = Object.fromEntries(CANONICAL_PRIORITIES.map((p, i) => [p, i]));
-function comparePriority(a: string, b: string): number {
-  const rankOf = (p: string) => (p ? (p in PRIORITY_RANK ? PRIORITY_RANK[p] : CANONICAL_PRIORITIES.length) : CANONICAL_PRIORITIES.length + 1);
-  const ra = rankOf(a);
-  const rb = rankOf(b);
-  if (ra !== rb) return ra - rb;
-  return a.localeCompare(b);
-}
-
-function compareTestCaseTitle(a: string, b: string): number {
-  return a.toLowerCase().localeCompare(b.toLowerCase());
-}
-
-function sortTestCases(cases: TestCaseListItem[], sort: RepoTcSort): TestCaseListItem[] {
-  if (!sort) return cases;
-  const direction = sort.direction === "asc" ? 1 : -1;
-  return [...cases].sort((a, b) => {
-    if (sort.column === "id") return direction * compareExternalId(a.externalId || "", b.externalId || "");
-    if (sort.column === "priority") return direction * comparePriority(a.priority || "", b.priority || "");
-    return direction * compareTestCaseTitle(a.title || "", b.title || "");
-  });
 }
 
 function parseProjectSettings(raw: unknown): Record<string, unknown> {
@@ -393,18 +352,12 @@ export default function TestCasesPage() {
   const [repoSummary, setRepoSummary] = useState<RepositorySummary | null>(cached?.repoSummary ?? null);
   const [suitePanelOpen, setSuitePanelOpen] = useState(true);
   /*
-   * Holds every row matching the current suite/search/status/priority/type/automation/jira/
-   * customField filters, up to MAX_PAGE_SIZE (500) — not just the current on-screen page. Sorting
-   * and pagination are then derived from this batch entirely client-side (see sortedSuiteCases/
-   * selectedSuiteCases below), the same architecture the Test Runs table already uses for its own
-   * column sort (cycles/[cycleId]/page.tsx loads every execution once, then sorts/paginates in
-   * memory). A round trip is still unavoidable when a *filter* actually changes — the server has to
-   * tell us what matches — but sorting and flipping pages no longer do, which is the part that used
-   * to feel sluggish (a sort click used to be its own full refetch).
-   *
-   * The trade-off: a filter set with more than MAX_PAGE_SIZE matches only has its first batch
-   * available to sort/page through client-side — see suiteCasesTruncated below, surfaced to the user
-   * rather than silently dropping rows.
+   * Holds ONE page of the rows matching the current suite/search/status/priority/type/automation/
+   * jira/customField filters, already sorted by the server. Paging and the ID/title/priority sort
+   * are server-side (limit/offset/sortBy on GET .../testcases), so a project with thousands of
+   * cases is fully reachable and a first load only carries `pageSize` rows. Every page flip, sort
+   * click and filter change is therefore a round trip; the previous rows stay on screen (with the
+   * "Updating…" pill) until the new page lands.
    */
   const [suiteCases, setSuiteCases] = useState<TestCaseListItem[]>([]);
   const [suiteCasesTotal, setSuiteCasesTotal] = useState(0);
@@ -415,7 +368,6 @@ export default function TestCasesPage() {
   // should stay on screen instead of being torn down and replaced by that message.
   const [hasLoadedCasesOnce, setHasLoadedCasesOnce] = useState(false);
   const [suiteCasesError, setSuiteCasesError] = useState<string | null>(null);
-  const [suiteCasesPage, setSuiteCasesPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
   // ID/Test case title/Priority column sort — null keeps the server's default (creation) order,
   // same "no sort" convention the Test Runs table's own column sort uses.
@@ -427,6 +379,8 @@ export default function TestCasesPage() {
 
   const [isAddSuiteModalOpen, setIsAddSuiteModalOpen] = useState(false);
   const [newSuiteName, setNewSuiteName] = useState("");
+  const [newSuiteDescription, setNewSuiteDescription] = useState("");
+  const [newSuitePreconditions, setNewSuitePreconditions] = useState("");
   const [newSuiteParentId, setNewSuiteParentId] = useState("");
   const [isCreatingSuite, setIsCreatingSuite] = useState(false);
   const [newSuiteNameError, setNewSuiteNameError] = useState("");
@@ -454,7 +408,7 @@ export default function TestCasesPage() {
   const [estimatedDuration, setEstimatedDuration] = useState("");
   const [attachments, setAttachments] = useState("");
   const [type, setType] = useState("Functional");
-  const [priority, setPriority] = useState("P2");
+  const [priority, setPriority] = useState("Not set");
   const [status, setStatus] = useState("Draft");
   const [automationStatus, setAutomationStatus] = useState("Not Automated");
   const [component, setComponent] = useState("");
@@ -508,6 +462,8 @@ export default function TestCasesPage() {
   const [isRenameSuiteModalOpen, setIsRenameSuiteModalOpen] = useState(false);
   const [renameSuiteId, setRenameSuiteId] = useState<string | null>(null);
   const [renameSuiteInputValue, setRenameSuiteInputValue] = useState("");
+  const [renameSuiteDescription, setRenameSuiteDescription] = useState("");
+  const [renameSuitePreconditions, setRenameSuitePreconditions] = useState("");
   const [isRenamingSuite, setIsRenamingSuite] = useState(false);
   const [renameSuiteError, setRenameSuiteError] = useState("");
 
@@ -658,17 +614,8 @@ export default function TestCasesPage() {
     }
     return new Map(suites.map((s) => [s.id, pathFor(s.id)]));
   }, [suites]);
-  // Sorted client-side from the whole loaded batch, then sliced to just the current page — both
-  // instant, no network round trip for either (see the `suiteCases` state comment above).
-  const sortedSuiteCases = useMemo(() => sortTestCases(suiteCases, suiteCasesSort), [suiteCases, suiteCasesSort]);
-  const selectedSuiteCases = useMemo(
-    () => sortedSuiteCases.slice((suiteCasesPage - 1) * pageSize, suiteCasesPage * pageSize),
-    [sortedSuiteCases, suiteCasesPage, pageSize]
-  );
-  // The server reports more matches than fit in one MAX_PAGE_SIZE batch — pagination can only reach
-  // what was actually loaded, so this is surfaced next to the result count rather than silently
-  // dead-ending on a page that renders nothing.
-  const suiteCasesTruncated = suiteCasesTotal > suiteCases.length;
+  // The server already returned exactly this page, in order.
+  const selectedSuiteCases = suiteCases;
   const selectedCaseIdSet = useMemo(() => new Set(selectedCaseIds), [selectedCaseIds]);
   const areAllCasesSelected =
     selectedSuiteCases.length > 0 && selectedSuiteCases.every((tc) => selectedCaseIdSet.has(tc.id));
@@ -731,10 +678,7 @@ export default function TestCasesPage() {
     customFieldFilters.length > 0,
     suiteTagFilter.length > 0,
   ].filter(Boolean).length;
-  // Paged against what was actually loaded (suiteCases.length), not the server's raw total — when
-  // suiteCasesTruncated is true those differ, and paging against the total would offer pages past
-  // the loaded batch that can only ever render empty.
-  const totalPages = Math.max(1, Math.ceil(suiteCases.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(suiteCasesTotal / pageSize));
 
   const statusCount = useCallback(
     (name: string) => repoSummary?.byStatus.find((s) => s.name === name)?.count ?? 0,
@@ -798,9 +742,23 @@ export default function TestCasesPage() {
     return () => document.removeEventListener("mousedown", handler);
   }, [isImportExportMenuOpen]);
 
-  useEffect(() => {
-    setSuiteCasesPage(1);
-  }, [
+  // Toggles the ID/Test case title/Priority column sort: the same column clicked again flips
+  // direction, a different column replaces it starting at ascending — only one active sort at a
+  // time, matching the Test Runs table's own toggleRunSort. A state update; loadSelectedSuiteCases
+  // depends on it, so the server re-sorts and the page resets to 1.
+  const toggleSuiteCasesSort = useCallback((column: RepoTcSortColumn) => {
+    setSuiteCasesSort((prev) =>
+      prev?.column === column ? { column, direction: prev.direction === "asc" ? "desc" : "asc" } : { column, direction: "asc" }
+    );
+  }, []);
+
+  /*
+   * The current page number, valid only for the filter/sort/page-size combination it was set under.
+   * Storing it with that combination's key (instead of resetting it from an effect) means a filter
+   * change reads as page 1 in the same render, so the list is fetched once with offset 0 — a reset
+   * effect would first fire a request for the stale page and then a second one for page 1.
+   */
+  const suiteListKey = JSON.stringify([
     activeSuiteId,
     debouncedSuiteSearch,
     suiteStatusFilter,
@@ -808,32 +766,37 @@ export default function TestCasesPage() {
     suiteTypeFilter,
     suiteAutomationFilter,
     activeJiraIssueKey,
+    activeLinearIssueKey,
+    activeNotionPageId,
     customFieldFilters,
     suiteTagFilter,
     pageSize,
     suiteCasesSort,
   ]);
-
-  // Toggles the ID/Test case title/Priority column sort: the same column clicked again flips
-  // direction, a different column replaces it starting at ascending — only one active sort at a
-  // time, matching the Test Runs table's own toggleRunSort. Purely a state update: sortedSuiteCases
-  // above re-derives from it instantly, with no fetch involved at all.
-  const toggleSuiteCasesSort = useCallback((column: RepoTcSortColumn) => {
-    setSuiteCasesSort((prev) =>
-      prev?.column === column ? { column, direction: prev.direction === "asc" ? "desc" : "asc" } : { column, direction: "asc" }
-    );
-  }, []);
+  const [pageState, setPageState] = useState({ key: "", page: 1 });
+  const suiteCasesPage = pageState.key === suiteListKey ? pageState.page : 1;
+  const setSuiteCasesPage = useCallback(
+    (next: number | ((prev: number) => number)) =>
+      setPageState((prev) => {
+        const current = prev.key === suiteListKey ? prev.page : 1;
+        return { key: suiteListKey, page: Math.max(1, typeof next === "function" ? next(current) : next) };
+      }),
+    [suiteListKey]
+  );
+  // Only the newest request may write state: a slow page 2 must not land on top of a faster page 3.
+  const suiteCasesRequestSeq = useRef(0);
 
   const loadSelectedSuiteCases = useCallback(async () => {
+    const seq = ++suiteCasesRequestSeq.current;
+    let followUp = false;
     setSuiteCasesLoading(true);
     setSuiteCasesError(null);
     try {
-      // Always the whole filtered batch (up to MAX_PAGE_SIZE), never just one page — sort and
-      // pagination are derived from it client-side (sortedSuiteCases/selectedSuiteCases above), so
-      // neither one needs to appear in this call or in this callback's dependencies below.
       const { list, total } = await listTestCases(projectId, {
-        limit: MAX_PAGE_SIZE,
-        offset: 0,
+        limit: pageSize,
+        offset: (suiteCasesPage - 1) * pageSize,
+        sortBy: suiteCasesSort?.column,
+        sortDir: suiteCasesSort?.direction,
         suiteId: activeSuiteId ?? undefined,
         // A suite in this tree stands for itself and everything nested under it (see the
         // sidebar's recursiveTestCaseCount) — the list has to agree, or a parent suite with all
@@ -850,16 +813,28 @@ export default function TestCasesPage() {
         customFieldFilters: buildCustomFieldFiltersQueryParam(customFieldFilters),
         customTagIds: suiteTagFilter.length ? suiteTagFilter : undefined,
       });
+      if (seq !== suiteCasesRequestSeq.current) return;
+      const lastPage = Math.max(1, Math.ceil(total / pageSize));
+      if (list.length === 0 && total > 0 && suiteCasesPage > lastPage) {
+        // The page we asked for no longer exists (its rows were deleted or moved, here or in
+        // another tab). Step back to the real last page; changing the page re-runs this load.
+        followUp = true;
+        setSuiteCasesPage(lastPage);
+        return;
+      }
       setSuiteCases(list);
       setSuiteCasesTotal(total);
     } catch (err) {
+      if (seq !== suiteCasesRequestSeq.current) return;
       const message = err instanceof Error ? err.message : "Failed to load test cases.";
       setSuiteCasesError(message);
       setSuiteCases([]);
       setSuiteCasesTotal(0);
     } finally {
-      setSuiteCasesLoading(false);
-      setHasLoadedCasesOnce(true);
+      if (seq === suiteCasesRequestSeq.current && !followUp) {
+        setSuiteCasesLoading(false);
+        setHasLoadedCasesOnce(true);
+      }
     }
   }, [
     activeSuiteId,
@@ -874,10 +849,14 @@ export default function TestCasesPage() {
     activeNotionPageId,
     customFieldFilters,
     suiteTagFilter,
+    pageSize,
+    suiteCasesPage,
+    suiteCasesSort,
+    setSuiteCasesPage,
   ]);
 
   // Same suite/status/priority/type/automation/jira/linear/search/custom-field filters AND column
-  // sort loadSelectedSuiteCases/sortedSuiteCases apply on screen, reused for the "Export" menu so
+  // sort loadSelectedSuiteCases applies on screen, reused for the "Export" menu so
   // the downloaded file matches whatever the repository is currently showing — both which rows
   // (suite/filters) and their order (sort) — instead of always exporting the whole project in an
   // unrelated order ("[Test Cases] Exported Test Cases Lose Their Original Sequence": export used to
@@ -990,7 +969,8 @@ export default function TestCasesPage() {
     setEstimatedDuration("");
     setAttachments("");
     setType("");
-    setPriority("");
+    // New cases start as "Not set", not blank and not P2: the person has not chosen one yet.
+    setPriority("Not set");
     setStatus("Draft");
     setAutomationStatus("");
     setComponent("");
@@ -1265,6 +1245,8 @@ export default function TestCasesPage() {
 
   function openAddSuiteModal(parentId?: string) {
     setNewSuiteName("");
+    setNewSuiteDescription("");
+    setNewSuitePreconditions("");
     setNewSuiteParentId(parentId ?? "");
     setNewSuiteNameError("");
     setIsAddSuiteModalOpen(true);
@@ -1289,9 +1271,16 @@ export default function TestCasesPage() {
     setIsCreatingSuite(true);
     setNewSuiteNameError("");
     try {
-      const created = await createSuite(projectId, { name: newSuiteName.trim(), parentId: newSuiteParentId || undefined });
+      const created = await createSuite(projectId, {
+        name: newSuiteName.trim(),
+        description: newSuiteDescription.trim(),
+        preconditions: newSuitePreconditions.trim(),
+        parentId: newSuiteParentId || undefined,
+      });
       if (created.parentId) setExpandedSuiteIds((prev) => new Set(prev).add(created.parentId as string));
       setNewSuiteName("");
+      setNewSuiteDescription("");
+      setNewSuitePreconditions("");
       setNewSuiteParentId("");
       setIsAddSuiteModalOpen(false);
       // A new suite starts empty (testCaseCount/recursiveTestCaseCount both 0, guaranteed by the
@@ -1308,8 +1297,11 @@ export default function TestCasesPage() {
   }
 
   function handleRenameSuite(suiteId: string, currentName: string) {
+    const current = suites.find((suite) => suite.id === suiteId);
     setRenameSuiteId(suiteId);
     setRenameSuiteInputValue(currentName);
+    setRenameSuiteDescription(current?.description ?? "");
+    setRenameSuitePreconditions(current?.preconditions ?? "");
     setRenameSuiteError("");
     setIsRenameSuiteModalOpen(true);
   }
@@ -1325,7 +1317,15 @@ export default function TestCasesPage() {
     setRenameSuiteError("");
     try {
       const trimmedName = renameSuiteInputValue.trim();
-      await updateSuite(renameSuiteId, { name: trimmedName });
+      // The backend writes parent_id verbatim (no COALESCE), so an edit that omits it would move the
+      // suite to the root. Sending the current parent back keeps the suite where it is.
+      const current = suites.find((suite) => suite.id === renameSuiteId);
+      await updateSuite(renameSuiteId, {
+        name: trimmedName,
+        description: renameSuiteDescription.trim(),
+        preconditions: renameSuitePreconditions.trim(),
+        parentId: current?.parentId ?? null,
+      });
       setIsRenameSuiteModalOpen(false);
       setRenameSuiteId(null);
       // NOT patched client-side, deliberately, unlike suite create: the backend's updateSuite writes
@@ -2215,11 +2215,41 @@ export default function TestCasesPage() {
                   </div>
                 )}
 
+                {/* Suite description and preconditions: above every state below (table, empty suite, error), so a suite that has no cases yet still shows what it is for. */}
+                {selectedSuite && (selectedSuite.description || selectedSuite.preconditions) && (
+                  <div
+                    data-testid="suite-details"
+                    className="mx-4 mt-3 shrink-0 space-y-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-4 py-3 text-[12.5px]"
+                  >
+                    {selectedSuite.description && (
+                      <div>
+                        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--muted-soft)]">Description</div>
+                        <p className="mt-0.5 whitespace-pre-wrap break-words text-[var(--foreground)]">{selectedSuite.description}</p>
+                      </div>
+                    )}
+                    {selectedSuite.preconditions && (
+                      <div>
+                        <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--muted-soft)]">Preconditions</div>
+                        <p className="mt-0.5 whitespace-pre-wrap break-words text-[var(--foreground)]">{selectedSuite.preconditions}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Content */}
                 {suiteCasesError ? (
-                  <p className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-[var(--error-foreground)]">
-                    {suiteCasesError}
-                  </p>
+                  <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-4 text-sm text-[var(--error-foreground)]">
+                    <p>{suiteCasesError}</p>
+                    {/* Paging is server-side now, so a failed page leaves nothing to navigate from: retry keeps the page. */}
+                    <button
+                      type="button"
+                      data-testid="testcases-retry"
+                      onClick={() => void loadSelectedSuiteCases()}
+                      className="rounded-[5px] border border-[var(--border)] px-3 py-1 text-[12px] text-[var(--muted)] hover:border-[var(--brand-primary)] hover:text-[var(--accent-light)]"
+                    >
+                      Retry
+                    </button>
+                  </div>
                 ) : suiteCasesLoading && !hasLoadedCasesOnce ? (
                   <p className="flex min-h-0 flex-1 items-center justify-center p-4 text-sm text-[var(--muted)]">
                     Loading test cases...
@@ -2247,14 +2277,7 @@ export default function TestCasesPage() {
                   </div>
                 ) : (
                   <div className="relative flex min-h-0 flex-1 flex-col">
-                    {/*
-                     * Sort and pagination no longer fetch anything at all (see the `suiteCases`
-                     * state comment above) — this now only ever fires when a *filter* actually
-                     * changes and the server has to say what matches. Even then, the previous rows
-                     * stay on screen (loadSelectedSuiteCases never clears them before the request
-                     * lands) with just this small, non-blocking indicator layered over the top,
-                     * rather than tearing the table down the way the very first load above does.
-                     */}
+                    {/* Rows from the previous page/filter stay up while a new page loads; this pill is the only signal. */}
                     {suiteCasesLoading && (
                       <div className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center">
                         <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--surface-overlay)] px-2.5 py-1 text-[11px] text-[var(--muted)] shadow-[var(--shadow-elevated)]">
@@ -2295,14 +2318,6 @@ export default function TestCasesPage() {
                             of{" "}
                             <span className="font-medium text-[var(--foreground)]">{totalPages}</span>
                           </>
-                        )}
-                        {suiteCasesTruncated && (
-                          <span
-                            className="ml-1.5 text-[var(--muted-soft)]"
-                            title="Sorting and pagination only cover the rows already loaded. Narrow your filters to bring the rest within reach."
-                          >
-                            (showing the first {suiteCases.length.toLocaleString()})
-                          </span>
                         )}
                       </span>
                       <div className="flex items-center gap-2">
@@ -2906,6 +2921,26 @@ export default function TestCasesPage() {
             ))}
           </Select>
         </Field>
+        <Field className="mt-4">
+          <FieldLabel>Description (optional)</FieldLabel>
+          <Textarea
+            value={newSuiteDescription}
+            onChange={(e) => setNewSuiteDescription(e.target.value)}
+            rows={3}
+            maxLength={SUITE_TEXT_MAX_LENGTH}
+            placeholder="What does this suite cover?"
+          />
+        </Field>
+        <Field className="mt-4">
+          <FieldLabel>Preconditions (optional)</FieldLabel>
+          <Textarea
+            value={newSuitePreconditions}
+            onChange={(e) => setNewSuitePreconditions(e.target.value)}
+            rows={3}
+            maxLength={SUITE_TEXT_MAX_LENGTH}
+            placeholder="What must be true before running these test cases?"
+          />
+        </Field>
         <div className="mt-5 flex justify-end gap-2">
           <Button
             variant="secondary"
@@ -3124,6 +3159,26 @@ export default function TestCasesPage() {
               </FieldHint>
             )
           )}
+        </Field>
+        <Field className="mt-4">
+          <FieldLabel>Description (optional)</FieldLabel>
+          <Textarea
+            value={renameSuiteDescription}
+            onChange={(e) => setRenameSuiteDescription(e.target.value)}
+            rows={3}
+            maxLength={SUITE_TEXT_MAX_LENGTH}
+            placeholder="What does this suite cover?"
+          />
+        </Field>
+        <Field className="mt-4">
+          <FieldLabel>Preconditions (optional)</FieldLabel>
+          <Textarea
+            value={renameSuitePreconditions}
+            onChange={(e) => setRenameSuitePreconditions(e.target.value)}
+            rows={3}
+            maxLength={SUITE_TEXT_MAX_LENGTH}
+            placeholder="What must be true before running these test cases?"
+          />
         </Field>
         <div className="mt-5 flex justify-end gap-2">
           <Button

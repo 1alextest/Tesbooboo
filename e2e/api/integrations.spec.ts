@@ -2567,4 +2567,66 @@ test.describe("integrations — Jira and Linear", () => {
       scalar("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'integration_ticket_comments_provider_check';"),
     ).toContain("notion");
   });
+
+  test("INT-A-86 renaming a project is reflected on every provider's workspace status, with the key unchanged", async () => {
+    const jira = seedConnection("jira");
+    seedJiraMapping(jira);
+    const linear = seedConnection("linear");
+    seedLinearMapping(linear);
+    const notion = seedConnection("notion", "https://www.notion.so");
+    seedNotionMapping(notion, tenant!.mainProjectId);
+
+    const before = await (await asOwner.get(`/api/projects/${tenant!.mainProjectId}`)).json();
+    const renamed = `E2E Renamed ${Date.now()}`;
+    try {
+      const patch = await asOwner.patch(`/api/projects/${tenant!.mainProjectId}`, { data: { name: renamed } });
+      expect(patch.ok(), await patch.text()).toBeTruthy();
+
+      for (const provider of ["jira", "linear", "notion"]) {
+        const body = await (await asOwner.get(`/api/workspace/integrations/${provider}/status`)).json();
+        const mapped = body.connectedProjects.find((p: any) => p.projectId === tenant!.mainProjectId);
+        expect(mapped, `${provider} status lost the mapped project`).toBeTruthy();
+        expect(mapped.projectName, `${provider} status kept the pre-rename name`).toBe(renamed);
+        // The key is immutable: a rename must never touch it.
+        expect(mapped.projectKey).toBe(before.key);
+      }
+    } finally {
+      await asOwner.patch(`/api/projects/${tenant!.mainProjectId}`, { data: { name: before.name }, failOnStatusCode: false });
+    }
+  });
+
+  test("INT-A-92 two projects sharing one name are both listed on the workspace status, each with its own key", async () => {
+    const notion = seedConnection("notion", "https://www.notion.so");
+    const dbId = seedNotionMapping(notion, tenant!.mainProjectId);
+    seedNotionMapping(notion, tenant!.secondProjectId, { databaseId: dbId });
+
+    const main = await (await asOwner.get(`/api/projects/${tenant!.mainProjectId}`)).json();
+    const second = await (await asOwner.get(`/api/projects/${tenant!.secondProjectId}`)).json();
+    const shared = `E2E Same Name ${Date.now()}`;
+    try {
+      for (const id of [tenant!.mainProjectId, tenant!.secondProjectId]) {
+        const patch = await asOwner.patch(`/api/projects/${id}`, { data: { name: shared } });
+        expect(patch.ok(), await patch.text()).toBeTruthy();
+      }
+      const body = await (await asOwner.get("/api/workspace/integrations/notion/status")).json();
+      const rows = body.connectedProjects.filter((p: any) => p.projectName === shared);
+      expect(rows, "both same-named projects must be listed, not collapsed").toHaveLength(2);
+      // The key is the only disambiguator left, so it must be present and distinct.
+      expect(rows.map((p: any) => p.projectKey).sort()).toEqual([main.key, second.key].sort());
+    } finally {
+      await asOwner.patch(`/api/projects/${tenant!.mainProjectId}`, { data: { name: main.name }, failOnStatusCode: false });
+      await asOwner.patch(`/api/projects/${tenant!.secondProjectId}`, { data: { name: second.name }, failOnStatusCode: false });
+    }
+  });
+
+  test("INT-A-93 a disabled mapping drops its project from the workspace status, and an unmapped project is never listed", async () => {
+    const notion = seedConnection("notion", "https://www.notion.so");
+    seedNotionMapping(notion, tenant!.mainProjectId);
+    let body = await (await asOwner.get("/api/workspace/integrations/notion/status")).json();
+    expect(body.connectedProjects.map((p: any) => p.projectId)).toEqual([tenant!.mainProjectId]);
+
+    exec(`UPDATE notion_project_mappings SET enabled = false WHERE project_id = ${literal(tenant!.mainProjectId)};`);
+    body = await (await asOwner.get("/api/workspace/integrations/notion/status")).json();
+    expect(body.connectedProjects).toEqual([]);
+  });
 });

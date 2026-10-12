@@ -1067,3 +1067,127 @@ test.describe("Test Environment dropdown: runs list and test plan", () => {
     await expect(page.getByRole("button", { name: "Create Test Run", exact: true })).toBeDisabled();
   });
 });
+
+/*
+ * Test Runs list: the whole run card opens the run, not just the name and the arrow icon. The name
+ * link is stretched over the card (::after), with the edit/delete controls lifted above it.
+ */
+test.describe("run card is one click target", () => {
+  test("clicking blank space or the results row opens the run, while Edit still opens its own dialog", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const { cycleId, testcaseIds } = await seedRunWithStatuses(api, "E2E Card Click", ["Passed", "Failed", "Untested"]);
+    try {
+      const runUrl = new RegExp(`/projects/${ctx.projectId}/cycles/${cycleId}$`);
+      const listUrl = `/projects/${ctx.projectId}/cycles`;
+      await page.goto(listUrl);
+      const card = runCard(page, cycleId);
+      await expect(card).toContainText("1 passed");
+      const box = (await card.boundingBox())!;
+
+      // Bottom-left of the card is the progress / counts strip: nothing there was a link before.
+      await card.click({ position: { x: 40, y: box.height - 12 } });
+      await expect(page).toHaveURL(runUrl);
+
+      // Right of the header row, clear of the action icons and the name.
+      await page.goto(listUrl);
+      await runCard(page, cycleId).click({ position: { x: (box.width * 2) / 3, y: 20 } });
+      await expect(page).toHaveURL(runUrl);
+
+      // The pencil is above the stretched link: it opens the edit form and does not navigate.
+      await page.goto(listUrl);
+      await runCard(page, cycleId).getByTitle("Edit run").click();
+      await expect(page).toHaveURL(new RegExp(`${listUrl}$`));
+      await expect(page.getByRole("button", { name: /Save/i }).first()).toBeVisible();
+    } finally {
+      await cleanUpRun(api, cycleId, testcaseIds);
+      await api.dispose();
+    }
+  });
+});
+
+// A run carried over from another tool keeps its time spent and tags, and each result keeps its step
+// outcomes, earlier results and stack trace. A plain manual result must look exactly as it did.
+test.describe("imported run history in the UI", () => {
+  test("the runs list and the run header show time spent and tags", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const { cycleId, testcaseIds } = await seedRunWithStatuses(api, "E2E UI History", ["Passed"]);
+    try {
+      const tag = `ui-tag-${Date.now()}`;
+      const res = await api.post(`/api/cycles/${cycleId}/history-import`, {
+        data: { run: { timeSpentMs: 2 * 86_400_000 + 3 * 3_600_000, tags: [tag, "second tag"] } },
+      });
+      expect(res.ok(), await res.text()).toBeTruthy();
+
+      await page.goto(`/projects/${ctx.projectId}/cycles`);
+      const card = runCard(page, cycleId);
+      await expect(card.getByTestId("run-time-spent")).toContainText("2d 3h");
+      await expect(card.getByTestId("run-tags")).toContainText(tag);
+      await expect(card.getByTestId("run-tags")).toContainText("second tag");
+
+      await page.goto(`/projects/${ctx.projectId}/cycles/${cycleId}`);
+      await expect(page.getByTestId("run-time-spent")).toContainText("2d 3h");
+      await expect(page.getByTestId("run-tags")).toContainText(tag);
+    } finally {
+      await cleanUpRun(api, cycleId, testcaseIds);
+      await api.dispose();
+    }
+  });
+
+  test("a result's drawer shows step results, earlier results and the stack trace; a plain result shows none of it", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const { cycleId, testcaseIds } = await seedRunWithStatuses(api, "E2E UI History Drawer", ["Passed", "Passed"]);
+    try {
+      const rows = await (await api.get(`/api/cycles/${cycleId}/executions`)).json();
+      const imported = rows.find((r: { testcaseId: string }) => r.testcaseId === testcaseIds[0]);
+      const plain = rows.find((r: { testcaseId: string }) => r.testcaseId === testcaseIds[1]);
+      const res = await api.post(`/api/cycles/${cycleId}/history-import`, {
+        data: {
+          results: [
+            {
+              testcaseId: testcaseIds[0],
+              status: "Failed",
+              executedAt: "2024-03-08T09:30:00Z",
+              durationMs: 2100,
+              errorStack: "TypeError: x is undefined\n    at checkout (cart.js:42:7)",
+              stepResults: [
+                { position: 1, status: "Passed" },
+                { position: 2, status: "Failed", comment: "button missing from the page" },
+              ],
+              history: [{ status: "Retest", executedAt: "2024-03-08T09:00:00Z", comment: "first attempt note" }],
+            },
+          ],
+        },
+      });
+      expect(res.ok(), await res.text()).toBeTruthy();
+
+      await page.goto(`/projects/${ctx.projectId}/cycles/${cycleId}`);
+      await page.getByText(imported.title).first().click();
+      const meta = page.getByTestId("result-meta");
+      await expect(meta).toBeVisible();
+      await expect(meta.getByText("2.1s")).toBeVisible();
+      await expect(meta.getByText(/Executed 08 Mar 2024/)).toBeVisible();
+
+      const steps = meta.getByTestId("result-step-results");
+      await expect(steps).toContainText("Step 1");
+      await expect(steps).toContainText("Step 2");
+      await expect(steps).toContainText("button missing from the page");
+
+      // Collapsed until asked for.
+      await expect(meta.getByTestId("result-stack")).toBeHidden();
+      await meta.getByText("Stack trace").click();
+      await expect(meta.getByTestId("result-stack")).toContainText("at checkout (cart.js:42:7)");
+
+      await meta.getByText(/Earlier results \(1\)/).click();
+      await expect(meta.getByTestId("result-history")).toContainText("first attempt note");
+
+      // Close the drawer, open the plain result: nothing extra.
+      await page.keyboard.press("Escape");
+      await page.getByText(plain.title).first().click();
+      await expect(page.getByText(plain.title).first()).toBeVisible();
+      await expect(page.getByTestId("result-meta")).toHaveCount(0);
+    } finally {
+      await cleanUpRun(api, cycleId, testcaseIds);
+      await api.dispose();
+    }
+  });
+});

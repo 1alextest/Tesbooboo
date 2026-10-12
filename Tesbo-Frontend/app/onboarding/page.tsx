@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { authMe, createWorkspace, createWorkspaceInvitation, getWorkspace, type WorkspaceRole } from "@/lib/api";
+import { DEFAULT_SIGNED_IN_PATH } from "@/lib/redirect";
 import { countryOptions } from "@/lib/countries";
 import { DEFAULT_INVITE_ROLE, inviteRoleDescription, invitableRoleOptions } from "@/lib/workspaceRoles";
 import { Button, Field, FieldError, FieldHint, FieldLabel, Input, Select, Textarea } from "@/components/ui";
@@ -64,7 +65,7 @@ export default function OnboardingPage() {
 
       try {
         await getWorkspace();
-        router.replace("/projects");
+        router.replace(DEFAULT_SIGNED_IN_PATH);
         return;
       } catch {
         // No workspace yet; user should continue onboarding.

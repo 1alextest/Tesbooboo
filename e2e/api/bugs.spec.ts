@@ -2219,7 +2219,7 @@ test.describe("bug activity", () => {
     return res.json();
   }
 
-  /** This bug's activity, oldest first — the order Bug Details shows it in. */
+  /** This bug's activity, oldest first (chronological). Bug Details shows it newest first; the API returns newest first. */
   async function activityOf(bugId: string, as: APIRequestContext = asOwner): Promise<Activity[]> {
     const res = await as.get(`/api/projects/${tenant!.mainProjectId}/activity`, {
       params: { entityType: "bug", entityId: bugId, limit: "100" },

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Req } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req } from "@nestjs/common";
 import { AuthenticatedRequest } from "../common/request.types";
 import { CustomTagsService } from "./custom-tags.service";
 
@@ -14,6 +14,16 @@ export class CustomTagsController {
   @Post("/api/projects/:projectId/custom-tags")
   createTag(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
     return this.customTags.createTag(req.userId, projectId, body);
+  }
+
+  @Patch("/api/projects/:projectId/custom-tags/:tagId")
+  updateTag(
+    @Req() req: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("tagId") tagId: string,
+    @Body() body: Record<string, any>
+  ) {
+    return this.customTags.updateTag(req.userId, projectId, tagId, body);
   }
 
   @Delete("/api/projects/:projectId/custom-tags/:tagId")

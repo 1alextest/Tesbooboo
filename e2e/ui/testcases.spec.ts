@@ -102,6 +102,8 @@ test.describe("test case creation", () => {
     }
   });
 
+  // Priority is the one exception to the blank defaults below: it opens on "Not set" and saves as
+  // "Not set" (a case whose priority nobody has chosen yet), not "" and not P2.
   // Suite, Type, Priority, Automation Type, Component and Severity are all optional on Create:
   // Create Test Case must open with the dropdowns on "Select"/"No suite" and Component empty,
   // and leaving every one of them untouched must both (a) succeed, and (b) persist them as blank/
@@ -121,7 +123,7 @@ test.describe("test case creation", () => {
 
     await expect(fieldControl(page, "Suite").locator("option:checked")).toHaveText("Select");
     await expect(fieldControl(page, "Type").locator("option:checked")).toHaveText("Select");
-    await expect(fieldControl(page, "Priority").locator("option:checked")).toHaveText("Select");
+    await expect(fieldControl(page, "Priority").locator("option:checked")).toHaveText("Not set");
     await expect(fieldControl(page, "Automation Type").locator("option:checked")).toHaveText("Select");
     await expect(fieldControl(page, "Component")).toHaveValue("");
     await expect(fieldControl(page, "Severity").locator("option:checked")).toHaveText("Select");
@@ -145,7 +147,7 @@ test.describe("test case creation", () => {
       expect(match).toBeTruthy();
       expect(match.suiteId).toBeNull();
       expect(match.type).toBeNull();
-      expect(match.priority).toBe("");
+      expect(match.priority).toBe("Not set");
       expect(match.automationStatus).toBeNull();
       expect(match.component).toBeFalsy();
       expect(match.severity).toBeFalsy();
@@ -634,15 +636,13 @@ test.describe("test case repository table — column drag-and-drop removed", () 
   });
 });
 
-// The repository's ID/Test case title/Priority column sort, added to match the Test Runs table's
-// own column sort (testcases/page.tsx toggleSuiteCasesSort). listTestCases's sortBy/sortDir
-// (legacy.service.ts, see api/testcases.spec.ts's "sort" describe) is a real, tested server
-// capability, but the screen no longer calls it for this: an initial report that sorting "took too
-// long" traced back to every click being its own full refetch, so the page now loads the whole
-// filtered batch once (up to MAX_PAGE_SIZE) and sorts/paginates it entirely client-side afterward —
-// same architecture the Test Runs table already used. These UI tests cover what the API tests
-// can't: that a click actually reorders what's on screen with no fetch at all, and that the one
-// thing that still does refetch (an actual filter change) doesn't blank the table while in flight.
+// The repository's ID/Test case title/Priority column sort (testcases/page.tsx toggleSuiteCasesSort).
+// Paging and sorting are server-side (limit/offset/sortBy on the list endpoint, see
+// api/testcases.spec.ts's "sort" and "repository paging" describes), so a header click is a request
+// for the first page in that order. It briefly used to sort a 500-row batch in the browser; that
+// capped the table at 500 rows, which is why it moved back. These UI tests cover what the API tests
+// can't: that a click reorders what's on screen, asks the server for the sort, and that the
+// refetch doesn't blank the table while in flight.
 test.describe("test case repository table — column sort", () => {
   test("the Test case title header sorts the visible rows ascending, then descending on a second click", async ({ page }) => {
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
@@ -662,13 +662,12 @@ test.describe("test case repository table — column sort", () => {
       const titleButtons = () => page.locator("table.tc-repo-table tbody tr td button", { hasText: marker });
       await expect(titleButtons()).toHaveCount(3);
 
-      // Once the filtered batch has landed, sorting must not issue any further request to the
-      // testcases list endpoint at all — this is the whole point of the fix (a sort click used to be
-      // its own full refetch, which is what made it feel slow).
-      let listRequestsAfterInitialLoad = 0;
+      // The server does the sorting, so each click must reach the list endpoint with that sort.
+      const sortRequests: string[] = [];
       page.on("request", (req) => {
-        if (req.method() === "GET" && new URL(req.url()).pathname === `/api/projects/${ctx.projectId}/testcases`) {
-          listRequestsAfterInitialLoad += 1;
+        const url = new URL(req.url());
+        if (req.method() === "GET" && url.pathname === `/api/projects/${ctx.projectId}/testcases` && url.searchParams.has("sortBy")) {
+          sortRequests.push(`${url.searchParams.get("sortBy")}:${url.searchParams.get("sortDir")}`);
         }
       });
 
@@ -677,16 +676,14 @@ test.describe("test case repository table — column sort", () => {
       await sortByTitle.click();
 
       await expect(page.getByRole("button", { name: "Sort by Test case title, currently ascending" })).toBeVisible();
-      // Polled rather than a one-shot read: the row order updates the instant the click is handled
-      // (a client-side derive, not awaiting any response), and while that's effectively synchronous
-      // with the click, polling avoids any flakiness in exactly when Playwright observes it.
+      // Polled: the new order lands when the sorted page's response does.
       await expect.poll(() => titleButtons().allTextContents()).toEqual([`${marker} Alpha`, `${marker} Mango`, `${marker} Zeta`]);
 
       await sortByTitle.click();
       await expect(page.getByRole("button", { name: "Sort by Test case title, currently descending" })).toBeVisible();
       await expect.poll(() => titleButtons().allTextContents()).toEqual([`${marker} Zeta`, `${marker} Mango`, `${marker} Alpha`]);
 
-      expect(listRequestsAfterInitialLoad, "sorting should not refetch the list from the server").toBe(0);
+      expect(sortRequests, "each click asks the server for that sort").toEqual(expect.arrayContaining(["title:asc", "title:desc"]));
     } finally {
       for (const id of created) await api.delete(`/api/projects/${ctx.projectId}/testcases/${id}`, { failOnStatusCode: false });
       await api.dispose();
@@ -712,8 +709,7 @@ test.describe("test case repository table — column sort", () => {
       }
     );
 
-    // Sort and pagination no longer touch the network at all (see the test above), so a filter
-    // change is the one thing left that still refetches — this is what exercises that refetch path.
+    // A filter change refetches (as do sort and paging); this exercises that refetch path.
     await page.getByPlaceholder("Search by ID, title, or type").fill("zzz-unlikely-to-match-anything-at-all");
 
     // While that delayed request is in flight: the table's own rows are still there — not torn down
@@ -970,5 +966,220 @@ test.describe("test case repository table and detail panel — Context column", 
       for (const id of created) await api.delete(`/api/projects/${ctx.projectId}/testcases/${id}`, { failOnStatusCode: false });
       await api.dispose();
     }
+  });
+});
+
+// The Create/Edit panel's Priority, Type and Automation Type dropdowns are fixed lists. A case whose
+// stored value is not in the list shows "Select" and can never be saved back as that value, so the
+// values a migrated case can carry have to be offered.
+test.describe("Not set priority and the added Type / Automation Type values", () => {
+  test("Create Test Case offers Not set, the added Types and To Be Automated, and saves the chosen values", async ({ page }) => {
+    const title = `UI new values test case ${Date.now()}`;
+    await page.goto(`/projects/${ctx.projectId}/testcases`);
+    await page.getByRole("button", { name: "Add test case" }).first().click();
+    const panel = page.locator("aside");
+    await panel.getByPlaceholder("Describe what this test case validates").fill(title);
+
+    const options = async (label: string) => fieldControl(page, label).locator("option").allTextContents();
+    expect(await options("Priority")).toEqual(["Select", "P0", "P1", "P2", "P3", "Not set"]);
+    const types = await options("Type");
+    for (const t of ["Other", "Acceptance", "Usability", "Compatibility", "Exploratory"]) expect(types).toContain(t);
+    expect(await options("Automation Type")).toContain("To Be Automated");
+
+    await fieldControl(page, "Suite").selectOption({ label: "No suite" });
+    await fieldControl(page, "Type").selectOption("Other");
+    await fieldControl(page, "Priority").selectOption("Not set");
+    await fieldControl(page, "Automation Type").selectOption("To Be Automated");
+    await panel.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(panel.getByText("Test case created successfully.")).toBeVisible();
+
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    try {
+      const list = await (await api.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: title } })).json();
+      const match = list.find((tc: { title: string }) => tc.title === title);
+      expect(match, "the created case is listed").toBeTruthy();
+      expect(match.priority).toBe("Not set");
+      expect(match.type).toBe("Other");
+      expect(match.automationStatus).toBe("To Be Automated");
+      await api.delete(`/api/projects/${ctx.projectId}/testcases/${match.id}`, { failOnStatusCode: false });
+    } finally {
+      await api.dispose();
+    }
+  });
+
+  test("Edit Test Case shows a case stored as Not set / Exploratory / To Be Automated as exactly those values, and saving with no changes keeps them", async ({ page }) => {
+    const title = `UI edit new values test case ${Date.now()}`;
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    let testcaseId = "";
+    try {
+      const created = await (
+        await api.post(`/api/projects/${ctx.projectId}/testcases`, {
+          data: { title, priority: "Not set", type: "Exploratory", automationStatus: "To Be Automated" },
+        })
+      ).json();
+      testcaseId = created.id;
+
+      await page.goto(`/projects/${ctx.projectId}/testcases`);
+      await page.getByRole("button", { name: title }).click();
+      const panel = page.locator("aside");
+      await expect(fieldControl(page, "Priority").locator("option:checked")).toHaveText("Not set");
+      await expect(fieldControl(page, "Type").locator("option:checked")).toHaveText("Exploratory");
+      await expect(fieldControl(page, "Automation Type").locator("option:checked")).toHaveText("To Be Automated");
+
+      await panel.getByRole("button", { name: "Save changes" }).click();
+      await expect(panel.getByText("Test case updated successfully.")).toBeVisible();
+      const after = await (await api.get(`/api/projects/${ctx.projectId}/testcases/${testcaseId}`)).json();
+      expect(after.priority).toBe("Not set");
+      expect(after.type).toBe("Exploratory");
+      expect(after.automationStatus).toBe("To Be Automated");
+    } finally {
+      if (testcaseId) await api.delete(`/api/projects/${ctx.projectId}/testcases/${testcaseId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
+  test("the Add Test Cases picker's Priority and Type filters offer Not set and the added Types, and filtering by Not set keeps only those cases", async ({ page }) => {
+    const stamp = Date.now();
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const caseIds: string[] = [];
+    let cycleId = "";
+    try {
+      const notSet = await (
+        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker NotSet ${stamp}`, priority: "Not set", type: "Exploratory" } })
+      ).json();
+      const p1 = await (
+        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker P1 ${stamp}`, priority: "P1" } })
+      ).json();
+      caseIds.push(notSet.id, p1.id);
+      const cycle = await (
+        await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI picker filters ${stamp}` } })
+      ).json();
+      cycleId = cycle.id;
+
+      await page.goto(`/projects/${ctx.projectId}/cycles/${cycleId}`);
+      await page.getByRole("button", { name: "Add Test Cases" }).click();
+      await expect(page.getByText("Add Test Cases to Run")).toBeVisible();
+      // The picker's selects are the last ones on the page (the run table's own filters sit behind a popover).
+      const priority = page.locator("select").filter({ hasText: "All Priorities" }).last();
+      const type = page.locator("select").filter({ hasText: "All Types" }).last();
+      expect(await priority.locator("option").allTextContents()).toContain("Not set");
+      const typeOptions = await type.locator("option").allTextContents();
+      for (const t of ["Sanity", "API", "UI", "Acceptance", "Usability", "Compatibility", "Exploratory", "Other"]) expect(typeOptions).toContain(t);
+
+      await page.getByPlaceholder("Search by title or ID…").fill(`UI picker ${stamp}`);
+      await priority.selectOption("Not set");
+      await expect(page.getByText(`UI picker NotSet ${stamp}`)).toBeVisible();
+      await expect(page.getByText(`UI picker P1 ${stamp}`)).toHaveCount(0);
+    } finally {
+      if (cycleId) await api.delete(`/api/cycles/${cycleId}`, { failOnStatusCode: false });
+      for (const id of caseIds) await api.delete(`/api/projects/${ctx.projectId}/testcases/${id}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+});
+
+test.describe("suite description and preconditions in the repository", () => {
+  test("Add suite saves a description and preconditions, and the suite header shows them", async ({ page }) => {
+    const stamp = Date.now();
+    const suiteName = `UI Suite Text ${stamp}`;
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    let suiteId = "";
+    try {
+      await page.goto(`/projects/${ctx.projectId}/testcases`);
+      await page.getByTitle("Add suite").click();
+      await page.getByPlaceholder("Enter suite name").fill(suiteName);
+      await page.getByPlaceholder("What does this suite cover?").fill("Login and session flows\nSecond line");
+      await page.getByPlaceholder("What must be true before running these test cases?").fill("An agency account exists");
+      await page.getByRole("button", { name: "Create", exact: true }).click();
+      await expect(page.getByPlaceholder("Enter suite name")).toHaveCount(0);
+
+      const row = (await (await api.get(`/api/projects/${ctx.projectId}/suites`)).json()).find((s: { name: string }) => s.name === suiteName);
+      suiteId = row.id;
+      expect(row.description).toBe("Login and session flows\nSecond line");
+      expect(row.preconditions).toBe("An agency account exists");
+
+      await page.getByRole("button", { name: suiteName, exact: true }).click();
+      const details = page.getByTestId("suite-details");
+      await expect(details).toContainText("Login and session flows");
+      await expect(details).toContainText("Second line");
+      await expect(details).toContainText("An agency account exists");
+    } finally {
+      if (suiteId) await api.delete(`/api/suites/${suiteId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
+  test("a suite with no text shows no details block", async ({ page }) => {
+    const suiteName = `UI Suite No Text ${Date.now()}`;
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    let suiteId = "";
+    try {
+      suiteId = (await (await api.post(`/api/projects/${ctx.projectId}/suites`, { data: { name: suiteName } })).json()).id;
+      await page.goto(`/projects/${ctx.projectId}/testcases`);
+      await page.getByRole("button", { name: suiteName, exact: true }).click();
+      await expect(page.getByText(suiteName, { exact: true }).first()).toBeVisible();
+      await expect(page.getByTestId("suite-details")).toHaveCount(0);
+    } finally {
+      if (suiteId) await api.delete(`/api/suites/${suiteId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
+  test("Rename suite opens with the saved text, saves edits, clears them, and a child suite stays under its parent", async ({ page }) => {
+    const stamp = Date.now();
+    const parentName = `UI Suite Parent ${stamp}`;
+    const childName = `UI Suite Child ${stamp}`;
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    let parentId = "";
+    let childId = "";
+    try {
+      parentId = (await (await api.post(`/api/projects/${ctx.projectId}/suites`, { data: { name: parentName } })).json()).id;
+      childId = (
+        await (
+          await api.post(`/api/projects/${ctx.projectId}/suites`, {
+            data: { name: childName, parentId, description: "Saved description", preconditions: "Saved preconditions" },
+          })
+        ).json()
+      ).id;
+
+      await page.goto(`/projects/${ctx.projectId}/testcases`);
+      await page.getByTestId(`suite-expand-${parentId}`).click();
+      const childRow = page.getByRole("button", { name: new RegExp(childName) }).first();
+      await childRow.hover();
+      await page.getByTitle("Rename suite").click();
+
+      const description = page.getByPlaceholder("What does this suite cover?");
+      const preconditions = page.getByPlaceholder("What must be true before running these test cases?");
+      await expect(description).toHaveValue("Saved description");
+      await expect(preconditions).toHaveValue("Saved preconditions");
+
+      await description.fill("Edited description");
+      await preconditions.fill("");
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await expect(page.getByPlaceholder("Enter suite name")).toHaveCount(0);
+
+      const after = (await (await api.get(`/api/projects/${ctx.projectId}/suites`)).json()).find((s: { id: string }) => s.id === childId);
+      expect(after.description).toBe("Edited description");
+      expect(after.preconditions).toBe("");
+      expect(after.parentId, "editing the text must not move the suite to the root").toBe(parentId);
+
+      await page.getByRole("button", { name: new RegExp(childName) }).first().click();
+      const details = page.getByTestId("suite-details");
+      await expect(details).toContainText("Edited description");
+      await expect(details).not.toContainText("Preconditions");
+    } finally {
+      if (parentId) await api.delete(`/api/suites/${parentId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
+  test("the suite text fields cap at 20000 characters instead of overflowing", async ({ page }) => {
+    await page.goto(`/projects/${ctx.projectId}/testcases`);
+    await page.getByTitle("Add suite").click();
+    const description = page.getByPlaceholder("What does this suite cover?");
+    await description.fill("y".repeat(20500));
+    await expect(description).toHaveValue("y".repeat(20000));
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.getByPlaceholder("Enter suite name")).toHaveCount(0);
   });
 });

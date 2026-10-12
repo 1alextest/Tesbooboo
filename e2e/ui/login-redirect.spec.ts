@@ -150,7 +150,8 @@ test.describe("login redirect target validation", () => {
 
       await page.goto(`/login?redirect=${encodeURIComponent(hostile)}`);
 
-      await page.waitForURL(/\/projects/);
+      // The default sign-in landing is the workspace Dashboard (DEFAULT_SIGNED_IN_PATH).
+      await page.waitForURL(/\/dashboard$/);
       expect(offSite).toEqual([]);
       // Belt and braces: the address bar is on the stack under test, not merely path-matching.
       expect(new URL(page.url()).origin).toBe(new URL(env.webBaseUrl).origin);
@@ -170,7 +171,7 @@ test.describe("login redirect after signing in through the form", () => {
     await page.waitForURL(/\/settings/);
   });
 
-  test("drops a hostile redirect and falls back to /projects", { tag: '@tesbo.testId("TES-TC-1035")' }, async ({ page }) => {
+  test("drops a hostile redirect and falls back to the Dashboard", { tag: '@tesbo.testId("TES-TC-1035")' }, async ({ page }) => {
     const offSite = await blockOffSiteNavigation(page);
 
     await page.goto("/login?redirect=%2F%2Fexample.com");
@@ -178,7 +179,7 @@ test.describe("login redirect after signing in through the form", () => {
     await page.getByLabel("Password *", { exact: true }).fill(env.testPassword);
     await page.getByRole("button", { name: "Sign in" }).click();
 
-    await page.waitForURL(/\/projects/);
+    await page.waitForURL(/\/dashboard$/);
     expect(offSite).toEqual([]);
   });
 });
@@ -395,7 +396,8 @@ test.describe("login reached from an invite while signed in as a different email
       await expect(page.getByText(/signed in as a different email/i)).toHaveCount(0);
       await page.getByRole("button", { name: "Accept and join workspace" }).click();
 
-      await page.waitForURL(/\/projects/, { timeout: 20_000 });
+      // Accepting an invite is a sign-in into the workspace: it lands on the Dashboard.
+      await page.waitForURL(/\/dashboard$/, { timeout: 20_000 });
     } finally {
       await ctx.close();
     }
@@ -504,5 +506,89 @@ test.describe("invite page — decline and close", () => {
     } finally {
       await ctx.close();
     }
+  });
+});
+
+/*
+ * "[Login] Redirect Users to Workspace Dashboard After Login". Every sign-in path used to fall back
+ * to /projects; the default is now the workspace Dashboard (DEFAULT_SIGNED_IN_PATH in
+ * lib/redirect.ts). A safe ?redirect= deep link must still win over it, and the Dashboard must
+ * actually render for every role — including a member who can reach no project at all.
+ */
+test.describe("sign-in lands on the workspace Dashboard by default", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+  let tenant: RbacTenant | null = null;
+
+  test.beforeAll(async () => {
+    tenant = await provisionRbacTenant("invite-signin");
+  });
+
+  test.beforeEach(() => {
+    const reason = rbacSuiteSkipReason(tenant);
+    test.skip(reason !== null, reason ?? "");
+  });
+
+  async function signInWithPassword(page: Page, email: string, password: string): Promise<void> {
+    await page.getByLabel("Email *", { exact: true }).fill(email);
+    await page.getByLabel("Password *", { exact: true }).fill(password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+  }
+
+  /** On the Dashboard, and it rendered its analytics rather than its error state. */
+  async function expectDashboardRendered(page: Page): Promise<void> {
+    await page.waitForURL(/\/dashboard$/, { timeout: 20_000 });
+    await expect(page.getByText("Workspace-level analytics across all projects")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/Failed to load analytics|Unable to load analytics/)).toHaveCount(0);
+  }
+
+  test("LR-D-01 a password sign-in with no redirect lands on the Dashboard", async ({ page }) => {
+    await page.goto("/login");
+    await signInWithPassword(page, tenant!.owner.email, FIXTURE_PASSWORD);
+    await expectDashboardRendered(page);
+  });
+
+  test("LR-D-02 an email-code sign-in with no redirect lands on the Dashboard", async ({ page }) => {
+    // verify-otp hands off to /onboarding, which sends a user who already has a workspace on to the
+    // default landing — this is the path that used to end on /projects.
+    clearOtpIpRateLimit();
+    const email = tenant!.qa.email;
+    await page.goto("/login");
+    await page.getByRole("button", { name: "Email code", exact: true }).click();
+    await page.getByLabel("Email *", { exact: true }).fill(email);
+    await page.getByRole("button", { name: "Send login code" }).click();
+    await page.waitForURL(/\/verify-otp/);
+    seedOtpCode(email, "604213");
+    const boxes = page.locator('input[inputmode="numeric"]');
+    for (let i = 0; i < "604213".length; i++) await boxes.nth(i).fill("604213"[i]);
+    await page.getByRole("button", { name: "Verify and sign in" }).click();
+    await expectDashboardRendered(page);
+  });
+
+  test("LR-D-03 an already signed-in visit to / or /login goes to the Dashboard", async ({ page }) => {
+    await page.goto("/login");
+    await signInWithPassword(page, tenant!.owner.email, FIXTURE_PASSWORD);
+    await expectDashboardRendered(page);
+
+    await page.goto("/");
+    await expectDashboardRendered(page);
+
+    await page.goto("/login");
+    await expectDashboardRendered(page);
+  });
+
+  test("LR-D-04 a deep link still wins: ?redirect= to a project page lands on that page, not the Dashboard", async ({ page }) => {
+    const target = `/projects/${tenant!.mainProjectId}/testcases`;
+    await page.goto(`/login?redirect=${encodeURIComponent(target)}`);
+    await signInWithPassword(page, tenant!.owner.email, FIXTURE_PASSWORD);
+    await page.waitForURL((url) => url.pathname.startsWith("/projects/") && url.pathname.endsWith("/testcases"), { timeout: 20_000 });
+    expect(new URL(page.url()).pathname).not.toBe("/dashboard");
+  });
+
+  test("LR-D-05 a member with no project access still lands on a working, empty Dashboard", async ({ page }) => {
+    // The tenant's guest is in the workspace but in no project; /api/workspace/analytics narrows to
+    // reachable projects, so this is the edge where an error state would show instead.
+    await page.goto("/login");
+    await signInWithPassword(page, tenant!.guest.email, FIXTURE_PASSWORD);
+    await expectDashboardRendered(page);
   });
 });

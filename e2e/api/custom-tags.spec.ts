@@ -272,6 +272,108 @@ test.describe("custom tags", () => {
     expect(deleted.ok(), await deleted.text()).toBeTruthy();
   });
 
+  // ─── Renaming ──────────────────────────────────────────────────────────────
+
+  async function rename(tagId: string, name: unknown, api: APIRequestContext = asOwner, projectId?: string): Promise<APIResponse> {
+    return api.patch(tagUrl(tagId, projectId), { data: { name }, failOnStatusCode: false });
+  }
+
+  function storedName(tagId: string): string {
+    return scalar(`SELECT name FROM custom_tags WHERE id = ${literal(tagId)};`);
+  }
+
+  test("an owner renames a tag; the new name is saved, trimmed, and listed", async () => {
+    const tag = await createTag({ name: tagName("Before") });
+    const next = tagName("After");
+    const res = await rename(tag.id, `  ${next}  `);
+    expect(res.status(), await res.text()).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ id: tag.id, projectId: tenant!.mainProjectId, name: next });
+    expect(storedName(tag.id)).toBe(next);
+    expect((await listTags()).find((t) => t.id === tag.id)?.name).toBe(next);
+  });
+
+  test("a rename shows wherever the tag is used: the test case, a cached repository page, and Execution Report", async () => {
+    const tag = await createTag({ name: tagName("Old") });
+    const testcase = await createTestCase({ customTagIds: [tag.id] });
+    const run = await seedRun(asOwner, tenant!.mainProjectId, { name: `E2E Rename Run ${Date.now()}` });
+    await addRunCases(asOwner, run.id, [testcase.id]);
+    // Warm the cacheable unfiltered first page, so a stale cached name would be caught.
+    await listCases({ limit: "100", offset: "0" });
+
+    const next = tagName("New");
+    expect((await rename(tag.id, next)).status()).toBe(200);
+
+    expect((await getTestCaseTags(testcase.id)).map((t) => t.name)).toEqual([next]);
+    const page = await listCases({ limit: "100", offset: "0" });
+    expect((page.rows.find((r: any) => r.id === testcase.id) as any).customTags).toEqual([{ id: tag.id, name: next }]);
+    const report = await (await asOwner.get(`/api/projects/${tenant!.mainProjectId}/reports/execution?filterBy=tags`)).json();
+    expect(report.rows.find((r: any) => r.groupId === tag.id)?.groupName).toBe(next);
+    // Still the same tag: assignments and filters by id are untouched.
+    expect((await listCases({ customTagIds: tag.id })).ids).toEqual([testcase.id]);
+  });
+
+  test("a rename needs a name, within the column limit — the stored name is untouched on refusal", async () => {
+    const tag = await createTag();
+    for (const bad of ["", "   ", undefined, "x".repeat(41)]) {
+      const res = await rename(tag.id, bad);
+      expect(res.status(), `name ${JSON.stringify(bad)}`).toBe(400);
+    }
+    expect(storedName(tag.id)).toBe(tag.name);
+    const max = "y".repeat(40);
+    expect((await rename(tag.id, max)).status()).toBe(200);
+    expect(storedName(tag.id)).toBe(max);
+  });
+
+  test("renaming onto another tag's name is refused case-insensitively; a case-only change of its own name is allowed", async () => {
+    const [first, second] = await Promise.all([createTag({ name: tagName("First") }), createTag({ name: tagName("Second") })]);
+    const clash = await rename(first.id, second.name.toUpperCase());
+    expect(clash.status()).toBe(400);
+    expect((await clash.json()).error).toContain("already exists");
+    expect(storedName(first.id)).toBe(first.name);
+
+    const recased = first.name.toUpperCase();
+    expect((await rename(first.id, recased)).status()).toBe(200);
+    expect(storedName(first.id)).toBe(recased);
+    // Saving the unchanged name is a no-op success, not a self-clash.
+    expect((await rename(first.id, recased)).status()).toBe(200);
+  });
+
+  test("a name used in another project is free to take in this one", async () => {
+    const other = await createTag({ name: tagName("Shared") }, asOwner, tenant!.secondProjectId);
+    const tag = await createTag();
+    expect((await rename(tag.id, other.name)).status()).toBe(200);
+  });
+
+  test("two concurrent renames to the same name: exactly one wins, the other is a 400 — never a 500", async () => {
+    const [a, b] = await Promise.all([createTag(), createTag()]);
+    const target = tagName("Race");
+    const results = await Promise.all([rename(a.id, target), rename(b.id, target)]);
+    expect(results.map((r) => r.status()).sort()).toEqual([200, 400]);
+    expect(scalar(`SELECT COUNT(*) FROM custom_tags WHERE lower(name) = lower(${literal(target)});`)).toBe("1");
+  });
+
+  test("renaming an unknown, malformed, or other project's tag is a 404", async () => {
+    expect((await rename("00000000-0000-0000-0000-000000000000", tagName("X"))).status()).toBe(404);
+    expect((await rename("not-a-uuid", tagName("X"))).status()).toBe(404);
+    const foreign = await createTag({}, asOwner, tenant!.secondProjectId);
+    expect((await rename(foreign.id, tagName("X"))).status()).toBe(404);
+    expect(storedName(foreign.id)).toBe(foreign.name);
+  });
+
+  test("a manager can rename; a QA Engineer, an outsider and an anonymous caller cannot", async () => {
+    const tag = await createTag();
+    expect((await rename(tag.id, tagName("Manager"), asManager)).status()).toBe(200);
+    const afterManager = storedName(tag.id);
+
+    const qa = await rename(tag.id, tagName("QA"), asQa);
+    expect(qa.status()).toBe(403);
+    expect((await qa.json()).error).toContain("QA Engineers cannot manage custom tags");
+    expect((await rename(tag.id, tagName("Guest"), asGuest)).status()).toBe(404);
+    expect([401, 403, 404]).toContain((await rename(tag.id, tagName("Anon"), anon)).status());
+    expect(storedName(tag.id)).toBe(afterManager);
+  });
+
   // ─── Authorization ─────────────────────────────────────────────────────────
 
   test("every route refuses a caller with no session", async () => {

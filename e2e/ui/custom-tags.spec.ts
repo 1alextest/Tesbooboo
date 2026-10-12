@@ -156,9 +156,102 @@ test.describe("custom tags (UI)", () => {
     expect((await api.get(tagsApiUrl()).then((r) => r.json())).map((t: any) => t.name)).not.toContain(name);
   });
 
+  test("an owner renames a tag inline, and the new name is saved", async ({ browser }) => {
+    const tag = await defineTag(tagName("Rename me"));
+    const page = await pageAs(browser, "owner");
+    await page.goto(customTagsUrl());
+
+    await page.getByRole("button", { name: `Edit tag ${tag.name}` }).click();
+    const next = tagName("Renamed");
+    const input = page.getByLabel(`New name for tag ${tag.name}`);
+    await expect(input).toHaveValue(tag.name);
+    await input.fill(next);
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    await expect(page.getByText(next, { exact: true })).toBeVisible();
+    await expect(page.getByText(tag.name, { exact: true })).toHaveCount(0);
+    const listed = await api.get(tagsApiUrl()).then((r) => r.json());
+    expect(listed.find((t: any) => t.id === tag.id)?.name).toBe(next);
+  });
+
+  test("Cancel and Escape leave a tag's name unchanged", async ({ browser }) => {
+    const tag = await defineTag(tagName("Keep"));
+    const page = await pageAs(browser, "owner");
+    await page.goto(customTagsUrl());
+
+    await page.getByRole("button", { name: `Edit tag ${tag.name}` }).click();
+    await page.getByLabel(`New name for tag ${tag.name}`).fill(tagName("Discarded"));
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByText(tag.name, { exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: `Edit tag ${tag.name}` }).click();
+    const input = page.getByLabel(`New name for tag ${tag.name}`);
+    await input.fill(tagName("Discarded too"));
+    await input.press("Escape");
+    await expect(page.getByText(tag.name, { exact: true })).toBeVisible();
+    expect((await api.get(tagsApiUrl()).then((r) => r.json())).find((t: any) => t.id === tag.id)?.name).toBe(tag.name);
+  });
+
+  test("renaming onto an existing tag's name shows the error inline and keeps the row in edit mode", async ({ browser }) => {
+    const [first, second] = await Promise.all([defineTag(tagName("First")), defineTag(tagName("Second"))]);
+    const page = await pageAs(browser, "owner");
+    await page.goto(customTagsUrl());
+
+    await page.getByRole("button", { name: `Edit tag ${first.name}` }).click();
+    const input = page.getByLabel(`New name for tag ${first.name}`);
+    await input.fill(second.name.toLowerCase());
+    await input.press("Enter");
+    await expect(page.getByText("A tag with this name already exists")).toBeVisible();
+    await expect(input).toBeVisible();
+    // An empty name is caught before any request.
+    await input.fill("   ");
+    await input.press("Enter");
+    await expect(page.getByText("Tag name is required.")).toBeVisible();
+    expect((await api.get(tagsApiUrl()).then((r) => r.json())).find((t: any) => t.id === first.id)?.name).toBe(first.name);
+  });
+
+  test("a QA Engineer is never offered the edit action", async ({ browser }) => {
+    const tag = await defineTag(tagName("QA no edit"));
+    const page = await pageAs(browser, "qa");
+    await page.goto(customTagsUrl());
+    await expect(page.getByText("Only project owners and managers can manage custom tags.")).toBeVisible();
+    await expect(page.getByRole("button", { name: `Edit tag ${tag.name}` })).toHaveCount(0);
+  });
+
+  test("with a few tags the list is compact: several to a row, no empty band below, actions beside each name", async ({ browser }) => {
+    const names = [tagName("Compact A"), tagName("Compact B"), tagName("Compact C")];
+    for (const n of names) await defineTag(n);
+    const page = await pageAs(browser, "owner");
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(customTagsUrl());
+    await expect(page.getByText(names[2], { exact: true })).toBeVisible();
+
+    const list = page.locator("ul").filter({ hasText: names[0] });
+    const layout = await list.evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      const cells = Array.from(el.children).map((li) => li.getBoundingClientRect());
+      return {
+        emptyBelow: box.bottom - Math.max(...cells.map((c) => c.bottom)),
+        rowTops: new Set(cells.map((c) => Math.round(c.top))).size,
+        widestCell: Math.max(...cells.map((c) => c.width)),
+        listWidth: box.width,
+      };
+    });
+    // It used to stretch to fill the viewport (~500px of empty box under three tags).
+    expect(layout.emptyBelow).toBeLessThanOrEqual(4);
+    // Three tags share one row on a desktop width, rather than one full-width row each.
+    expect(layout.rowTops).toBe(1);
+    expect(layout.widestCell).toBeLessThan(layout.listWidth / 2);
+    // Each tag's actions sit inside its own cell, next to its name.
+    const cell = list.locator("li").filter({ hasText: names[0] });
+    await expect(cell.getByRole("button", { name: `Edit tag ${names[0]}` })).toBeVisible();
+    await expect(cell.getByRole("button", { name: `Delete tag ${names[0]}` })).toBeVisible();
+  });
+
   test("with a long catalog the page itself never scrolls — only the tag list does", async ({ browser }) => {
     // Enough tags to overflow any sane viewport height; created in one go so the page loads them all.
-    const names = Array.from({ length: 30 }, (_, i) => tagName(`Scroll ${String(i).padStart(2, "0")}`));
+    // 60, not 30: the list lays tags out three to a row on a desktop width, so 30 is only ten rows.
+    const names = Array.from({ length: 60 }, (_, i) => tagName(`Scroll ${String(i).padStart(2, "0")}`));
     await Promise.all(names.map((n) => defineTag(n)));
 
     const page = await pageAs(browser, "owner");

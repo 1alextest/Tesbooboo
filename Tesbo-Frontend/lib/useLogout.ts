@@ -6,6 +6,7 @@ import { logout as logoutRequest } from "@/lib/api";
 import { resetTesboUser } from "@/lib/posthog";
 import { removeStoredValue } from "@/lib/storage";
 import { clearPageCache } from "@/lib/pageDataCache";
+import { clearProjectPrefetch } from "@/lib/projectPrefetch";
 
 /**
  * The one place that calls POST /api/auth/logout and clears client-side state afterward — shared by
@@ -25,6 +26,7 @@ export function useLogout() {
       await logoutRequest();
       if (typeof window !== "undefined") removeStoredValue("token");
       clearPageCache();
+      clearProjectPrefetch();
       resetTesboUser();
       router.replace("/login");
       router.refresh();

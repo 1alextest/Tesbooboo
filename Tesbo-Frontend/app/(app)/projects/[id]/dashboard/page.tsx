@@ -187,14 +187,23 @@ export default function ProjectDashboardPage() {
         return;
       }
       try {
-        const [summaryRes, cyclesRes, activityRes] = await Promise.all([
+        // Only the summary gates the page. Recent runs and recent activity are side panels: when one
+        // fails (the activity feed timing out was a 500 that bounced users off the project) the
+        // dashboard still renders with that panel empty instead of redirecting away.
+        const [summaryRes, cyclesRes, activityRes] = await Promise.allSettled([
           getProjectDashboardSummary(projectId),
           listCycles(projectId),
           listActivity(projectId, { limit: 10 }),
         ]);
         if (cancelled) return;
-        const next: DashboardData = { summary: summaryRes, runs: cyclesRes.slice(0, 4), activities: activityRes.list };
-        setPageCache(key, next);
+        if (summaryRes.status === "rejected") throw summaryRes.reason;
+        const next: DashboardData = {
+          summary: summaryRes.value,
+          runs: cyclesRes.status === "fulfilled" ? cyclesRes.value.slice(0, 4) : [],
+          activities: activityRes.status === "fulfilled" ? activityRes.value.list : [],
+        };
+        // A degraded result is shown but not cached, so the next visit retries the failed panel.
+        if (cyclesRes.status === "fulfilled" && activityRes.status === "fulfilled") setPageCache(key, next);
         setSummary(next.summary);
         setRuns(next.runs);
         setActivities(next.activities);

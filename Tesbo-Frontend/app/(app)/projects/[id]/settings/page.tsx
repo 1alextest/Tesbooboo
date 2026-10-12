@@ -180,6 +180,10 @@ export default function ProjectSettingsPage() {
     ? normalizeRole(projectMembers.find((m) => m.userId === currentUserId)?.role ?? "qa_engineer")
     : "qa_engineer";
   const canManageCustomFields = currentUserRole === "owner" || currentUserRole === "manager";
+  // General + Test Environments save through PATCH /api/projects/:id and Delete through DELETE —
+  // both refused for qa_engineer server-side (updateProjectForUser/deleteProjectForUser). The
+  // controls stay visible but disabled, so a QA engineer can still read the settings.
+  const canEditProjectSettings = canManageCustomFields;
   const visibleTabs = useMemo<Array<{ key: SettingsTab; label: string }>>(
     () => [
       { key: "general", label: "General" },
@@ -277,6 +281,7 @@ export default function ProjectSettingsPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!canEditProjectSettings) return;
     setMessage(null);
     const nameValidationError = validateProjectName(name);
     if (nameValidationError) {
@@ -340,6 +345,7 @@ export default function ProjectSettingsPage() {
   }
 
   async function handleDeleteProject() {
+    if (!canEditProjectSettings) return;
     const projectName = String(project?.name ?? "").trim();
     if (!projectName) {
       setDeleteProjectError("Project name is unavailable. Refresh and try again.");
@@ -472,6 +478,19 @@ export default function ProjectSettingsPage() {
 
   const projectName = typeof project.name === "string" ? project.name : "";
 
+  const messageBanner = message ? (
+    <p
+      role={messageIsError ? "alert" : "status"}
+      className={`rounded-lg border px-3 py-2 text-sm ${
+        messageIsError
+          ? "border-[var(--error-border)] bg-[var(--error-soft)] text-[var(--error-foreground)]"
+          : "border-[var(--success-border)] bg-[var(--success-soft)] text-[var(--success-foreground)]"
+      }`}
+    >
+      {message}
+    </p>
+  ) : null;
+
   return (
     <main className="tc-fullbleed flex flex-col pb-4 pr-4 pt-4" style={{ height: "calc(100vh - 3.5rem)" }}>
       <div className="flex min-h-0 flex-1 flex-col">
@@ -528,6 +547,16 @@ export default function ProjectSettingsPage() {
         // intercepts Save's submit before handleSubmit ever runs, so the styled inline validation
         // above never gets a chance to show (same class of bug as the login/signup email fields).
         <form onSubmit={handleSubmit} className="space-y-5" noValidate>
+          {currentUserId && !canEditProjectSettings && (
+            <Card className="p-4">
+              <p className="text-sm text-[var(--muted)]">
+                Only project managers and owners can change project settings or delete the project.
+              </p>
+            </Card>
+          )}
+          {/* A disabled fieldset natively disables every input and button inside it — Save, Add,
+              Remove, the icon picker and Delete project — for a QA engineer. Reset to no box. */}
+          <fieldset disabled={!canEditProjectSettings} className="m-0 min-w-0 space-y-5 border-0 p-0">
           {activeTab === "general" && (
             <>
               <Card className="p-4 space-y-4">
@@ -555,6 +584,14 @@ export default function ProjectSettingsPage() {
                     maxLength={PROJECT_NAME_MAX_LENGTH}
                   />
                   {nameError && <FieldError>{nameError}</FieldError>}
+                  {/* Plain text, not an input: keeps `form input[type=text]` selectors on the name field. */}
+                  <p className="mt-1.5 text-xs text-[var(--muted)]" data-testid="project-key-note">
+                    Project key{" "}
+                    <span className="font-mono uppercase text-[var(--foreground)]" data-testid="project-key">
+                      {String(project.key ?? "")}
+                    </span>{" "}
+                    is set when the project is created and stays the same when you rename it. It appears in URLs and integrations.
+                  </p>
                 </Field>
                 <Field>
                   <div className="flex items-baseline justify-between">
@@ -602,6 +639,8 @@ export default function ProjectSettingsPage() {
                   {saving ? "Saving…" : "Save"}
                 </Button>
               </Card>
+              {/* Right under the Save button, above the Danger zone, so the result is seen without scrolling past it. */}
+              {messageBanner}
               <div className="rounded-xl border border-[var(--error-border)] bg-[var(--error-soft)] p-4 space-y-2">
                 <h3 className="text-sm font-semibold text-[var(--error-foreground)]">Danger zone</h3>
                 <p className="text-sm text-[var(--error-foreground)]">
@@ -717,23 +756,13 @@ export default function ProjectSettingsPage() {
             </Card>
           )}
 
-          {message && (
-            <p
-              role={messageIsError ? "alert" : "status"}
-              className={`rounded-lg border px-3 py-2 text-sm ${
-                messageIsError
-                  ? "border-[var(--error-border)] bg-[var(--error-soft)] text-[var(--error-foreground)]"
-                  : "border-[var(--success-border)] bg-[var(--success-soft)] text-[var(--success-foreground)]"
-              }`}
-            >
-              {message}
-            </p>
-          )}
+          {activeTab !== "general" && messageBanner}
           {activeTab !== "general" && (
             <Button type="submit" disabled={saving}>
               {saving ? "Saving…" : "Save"}
             </Button>
           )}
+          </fieldset>
         </form>
       )}
 
@@ -1030,7 +1059,8 @@ export default function ProjectSettingsPage() {
                   {linearStatus.connectedProjects && linearStatus.connectedProjects.length > 0 ? (
                     <p className="text-xs text-[var(--muted)]">
                       {linearStatus.connectedProjects.length} Linear team{linearStatus.connectedProjects.length > 1 ? "s" : ""} linked to this project:{" "}
-                      {linearStatus.connectedProjects.map((p) => p.linearTeamKey).join(", ")}
+                      {/* The name, not the key: for a Linear Project the key is an opaque slugId (4081f3c6e1df). */}
+                      {linearStatus.connectedProjects.map((p) => p.linearTeamName || p.linearTeamKey).join(", ")}
                     </p>
                   ) : (
                     <p className="text-xs text-[var(--muted-soft)]">No Linear team linked to this project yet.</p>

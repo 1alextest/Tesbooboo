@@ -196,7 +196,9 @@ export default function IntegrationsTab() {
                     {status.connectedProjects && status.connectedProjects.length > 0 && (
                       <p className="text-xs text-[var(--muted)]">
                         Used by {status.connectedProjects.length} project{status.connectedProjects.length > 1 ? "s" : ""}:{" "}
-                        {status.connectedProjects.map((p) => p.projectKey).join(", ")}
+                        {/* The key is immutable, so labelling by it made a renamed project look un-renamed.
+                            The name comes live from the API; the key is only the fallback for a blank name. */}
+                        {status.connectedProjects.map((p) => p.projectName?.trim() || p.projectKey).join(", ")}
                       </p>
                     )}
                   </div>

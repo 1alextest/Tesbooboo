@@ -3684,7 +3684,7 @@ test.describe("bug activity", () => {
     return activity;
   }
 
-  test("BUG-U-79 the full page shows Comments and Activity as two tabs, Comments open; Activity lists entries oldest first, naming the actor", async ({ page }) => {
+  test("BUG-U-79 the full page shows Comments and Activity as two tabs, Comments open; Activity lists entries newest first, naming the actor", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     const bug = await seedBug("Page");
     try {
@@ -3710,9 +3710,9 @@ test.describe("bug activity", () => {
       await expect(comments, "only one tab's content shows at a time").toBeHidden();
       const entries = activity.getByTestId("bug-activity");
       await expect(entries).toHaveCount(3);
-      await expect(entries.nth(0)).toContainText(`${actorName} created the bug`);
+      await expect(entries.nth(2)).toContainText(`${actorName} created the bug`);
       await expect(entries.nth(1)).toContainText(`${actorName} changed status from Open to In Progress`);
-      await expect(entries.nth(2)).toContainText(`${actorName} changed priority from None to P1`);
+      await expect(entries.nth(0)).toContainText(`${actorName} changed priority from None to P1`);
       await expect(entries.nth(0).locator("time")).toHaveAttribute("datetime", /\d{4}-\d{2}-\d{2}T/);
 
       await commentsTab.click();
@@ -3741,7 +3741,9 @@ test.describe("bug activity", () => {
       await expect(tab(page, /^Activity/)).toHaveAccessibleName("Activity (2)");
 
       const activity = await openActivity(page);
-      await expect(activity.getByTestId("bug-activity").last()).toContainText(`${actorName} added a comment`);
+      // Newest first: the comment just posted leads the list, above "created the bug".
+      await expect(activity.getByTestId("bug-activity").first()).toContainText(`${actorName} added a comment`);
+      await expect(activity.getByTestId("bug-activity").last()).toContainText(`${actorName} created the bug`);
 
       const persisted = await (await api.get(`/api/projects/${projectId}/bugs/${bug.id}/comments`)).json();
       expect(persisted.list.map((x: { body: string }) => x.body)).toEqual(["Seen again on build 12"]);
@@ -3778,7 +3780,7 @@ test.describe("bug activity", () => {
       await expect(detailsRegion(page).getByRole("region", { name: "Comments" })).toBeVisible();
       const activity = await openActivity(page);
       await expect(activity.getByTestId("bug-activity")).toHaveCount(2);
-      await expect(activity.getByTestId("bug-activity").last()).toContainText(`${actorName} closed the bug (was Open)`);
+      await expect(activity.getByTestId("bug-activity").first()).toContainText(`${actorName} closed the bug (was Open)`);
     } finally {
       await api.delete(`/api/bugs/${bug.id}`, { failOnStatusCode: false });
     }

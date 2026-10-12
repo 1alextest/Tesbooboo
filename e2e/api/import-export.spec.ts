@@ -1836,6 +1836,48 @@ test.describe("import / export", () => {
     });
   });
 
+  test("Not set priority and the added Type value export in Russian, stay as stored in English, and round-trip through a re-import", async () => {
+    const stamp = Date.now();
+    const project = await newProject(`E2E Export NotSet ${stamp}`);
+    const seeded = await seedCase(
+      { title: `E2E NotSet Export ${stamp}`, priority: "Not set", type: "Other" },
+      project,
+    );
+
+    const ru = await asOwner.get(`/api/projects/${project}/testcases/export/csv`, { headers: RU });
+    expect(ru.status()).toBe(200);
+    const ruRecords = parseCsvRecords((await csvBody(ru)).text).records;
+    expect(ruRecords[0]).toMatchObject({
+      Название: seeded.title,
+      Приоритет: "Не задан",
+      Тип: "Другое",
+    });
+
+    // English (and no header at all) keep exactly what is stored.
+    const en = await asOwner.get(`/api/projects/${project}/testcases/export/csv`);
+    const enRecords = parseCsvRecords((await csvBody(en)).text).records;
+    expect(enRecords[0]).toMatchObject({ priority: "Not set", type: "Other" });
+
+    // The Russian file imported back stores the English values, not the Russian words.
+    const back = await asOwner.post(`/api/projects/${project}/testcases/import`, {
+      data: {
+        rows: [
+          {
+            rowNumber: 1,
+            title: `${ruRecords[0].Название} (re-import)`,
+            priority: ruRecords[0].Приоритет,
+            type: ruRecords[0].Тип,
+          },
+        ],
+      },
+    });
+    expect((await back.json()).errors).toEqual([]);
+    const list = await (await asOwner.get(`/api/projects/${project}/testcases`)).json();
+    const reimported = list.find((tc: { title: string }) => tc.title === `${seeded.title} (re-import)`);
+    expect(reimported, "the re-imported case exists").toBeTruthy();
+    expect(reimported).toMatchObject({ priority: "Not set", type: "Other" });
+  });
+
   test("the same export with an English browser, or no language at all, is byte-for-byte the English file", async () => {
     const stamp = Date.now();
     const project = await newProject(`E2E Export EN ${stamp}`);
