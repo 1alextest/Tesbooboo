@@ -50,6 +50,108 @@ test.describe("project settings", () => {
     }
   });
 
+  test("the General tab's save result sits above the Danger zone, for success and for failure", async ({ page }) => {
+    const api = await apiContext();
+    let projectId: string | undefined;
+
+    try {
+      const suffix = Date.now().toString().slice(-8);
+      const created = await (
+        await api.post("/api/projects", { data: { name: `UI Banner Project ${suffix}`, key: `E2EUIBAN${suffix}` } })
+      ).json();
+      projectId = created.id;
+
+      await page.goto(`/projects/${projectId}/settings`);
+      // The Danger zone has no role; its heading is the stable anchor. The banner used to render
+      // below it, off-screen on a short viewport, so a save looked like it did nothing.
+      const dangerTop = async () => (await page.getByRole("heading", { name: "Danger zone" }).boundingBox())!.y;
+
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      const ok = page.getByRole("status").filter({ hasText: "Project settings saved." });
+      await expect(ok).toBeVisible();
+      expect((await ok.boundingBox())!.y).toBeLessThan(await dangerTop());
+
+      // Failure path: the server rejects the save, and the error banner takes the same slot.
+      await page.route(`**/api/projects/${projectId}`, (route) =>
+        route.request().method() === "PATCH"
+          ? route.fulfill({ status: 500, json: { error: "E2E forced save failure" } })
+          : route.continue()
+      );
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      const failed = page.getByRole("alert").filter({ hasText: "E2E forced save failure" });
+      await expect(failed).toBeVisible();
+      await expect(ok).toHaveCount(0);
+      expect((await failed.boundingBox())!.y).toBeLessThan(await dangerTop());
+    } finally {
+      if (projectId) await api.delete(`/api/projects/${projectId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
+  test("after a rename the project card shows the new name and initial, while the key stays and settings says so", async ({ page }) => {
+    const api = await apiContext();
+    let projectId: string | undefined;
+
+    try {
+      const suffix = Date.now().toString().slice(-8);
+      const key = `E2EUIKEY${suffix}`;
+      const created = await (
+        await api.post("/api/projects", { data: { name: `Alpha Label ${suffix}`, key } })
+      ).json();
+      projectId = created.id;
+
+      await page.goto(`/projects/${projectId}/settings`);
+      await expect(page.getByTestId("project-key")).toHaveText(key, { ignoreCase: true });
+      await expect(page.getByTestId("project-key-note")).toContainText("stays the same when you rename it");
+
+      const renamed = `Zulu Label ${suffix}`;
+      await page.locator('form input[type="text"]').first().fill(renamed);
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await expect(page.getByText("Project settings saved.")).toBeVisible();
+      // The note reads the refetched project, so it still shows the original key after the save.
+      await expect(page.getByTestId("project-key")).toHaveText(key, { ignoreCase: true });
+
+      // Client-side nav to the list: the card must carry the new name and initial, the same key.
+      await page.goto("/projects");
+      await page.getByPlaceholder(/search/i).first().fill(suffix);
+      const card = page.getByRole("link").filter({ hasText: renamed });
+      await expect(card).toBeVisible();
+      await expect(card.getByText(key, { exact: true })).toBeVisible();
+      await expect(card.getByText(`Alpha Label ${suffix}`)).toHaveCount(0);
+      // Automatic avatar: first letter of the NEW name (Z), not the original (A).
+      await expect(card.getByText("Z", { exact: true })).toBeVisible();
+    } finally {
+      if (projectId) await api.delete(`/api/projects/${projectId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
+  test("a project with a custom icon letter keeps it across a rename", async ({ page }) => {
+    const api = await apiContext();
+    let projectId: string | undefined;
+
+    try {
+      const suffix = Date.now().toString().slice(-8);
+      const created = await (
+        await api.post("/api/projects", { data: { name: `Beta Icon ${suffix}`, key: `E2EUIGLY${suffix}`, icon: { color: "#4C5FD5", glyph: "Q" } } })
+      ).json();
+      projectId = created.id;
+
+      const res = await api.patch(`/api/projects/${projectId}`, { data: { name: `Yankee Icon ${suffix}` } });
+      expect(res.ok()).toBeTruthy();
+
+      await page.goto("/projects");
+      await page.getByPlaceholder(/search/i).first().fill(suffix);
+      const card = page.getByRole("link").filter({ hasText: `Yankee Icon ${suffix}` });
+      await expect(card).toBeVisible();
+      // An explicit glyph is the user's choice; only the automatic one follows the name.
+      await expect(card.getByText("Q", { exact: true })).toBeVisible();
+    } finally {
+      if (projectId) await api.delete(`/api/projects/${projectId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
   test("a user can set a project's icon from settings, and clear it back to automatic", async ({ page }) => {
     const api = await apiContext();
     let projectId: string | undefined;

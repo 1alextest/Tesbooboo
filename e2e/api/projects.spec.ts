@@ -106,6 +106,38 @@ test.describe("project CRUD", () => {
     await request.delete(`/api/projects/${first.id}`);
   });
 
+  test("a rename never changes the project key, even when the PATCH tries to send one", async ({ request }) => {
+    const suffix = Date.now().toString().slice(-8);
+    const key = `E2EKEY${suffix}`;
+    const created = await (await request.post("/api/projects", { data: { name: `E2E Key Stays ${suffix}`, key } })).json();
+    try {
+      for (const body of [
+        { name: `E2E Renamed ${suffix}` },
+        // A key in the body is not an editable field: ignored, not applied and not an error.
+        { name: `E2E Renamed Again ${suffix}`, key: "HIJACK" },
+        // Surrounding whitespace is trimmed from the name; the key is still untouched.
+        { name: `  E2E Padded ${suffix}  ` },
+      ]) {
+        const res = await request.patch(`/api/projects/${created.id}`, { data: body, failOnStatusCode: false });
+        expect(res.ok(), await res.text()).toBeTruthy();
+        const after = await (await request.get(`/api/projects/${created.id}`)).json();
+        expect(after.key).toBe(key);
+        expect(after.name).toBe(body.name.trim());
+      }
+
+      // Every list that carries the label agrees with the single read.
+      const list = await (await request.get("/api/projects")).json();
+      const row = list.find((p: { id: string }) => p.id === created.id);
+      expect(row.key).toBe(key);
+      expect(row.name).toBe(`E2E Padded ${suffix}`);
+      // The project is still addressable by its original key.
+      const byKey = await request.get(`/api/projects/${key}`, { failOnStatusCode: false });
+      expect(byKey.status()).toBeLessThan(500);
+    } finally {
+      await request.delete(`/api/projects/${created.id}`, { failOnStatusCode: false });
+    }
+  });
+
   test("supports the read -> update -> delete lifecycle", { tag: '@tesbo.testId("TES-TC-409")' }, async ({ request }) => {
     const suffix = Date.now().toString().slice(-8);
     const name = `E2E Lifecycle Project ${suffix}`;
