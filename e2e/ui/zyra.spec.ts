@@ -4316,6 +4316,73 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
     expect(session.messages.map((m: { role: string; status: string }) => [m.role, m.status])).toEqual([["user", "sent"], ["assistant", "completed"]]);
   });
 
+  /*
+   * "[Zyra] Warn Users About the 100-Test-Case Limit When Generating for Multiple Tickets": a request
+   * whose estimate (tickets × the per-task count) is above 60 is answered with a question and
+   * clickable options, the way a permission prompt offers its choices. Clicking one sends it with
+   * `choice`; the answered question keeps showing what was picked and can't be clicked again.
+   * api/zyra-chat-consistency.spec.ts ZCC-T-* covers what each answer then does.
+   */
+  test("ZYU-148 a request spanning many tickets asks with clickable options; a click sends the answer and locks the question", async ({ browser }) => {
+    await allocateFakeAiKey();
+    let folderId = scalar(`SELECT id FROM knowledge_folders WHERE project_id = ${literal(tenant!.mainProjectId)} AND is_root = true;`);
+    if (!folderId) {
+      exec(
+        "INSERT INTO knowledge_folders (organization_id, project_id, parent_folder_id, name, is_root) " +
+          `VALUES (${literal(tenant!.organizationId)}, ${literal(tenant!.mainProjectId)}, NULL, 'Knowledge base', true);`,
+      );
+      folderId = scalar(`SELECT id FROM knowledge_folders WHERE project_id = ${literal(tenant!.mainProjectId)} AND is_root = true;`);
+    }
+    // Synced-ticket-shaped documents ("KEY-n: summary"), so ZUI-n reads as this project's tickets.
+    for (const n of [1, 2, 3]) {
+      const res = await api.post(`/api/projects/${tenant!.mainProjectId}/knowledge-base/documents`, {
+        data: { folderId, documentType: "general", title: `ZUI-${n}: Gift card balance ${n}`, contentText: "Customers can look up a gift card balance." },
+        failOnStatusCode: false,
+      });
+      expect(res.status(), `seeding ticket ZUI-${n} — ${await res.text()}`).toBe(201);
+    }
+    const page = await openChat(browser);
+    // Only the router runs: the question comes before any generation.
+    ai.queueReply({ reply: "", reasoningSummary: "Generating test cases.", action: "create", actionType: "create", operations: [], testcases: [], requestedCount: null, exhaustive: false });
+
+    await composer(page).fill("Generate test cases for ZUI-1, ZUI-2 and ZUI-3.");
+    await composer(page).press("Enter");
+
+    // The 30-50 default is 50 per ticket, so 3 tickets is ~150 — above 60.
+    const question = page.getByRole("group", { name: "Choose an option" });
+    await expect(question).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/This request covers 3 tickets/)).toBeVisible();
+    const smaller = question.getByRole("button", { name: /Generate in smaller batches/ });
+    const all = question.getByRole("button", { name: /Generate all tickets in batches/ });
+    await expect(smaller).toBeEnabled();
+    await expect(all).toBeEnabled();
+    await expect(smaller).toContainText("Select 1–2 tickets at a time for better coverage.");
+    await expect(page.getByText("Or type something else below.")).toBeVisible();
+    const questionId = scalar(
+      `SELECT id FROM zyra_chat_messages WHERE project_id = ${literal(tenant!.mainProjectId)} AND options->>'kind' = 'ticket_scope';`,
+    );
+
+    const sent = page.waitForRequest((req) => isSendRequest(req.url(), req.method()));
+    await smaller.click();
+    expect((await sent).postDataJSON()).toMatchObject({
+      message: "Generate in smaller batches",
+      choice: { messageId: questionId, optionId: "smaller" },
+    });
+
+    // The tickets arrive as the newest question, one per option (50 per ticket keeps each pick ≤ 60).
+    const groups = page.getByRole("group", { name: "Choose an option" });
+    await expect(groups).toHaveCount(2, { timeout: 30_000 });
+    await expect(groups.last().getByRole("button")).toHaveCount(3);
+    await expect(groups.last().getByRole("button", { name: /ZUI-2(?!\d)/ })).toBeEnabled();
+
+    // The first question shows what was picked and is no longer clickable — in the page and the database.
+    await expect(groups.first().getByRole("button", { name: /Generate in smaller batches/ })).toHaveAttribute("aria-pressed", "true");
+    await expect(groups.first().getByRole("button", { name: /Generate in smaller batches/ })).toContainText("Chosen");
+    await expect(groups.first().getByRole("button", { name: /Generate all tickets in batches/ })).toBeDisabled();
+    expect(scalar(`SELECT options->>'answeredId' FROM zyra_chat_messages WHERE id = ${literal(questionId)};`)).toBe("smaller");
+    expect(ai.requests, "offering the tickets made no model call").toHaveLength(1);
+  });
+
   test("ZYU-101 with Knowledge Base access on, the reply still arrives and the model is shown the knowledge base", async ({ browser }) => {
     await allocateFakeAiKey();
     const marker = `Zorblax${Date.now() % 100000}`;

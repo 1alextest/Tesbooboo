@@ -231,7 +231,44 @@ export const ZYRA_RU = {
   jiraNotSynced:
     "Jira подключена, но синхронизированных тикетов Jira в локальном кэше пока нет. Сначала запустите синхронизацию Jira, затем спросите снова — я посчитаю покрытие.",
   jiraNotConnected:
-    "Jira для этого проекта ещё не подключена, поэтому я не могу посчитать покрытие тест-кейсами. Сначала подключите Jira и синхронизируйте тикеты."
+    "Jira для этого проекта ещё не подключена, поэтому я не могу посчитать покрытие тест-кейсами. Сначала подключите Jira и синхронизируйте тикеты.",
+
+  // zyraTicketScopeQuestion / zyraTicketGroupDecision
+  scopeQuestion: (tickets: number, perTicket: number, preview: string) =>
+    `Этот запрос охватывает ${n(tickets)} тикет(ов)${preview}. При ~${n(perTicket)} тест-кейсах на тикет это около ${n(tickets * perTicket)} тест-кейсов, а одна генерация ограничена 100 — если делать всё сразу, покрытие каждого тикета получится поверхностным. Как продолжим?`,
+  scopeSmallerLabel: "Генерировать небольшими пакетами",
+  scopeSmallerDescription: "Выбирать по 1–2 тикета за раз для лучшего покрытия.",
+  scopeAllLabel: "Сгенерировать для всех тикетов пакетами",
+  scopeAllDescription: (tickets: number) =>
+    `Zyra обработает все ${n(tickets)} тикет(ов) пакетами до 100 тест-кейсов и будет сообщать о прогрессе.`,
+  scopeReasoning: "Запрос охватывает больше тикетов, чем умещается в одну генерацию, — спрашиваю, как продолжить.",
+  groupIntro: (perGroup: number, shown: number, total: number) =>
+    `Выберите, с чего начать — каждый вариант генерирует тест-кейсы для ${perGroup === 1 ? "одного тикета" : "двух тикетов"} за раз.${shown < total ? ` Показаны первые ${n(shown)} из ${n(total)} групп.` : ""} Можно также просто назвать 1–2 тикета самостоятельно.`,
+  groupNoTickets: "Ни один из этих тикетов ещё не синхронизирован в Tesbo, поэтому выбрать нечего. Синхронизируйте их и спросите снова.",
+  groupMessage: (keys: string, exhaustive: boolean) =>
+    exhaustive ? `Сгенерируй все возможные тест-кейсы для ${keys}` : `Сгенерируй тест-кейсы для ${keys}`,
+  groupReasoning: "Предлагаю тикеты небольшими группами.",
+
+  // ticket-scoped plan
+  ticketsProgress: (planned: number, total: number) => `\n\nТикетов распланировано: ${n(planned)} из ${n(total)}.`,
+  ticketsAllDone: (total: number) => `\n\nВсе ${n(total)} тикет(ов) обработаны.`,
+  ticketsPartial: (processed: number, total: number) => `\n\nТест-кейсы получили ${n(processed)} из ${n(total)} тикет(ов).`,
+  ticketsUnprocessedHeading: (count: number) => `Не удалось сгенерировать тест-кейсы для ${n(count)} тикет(ов):`,
+  ticketNotSynced: "ещё не синхронизирован в Tesbo",
+  ticketNoScenarios: "нет новых сценариев — уже покрыт существующими тест-кейсами",
+  ticketsMoreUnprocessed: (count: number) => `…и ещё ${n(count)}.`,
+  ticketsNoneSynced: (tickets: number) =>
+    `Ни один из ${n(tickets)} выбранных тикетов ещё не синхронизирован в Tesbo, поэтому генерировать не из чего. Синхронизируйте их и спросите снова.`,
+  ticketsNothingNew: (tickets: number) =>
+    `Я прошёл(а) все ${n(tickets)} тикет(ов), но новых сценариев не нашлось — существующие тест-кейсы уже их покрывают.`,
+  ticketsSkippedUnsynced: (count: number, keys: string) =>
+    `\n${n(count)} тикет(ов) не синхронизированы в Tesbo и будут пропущены: ${keys}.`,
+  ticketsPlanFailed: (cause: string) =>
+    `Не удалось начать планирование тикетов (${cause}). Ничего не сгенерировано — спросите снова, чтобы повторить.`,
+  ticketsFinished: "Работа по тикетам завершена.",
+  ticketScopedReasoning: "Пакетная генерация по тикетам, по одному тикету за раз.",
+  ticketScopedStarted: (tickets: number, batchSize: number, firstIntro: string, reply: string) =>
+    `Генерирую тест-кейсы для ${n(tickets)} тикет(ов) по одному тикету за раз, пакетами до ${n(batchSize)} тест-кейсов. ${firstIntro} Остальные опубликую здесь по мере готовности; пока можете проверить эти.\n\n${reply}`
 };
 
 const L = "(?<![\\p{L}\\p{N}])"; // start of a word, in any script

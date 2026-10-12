@@ -105,6 +105,9 @@ const EN = {
     "⚠️ Zyra didn't return structured data for this reply — nothing above should be treated as saved or staged. Try asking again.",
   "msg.viewTestCases": "View test cases",
   "msg.continue": "Continue",
+  "options.label": "Choose an option",
+  "options.typeInstead": "Or type something else below.",
+  "options.chosen": "Chosen",
   "msg.timedOutRepeatedly": (p) =>
     `This has timed out ${p.n} times in a row. The batch may be too large for the provider to finish in time.`,
   "msg.continueSmaller": "Continue with a smaller batch (5 cases)",
@@ -513,6 +516,9 @@ const RU: Record<ZyraTextKey, Entry> = {
     "⚠️ Zyra не вернула структурированные данные для этого ответа — ничего из показанного выше не сохранено и не подготовлено к проверке. Попробуйте спросить ещё раз.",
   "msg.viewTestCases": "Открыть тест-кейсы",
   "msg.continue": "Продолжить",
+  "options.label": "Выберите вариант",
+  "options.typeInstead": "Или напишите свой вариант ниже.",
+  "options.chosen": "Выбрано",
   "msg.timedOutRepeatedly": (p) =>
     `Время ожидания истекло ${p.n} ${ruPlural(p.n, "раз", "раза", "раз")} подряд. Возможно, пакет слишком велик, чтобы провайдер успел его обработать.`,
   "msg.continueSmaller": "Продолжить с пакетом поменьше (5 тест-кейсов)",
