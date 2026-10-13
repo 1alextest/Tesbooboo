@@ -447,6 +447,49 @@ test.describe("test case import wizard", () => {
     }
   });
 
+  // Regression: importing while a suite was open dropped every row without a Suite column at the
+  // project root ("All test cases") because the modal never sent the open suite as defaultSuiteId.
+  test("importing while a suite is open lands the rows in that suite, and says so", async ({ browser }) => {
+    let fixture: Fixture | undefined;
+    try {
+      fixture = await withProject(browser, "OpenSuite");
+      const { page, projectId } = fixture;
+      const stamp = Date.now();
+      const suiteName = `E2E Open Suite ${stamp}`;
+      const plain = `E2E Open Plain ${stamp}`;
+      const named = `E2E Open Named ${stamp}`;
+      const namedSuite = `E2E Open Child ${stamp}`;
+
+      const suiteRes = await api.post(`/api/projects/${projectId}/suites`, { data: { name: suiteName } });
+      expect(suiteRes.ok()).toBeTruthy();
+      const openSuite = (await suiteRes.json()) as { id: string };
+
+      await page.goto(`/projects/${projectId}/testcases?suiteId=${openSuite.id}`);
+      await clickImport(page);
+      await uploadCsv(page, toCsv(["Title", "Suite"], [[plain, ""], [named, namedSuite]]));
+      await expect(page.getByTestId("import-target-suite")).toContainText(suiteName);
+      await runImport(page, 2);
+      await page.getByRole("button", { name: "Done" }).click();
+
+      const cases = await listCases(projectId);
+      expect(cases.find((c) => c.title === plain)!.suiteId, "a blank-suite row lands in the open suite").toBe(openSuite.id);
+      const child = (await listSuites(projectId)).find((s) => s.name === namedSuite);
+      expect(child!.parentId, "a named suite nests under the open suite").toBe(openSuite.id);
+      expect(cases.find((c) => c.title === named)!.suiteId).toBe(child!.id);
+
+      // From All test cases (no suite open) the same file still goes to the root, with no banner.
+      const rootTitle = `E2E Open Root ${stamp}`;
+      await openWizard(page, projectId);
+      await uploadCsv(page, toCsv(["Title"], [[rootTitle]]));
+      await expect(page.getByTestId("import-target-suite")).toHaveCount(0);
+      await runImport(page, 1);
+      const after = await listCases(projectId);
+      expect(after.find((c) => c.title === rootTitle)!.suiteId).toBeNull();
+    } finally {
+      await disposeProject(fixture);
+    }
+  });
+
   test("splits steps into actions with their expected results", { tag: '@tesbo.testId("TES-TC-830")' }, async ({ browser }) => {
     let fixture: Fixture | undefined;
     try {

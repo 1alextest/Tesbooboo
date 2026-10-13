@@ -3206,6 +3206,8 @@ export default function TestCasesPage() {
       {/* ── Import Modal ── */}
       <ImportTestCasesModal
         projectId={projectId}
+        defaultSuiteId={formSuiteId}
+        defaultSuiteLabel={formSuiteId ? suiteNameMap.get(formSuiteId) ?? null : null}
         open={isImportModalOpen}
         onClose={() => setIsImportModalOpen(false)}
         onImported={(result) => {

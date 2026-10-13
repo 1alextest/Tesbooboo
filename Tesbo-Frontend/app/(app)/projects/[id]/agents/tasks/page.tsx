@@ -17,6 +17,7 @@ import {
 import { Button, Field, FieldLabel, Modal, PageLoader, Select, StatusChip, Textarea } from "@/components/ui";
 import { PageHeader, StandardPageLayout, Breadcrumbs } from "@/components/workflows";
 import TaskQuickViewPanel, { JIRA_BADGE_CLASS, latestFailureDetail, normalizeTaskStatus as normalizeStatus, taskStatusLabel, taskStatusTone as tone } from "@/components/agents/TaskQuickViewPanel";
+import ReviewBoard from "@/components/agents/ReviewBoard";
 import { markdownToPlainText, renderMarkdown } from "@/lib/markdown";
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
@@ -35,7 +36,7 @@ const columns = [
   { key: "done", label: "Done", dot: "var(--success)" },
 ] as const;
 
-type TaskView = "tasks" | "kanban";
+type TaskView = "tasks" | "kanban" | "review";
 
 function htmlToPlainText(html: string): string {
   // The knowledge-base editor only ever produces rich-text markup (paragraphs, lists, headings,
@@ -318,6 +319,7 @@ export default function ZyraTasksPage() {
           {[
             { key: "tasks" as const, label: "Task window" },
             { key: "kanban" as const, label: "Kanban board" },
+            { key: "review" as const, label: "Review Board" },
           ].map((tab) => (
             <button
               key={tab.key}
@@ -389,6 +391,8 @@ export default function ZyraTasksPage() {
             {tasks.length === 0 && <div className="p-8 text-center text-sm text-[var(--muted)]">No tasks in queue</div>}
           </div>
         </section>
+      ) : activeView === "review" ? (
+        <ReviewBoard projectId={projectId} />
       ) : (
         <div className="grid gap-4 xl:grid-cols-5">
           {columns.map((column) => {

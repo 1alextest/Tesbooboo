@@ -396,6 +396,15 @@ export class PlanLimitsService {
     }
   }
 
+  async assertReviewBoardEnabled(organizationId: string): Promise<void> {
+    const { effectivePlan } = await this.getEntitlement(organizationId);
+    if (effectivePlan !== "pro") {
+      throw new ForbiddenException({
+        error: "The Review Board is a Pro plan feature. Upgrade to Pro to analyse and review duplicate test cases."
+      });
+    }
+  }
+
   async assertIntegrationAllowed(organizationId: string, provider: string): Promise<void> {
     const { effectivePlan } = await this.getEntitlement(organizationId);
     if (effectivePlan === "pro" || LAUNCH_ALLOWED_INTEGRATIONS.has(provider)) return;
