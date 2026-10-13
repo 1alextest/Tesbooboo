@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { IconChecklist } from "@tabler/icons-react";
+import { IconAlertTriangle, IconArrowsLeftRight, IconCheck, IconChecklist, IconCopy, IconEye, IconGitCompare, IconPencil, IconRefresh, IconTrash } from "@tabler/icons-react";
 import { getBillingInfo, type BillingInfo } from "@/lib/api";
 import { Button, Card, Modal, PageLoader, StatusChip } from "@/components/ui";
 import PricingModal from "@/components/PricingModal";
@@ -11,7 +11,6 @@ import ReviewCompareModal from "@/components/agents/ReviewCompareModal";
 import ReviewEditModal from "@/components/agents/ReviewEditModal";
 import {
   DIFFERENCE_LABEL,
-  formatPercent,
   STALE_HINT,
   getReviewAnalysis,
   keepReviewRecommendation,
@@ -31,14 +30,14 @@ const POLL_MS = 2500;
 // "Removed" is deliberately not a filter: the API only lists findings whose two test cases both still
 // exist, and a removed finding by definition has a deleted case.
 const FILTERS: Array<{ key: ReviewStatus; label: string }> = [
-  { key: "pending", label: "Pending" },
+  { key: "pending", label: "To review" },
   { key: "kept", label: "Kept" },
   { key: "edited", label: "Edited" },
   { key: "obsolete", label: "No longer matching" },
 ];
 
 const STATUS_LABEL: Record<ReviewStatus, string> = {
-  pending: "Pending review",
+  pending: "To review",
   kept: "Kept as is",
   edited: "Edited",
   removed: "Removed",
@@ -225,88 +224,142 @@ function ReviewWorkspace({ projectId }: { projectId: string }) {
 
   const empty = !!data && data.total === 0;
   const neverFound = !!data && Object.values(data.counts).every((n) => n === 0);
+  const busyRun = starting || active;
 
   return (
-    <section aria-label="Review Board" className="space-y-4">
-      <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
-        <div className="min-w-0">
-          <h2 className="text-base font-semibold text-[var(--foreground)]">Duplicate and similar test cases</h2>
-          <p className="mt-0.5 text-sm text-[var(--muted)]">
-            Compares the title, preconditions, steps, expected results, test data and postconditions of every test case in this project. Suggestions only — nothing is edited or removed until you confirm it.
-          </p>
+    <section aria-label="Review Board" className="space-y-5">
+      <Card className="space-y-4 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-secondary)] text-[var(--accent-light)]">
+              <IconGitCompare size={22} stroke={1.75} />
+            </span>
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-[var(--foreground)]">Duplicate and similar test cases</h2>
+              <p className="mt-0.5 max-w-2xl text-sm leading-relaxed text-[var(--muted)]">
+                Find test cases in this project that repeat each other. You review every suggestion — nothing is edited or removed until you confirm it.
+              </p>
+            </div>
+          </div>
+          <Button type="button" size="lg" onClick={() => void handleStart()} disabled={busyRun || analysis === undefined}>
+            <span className="inline-flex items-center gap-2">
+              <IconRefresh size={17} stroke={1.9} className={busyRun ? "animate-spin" : undefined} />
+              {busyRun ? "Analysing…" : analysis?.status === "completed" ? "Analyse again" : "Start Analysing"}
+            </span>
+          </Button>
         </div>
-        <Button type="button" size="lg" onClick={() => void handleStart()} disabled={starting || active || analysis === undefined}>
-          {starting || active ? "Analysing…" : analysis?.status === "completed" ? "Analyse again" : "Start Analysing"}
-        </Button>
+
+        {startError && <p role="alert" className={errorBox}>{startError}</p>}
+
+        {analysis === undefined && <PageLoader variant="inline" label="Loading analysis…" />}
+
+        {analysis === null && !loadError && (
+          <div className="grid gap-3 border-t border-[var(--border)] pt-4 sm:grid-cols-3">
+            {[
+              ["1", "Analyse", "We compare the title, steps, expected results and test data of every test case."],
+              ["2", "Review", "See why two test cases match and exactly what is different between them."],
+              ["3", "Decide", "Keep both, edit one, or remove one — only after you confirm."],
+            ].map(([n, title, text]) => (
+              <div key={n} className="flex items-start gap-3">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--surface-secondary)] text-xs font-semibold text-[var(--accent-light)]">{n}</span>
+                <div>
+                  <p className="text-sm font-medium text-[var(--foreground)]">{title}</p>
+                  <p className="text-xs leading-relaxed text-[var(--muted)]">{text}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {analysis && active && (
+          <div role="status" className="flex items-start gap-3 border-t border-[var(--border)] pt-4">
+            <PageLoader variant="inline" label={analysis.status === "queued" ? "Analysis queued…" : "Analysing test cases…"} />
+            <p className="text-xs leading-relaxed text-[var(--muted)]">
+              Started {fmtDate(analysis.createdAt)}. It keeps running if you leave this page — results appear here when it finishes.
+            </p>
+          </div>
+        )}
+
+        {analysis?.status === "failed" && (
+          <div role="alert" className={`${errorBox} flex items-start gap-2`}>
+            <IconAlertTriangle size={17} className="mt-0.5 shrink-0" />
+            <span>
+              The analysis didn&apos;t finish{analysis.finishedAt ? ` (${fmtDate(analysis.finishedAt)})` : ""}: {analysis.error ?? "unknown error"} You can start it again.
+            </span>
+          </div>
+        )}
+
+        {analysis?.status === "completed" && (
+          <div className="space-y-1.5 border-t border-[var(--border)] pt-3">
+            <dl className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-[var(--muted)]">
+              <div className="flex gap-1.5"><dt>Last analysed</dt><dd className="font-medium text-[var(--foreground)]">{fmtDate(analysis.finishedAt)}</dd></div>
+              <div className="flex gap-1.5"><dt>Test cases checked</dt><dd className="font-medium text-[var(--foreground)]">{analysis.testcasesAnalyzed ?? 0}</dd></div>
+              <div className="flex gap-1.5"><dt>Pairs found</dt><dd className="font-medium text-[var(--foreground)]">{analysis.pairsFound ?? 0}</dd></div>
+            </dl>
+            {analysis.truncated && (
+              <p className="text-xs text-[var(--warning-foreground)]">Only the most similar pairs are listed. Resolve some and analyse again to see the rest.</p>
+            )}
+          </div>
+        )}
       </Card>
-
-      {startError && <p role="alert" className={errorBox}>{startError}</p>}
-
-      {analysis === undefined && <PageLoader variant="inline" label="Loading analysis…" />}
-      {analysis === null && !loadError && (
-        <p className="text-sm text-[var(--muted)]">This project has not been analysed yet. Start an analysis to look for duplicate and similar test cases.</p>
-      )}
-      {analysis && active && (
-        <div role="status" className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-          <PageLoader variant="inline" label={analysis.status === "queued" ? "Analysis queued…" : "Analysing test cases…"} />
-          <p className="mt-1 text-xs text-[var(--muted)]">Started {fmtDate(analysis.createdAt)}. The analysis keeps running if you leave this page; results appear here when it finishes.</p>
-        </div>
-      )}
-      {analysis?.status === "failed" && (
-        <p role="alert" className={errorBox}>Analysis failed{analysis.finishedAt ? ` (${fmtDate(analysis.finishedAt)})` : ""}: {analysis.error ?? "unknown error"}</p>
-      )}
-      {analysis?.status === "completed" && (
-        <p className="text-xs text-[var(--muted)]">
-          Last analysed {fmtDate(analysis.finishedAt)} · {analysis.testcasesAnalyzed ?? 0} test cases · {analysis.pairsFound ?? 0} pair{analysis.pairsFound === 1 ? "" : "s"} found
-          {analysis.truncated && " (only the most similar pairs are listed — resolve some and analyse again to see the rest)"}.
-        </p>
-      )}
 
       {loadError && <p role="alert" className={errorBox}>{loadError}</p>}
       {actionError && <p role="alert" className={errorBox}>{actionError}</p>}
-      {notice && <p role="status" className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-sm">{notice}</p>}
+      {notice && (
+        <p role="status" className="flex items-start gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2.5 text-sm text-[var(--foreground)]">
+          <IconCheck size={17} className="mt-0.5 shrink-0 text-[var(--success-foreground)]" />
+          <span>{notice}</span>
+        </p>
+      )}
 
       {analysis !== undefined && analysis !== null && (
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter recommendations">
+        <div role="tablist" aria-label="Filter findings" className="flex flex-wrap gap-1 border-b border-[var(--border)]">
           {FILTERS.map((f) => (
             <button
               key={f.key}
               type="button"
-              aria-pressed={filter === f.key}
+              role="tab"
+              aria-selected={filter === f.key}
               onClick={() => {
                 setFilter(f.key);
                 setOffset(0);
               }}
-              className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                filter === f.key ? "border-[var(--brand-primary)] text-[var(--accent-light)]" : "border-[var(--border)] text-[var(--muted)] hover:text-[var(--foreground)]"
+              className={`flex items-center gap-2 border-b-2 px-3.5 py-2.5 text-sm font-medium transition-colors ${
+                filter === f.key ? "border-[var(--brand-primary)] text-[var(--accent-light)]" : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
               }`}
             >
               {f.label}
-              {data && <span className="ml-1.5 text-[var(--muted-soft)]">{data.counts[f.key]}</span>}
+              {data && (
+                <span className={`rounded-full px-1.5 py-0.5 text-[11px] leading-none ${filter === f.key ? "bg-[var(--surface-secondary)] text-[var(--foreground)]" : "bg-[var(--surface-secondary)] text-[var(--muted)]"}`}>
+                  {data.counts[f.key]}
+                </span>
+              )}
             </button>
           ))}
         </div>
       )}
 
       {empty && analysis?.status === "completed" && (
-        <section className="rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface)] p-8 text-center">
-          <IconChecklist size={28} stroke={1.5} className="mx-auto text-[var(--muted-soft)]" />
+        <section className="rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface)] p-10 text-center">
+          <IconChecklist size={30} stroke={1.5} className="mx-auto text-[var(--muted-soft)]" />
           <h3 className="mt-3 text-sm font-semibold text-[var(--foreground)]">
-            {neverFound ? "No duplicate or similar test cases found" : `No ${FILTERS.find((f) => f.key === filter)?.label.toLowerCase()} recommendations`}
+            {neverFound ? "No duplicate or similar test cases found" : `Nothing in “${FILTERS.find((f) => f.key === filter)?.label}”`}
           </h3>
-          <p className="mx-auto mt-1 max-w-xl text-xs text-[var(--muted)]">
-            {neverFound ? "Every test case in this project looks distinct. Analyse again after adding or changing test cases." : "Switch the filter above to see the others."}
+          <p className="mx-auto mt-1 max-w-md text-sm text-[var(--muted)]">
+            {neverFound ? "Every test case in this project looks distinct. Analyse again after adding or changing test cases." : "Use the tabs above to look at the other groups."}
           </p>
         </section>
       )}
 
       {data && data.items.length > 0 && (
-        <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)] divide-y divide-[var(--border)]">
+        <div className="space-y-4">
           {data.items.map((rec) => (
             <RecommendationRow
               key={rec.id}
               rec={rec}
               busy={busyId === rec.id}
+              reanalyseDisabled={busyRun}
+              onReanalyse={() => void handleStart()}
               onCompare={() => setCompareFor(rec)}
               onKeep={() => void handleKeep(rec)}
               onEdit={() => setEditFor(rec)}
@@ -317,9 +370,9 @@ function ReviewWorkspace({ projectId }: { projectId: string }) {
       )}
 
       {data && data.total > PAGE_SIZE && (
-        <div className="flex items-center justify-between text-xs text-[var(--muted)]">
+        <div className="flex items-center justify-between text-sm text-[var(--muted)]">
           <span>
-            {offset + 1}–{Math.min(offset + PAGE_SIZE, data.total)} of {data.total}
+            Showing {offset + 1}–{Math.min(offset + PAGE_SIZE, data.total)} of {data.total}
           </span>
           <div className="flex gap-2">
             <Button type="button" size="sm" variant="secondary" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>Previous</Button>
@@ -358,9 +411,37 @@ function ReviewWorkspace({ projectId }: { projectId: string }) {
   );
 }
 
+/** Match percentage with a small bar, so strong matches stand out from borderline ones at a glance. */
+function MatchMeter({ value }: { value: number }) {
+  const pct = Math.round(value * 100);
+  return (
+    <div className="flex items-center gap-2" title={`${pct}% of the compared content matches`}>
+      <div className="h-1.5 w-20 overflow-hidden rounded-full bg-[var(--surface-secondary)] ring-1 ring-[var(--border)]" aria-hidden="true">
+        <div className="h-full rounded-full bg-[var(--brand-primary)]" style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-sm font-semibold text-[var(--foreground)]">{pct}% match</span>
+    </div>
+  );
+}
+
+function TestcaseCard({ label, t }: { label: string; t: ReviewRecommendation["testcaseA"] }) {
+  return (
+    <div className="min-w-0 rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3.5">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{label}</p>
+      <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="rounded bg-[var(--surface)] px-1.5 py-0.5 font-mono text-xs text-[var(--foreground)] ring-1 ring-[var(--border)]">{t.externalId}</span>
+        <span className="min-w-0 truncate text-xs text-[var(--muted)]">{t.repositoryName}</span>
+      </div>
+      <p className="mt-2 line-clamp-3 break-words text-sm font-semibold leading-snug text-[var(--foreground)]">{t.title}</p>
+    </div>
+  );
+}
+
 function RecommendationRow({
   rec,
   busy,
+  reanalyseDisabled,
+  onReanalyse,
   onCompare,
   onKeep,
   onEdit,
@@ -368,6 +449,8 @@ function RecommendationRow({
 }: {
   rec: ReviewRecommendation;
   busy: boolean;
+  reanalyseDisabled: boolean;
+  onReanalyse: () => void;
   onCompare: () => void;
   onKeep: () => void;
   onEdit: () => void;
@@ -376,43 +459,63 @@ function RecommendationRow({
   // An outdated finding must not stay actionable: once either case changed after the analysis, only
   // Compare is available until the analysis is re-run. The API refuses the destructive actions regardless.
   const actionable = rec.reviewStatus === "pending" && !rec.stale && !busy;
+  const whyDisabled = actionable
+    ? undefined
+    : rec.reviewStatus !== "pending"
+      ? "This finding has already been reviewed."
+      : rec.stale
+        ? "This finding is out of date — analyse again first."
+        : "Working…";
+  const exact = rec.classification === "exact_duplicate";
+
   return (
-    <article className="space-y-3 p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <StatusChip tone={rec.classification === "exact_duplicate" ? "error" : "ai"}>
-          {rec.classification === "exact_duplicate" ? "Exact duplicate" : "Similar"}
-        </StatusChip>
-        <span className="text-xs font-medium text-[var(--foreground)]">{formatPercent(rec.similarity)} match</span>
-        <StatusChip tone={STATUS_TONE[rec.reviewStatus]}>{STATUS_LABEL[rec.reviewStatus]}</StatusChip>
-        {rec.stale && <StatusChip tone="warning">{rec.staleReason === "unverified" ? "Needs re-analysis" : "Changed since analysis"}</StatusChip>}
-        <span className="ml-auto text-xs text-[var(--muted)]">
-          Analysis {rec.lastAnalysis.status ?? "—"}
-          {rec.lastAnalysis.finishedAt ? ` · ${fmtDate(rec.lastAnalysis.finishedAt)}` : ""}
-        </span>
+    <article className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5">
+      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <StatusChip tone={exact ? "error" : "ai"}>
+            <span className="inline-flex items-center gap-1.5">
+              {exact ? <IconCopy size={13} stroke={2} /> : <IconGitCompare size={13} stroke={2} />}
+              {exact ? "Exact duplicate" : "Similar"}
+            </span>
+          </StatusChip>
+          <MatchMeter value={rec.similarity} />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {rec.reviewStatus !== "pending" && <StatusChip tone={STATUS_TONE[rec.reviewStatus]}>{STATUS_LABEL[rec.reviewStatus]}</StatusChip>}
+          {rec.stale && <StatusChip tone="warning">{rec.staleReason === "unverified" ? "Needs re-analysis" : "Changed since analysis"}</StatusChip>}
+        </div>
+      </header>
+
+      <div className="grid items-stretch gap-3 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+        <TestcaseCard label="Test case A" t={rec.testcaseA} />
+        <div className="hidden items-center text-[var(--muted-soft)] md:flex" aria-hidden="true">
+          <IconArrowsLeftRight size={18} stroke={1.75} />
+        </div>
+        <TestcaseCard label="Test case B" t={rec.testcaseB} />
       </div>
 
-      <div className="grid gap-2 md:grid-cols-2">
-        {[rec.testcaseA, rec.testcaseB].map((t) => (
-          <div key={t.id} className="min-w-0 rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2">
-            <div className="font-mono text-xs text-[var(--muted)]">{t.externalId} · {t.repositoryName}</div>
-            <div className="line-clamp-2 text-sm font-semibold text-[var(--foreground)]">{t.title}</div>
-          </div>
-        ))}
+      <div className="rounded-lg border-l-2 border-[var(--brand-primary)] bg-[var(--surface-secondary)] px-3.5 py-2.5">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">Why they match</p>
+        <p className="mt-0.5 text-sm leading-relaxed text-[var(--foreground)]">{rec.explanation}</p>
       </div>
-
-      <p className="text-xs text-[var(--foreground)]">{rec.explanation}</p>
 
       {rec.differences.length > 0 && (
-        <details className="text-xs" open={rec.differences.length <= 2}>
-          <summary className="cursor-pointer font-medium text-[var(--muted)]">
-            {rec.differences.length} difference{rec.differences.length === 1 ? "" : "s"}: {rec.differences.map((d) => DIFFERENCE_LABEL[d.field]).join(", ")}
+        <details className="rounded-lg border border-[var(--border)]" open={rec.differences.length <= 2}>
+          <summary className="cursor-pointer px-3.5 py-2.5 text-sm font-medium text-[var(--foreground)]">
+            What is different
+            <span className="ml-2 font-normal text-[var(--muted)]">{rec.differences.map((d) => DIFFERENCE_LABEL[d.field]).join(", ")}</span>
           </summary>
-          <div className="mt-2 space-y-2">
+          <div className="space-y-2 border-t border-[var(--border)] p-3">
+            <div className="hidden gap-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--muted)] md:grid md:grid-cols-[120px_minmax(0,1fr)_minmax(0,1fr)]">
+              <span />
+              <span>Test case A</span>
+              <span>Test case B</span>
+            </div>
             {rec.differences.map((d) => (
-              <div key={d.field} className="grid gap-2 md:grid-cols-[120px_1fr_1fr]">
-                <div className="font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">{DIFFERENCE_LABEL[d.field]}</div>
-                <div className="line-clamp-4 whitespace-pre-wrap break-words rounded-md bg-[var(--warning-soft)] px-2 py-1.5">{d.a || "—"}</div>
-                <div className="line-clamp-4 whitespace-pre-wrap break-words rounded-md bg-[var(--warning-soft)] px-2 py-1.5">{d.b || "—"}</div>
+              <div key={d.field} className="grid gap-2 md:grid-cols-[120px_minmax(0,1fr)_minmax(0,1fr)]">
+                <div className="pt-1.5 text-xs font-semibold text-[var(--foreground)]">{DIFFERENCE_LABEL[d.field]}</div>
+                <div className="line-clamp-4 whitespace-pre-wrap break-words rounded-md bg-[var(--warning-soft)] px-2.5 py-1.5 text-xs leading-relaxed text-[var(--foreground)]">{d.a || "—"}</div>
+                <div className="line-clamp-4 whitespace-pre-wrap break-words rounded-md bg-[var(--warning-soft)] px-2.5 py-1.5 text-xs leading-relaxed text-[var(--foreground)]">{d.b || "—"}</div>
               </div>
             ))}
           </div>
@@ -420,15 +523,39 @@ function RecommendationRow({
       )}
 
       {rec.stale && rec.staleReason && rec.reviewStatus === "pending" && (
-        <p className="text-xs text-[var(--warning-foreground)]">{STALE_HINT[rec.staleReason]} Keep, Edit and Remove are unavailable until you analyse again.</p>
+        <div role="note" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--warning-border)] bg-[var(--warning-soft)] px-3.5 py-3">
+          <p className="flex min-w-0 flex-1 items-start gap-2 text-sm leading-relaxed text-[var(--warning-foreground)]">
+            <IconAlertTriangle size={17} className="mt-0.5 shrink-0" />
+            <span>{STALE_HINT[rec.staleReason]} Analyse again to keep, edit or remove them.</span>
+          </p>
+          <Button type="button" size="sm" variant="secondary" onClick={onReanalyse} disabled={reanalyseDisabled}>Analyse again</Button>
+        </div>
       )}
 
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" size="sm" variant="secondary" onClick={onCompare}>Compare</Button>
-        <Button type="button" size="sm" variant="secondary" disabled={!actionable} onClick={onKeep}>Keep as is</Button>
-        <Button type="button" size="sm" variant="secondary" disabled={!actionable} onClick={onEdit}>Edit</Button>
-        <Button type="button" size="sm" variant="destructive" disabled={!actionable} onClick={onRemove}>Remove from project</Button>
-      </div>
+      <footer className="flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-4">
+        <Button type="button" size="sm" variant="secondary" onClick={onCompare}>
+          <span className="inline-flex items-center gap-1.5"><IconEye size={15} stroke={1.9} />Compare</span>
+        </Button>
+        <span title={whyDisabled}>
+          <Button type="button" size="sm" variant="secondary" disabled={!actionable} onClick={onKeep}>
+            <span className="inline-flex items-center gap-1.5"><IconCheck size={15} stroke={1.9} />Keep as is</span>
+          </Button>
+        </span>
+        <span title={whyDisabled}>
+          <Button type="button" size="sm" variant="secondary" disabled={!actionable} onClick={onEdit}>
+            <span className="inline-flex items-center gap-1.5"><IconPencil size={15} stroke={1.9} />Edit</span>
+          </Button>
+        </span>
+        <span className="ml-auto" title={whyDisabled}>
+          <Button type="button" size="sm" variant="destructive" disabled={!actionable} onClick={onRemove}>
+            <span className="inline-flex items-center gap-1.5"><IconTrash size={15} stroke={1.9} />Remove from project</span>
+          </Button>
+        </span>
+        <p className="basis-full text-[11px] text-[var(--muted-soft)]">
+          Found by the analysis on {fmtDate(rec.lastAnalysis.finishedAt) || "—"}
+          {rec.lastAnalysis.status && rec.lastAnalysis.status !== "completed" ? ` (${rec.lastAnalysis.status})` : ""}.
+        </p>
+      </footer>
     </article>
   );
 }
