@@ -1810,6 +1810,49 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
     return raw ? (JSON.parse(raw) as Record<string, unknown>) : null;
   }
 
+  /*
+   * The ticket-scope question ("[Zyra] Warn Users About the 100-Test-Case Limit When Generating for
+   * Multiple Tickets"): a create whose estimate — tickets × the per-task count — is above 60 is asked
+   * about first. These read it the way the chat page does and answer it the way a click does.
+   */
+  type ChatOption = { id: string; label: string; description?: string; message?: string };
+
+  async function sessionMessages(sessionId: string): Promise<Array<Record<string, unknown>>> {
+    return (await (await asOwner.get(url(`/chat/sessions/${sessionId}`))).json()).messages as Array<Record<string, unknown>>;
+  }
+
+  async function latestReply(sessionId: string): Promise<Record<string, unknown>> {
+    return [...(await sessionMessages(sessionId))].reverse().find((m) => m.role === "assistant")!;
+  }
+
+  /** Clicks `optionId` on the latest reply's question — the chat page sends the option's request text with `choice`. */
+  async function answerQuestion(sessionId: string, optionId: string): Promise<{ status: number; body: Record<string, unknown> }> {
+    const question = await latestReply(sessionId);
+    const options = question.options as { choices: ChatOption[] } | null;
+    expect(options, "the latest reply must be a question with options").toBeTruthy();
+    const choice = options!.choices.find((c) => c.id === optionId);
+    expect(choice, `the question offers "${optionId}"`).toBeTruthy();
+    const res = await asOwner.post(url(`/chat/sessions/${sessionId}/messages`), {
+      data: { message: choice!.message || choice!.label, choice: { messageId: question.id, optionId } },
+      failOnStatusCode: false,
+    });
+    return { status: res.status(), body: await res.json().catch(() => ({})) };
+  }
+
+  /** Asserts the latest reply is the ticket-scope question, and that nothing was generated or staged for it. */
+  async function expectScopeQuestion(sessionId: string, tickets: number): Promise<Record<string, unknown>> {
+    const question = await latestReply(sessionId);
+    expect(String(question.content || "")).toContain(`This request covers ${tickets} tickets`);
+    const options = question.options as { kind: string; choices: ChatOption[]; answeredId: string | null };
+    expect(options.kind).toBe("ticket_scope");
+    expect(options.choices.map((c) => c.label)).toEqual(["Generate in smaller batches", "Generate all tickets in batches"]);
+    expect(options.answeredId).toBeNull();
+    expect(JSON.stringify(options), "what acting on the answer needs stays server-side").not.toContain("originalMessage");
+    expect(question.testcases as unknown[], "a question stages nothing").toHaveLength(0);
+    expect(stagedDraftCount(sessionId), "nothing is generated before the user answers").toBe(0);
+    return question;
+  }
+
   function stagedDraftCount(sessionId: string): number {
     return Number(scalar(`SELECT COALESCE(SUM(jsonb_array_length(generated_payload)), 0) FROM ai_generation_requests WHERE chat_session_id = ${literal(sessionId)};`));
   }
@@ -1836,6 +1879,11 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
 
     const turn = await sendMessage(sessionId, ALL_TICKETS_MESSAGE);
     expect(turn.status, JSON.stringify(turn.body)).toBeLessThan(300);
+    // 26 tickets × 50 (an exhaustive ask) is above 60, so Zyra asks first; answering "all" skips the
+    // router (already consumed above) and runs the paged plan from the queued replies, in order.
+    await expectScopeQuestion(sessionId, 26);
+    const answered = await answerQuestion(sessionId, "all");
+    expect(answered.status, JSON.stringify(answered.body)).toBeLessThan(300);
 
     // Right after the first batch: a plan with more tickets still to plan.
     const started = activePlan(sessionId);
@@ -1857,7 +1905,8 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
     expect(new Set([...pageOne, ...pageTwo]).size, "no ticket planned twice, none missed").toBe(26);
 
     const messages = (await (await asOwner.get(url(`/chat/sessions/${sessionId}`))).json()).messages as Array<Record<string, unknown>>;
-    const batches = messages.filter((m) => m.role === "assistant");
+    // The question is a reply too; the batches are the replies after it.
+    const batches = messages.filter((m) => m.role === "assistant" && !m.options);
     expect(batches.map((m) => (m.testcases as unknown[]).length), "10 + 10 + 1 test cases").toEqual([10, 10, 1]);
     expect(String(batches[0].content || ""), "the first reply says more tickets are coming").toContain("I identified 12 distinct scenarios to cover from the first tickets");
     expect(String(batches[1].content || "")).toContain("Here are 10 more test case(s) — 20/21 scenarios covered so far");
@@ -1883,6 +1932,9 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
 
     const turn = await sendMessage(sessionId, ALL_TICKETS_MESSAGE);
     expect(turn.status, JSON.stringify(turn.body)).toBeLessThan(300);
+    await expectScopeQuestion(sessionId, 26); // see ZCC-B-21
+    const answered = await answerQuestion(sessionId, "all");
+    expect(answered.status, JSON.stringify(answered.body)).toBeLessThan(300);
     await expect
       .poll(() => scalar(`SELECT active_plan->>'status' FROM zyra_chat_sessions WHERE id = ${literal(sessionId)};`), {
         message: "a page that cannot be planned must pause the plan, not end it or leave it running",
@@ -1981,5 +2033,167 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
     const first = messages.find((m) => m.role === "assistant")!;
     expect(String(first.content || "")).toContain("I identified 12 distinct scenarios to cover. ");
     expect(String(first.content || "")).not.toContain("from the first tickets");
+  });
+
+  // ─── The ticket-scope question ────────────────────────────────────────────────────────────────
+  //
+  // Thirty named tickets used to share one planner call capped at 100 scenarios (~98 test cases, about
+  // three a ticket) and finish with "all N scenarios are now covered". Above an estimate of 60 Zyra now
+  // asks; "all in batches" plans named tickets one at a time and accounts for every one of them.
+
+  /** A generated draft that names the plan scenario it covers, so a batch's coverage is mapped exactly. */
+  function coveringDraft(title: string, scenario: number) {
+    return { ...scenarioDraft(title), scenario };
+  }
+
+  test("ZCC-T-01 naming many tickets asks first — with options, nothing generated, nothing staged", async () => {
+    await allocateFakeAiKey();
+    await seedTickets(3);
+    const sessionId = await newSession("E2E ZCC scope question");
+    // Only the router runs: the question is decided before any generation call.
+    ai.queueReply({ reply: "", reasoningSummary: "Generating test cases.", action: "create", actionType: "create", operations: [], testcases: [], requestedCount: null, exhaustive: false });
+
+    // The 30-50 default range is 50 per ticket: 3 named tickets is roughly 150, above 60.
+    const turn = await sendMessage(sessionId, "Generate test cases for E2EZ-1, E2EZ-2 and E2EZ-3.");
+    expect(turn.status, JSON.stringify(turn.body)).toBeLessThan(300);
+    const question = await expectScopeQuestion(sessionId, 3);
+    expect(String(question.content || "")).toContain("roughly 150 test cases");
+    expect(ai.requests, "only the router call — no planning, no generation").toHaveLength(1);
+    expect(activePlan(sessionId), "no plan starts before the user answers").toBeNull();
+  });
+
+  test("ZCC-T-02 'all tickets in batches' plans each named ticket on its own and accounts for every one", async () => {
+    test.setTimeout(180_000);
+    await allocateFakeAiKey();
+    await seedTickets(3);
+    const sessionId = await newSession("E2E ZCC ticket-scoped plan");
+    ai.queueReply({ reply: "", reasoningSummary: "Generating test cases.", action: "create", actionType: "create", operations: [], testcases: [], requestedCount: null, exhaustive: false });
+    // E2EZ-99 is never synced — it must be named, not silently dropped.
+    const turn = await sendMessage(sessionId, "Generate test cases for E2EZ-1, E2EZ-2, E2EZ-3 and E2EZ-99.");
+    expect(turn.status, JSON.stringify(turn.body)).toBeLessThan(300);
+    await expectScopeQuestion(sessionId, 4);
+
+    // One planner call per synced ticket (they are read in document-id order, so which ticket comes
+    // first is not fixed): two tickets plan 2 scenarios each — under 90% of their 50, so each gets a
+    // top-up round — and the third plans none, which needs no top-up.
+    ai.queueReply({ scenarios: ["First ticket scenario 1", "First ticket scenario 2"] });
+    ai.queueReply({ scenarios: [] });
+    ai.queueReply({ scenarios: ["Second ticket scenario 1", "Second ticket scenario 2"] });
+    ai.queueReply({ scenarios: [] });
+    ai.queueReply({ scenarios: [] });
+    // The 4 scenarios fit one batch of 50, so this is the only batch and no plan is left running.
+    ai.queueReply({ drafts: Array.from({ length: 4 }, (_, i) => coveringDraft(`E2E scoped case ${i + 1} ${Date.now()}`, i + 1)) });
+    ai.queueReply("Noted."); // the batch's rememberZyraTurn — see ZCC-B-08
+
+    const answered = await answerQuestion(sessionId, "all");
+    expect(answered.status, JSON.stringify(answered.body)).toBeLessThan(300);
+
+    const planners = plannerPrompts();
+    expect(planners, "one planner call per synced ticket").toHaveLength(3);
+    const perCall = planners.map(distinctTickets);
+    for (const tickets of perCall) expect(tickets, "each planner call sees exactly one ticket").toHaveLength(1);
+    expect(new Set(perCall.flat()), "every synced ticket planned, none twice").toEqual(new Set(["E2EZ-1:", "E2EZ-2:", "E2EZ-3:"]));
+    const emptyTicket = perCall[2][0].replace(":", "");
+
+    const reply = await latestReply(sessionId);
+    const content = String(reply.content || "");
+    expect(content).toContain("I'm generating test cases for 4 ticket(s) one ticket at a time");
+    expect(content).toContain("1 ticket(s) aren't synced to Tesbo and will be skipped: E2EZ-99");
+    expect(content, "the last message accounts for every ticket").toContain("2 of 4 ticket(s) got test cases");
+    expect(content).toContain("- E2EZ-99 — not synced to Tesbo yet");
+    expect(content).toContain(`- ${emptyTicket} — no new scenarios`);
+    expect(content, "never the old scenario-only finish line").not.toContain("scenarios are now covered");
+    expect((reply.testcases as unknown[]).length).toBe(4);
+    expect(stagedDraftCount(sessionId)).toBe(4);
+    expect(activePlan(sessionId), "one batch was all there was").toBeNull();
+
+    // The question now shows which answer was taken, and cannot be answered again.
+    const question = (await sessionMessages(sessionId)).find((m) => m.options)!;
+    expect((question.options as { answeredId: string }).answeredId).toBe("all");
+    const again = await asOwner.post(url(`/chat/sessions/${sessionId}/messages`), {
+      data: { message: "Generate all tickets in batches", choice: { messageId: question.id, optionId: "all" } },
+      failOnStatusCode: false,
+    });
+    expect(again.status(), "an answered question is refused, not run a second time").toBe(409);
+  });
+
+  test("ZCC-T-03 'smaller batches' offers the tickets one at a time, and a picked ticket generates as usual", async () => {
+    await allocateFakeAiKey();
+    await seedTickets(3);
+    const sessionId = await newSession("E2E ZCC smaller batches");
+    ai.queueReply({ reply: "", reasoningSummary: "Generating test cases.", action: "create", actionType: "create", operations: [], testcases: [], requestedCount: null, exhaustive: false });
+    await sendMessage(sessionId, "Generate test cases for E2EZ-1, E2EZ-2 and E2EZ-3.");
+    await expectScopeQuestion(sessionId, 3);
+
+    const smaller = await answerQuestion(sessionId, "smaller");
+    expect(smaller.status, JSON.stringify(smaller.body)).toBeLessThan(300);
+    expect(ai.requests, "offering the groups calls no model").toHaveLength(1);
+    const groups = await latestReply(sessionId);
+    const options = groups.options as { kind: string; choices: ChatOption[] };
+    expect(options.kind).toBe("ticket_group");
+    // 50 per ticket: one ticket per group keeps each pick at or under 60, so it is never asked about again.
+    expect(options.choices.map((c) => c.label)).toEqual(["E2EZ-1", "E2EZ-2", "E2EZ-3"]);
+    expect(options.choices[1].message).toBe("Generate test cases for E2EZ-2");
+
+    ai.queueReply({ reply: "", reasoningSummary: "Generating test cases.", action: "create", actionType: "create", operations: [], testcases: [], requestedCount: null, exhaustive: false });
+    ai.queueReply({ drafts: [scenarioDraft(`E2E picked ticket case ${Date.now()}`)] });
+    ai.queueReply("Noted.");
+    const picked = await answerQuestion(sessionId, "group-2");
+    expect(picked.status, JSON.stringify(picked.body)).toBeLessThan(300);
+
+    const messages = await sessionMessages(sessionId);
+    const lastUser = [...messages].reverse().find((m) => m.role === "user")!;
+    expect(lastUser.content, "the pick is sent as its own request").toBe("Generate test cases for E2EZ-2");
+    const reply = await latestReply(sessionId);
+    expect(reply.options ?? null, "one ticket is generated, not asked about").toBeNull();
+    expect((reply.testcases as unknown[]).length).toBe(1);
+  });
+
+  test("ZCC-T-04 small requests are unchanged: one ticket, or few tickets on a small range, generate straight away", async () => {
+    await allocateFakeAiKey();
+    await seedTickets(2);
+    const sessionId = await newSession("E2E ZCC small request");
+    // 1-10 is 10 per ticket: two tickets is 20, well under 60.
+    await setRange("1-10");
+    ai.queueReply({ reply: "", reasoningSummary: "Generating test cases.", action: "create", actionType: "create", operations: [], testcases: [], requestedCount: null, exhaustive: false });
+    ai.queueReply({ drafts: [scenarioDraft(`E2E small request case ${Date.now()}`)] });
+    ai.queueReply("Noted.");
+    const turn = await sendMessage(sessionId, "Generate test cases for E2EZ-1 and E2EZ-2.");
+    expect(turn.status, JSON.stringify(turn.body)).toBeLessThan(300);
+    const reply = await latestReply(sessionId);
+    expect(reply.options ?? null).toBeNull();
+    expect((reply.testcases as unknown[]).length).toBe(1);
+    // Key-shaped words that are not this project's tickets never count as tickets.
+    ai.queueReply({ reply: "", reasoningSummary: "Generating test cases.", action: "create", actionType: "create", operations: [], testcases: [], requestedCount: null, exhaustive: false });
+    ai.queueReply({ drafts: [scenarioDraft(`E2E encoding case ${Date.now()}`)] });
+    ai.queueReply("Noted.");
+    await setRange("30-50");
+    await sendMessage(sessionId, "Generate test cases for UTF-8 and ISO-8859 input.");
+    expect((await latestReply(sessionId)).options ?? null, "UTF-8 is not a ticket").toBeNull();
+  });
+
+  test("ZCC-T-05 answering: a typed number works; a stale, malformed, unknown or other-project answer is refused", async () => {
+    await allocateFakeAiKey();
+    await seedTickets(3);
+    const sessionId = await newSession("E2E ZCC answering rules");
+    ai.queueReply({ reply: "", reasoningSummary: "Generating test cases.", action: "create", actionType: "create", operations: [], testcases: [], requestedCount: null, exhaustive: false });
+    await sendMessage(sessionId, "Generate test cases for E2EZ-1, E2EZ-2 and E2EZ-3.");
+    const question = await expectScopeQuestion(sessionId, 3);
+    const post = (data: Record<string, unknown>, projectId = tenant!.mainProjectId) =>
+      asOwner.post(`/api/projects/${projectId}/agents/zyra/chat/sessions/${sessionId}/messages`, { data, failOnStatusCode: false });
+
+    expect((await post({ message: "x", choice: { messageId: "not-a-uuid", optionId: "all" } })).status(), "malformed").toBe(400);
+    expect((await post({ message: "x", choice: { messageId: question.id, optionId: "everything" } })).status(), "unknown option").toBe(400);
+    expect((await post({ message: "x", choice: { messageId: question.id, optionId: "all" } }, tenant!.secondProjectId)).status(), "another project's session").toBe(404);
+    expect(((await latestReply(sessionId)).options as { answeredId: string | null }).answeredId, "a refused answer answers nothing").toBeNull();
+
+    // Typing "1" is the first option: the groups are offered, without a model call.
+    const typed = await sendMessage(sessionId, "1");
+    expect(typed.status, JSON.stringify(typed.body)).toBeLessThan(300);
+    expect(((await latestReply(sessionId)).options as { kind: string }).kind).toBe("ticket_group");
+    expect(ai.requests).toHaveLength(1);
+
+    // The first question is no longer the latest reply, so clicking it now is refused.
+    expect((await post({ message: "Generate all tickets in batches", choice: { messageId: question.id, optionId: "all" } })).status(), "stale").toBe(409);
   });
 });

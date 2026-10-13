@@ -1154,6 +1154,19 @@ export interface ZyraChatMessage {
    * message only when the reply answers no user message of its own (a plan batch, a resumed turn).
    */
   trace?: ZyraTurnTrace | null;
+  /** A question Zyra asked with clickable answers — answered by sending `choice` with the next message. */
+  options?: ZyraChatOptions | null;
+}
+
+/**
+ * Clickable answers to a question on an assistant message. `ticket_scope` asks how to handle a
+ * request spanning many tickets; `ticket_group` offers tickets a group at a time, each choice carrying
+ * the request it sends (`message`). `answeredId` is the choice already acted on.
+ */
+export interface ZyraChatOptions {
+  kind: "ticket_scope" | "ticket_group" | string;
+  choices: Array<{ id: string; label: string; description?: string; message?: string }>;
+  answeredId: string | null;
 }
 
 export type ZyraTraceStepStatus = "active" | "ok" | "empty" | "skipped" | "blocked" | "failed" | "timed_out";
@@ -1280,11 +1293,11 @@ export async function startZyraChatMessage(
   projectId: string,
   sessionId: string,
   message: string,
-  opts: { turnId?: string } = {}
+  opts: { turnId?: string; choice?: { messageId: string; optionId: string } } = {}
 ): Promise<{ accepted: true; userMessageId: string; session: ZyraChatSession }> {
   return api(`/api/projects/${projectId}/agents/zyra/chat/sessions/${sessionId}/messages`, {
     method: "POST",
-    body: { message, turnId: opts.turnId, background: true },
+    body: { message, turnId: opts.turnId, background: true, ...(opts.choice ? { choice: opts.choice } : {}) },
   });
 }
 

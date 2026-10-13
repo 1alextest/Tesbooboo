@@ -25,6 +25,7 @@ import {
   ZYRA_RESUME_ATTEMPT_CAP,
   type ZyraAgentState,
   type ZyraChatMessage,
+  type ZyraChatOptions,
   type ZyraChatSession,
   type ZyraChatTestcaseRow,
   type ZyraTraceOutcome,
@@ -377,12 +378,61 @@ function zyraTraceForMessage(message: ZyraChatMessage, previous: ZyraChatMessage
 }
 
 // ─── MessageBubble ────────────────────────────────────────────────────────────
+type ZyraChoice = ZyraChatOptions["choices"][number];
+
+// A question's clickable answers, numbered the way the question reads them out. Only the latest
+// assistant message's unanswered question is live (`open`); an answered one keeps showing which
+// option was picked, and a superseded one stays visible but inert — the backend refuses both.
+function ZyraChatOptionList({
+  options,
+  open,
+  onChoose,
+}: {
+  options: ZyraChatOptions;
+  open: boolean;
+  onChoose: (choice: ZyraChoice) => void;
+}) {
+  const t = useZyraText();
+  if (!options.choices.length) return null;
+  return (
+    <div className="max-w-[720px] space-y-2" role="group" aria-label={t("options.label")}>
+      {options.choices.map((choice, index) => {
+        const chosen = options.answeredId === choice.id;
+        return (
+          <button
+            key={choice.id}
+            type="button"
+            onClick={() => onChoose(choice)}
+            disabled={!open}
+            aria-pressed={chosen}
+            className={`flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
+              chosen
+                ? "border-[var(--brand-primary)] bg-[var(--brand-primary)]/10"
+                : "border-[var(--border)] bg-[var(--surface)]"
+            } ${open ? "hover:border-[var(--brand-primary)] hover:bg-[var(--brand-primary)]/5" : "cursor-default opacity-70"}`}
+          >
+            <span className="mt-px font-mono text-[12px] text-[var(--muted)]">{index + 1}</span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-medium text-[var(--foreground)]">{choice.label}</span>
+              {choice.description && <span className="mt-0.5 block text-[12px] text-[var(--muted)]">{choice.description}</span>}
+            </span>
+            {chosen && <span className="shrink-0 text-[11px] font-medium text-[var(--brand-primary)]">{t("options.chosen")}</span>}
+          </button>
+        );
+      })}
+      {open && <p className="text-[11px] text-[var(--muted)]">{t("options.typeInstead")}</p>}
+    </div>
+  );
+}
+
 function MessageBubble({
   message,
   projectId,
   backlogSteps,
   finishedBacklog,
   onContinue,
+  optionsOpen = false,
+  onChoose,
 }: {
   message: ZyraChatMessage;
   projectId: string;
@@ -395,6 +445,9 @@ function MessageBubble({
   // Only ever invoked from the Continue affordance below, which only renders for a timed-out turn —
   // the happy path (a message that answered normally) never touches this prop at all.
   onContinue: (messageId: string, opts?: { narrow?: boolean }) => Promise<void>;
+  // Whether this message's question (message.options) can still be answered — see ZyraChatOptionList.
+  optionsOpen?: boolean;
+  onChoose?: (message: ZyraChatMessage, choice: ZyraChoice) => void;
 }) {
   const isUser = message.role === "user";
   const t = useZyraText();
@@ -496,6 +549,10 @@ function MessageBubble({
         className="zyra-prose max-w-[720px] text-[13px] leading-[1.7] text-[var(--muted)]"
         dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }}
       />
+
+      {!isUser && message.options && (
+        <ZyraChatOptionList options={message.options} open={optionsOpen && Boolean(onChoose)} onChoose={(choice) => onChoose?.(message, choice)} />
+      )}
 
       <TestcaseTable rows={appliedRows} projectId={projectId} />
       {reviewRequestId && proposedRows.length > 0 && (
@@ -1076,6 +1133,7 @@ export default function ZyraChatPage() {
   const sendingLocally = activeSession ? pendingSessionIds.has(activeSession.id) : false;
   // Derived, not stored: reflects only whether the CURRENTLY VIEWED session has a turn in flight.
   const sending = sendingLocally || hasProcessingMessage;
+  const latestAssistantId = [...messages].reverse().find((m) => m.role === "assistant")?.id ?? null;
   // The running turn's steps: this tab's live stream when it has one, otherwise the trace the
   // backend writes onto the processing message as each step happens (a reload mid-turn, another
   // tab's turn, or a stream that never attached).
@@ -1297,7 +1355,8 @@ export default function ZyraChatPage() {
     return null;
   }
 
-  async function submitMessage(text: string) {
+  // `choice`: this message answers a question's option (see ZyraChatOptionList) rather than being typed.
+  async function submitMessage(text: string, choice?: { messageId: string; optionId: string }) {
     if (!activeSession || !text.trim() || pendingSessionIds.has(activeSession.id) || hasProcessingMessage) return;
     const sessionId = activeSession.id;
     const trimmed = text.trim();
@@ -1332,7 +1391,7 @@ export default function ZyraChatPage() {
     // this polls for it. Awaiting the whole turn on one request is what broke behind Cloudflare — a
     // generation turn runs for minutes, Cloudflare drops the request at 100 s with a CORS-less 524,
     // and the page showed "Failed to fetch" while the backend went on to save the reply.
-    const startPromise = startZyraChatMessage(projectId, sessionId, trimmed, { turnId });
+    const startPromise = startZyraChatMessage(projectId, sessionId, trimmed, { turnId, ...(choice ? { choice } : {}) });
     watchZyraTurnProgress(sessionId, turnId);
     let started: Awaited<typeof startPromise>;
     try {
@@ -1730,6 +1789,8 @@ export default function ZyraChatPage() {
 
                   {messages.map((msg, i) => {
                     const next = messages[i + 1];
+                    // Only the newest reply's question can be answered, and only while nothing is sending.
+                    const optionsOpen = !sending && msg.id === latestAssistantId && Boolean(msg.options) && !msg.options?.answeredId;
                     // A request that failed before any reply was written: its trace has nowhere
                     // else to show, so it goes under the request itself.
                     const unanswered = msg.role === "user" && msg.status === ZYRA_MESSAGE_FAILED && next?.role !== "assistant";
@@ -1741,6 +1802,8 @@ export default function ZyraChatPage() {
                           backlogSteps={resumeTurnIds[msg.id] ? turnBacklogs[resumeTurnIds[msg.id]] : undefined}
                           finishedBacklog={msg.role === "assistant" ? zyraTraceForMessage(msg, messages[i - 1]) : undefined}
                           onContinue={handleContinue}
+                          optionsOpen={optionsOpen}
+                          onChoose={(answered, choice) => void submitMessage(choice.message || choice.label, { messageId: answered.id, optionId: choice.id })}
                         />
                         {unanswered && (() => {
                           const finished = zyraFinishedFromTrace(msg.trace, true);
