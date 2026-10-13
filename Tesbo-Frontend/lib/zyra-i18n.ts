@@ -187,6 +187,9 @@ const EN = {
   "plan.generating": (p) =>
     `Generating remaining scenarios — ${p.covered}/${p.total} covered (${p.pct}%). Review what's in so far; more will appear here shortly.`,
   "plan.paused": (p) => `Paused — ${p.covered}/${p.total} scenarios covered.`,
+  "plan.tickets": (p) => `Tickets planned: ${p.done} of ${p.total}.`,
+  "review.generating": (p) => `Generating — ${p.staged} of ${p.total} written. The rest appear here as they are done.`,
+  "review.discardAllWhileGenerating": "Available once generation finishes.",
   "plan.resuming": "Resuming…",
   "plan.resume": "Resume",
   "plan.stopping": "Stopping…",
@@ -594,6 +597,9 @@ const RU: Record<ZyraTextKey, Entry> = {
   "plan.generating": (p) =>
     `Генерируем оставшиеся сценарии — покрыто ${p.covered}/${p.total} (${p.pct}%). Проверьте то, что уже готово; остальное скоро появится здесь.`,
   "plan.paused": (p) => `Приостановлено — покрыто сценариев: ${p.covered}/${p.total}.`,
+  "plan.tickets": (p) => `Тикетов распланировано: ${p.done} из ${p.total}.`,
+  "review.generating": (p) => `Генерация — написано ${p.staged} из ${p.total}. Остальные появятся здесь по мере готовности.`,
+  "review.discardAllWhileGenerating": "Станет доступно после завершения генерации.",
   "plan.resuming": "Возобновление…",
   "plan.resume": "Возобновить",
   "plan.stopping": "Остановка…",

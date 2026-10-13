@@ -4369,18 +4369,90 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
       choice: { messageId: questionId, optionId: "smaller" },
     });
 
-    // The tickets arrive as the newest question, one per option (50 per ticket keeps each pick ≤ 60).
+    // Zyra asks which tickets — typed in the composer — instead of listing them: one option, the way
+    // out to every ticket, however many tickets there are.
     const groups = page.getByRole("group", { name: "Choose an option" });
     await expect(groups).toHaveCount(2, { timeout: 30_000 });
-    await expect(groups.last().getByRole("button")).toHaveCount(3);
-    await expect(groups.last().getByRole("button", { name: /ZUI-2(?!\d)/ })).toBeEnabled();
+    await expect(page.getByText(/Type the ticket IDs or a range — for example/)).toBeVisible();
+    await expect(groups.last().getByRole("button")).toHaveCount(1);
+    await expect(groups.last().getByRole("button", { name: /Generate all tickets in batches/ })).toBeEnabled();
+    await expect(composer(page), "the tickets are typed here").toBeEnabled();
 
     // The first question shows what was picked and is no longer clickable — in the page and the database.
     await expect(groups.first().getByRole("button", { name: /Generate in smaller batches/ })).toHaveAttribute("aria-pressed", "true");
     await expect(groups.first().getByRole("button", { name: /Generate in smaller batches/ })).toContainText("Chosen");
     await expect(groups.first().getByRole("button", { name: /Generate all tickets in batches/ })).toBeDisabled();
     expect(scalar(`SELECT options->>'answeredId' FROM zyra_chat_messages WHERE id = ${literal(questionId)};`)).toBe("smaller");
-    expect(ai.requests, "offering the tickets made no model call").toHaveLength(1);
+    expect(ai.requests, "asking which tickets made no model call").toHaveLength(1);
+  });
+
+  /*
+   * "[Zyra] Stream Main Test Case Review UI Progressively During Generation": while a batch is being
+   * written, its test cases appear in the REAL review panel — the one Edit, Discard and Save work on —
+   * one by one, with its count and a progress line updating; no separate preview list. The fake
+   * provider streams its reply slowly (setStreamChunkDelayMs), so there is a real window in which only
+   * some drafts exist.
+   */
+  test("ZYU-149 the review panel fills while the batch is written, and its actions work mid-generation", async ({ browser }) => {
+    test.setTimeout(120_000);
+    await allocateFakeAiKey();
+    const range = await api.patch(`/api/projects/${tenant!.mainProjectId}/agents/zyra/settings`, { data: { testcaseRange: "10-30" }, failOnStatusCode: false });
+    expect(range.status(), await range.text()).toBeLessThan(300);
+    const page = await openChat(browser);
+    ai.queueReply({ reply: "", reasoningSummary: "Planning exhaustive coverage.", action: "create", actionType: "create", operations: [], testcases: [], exhaustive: true });
+    ai.queueReply({ scenarios: Array.from({ length: 20 }, (_, i) => `Live scenario ${i + 1}`) });
+    ai.queueReply({ scenarios: [] }); // the planner's top-up round
+    const stamp = Date.now();
+    ai.queueReplyMatching("an AI testcase generation agent", {
+      drafts: Array.from({ length: 20 }, (_, i) => ({
+        title: `E2E live draft ${i + 1} ${stamp}`,
+        preconditions: "",
+        stepsJson: JSON.stringify([{ stepNumber: 1, action: "Do it", expectedResult: "It works" }]),
+        testData: "",
+        expectedSummary: "It works.",
+        priority: "P2",
+        tags: ["zyra"],
+        sourceRefs: [],
+        scenario: i + 1
+      }))
+    });
+    // ~200 characters a chunk, 0.4 s apart: the 20 drafts take several seconds to arrive.
+    ai.setStreamChunkDelayMs(400);
+
+    await composer(page).fill("Generate all possible test cases for the login flow.");
+    await composer(page).press("Enter");
+
+    // Mid-generation: the review panel itself is on screen, partly filled, with live progress — and
+    // no separate "Writing" preview of any kind.
+    await expect(page.getByTestId("zyra-review-progress")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId("zyra-review-progress")).toContainText(/Generating — \d+ of 20 written/);
+    await expect(page.getByText(`E2E live draft 1 ${stamp}`)).toBeVisible();
+    const midCount = Number(((await page.getByText(/\d+ of \d+ selected/).first().textContent()) || "").match(/of (\d+) selected/)?.[1]);
+    expect(midCount, "only the drafts written so far").toBeLessThan(20);
+    await expect(page.getByText("Writing", { exact: true })).toHaveCount(0);
+    // "Discard all" is off while generating — closing now would drop every draft still being written.
+    await expect(page.getByRole("button", { name: "Discard all" })).toBeDisabled();
+
+    // The panel's actions work while the rest is still being written: discard the first draft now.
+    page.on("dialog", (dialog) => void dialog.accept());
+    const first = page.getByRole("listitem").filter({ hasText: `E2E live draft 1 ${stamp}` });
+    await first.getByRole("button", { name: "Discard" }).click();
+    await expect(page.getByText(`E2E live draft 1 ${stamp}`)).toHaveCount(0);
+
+    // Then generation finishes: the progress line goes, every other draft is there exactly once, and
+    // the discarded one stays gone.
+    await expect(page.getByText(/19 of 19 selected/)).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId("zyra-review-progress")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Discard all" }), "available again once generation finishes").toBeEnabled();
+    await expect(page.getByText(`E2E live draft 20 ${stamp}`)).toHaveCount(1);
+    await expect(page.getByText(`E2E live draft 1 ${stamp}`)).toHaveCount(0);
+    // Every row is numbered by its position, renumbered after the discard: 1..19, in order.
+    await expect(page.getByTestId("zyra-review-number")).toHaveText(Array.from({ length: 19 }, (_, i) => `${i + 1}.`));
+    await expect(page.getByRole("listitem").filter({ hasText: `E2E live draft 2 ${stamp}` }).getByTestId("zyra-review-number")).toHaveText("1.");
+    const staged = Number(scalar(`SELECT COALESCE(SUM(jsonb_array_length(generated_payload)), 0) FROM ai_generation_requests WHERE project_id = ${literal(tenant!.mainProjectId)} AND chat_session_id IS NOT NULL;`));
+    expect(staged, "one batch of 19 — the discard held, nothing staged twice").toBe(19);
+    const generation = ai.requests.find((r) => JSON.stringify(r.messages).includes("an AI testcase generation agent"));
+    expect(generation?.stream, "the watched turn asked for a streamed reply").toBe(true);
   });
 
   test("ZYU-101 with Knowledge Base access on, the reply still arrives and the model is shown the knowledge base", async ({ browser }) => {

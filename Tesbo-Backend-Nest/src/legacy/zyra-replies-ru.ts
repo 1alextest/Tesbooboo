@@ -242,12 +242,19 @@ export const ZYRA_RU = {
   scopeAllDescription: (tickets: number) =>
     `Zyra обработает все ${n(tickets)} тикет(ов) пакетами до 100 тест-кейсов и будет сообщать о прогрессе.`,
   scopeReasoning: "Запрос охватывает больше тикетов, чем умещается в одну генерацию, — спрашиваю, как продолжить.",
-  groupIntro: (perGroup: number, shown: number, total: number) =>
-    `Выберите, с чего начать — каждый вариант генерирует тест-кейсы для ${perGroup === 1 ? "одного тикета" : "двух тикетов"} за раз.${shown < total ? ` Показаны первые ${n(shown)} из ${n(total)} групп.` : ""} Можно также просто назвать 1–2 тикета самостоятельно.`,
-  groupNoTickets: "Ни один из этих тикетов ещё не синхронизирован в Tesbo, поэтому выбрать нечего. Синхронизируйте их и спросите снова.",
-  groupMessage: (keys: string, exhaustive: boolean) =>
+  selectionPrompt: (total: number, example: string, rangeExample: string, perBatch: number) =>
+    `С каких тикетов начать? Напишите ID тикетов или диапазон — например, ${example} или ${rangeExample}. В области запроса ${n(total)} тикет(ов); для лучшего покрытия называйте до ${n(perBatch)} за раз — более длинный список тоже подойдёт, он будет сгенерирован пакетами. Или сгенерируйте для всех:`,
+  selectionNoTickets: "Ни один из этих тикетов ещё не синхронизирован в Tesbo, поэтому выбирать не из чего. Синхронизируйте их и спросите снова.",
+  selectionNoneSynced: (keys: string) => `Ни один из тикетов ${keys} не синхронизирован в этом проекте.
+
+`,
+  selectionRangeTooLarge: (from: string, to: string, size: number, max: number) =>
+    `Диапазон ${from}–${to} охватывает ${n(size)} тикет(ов) — называйте не больше ${n(max)} за раз или сгенерируйте для всех тикетов пакетами.
+
+`,
+  selectionRequest: (keys: string, exhaustive: boolean) =>
     exhaustive ? `Сгенерируй все возможные тест-кейсы для ${keys}` : `Сгенерируй тест-кейсы для ${keys}`,
-  groupReasoning: "Предлагаю тикеты небольшими группами.",
+  selectionReasoning: "Спрашиваю, для каких тикетов генерировать.",
 
   // ticket-scoped plan
   ticketsProgress: (planned: number, total: number) => `\n\nТикетов распланировано: ${n(planned)} из ${n(total)}.`,
@@ -261,6 +268,14 @@ export const ZYRA_RU = {
     `Ни один из ${n(tickets)} выбранных тикетов ещё не синхронизирован в Tesbo, поэтому генерировать не из чего. Синхронизируйте их и спросите снова.`,
   ticketsNothingNew: (tickets: number) =>
     `Я прошёл(а) все ${n(tickets)} тикет(ов), но новых сценариев не нашлось — существующие тест-кейсы уже их покрывают.`,
+  // live review batches
+  planBatchGenerating: "Генерирую тест-кейсы для этого пакета — они появляются ниже по мере написания.",
+  planBatchStopped: (kept: number) =>
+    `Генерация остановилась до завершения пакета — ${n(kept)} уже написанных тест-кейс(ов) ниже, их можно проверить.`,
+  planPausedKeptDrafts: (kept: number) => ` ${n(kept)} тест-кейс(ов), написанных до остановки, выше — их можно проверить.`,
+  liveTurnStopped: (kept: number) =>
+    `Генерация остановилась до завершения — ${n(kept)} уже написанных тест-кейс(ов) ниже, их можно проверить.`,
+  liveTurnStoppedReasoning: "Ход завершился с ошибкой после того, как часть тест-кейсов уже была написана; они сохранены.",
   ticketsSkippedUnsynced: (count: number, keys: string) =>
     `\n${n(count)} тикет(ов) не синхронизированы в Tesbo и будут пропущены: ${keys}.`,
   ticketsPlanFailed: (cause: string) =>

@@ -67,7 +67,8 @@ type Internals = {
   chatTestcasePlan: (message: string, range: string, routed?: Body) => { requestedCount: number; testcaseRange?: string };
   zyraTicketScope: (projectId: string, message: string, plan: { requestedCount: number; testcaseRange?: string }, confidence?: string) => Promise<Scope>;
   zyraTicketScopeQuestion: (message: string, scope: NonNullable<Scope>, exhaustive: boolean, routedSuite: Body | null) => Decision;
-  zyraTicketGroupDecision: (projectId: string, context: Body) => Promise<Decision>;
+  zyraTicketSelectionPrompt: (projectId: string, context: Body, problem?: Body) => Promise<Decision>;
+  zyraParseTicketSelection: (message: string) => { keys: string[]; oversizedRange?: { from: string; to: string; size: number } };
   zyraResolveChoice: (projectId: string, sessionId: string, rawChoice: unknown, message: string) => Promise<{ options: Options; choice: { id: string; message?: string } } | null>;
   zyraPlanScopedTicketRound: (params: Body) => Promise<{ scenarios: string[]; cursor: string | null; hasMore: boolean; tickets: number; emptyKeys?: string[] }>;
   generateZyraChatCreateDecision: (params: Body) => Promise<Decision>;
@@ -120,6 +121,13 @@ describe("zyraTicketScope — asks only above an estimate of 60 test cases", () 
   it("at 10 per ticket asks from 7 tickets, not 6", async () => {
     expect(await scopeFor(`Generate test cases for ${keys(6).join(", ")}`, "1-10")).toBeNull();
     expect((await scopeFor(`Generate test cases for ${keys(7).join(", ")}`, "1-10"))?.ticketCount).toBe(7);
+  });
+
+  it("an 'all possible' request budgets each ticket at the 'all' range's full batch, not the single-call cap", async () => {
+    // ZYRA_BATCH_BY_RANGE.all — two tickets asked for in full are 100 each, not 50 each sharing one batch.
+    expect((await scopeFor("Generate all possible test cases for QAB-1 and QAB-2", "30-50"))?.perTicket).toBe(100);
+    // Without "all possible", the project's own range decides.
+    expect((await scopeFor("Generate test cases for QAB-1, QAB-2 and QAB-3", "10-30"))?.perTicket).toBe(30);
   });
 
   it("never asks about a single ticket, however large its budget", async () => {
@@ -183,27 +191,77 @@ describe("zyraTicketScopeQuestion — the two options, and what the client sees 
   });
 });
 
-describe("zyraTicketGroupDecision — 'smaller batches' offers groups that never trip the question again", () => {
-  it("one ticket per group at 50 per ticket, two at 30, with ready-to-send requests", async () => {
+describe("zyraTicketSelectionPrompt — 'smaller batches' asks which tickets, it does not list them", () => {
+  it("asks for ids or a range, with real examples, how many fit a batch, and 'all' one click away", async () => {
+    const decision = await internals(makeLegacy()).zyraTicketSelectionPrompt("p1", { ticketKeys: keys(30), perTicket: 50, exhaustive: true });
+    expect(decision.reply).toMatch(/Type the ticket IDs or a range — for example `QAB-1, QAB-2` or `QAB-1 to QAB-2`/);
+    expect(decision.reply).toMatch(/30 tickets are in scope; for the best coverage name up to 2 at a time/);
+    expect(decision.options?.kind).toBe("ticket_selection");
+    // One option however many tickets there are — never a row per ticket.
+    expect(decision.options?.choices.map((c) => c.id)).toEqual(["all"]);
+    expect(decision.options?.choices[0].description).toMatch(/all 30 tickets/);
+    expect(decision.options?.context).toMatchObject({ ticketKeys: keys(30), perTicket: 50 });
+  });
+
+  it("for 'all the tickets' counts and samples the synced tickets in number order, never listing them", async () => {
+    const query = jest.fn((sql: string) => Promise.resolve({
+      rows: sql.includes("count(*)") ? [{ count: "10000" }] : [{ ticket_key: "KAN-1" }, { ticket_key: "KAN-2" }]
+    })) as unknown as Query;
+    const decision = await internals(makeLegacy(query)).zyraTicketSelectionPrompt("p1", { ticketKeys: null, perTicket: 10 });
+    expect(decision.reply).toMatch(/10000 tickets are in scope; for the best coverage name up to 10 at a time/);
+    expect(decision.reply).toMatch(/`KAN-1 to KAN-10`/);
+    expect(decision.options?.choices).toHaveLength(1);
+    const sampled = query.mock.calls.find(([sql]) => sql.includes("ORDER BY split_part"))!;
+    // KAN-2 sorts before KAN-10: ordered by the key's number, not its text.
+    expect(sampled[0]).toMatch(/regexp_replace\(ticket_key, '\^\.\*-', ''\)\)::bigint/);
+  });
+
+  it("says why it is asking again: nothing typed was a synced ticket, or the range was too large", async () => {
     const svc = makeLegacy();
-    const fifty = await internals(svc).zyraTicketGroupDecision("p1", { ticketKeys: ["QAB-1", "QAB-2", "QAB-3"], perTicket: 50, exhaustive: true });
-    expect(fifty.options?.choices.map((c) => c.label)).toEqual(["QAB-1", "QAB-2", "QAB-3"]);
-    expect(fifty.options?.choices[0].message).toBe("Generate all possible test cases for QAB-1");
-    const thirty = await internals(svc).zyraTicketGroupDecision("p1", { ticketKeys: ["QAB-1", "QAB-2", "QAB-3"], perTicket: 30, exhaustive: false });
-    expect(thirty.options?.choices.map((c) => c.label)).toEqual(["QAB-1, QAB-2", "QAB-3"]);
-    expect(thirty.options?.choices[0].message).toBe("Generate test cases for QAB-1 and QAB-2");
+    const unknown = await internals(svc).zyraTicketSelectionPrompt("p1", { ticketKeys: keys(3), perTicket: 50 }, { unknown: ["KAN-999"] });
+    expect(unknown.reply).toMatch(/^None of KAN-999 is a synced ticket in this project\./);
+    expect(unknown.options?.kind).toBe("ticket_selection");
+    const tooLarge = await internals(svc).zyraTicketSelectionPrompt("p1", { ticketKeys: keys(3), perTicket: 50 }, { oversizedRange: { from: "KAN-1", to: "KAN-9000", size: 9000 } });
+    expect(tooLarge.reply).toMatch(/^KAN-1 to KAN-9000 covers 9000 tickets — name at most 500 at a time/);
   });
 
-  it("lists at most 10 groups and says how many there are", async () => {
-    const decision = await internals(makeLegacy()).zyraTicketGroupDecision("p1", { ticketKeys: keys(30), perTicket: 50 });
-    expect(decision.options?.choices).toHaveLength(10);
-    expect(decision.reply).toMatch(/Showing the first 10 of 30 groups/);
-  });
-
-  it("with nothing synced for 'all tickets', says so rather than offering an empty list", async () => {
-    const decision = await internals(makeLegacy()).zyraTicketGroupDecision("p1", { ticketKeys: null, perTicket: 50 });
+  it("with nothing synced for 'all tickets', says so and asks nothing", async () => {
+    const decision = await internals(makeLegacy(jest.fn(() => Promise.resolve({ rows: [{ count: "0" }] })) as unknown as Query)).zyraTicketSelectionPrompt("p1", { ticketKeys: null, perTicket: 50 });
     expect(decision.options).toBeUndefined();
     expect(decision.reply).toMatch(/None of these tickets is synced/);
+  });
+});
+
+describe("zyraParseTicketSelection — ids and ranges typed in chat", () => {
+  const parse = (message: string) => internals(makeLegacy()).zyraParseTicketSelection(message);
+
+  it("reads a list of ids, any provider's, deduplicated in the order typed", () => {
+    expect(parse("KAN-1, KAN-10 and ENG-7, kan-1").keys).toEqual(["KAN-1", "KAN-10", "ENG-7"]);
+  });
+
+  it("expands every range spelling in number order", () => {
+    for (const range of ["KAN-3 to KAN-6", "KAN-3..KAN-6", "KAN-3 - KAN-6", "KAN-3 to 6", "KAN-6 to KAN-3", "kan-3 through kan-6"]) {
+      expect({ range, keys: parse(`Do ${range}`).keys }).toEqual({ range, keys: ["KAN-3", "KAN-4", "KAN-5", "KAN-6"] });
+    }
+  });
+
+  it("mixes ranges and ids", () => {
+    expect(parse("KAN-1 to KAN-3, ENG-9").keys).toEqual(["KAN-1", "KAN-2", "KAN-3", "ENG-9"]);
+  });
+
+  it("two different projects either side of a dash are two tickets, not a range", () => {
+    expect(parse("KAN-1 - ENG-4").keys).toEqual(["KAN-1", "ENG-4"]);
+  });
+
+  it("a range over 500 is reported, not expanded or cut short", () => {
+    const result = parse("KAN-1 to KAN-9000");
+    expect(result.keys).toEqual([]);
+    expect(result.oversizedRange).toEqual({ from: "KAN-1", to: "KAN-9000", size: 9000 });
+    expect(parse("KAN-1 to KAN-500").keys).toHaveLength(500);
+  });
+
+  it("finds nothing in a message that names no ticket", () => {
+    expect(parse("just do the important ones").keys).toEqual([]);
   });
 });
 
@@ -246,6 +304,17 @@ describe("zyraResolveChoice — a click or a typed answer, acted on once", () =>
     expect((await resolve(setup({ id: MESSAGE_ID, options: open() }).svc, undefined, "generate in smaller batches."))?.choice.id).toBe("smaller");
     expect(await resolve(setup({ id: MESSAGE_ID, options: open() }).svc, undefined, "Generate tests for login")).toBeNull();
     expect(await resolve(setup({ id: MESSAGE_ID, options: open() }).svc, undefined, "3")).toBeNull();
+  });
+
+  it("an open which-tickets question is answered by typing ticket ids or a range; other text is not an answer", async () => {
+    const selection: Options = { kind: "ticket_selection", choices: [{ id: "all", label: "Generate all tickets in batches" }], answeredId: null, context: {} };
+    expect((await resolve(setup({ id: MESSAGE_ID, options: selection }).svc, undefined, "KAN-1, KAN-10"))?.choice.id).toBe("typed");
+    // Too large is still an answer — it is re-asked with the reason.
+    expect((await resolve(setup({ id: MESSAGE_ID, options: selection }).svc, undefined, "KAN-1 to KAN-9000"))?.choice.id).toBe("typed");
+    expect((await resolve(setup({ id: MESSAGE_ID, options: selection }).svc, undefined, "1"))?.choice.id).toBe("all");
+    expect(await resolve(setup({ id: MESSAGE_ID, options: selection }).svc, undefined, "what does this mean?")).toBeNull();
+    // On the first question, a typed ticket list is an ordinary message, not an answer.
+    expect(await resolve(setup({ id: MESSAGE_ID, options: open() }).svc, undefined, "KAN-1, KAN-10")).toBeNull();
   });
 
   it("a typed answer never reopens an answered question, and no question means nothing to answer", async () => {
@@ -340,12 +409,23 @@ describe("zyraPlanScopedTicketRound — one ticket per round, each scenario labe
     const result = await round(svc, "d0");
     const [sql, params] = query.mock.calls[0];
     expect(sql).toMatch(/= ANY\(\$2::text\[\]\)/);
-    expect(sql).toMatch(/LIMIT 1/);
+    expect(sql).toMatch(/LIMIT 2/);
     expect(params).toEqual(["p1", ["QAB-1", "QAB-2"], "d0"]);
     const plannerCall = planner.mock.calls[0][0] as { maxScenarios: number; message: string };
     expect(plannerCall.maxScenarios).toBe(30);
     expect(plannerCall.message).toMatch(/for QAB-1 only/);
-    expect(result).toEqual({ scenarios: ["[QAB-1] Valid login", "[QAB-1] Locked account"], cursor: "d1", hasMore: true, tickets: 1, emptyKeys: [] });
+    // One row back: this was the last ticket, and the round already knows it.
+    expect(result).toEqual({ scenarios: ["[QAB-1] Valid login", "[QAB-1] Locked account"], cursor: "d1", hasMore: false, tickets: 1, emptyKeys: [] });
+  });
+
+  it("reads one ticket ahead: plans only the first, and reports more when a second is there", async () => {
+    const { svc, planner } = setup([
+      { id: "d1", title: "QAB-1: Login", content_text: "", ticket_key: "QAB-1" },
+      { id: "d2", title: "QAB-2: Logout", content_text: "", ticket_key: "QAB-2" }
+    ], ["Valid login"]);
+    const result = await round(svc, null);
+    expect(planner).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ scenarios: ["[QAB-1] Valid login"], cursor: "d1", hasMore: true, tickets: 1, emptyKeys: [] });
   });
 
   it("a ticket that plans nothing is named, not silently dropped", async () => {
@@ -450,18 +530,81 @@ describe("zyraDecisionForChoice — what each answer runs", () => {
     expect((build.mock.calls[0][5] as Body).routedCount).toEqual({ exhaustive: true, scopeDecided: true });
   });
 
-  it("'smaller batches' offers groups without calling the model", async () => {
+  it("'smaller batches' asks which tickets, without calling the model", async () => {
     const { svc, build } = setup();
     const decision = await internals(svc).zyraDecisionForChoice(turn, { options: scopeOptions(["QAB-1", "QAB-2"]), choice: { id: "smaller", label: "Generate in smaller batches" } });
     expect(build).not.toHaveBeenCalled();
-    expect(decision.options?.kind).toBe("ticket_group");
+    expect(decision.options?.kind).toBe("ticket_selection");
   });
 
-  it("a picked group runs its own request, not the typed '1'", async () => {
+  const selectionOptions = (ticketKeys: string[] | null): Options => ({
+    kind: "ticket_selection",
+    choices: [{ id: "all", label: "Generate all tickets in batches" }],
+    answeredId: "typed",
+    context: { originalMessage: "Generate all possible test cases on all tickets", ticketKeys, perTicket: 50, exhaustive: true, routedSuite: null }
+  });
+  function setupSelection(syncedKeys: string[]) {
+    const query = jest.fn((sql: string, params: unknown[] = []) => {
+      if (sql.includes("ORDER BY split_part")) return Promise.resolve({ rows: syncedKeys.filter((k) => !params[1] || (params[1] as string[]).includes(k)).map((ticket_key) => ({ ticket_key })) });
+      if (sql.includes("count(*)")) return Promise.resolve({ rows: [{ count: String(syncedKeys.length) }] });
+      return Promise.resolve({ rows: [] });
+    }) as unknown as Query;
+    const svc = makeLegacy(query);
+    const build = jest.spyOn(internals(svc), "buildZyraChatDecision").mockResolvedValue({ reply: "built", actionType: "create", operations: [] });
+    return { svc, build };
+  }
+  const typed = (message: string) => ({ choice: { id: "typed", label: message } });
+
+  it("typed tickets run as a ticket-scoped plan of their own — unsynced ones included, so the plan names them", async () => {
+    const { svc, build } = setupSelection(["KAN-1", "KAN-2", "KAN-3"]);
+    await internals(svc).zyraDecisionForChoice({ ...turn, message: "KAN-1 to KAN-3, KAN-999" }, { options: selectionOptions(null), ...typed("KAN-1 to KAN-3, KAN-999") });
+    const [, , , request, , resume] = build.mock.calls[0];
+    expect(request).toBe("Generate all possible test cases for KAN-1, KAN-2, KAN-3, KAN-999");
+    expect(resume).toEqual({
+      routedSuite: null,
+      routedCount: { exhaustive: true, scopeDecided: true, ticketScope: { ticketKeys: ["KAN-1", "KAN-2", "KAN-3", "KAN-999"], perTicket: 50 } }
+    });
+  });
+
+  it("nothing typed is a synced ticket: asks again, says which, and generates nothing", async () => {
+    const { svc, build } = setupSelection(["KAN-1"]);
+    const decision = await internals(svc).zyraDecisionForChoice({ ...turn, message: "KAN-998, KAN-999" }, { options: selectionOptions(null), ...typed("KAN-998, KAN-999") });
+    expect(build).not.toHaveBeenCalled();
+    expect(decision.reply).toMatch(/^None of KAN-998, KAN-999 is a synced ticket/);
+    expect(decision.options?.kind).toBe("ticket_selection");
+  });
+
+  it("a range that is too large: asks again with the reason, and generates nothing", async () => {
+    const { svc, build } = setupSelection(["KAN-1"]);
+    const decision = await internals(svc).zyraDecisionForChoice({ ...turn, message: "KAN-1 to KAN-9000" }, { options: selectionOptions(null), ...typed("KAN-1 to KAN-9000") });
+    expect(build).not.toHaveBeenCalled();
+    expect(decision.reply).toMatch(/covers 9000 tickets/);
+  });
+
+  it("'all' on the which-tickets question is the same as on the first question", async () => {
+    const { svc, build } = setupSelection([]);
+    await internals(svc).zyraDecisionForChoice(turn, { options: selectionOptions(null), choice: { id: "all", label: "Generate all tickets in batches" } });
+    expect((build.mock.calls[0][5] as Body).routedCount).toEqual({ exhaustive: true, scopeDecided: true });
+  });
+
+  it("a ticket group from an older message still runs its own request, not the typed '1'", async () => {
     const { svc, build } = setup();
     const groups: Options = { kind: "ticket_group", choices: [{ id: "group-1", label: "QAB-1", message: "Generate test cases for QAB-1" }], answeredId: "group-1" };
     await internals(svc).zyraDecisionForChoice({ ...turn, message: "1" }, { options: groups, choice: groups.choices[0] });
     expect(build.mock.calls[0][3]).toBe("Generate test cases for QAB-1");
     expect(build.mock.calls[0][5]).toBeUndefined();
+  });
+});
+
+describe("the paged plan for 'all the tickets' reports ticket progress too", () => {
+  it("a batch message of a paged plan carries 'Tickets planned: X of Y'", () => {
+    expect(statics.zyraTicketPlanSummary({ ticketsDone: 25, ticketsSynced: 243 }, false)).toMatch(/Tickets planned: 25 of 243/);
+    expect(statics.zyraTicketPlanSummary({ ticketsTotal: 243 }, true)).toMatch(/All 243 ticket\(s\) processed/);
+  });
+
+  it("only plans that record ticket counts get the lines — an older plan is left as it was", () => {
+    const tracks = (LegacyService as unknown as { zyraPlanTracksTickets: (plan: Body) => boolean }).zyraPlanTracksTickets;
+    expect(tracks({ ticketsSynced: 243 })).toBe(true);
+    expect(tracks({ ticketsHasMore: true, ticketCursor: "c1" })).toBe(false);
   });
 });

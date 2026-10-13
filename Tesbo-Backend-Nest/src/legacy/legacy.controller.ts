@@ -20,7 +20,7 @@ import {
 import { FilesInterceptor } from "@nestjs/platform-express";
 import type { Response } from "express";
 import ExcelJS from "exceljs";
-import { map, Observable, of } from "rxjs";
+import { filter, interval, map, merge, Observable, of } from "rxjs";
 import { AuthenticatedRequest } from "../common/request.types";
 import { LegacyService } from "./legacy.service";
 import { CustomFieldsService } from "../custom-fields/custom-fields.service";
@@ -1554,6 +1554,33 @@ export class LegacyController {
       return of<MessageEvent>({ data: { kind: "unknown" } });
     }
     return subject.pipe(map((event) => ({ data: event })));
+  }
+
+  /*
+   * Live events of this session's background plan batches: each test case as the model finishes it
+   * ({kind: "draft", piece, row}), each part as it is posted for review ({kind: "posted", piece}), and
+   * the end of each batch ({kind: "batch"}). Best-effort and in-process, like the turn stream above —
+   * the page keeps polling the session, which stays the source of truth (an instance that is not the
+   * one running the plan simply has nothing to say). Same access check and kill switch as above.
+   */
+  @Sse("/api/projects/:projectId/agents/zyra/chat/sessions/:sessionId/plan/events")
+  async zyraPlanEvents(
+    @Req() req: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("sessionId") sessionId: string
+  ): Promise<Observable<MessageEvent>> {
+    await this.legacy.zyraChatSession(projectId, req.userId, sessionId);
+    if (!this.zyraProgressStreamingEnabled()) {
+      return of<MessageEvent>({ data: { kind: "unknown" } });
+    }
+    const events = this.legacy.zyraPlanEvents.pipe(
+      filter((entry) => entry.projectId === projectId && entry.sessionId === sessionId),
+      map((entry) => ({ data: entry.event }) as MessageEvent)
+    );
+    // A batch can go a minute or two between events; a heartbeat keeps proxies (Cloudflare drops an
+    // idle connection after 100 s) from closing the stream in between.
+    const heartbeat = interval(25_000).pipe(map(() => ({ data: { kind: "ping" } }) as MessageEvent));
+    return merge(events, heartbeat);
   }
 
   @Post("/api/projects/:projectId/agents/zyra/chat/sessions/:sessionId/messages/:messageId/continue")

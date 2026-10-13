@@ -1198,6 +1198,9 @@ export interface ZyraChatActivePlan {
   totalCount: number;
   /** Scenarios that have a test case — what progress shows. doneCount is the batch cursor, which grows with retries. Absent on plans started before it existed. */
   coveredCount?: number;
+  /** Tickets planned so far, of the synced tickets in scope — only on plans that walk tickets. */
+  ticketsDone?: number;
+  ticketsSynced?: number;
 }
 
 export interface ZyraChatSession {
@@ -1334,9 +1337,27 @@ export type ZyraTurnProgressEvent =
   | { kind: "stage"; stage: string; meta?: Record<string, unknown> }
   /** Merges `meta` into the latest step named `stage` ("*" = the open one). */
   | { kind: "update"; stage: string; meta?: Record<string, unknown> }
+  /** A test case staged into the turn's review batch the moment the model finished it. */
+  | { kind: "draft"; meta?: { reviewRequestId?: string; row?: ZyraChatTestcaseRow; staged?: number; total?: number } }
   | { kind: "complete"; payload: unknown }
   | { kind: "error"; message: string }
   | { kind: "unknown" };
+
+/**
+ * Live events of a session's background plan batches (openZyraPlanEvents): a batch's review panel
+ * appearing (its message is posted with its first draft), each test case staged into it, the batch
+ * finishing. Best-effort, like the turn stream — the session itself stays the source of truth.
+ */
+export type ZyraPlanEvent =
+  | { kind: "batchStarted"; reviewRequestId: string }
+  | { kind: "draft"; reviewRequestId: string; row: ZyraChatTestcaseRow; staged: number; total: number }
+  | { kind: "batch"; reviewRequestId?: string | null }
+  | { kind: "ping" }
+  | { kind: "unknown" };
+
+export function openZyraPlanEvents(projectId: string, sessionId: string): EventSource {
+  return new EventSource(`${API_BASE}/api/projects/${projectId}/agents/zyra/chat/sessions/${sessionId}/plan/events`, { withCredentials: true });
+}
 
 /**
  * Best-effort live narration for one turn ("routing…", "generating…") — a pure enhancement over
