@@ -304,12 +304,13 @@ export default function RequirementsPage() {
   // level) are offered as tabs. "All Sources" is always shown alongside them — with zero linked
   // trackers it's the only tab, since it's the default view the empty/connect states render under.
   const connectedProviders = PROVIDERS.filter((p) => connectedSources.includes(p.id));
-  // With exactly one tracker linked the aggregate tab shows that same tracker's items, so "All
-  // Sources" would overpromise; it reads "Source" until a second one is linked (with none it is the
-  // only tab, and keeps "All Sources").
-  const allTab = connectedProviders.length === 1 ? { ...ALL_TAB, label: "Source" } : ALL_TAB;
+  // With exactly one tracker linked an aggregate tab would only repeat that tracker's items, so it is
+  // dropped and the tracker's own tab (named for it) stands alone. Two or more get the aggregate tab,
+  // labelled "Sources"; with none it is the only tab and keeps "All Sources".
+  const singleProvider = connectedProviders.length === 1 ? connectedProviders[0] : null;
+  const allTab = connectedProviders.length >= 2 ? { ...ALL_TAB, label: "Sources" } : ALL_TAB;
   const sourceTabs: Array<{ id: Source; label: string; logoBg: string; logoLetter: string }> =
-    [allTab, ...connectedProviders];
+    singleProvider ? [singleProvider] : [allTab, ...connectedProviders];
   const anyConnected = connectedProviders.length > 0;
   const sourceConnected = source === "all" ? anyConnected : connectedSources.includes(source);
   const stats = summary?.[source] ?? EMPTY_STATS;
@@ -597,6 +598,13 @@ export default function RequirementsPage() {
     }
     syncWasActiveRef.current = anySyncActive;
   }, [anySyncActive, source, page, search, typeFilter, statusFilter, coverageFilter, historicalRemoteId, loadTickets, refreshSummary, refreshLinkedKeys, refreshKbFolders, refreshHistory]);
+
+  // A restored view can still be on the aggregate tab after a second tracker was unlinked; with only
+  // one left that tab is gone, so move to the remaining tracker's tab.
+  useEffect(() => {
+    if (singleProvider && source === "all") handleSourceChange(singleProvider.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [singleProvider?.id, source]);
 
   function handleSourceChange(next: Source) {
     setSource(next);
