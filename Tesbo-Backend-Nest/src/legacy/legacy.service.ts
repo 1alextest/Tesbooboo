@@ -14702,7 +14702,10 @@ export class LegacyService implements OnModuleInit {
             projectId: turn.projectId,
             userId: turn.uid,
             sessionId: turn.sessionId,
-            emit: (event) => recorder.onStage("draft", event, "draft")
+            emit: (event) => recorder.onStage("draft", event, "draft"),
+            // Recorded on the turn's own trace (saved and polled), so the batch is found without this
+            // tab's event stream — after a conversation switch, a reload, or from another tab.
+            onRowCreated: async (reviewRequestId) => recorder.onStage("generating", { reviewRequestId }, "update")
           })
         : undefined;
       let result: Awaited<ReturnType<LegacyService["executeZyraChatTurn"]>>;
