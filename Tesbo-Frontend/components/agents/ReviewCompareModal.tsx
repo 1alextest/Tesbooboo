@@ -1,0 +1,121 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { getTestCase } from "@/lib/api";
+import { buildCompareRows, buildContextRows, formatPercent, type CompareRow, type ReviewRecommendation } from "@/lib/reviewBoard";
+import { Button, Modal, PageLoader, StatusChip } from "@/components/ui";
+
+function Cell({ value, differs }: { value: string; differs: boolean }) {
+  return (
+    <div
+      className={`whitespace-pre-wrap break-words rounded-md px-2.5 py-2 text-sm ${
+        differs ? "bg-[var(--warning-soft)] text-[var(--foreground)]" : "text-[var(--muted)]"
+      }`}
+    >
+      {value.trim() ? value : <span className="text-[var(--muted-soft)]">—</span>}
+    </div>
+  );
+}
+
+function Rows({ rows }: { rows: CompareRow[] }) {
+  return (
+    <div className="divide-y divide-[var(--border)] rounded-lg border border-[var(--border)]">
+      {rows.map((r) => (
+        <div key={r.key} className="grid gap-2 p-2 md:grid-cols-[120px_1fr_1fr]">
+          <div className="flex items-start gap-2 px-1 pt-2 text-xs font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">
+            {r.label}
+            {r.differs && <StatusChip tone="warning">Differs</StatusChip>}
+          </div>
+          <Cell value={r.a} differs={r.differs} />
+          <Cell value={r.b} differs={r.differs} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Side-by-side comparison. Both test cases are read live through the existing getTestCase API, so this
+ * always shows what the cases contain NOW — which is why a finding can be flagged "changed since analysis"
+ * while this view already shows the new content. Differences are judged after the same normalisation the
+ * backend uses (case, spacing and punctuation are not differences).
+ */
+export default function ReviewCompareModal({
+  projectId,
+  recommendation,
+  onClose,
+}: {
+  projectId: string;
+  recommendation: ReviewRecommendation | null;
+  onClose: () => void;
+}) {
+  return (
+    <Modal open={!!recommendation} onClose={onClose} title="Compare test cases" className="max-w-5xl">
+      {/* Keyed by finding, so opening another one starts from a clean loading state. */}
+      {recommendation && <CompareBody key={recommendation.id} projectId={projectId} rec={recommendation} onClose={onClose} />}
+    </Modal>
+  );
+}
+
+function CompareBody({ projectId, rec, onClose }: { projectId: string; rec: ReviewRecommendation; onClose: () => void }) {
+  const [rows, setRows] = useState<CompareRow[] | null>(null);
+  const [contextRows, setContextRows] = useState<CompareRow[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const idA = rec.testcaseA.id;
+  const idB = rec.testcaseB.id;
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([getTestCase(projectId, idA), getTestCase(projectId, idB)])
+      .then(([a, b]) => {
+        if (cancelled) return;
+        setRows(buildCompareRows(a, b));
+        setContextRows(buildContextRows(a, b));
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load the test cases.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, idA, idB]);
+
+  return (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusChip tone={rec.classification === "exact_duplicate" ? "error" : "ai"}>
+              {rec.classification === "exact_duplicate" ? "Exact duplicate" : "Similar"}
+            </StatusChip>
+            <span className="text-xs text-[var(--muted)]">{formatPercent(rec.similarity)} match</span>
+            {rec.stale && <StatusChip tone="warning">{rec.staleReason === "unverified" ? "Needs re-analysis" : "Changed since analysis"}</StatusChip>}
+          </div>
+          <p className="text-xs text-[var(--muted)]">{rec.explanation}</p>
+
+          <div className="grid gap-2 md:grid-cols-[120px_1fr_1fr]">
+            <div />
+            {[rec.testcaseA, rec.testcaseB].map((t) => (
+              <div key={t.id} className="min-w-0 rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2">
+                <div className="font-mono text-xs text-[var(--muted)]">{t.externalId}</div>
+                <div className="line-clamp-2 text-sm font-semibold text-[var(--foreground)]">{t.title}</div>
+                <div className="text-xs text-[var(--muted)]">{t.repositoryName}</div>
+              </div>
+            ))}
+          </div>
+
+          {error && <p className="rounded-lg border border-[var(--error)]/40 bg-[var(--error-soft)] px-3 py-2 text-sm text-[var(--error-foreground)]">{error}</p>}
+          {!rows && !error && <PageLoader variant="inline" label="Loading test cases…" />}
+          {rows && (
+            <>
+              <Rows rows={rows} />
+              <div>
+                <p className="mb-1.5 text-xs text-[var(--muted)]">Not compared by the analysis (shown for context):</p>
+                <Rows rows={contextRows} />
+              </div>
+            </>
+          )}
+          <div className="flex justify-end">
+            <Button type="button" variant="secondary" onClick={onClose}>Close</Button>
+          </div>
+        </div>
+  );
+}
