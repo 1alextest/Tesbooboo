@@ -1198,8 +1198,18 @@ export class LegacyController {
   }
 
   @Get("/api/projects/:projectId/reports/requirement-matrix")
-  matrix(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
-    return this.legacy.requirementMatrixForUser(req.userId, projectId);
+  matrix(
+    @Req() req: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Query() query: Record<string, any>
+  ) {
+    // No `limit` = the full matrix (API consumers); the Reports tab always sends one and pages.
+    const limit = query.limit !== undefined ? Number(query.limit) : undefined;
+    return this.legacy.requirementMatrixForUser(req.userId, projectId, {
+      limit: Number.isFinite(limit) ? limit : undefined,
+      offset: Number(query.offset) || 0,
+      search: typeof query.search === "string" ? query.search : undefined
+    });
   }
 
   @Get("/api/projects/:projectId/reports/repository-summary")
