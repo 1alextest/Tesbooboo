@@ -3075,7 +3075,10 @@ export interface WorkspaceAnalytics {
   suiteCount: number;
   planCount: number;
   cycleCount: number;
+  /** Every execution status, in the backend's canonical order, including those at 0. */
   executionStatus: Record<string, number>;
+  /** Whole-number share of executionTotal per status; sums to exactly 100 (all 0 when there are none). */
+  executionStatusPercent: Record<string, number>;
   executionTotal: number;
 }
 
