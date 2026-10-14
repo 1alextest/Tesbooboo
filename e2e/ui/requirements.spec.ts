@@ -240,9 +240,9 @@ test.describe("requirements page — View in Knowledge base follows the active s
       // Only Jira is connected, so the page opens straight on that tab — there's no "All Sources"
       // tab to sit under with a single provider.
       await page.goto(`/projects/${project.id}/requirements`);
-      // One tracker connected: the aggregate tab is labelled "Source", not "All Sources".
-      await expect(page.getByTestId("requirements-source-tab-all")).toContainText("Source");
-      await expect(page.getByTestId("requirements-source-tab-all")).not.toContainText("All Sources");
+      // One tracker connected: no aggregate tab at all, just that tracker's own tab, named for it.
+      await expect(page.getByTestId("requirements-source-tab-jira")).toContainText("Jira");
+      await expect(page.getByTestId("requirements-source-tab-all")).toHaveCount(0);
       const link = page.getByTestId("view-in-knowledge-base-link");
       await expect(link).toHaveAttribute("href", `/projects/${project.id}/knowledge-base?folder=${jiraFolderId}`);
 
@@ -284,7 +284,10 @@ test.describe("requirements page — View in Knowledge base follows the active s
 
         // Both providers connected -> the page opens on "All Sources".
         await page.goto(`/projects/${project.id}/requirements`);
-        await expect(page.getByTestId("requirements-source-tab-all")).toContainText("All Sources");
+        // Two or more connected: the aggregate tab reads "Sources".
+        const allTab = page.getByTestId("requirements-source-tab-all");
+        await expect(allTab).toContainText("Sources");
+        await expect(allTab).not.toContainText("All");
         const link = page.getByTestId("view-in-knowledge-base-link");
         await expect(link).toHaveAttribute("href", `/projects/${project.id}/knowledge-base`);
 

@@ -105,6 +105,9 @@ const EN = {
     "⚠️ Zyra didn't return structured data for this reply — nothing above should be treated as saved or staged. Try asking again.",
   "msg.viewTestCases": "View test cases",
   "msg.continue": "Continue",
+  "options.label": "Choose an option",
+  "options.typeInstead": "Or type something else below.",
+  "options.chosen": "Chosen",
   "msg.timedOutRepeatedly": (p) =>
     `This has timed out ${p.n} times in a row. The batch may be too large for the provider to finish in time.`,
   "msg.continueSmaller": "Continue with a smaller batch (5 cases)",
@@ -184,6 +187,10 @@ const EN = {
   "plan.generating": (p) =>
     `Generating remaining scenarios — ${p.covered}/${p.total} covered (${p.pct}%). Review what's in so far; more will appear here shortly.`,
   "plan.paused": (p) => `Paused — ${p.covered}/${p.total} scenarios covered.`,
+  "plan.tickets": (p) => `Tickets planned: ${p.done} of ${p.total}.`,
+  "review.generating": (p) => `Generating — ${p.staged} of ${p.total} written. The rest appear here as they are done.`,
+  "review.discardAllWhileGenerating": "Available once generation finishes.",
+  "review.generatingSoFar": (p) => `Generating — ${p.staged} written so far. The rest appear here as they are done.`,
   "plan.resuming": "Resuming…",
   "plan.resume": "Resume",
   "plan.stopping": "Stopping…",
@@ -513,6 +520,9 @@ const RU: Record<ZyraTextKey, Entry> = {
     "⚠️ Zyra не вернула структурированные данные для этого ответа — ничего из показанного выше не сохранено и не подготовлено к проверке. Попробуйте спросить ещё раз.",
   "msg.viewTestCases": "Открыть тест-кейсы",
   "msg.continue": "Продолжить",
+  "options.label": "Выберите вариант",
+  "options.typeInstead": "Или напишите свой вариант ниже.",
+  "options.chosen": "Выбрано",
   "msg.timedOutRepeatedly": (p) =>
     `Время ожидания истекло ${p.n} ${ruPlural(p.n, "раз", "раза", "раз")} подряд. Возможно, пакет слишком велик, чтобы провайдер успел его обработать.`,
   "msg.continueSmaller": "Продолжить с пакетом поменьше (5 тест-кейсов)",
@@ -588,6 +598,10 @@ const RU: Record<ZyraTextKey, Entry> = {
   "plan.generating": (p) =>
     `Генерируем оставшиеся сценарии — покрыто ${p.covered}/${p.total} (${p.pct}%). Проверьте то, что уже готово; остальное скоро появится здесь.`,
   "plan.paused": (p) => `Приостановлено — покрыто сценариев: ${p.covered}/${p.total}.`,
+  "plan.tickets": (p) => `Тикетов распланировано: ${p.done} из ${p.total}.`,
+  "review.generating": (p) => `Генерация — написано ${p.staged} из ${p.total}. Остальные появятся здесь по мере готовности.`,
+  "review.discardAllWhileGenerating": "Станет доступно после завершения генерации.",
+  "review.generatingSoFar": (p) => `Генерация — пока написано ${p.staged}. Остальные появятся здесь по мере готовности.`,
   "plan.resuming": "Возобновление…",
   "plan.resume": "Возобновить",
   "plan.stopping": "Остановка…",

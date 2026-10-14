@@ -1154,6 +1154,19 @@ export interface ZyraChatMessage {
    * message only when the reply answers no user message of its own (a plan batch, a resumed turn).
    */
   trace?: ZyraTurnTrace | null;
+  /** A question Zyra asked with clickable answers — answered by sending `choice` with the next message. */
+  options?: ZyraChatOptions | null;
+}
+
+/**
+ * Clickable answers to a question on an assistant message. `ticket_scope` asks how to handle a
+ * request spanning many tickets; `ticket_group` offers tickets a group at a time, each choice carrying
+ * the request it sends (`message`). `answeredId` is the choice already acted on.
+ */
+export interface ZyraChatOptions {
+  kind: "ticket_scope" | "ticket_group" | string;
+  choices: Array<{ id: string; label: string; description?: string; message?: string }>;
+  answeredId: string | null;
 }
 
 export type ZyraTraceStepStatus = "active" | "ok" | "empty" | "skipped" | "blocked" | "failed" | "timed_out";
@@ -1185,6 +1198,9 @@ export interface ZyraChatActivePlan {
   totalCount: number;
   /** Scenarios that have a test case — what progress shows. doneCount is the batch cursor, which grows with retries. Absent on plans started before it existed. */
   coveredCount?: number;
+  /** Tickets planned so far, of the synced tickets in scope — only on plans that walk tickets. */
+  ticketsDone?: number;
+  ticketsSynced?: number;
 }
 
 export interface ZyraChatSession {
@@ -1280,11 +1296,11 @@ export async function startZyraChatMessage(
   projectId: string,
   sessionId: string,
   message: string,
-  opts: { turnId?: string } = {}
+  opts: { turnId?: string; choice?: { messageId: string; optionId: string } } = {}
 ): Promise<{ accepted: true; userMessageId: string; session: ZyraChatSession }> {
   return api(`/api/projects/${projectId}/agents/zyra/chat/sessions/${sessionId}/messages`, {
     method: "POST",
-    body: { message, turnId: opts.turnId, background: true },
+    body: { message, turnId: opts.turnId, background: true, ...(opts.choice ? { choice: opts.choice } : {}) },
   });
 }
 
@@ -1321,9 +1337,27 @@ export type ZyraTurnProgressEvent =
   | { kind: "stage"; stage: string; meta?: Record<string, unknown> }
   /** Merges `meta` into the latest step named `stage` ("*" = the open one). */
   | { kind: "update"; stage: string; meta?: Record<string, unknown> }
+  /** A test case staged into the turn's review batch the moment the model finished it. */
+  | { kind: "draft"; meta?: { reviewRequestId?: string; row?: ZyraChatTestcaseRow; staged?: number; total?: number } }
   | { kind: "complete"; payload: unknown }
   | { kind: "error"; message: string }
   | { kind: "unknown" };
+
+/**
+ * Live events of a session's background plan batches (openZyraPlanEvents): a batch's review panel
+ * appearing (its message is posted with its first draft), each test case staged into it, the batch
+ * finishing. Best-effort, like the turn stream — the session itself stays the source of truth.
+ */
+export type ZyraPlanEvent =
+  | { kind: "batchStarted"; reviewRequestId: string }
+  | { kind: "draft"; reviewRequestId: string; row: ZyraChatTestcaseRow; staged: number; total: number }
+  | { kind: "batch"; reviewRequestId?: string | null }
+  | { kind: "ping" }
+  | { kind: "unknown" };
+
+export function openZyraPlanEvents(projectId: string, sessionId: string): EventSource {
+  return new EventSource(`${API_BASE}/api/projects/${projectId}/agents/zyra/chat/sessions/${sessionId}/plan/events`, { withCredentials: true });
+}
 
 /**
  * Best-effort live narration for one turn ("routing…", "generating…") — a pure enhancement over

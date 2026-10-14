@@ -42,7 +42,8 @@ export interface ZyraTurnTrace {
  * ZYRA_TRACE_CURRENT_STEP, whichever step is currently open) instead of opening a new one — how a
  * step records an outcome only known after it started (the router's decision, a timeout, a block).
  */
-export type ZyraOnStage = (stage: string, meta?: Record<string, unknown>, mode?: "update") => void;
+// mode "draft": a live draft for the watching client (zyra-draft-stream.ts) — forwarded, never traced.
+export type ZyraOnStage = (stage: string, meta?: Record<string, unknown>, mode?: "update" | "draft") => void;
 
 /** Targets whichever step is currently open — for a catch block that can fail any of several. */
 export const ZYRA_TRACE_CURRENT_STEP = "*";
@@ -86,10 +87,19 @@ export class ZyraTurnTraceRecorder {
 
   constructor(private readonly forward?: ZyraOnStage) {}
 
+  /** Whether anyone is watching this turn live — live drafts are only worth reading for them. */
+  get live(): boolean {
+    return Boolean(this.forward);
+  }
+
   /** The callback threaded through the pipeline in place of the raw SSE emitter. */
   readonly onStage: ZyraOnStage = (stage, meta, mode) => {
     try {
       if (this.frozen) return;
+      if (mode === "draft") {
+        this.forward?.(stage, meta, mode);
+        return;
+      }
       if (mode === "update") this.update(stage, meta || {});
       else this.open(stage, meta);
       this.forward?.(stage, meta, mode);

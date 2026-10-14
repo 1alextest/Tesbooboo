@@ -58,6 +58,8 @@ import { SuitesCacheService } from "../cache/suites-cache.service";
 import { TestcasesListCacheService } from "../cache/testcases-list-cache.service";
 import { ProjectOverviewCacheService } from "../cache/project-overview-cache.service";
 import { ZYRA_TRACE_CURRENT_STEP, ZyraTurnTraceRecorder, type ZyraOnStage, type ZyraTurnTrace } from "./zyra-turn-trace";
+import { runWithZyraDraftSink, runWithoutZyraDraftSink, runWithZyraLiveBatch, zyraDraftSink, zyraLiveBatch, zyraLiveDraftFeed, type ZyraDraftSink, type ZyraLiveBatch } from "./zyra-draft-stream";
+import { Subject } from "rxjs";
 
 type Body = Record<string, any>;
 
@@ -374,7 +376,19 @@ type ZyraChatDecision = {
   // plan-batch scenario number the model said it covers, or null. Read only by the plan flow
   // (zyraPlanBatchOutcome) to tell which scenarios of a batch came back without a draft.
   draftScenarios?: Array<number | null>;
+  // A question with clickable answers (see ZyraChatOptions) — persisted by insertZyraAssistantMessage.
+  options?: ZyraChatOptions;
+  // Set by generateZyraChatTestcasesWithAi when its drafts were staged live, as they were written
+  // (createZyraLiveBatch): which review batch holds them, and which of `operations` are already in it.
+  liveStaged?: ZyraLiveStaged;
 };
+
+// Drafts already staged into a review batch while they were being written — applyZyraChatOperations
+// adds only the rest (`skip` = indexes into the decision's operations), into the same batch.
+type ZyraLiveStaged = { reviewRequestId: string; skip: number[]; activity: Body[] };
+
+// Suite lookups shared across one batch's many staging calls (applyZyraChatOperations).
+type ZyraSuiteCache = { byId: Map<string, any>; byName: Map<string, any> };
 
 // Which sources a chat turn resolved, by reference only — re-fetched (project-scoped) by the next
 // turn rather than trusted as stored content. Every lookup a turn makes is keyed on its own message
@@ -403,6 +417,39 @@ type ZyraTurnSources = {
   bugs: NonNullable<ZyraGenerationInput["bugs"]>;
 };
 
+// The router's reading of how many test cases a create asked for. The last two are set only once the
+// user has answered the ticket-scope question (zyraTicketScopeQuestion), and either one stops it being
+// asked again: `ticketScope` turns the create into a plan over exactly those named tickets
+// (startZyraTicketScopedPlan); `scopeDecided` alone is "all the tickets", which the existing paged
+// plan already walks page by page.
+type ZyraRoutedCount = {
+  requestedCount?: unknown;
+  exhaustive?: boolean;
+  ticketScope?: { ticketKeys: string[] | null; perTicket?: number };
+  scopeDecided?: boolean;
+};
+
+// What a ticket-scoped plan pages through (zyraPlanScopedTicketRound): those tickets (null: every
+// synced ticket), each planned against `perTicket` scenarios of its own.
+type ZyraPlanTicketScope = { ticketKeys: string[] | null; perTicket: number };
+
+// One planning round, or several merged (zyraPlanFill). `emptyKeys` — tickets that planned nothing —
+// only a ticket-scoped plan reports.
+type ZyraPlanRound = { scenarios: string[]; cursor: string | null; hasMore: boolean; tickets: number; emptyKeys?: string[] };
+
+// A question Zyra asks with clickable answers, stored on its message (zyra_chat_messages.options).
+// `context` is what acting on an answer needs and stays server-side — zyraPublicOptions strips it.
+type ZyraChatOptions = {
+  // "ticket_group" is no longer written (see zyraTicketSelectionPrompt) but older messages still carry it.
+  kind: "ticket_scope" | "ticket_selection" | "ticket_group";
+  choices: Array<{ id: string; label: string; description?: string; message?: string }>;
+  answeredId?: string | null;
+  context?: Body;
+};
+
+// An answer to a ZyraChatOptions question — the stored question (with its context) and the option picked.
+type ZyraResolvedChoice = { options: ZyraChatOptions; choice: ZyraChatOptions["choices"][number] };
+
 // What continueZyraChatMessage needs to pick a timed-out turn back up without repeating the work
 // that already finished. "router" means the routing call itself never answered — there is nothing
 // yet to skip, so resuming just retries buildZyraChatDecision from the same user message. "generate"
@@ -414,7 +461,7 @@ type ZyraResumeCheckpoint = {
   userMessageId: string;
   message: string;
   routedSuite?: { id?: string; name?: string } | null;
-  routedCount?: { requestedCount?: unknown; exhaustive?: boolean };
+  routedCount?: ZyraRoutedCount;
 };
 
 // Shape of applyZyraChatOperations' result that the reply-reconciliation path (finalizeZyraChatReply,
@@ -432,6 +479,9 @@ type ZyraAppliedOperations = {
   // Archives a confirming message applied immediately (see applyZyraChatOperations' archiveConfirmed),
   // so reconcileZyraReply can state what actually happened instead of the model's "staged" wording.
   archivedNowCount?: number;
+  // Drafts of a live-staged batch the user saved while it was still being generated: they are no
+  // longer in the batch, but they were drafted this turn — counted so the reply doesn't call it partial.
+  liveSavedCount?: number;
 };
 
 // Structurally satisfied by both DatabaseService and a transaction's PoolClient (both expose this
@@ -1346,6 +1396,219 @@ export class LegacyService implements OnModuleInit {
     @Inject(forwardRef(() => CustomFieldsService)) private readonly customFields: CustomFieldsService,
     @Inject(forwardRef(() => CustomTagsService)) private readonly customTags: CustomTagsService
   ) {}
+
+  /*
+   * Live events of background plan batches — the batch's review panel appearing, each draft as it is
+   * staged into it, and the batch finishing — for the chat page's plan stream (LegacyController's
+   * plan/events route). Best-effort and in-process: the page still polls the session, which stays the
+   * source of truth.
+   */
+  readonly zyraPlanEvents = new Subject<{ projectId: string; sessionId: string; event: Body }>();
+
+  /*
+   * The review batch filled while it is generated ("[Zyra] Stream Main Test Case Review UI
+   * Progressively During Generation"). Each finished draft is staged through applyZyraChatOperations —
+   * the same checks, suite filing and storage as a whole batch — into ONE ai_generation_requests row:
+   * the first draft creates it (onRowCreated), every later one is appended under the row lock that
+   * Edit, Discard and Save already take. So the review panel shows exactly what Save saves, while the
+   * rest is still being written. Staging is one draft at a time, in arrival order; a failure to stage
+   * one draft costs only that draft, never the generation. A batch the user closed ("Discard all")
+   * takes nothing more.
+   */
+  private createZyraLiveBatch(params: {
+    projectId: string;
+    userId: string | null;
+    sessionId: string;
+    emit: (event: { reviewRequestId: string; row: Body; staged: number; total: number }) => void;
+    onRowCreated?: (reviewRequestId: string) => Promise<void>;
+  }): ZyraLiveBatch {
+    const { projectId, userId, sessionId } = params;
+    let rowId: string | null = null;
+    let closed = false;
+    let chain: Promise<unknown> = Promise.resolve();
+    const tracked = new Set<Promise<unknown>>();
+    let activity: Body[] = [];
+    const scenarios: number[] = [];
+    let staged = 0;
+    const suiteCache: ZyraSuiteCache = { byId: new Map(), byName: new Map() };
+    const batch: ZyraLiveBatch = {
+      total: 0,
+      stage: (operation, scenario) => {
+        const run = chain.then(async (): Promise<Body | null> => {
+          if (closed) return null;
+          const applied = await this.applyZyraChatOperations(projectId, userId, sessionId, [operation as ZyraChatDecision["operations"][number]], {
+            appendTo: rowId ?? undefined,
+            suiteCache
+          });
+          if (applied.appendClosed) {
+            closed = true;
+            return null;
+          }
+          const row = applied.testcases.find((tc) => typeof tc.draftIndex === "number" && tc.reviewRequestId) ?? null;
+          if (!row || !applied.reviewRequestId) return null;
+          if (!rowId) {
+            rowId = applied.reviewRequestId;
+            await params.onRowCreated?.(rowId).catch((err) => this.logger.warn(`Live batch ${rowId} could not announce itself: ${err instanceof Error ? err.message : err}`));
+          }
+          activity.push(...applied.activity);
+          staged += 1;
+          if (scenario !== null) scenarios.push(scenario);
+          try {
+            params.emit({ reviewRequestId: rowId, row, staged, total: Math.max(batch.total, staged) });
+          } catch {
+            // The live view is best-effort.
+          }
+          return row;
+        });
+        chain = run.catch(() => undefined);
+        return run.catch((err) => {
+          this.logger.warn(`A live draft could not be staged for project ${projectId}: ${err instanceof Error ? err.message : err}`);
+          return null;
+        });
+      },
+      track: (work) => {
+        let entry: Promise<unknown> = Promise.resolve();
+        entry = work.catch(() => undefined).finally(() => tracked.delete(entry));
+        tracked.add(entry);
+      },
+      idle: async () => {
+        while (tracked.size) await Promise.all([...tracked]);
+        await chain;
+      },
+      reviewRequestId: () => rowId,
+      takeActivity: () => {
+        const out = activity;
+        activity = [];
+        return out;
+      },
+      stagedScenarios: () => [...scenarios],
+      stagedCount: () => staged
+    };
+    return batch;
+  }
+
+  /** A batch's staged drafts, as the review panel and a chat message show them. */
+  private async zyraReviewRows(reviewRequestId: string): Promise<{ rows: Body[]; savedCount: number }> {
+    const res = await this.db.query<{ generated_payload: unknown; saved_count: number | null }>(
+      "SELECT generated_payload, saved_count FROM ai_generation_requests WHERE id = $1",
+      [reviewRequestId]
+    );
+    const payload = normalizeJsonArray(res.rows[0]?.generated_payload);
+    const rows = await Promise.all(payload.map(async (entry, index) => ({ ...(await this.normalizeAiTaskDraftEntry(entry as Body)), draftIndex: index, reviewRequestId })));
+    return { rows, savedCount: Number(res.rows[0]?.saved_count || 0) };
+  }
+
+  /*
+   * Appends staged proposals to a live batch's row, under the same row lock Edit, Discard and Save
+   * take, and reports where they start. A batch the user closed takes nothing (`closed`); one that was
+   * emptied by a Save while still generating is reopened for the drafts still coming.
+   */
+  private async appendZyraReviewProposals(projectId: string, sessionId: string, reviewRequestId: string, proposals: Body[]): Promise<{ closed: boolean; base: number }> {
+    const result = await this.db.transaction(async (client) => {
+      const res = await client.query("SELECT task_status, generated_payload, activity_log FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [reviewRequestId, projectId]);
+      const row = res.rows[0];
+      if (!row) return { closed: true, base: 0, reopened: false };
+      const log = normalizeJsonArray(row.activity_log) as Body[];
+      if (row.task_status === "done" && log[log.length - 1]?.title === "Closed task") return { closed: true, base: 0, reopened: false };
+      const existing = normalizeJsonArray(row.generated_payload);
+      const statusBefore = String(row.task_status);
+      if (proposals.length) {
+        const merged = [...existing, ...proposals];
+        await client.query(
+          `UPDATE ai_generation_requests
+           SET generated_payload = $3::jsonb, generated_count = $4, requested_count = GREATEST(requested_count, $4),
+               task_status = 'in_review', updated_at = now()
+           WHERE id = $1 AND project_id = $2`,
+          [reviewRequestId, projectId, JSON.stringify(merged), merged.length]
+        );
+      }
+      return { closed: false, base: existing.length, reopened: proposals.length > 0 && statusBefore !== "in_review" };
+    });
+    if (result.reopened) await this.recordZyraPendingReviewRequest(sessionId, reviewRequestId);
+    return { closed: result.closed, base: result.base };
+  }
+
+  /*
+   * After a watched turn: drafts staged live must stay reachable however the turn ended. A turn whose
+   * reply references the batch needs nothing; a reply that doesn't (it timed out, or failed after
+   * drafting) is pointed at it; a turn that wrote no reply at all gets one holding the batch.
+   */
+  private async keepZyraLiveBatch(turn: { projectId: string; uid: string; sessionId: string }, live: ZyraLiveBatch, message: Body | null): Promise<void> {
+    await live.idle();
+    const reviewRequestId = live.reviewRequestId();
+    if (!reviewRequestId || message?.reviewRequestId === reviewRequestId) return;
+    const { rows } = await this.zyraReviewRows(reviewRequestId);
+    if (message?.id && message.role === "assistant" && !message.reviewRequestId) {
+      await this.db.query(
+        "UPDATE zyra_chat_messages SET review_request_id = $2, testcases = $3::jsonb WHERE id = $1 AND review_request_id IS NULL",
+        [message.id, reviewRequestId, JSON.stringify(rows)]
+      );
+      message.reviewRequestId = reviewRequestId;
+      message.testcases = rows;
+      return;
+    }
+    const ru = zyraReplyLanguage() === "ru";
+    await this.db.query(
+      `INSERT INTO zyra_chat_messages (session_id, project_id, user_id, role, content, reasoning_summary, action_type, status, testcases, activity, review_request_id)
+       VALUES ($1,$2,$3,'assistant',$4,$5,'create','completed',$6::jsonb,'[]'::jsonb,$7)`,
+      [
+        turn.sessionId,
+        turn.projectId,
+        turn.uid,
+        ru ? ZYRA_RU.liveTurnStopped(rows.length) : `Generation stopped before it finished — the ${rows.length} test case(s) written so far are below, ready for review.`,
+        ru ? ZYRA_RU.liveTurnStoppedReasoning : "This turn failed after some test cases were already drafted; they were kept.",
+        JSON.stringify(rows),
+        reviewRequestId
+      ]
+    );
+  }
+
+  /** A draft's identity for matching a live-staged draft to the final parse's copy of it. */
+  private static zyraDraftKey(draft: Body): string {
+    return `${String(draft.title || "").trim().toLowerCase()}\n${String(draft.stepsJson || "")}`;
+  }
+
+  /** A streamed draft normalized exactly as the final parse will normalize it at the same position. */
+  private zyraNormalizeLiveDraft(raw: Body, element: number): Body | null {
+    if (typeof raw.title !== "string" || !raw.title.trim()) return null;
+    try {
+      const padded = [...Array.from({ length: element }, () => ({ title: "-" })), raw];
+      return this.normalizeAiDrafts({ drafts: padded }, element + 1)[element] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /*
+   * One streamed draft into the live batch: normalized and source-checked like the final drafts, then
+   * staged as the same create operation the final mapping builds. A draft that resembles an existing
+   * test case is held back — its piece's similarity revision decides it, and it is staged with the
+   * rest when the piece finishes (only when the project has test case embeddings at all).
+   */
+  private async stageZyraLiveDraft(p: {
+    live: ZyraLiveBatch;
+    record: { keys: string[]; elements: number[] };
+    raw: Body;
+    element: number;
+    size: number;
+    scenarioOffset: number;
+    projectId: string;
+    sourceRefIndex: Map<string, ZyraSourceRef>;
+    createOperation: (draft: Body) => Body;
+  }): Promise<void> {
+    if (p.element >= p.size) return;
+    const draft = this.zyraNormalizeLiveDraft(p.raw, p.element);
+    if (!draft) return;
+    draft.sourceRefs = LegacyService.sanitizeZyraSourceRefs(draft.sourceRefs, p.sourceRefIndex);
+    const { matchesByIndex } = await this.zyraSimilarityFeedbackForDrafts(p.projectId, [draft]);
+    if (matchesByIndex[0]) return;
+    const scenario = typeof draft.scenario === "number" && draft.scenario >= 1 && draft.scenario <= p.size ? draft.scenario + p.scenarioOffset : null;
+    const row = await p.live.stage(p.createOperation(draft), scenario);
+    if (row) {
+      p.record.keys.push(LegacyService.zyraDraftKey(draft));
+      p.record.elements.push(p.element);
+    }
+  }
 
   // --- API tokens (project-scoped machine credentials) -------------------
   // Backs GET/POST/DELETE /api/projects/:id/apikeys. Access is gated by the
@@ -13994,7 +14257,7 @@ export class LegacyService implements OnModuleInit {
                 WHEN status = 'resuming' AND resuming_since < now() - interval '${LegacyService.ZYRA_CLAIM_STALE_MINUTES} minutes' THEN 'timed_out'
                 ELSE status
               END AS status,
-              testcases, activity, created_at, review_request_id, resume_attempt, trace
+              testcases, activity, created_at, review_request_id, resume_attempt, trace, options
        FROM zyra_chat_messages
        WHERE session_id = $1 AND project_id = $2
        ORDER BY created_at ASC`,
@@ -14006,6 +14269,7 @@ export class LegacyService implements OnModuleInit {
         const item = toCamel(row);
         item.testcases = normalizeJsonArray(row.testcases);
         item.activity = normalizeJsonArray(row.activity);
+        item.options = LegacyService.zyraPublicOptions(row.options);
         return item;
       })
     };
@@ -14151,7 +14415,7 @@ export class LegacyService implements OnModuleInit {
     body: Body,
     userMessageStatus: string,
     recorder: ZyraTurnTraceRecorder
-  ): Promise<{ projectId: string; userId: string | null | undefined; uid: string; sessionId: string; message: string; userMessageId: string; userMessageStatus: string; sessionRow: Body; claimToken: string }> {
+  ): Promise<{ projectId: string; userId: string | null | undefined; uid: string; sessionId: string; message: string; userMessageId: string; userMessageStatus: string; sessionRow: Body; claimToken: string; choice: ZyraResolvedChoice | null }> {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     if (!isUuid(sessionId)) throw new NotFoundException({ error: "Zyra chat session not found" });
@@ -14198,6 +14462,9 @@ export class LegacyService implements OnModuleInit {
         "UPDATE zyra_chat_messages SET status = $2 WHERE session_id = $1 AND role = 'user' AND status = $3",
         [sessionId, LegacyService.ZYRA_USER_MESSAGE_FAILED, LegacyService.ZYRA_USER_MESSAGE_PROCESSING]
       );
+      // Settled here, inside the claim, so a clicked option that is stale or already answered is a
+      // real 4xx for the caller and an option can only ever be acted on once.
+      const choice = await this.zyraResolveChoice(projectId, sessionId, body.choice, message);
       recorder.onStage("received");
       // id is returned because it seeds this turn's Langfuse trace id (see startZyraTurn). It is the
       // only stable identifier for the turn: seeding off the message text instead would give two
@@ -14216,11 +14483,146 @@ export class LegacyService implements OnModuleInit {
       recorder.attach((trace) =>
         this.db.query("UPDATE zyra_chat_messages SET trace = $2::jsonb WHERE id = $1", [userMessageId, JSON.stringify(trace)])
       );
-      return { projectId, userId, uid, sessionId, message, userMessageId, userMessageStatus, sessionRow: sessionRes.rows[0], claimToken };
+      return { projectId, userId, uid, sessionId, message, userMessageId, userMessageStatus, sessionRow: sessionRes.rows[0], claimToken, choice };
     } catch (err) {
       await this.releaseZyraSessionClaim(sessionId, claimToken);
       throw err;
     }
+  }
+
+  /*
+   * Which answer, if any, this message gives to the question on the session's latest assistant message
+   * (ZyraChatOptions). A clicked option arrives as `choice: {messageId, optionId}`; a typed one is
+   * matched by its number ("2") or its exact label, and anything else is an ordinary message. The
+   * question is marked answered by the same statement that checks it is still open, so one answer is
+   * ever acted on. A clicked option that is malformed (400), not on the latest message, or already
+   * answered (409) is refused rather than quietly run as a new request.
+   */
+  private async zyraResolveChoice(projectId: string, sessionId: string, rawChoice: unknown, message: string): Promise<ZyraResolvedChoice | null> {
+    let requested: { messageId: string; optionId: string } | null = null;
+    if (rawChoice !== undefined && rawChoice !== null) {
+      const candidate = (typeof rawChoice === "object" ? rawChoice : {}) as Body;
+      const optionId = candidate.optionId;
+      if (!isUuid(String(candidate.messageId || "")) || typeof optionId !== "string" || !optionId || optionId.length > 64) {
+        throw new BadRequestException({ error: "choice must be { messageId, optionId }" });
+      }
+      requested = { messageId: String(candidate.messageId), optionId };
+    }
+    const latestRes = await this.db.query<{ id: string; options: ZyraChatOptions | null }>(
+      "SELECT id, options FROM zyra_chat_messages WHERE session_id = $1 AND project_id = $2 AND role = 'assistant' ORDER BY created_at DESC LIMIT 1",
+      [sessionId, projectId]
+    );
+    const latest = latestRes.rows[0];
+    const choices = normalizeJsonArray(latest?.options?.choices) as ZyraChatOptions["choices"];
+    let choice: ZyraChatOptions["choices"][number] | undefined;
+    if (requested) {
+      if (!latest?.options || latest.id !== requested.messageId) throw new ConflictException({ error: "That question is no longer current — send your request again." });
+      if (latest.options.answeredId) throw new ConflictException({ error: "That question has already been answered." });
+      choice = choices.find((option) => option.id === requested.optionId);
+      if (!choice) throw new BadRequestException({ error: "Unknown option for this question." });
+    } else {
+      if (!latest?.options || latest.options.answeredId) return null;
+      const typed = message.trim().replace(/[.!)\s]+$/, "");
+      choice = /^\d{1,2}$/.test(typed)
+        ? choices[Number(typed) - 1]
+        : choices.find((option) => String(option.label || "").trim().toLowerCase() === typed.toLowerCase());
+      // "Which tickets?" is answered by naming them: any ticket id or range typed while it is open.
+      if (!choice && latest.options.kind === "ticket_selection") {
+        const selection = this.zyraParseTicketSelection(message);
+        if (selection.keys.length || selection.oversizedRange) choice = { id: LegacyService.ZYRA_TYPED_SELECTION, label: message };
+      }
+      if (!choice) return null;
+    }
+    const claimed = await this.db.query<{ options: ZyraChatOptions }>(
+      `UPDATE zyra_chat_messages SET options = jsonb_set(options, '{answeredId}', to_jsonb($2::text))
+       WHERE id = $1 AND options IS NOT NULL AND options->>'answeredId' IS NULL
+       RETURNING options`,
+      [latest.id, choice.id]
+    );
+    if (!claimed.rows[0]) {
+      if (requested) throw new ConflictException({ error: "That question has already been answered." });
+      return null;
+    }
+    return { options: claimed.rows[0].options, choice };
+  }
+
+  /** The choice id a typed ticket list or range answers a "which tickets?" question with — never offered as a button. */
+  private static readonly ZYRA_TYPED_SELECTION = "typed";
+  /** The most tickets one typed range may expand to, so one message can't name thousands. */
+  private static readonly ZYRA_TICKET_RANGE_MAX = 500;
+
+  /*
+   * Acting on an answer. "Generate all tickets in batches" (on either question) re-enters the create
+   * path for the original request with its routing already decided (the `resume` route, which skips
+   * the router) and is not asked about again: named tickets become a ticket-scoped plan, one ticket at
+   * a time; "all the tickets" is the existing paged plan, which walks every synced ticket page by page
+   * and is the affordable way through thousands of them. "Smaller batches" asks which tickets to do
+   * (zyraTicketSelectionPrompt), and the tickets typed in reply run as a ticket-scoped plan of their own.
+   */
+  private async zyraDecisionForChoice(
+    turn: Awaited<ReturnType<LegacyService["beginZyraChatTurn"]>>,
+    answer: ZyraResolvedChoice,
+    onStage?: ZyraOnStage
+  ): Promise<ZyraChatDecision> {
+    const { projectId, uid, sessionId, message, userMessageId } = turn;
+    const context = (answer.options.context || {}) as Body;
+    const { kind } = answer.options;
+    const routedSuite = (context.routedSuite as { id?: string; name?: string } | null) ?? null;
+    if ((kind === "ticket_scope" || kind === "ticket_selection") && answer.choice.id === "all") {
+      const ticketKeys = Array.isArray(context.ticketKeys) ? (context.ticketKeys as unknown[]).map(String) : null;
+      return this.buildZyraChatDecision(projectId, uid, sessionId, String(context.originalMessage || message), userMessageId, {
+        routedSuite,
+        routedCount: ticketKeys
+          ? { exhaustive: true, scopeDecided: true, ticketScope: { ticketKeys, perTicket: Number(context.perTicket) || undefined } }
+          : { exhaustive: true, scopeDecided: true }
+      }, undefined, onStage);
+    }
+    if (kind === "ticket_scope") return this.zyraTicketSelectionPrompt(projectId, context);
+    if (kind === "ticket_selection") {
+      const selection = this.zyraParseTicketSelection(message);
+      if (selection.oversizedRange) return this.zyraTicketSelectionPrompt(projectId, context, { oversizedRange: selection.oversizedRange });
+      const synced = new Set(await this.zyraSyncedTicketKeys(projectId, selection.keys));
+      if (!selection.keys.some((key) => synced.has(key))) return this.zyraTicketSelectionPrompt(projectId, context, { unknown: selection.keys });
+      // Every typed key goes into the plan, synced or not — the plan names the ones it has to skip
+      // (startZyraTicketScopedPlan), so nothing typed is dropped silently.
+      const exhaustive = context.exhaustive === true;
+      const request = zyraReplyLanguage() === "ru"
+        ? ZYRA_RU.selectionRequest(selection.keys.join(", "), exhaustive)
+        : `Generate ${exhaustive ? "all possible test cases" : "test cases"} for ${selection.keys.join(", ")}`;
+      return this.buildZyraChatDecision(projectId, uid, sessionId, request, userMessageId, {
+        routedSuite,
+        routedCount: { exhaustive, scopeDecided: true, ticketScope: { ticketKeys: selection.keys, perTicket: Number(context.perTicket) || undefined } }
+      }, undefined, onStage);
+    }
+    // A ticket group from before groups were replaced by typing: its ready-made request, run like any message.
+    return this.buildZyraChatDecision(projectId, uid, sessionId, String(answer.choice.message || message), userMessageId, undefined, undefined, onStage);
+  }
+
+  /*
+   * The tickets a message names: ids (any provider's "KEY-123") and ranges — "KAN-1 to KAN-20",
+   * "KAN-1..KAN-20", "KAN-1 - KAN-20", or "KAN-1 to 20" — expanded in number order, deduplicated in
+   * the order typed. A range over ZYRA_TICKET_RANGE_MAX is not expanded; it is reported, so the
+   * reply can say so instead of quietly generating for part of it.
+   */
+  private zyraParseTicketSelection(message: string): { keys: string[]; oversizedRange?: { from: string; to: string; size: number } } {
+    const keys: string[] = [];
+    let oversizedRange: { from: string; to: string; size: number } | undefined;
+    const rangeRe = /\b([A-Za-z][A-Za-z0-9]*)-(\d+)\s*(?:\.\.|to|through|thru|–|—|-)\s*(?:([A-Za-z][A-Za-z0-9]*)-)?(\d+)\b/gi;
+    const rest = message.replace(rangeRe, (whole, prefix: string, fromText: string, toPrefix: string | undefined, toText: string) => {
+      // "KAN-1 - OPS-4" is two tickets, not a range.
+      if (toPrefix && toPrefix.toUpperCase() !== prefix.toUpperCase()) return whole;
+      const key = prefix.toUpperCase();
+      const [low, high] = [Number(fromText), Number(toText)].sort((a, b) => a - b);
+      const size = high - low + 1;
+      if (size > LegacyService.ZYRA_TICKET_RANGE_MAX) {
+        oversizedRange = { from: `${key}-${low}`, to: `${key}-${high}`, size };
+        return " ";
+      }
+      for (let n = low; n <= high; n++) keys.push(`${key}-${n}`);
+      return " ";
+    });
+    keys.push(...this.extractJiraIssueKeys(rest));
+    return { keys: [...new Set(keys)], ...(oversizedRange ? { oversizedRange } : {}) };
   }
 
   /** How long a session claim / resume claim survives without a heartbeat before it counts as dead. */
@@ -14293,7 +14695,27 @@ export class LegacyService implements OnModuleInit {
       [turn.sessionId, turn.claimToken]
     );
     try {
-      const result = await this.executeZyraChatTurn(turn, recorder.onStage);
+      // A watched turn stages its drafts into the review batch as the model finishes them, and tells the
+      // page each time (createZyraLiveBatch). An unwatched one stages the batch whole, as before.
+      const live = recorder.live
+        ? this.createZyraLiveBatch({
+            projectId: turn.projectId,
+            userId: turn.uid,
+            sessionId: turn.sessionId,
+            emit: (event) => recorder.onStage("draft", event, "draft"),
+            // Recorded on the turn's own trace (saved and polled), so the batch is found without this
+            // tab's event stream — after a conversation switch, a reload, or from another tab.
+            onRowCreated: async (reviewRequestId) => recorder.onStage("generating", { reviewRequestId }, "update")
+          })
+        : undefined;
+      let result: Awaited<ReturnType<LegacyService["executeZyraChatTurn"]>>;
+      try {
+        result = await runWithZyraLiveBatch(live, () => this.executeZyraChatTurn(turn, recorder.onStage));
+      } catch (err) {
+        if (live) await this.keepZyraLiveBatch(turn, live, null).catch(() => undefined);
+        throw err;
+      }
+      if (live) await this.keepZyraLiveBatch(turn, live, result.message);
       await settleUserMessage("sent", recorder.finish(result.message?.status === "timed_out" ? "timed_out" : undefined));
       return { message: result.message, session: background ? await this.zyraChatSession(turn.projectId, turn.userId, turn.sessionId) : result.session };
     } catch (err) {
@@ -14320,7 +14742,7 @@ export class LegacyService implements OnModuleInit {
       // back up with a plain "continue" — resolved before any other decision-making so it
       // doesn't get treated as a normal analytical question.
       const existingPlan = sessionRow.active_plan as Body | undefined;
-      if (existingPlan?.status === "paused" && this.isZyraResumeIntent(message)) {
+      if (!turn.choice && existingPlan?.status === "paused" && this.isZyraResumeIntent(message)) {
         const resumed = await this.resumeZyraChatPlan(projectId, uid, sessionId);
         const lastMessage = resumed.messages[resumed.messages.length - 1];
         return { message: lastMessage, session: resumed };
@@ -14353,7 +14775,9 @@ export class LegacyService implements OnModuleInit {
         [sessionId]
       );
 
-      let decision = await this.buildZyraChatDecision(projectId, uid, sessionId, message, userMessageId, undefined, undefined, onStage);
+      let decision = turn.choice
+        ? await this.zyraDecisionForChoice(turn, turn.choice, onStage)
+        : await this.buildZyraChatDecision(projectId, uid, sessionId, message, userMessageId, undefined, undefined, onStage);
       // Which trace the FINAL decision actually came from — see the reassignment below.
       // buildZyraChatDecision suffixes its trace id with ":confirm-retry" whenever confirmationHint
       // is set (so the retry's own router span never collides with the first attempt's), but only
@@ -14365,7 +14789,7 @@ export class LegacyService implements OnModuleInit {
       // exact failure shape behind this bug (Basecamp 10231190735 and its recurrences) — the model
       // had a clear confirmation to act on and didn't. This never overrides a model decision that
       // already produced operations; it only re-asks, once, when the model plainly didn't.
-      if (decision.actionType === "answer" && !decision.operations.length && this.zyraIsConfirmation(message)) {
+      if (!turn.choice && decision.actionType === "answer" && !decision.operations.length && this.zyraIsConfirmation(message)) {
         const lastAssistantRes = await this.db.query(
           `SELECT content, action_type, testcases FROM zyra_chat_messages
            WHERE session_id = $1 AND project_id = $2 AND role = 'assistant'
@@ -14399,7 +14823,7 @@ export class LegacyService implements OnModuleInit {
       if (decision.operations.length) onStage?.("staging", { operationCounts: LegacyService.tallyZyraOperationTypes(decision.operations) });
       // A confirmed archive is applied now rather than staged — but only when THIS message really is
       // the user's confirmation (zyraIsArchiveConfirmation), never on the model's word alone.
-      const applied = await this.applyZyraChatOperations(projectId, uid, sessionId, decision.operations, { archiveConfirmed: this.zyraIsArchiveConfirmation(message) });
+      const applied = await this.applyZyraChatOperations(projectId, uid, sessionId, decision.operations, { archiveConfirmed: this.zyraIsArchiveConfirmation(message), live: decision.liveStaged });
       const activity = [
         { actor: "user", title: "Asked Zyra", detail: message.slice(0, 320), createdAt: new Date().toISOString() },
         ...applied.activity
@@ -14485,9 +14909,9 @@ export class LegacyService implements OnModuleInit {
     }
     const assistant = await this.db.query(
       `INSERT INTO zyra_chat_messages
-       (session_id, project_id, user_id, role, content, reasoning_summary, action_type, status, testcases, activity, review_request_id, resume_checkpoint, resume_attempt, context_refs, trace)
-       VALUES ($1,$2,$3,'assistant',$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11::jsonb,$12,$13::jsonb,$14::jsonb)
-       RETURNING id, session_id, project_id, user_id, role, content, reasoning_summary, action_type, status, testcases, activity, created_at, review_request_id, resume_attempt, trace`,
+       (session_id, project_id, user_id, role, content, reasoning_summary, action_type, status, testcases, activity, review_request_id, resume_checkpoint, resume_attempt, context_refs, trace, options)
+       VALUES ($1,$2,$3,'assistant',$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11::jsonb,$12,$13::jsonb,$14::jsonb,$15::jsonb)
+       RETURNING id, session_id, project_id, user_id, role, content, reasoning_summary, action_type, status, testcases, activity, created_at, review_request_id, resume_attempt, trace, options`,
       [
         sessionId,
         projectId,
@@ -14504,12 +14928,14 @@ export class LegacyService implements OnModuleInit {
         // Read back by the next turn in this session (zyraPriorTurnContextRefs) — never returned to
         // the frontend, same as resume_checkpoint.
         decision.contextRefs ? JSON.stringify(decision.contextRefs) : null,
-        trace ? JSON.stringify(trace) : null
+        trace ? JSON.stringify(trace) : null,
+        decision.options ? JSON.stringify(decision.options) : null
       ]
     );
     const item = toCamel(assistant.rows[0]);
     item.testcases = normalizeJsonArray(assistant.rows[0].testcases);
     item.activity = normalizeJsonArray(assistant.rows[0].activity);
+    item.options = LegacyService.zyraPublicOptions(assistant.rows[0].options);
     return item;
   }
 
@@ -14662,7 +15088,7 @@ export class LegacyService implements OnModuleInit {
       // Same two stages sendZyraChatMessage narrates, mirrored here so a resumed turn's backlog has
       // the identical shape as a fresh one — see the "unify both flows" design.
       if (decision.operations.length) stage("staging", { operationCounts: LegacyService.tallyZyraOperationTypes(decision.operations) });
-      const applied = await this.applyZyraChatOperations(projectId, uid, sessionId, decision.operations);
+      const applied = await this.applyZyraChatOperations(projectId, uid, sessionId, decision.operations, { live: decision.liveStaged });
       const activity = [
         { actor: "user", title: "Continued after timeout", detail: resumeMessage.slice(0, 320), createdAt: new Date().toISOString() },
         ...applied.activity
@@ -14924,7 +15350,7 @@ export class LegacyService implements OnModuleInit {
     sessionId: string,
     message: string,
     userMessageId?: string,
-    resume?: { routedSuite: { id?: string; name?: string } | null; routedCount: { requestedCount?: unknown; exhaustive?: boolean } },
+    resume?: { routedSuite: { id?: string; name?: string } | null; routedCount: ZyraRoutedCount },
     confirmationHint?: string,
     onStage?: ZyraOnStage
   ): Promise<ZyraChatDecision> {
@@ -14943,7 +15369,7 @@ export class LegacyService implements OnModuleInit {
     // before the drafting call timed out. Its presence skips the router call entirely — that is the
     // whole point of resuming rather than restarting: the routing decision the user already waited
     // for is not repeated.
-    resume?: { routedSuite: { id?: string; name?: string } | null; routedCount: { requestedCount?: unknown; exhaustive?: boolean } },
+    resume?: { routedSuite: { id?: string; name?: string } | null; routedCount: ZyraRoutedCount },
     // Set only by sendZyraChatMessage's confirmation retry: a single extra call made when a turn
     // routed `answer` with zero operations despite the transcript showing a clear, just-confirmed
     // PROPOSAL or OFFER from the immediately preceding assistant turn (see zyraPendingConfirmation).
@@ -15457,7 +15883,7 @@ export class LegacyService implements OnModuleInit {
     suites: Array<{ id: string; name: string }>;
     conversation: string;
     routedSuite: { id?: string; name?: string } | null;
-    routedCount: { requestedCount?: unknown; exhaustive?: boolean };
+    routedCount: ZyraRoutedCount;
     mentionedJira: Array<{ key: string; summary: string; description: string }>;
     capabilities: ZyraCapabilities;
     bugsForChat?: ZyraGenerationInput["bugs"];
@@ -15487,7 +15913,8 @@ export class LegacyService implements OnModuleInit {
         contextRefs
       });
       onStage?.("generating", { draftedCount: LegacyService.zyraDraftedCount(decision) }, "update");
-      return this.applyStorageGateToGenerated(decision, capabilities);
+      // A question generated nothing, so there is nothing for the storage gate to call suggestions.
+      return decision.options ? decision : this.applyStorageGateToGenerated(decision, capabilities);
     } catch (err) {
       if (this.isZyraTimeoutError(err)) {
         // Recomputed rather than threaded through the call above — chatTestcasePlan is pure and
@@ -15624,7 +16051,7 @@ export class LegacyService implements OnModuleInit {
     message: string,
     userMessageId: string | undefined,
     existingCount: number,
-    resumeState?: { routedSuite: { id?: string; name?: string } | null; routedCount: { requestedCount?: unknown; exhaustive?: boolean } },
+    resumeState?: { routedSuite: { id?: string; name?: string } | null; routedCount: ZyraRoutedCount },
     // The actual budget that call ran under — the generate stage's is now sized to how many
     // testcases were requested (see zyraGenerateTimeoutMs), so it's no longer a single constant
     // this function can look up by stage name alone. Defaults to the router's fixed budget, the
@@ -15684,8 +16111,16 @@ export class LegacyService implements OnModuleInit {
     userId: string | null,
     sessionId: string,
     operations: ZyraChatDecision["operations"],
-    options: { archiveConfirmed?: boolean } = {}
+    // appendTo: stage into this existing review batch instead of a new one (a live batch's drafts).
+    // live: the decision's drafts were staged live already — add only the rest, into that batch, and
+    // return the whole batch as it stands. suiteCache: shared across a live batch's staging calls.
+    options: { archiveConfirmed?: boolean; appendTo?: string; live?: ZyraLiveStaged; suiteCache?: ZyraSuiteCache } = {}
   ) {
+    if (options.live) {
+      const skip = new Set(options.live.skip);
+      operations = operations.filter((_, index) => !skip.has(index));
+    }
+    const appendTo = options.live?.reviewRequestId ?? options.appendTo;
     const testcases: Body[] = [];
     const activity: Body[] = [];
     // create/update/archive no longer write straight to `testcases` — they're staged here and only
@@ -15742,6 +16177,12 @@ export class LegacyService implements OnModuleInit {
         createdAt: new Date().toISOString()
       });
     }
+    // Each create op files into a suite, and a batch's drafts nearly always share one: looked up once
+    // per call rather than once per draft. A batch of 100 used to make 100 identical, sequential round
+    // trips to the hosted database — about 30 s of a batch's staging (zyra_chat_messages.trace,
+    // 2026-10-13). A suite this call created is reported and logged once, as before.
+    const createSuiteById: Map<string, Awaited<ReturnType<LegacyService["getProjectSuite"]>>> = options.suiteCache?.byId ?? new Map();
+    const createSuiteByName: Map<string, Awaited<ReturnType<LegacyService["resolveOrCreateSuiteByName"]>>> = options.suiteCache?.byName ?? new Map();
     for (const op of allowed.slice(0, LegacyService.ZYRA_CHAT_MAX_OPERATIONS)) {
       // F5: this loop is not one transaction — each operation below issues its own independent
       // DB statement(s) (see moveTargetIds' own comment above for why move counts are read back
@@ -15761,7 +16202,8 @@ export class LegacyService implements OnModuleInit {
         // unassigned (suite_id NULL) because this resolution never happened.
         let suiteId: string | null = null;
         if (op.suiteId) {
-          const suite = await this.getProjectSuite(projectId, op.suiteId);
+          if (!createSuiteById.has(op.suiteId)) createSuiteById.set(op.suiteId, await this.getProjectSuite(projectId, op.suiteId));
+          const suite = createSuiteById.get(op.suiteId);
           suiteId = suite ? suite.id : null;
         }
         // No suite named — or one named that no longer resolves — stages in Zyra's own suite rather
@@ -15769,7 +16211,10 @@ export class LegacyService implements OnModuleInit {
         // changes is that it is now identifiable as an unfiled agent draft.
         const suiteName = op.suiteName || (suiteId ? null : LegacyService.ZYRA_DRAFT_SUITE_NAME);
         if (!suiteId && suiteName) {
-          const suite = await this.resolveOrCreateSuiteByName(projectId, suiteName);
+          const known = createSuiteByName.get(suiteName);
+          // Only the lookup that created it says so — every later draft finds it existing.
+          const suite = known ? { ...known, created: false } : await this.resolveOrCreateSuiteByName(projectId, suiteName);
+          if (!known) createSuiteByName.set(suiteName, suite);
           suiteId = suite.id;
           if (suite.created) {
             activity.push({ actor: "agent", title: "Created suite", detail: suite.name, createdAt: new Date().toISOString() });
@@ -16019,7 +16464,21 @@ export class LegacyService implements OnModuleInit {
       }
     }
     let reviewRequestId: string | null = null;
-    if (proposals.length) {
+    let appendClosed = false;
+    if (appendTo) {
+      const appended = await this.appendZyraReviewProposals(projectId, sessionId, appendTo, proposals);
+      if (appended.closed) {
+        appendClosed = true;
+      } else {
+        reviewRequestId = appendTo;
+        for (const tc of testcases) {
+          if (typeof tc.draftIndex === "number" && !tc.reviewRequestId) {
+            tc.draftIndex += appended.base;
+            tc.reviewRequestId = appendTo;
+          }
+        }
+      }
+    } else if (proposals.length) {
       const inserted = await this.db.query(
         `INSERT INTO ai_generation_requests
          (project_id, requested_by, provider, model, user_story, requested_count, generated_count,
@@ -16082,7 +16541,21 @@ export class LegacyService implements OnModuleInit {
       }
     }
     const moveBreakdown = await this.zyraMoveBreakdown(projectId, moveSuites, moveTargetIds);
-    return { testcases, activity, reviewRequestId, moveBreakdown, unresolvedMoveTargetCount, archivedNowCount };
+    if (options.live) {
+      // The whole batch as it stands — the drafts staged live and the ones added just now.
+      const { rows, savedCount } = appendClosed ? { rows: [] as Body[], savedCount: 0 } : await this.zyraReviewRows(options.live.reviewRequestId);
+      return {
+        testcases: rows,
+        activity: [...options.live.activity, ...activity],
+        reviewRequestId: options.live.reviewRequestId,
+        moveBreakdown,
+        unresolvedMoveTargetCount,
+        archivedNowCount,
+        appendClosed,
+        liveSavedCount: savedCount
+      };
+    }
+    return { testcases, activity, reviewRequestId, moveBreakdown, unresolvedMoveTargetCount, archivedNowCount, appendClosed, liveSavedCount: 0 };
   }
 
   // Ground truth for how many testcases actually ended up in each suite a move_to_suite operation
@@ -16307,6 +16780,10 @@ export class LegacyService implements OnModuleInit {
     knowledgeConfidence?: RagRetrievalConfidence;
     // The session's language (zyraSessionLanguage). Undefined generates in English.
     language?: ExportLocale;
+    // Set by the plan flow: the batch's scenarios and the request they came from, so a large batch can
+    // be written in parallel chunks (generateZyraChunkedDrafts). `message` is still zyraBatchMessage
+    // of the whole batch — memory, suite matching and every other use read it as before.
+    planBatch?: { originalMessage: string; scenarios: string[] };
   }): Promise<ZyraChatDecision> {
     // Prefer the Jira context already gathered for this turn (explicit keys plus relevance-matched
     // tickets); fall back to an explicit-key lookup only when a caller supplied none.
@@ -16340,86 +16817,88 @@ export class LegacyService implements OnModuleInit {
       knowledgeConfidence: params.knowledgeConfidence,
       language: params.language
     };
-    const aiResult = await this.generateZyraWithProvider({
+    // The create operation for one generated draft — for the final mapping below and for each draft
+    // staged live while it is written.
+    const createOperation = (draft: Body): Body => {
+      // Linked to the named ticket this draft actually cites. Every draft used to take the FIRST
+      // named key, so a request naming several tickets linked all of its cases to one of them.
+      const citedKey = normalizeJsonArray(draft.sourceRefs)
+        .map((ref) => ref as ZyraSourceRef)
+        .find((ref) => ref?.type === "jira_ticket" && params.jiraIssueKeys.includes(ref.id))?.id;
+      return {
+        type: "create",
+        // A suite the router named but that does not exist yet carries only a name — it is
+        // created on demand when the operation is applied (resolveOrCreateSuiteByName).
+        suiteId: matchedSuite?.id,
+        suiteName: matchedSuite?.id ? undefined : matchedSuite?.name,
+        draft: {
+          ...draft,
+          jiraIssueKey: citedKey || params.jiraIssueKeys[0] || draft.jiraIssueKey || null
+        },
+        reason: "Generated by AI from Zyra chat context."
+      };
+    };
+    // A plan batch bigger than one chunk is written by several calls at once (generateZyraChunkedDrafts):
+    // one call writing ~100 test cases is one long serial stream of output, and was most of a batch's
+    // time. Everything else — a single chat create, a batch that fits one chunk — is one call, as before.
+    const providerArgs = {
       provider: params.provider,
       model: params.model,
       apiKey: params.key.api_key,
       baseUrl: params.key.base_url,
       authHeaderName: params.key.auth_header_name,
       authScheme: params.key.auth_scheme,
-      projectId: params.projectId,
-      input: generationInput
-    });
-    // This one function backs every chat-driven "create" call: the first turn, the first batch of
-    // an exhaustive plan (startZyraChatPlan), and every subsequent background batch
-    // (continueZyraChatPlan's loop) — instrumenting it once covers all three.
-    await this.recordZyraTokenUsage(params.projectId, "chat_generate", params.provider, params.model, aiResult.usage);
-    // The draft-authoring call itself — previously the only model call in the create path with no
-    // trace span at all, despite being the one that actually writes what the user sees. No-op when
-    // params.trace is unset (see its own doc comment above).
-    if (params.trace) {
-      recordGeneration(params.trace, {
-        name: "generate",
-        provider: params.provider,
-        model: params.model,
-        input: { message: params.message, requestedCount: params.requestedCount, testcaseRange: params.testcaseRange, knowledgeCount: params.knowledge.length, jiraCount: jira.length, existingCount: params.existingTestcases.length },
-        output: { draftCount: aiResult.drafts.length, drafts: aiResult.drafts },
-        usage: aiResult.usage
-      });
-    }
-    // Semantic-similarity pass (ZYRA_TICKET_WORKFLOW.md §10's Update signal, wired into the create
-    // path only). Two tiers, checked once against each drafted candidate's own content (nothing to
-    // compare before drafting exists):
-    //   - TESTCASE_SIMILARITY_THRESHOLD (advisory): handed to the model as `feedback` on one
-    //     bounded follow-up call (reusing the already-wired ZyraGenerationInput.feedback channel —
-    //     see zyraDynamicTaskPrompt) so the drafting decision itself decides whether to keep,
-    //     revise, or fold each flagged draft. Never a backend reclassification by itself.
-    //   - TESTCASE_UPDATE_THRESHOLD (redirect): a materially higher bar. A draft that clears it
-    //     has its operation redirected from create to update below (see `updateTargetsByIndex`
-    //     used at the operations/testcases return value) — this IS a backend decision, not left to
-    //     the model, because the review panel needs a concrete target id before the user ever sees
-    //     the row. Still fully staged and user-confirmed like any other update — see
-    //     applyZyraChatOperations' "update" branch, untouched by this change.
-    // `matchesByIndex` stays aligned with the ORIGINAL (pre-revision) drafts array — the revision
-    // call below can change a draft's CONTENT but is asked to keep each flagged draft's scenario
-    // recognizable ("revise to differentiate" or "keep if distinct"), so the same positional index
-    // in the (possibly revised) finalResult.drafts below is treated as the same candidate for
-    // update-redirect purposes. Only fires when at least one draft actually matches at the
-    // advisory tier or above; adds zero extra cost/latency otherwise.
-    let finalResult = aiResult;
-    const { feedback: similarityFeedback, matchesByIndex } = await this.zyraSimilarityFeedbackForDrafts(params.projectId, aiResult.drafts, params.trace?.traceId);
-    if (similarityFeedback) {
-      try {
-        const revised = await this.generateZyraWithProvider({
-          provider: params.provider,
-          model: params.model,
-          apiKey: params.key.api_key,
-          baseUrl: params.key.base_url,
-          authHeaderName: params.key.auth_header_name,
-          authScheme: params.key.auth_scheme,
-          projectId: params.projectId,
-          input: { ...generationInput, feedback: similarityFeedback }
-        });
-        // Same "chat_generate" bucket as the first call — zyra_token_usage.source is a DB-level
-        // CHECK constraint (V87) and this revision pass doesn't warrant a schema change just to
-        // sub-categorize it; the Langfuse trace span below ("generate_similarity_revise") already
-        // gives per-call observability for anyone who needs to tell the two apart.
-        await this.recordZyraTokenUsage(params.projectId, "chat_generate", params.provider, params.model, revised.usage);
-        if (params.trace) {
-          recordGeneration(params.trace, {
-            name: "generate_similarity_revise",
-            provider: params.provider,
-            model: params.model,
-            input: { feedback: similarityFeedback, draftCount: aiResult.drafts.length },
-            output: { draftCount: revised.drafts.length, drafts: revised.drafts },
-            usage: revised.usage
-          });
+      projectId: params.projectId
+    };
+    // A live batch in scope (a watched turn, a background plan batch): each draft is staged into it as
+    // the model finishes it (stageZyraLiveDraft), once per generation piece; what was staged is matched
+    // against the final parse below so nothing is staged twice.
+    const live = zyraLiveBatch();
+    if (live) live.total = Math.max(live.total, live.stagedCount() + params.requestedCount);
+    const liveSourceRefIndex = this.zyraSourceRefIndex({ knowledge: params.knowledge, jira, existingTestcases: params.existingTestcases, bugs });
+    const liveRecords: Array<{ keys: string[]; elements: number[] }> = [];
+    const livePiece = live
+      ? (scenarioOffset: number, size: number): ZyraDraftSink => {
+          const record = { keys: [] as string[], elements: [] as number[] };
+          liveRecords.push(record);
+          return (raw, element) => live.track(this.stageZyraLiveDraft({
+            live, record, raw, element, size, scenarioOffset, projectId: params.projectId, sourceRefIndex: liveSourceRefIndex, createOperation
+          }));
         }
-        finalResult = revised;
-      } catch (err) {
-        // Never blocks the turn — the original, unrevised drafts still ship. Same fail-open
-        // contract as RagRetrievalService itself.
-        this.logger.warn(`Similarity-revision generation call failed for project ${params.projectId}, keeping original drafts: ${err instanceof Error ? err.message : err}`);
+      : undefined;
+    const generated = params.planBatch && params.planBatch.scenarios.length > LegacyService.ZYRA_GENERATION_CHUNK
+      ? await this.generateZyraChunkedDrafts(providerArgs, generationInput, params.planBatch, params.trace, livePiece)
+      : await this.generateZyraDraftsOnce(providerArgs, generationInput, params.trace, livePiece?.(0, params.requestedCount));
+    const { result: finalResult, matchesByIndex } = generated;
+    const pieces = "pieces" in generated ? generated.pieces : [{ finalCount: finalResult.drafts.length, revised: generated.revised }];
+    let liveStaged: ZyraLiveStaged | undefined;
+    if (live) {
+      await live.idle();
+      const liveId = live.reviewRequestId();
+      if (liveId) {
+        // Final drafts already staged live: by identity, or — in a piece the similarity pass revised,
+        // whose content changed — by position, the revision's own alignment.
+        const skip: number[] = [];
+        let start = 0;
+        pieces.forEach((piece, index) => {
+          const record = liveRecords[index];
+          if (record) {
+            if (piece.revised) {
+              for (const element of record.elements) if (element < piece.finalCount) skip.push(start + element);
+            } else {
+              const pool = [...record.keys];
+              for (let i = 0; i < piece.finalCount; i++) {
+                const at = pool.indexOf(LegacyService.zyraDraftKey(finalResult.drafts[start + i]));
+                if (at >= 0) {
+                  pool.splice(at, 1);
+                  skip.push(start + i);
+                }
+              }
+            }
+          }
+          start += piece.finalCount;
+        });
+        liveStaged = { reviewRequestId: liveId, skip, activity: live.takeActivity() };
       }
     }
     // Index -> update target, for drafts whose match cleared the higher redirect bar. Bounds-checked
@@ -16567,27 +17046,170 @@ export class LegacyService implements OnModuleInit {
             reason: `Generated by AI from Zyra chat context; redirected to update — closely matches an existing test case (similarity ${updateTarget.cosineSimilarity.toFixed(2)}).`
           };
         }
-        // Linked to the named ticket this draft actually cites. Every draft used to take the FIRST
-        // named key, so a request naming several tickets linked all of its cases to one of them.
-        const citedKey = normalizeJsonArray(draft.sourceRefs)
-          .map((ref) => ref as ZyraSourceRef)
-          .find((ref) => ref?.type === "jira_ticket" && params.jiraIssueKeys.includes(ref.id))?.id;
-        return {
-          type: "create",
-          // A suite the router named but that does not exist yet carries only a name — it is
-          // created on demand when the operation is applied (resolveOrCreateSuiteByName).
-          suiteId: matchedSuite?.id,
-          suiteName: matchedSuite?.id ? undefined : matchedSuite?.name,
-          draft: {
-            ...draft,
-            jiraIssueKey: citedKey || params.jiraIssueKeys[0] || draft.jiraIssueKey || null
-          },
-          reason: "Generated by AI from Zyra chat context."
-        };
+        return createOperation(draft) as ZyraChatDecision["operations"][number];
       }),
       testcases: finalResult.drafts.map((draft) => this.chatDraftRow(draft, "suggested", "Generated by AI from Zyra chat context.")),
-      draftScenarios: finalResult.drafts.map((draft) => (typeof draft.scenario === "number" ? draft.scenario : null))
+      draftScenarios: finalResult.drafts.map((draft) => (typeof draft.scenario === "number" ? draft.scenario : null)),
+      ...(liveStaged ? { liveStaged } : {})
     };
+  }
+
+  /*
+   * One generation: the drafting call, then the similarity pass and its optional revision call — the
+   * body of generateZyraChatTestcasesWithAi's provider step, moved here unchanged so a chunked plan
+   * batch (generateZyraChunkedDrafts) runs exactly the same steps per chunk.
+   */
+  private async generateZyraDraftsOnce(
+    args: { provider: string; model: string; apiKey: string; baseUrl?: string | null; authHeaderName?: string | null; authScheme?: string | null; projectId: string },
+    generationInput: ZyraGenerationInput,
+    trace?: TurnHandle,
+    // Receives each draft as the model finishes it — set when a live batch is being filled.
+    liveSink?: ZyraDraftSink
+  ): Promise<{ result: ZyraAiResult; matchesByIndex: Array<{ testcaseId: string; cosineSimilarity: number } | null>; revised: boolean }> {
+    const aiResult = liveSink
+      ? await runWithZyraDraftSink(liveSink, () => this.generateZyraWithProvider({ ...args, input: generationInput }))
+      : await this.generateZyraWithProvider({ ...args, input: generationInput });
+    // This one function backs every chat-driven "create" call: the first turn, the first batch of
+    // an exhaustive plan (startZyraChatPlan), and every subsequent background batch
+    // (continueZyraChatPlan's loop) — instrumenting it once covers all three.
+    await this.recordZyraTokenUsage(args.projectId, "chat_generate", args.provider, args.model, aiResult.usage);
+    // The draft-authoring call itself — previously the only model call in the create path with no
+    // trace span at all, despite being the one that actually writes what the user sees. No-op when
+    // trace is unset (see its own doc comment above).
+    if (trace) {
+      recordGeneration(trace, {
+        name: "generate",
+        provider: args.provider,
+        model: args.model,
+        input: { message: generationInput.story, requestedCount: generationInput.requestedCount, testcaseRange: generationInput.testcaseRange, knowledgeCount: generationInput.knowledge.length, jiraCount: generationInput.jira.length, existingCount: generationInput.existingTestcases.length },
+        output: { draftCount: aiResult.drafts.length, drafts: aiResult.drafts },
+        usage: aiResult.usage
+      });
+    }
+    // Semantic-similarity pass (ZYRA_TICKET_WORKFLOW.md §10's Update signal, wired into the create
+    // path only). Two tiers, checked once against each drafted candidate's own content (nothing to
+    // compare before drafting exists):
+    //   - TESTCASE_SIMILARITY_THRESHOLD (advisory): handed to the model as `feedback` on one
+    //     bounded follow-up call (reusing the already-wired ZyraGenerationInput.feedback channel —
+    //     see zyraDynamicTaskPrompt) so the drafting decision itself decides whether to keep,
+    //     revise, or fold each flagged draft. Never a backend reclassification by itself.
+    //   - TESTCASE_UPDATE_THRESHOLD (redirect): a materially higher bar. A draft that clears it
+    //     has its operation redirected from create to update below (see `updateTargetsByIndex`
+    //     used at the operations/testcases return value) — this IS a backend decision, not left to
+    //     the model, because the review panel needs a concrete target id before the user ever sees
+    //     the row. Still fully staged and user-confirmed like any other update — see
+    //     applyZyraChatOperations' "update" branch, untouched by this change.
+    // `matchesByIndex` stays aligned with the ORIGINAL (pre-revision) drafts array — the revision
+    // call below can change a draft's CONTENT but is asked to keep each flagged draft's scenario
+    // recognizable ("revise to differentiate" or "keep if distinct"), so the same positional index
+    // in the (possibly revised) finalResult.drafts below is treated as the same candidate for
+    // update-redirect purposes. Only fires when at least one draft actually matches at the
+    // advisory tier or above; adds zero extra cost/latency otherwise.
+    let finalResult = aiResult;
+    const { feedback: similarityFeedback, matchesByIndex } = await this.zyraSimilarityFeedbackForDrafts(args.projectId, aiResult.drafts, trace?.traceId);
+    if (similarityFeedback) {
+      try {
+        // Never streamed into the live batch: it rewrites drafts the batch already decided about.
+        const revised = await runWithoutZyraDraftSink(() => this.generateZyraWithProvider({ ...args, input: { ...generationInput, feedback: similarityFeedback } }));
+        // Same "chat_generate" bucket as the first call — zyra_token_usage.source is a DB-level
+        // CHECK constraint (V87) and this revision pass doesn't warrant a schema change just to
+        // sub-categorize it; the Langfuse trace span below ("generate_similarity_revise") already
+        // gives per-call observability for anyone who needs to tell the two apart.
+        await this.recordZyraTokenUsage(args.projectId, "chat_generate", args.provider, args.model, revised.usage);
+        if (trace) {
+          recordGeneration(trace, {
+            name: "generate_similarity_revise",
+            provider: args.provider,
+            model: args.model,
+            input: { feedback: similarityFeedback, draftCount: aiResult.drafts.length },
+            output: { draftCount: revised.drafts.length, drafts: revised.drafts },
+            usage: revised.usage
+          });
+        }
+        finalResult = revised;
+      } catch (err) {
+        // Never blocks the turn — the original, unrevised drafts still ship. Same fail-open
+        // contract as RagRetrievalService itself.
+        this.logger.warn(`Similarity-revision generation call failed for project ${args.projectId}, keeping original drafts: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    return { result: finalResult, matchesByIndex, revised: finalResult !== aiResult };
+  }
+
+  /** Most scenarios one generation call writes in a plan batch; a bigger batch is split into parallel calls. */
+  private static readonly ZYRA_GENERATION_CHUNK = 25;
+
+  /*
+   * A plan batch written by several generation calls at once, one per chunk of its scenarios.
+   *
+   * Why: a batch of 100 was one call writing ~30k output tokens as a single stream — about 400 of a
+   * batch's ~470 seconds (zyra_chat_messages.trace, 2026-10-13). Output is what takes the time, and
+   * it does not get faster in one stream; four streams of 25 finish in about a quarter of it.
+   *
+   * What does not change: every chunk gets the same sources, existing coverage and instructions
+   * (only the scenario list differs — the plan already made the scenarios distinct and checked them
+   * against existing test cases), and each chunk runs the same similarity pass and revision
+   * (generateZyraDraftsOnce) — now revising only the chunk a flagged draft is in, not the whole batch.
+   * Drafts come back in scenario order, numbered against the whole batch, so zyraPlanBatchOutcome's
+   * retry accounting is unchanged. A failed chunk fails the batch, exactly as a failed single call did.
+   *
+   * What it costs: each chunk re-sends the prompt's sources, so input tokens grow with the chunk count
+   * (output tokens, the expensive part, are the same); and up to that many calls run concurrently.
+   */
+  private async generateZyraChunkedDrafts(
+    args: { provider: string; model: string; apiKey: string; baseUrl?: string | null; authHeaderName?: string | null; authScheme?: string | null; projectId: string },
+    generationInput: ZyraGenerationInput,
+    planBatch: { originalMessage: string; scenarios: string[] },
+    trace?: TurnHandle,
+    // A live sink for each piece, given the piece's batch-wide scenario offset and size.
+    livePiece?: (scenarioOffset: number, size: number) => ZyraDraftSink
+  ): Promise<{ result: ZyraAiResult; matchesByIndex: Array<{ testcaseId: string; cosineSimilarity: number } | null>; pieces: Array<{ finalCount: number; revised: boolean }> }> {
+    const chunks = LegacyService.zyraGenerationChunks(planBatch.scenarios);
+    const offsets = chunks.map((_, index) => chunks.slice(0, index).reduce((sum, chunk) => sum + chunk.length, 0));
+    // Every piece settles before a failure is reported: a piece still streaming would otherwise go on
+    // staging live drafts after its batch was already counted as failed (and its scenarios re-queued).
+    const settled = await Promise.allSettled(chunks.map((chunk, index) =>
+      this.generateZyraDraftsOnce(
+        args,
+        { ...generationInput, story: this.zyraBatchMessage(planBatch.originalMessage, chunk), requestedCount: chunk.length, testcaseRange: undefined },
+        trace,
+        livePiece?.(offsets[index], chunk.length)
+      )
+    ));
+    const failed = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failed) throw failed.reason;
+    const runs = settled.map((result) => (result as PromiseFulfilledResult<Awaited<ReturnType<LegacyService["generateZyraDraftsOnce"]>>>).value);
+    const drafts: Body[] = [];
+    const matchesByIndex: Array<{ testcaseId: string; cosineSimilarity: number } | null> = [];
+    const usage: ZyraAiUsage = { input: 0, output: 0, total: 0, cached: 0 };
+    let offset = 0;
+    runs.forEach((run, index) => {
+      const size = chunks[index].length;
+      for (const draft of run.result.drafts) {
+        // A chunk numbers its scenarios 1..size; renumber against the whole batch. A number outside
+        // the chunk is dropped, so the batch outcome counts it as unmapped rather than misattributing it.
+        const scenario = typeof draft.scenario === "number" && draft.scenario >= 1 && draft.scenario <= size ? draft.scenario + offset : undefined;
+        const { scenario: _drop, ...rest } = draft;
+        drafts.push(scenario === undefined ? rest : { ...rest, scenario });
+      }
+      // Kept aligned with this chunk's drafts, so a later chunk's matches stay at its own drafts' indexes.
+      for (let i = 0; i < run.result.drafts.length; i++) matchesByIndex.push(run.matchesByIndex[i] ?? null);
+      usage.input += run.result.usage.input;
+      usage.output += run.result.usage.output;
+      usage.total += run.result.usage.total;
+      usage.cached += run.result.usage.cached || 0;
+      offset += size;
+    });
+    return { result: { drafts, usage }, matchesByIndex, pieces: runs.map((run) => ({ finalCount: run.result.drafts.length, revised: run.revised })) };
+  }
+
+  /** Splits a batch's scenarios into the fewest even chunks of at most ZYRA_GENERATION_CHUNK, in order. */
+  private static zyraGenerationChunks(scenarios: string[]): string[][] {
+    const count = Math.ceil(scenarios.length / LegacyService.ZYRA_GENERATION_CHUNK);
+    const size = Math.ceil(scenarios.length / count);
+    const chunks: string[][] = [];
+    for (let i = 0; i < scenarios.length; i += size) chunks.push(scenarios.slice(i, i + size));
+    return chunks;
   }
 
   // Per-draft semantic similarity check for generateZyraChatTestcasesWithAi's create path only.
@@ -16774,6 +17396,20 @@ export class LegacyService implements OnModuleInit {
   private static readonly ZYRA_PLAN_MAX_SCENARIOS = 100;
   // Tickets handed to the planner per round of a paged plan.
   private static readonly ZYRA_PLAN_TICKET_PAGE = 25;
+  // A ticket-scoped round plans one ticket, so it can read far more of it than a 25-ticket page can.
+  private static readonly ZYRA_SCOPED_TICKET_CHARS = 4000;
+
+  /** A plan's ticket scope, when it is a ticket-scoped plan (startZyraTicketScopedPlan). */
+  private static zyraPlanTicketScopeOf(plan: Body): ZyraPlanTicketScope | null {
+    const scope = plan.ticketScope as Body | undefined;
+    if (!scope || typeof scope !== "object") return null;
+    return { ticketKeys: Array.isArray(scope.ticketKeys) ? (scope.ticketKeys as unknown[]).map(String) : null, perTicket: Math.max(1, Number(scope.perTicket) || 1) };
+  }
+
+  /** The tickets a ticket-scoped batch's scenarios belong to — the "[KEY]" zyraPlanScopedTicketRound puts on each. */
+  private static zyraBatchTicketKeys(batch: string[]): string[] {
+    return [...new Set(batch.map((scenario) => /^\[([A-Za-z][A-Za-z0-9]*-\d+)\]/.exec(scenario)?.[1]?.toUpperCase()).filter((key): key is string => Boolean(key)))];
+  }
   // Planner rounds one fill makes before saving its cursor, and the first (inline) fill's bound.
   private static readonly ZYRA_PLAN_FILL_ROUNDS = 4;
   // A plan below this share of ZYRA_PLAN_MAX_SCENARIOS gets one top-up planning call (planZyraChatScenarios).
@@ -16910,7 +17546,9 @@ export class LegacyService implements OnModuleInit {
     key: Body;
     message: string;
     cursor: string | null;
-  }): Promise<{ scenarios: string[]; cursor: string | null; hasMore: boolean; tickets: number }> {
+    scope?: ZyraPlanTicketScope;
+  }): Promise<ZyraPlanRound> {
+    if (params.scope) return this.zyraPlanScopedTicketRound({ ...params, scope: params.scope });
     const size = LegacyService.ZYRA_PLAN_TICKET_PAGE;
     const res = await this.db.query<{ id: string; title: string; content_text: string | null }>(
       `SELECT id, title, content_text
@@ -16938,6 +17576,50 @@ export class LegacyService implements OnModuleInit {
     return { scenarios, cursor: res.rows[res.rows.length - 1].id, hasMore: res.rows.length === size, tickets: res.rows.length };
   }
 
+  /*
+   * One round of a ticket-scoped plan (the user chose "Generate all tickets in batches" — see
+   * zyraTicketScopeQuestion): ONE ticket, planned against its own budget (scope.perTicket) instead of
+   * sharing a planner call's ZYRA_PLAN_MAX_SCENARIOS with every other ticket. Each scenario is labelled
+   * "[KEY] …", which is how a batch later reads exactly its own tickets (zyraBatchTicketKeys) and how a
+   * ticket that planned nothing is named at the end (`emptyKeys`). It reads one ticket ahead, so the
+   * round that plans the last ticket already knows it is the last — the plan never needs an empty extra
+   * round (and an empty extra "finished" message) to find that out.
+   */
+  private async zyraPlanScopedTicketRound(params: {
+    projectId: string;
+    provider: string;
+    model: string;
+    key: Body;
+    message: string;
+    cursor: string | null;
+    scope: ZyraPlanTicketScope;
+  }): Promise<ZyraPlanRound> {
+    const res = await this.db.query<{ id: string; title: string; content_text: string | null; ticket_key: string }>(
+      `SELECT id, title, content_text, ticket_key FROM (${LegacyService.ZYRA_TICKET_DOCS_SQL}) t
+       WHERE ($3::uuid IS NULL OR id > $3::uuid)
+       ORDER BY id
+       LIMIT 2`,
+      [params.projectId, params.scope.ticketKeys, params.cursor]
+    );
+    const row = res.rows[0];
+    if (!row) return { scenarios: [], cursor: params.cursor, hasMore: false, tickets: 0, emptyKeys: [] };
+    const key = String(row.ticket_key);
+    const existingTestcases = await this.existingTestcaseSnapshot(params.projectId, row.title, "");
+    const planned = await this.planZyraChatScenarios({
+      projectId: params.projectId,
+      provider: params.provider,
+      model: params.model,
+      key: params.key,
+      message: `${params.message}
+
+Plan scenarios for ${key} only — every other ticket in this request is planned separately.`,
+      knowledge: [{ title: row.title, content: String(row.content_text || "").slice(0, LegacyService.ZYRA_SCOPED_TICKET_CHARS) }],
+      existingTestcases,
+      maxScenarios: params.scope.perTicket
+    });
+    return { scenarios: planned.map((scenario) => `[${key}] ${scenario}`), cursor: row.id, hasMore: res.rows.length > 1, tickets: 1, emptyKeys: planned.length ? [] : [key] };
+  }
+
   // Plans ticket pages onto `scenarios` until it holds `target` of them or the tickets run out.
   // `maxRounds` bounds one call (a page whose scenarios all exist already adds none); the caller
   // saves the returned cursor and calls again, so progress is kept either way.
@@ -16951,18 +17633,21 @@ export class LegacyService implements OnModuleInit {
     cursor: string | null;
     target: number;
     maxRounds: number;
-  }): Promise<{ scenarios: string[]; cursor: string | null; hasMore: boolean; tickets: number }> {
+    scope?: ZyraPlanTicketScope;
+  }): Promise<ZyraPlanRound> {
     let { scenarios, cursor } = params;
     let hasMore = true;
     let tickets = 0;
+    const emptyKeys: string[] = [];
     for (let round = 0; round < params.maxRounds && hasMore && scenarios.length < params.target; round++) {
-      const next = await this.zyraPlanTicketRound({ projectId: params.projectId, provider: params.provider, model: params.model, key: params.key, message: params.message, cursor });
+      const next = await this.zyraPlanTicketRound({ projectId: params.projectId, provider: params.provider, model: params.model, key: params.key, message: params.message, cursor, ...(params.scope ? { scope: params.scope } : {}) });
       scenarios = LegacyService.mergeZyraScenarios(scenarios, next.scenarios, Number.MAX_SAFE_INTEGER);
       cursor = next.cursor;
       hasMore = next.hasMore;
       tickets += next.tickets;
+      emptyKeys.push(...(next.emptyKeys ?? []));
     }
-    return { scenarios, cursor, hasMore, tickets };
+    return { scenarios, cursor, hasMore, tickets, ...(params.scope ? { emptyKeys } : {}) };
   }
 
   // A request that is about the project's tickets as a whole, not one feature or one named ticket.
@@ -16983,7 +17668,8 @@ export class LegacyService implements OnModuleInit {
     recorder.onStage("plan:tickets", { fromScenario: Math.min(doneCount + 1, Number(plan.totalCount || 0)), totalCount: Number(plan.totalCount || 0) });
     try {
       const capabilities = await this.zyraProjectCapabilities(projectId);
-      let filled: { scenarios: string[]; cursor: string | null; hasMore: boolean } = { scenarios: queue, cursor, hasMore: false };
+      const scope = LegacyService.zyraPlanTicketScopeOf(plan);
+      let filled: ZyraPlanRound = { scenarios: queue, cursor, hasMore: false, tickets: 0 };
       // Knowledge-base access turned off mid-plan: the tickets can't be read, so what is queued is what is left.
       if (capabilities.knowledgeBase) {
         const allocation = await this.zyraAiAllocation(projectId);
@@ -16998,7 +17684,8 @@ export class LegacyService implements OnModuleInit {
           scenarios: queue,
           cursor,
           target: batchSize,
-          maxRounds: LegacyService.ZYRA_PLAN_FILL_ROUNDS
+          maxRounds: LegacyService.ZYRA_PLAN_FILL_ROUNDS,
+          ...(scope ? { scope } : {})
         });
       }
       return await this.zyraPlanTransition(sessionId, planId, doneCount, async (client, current) => {
@@ -17009,7 +17696,15 @@ export class LegacyService implements OnModuleInit {
             remainingScenarios: filled.scenarios,
             totalCount: Number(current.totalCount || 0) + (filled.scenarios.length - queue.length),
             ticketCursor: filled.cursor,
-            ticketsHasMore: filled.hasMore
+            ticketsHasMore: filled.hasMore,
+            // A ticket-scoped plan also counts tickets, and remembers each one that planned nothing.
+            ...(scope ? {
+              ticketsDone: Number(current.ticketsDone || 0) + filled.tickets,
+              unprocessedTickets: [
+                ...normalizeJsonArray(current.unprocessedTickets),
+                ...(filled.emptyKeys ?? []).map((key) => ({ key, reason: "no_scenarios" }))
+              ]
+            } : LegacyService.zyraPlanTracksTickets(current) ? { ticketsDone: Number(current.ticketsDone || 0) + filled.tickets } : {})
           })]
         );
       });
@@ -17061,12 +17756,17 @@ export class LegacyService implements OnModuleInit {
     language?: ExportLocale;
     // The project's "Test cases per task" range: sets how many test cases each batch holds.
     projectTestcaseRange?: string;
+    // Set once the user chose "Generate all tickets in batches" — see startZyraTicketScopedPlan.
+    ticketScope?: { ticketKeys: string[] | null; perTicket?: number };
   }): Promise<ZyraChatDecision> {
     const batchSize = LegacyService.zyraBatchSize(String(params.projectTestcaseRange || "30-50"));
+    if (params.ticketScope) return this.startZyraTicketScopedPlan(params, params.ticketScope, batchSize);
     let scenarios: string[] = [];
     // Set when the plan walks the project's tickets page by page (zyraPlanTicketRound) instead of
     // planning once from what the search matched.
     let paging: { cursor: string | null; hasMore: boolean } | null = null;
+    // A paged plan's ticket progress: documents planned so far out of all of them (zyraTicketDocumentCount).
+    let pagedTickets: { done: number; total: number } | null = null;
     try {
       // Paged only for a request about the tickets as a whole: nothing named outright, no confident
       // search match. A named ticket or folder, or one feature, plans from what it matched.
@@ -17092,6 +17792,7 @@ export class LegacyService implements OnModuleInit {
         if (filled.tickets) {
           scenarios = filled.scenarios;
           paging = { cursor: filled.cursor, hasMore: filled.hasMore };
+          pagedTickets = { done: filled.tickets, total: await this.zyraTicketDocumentCount(params.projectId) };
         }
       }
       if (!paging) {
@@ -17147,6 +17848,7 @@ export class LegacyService implements OnModuleInit {
       model: params.model,
       key: params.key,
       message: this.zyraBatchMessage(params.message, firstBatch),
+      planBatch: { originalMessage: params.message, scenarios: firstBatch },
       knowledge: params.knowledge,
       existingTestcases: params.existingTestcases,
       jiraIssueKeys: params.jiraIssueKeys,
@@ -17182,6 +17884,9 @@ export class LegacyService implements OnModuleInit {
         batchSize,
         // Only a paged plan has these: where the next ticket page starts, and whether there is one.
         ...(paging ? { ticketCursor: paging.cursor, ticketsHasMore: paging.hasMore } : {}),
+        // Ticket progress for the batch messages (zyraTicketPlanSummary) — "all the tickets" is no
+        // longer reported only in scenarios.
+        ...(pagedTickets ? { ticketsDone: pagedTickets.done, ticketsSynced: pagedTickets.total, ticketsTotal: pagedTickets.total } : {}),
         doneCount: firstBatch.length,
         totalCount: scenarios.length,
         // Scenarios that have a test case — what progress shows (see zyraPlanBatchReply). doneCount
@@ -17192,6 +17897,7 @@ export class LegacyService implements OnModuleInit {
       })]
     );
     void this.continueZyraChatPlan(params.projectId, params.userId, params.sessionId, planId).catch(() => undefined);
+    const pagedProgress = pagedTickets ? LegacyService.zyraTicketPlanSummary({ ticketsDone: pagedTickets.done, ticketsSynced: pagedTickets.total }, false) : "";
 
     if (zyraReplyLanguage() === "ru") {
       const intro = first.requeue.length
@@ -17199,7 +17905,7 @@ export class LegacyService implements OnModuleInit {
         : first.unmapped
           ? ZYRA_RU.planFirstIntroUnmapped(decision.testcases.length, firstBatch.length, first.unmapped)
           : ZYRA_RU.planFirstIntro(firstBatch.length);
-      return { ...decision, reply: ZYRA_RU.planStarted(scenarios.length, intro, remaining.length, decision.reply) + (paging?.hasMore ? ZYRA_RU.planMorePagedTickets : "") };
+      return { ...decision, reply: ZYRA_RU.planStarted(scenarios.length, intro, remaining.length, decision.reply) + (paging?.hasMore ? ZYRA_RU.planMorePagedTickets : "") + pagedProgress };
     }
     const firstIntro = first.requeue.length
       ? `Here are ${decision.testcases.length} test case(s) for the first ${firstBatch.length} — ${first.requeue.length} scenario(s) came back without a test case and will be retried in a later batch.`
@@ -17208,8 +17914,188 @@ export class LegacyService implements OnModuleInit {
         : `Here are the first ${firstBatch.length}.`;
     return {
       ...decision,
-      reply: `I identified ${scenarios.length} distinct scenarios to cover${paging?.hasMore ? " from the first tickets, and I'll plan the rest of the tickets as I go" : ""}. ${firstIntro} I'll keep generating the rest (${remaining.length} more${paging?.hasMore ? " so far" : ""}) and post them here as they're ready; feel free to review these in the meantime.\n\n${decision.reply}`
+      reply: `I identified ${scenarios.length} distinct scenarios to cover${paging?.hasMore ? " from the first tickets, and I'll plan the rest of the tickets as I go" : ""}. ${firstIntro} I'll keep generating the rest (${remaining.length} more${paging?.hasMore ? " so far" : ""}) and post them here as they're ready; feel free to review these in the meantime.\n\n${decision.reply}${pagedProgress}`
     };
+  }
+
+  /*
+   * The plan behind "Generate all tickets in batches": every selected ticket (or every synced ticket,
+   * for "all the tickets"), planned one ticket per round against its own budget and generated in
+   * batches of the project's size. Differs from the paged plan above in what it promises — each ticket
+   * is accounted for: one that isn't synced is named up front, one that plans nothing is recorded, and
+   * the last message says how many tickets got test cases and which did not (zyraTicketPlanSummary).
+   *
+   * The first fill keeps planning until it has something to generate or the tickets run out, so a run
+   * of already-covered tickets at the front never reads as "nothing to do". Each round advances the
+   * cursor, so that loop ends.
+   */
+  private async startZyraTicketScopedPlan(
+    params: Parameters<LegacyService["startZyraChatPlan"]>[0],
+    ticketScope: { ticketKeys: string[] | null; perTicket?: number },
+    batchSize: number
+  ): Promise<ZyraChatDecision> {
+    const ru = zyraReplyLanguage() === "ru";
+    const perTicket = Math.max(1, Number(ticketScope.perTicket) || LegacyService.zyraBatchSize(String(params.projectTestcaseRange || "30-50")));
+    const scope: ZyraPlanTicketScope = { ticketKeys: ticketScope.ticketKeys, perTicket };
+    const synced = await this.zyraSyncedTicketKeys(params.projectId, scope.ticketKeys);
+    const missing = scope.ticketKeys ? scope.ticketKeys.filter((key) => !synced.includes(key)) : [];
+    const ticketsTotal = scope.ticketKeys ? scope.ticketKeys.length : synced.length;
+    const answer = (reply: string): ZyraChatDecision => ({
+      reply,
+      reasoningSummary: ru ? ZYRA_RU.ticketScopedReasoning : "Ticket-by-ticket batched generation.",
+      actionType: "answer",
+      operations: [],
+      testcases: []
+    });
+    if (!synced.length) {
+      return answer(ru
+        ? ZYRA_RU.ticketsNoneSynced(ticketsTotal)
+        : `None of the ${ticketsTotal} selected ticket(s) is synced to Tesbo yet, so there is nothing to generate from. Sync them and ask again.`);
+    }
+
+    let filled: ZyraPlanRound = { scenarios: [], cursor: null, hasMore: true, tickets: 0, emptyKeys: [] };
+    try {
+      while (filled.hasMore && !filled.scenarios.length) {
+        const next = await this.zyraPlanFill({
+          projectId: params.projectId,
+          provider: params.provider,
+          model: params.model,
+          key: params.key,
+          message: params.message,
+          scenarios: [],
+          cursor: filled.cursor,
+          target: batchSize,
+          maxRounds: LegacyService.ZYRA_PLAN_FILL_ROUNDS,
+          scope
+        });
+        filled = { ...next, tickets: filled.tickets + next.tickets, emptyKeys: [...(filled.emptyKeys ?? []), ...(next.emptyKeys ?? [])] };
+      }
+    } catch (err) {
+      const { cause } = LegacyService.zyraFailureCause(this.extractAiErrorMessage(err));
+      return answer(ru ? ZYRA_RU.ticketsPlanFailed(cause) : `I couldn't start planning the tickets (${cause}). Nothing was generated — ask again to retry.`);
+    }
+
+    // Everything the ticket lines report from; saved into the plan below when there is more to do.
+    const ticketState = {
+      ticketScope: scope,
+      ticketsTotal,
+      ticketsSynced: synced.length,
+      ticketsDone: filled.tickets,
+      unprocessedTickets: [
+        ...missing.map((key) => ({ key, reason: "not_synced" })),
+        ...(filled.emptyKeys ?? []).map((key) => ({ key, reason: "no_scenarios" }))
+      ]
+    };
+    const skippedNote = missing.length
+      ? (ru ? ZYRA_RU.ticketsSkippedUnsynced(missing.length, missing.join(", ")) : `\n${missing.length} ticket(s) aren't synced to Tesbo and will be skipped: ${missing.join(", ")}.`)
+      : "";
+    if (!filled.scenarios.length) {
+      return answer((ru ? ZYRA_RU.ticketsNothingNew(ticketsTotal) : `I went through all ${ticketsTotal} ticket(s), but none had new scenarios to cover — the existing test cases already cover them.`) + LegacyService.zyraTicketPlanSummary(ticketState, true));
+    }
+
+    const firstBatch = filled.scenarios.slice(0, batchSize);
+    const capabilities = await this.zyraProjectCapabilities(params.projectId);
+    const decision = await this.generateZyraScopedBatch({
+      projectId: params.projectId,
+      userId: params.userId,
+      provider: params.provider,
+      model: params.model,
+      key: params.key,
+      originalMessage: params.message,
+      batch: firstBatch,
+      jiraIssueKeys: params.jiraIssueKeys,
+      capabilities,
+      routedSuite: params.routedSuite ?? null,
+      language: params.language,
+      trace: params.trace
+    });
+    const first = LegacyService.zyraPlanBatchOutcome(firstBatch, decision.draftScenarios ?? [], []);
+    const remaining = [...filled.scenarios.slice(batchSize), ...first.requeue];
+    const done = !remaining.length && !filled.hasMore;
+    const firstIntro = first.requeue.length
+      ? (ru ? ZYRA_RU.planFirstIntroRequeued(decision.testcases.length, firstBatch.length, first.requeue.length) : `Here are ${decision.testcases.length} test case(s) for the first ${firstBatch.length} scenarios — ${first.requeue.length} came back without a test case and will be retried in a later batch.`)
+      : first.unmapped
+        ? (ru ? ZYRA_RU.planFirstIntroUnmapped(decision.testcases.length, firstBatch.length, first.unmapped) : `Here are ${decision.testcases.length} test case(s) for the first ${firstBatch.length} scenarios — ${first.unmapped} of them did not produce a test case.`)
+        : (ru ? ZYRA_RU.planFirstIntro(firstBatch.length) : `Here are the first ${firstBatch.length}.`);
+    const lead = ru
+      ? ZYRA_RU.ticketScopedStarted(ticketsTotal, batchSize, firstIntro, decision.reply)
+      : `I'm generating test cases for ${ticketsTotal} ticket(s) one ticket at a time, in batches of up to ${batchSize}. ${firstIntro}${done ? "" : " I'll post the rest here as they're ready; feel free to review these in the meantime."}\n\n${decision.reply}`;
+    const reply = `${lead}${skippedNote}${LegacyService.zyraTicketPlanSummary(ticketState, done)}`;
+    if (done) return { ...decision, reply };
+
+    const planId = randomUUID();
+    await this.db.query(
+      "UPDATE zyra_chat_sessions SET active_plan = $2::jsonb, updated_at = now() WHERE id = $1",
+      [params.sessionId, JSON.stringify({
+        planId,
+        status: "running",
+        originalMessage: params.message,
+        jiraIssueKeys: params.jiraIssueKeys,
+        // Not carried: the starting turn's sources are the first tickets the message named, and each
+        // batch reads its own tickets instead (generateZyraScopedBatch).
+        contextRefs: null,
+        routedSuite: params.routedSuite || null,
+        remainingScenarios: remaining,
+        batchSize,
+        ticketCursor: filled.cursor,
+        ticketsHasMore: filled.hasMore,
+        doneCount: firstBatch.length,
+        totalCount: filled.scenarios.length,
+        coveredCount: first.covered,
+        retriedScenarios: first.requeue,
+        ...ticketState
+      })]
+    );
+    void this.continueZyraChatPlan(params.projectId, params.userId, params.sessionId, planId).catch(() => undefined);
+    return { ...decision, reply };
+  }
+
+  /*
+   * One batch of a ticket-scoped plan: sources read for the batch's own tickets (zyraBatchTicketKeys)
+   * rather than for the original message, which can name more tickets than any one lookup keeps
+   * (ZYRA_NAMED_TICKET_LIMIT) and would pad every batch with tickets it isn't about. Existing coverage
+   * is re-read here too, so a batch sees what the batches before it staged.
+   */
+  private async generateZyraScopedBatch(params: {
+    projectId: string;
+    userId: string | null;
+    provider: string;
+    model: string;
+    key: Body;
+    originalMessage: string;
+    batch: string[];
+    jiraIssueKeys: string[];
+    capabilities: ZyraCapabilities;
+    routedSuite: { id?: string; name?: string } | null;
+    language?: ExportLocale;
+    trace?: TurnHandle;
+    onContext?: (context: Awaited<ReturnType<LegacyService["zyraGenerationContext"]>>) => void;
+  }): Promise<ZyraChatDecision> {
+    const batchKeys = LegacyService.zyraBatchTicketKeys(params.batch);
+    const batchJiraKeys = params.jiraIssueKeys.filter((key) => batchKeys.includes(key));
+    const context = await this.zyraGenerationContext(params.projectId, `${batchKeys.join(" ")}\n${params.batch.join("\n")}`, batchJiraKeys, params.capabilities, null);
+    params.onContext?.(context);
+    const batchRequest = `${params.originalMessage}\n\nThis batch covers ${batchKeys.join(", ")}.`;
+    return this.generateZyraChatTestcasesWithAi({
+      projectId: params.projectId,
+      userId: params.userId,
+      provider: params.provider,
+      model: params.model,
+      key: params.key,
+      message: this.zyraBatchMessage(batchRequest, params.batch),
+      planBatch: { originalMessage: batchRequest, scenarios: params.batch },
+      knowledge: context.knowledge,
+      existingTestcases: context.existingTestcases,
+      jiraIssueKeys: batchJiraKeys,
+      jira: context.jira,
+      knowledgeConfidence: context.knowledgeConfidence,
+      bugs: context.bugs,
+      requestedCount: params.batch.length,
+      suites: context.suites,
+      routedSuite: params.routedSuite,
+      trace: params.trace,
+      language: params.language
+    });
   }
 
   /*
@@ -17231,12 +18117,28 @@ export class LegacyService implements OnModuleInit {
   // proposed drafts into. The frontend only renders proposed rows inside a review panel addressed by
   // the message's review_request_id — omitting it (as every batch after the first once did) left
   // "N test cases drafted for review" with nothing under it. Status-only messages pass null.
-  private async postZyraPlanMessage(client: ZyraQueryClient, projectId: string, sessionId: string, userId: string | null, reply: string, testcases: Body[], activity: Body[], actionType: "create" | "answer" = "answer", trace: ZyraTurnTrace | null = null, reviewRequestId: string | null = null): Promise<void> {
-    await client.query(
+  // `status` "generating": a batch's message posted when its first draft is staged, so its review panel
+  // fills while the rest is written — finished by finishZyraPlanMessage.
+  private async postZyraPlanMessage(client: ZyraQueryClient, projectId: string, sessionId: string, userId: string | null, reply: string, testcases: Body[], activity: Body[], actionType: "create" | "answer" = "answer", trace: ZyraTurnTrace | null = null, reviewRequestId: string | null = null, status: "completed" | "generating" = "completed"): Promise<string | null> {
+    const inserted = await client.query(
       `INSERT INTO zyra_chat_messages
        (session_id, project_id, user_id, role, content, reasoning_summary, action_type, status, testcases, activity, trace, review_request_id)
-       VALUES ($1,$2,$3,'assistant',$4,$5,$6,'completed',$7::jsonb,$8::jsonb,$9::jsonb,$10)`,
-      [sessionId, projectId, userId, reply, zyraReplyLanguage() === "ru" ? ZYRA_RU.planMessageReasoning : "Continuing a batched 'all possible cases' generation plan.", actionType, JSON.stringify(testcases), JSON.stringify(activity), trace ? JSON.stringify(trace) : null, reviewRequestId]
+       VALUES ($1,$2,$3,'assistant',$4,$5,$6,$11,$7::jsonb,$8::jsonb,$9::jsonb,$10)
+       RETURNING id`,
+      [sessionId, projectId, userId, reply, zyraReplyLanguage() === "ru" ? ZYRA_RU.planMessageReasoning : "Continuing a batched 'all possible cases' generation plan.", actionType, JSON.stringify(testcases), JSON.stringify(activity), trace ? JSON.stringify(trace) : null, reviewRequestId, status]
+    );
+    await client.query("UPDATE zyra_chat_sessions SET updated_at = now() WHERE id = $1", [sessionId]);
+    return inserted.rows[0]?.id ? String(inserted.rows[0].id) : null;
+  }
+
+  /** Completes a batch message posted while generating: the batch's final reply, rows and trace. */
+  private async finishZyraPlanMessage(client: ZyraQueryClient, sessionId: string, messageId: string, reply: string, testcases: Body[], activity: Body[], actionType: "create" | "answer", trace: ZyraTurnTrace | null, reviewRequestId: string | null): Promise<void> {
+    await client.query(
+      `UPDATE zyra_chat_messages
+       SET content = $2, action_type = $3, status = 'completed', testcases = $4::jsonb, activity = $5::jsonb, trace = $6::jsonb,
+           review_request_id = COALESCE($7, review_request_id)
+       WHERE id = $1`,
+      [messageId, reply, actionType, JSON.stringify(testcases), JSON.stringify(activity), trace ? JSON.stringify(trace) : null, reviewRequestId]
     );
     await client.query("UPDATE zyra_chat_sessions SET updated_at = now() WHERE id = $1", [sessionId]);
   }
@@ -17357,8 +18259,14 @@ export class LegacyService implements OnModuleInit {
       const doneCount = Number(plan.doneCount || 0);
       const totalCount = Number(plan.totalCount || 0);
       const retried = normalizeJsonArray(plan.retriedScenarios).map(String);
+      const ticketScope = LegacyService.zyraPlanTicketScopeOf(plan);
       if (!batch.length) {
-        await this.zyraPlanTransition(sessionId, planId, doneCount, async (client) => {
+        await this.zyraPlanTransition(sessionId, planId, doneCount, async (client, current) => {
+          // A ticket-scoped plan whose last tickets planned nothing still owes its ticket summary — it
+          // must never just stop.
+          if (ticketScope || LegacyService.zyraPlanTracksTickets(current)) {
+            await this.postZyraPlanMessage(client, projectId, sessionId, userId, `${zyraReplyLanguage() === "ru" ? ZYRA_RU.ticketsFinished : "Finished working through the tickets."}${LegacyService.zyraTicketPlanSummary(current, true)}`, [], []);
+          }
           await client.query("UPDATE zyra_chat_sessions SET active_plan = NULL WHERE id = $1", [sessionId]);
         });
         return;
@@ -17383,6 +18291,10 @@ export class LegacyService implements OnModuleInit {
       // response even though provider/model are only known once the allocation resolves.
       let provider = "unknown";
       let model = "unknown";
+      // This batch's review batch, filled as its drafts are written, and the chat message that shows
+      // it — posted when the first draft is staged (createZyraLiveBatch's onRowCreated).
+      let live: ZyraLiveBatch | undefined;
+      let batchMessageId: string | null = null;
       try {
         const allocation = await this.zyraAiAllocation(projectId);
         if (!allocation.key) {
@@ -17406,43 +18318,44 @@ export class LegacyService implements OnModuleInit {
         model = normalizeProviderModel(provider, allocation.key.default_model);
         const originalMessage = String(plan.originalMessage || "");
         const jiraIssueKeys = normalizeJsonArray(plan.jiraIssueKeys).map(String);
-        // Re-read the sources for every batch: existing coverage grows as earlier batches land, so
-        // this is also what stops batch N from duplicating what batch N-1 just wrote.
-        const { knowledge, existingTestcases, suites, jira, bugs, knowledgeConfidence } = await this.zyraGenerationContext(
-          projectId,
-          `${originalMessage}\n${batch.join("\n")}`,
-          jiraIssueKeys,
-          capabilities,
-          LegacyService.normalizeZyraContextRefs(plan.contextRefs)
-        );
-        LegacyService.emitZyraContextSteps(stage, capabilities, {
-          knowledge: LegacyService.dedupeZyraKnowledgeItems(knowledge),
-          jira,
-          existingTestcases,
-          bugs: bugs || []
-        });
+        // Carried in the plan so every batch files into the suite the user asked for, not just
+        // the first — a routed suite id is not recoverable from the original message text.
         const batchSuite = (plan.routedSuite as { id?: string; name?: string } | null) || null;
-        stage("generating", { requestedCount: batch.length, suiteName: batchSuite?.name ?? null });
-        const decision = await this.generateZyraChatTestcasesWithAi({
+        const emitContext = (context: Awaited<ReturnType<LegacyService["zyraGenerationContext"]>>) => {
+          LegacyService.emitZyraContextSteps(stage, capabilities, {
+            knowledge: LegacyService.dedupeZyraKnowledgeItems(context.knowledge),
+            jira: context.jira,
+            existingTestcases: context.existingTestcases,
+            bugs: context.bugs || []
+          });
+          stage("generating", { requestedCount: batch.length, suiteName: batchSuite?.name ?? null });
+        };
+        const pieceContext = {
+          projectId, userId, provider, model, key: allocation.key, originalMessage, jiraIssueKeys, capabilities,
+          ticketScoped: Boolean(ticketScope), contextRefs: LegacyService.normalizeZyraContextRefs(plan.contextRefs),
+          routedSuite: batchSuite, language
+        };
+        live = this.createZyraLiveBatch({
           projectId,
           userId,
-          provider,
-          model,
-          key: allocation.key,
-          message: this.zyraBatchMessage(originalMessage, batch),
-          knowledge,
-          existingTestcases,
-          jiraIssueKeys,
-          jira,
-          knowledgeConfidence,
-          bugs,
-          requestedCount: batch.length,
-          suites,
-          // Carried in the plan so every batch files into the suite the user asked for, not just
-          // the first — a routed suite id is not recoverable from the original message text.
-          routedSuite: (plan.routedSuite as { id?: string; name?: string } | null) || null,
-          language
+          sessionId,
+          emit: (event) => this.zyraPlanEvents.next({ projectId, sessionId, event: { kind: "draft", ...event } }),
+          onRowCreated: async (reviewRequestId) => {
+            // Only while this plan is still the one running — superseded, its drafts stay staged and
+            // findable, as a finished batch's always have, just not announced in this session.
+            await this.zyraPlanTransition(sessionId, planId, doneCount, async (client) => {
+              batchMessageId = await this.postZyraPlanMessage(
+                client, projectId, sessionId, userId,
+                zyraReplyLanguage() === "ru" ? ZYRA_RU.planBatchGenerating : "Generating test cases for this batch — they appear below as they are written.",
+                [], [], "create", null, reviewRequestId, "generating"
+              );
+            });
+            if (batchMessageId) this.zyraPlanEvents.next({ projectId, sessionId, event: { kind: "batchStarted", reviewRequestId } });
+          }
         });
+        live.total = batch.length;
+        const batchLive = live;
+        const decision = await runWithZyraLiveBatch(batchLive, () => this.generateZyraPlanPiece({ ...pieceContext, scenarios: batch, onContext: emitContext }));
         stage("generating", { draftedCount: LegacyService.zyraDraftedCount(decision) }, "update");
         const gated = this.applyStorageGateToGenerated(decision, capabilities);
         if (gated.operations.length) stage("staging", { operationCounts: LegacyService.tallyZyraOperationTypes(gated.operations) });
@@ -17454,7 +18367,7 @@ export class LegacyService implements OnModuleInit {
         // message superseded the plan a moment ago — it lands as a real, independently reachable
         // staged batch (findable via zyraPendingCreateBatches) even when zyraPlanTransition below
         // decides not to post about it in the (now-superseded) chat session.
-        const applied = await this.applyZyraChatOperations(projectId, userId, sessionId, gated.operations);
+        const applied = await this.applyZyraChatOperations(projectId, userId, sessionId, gated.operations, { live: gated.liveStaged });
         const testcases = applied.testcases.length ? applied.testcases : gated.testcases;
         stage("finalizing", {
           savedCount: applied.testcases.filter((tc) => !(typeof tc.action === "string" && tc.action.startsWith("proposed-"))).length,
@@ -17482,6 +18395,8 @@ export class LegacyService implements OnModuleInit {
               remaining.length ? `Continuing with the remaining ${remaining.length}.` : "That was the last batch."
             ].filter(Boolean).join(" ")
           : LegacyService.zyraPlanBatchReply({ drafted: testcases.length, covered: newCovered, totalCount, remaining: remaining.length, requeued: outcome.requeue.length, skipped: outcome.skipped, unmapped: outcome.unmapped, moreTickets: Boolean(plan.ticketsHasMore) });
+        // A ticket-scoped plan also reports tickets: progress on every batch, the full account on the last.
+        const batchReply = ticketScope || LegacyService.zyraPlanTracksTickets(plan) ? `${reply}${LegacyService.zyraTicketPlanSummary(plan, !remaining.length && !plan.ticketsHasMore)}` : reply;
 
         // The atomic commit: re-checks planId AND doneCount under the row lock, then posts the
         // message and advances (or clears) active_plan in the same transaction. If this returns
@@ -17492,7 +18407,9 @@ export class LegacyService implements OnModuleInit {
           // 'create' only when this batch genuinely produced staged rows — a "saved nothing" batch
           // (testcases.length === 0) gets 'answer' via the default, matching how a zero-mutation
           // reply is classified everywhere else in this file.
-          await this.postZyraPlanMessage(client, projectId, sessionId, userId, reply, testcases, applied.activity, testcases.length ? "create" : "answer", batchTrace, applied.reviewRequestId);
+          // A batch whose drafts were staged live already has its message, with its review panel in it.
+          if (batchMessageId) await this.finishZyraPlanMessage(client, sessionId, batchMessageId, batchReply, testcases, applied.activity, testcases.length ? "create" : "answer", batchTrace, applied.reviewRequestId);
+          else await this.postZyraPlanMessage(client, projectId, sessionId, userId, batchReply, testcases, applied.activity, testcases.length ? "create" : "answer", batchTrace, applied.reviewRequestId);
           if (!remaining.length && !plan.ticketsHasMore) {
             await client.query("UPDATE zyra_chat_sessions SET active_plan = NULL WHERE id = $1", [sessionId]);
           } else {
@@ -17507,6 +18424,7 @@ export class LegacyService implements OnModuleInit {
             );
           }
         });
+        if (stillCurrent) this.zyraPlanEvents.next({ projectId, sessionId, event: { kind: "batch", reviewRequestId: applied.reviewRequestId } });
         if (!stillCurrent || (!remaining.length && !plan.ticketsHasMore)) return;
       } catch (err) {
         const detail = this.extractAiErrorMessage(err);
@@ -17518,15 +18436,37 @@ export class LegacyService implements OnModuleInit {
         // never succeeded), so "continue" — or resumeZyraChatPlan — can retry from here later.
         // `detail` is already what the pause message itself tells the user.
         const failedTrace = recorder.fail(detail || "This batch did not complete.");
+        // Drafts already staged live stay where they are, reviewable — and their scenarios leave the
+        // queue, so "continue" generates only what is still missing, never a second copy.
+        await live?.idle().catch(() => undefined);
+        const keptReviewId = live?.reviewRequestId() ?? null;
+        const keptLabels = new Set((live?.stagedScenarios() ?? []).map((n) => batch[n - 1]).filter(Boolean));
+        const kept = keptReviewId ? (await this.zyraReviewRows(keptReviewId).catch(() => ({ rows: [] as Body[], savedCount: 0 }))).rows : [];
+        const covered = LegacyService.zyraPlanCovered(plan) + keptLabels.size;
+        const ru = zyraReplyLanguage() === "ru";
         await this.zyraPlanTransition(sessionId, planId, doneCount, async (client, current) => {
-          await this.postZyraPlanMessage(client, projectId, sessionId, userId, zyraReplyLanguage() === "ru" ? ZYRA_RU.planPausedOnError(detail, LegacyService.zyraPlanCovered(plan), totalCount) : `I ran into an issue generating more test cases (${detail}). Pausing here — ${LegacyService.zyraPlanCovered(plan)}/${totalCount} scenarios covered. Say "continue" and I'll retry the rest.`, [], [], "answer", failedTrace);
+          if (batchMessageId) {
+            await this.finishZyraPlanMessage(
+              client, sessionId, batchMessageId,
+              ru ? ZYRA_RU.planBatchStopped(kept.length) : `Generation stopped before this batch finished — the ${kept.length} test case(s) written so far are below, ready for review.`,
+              kept, [], kept.length ? "create" : "answer", null, keptReviewId
+            );
+          }
+          const pause = ru ? ZYRA_RU.planPausedOnError(detail, covered, totalCount) : `I ran into an issue generating more test cases (${detail}). Pausing here — ${covered}/${totalCount} scenarios covered. Say "continue" and I'll retry the rest.`;
+          await this.postZyraPlanMessage(client, projectId, sessionId, userId, `${pause}${kept.length ? (ru ? ZYRA_RU.planPausedKeptDrafts(kept.length) : ` The ${kept.length} test case(s) written before it stopped are above, ready for review.`) : ""}`, [], [], "answer", failedTrace);
           // Spread the locked read, not the outer closure's `plan` — same reasoning as the
           // success-path commit above.
+          const queue = normalizeJsonArray(current.remainingScenarios).map(String);
           await client.query(
             "UPDATE zyra_chat_sessions SET active_plan = $2::jsonb WHERE id = $1",
-            [sessionId, JSON.stringify({ ...current, status: "paused" })]
+            [sessionId, JSON.stringify({
+              ...current,
+              status: "paused",
+              ...(keptLabels.size ? { remainingScenarios: queue.filter((scenario) => !keptLabels.has(scenario)), doneCount: doneCount + keptLabels.size, coveredCount: covered } : {})
+            })]
           );
         });
+        if (keptReviewId) this.zyraPlanEvents.next({ projectId, sessionId, event: { kind: "batch", reviewRequestId: keptReviewId } });
         // A multi-batch plan runs unattended, so its owner may not be watching the chat when it
         // pauses. No actor: nobody did this, the job did.
         await this.notifyUsers([userId], {
@@ -17538,6 +18478,58 @@ export class LegacyService implements OnModuleInit {
         return;
       }
     }
+  }
+
+  /*
+   * One plan batch's generation — or one piece of one: sources re-read for exactly these scenarios
+   * (existing coverage grows as earlier batches land, so this is also what stops batch N from
+   * duplicating what batch N-1 just wrote), then the drafts. A ticket-scoped plan reads the scenarios'
+   * own tickets (generateZyraScopedBatch).
+   */
+  private async generateZyraPlanPiece(p: {
+    projectId: string;
+    userId: string | null;
+    provider: string;
+    model: string;
+    key: Body;
+    originalMessage: string;
+    jiraIssueKeys: string[];
+    capabilities: ZyraCapabilities;
+    ticketScoped: boolean;
+    contextRefs: ZyraTurnContextRefs | null;
+    routedSuite: { id?: string; name?: string } | null;
+    language?: ExportLocale;
+    scenarios: string[];
+    onContext?: (context: Awaited<ReturnType<LegacyService["zyraGenerationContext"]>>) => void;
+  }): Promise<ZyraChatDecision> {
+    if (p.ticketScoped) {
+      return this.generateZyraScopedBatch({
+        projectId: p.projectId, userId: p.userId, provider: p.provider, model: p.model, key: p.key, originalMessage: p.originalMessage,
+        batch: p.scenarios, jiraIssueKeys: p.jiraIssueKeys, capabilities: p.capabilities, routedSuite: p.routedSuite, language: p.language,
+        onContext: p.onContext
+      });
+    }
+    const context = await this.zyraGenerationContext(p.projectId, `${p.originalMessage}\n${p.scenarios.join("\n")}`, p.jiraIssueKeys, p.capabilities, p.contextRefs);
+    p.onContext?.(context);
+    return this.generateZyraChatTestcasesWithAi({
+      projectId: p.projectId,
+      userId: p.userId,
+      provider: p.provider,
+      model: p.model,
+      key: p.key,
+      message: this.zyraBatchMessage(p.originalMessage, p.scenarios),
+      planBatch: { originalMessage: p.originalMessage, scenarios: p.scenarios },
+      knowledge: context.knowledge,
+      existingTestcases: context.existingTestcases,
+      jiraIssueKeys: p.jiraIssueKeys,
+      jira: context.jira,
+      knowledgeConfidence: context.knowledgeConfidence,
+      bugs: context.bugs,
+      requestedCount: p.scenarios.length,
+      suites: context.suites,
+      routedSuite: p.routedSuite,
+      language: p.language
+    });
   }
 
   private async finalizeZyraToolDecisionWithAi(params: {
@@ -20816,7 +21808,7 @@ export class LegacyService implements OnModuleInit {
   }
 
   private normalizeAiDrafts(raw: unknown, requestedCount: number): Body[] {
-    const candidates = this.extractAiDraftCandidates(raw);
+    const candidates = LegacyService.stripZyraNulDeep(this.extractAiDraftCandidates(raw));
     if (!candidates.length) throw new BadRequestException({ error: "AI testcase generation returned no testcase drafts" });
     return candidates.slice(0, requestedCount).map((item, index) => {
       const draft = item as Body;
@@ -20895,8 +21887,37 @@ export class LegacyService implements OnModuleInit {
     return drafts;
   }
 
+  /*
+   * PostgreSQL cannot store the NUL character — not in a TEXT column, and not as `\u0000` inside
+   * JSONB ("unsupported Unicode escape sequence"). A model writing a null-byte input test (the prompt
+   * asks for input-sanitization cases) puts exactly that in a draft's test data or steps, and the whole
+   * batch then failed at staging with nothing saved — the turn reported as failed after minutes of
+   * generation (2026-10-13). Dropped here, where every model reply is parsed, so nothing downstream
+   * ever sees one. Only a real `\u0000` escape goes: `\\u0000` (an escaped backslash, then literal
+   * text) is left as written.
+   */
+  private static stripZyraNul(text: string): string {
+    return text.replace(/(?<!\\)((?:\\\\)*)\\u0000/gi, "$1").replace(/\u0000/g, "");
+  }
+
+  /*
+   * stripZyraNul over every string of a parsed model reply, at any depth. The reply's own text is not
+   * enough: a draft's steps are JSON inside a string ("stepsJson"), whose `\u0000` survives the outer
+   * parse as text and turns into a real NUL only when staging parses the steps (safeSteps) — the second
+   * "unsupported Unicode escape sequence" failure, the same day. Stripping each parsed string removes
+   * it at every level the reply nests.
+   */
+  private static stripZyraNulDeep<T>(value: T): T {
+    if (typeof value === "string") return LegacyService.stripZyraNul(value) as T;
+    if (Array.isArray(value)) return value.map((item) => LegacyService.stripZyraNulDeep(item)) as T;
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, LegacyService.stripZyraNulDeep(item)])) as T;
+    }
+    return value;
+  }
+
   private extractJsonPayload(raw: string): string {
-    const text = raw.trim();
+    const text = LegacyService.stripZyraNul(raw).trim();
     if (!text) return text;
     const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
     const candidate = (fenced?.[1] || text).trim();
@@ -21040,6 +22061,10 @@ export class LegacyService implements OnModuleInit {
   // Strict parse → repaired parse → textual field salvage. Returns null only when the text
   // holds no recoverable JSON object at all, which callers surface as plain prose.
   private parseModelJson(raw: string, salvageFields: string[] = ["reply", "reasoningSummary"]): Body | null {
+    return LegacyService.stripZyraNulDeep(this.parseModelJsonRaw(raw, salvageFields));
+  }
+
+  private parseModelJsonRaw(raw: string, salvageFields: string[]): Body | null {
     const payload = this.extractJsonPayload(String(raw || "").trim());
     if (!payload) return null;
     try {
@@ -21209,6 +22234,13 @@ export class LegacyService implements OnModuleInit {
     if (params.provider === "openai" && /^(gpt-5|gpt-4\.1)/.test(String(openAiBody.model))) {
       openAiBody.prompt_cache_retention = "24h";
     }
+    // Streamed only for OpenAI itself, and only while a live batch is being filled: a
+    // gateway's support for streaming isn't known. A response that comes back plain anyway is read plain.
+    const liveFeed = params.provider === "openai" ? zyraLiveDraftFeed() : undefined;
+    if (liveFeed) {
+      openAiBody.stream = true;
+      openAiBody.stream_options = { include_usage: true };
+    }
     const headers = this.providerAuthHeaders(params.provider, params.apiKey, params.authHeaderName ?? null, params.authScheme ?? null);
     const response = await fetch(providerChatUrl(params.provider, params.baseUrl, String(openAiBody.model)), {
       method: "POST",
@@ -21216,7 +22248,10 @@ export class LegacyService implements OnModuleInit {
       body: JSON.stringify(openAiBody),
       signal: LegacyService.zyraProviderSignal(LegacyService.zyraGenerateTimeoutMs(params.input.requestedCount))
     });
-    const body = await response.json().catch(() => ({} as Body)) as Body;
+    const streamed = Boolean(liveFeed) && response.ok && String(response.headers.get("content-type") || "").includes("text/event-stream");
+    const body = streamed
+      ? await LegacyService.readOpenAiStream(response, liveFeed)
+      : await response.json().catch(() => ({} as Body)) as Body;
     if (!response.ok) {
       const rawMessage = String(body.error?.message || body.error || response.statusText);
       const friendly = this.describeProviderError(params.provider, response.status, rawMessage);
@@ -21265,7 +22300,8 @@ export class LegacyService implements OnModuleInit {
     const anthropicHeaders = this.buildAnthropicAuthHeaders(params.apiKey, params.authHeaderName ?? null, params.authScheme ?? null);
     // A batch this size is streamed: a plain request returns no headers until it is finished, and
     // Node's fetch gives up on that after 5 minutes however long the abort signal allows.
-    const stream = params.input.requestedCount > LegacyService.ZYRA_STREAM_ABOVE;
+    // …and whenever a live batch is listening (zyraDraftSink), whatever the size.
+    const stream = params.input.requestedCount > LegacyService.ZYRA_STREAM_ABOVE || Boolean(zyraDraftSink());
     let maxTokens = Math.min(LegacyService.ZYRA_GEN_MAX_TOKENS, 2000 + params.input.requestedCount * 1500);
     const send = (model: string) => fetch(anthropicUrl, {
       method: "POST",
@@ -21299,8 +22335,9 @@ export class LegacyService implements OnModuleInit {
       signal: LegacyService.zyraProviderSignal(LegacyService.zyraGenerateTimeoutMs(params.input.requestedCount))
     });
     // The streamed answer comes back shaped like the plain one, so everything below reads both alike.
+    // Each attempt gets its own live parser (zyraLiveDraftFeed), so a retried request starts clean.
     const readBody = async (response: Response): Promise<Body> =>
-      response.ok && stream ? LegacyService.readAnthropicStream(response) : (await response.json().catch(() => ({} as Body))) as Body;
+      response.ok && stream ? LegacyService.readAnthropicStream(response, zyraLiveDraftFeed()) : (await response.json().catch(() => ({} as Body))) as Body;
     for (const model of providerModelCandidates(params.provider, params.model)) {
       let response = await send(model);
       let body = await readBody(response);
@@ -22395,7 +23432,34 @@ export class LegacyService implements OnModuleInit {
 
   // Reads a streamed Messages response into the shape a plain one has ({ content, usage }); a stream that
   // reports an error throws it. Usage arrives in two events: input at the start, output at the end.
-  private static async readAnthropicStream(response: Response): Promise<Body> {
+  /** An OpenAI chat-completions stream, read into the plain response's shape (content + usage). */
+  private static async readOpenAiStream(response: Response, onText?: (text: string) => void): Promise<Body> {
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let text = "";
+    let usage: Body = {};
+    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+      buffer += decoder.decode(chunk, { stream: true });
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (!line.startsWith("data:") || line === "data: [DONE]") continue;
+        let event: Body;
+        try { event = JSON.parse(line.slice(5)) as Body; } catch { continue; }
+        if (event.error) throw new Error(String(event.error?.message || "The AI provider's stream failed."));
+        const delta = String(event.choices?.[0]?.delta?.content || "");
+        if (delta) {
+          text += delta;
+          onText?.(delta);
+        }
+        if (event.usage) usage = event.usage as Body;
+      }
+    }
+    return { choices: [{ message: { content: text } }], usage };
+  }
+
+  private static async readAnthropicStream(response: Response, onText?: (text: string) => void): Promise<Body> {
     const decoder = new TextDecoder();
     let buffer = "";
     let text = "";
@@ -22409,7 +23473,11 @@ export class LegacyService implements OnModuleInit {
         if (!line.startsWith("data:")) continue;
         let event: Body;
         try { event = JSON.parse(line.slice(5)) as Body; } catch { continue; }
-        if (event.type === "content_block_delta" && event.delta?.type === "text_delta") text += String(event.delta.text || "");
+        if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+          const delta = String(event.delta.text || "");
+          text += delta;
+          onText?.(delta);
+        }
         else if (event.type === "message_start") Object.assign(usage, event.message?.usage || {});
         else if (event.type === "message_delta") Object.assign(usage, event.usage || {});
         else if (event.type === "error") throw new Error(String(event.error?.message || "The AI provider's stream failed."));
@@ -22753,7 +23821,7 @@ export class LegacyService implements OnModuleInit {
      * The correction goes FIRST, before the model's prose, so the two are read in the right order.
      */
     if (decision.actionType === "answer") {
-      const banner = !applied.testcases.length ? this.zyraFalseCompletionBanner(decision.reply, decision.__salvaged) : "";
+      const banner = !applied.testcases.length && !applied.liveSavedCount ? this.zyraFalseCompletionBanner(decision.reply, decision.__salvaged) : "";
       return banner ? [banner, "", decision.reply].join("\n") + moveSuffix : decision.reply + moveSuffix;
     }
     // Creating an empty suite touches no testcases and is still a complete success — but the reply
@@ -22768,7 +23836,7 @@ export class LegacyService implements OnModuleInit {
 
     // create_suite is the one operation that is not expected to produce a testcase row.
     const requested = decision.operations.filter((op) => op.type !== "create_suite").length;
-    const appliedCount = applied.testcases.length;
+    const appliedCount = applied.testcases.length + (applied.liveSavedCount ?? 0);
 
     const ru = zyraReplyLanguage() === "ru";
     // Every update named an existing test case but none of them would change anything (see
@@ -22957,7 +24025,7 @@ export class LegacyService implements OnModuleInit {
   private chatTestcasePlan(
     message: string,
     projectTestcaseRange: string,
-    routed?: { requestedCount?: unknown; exhaustive?: boolean }
+    routed?: ZyraRoutedCount
   ): { requestedCount: number; testcaseRange?: string } {
     // The router read the request in context — "fifteen", "a couple more than last time", "cover
     // everything you can" — so its reading wins. The patterns below only cover the case where it
@@ -22971,6 +24039,241 @@ export class LegacyService implements OnModuleInit {
     const wantsExhaustive = /\ball( the)? possible\b|as many as possible|\bexhaustive\b|every (scenario|edge case|flow|case)|full coverage|\ball types?\b/.test(lower);
     const range = wantsExhaustive ? "all" : projectTestcaseRange;
     return { testcaseRange: range, requestedCount: this.testcaseRangeConfig(range).requestedCount };
+  }
+
+  /*
+   * The ticket-scope question.
+   *
+   * A create that names many tickets used to be planned in ONE call capped at ZYRA_PLAN_MAX_SCENARIOS
+   * for all of them together (the paged path is off whenever a ticket is named — see
+   * startZyraChatPlan), keys past ZYRA_NAMED_TICKET_LIMIT never reached the planner, and the final
+   * "all N scenarios are now covered" read as full coverage. Thirty tickets came back as ~98 test
+   * cases, about three per ticket, and nothing said so.
+   *
+   * So when the estimate — tickets × the project's per-task count — is above
+   * ZYRA_TICKET_SCOPE_THRESHOLD, Zyra asks first: narrow to a ticket or two at a time, or work through
+   * every ticket in batches (a ticket-scoped plan, see startZyraChatPlan). An explicit count ("20 test
+   * cases for …") is the user's own budget and is never second-guessed; one ticket is never asked about.
+   */
+  private static readonly ZYRA_TICKET_SCOPE_THRESHOLD = 60;
+  /** "Generate in smaller batches" offers at most this many ticket groups to pick from. */
+  private static readonly ZYRA_TICKET_GROUP_OPTIONS = 10;
+  /** Unprocessed tickets listed by name in a plan's final message; the rest are counted. */
+  private static readonly ZYRA_UNPROCESSED_TICKETS_LISTED = 50;
+  // "All/every … tickets". Stricter than ZYRA_ALL_TICKETS_RE, which any mention of "requirement"
+  // matches — fine for choosing how an exhaustive plan reads, too loose to interrupt a request with.
+  private static readonly ZYRA_EVERY_TICKET_RE = /\b(all|every|each)\b[^.?!\n]{0,40}?\b(tickets?|issues?|user stories|stories|requirements|epics?)\b/i;
+
+  // One row per synced ticket ("<KEY>: summary" document, any provider) — the most recently updated
+  // when a key has several, as knowledgeTicketSnapshot picks. $2 limits it to those keys; NULL is every ticket.
+  private static readonly ZYRA_TICKET_DOCS_SQL = `
+    SELECT DISTINCT ON (upper(trim(split_part(title, ':', 1)))) id, title, content_text, upper(trim(split_part(title, ':', 1))) AS ticket_key
+    FROM knowledge_documents
+    WHERE project_id = $1 AND is_deleted = false AND (document_type != 'ai_memory' OR status = 'approved')
+      AND title ~ '^[A-Za-z][A-Za-z0-9]*-[0-9]+\\s*:'
+      AND ($2::text[] IS NULL OR upper(trim(split_part(title, ':', 1))) = ANY($2::text[]))
+    ORDER BY upper(trim(split_part(title, ':', 1))), updated_at DESC`;
+
+  /** The synced ticket keys among `ticketKeys` (every synced ticket when null), in key order. */
+  private async zyraSyncedTicketKeys(projectId: string, ticketKeys: string[] | null, limit?: number): Promise<string[]> {
+    const res = await this.db.query<{ ticket_key: string }>(
+      // KAN-2 before KAN-10: by prefix, then by number — the key's digits, not its text.
+      `SELECT ticket_key FROM (${LegacyService.ZYRA_TICKET_DOCS_SQL}) t
+       ORDER BY split_part(ticket_key, '-', 1), (regexp_replace(ticket_key, '^.*-', ''))::bigint ${limit ? "LIMIT $3" : ""}`,
+      limit ? [projectId, ticketKeys, limit] : [projectId, ticketKeys]
+    );
+    return res.rows.map((row) => String(row.ticket_key));
+  }
+
+  // Every ticket-titled document, counted the way a paged plan's pages read them (zyraPlanTicketRound),
+  // so "Tickets planned: X of Y" ends at Y.
+  private async zyraTicketDocumentCount(projectId: string): Promise<number> {
+    const res = await this.db.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM knowledge_documents
+       WHERE project_id = $1 AND is_deleted = false AND (document_type != 'ai_memory' OR status = 'approved')
+         AND title ~ '^[A-Za-z][A-Za-z0-9]*-[0-9]+\\s*:'`,
+      [projectId]
+    );
+    return Number(res.rows[0]?.count || 0);
+  }
+
+  /** A plan that reports ticket progress: ticket-scoped, or a paged plan started since it was added. */
+  private static zyraPlanTracksTickets(plan: Body): boolean {
+    return plan.ticketsSynced !== undefined && plan.ticketsSynced !== null;
+  }
+
+  private async zyraSyncedTicketCount(projectId: string, ticketKeys: string[] | null): Promise<number> {
+    const res = await this.db.query<{ count: string }>(`SELECT count(*)::text AS count FROM (${LegacyService.ZYRA_TICKET_DOCS_SQL}) t`, [projectId, ticketKeys]);
+    return Number(res.rows[0]?.count || 0);
+  }
+
+  // How many tickets this create spans, and whether that is enough to ask about. Null: just generate.
+  private async zyraTicketScope(
+    projectId: string,
+    message: string,
+    plan: { requestedCount: number; testcaseRange?: string },
+    knowledgeConfidence?: RagRetrievalConfidence
+  ): Promise<{ ticketKeys: string[] | null; ticketCount: number; perTicket: number } | null> {
+    if (!plan.testcaseRange) return null;
+    // What one ticket gets: its range's batch ceiling (ZYRA_BATCH_BY_RANGE) — 100 for "all possible",
+    // the project's 10/30/50 otherwise. Not requestedCount, which for "all" is the single-call cap of 50:
+    // two tickets asked for in full used to share one batch of 100, about 50 each.
+    const perTicket = LegacyService.zyraBatchSize(plan.testcaseRange);
+    let named = this.extractJiraIssueKeys(message);
+    // Key-shaped words are not all tickets ("UTF-8 and ISO-8859"): a key counts when its project prefix
+    // is one this project has synced tickets under. One not synced itself still counts — it is reported.
+    if (named.length >= 2) {
+      const prefixes = [...new Set(named.map((key) => key.split("-")[0]))];
+      const known = await this.db.query<{ prefix: string }>(
+        `SELECT DISTINCT upper(split_part(trim(split_part(title, ':', 1)), '-', 1)) AS prefix
+         FROM knowledge_documents
+         WHERE project_id = $1 AND is_deleted = false AND title ~ '^[A-Za-z][A-Za-z0-9]*-[0-9]+\\s*:'
+           AND upper(split_part(trim(split_part(title, ':', 1)), '-', 1)) = ANY($2::text[])`,
+        [projectId, prefixes]
+      );
+      const knownPrefixes = new Set(known.rows.map((row) => String(row.prefix)));
+      named = named.filter((key) => knownPrefixes.has(key.split("-")[0]));
+      if (!named.length) return null;
+    }
+    let ticketKeys: string[] | null = named;
+    let ticketCount = named.length;
+    if (!named.length) {
+      // "All the tickets": the same preconditions as startZyraChatPlan's paged plan, plus an explicit
+      // "all/every", so "tests for the login requirement" is never mistaken for every ticket there is.
+      if (this.extractQuotedPhrases(message).length || !LegacyService.ZYRA_EVERY_TICKET_RE.test(message) || knowledgeConfidence === "strong") return null;
+      if (!(await this.zyraProjectCapabilities(projectId)).knowledgeBase) return null;
+      ticketKeys = null;
+      ticketCount = await this.zyraSyncedTicketCount(projectId, null);
+    }
+    if (ticketCount < 2 || ticketCount * perTicket <= LegacyService.ZYRA_TICKET_SCOPE_THRESHOLD) return null;
+    return { ticketKeys, ticketCount, perTicket };
+  }
+
+  private zyraTicketScopeQuestion(
+    message: string,
+    scope: { ticketKeys: string[] | null; ticketCount: number; perTicket: number },
+    exhaustive: boolean,
+    routedSuite: { id?: string; name?: string } | null
+  ): ZyraChatDecision {
+    const ru = zyraReplyLanguage() === "ru";
+    const keys = scope.ticketKeys || [];
+    const preview = keys.length ? ` (${keys.slice(0, 5).join(", ")}${keys.length > 5 ? ", …" : ""})` : "";
+    return {
+      reply: ru
+        ? ZYRA_RU.scopeQuestion(scope.ticketCount, scope.perTicket, preview)
+        : `This request covers ${scope.ticketCount} tickets${preview}. At about ${scope.perTicket} test cases per ticket that is roughly ${scope.ticketCount * scope.perTicket} test cases, and one generation stays within 100 — doing them all at once would spread thin coverage across every ticket. How would you like to proceed?`,
+      reasoningSummary: ru ? ZYRA_RU.scopeReasoning : "The request spans more tickets than one generation covers well, so I asked how to proceed before generating.",
+      actionType: "answer",
+      operations: [],
+      testcases: [],
+      options: {
+        kind: "ticket_scope",
+        choices: [
+          {
+            id: "smaller",
+            label: ru ? ZYRA_RU.scopeSmallerLabel : "Generate in smaller batches",
+            description: ru ? ZYRA_RU.scopeSmallerDescription : "Select 1–2 tickets at a time for better coverage."
+          },
+          {
+            id: "all",
+            label: ru ? ZYRA_RU.scopeAllLabel : "Generate all tickets in batches",
+            description: ru
+              ? ZYRA_RU.scopeAllDescription(scope.ticketCount)
+              : `Zyra works through all ${scope.ticketCount} tickets in batches of up to 100 test cases and posts progress as it goes.`
+          }
+        ],
+        answeredId: null,
+        context: { originalMessage: message, ticketKeys: scope.ticketKeys, ticketCount: scope.ticketCount, perTicket: scope.perTicket, exhaustive, routedSuite }
+      }
+    };
+  }
+
+  /*
+   * "Generate in smaller batches": which tickets? Asked, not listed — a list of every ticket is
+   * unusable at hundreds and impossible at thousands. The user types ids or a range (read by
+   * zyraParseTicketSelection), checked against the synced tickets; how many fit one batch is the
+   * guidance, not a limit, because a longer list is still generated in batches. "Generate all tickets
+   * in batches" stays one click away. Re-asked, with the reason, when nothing typed is a synced
+   * ticket or a range is too large.
+   */
+  private async zyraTicketSelectionPrompt(
+    projectId: string,
+    context: Body,
+    problem: { unknown?: string[]; oversizedRange?: { from: string; to: string; size: number } } = {}
+  ): Promise<ZyraChatDecision> {
+    const ru = zyraReplyLanguage() === "ru";
+    const perTicket = Math.max(1, Number(context.perTicket) || 1);
+    const perBatch = Math.max(1, Math.floor(LegacyService.ZYRA_PLAN_MAX_SCENARIOS / perTicket));
+    const named = Array.isArray(context.ticketKeys) ? (context.ticketKeys as unknown[]).map(String) : null;
+    const total = named ? named.length : await this.zyraSyncedTicketCount(projectId, null);
+    const base = { reasoningSummary: ru ? ZYRA_RU.selectionReasoning : "Asked which tickets to generate for.", actionType: "answer" as const, operations: [], testcases: [] };
+    if (!total) {
+      return { ...base, reply: ru ? ZYRA_RU.selectionNoTickets : "None of these tickets is synced to Tesbo yet, so there is nothing to choose from. Sync them and ask again." };
+    }
+    const sample = named ? named.slice(0, 2) : await this.zyraSyncedTicketKeys(projectId, null, 2);
+    const first = sample[0];
+    const number = Number(first.split("-").pop());
+    const example = sample.length > 1 ? `\`${sample.join(", ")}\`` : `\`${first}\``;
+    const rangeExample = `\`${first} to ${first.slice(0, first.lastIndexOf("-"))}-${number + Math.max(1, perBatch - 1)}\``;
+    const problemLine = problem.oversizedRange
+      ? (ru
+        ? ZYRA_RU.selectionRangeTooLarge(problem.oversizedRange.from, problem.oversizedRange.to, problem.oversizedRange.size, LegacyService.ZYRA_TICKET_RANGE_MAX)
+        : `${problem.oversizedRange.from} to ${problem.oversizedRange.to} covers ${problem.oversizedRange.size} tickets — name at most ${LegacyService.ZYRA_TICKET_RANGE_MAX} at a time, or generate all tickets in batches.\n\n`)
+      : problem.unknown
+        ? (ru
+          ? ZYRA_RU.selectionNoneSynced(problem.unknown.slice(0, 10).join(", "))
+          : `None of ${problem.unknown.slice(0, 10).join(", ")}${problem.unknown.length > 10 ? ", …" : ""} is a synced ticket in this project.\n\n`)
+        : "";
+    return {
+      ...base,
+      reply: problemLine + (ru
+        ? ZYRA_RU.selectionPrompt(total, example, rangeExample, perBatch)
+        : `Which tickets should I start with? Type the ticket IDs or a range — for example ${example} or ${rangeExample}. ${total} tickets are in scope; for the best coverage name up to ${perBatch} at a time — a longer list still works, generated in batches. Or generate all of them:`),
+      options: {
+        kind: "ticket_selection",
+        choices: [{
+          id: "all",
+          label: ru ? ZYRA_RU.scopeAllLabel : "Generate all tickets in batches",
+          description: ru ? ZYRA_RU.scopeAllDescription(total) : `Zyra works through all ${total} tickets in batches of up to 100 test cases and posts progress as it goes.`
+        }],
+        answeredId: null,
+        context
+      }
+    };
+  }
+
+  /** What the client sees of a message's options: never `context`. */
+  private static zyraPublicOptions(raw: unknown): Body | null {
+    if (!raw || typeof raw !== "object") return null;
+    const options = raw as Body;
+    return { kind: options.kind, choices: normalizeJsonArray(options.choices), answeredId: options.answeredId ?? null };
+  }
+
+  /*
+   * The ticket lines a ticket-scoped plan adds to its messages: progress while it runs, and at the end
+   * how many tickets got test cases and which did not, and why — never only a scenario count.
+   */
+  private static zyraTicketPlanSummary(plan: Body, final: boolean): string {
+    const ru = zyraReplyLanguage() === "ru";
+    const total = Number(plan.ticketsTotal || 0);
+    const synced = Number(plan.ticketsSynced || 0);
+    const planned = Number(plan.ticketsDone || 0);
+    if (!final) return ru ? ZYRA_RU.ticketsProgress(planned, synced) : `\n\nTickets planned: ${planned} of ${synced}.`;
+    const unprocessed = normalizeJsonArray(plan.unprocessedTickets) as Array<{ key?: string; reason?: string }>;
+    if (!unprocessed.length) return ru ? ZYRA_RU.ticketsAllDone(total) : `\n\nAll ${total} ticket(s) processed.`;
+    const listed = unprocessed.slice(0, LegacyService.ZYRA_UNPROCESSED_TICKETS_LISTED).map((ticket) => {
+      const why = ticket.reason === "not_synced"
+        ? (ru ? ZYRA_RU.ticketNotSynced : "not synced to Tesbo yet")
+        : (ru ? ZYRA_RU.ticketNoScenarios : "no new scenarios — already covered by existing test cases");
+      return `- ${ticket.key} — ${why}`;
+    });
+    const more = unprocessed.length - listed.length;
+    return [
+      ru ? ZYRA_RU.ticketsPartial(total - unprocessed.length, total) : `\n\n${total - unprocessed.length} of ${total} ticket(s) got test cases.`,
+      ru ? ZYRA_RU.ticketsUnprocessedHeading(unprocessed.length) : `I couldn't generate test cases for ${unprocessed.length} ticket(s):`,
+      ...listed,
+      ...(more > 0 ? [ru ? ZYRA_RU.ticketsMoreUnprocessed(more) : `…and ${more} more.`] : [])
+    ].join("\n");
   }
 
   // Routes "all possible cases" through the plan-then-batch flow (startZyraChatPlan) and
@@ -22991,7 +24294,7 @@ export class LegacyService implements OnModuleInit {
     suites: Array<{ id: string; name: string }>;
     conversation?: string;
     routedSuite?: { id?: string; name?: string } | null;
-    routedCount?: { requestedCount?: unknown; exhaustive?: boolean };
+    routedCount?: ZyraRoutedCount;
     jira?: Array<{ key: string; summary: string; description: string }>;
     bugs?: ZyraGenerationInput["bugs"];
     trace?: TurnHandle;
@@ -22999,10 +24302,16 @@ export class LegacyService implements OnModuleInit {
     contextRefs?: ZyraTurnContextRefs;
   }): Promise<ZyraChatDecision> {
     const plan = this.chatTestcasePlan(params.message, params.projectTestcaseRange, params.routedCount);
+    const ticketScope = params.routedCount?.ticketScope;
+    // Asked once: answering it (zyraDecisionForChoice) sets ticketScope or scopeDecided.
+    if (!ticketScope && !params.routedCount?.scopeDecided) {
+      const scope = await this.zyraTicketScope(params.projectId, params.message, plan, params.knowledgeConfidence);
+      if (scope) return this.zyraTicketScopeQuestion(params.message, scope, plan.testcaseRange === "all", params.routedSuite ?? null);
+    }
     // Read here rather than threaded down from the turn: this is the one function every interactive
     // chat create (first try and the smaller retry) goes through, and it already has the session.
     const language = await this.zyraSessionLanguage(params.projectId, params.sessionId);
-    if (plan.testcaseRange === "all") {
+    if (plan.testcaseRange === "all" || ticketScope) {
       return this.startZyraChatPlan({
         projectId: params.projectId,
         userId: params.userId,
@@ -23023,7 +24332,8 @@ export class LegacyService implements OnModuleInit {
         knowledgeConfidence: params.knowledgeConfidence,
         contextRefs: params.contextRefs,
         language,
-        projectTestcaseRange: params.projectTestcaseRange
+        projectTestcaseRange: params.projectTestcaseRange,
+        ticketScope
       });
     }
     return this.generateZyraChatTestcasesWithAi({
@@ -23579,7 +24889,9 @@ export class LegacyService implements OnModuleInit {
     // editor does not, so a step written under a synonym key showed up correctly in an export but
     // silently blank in the app. Normalizing here, at the one place every write path funnels
     // through, means the editor never needs its own fallback.
-    return steps.map((step) => {
+    // Parsing is where a `\u0000` escape inside a steps string becomes a real NUL, which PostgreSQL
+    // cannot store (see stripZyraNul) — so it is dropped here too, for every caller, not only Zyra's.
+    return LegacyService.stripZyraNulDeep(steps).map((step) => {
       if (typeof step !== "object" || step === null) return step;
       const raw = step as Record<string, unknown>;
       return {

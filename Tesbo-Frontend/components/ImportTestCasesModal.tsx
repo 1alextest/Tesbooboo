@@ -92,9 +92,13 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onImported: (result: ImportResult) => void;
+  // The suite open on the page when Import was clicked (null for All test cases / Unfiled): rows
+  // with no Suite column land in it, and named suites nest under it. Sent as defaultSuiteId.
+  defaultSuiteId?: string | null;
+  defaultSuiteLabel?: string | null;
 }
 
-export default function ImportTestCasesModal({ projectId, open, onClose, onImported }: Props) {
+export default function ImportTestCasesModal({ projectId, open, onClose, onImported, defaultSuiteId, defaultSuiteLabel }: Props) {
   const [step, setStep] = useState<ImportStep>("upload");
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -469,11 +473,11 @@ export default function ImportTestCasesModal({ projectId, open, onClose, onImpor
       }
 
       // Skipped rather than sent when every row was rejected above — the endpoint refuses an empty
-      // batch, and there is nothing left for it to do anyway. No defaultSuiteId is ever sent: a row
-      // with no Suite column of its own lands at the project root, full stop — see importTestCases
-      // in legacy.service.ts.
+      // batch, and there is nothing left for it to do anyway. defaultSuiteId is the suite open on
+      // the page: a row with no Suite column of its own lands in it (project root when none is
+      // open) — see importTestCases in legacy.service.ts.
       const server = rows.length
-        ? await importTestCases(projectId, { rows })
+        ? await importTestCases(projectId, { rows, defaultSuiteId: defaultSuiteId || undefined })
         : { imported: 0, errors: [] as { row: number; message: string }[], expandSuiteIds: [] as string[] };
 
       const res: ImportResult = {
@@ -720,6 +724,11 @@ export default function ImportTestCasesModal({ projectId, open, onClose, onImpor
               <div className="mb-4 rounded-lg border border-[var(--confidence-high-border)] bg-[var(--confidence-high-soft)] px-4 py-2 text-sm text-[var(--confidence-high-foreground)]">
                 {preview.totalRows} row{preview.totalRows !== 1 ? "s" : ""} found in {selectedSheetName || "your file"}. Map the columns below.
               </div>
+              {defaultSuiteId && defaultSuiteLabel && (
+                <p data-testid="import-target-suite" className="mb-4 text-sm text-[var(--muted)]">
+                  Importing into: <span className="font-medium text-[var(--foreground)]">{defaultSuiteLabel}</span>
+                </p>
+              )}
 
               {preview.sheets.length > 1 && (
                 <div className="mb-4">

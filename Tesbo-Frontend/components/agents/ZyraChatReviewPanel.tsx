@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { deleteZyraTaskDraft, editZyraTaskDraft, saveZyraTask, closeZyraTask, getZyraTask, type ZyraChatTestcaseRow, type ZyraTask } from "@/lib/api";
 import { refreshPageCachesAfterZyraSave } from "@/lib/zyraCacheSync";
+import { recallZyraSelection, rememberZyraSelection, subscribeZyraLiveBatch, zyraLiveBatchProgress } from "@/lib/zyraLiveBatches";
 import { useAppData } from "@/components/app/AppDataProvider";
 import { Button, CopyButton, StatusChip, type Severity } from "@/components/ui";
 import { toTsv } from "@/lib/tsv";
@@ -74,6 +75,9 @@ const TECHNIQUE_BADGE_CLASS =
 // The batch's current drafts, as the server holds them now, in the same row shape the chat message
 // carries (formatAiTask normalizes a chat-staged entry through the same chatDraftRow). Each row's
 // draftIndex is its position in that list, which is exactly what discard/edit/save address.
+/** How long a generating panel waits for a live event before re-reading the batch itself. */
+const LIVE_FALLBACK_MS = 4000;
+
 function rowsFromTask(task: ZyraTask): ZyraChatTestcaseRow[] {
   return (task.drafts as unknown as ZyraChatTestcaseRow[]).map((row, index) => ({ ...row, draftIndex: index }));
 }
@@ -103,20 +107,116 @@ export function TechniqueBadges({ techniques }: { techniques?: string[] }) {
  * each card's index at a different draft, so Save/Discard on one card acted on another (and the
  * intended one silently stayed or vanished). So the batch is loaded on mount (the status check
  * already fetched it), replaced from the server's response after a discard, and re-read after a save.
+ *
+ * A batch still being generated fills in place: each draft the server stages arrives as a live event
+ * (lib/zyraLiveBatches.ts) and is appended — selected, like every draft on arrival — with the count
+ * and actions updating as it does. An event that doesn't follow on from the rows shown (a save or
+ * discard landed in between), or one that arrives mid-action, re-reads the batch instead of guessing.
  */
 export function ZyraChatReviewPanel({
   projectId,
   reviewRequestId,
   initialRows,
+  generating = false,
 }: {
   projectId: string;
   reviewRequestId: string;
   initialRows: ZyraChatTestcaseRow[];
+  // The batch is still being generated, as the caller knows from the session itself — set even when
+  // no live event reaches this panel (its stream was closed by a conversation switch, the page was
+  // reloaded, another tab started the turn), so the panel re-reads the batch on its own meanwhile.
+  generating?: boolean;
 }) {
   const { workspace } = useAppData();
   const [status, setStatus] = useState<"checking" | "in_review" | "resolved">("checking");
   const [rows, setRows] = useState<ZyraChatTestcaseRow[]>(initialRows);
   const [selected, setSelected] = useState<number[]>(() => initialRows.map((_, index) => index));
+  // Generation progress of a batch still being written ("X of N"), from its live events.
+  const [live, setLive] = useState(() => zyraLiveBatchProgress(reviewRequestId));
+  const rowsRef = useRef(rows);
+  const statusRef = useRef(status);
+  const workingRef = useRef(false);
+  const closedRef = useRef(false);
+  const resyncPendingRef = useRef(false);
+  const lastEventAtRef = useRef(0);
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+  useEffect(() => {
+    rememberZyraSelection(reviewRequestId, selected, rows.length);
+  }, [reviewRequestId, selected, rows.length]);
+
+  // Re-read the batch: keep the selection of the rows already shown, select every row that is new.
+  const resync = useCallback(async () => {
+    resyncPendingRef.current = false;
+    try {
+      const task = await getZyraTask(projectId, reviewRequestId);
+      if (task.taskStatus !== "in_review") return;
+      const next = rowsFromTask(task);
+      const shown = Math.min(rowsRef.current.length, next.length);
+      rowsRef.current = next;
+      setRows(next);
+      setSelected((prev) => [...prev.filter((index) => index < shown), ...next.map((_, index) => index).filter((index) => index >= shown)]);
+      setStatus("in_review");
+    } catch {
+      // The next event, or the next action's own re-read, tries again.
+    }
+  }, [projectId, reviewRequestId]);
+
+  useEffect(
+    () =>
+      subscribeZyraLiveBatch(reviewRequestId, (event) => {
+        if (event.kind === "done") {
+          setLive(null);
+          return;
+        }
+        lastEventAtRef.current = Date.now();
+        setLive({ staged: event.staged, total: event.total });
+        // "Discard all" closed the batch — the server takes nothing more into it.
+        if (closedRef.current) return;
+        if (workingRef.current || statusRef.current === "checking") {
+          resyncPendingRef.current = true;
+          return;
+        }
+        const index = event.row.draftIndex;
+        if (typeof index === "number" && index === rowsRef.current.length) {
+          rowsRef.current = [...rowsRef.current, event.row];
+          setRows(rowsRef.current);
+          setSelected((prev) => [...prev, index]);
+          if (statusRef.current === "resolved") setStatus("in_review");
+        } else {
+          void resync();
+        }
+      }),
+    [reviewRequestId, resync]
+  );
+
+  // The fallback: while generating with no live event lately, re-read the batch every few seconds. Live
+  // events stay the fast path; this is what keeps the panel filling when they don't arrive.
+  useEffect(() => {
+    if (!generating) return;
+    const interval = setInterval(() => {
+      if (document.hidden || workingRef.current || closedRef.current || statusRef.current === "checking") return;
+      if (Date.now() - lastEventAtRef.current < LIVE_FALLBACK_MS) return;
+      void resync();
+    }, LIVE_FALLBACK_MS);
+    return () => clearInterval(interval);
+  }, [generating, resync]);
+  // Still generating, whether known from live events or from the caller.
+  const isGenerating = Boolean(live) || generating;
+
+  function startWork() {
+    workingRef.current = true;
+    setWorking(true);
+  }
+  function endWork() {
+    workingRef.current = false;
+    setWorking(false);
+    if (resyncPendingRef.current) void resync();
+  }
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -129,12 +229,20 @@ export function ZyraChatReviewPanel({
       .then((task) => {
         if (cancelled) return;
         if (task.taskStatus === "in_review") {
-          // Nothing is interactive while status is "checking", so no selection can be lost here.
+          // Nothing is interactive while status is "checking", so no selection can be lost here —
+          // except one carried over from this batch's panel shown while the turn was running.
           const current = rowsFromTask(task);
+          const recalled = recallZyraSelection(reviewRequestId);
+          rowsRef.current = current;
           setRows(current);
-          setSelected(current.map((_, index) => index));
+          setSelected(
+            recalled
+              ? [...recalled.selected.filter((index) => index < Math.min(recalled.count, current.length)), ...current.map((_, index) => index).filter((index) => index >= recalled.count)]
+              : current.map((_, index) => index)
+          );
         }
         setStatus(task.taskStatus === "in_review" ? "in_review" : "resolved");
+        if (resyncPendingRef.current) void resync();
       })
       .catch(() => {
         // Fail open — let the user try acting on it; a batch that's actually already resolved
@@ -144,13 +252,20 @@ export function ZyraChatReviewPanel({
     return () => {
       cancelled = true;
     };
-  }, [projectId, reviewRequestId]);
+  }, [projectId, reviewRequestId, resync]);
+
+  const progressLine = isGenerating ? (
+    <p className="flex items-center gap-2 text-xs text-[var(--muted)]" data-testid="zyra-review-progress">
+      <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--brand-primary)]" />
+      {live ? t("review.generating", { staged: live.staged, total: live.total }) : t("review.generatingSoFar", { staged: rows.length })}
+    </p>
+  ) : null;
 
   if (status === "checking") {
     return <p className="mt-3 text-xs text-[var(--muted)]">{t("review.checking")}</p>;
   }
 
-  if (status === "resolved" && !message) {
+  if (status === "resolved" && !message && !isGenerating) {
     return (
       <p className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-xs text-[var(--muted)]">
         {t("review.resolved")}
@@ -164,7 +279,7 @@ export function ZyraChatReviewPanel({
   const allSelected = rows.length > 0 && selected.length === rows.length;
 
   async function handleDiscard(index: number) {
-    setWorking(true);
+    startWork();
     setError(null);
     try {
       // The server's response IS the batch after the removal — used as-is rather than mirrored by
@@ -176,12 +291,12 @@ export function ZyraChatReviewPanel({
     } catch (err) {
       setError(err instanceof Error ? err.message : t("review.err.discard"));
     } finally {
-      setWorking(false);
+      endWork();
     }
   }
 
   async function handleSaveEdit(index: number, values: ZyraDraftEditValues) {
-    setWorking(true);
+    startWork();
     setError(null);
     try {
       await editZyraTaskDraft(projectId, reviewRequestId, index, {
@@ -215,13 +330,13 @@ export function ZyraChatReviewPanel({
     } catch (err) {
       setError(err instanceof Error ? err.message : t("review.err.saveEdit"));
     } finally {
-      setWorking(false);
+      endWork();
     }
   }
 
   async function handleSaveSelected() {
     if (!selected.length) return;
-    setWorking(true);
+    startWork();
     setError(null);
     setMessage(null);
     try {
@@ -250,15 +365,17 @@ export function ZyraChatReviewPanel({
     } catch (err) {
       setError(err instanceof Error ? err.message : t("review.err.save"));
     } finally {
-      setWorking(false);
+      endWork();
     }
   }
 
   async function handleDiscardAll() {
-    setWorking(true);
+    startWork();
     setError(null);
     try {
       await closeZyraTask(projectId, reviewRequestId);
+      closedRef.current = true;
+      setLive(null);
       setRows([]);
       setSelected([]);
       setStatus("resolved");
@@ -266,7 +383,7 @@ export function ZyraChatReviewPanel({
     } catch (err) {
       setError(err instanceof Error ? err.message : t("review.err.close"));
     } finally {
-      setWorking(false);
+      endWork();
     }
   }
 
@@ -288,6 +405,7 @@ export function ZyraChatReviewPanel({
     <div className="mt-3 space-y-2 rounded-lg border border-[var(--brand-border)] bg-[var(--surface)] p-3">
       {message && <p className="rounded-md border border-[var(--border)] bg-[var(--surface-secondary)] px-2.5 py-1.5 text-xs text-[var(--foreground)]">{message}</p>}
       {error && <p className="rounded-md border border-[var(--error)]/40 bg-[var(--error-soft)] px-2.5 py-1.5 text-xs text-[var(--error-foreground)]">{error}</p>}
+      {progressLine}
       {rows.length === 0 ? null : (
         <>
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -301,7 +419,11 @@ export function ZyraChatReviewPanel({
               <span title={t("review.copyTitle")}>
                 <CopyButton value={tsv} label={t("copy")} copiedLabel={t("copied")} size="sm" />
               </span>
-              <Button variant="secondary" size="sm" onClick={() => void handleDiscardAll()} disabled={working}>{t("review.discardAll")}</Button>
+              {/* Not while generating: closing the batch mid-generation would silently drop every draft still
+                  being written. Single-row Discard stays available. */}
+              <span title={isGenerating ? t("review.discardAllWhileGenerating") : undefined}>
+                <Button variant="secondary" size="sm" onClick={() => void handleDiscardAll()} disabled={working || isGenerating}>{t("review.discardAll")}</Button>
+              </span>
               <Button size="sm" onClick={() => void handleSaveSelected()} disabled={working || selected.length === 0}>
                 {working ? t("saving") : t("review.saveToRepo", { n: selected.length || "" })}
               </Button>
@@ -320,6 +442,10 @@ export function ZyraChatReviewPanel({
                     disabled={working}
                     aria-label={t("review.selectRow", { n: index + 1 })}
                   />
+                  {/* Position in the batch — the same index every action addresses, so it renumbers when one is discarded or saved. */}
+                  <span className="mt-0.5 min-w-[1.75rem] shrink-0 text-right font-mono text-[11px] text-[var(--muted)]" data-testid="zyra-review-number">
+                    {index + 1}.
+                  </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <StatusChip tone="info" className="!rounded-[5px] !px-1.5 !py-0 !text-[10px] !font-medium">

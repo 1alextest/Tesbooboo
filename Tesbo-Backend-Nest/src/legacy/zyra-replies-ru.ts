@@ -231,7 +231,59 @@ export const ZYRA_RU = {
   jiraNotSynced:
     "Jira подключена, но синхронизированных тикетов Jira в локальном кэше пока нет. Сначала запустите синхронизацию Jira, затем спросите снова — я посчитаю покрытие.",
   jiraNotConnected:
-    "Jira для этого проекта ещё не подключена, поэтому я не могу посчитать покрытие тест-кейсами. Сначала подключите Jira и синхронизируйте тикеты."
+    "Jira для этого проекта ещё не подключена, поэтому я не могу посчитать покрытие тест-кейсами. Сначала подключите Jira и синхронизируйте тикеты.",
+
+  // zyraTicketScopeQuestion / zyraTicketGroupDecision
+  scopeQuestion: (tickets: number, perTicket: number, preview: string) =>
+    `Этот запрос охватывает ${n(tickets)} тикет(ов)${preview}. При ~${n(perTicket)} тест-кейсах на тикет это около ${n(tickets * perTicket)} тест-кейсов, а одна генерация ограничена 100 — если делать всё сразу, покрытие каждого тикета получится поверхностным. Как продолжим?`,
+  scopeSmallerLabel: "Генерировать небольшими пакетами",
+  scopeSmallerDescription: "Выбирать по 1–2 тикета за раз для лучшего покрытия.",
+  scopeAllLabel: "Сгенерировать для всех тикетов пакетами",
+  scopeAllDescription: (tickets: number) =>
+    `Zyra обработает все ${n(tickets)} тикет(ов) пакетами до 100 тест-кейсов и будет сообщать о прогрессе.`,
+  scopeReasoning: "Запрос охватывает больше тикетов, чем умещается в одну генерацию, — спрашиваю, как продолжить.",
+  selectionPrompt: (total: number, example: string, rangeExample: string, perBatch: number) =>
+    `С каких тикетов начать? Напишите ID тикетов или диапазон — например, ${example} или ${rangeExample}. В области запроса ${n(total)} тикет(ов); для лучшего покрытия называйте до ${n(perBatch)} за раз — более длинный список тоже подойдёт, он будет сгенерирован пакетами. Или сгенерируйте для всех:`,
+  selectionNoTickets: "Ни один из этих тикетов ещё не синхронизирован в Tesbo, поэтому выбирать не из чего. Синхронизируйте их и спросите снова.",
+  selectionNoneSynced: (keys: string) => `Ни один из тикетов ${keys} не синхронизирован в этом проекте.
+
+`,
+  selectionRangeTooLarge: (from: string, to: string, size: number, max: number) =>
+    `Диапазон ${from}–${to} охватывает ${n(size)} тикет(ов) — называйте не больше ${n(max)} за раз или сгенерируйте для всех тикетов пакетами.
+
+`,
+  selectionRequest: (keys: string, exhaustive: boolean) =>
+    exhaustive ? `Сгенерируй все возможные тест-кейсы для ${keys}` : `Сгенерируй тест-кейсы для ${keys}`,
+  selectionReasoning: "Спрашиваю, для каких тикетов генерировать.",
+
+  // ticket-scoped plan
+  ticketsProgress: (planned: number, total: number) => `\n\nТикетов распланировано: ${n(planned)} из ${n(total)}.`,
+  ticketsAllDone: (total: number) => `\n\nВсе ${n(total)} тикет(ов) обработаны.`,
+  ticketsPartial: (processed: number, total: number) => `\n\nТест-кейсы получили ${n(processed)} из ${n(total)} тикет(ов).`,
+  ticketsUnprocessedHeading: (count: number) => `Не удалось сгенерировать тест-кейсы для ${n(count)} тикет(ов):`,
+  ticketNotSynced: "ещё не синхронизирован в Tesbo",
+  ticketNoScenarios: "нет новых сценариев — уже покрыт существующими тест-кейсами",
+  ticketsMoreUnprocessed: (count: number) => `…и ещё ${n(count)}.`,
+  ticketsNoneSynced: (tickets: number) =>
+    `Ни один из ${n(tickets)} выбранных тикетов ещё не синхронизирован в Tesbo, поэтому генерировать не из чего. Синхронизируйте их и спросите снова.`,
+  ticketsNothingNew: (tickets: number) =>
+    `Я прошёл(а) все ${n(tickets)} тикет(ов), но новых сценариев не нашлось — существующие тест-кейсы уже их покрывают.`,
+  // live review batches
+  planBatchGenerating: "Генерирую тест-кейсы для этого пакета — они появляются ниже по мере написания.",
+  planBatchStopped: (kept: number) =>
+    `Генерация остановилась до завершения пакета — ${n(kept)} уже написанных тест-кейс(ов) ниже, их можно проверить.`,
+  planPausedKeptDrafts: (kept: number) => ` ${n(kept)} тест-кейс(ов), написанных до остановки, выше — их можно проверить.`,
+  liveTurnStopped: (kept: number) =>
+    `Генерация остановилась до завершения — ${n(kept)} уже написанных тест-кейс(ов) ниже, их можно проверить.`,
+  liveTurnStoppedReasoning: "Ход завершился с ошибкой после того, как часть тест-кейсов уже была написана; они сохранены.",
+  ticketsSkippedUnsynced: (count: number, keys: string) =>
+    `\n${n(count)} тикет(ов) не синхронизированы в Tesbo и будут пропущены: ${keys}.`,
+  ticketsPlanFailed: (cause: string) =>
+    `Не удалось начать планирование тикетов (${cause}). Ничего не сгенерировано — спросите снова, чтобы повторить.`,
+  ticketsFinished: "Работа по тикетам завершена.",
+  ticketScopedReasoning: "Пакетная генерация по тикетам, по одному тикету за раз.",
+  ticketScopedStarted: (tickets: number, batchSize: number, firstIntro: string, reply: string) =>
+    `Генерирую тест-кейсы для ${n(tickets)} тикет(ов) по одному тикету за раз, пакетами до ${n(batchSize)} тест-кейсов. ${firstIntro} Остальные опубликую здесь по мере готовности; пока можете проверить эти.\n\n${reply}`
 };
 
 const L = "(?<![\\p{L}\\p{N}])"; // start of a word, in any script
