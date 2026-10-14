@@ -9166,8 +9166,13 @@ export class LegacyService implements OnModuleInit {
         values
       )
     ]);
-    const executionStatus = Object.fromEntries(statuses.rows.map((r) => [r.status, Number(r.count)]));
-    const executionTotal = Object.values(executionStatus).reduce((a: number, b) => a + Number(b), 0);
+    // Seeded from EXECUTION_STATUSES so every status is reported, in that order, even at 0 — built from
+    // the GROUP BY rows alone, a status nobody had used yet (e.g. Blocked) vanished from the dashboard
+    // instead of reading "0 of N". A stored value outside the list is still appended, not dropped, so
+    // the buckets keep summing to executionTotal.
+    const executionStatus: Record<string, number> = Object.fromEntries(LegacyService.EXECUTION_STATUSES.map((s) => [s, 0]));
+    for (const r of statuses.rows) executionStatus[r.status] = (executionStatus[r.status] ?? 0) + Number(r.count);
+    const executionTotal = Object.values(executionStatus).reduce((a, b) => a + b, 0);
     return {
       projectCount: Number(projects.rows[0]?.count || 0),
       testCaseCount: Number(testcases.rows[0]?.count || 0),
@@ -9175,8 +9180,33 @@ export class LegacyService implements OnModuleInit {
       planCount: Number(plans.rows[0]?.count || 0),
       cycleCount: Number(cycles.rows[0]?.count || 0),
       executionStatus,
+      executionStatusPercent: LegacyService.wholePercentages(executionStatus, executionTotal),
       executionTotal
     };
+  }
+
+  /**
+   * Whole-number shares of `total` that always sum to exactly 100 (or are all 0 when total is 0).
+   *
+   * Rounding each share on its own does not: 65/35/2/1/1 of 104 rounds to 63+34+2+1+1 = 101%.
+   * Largest remainder instead floors every share, then hands the points still missing to the shares
+   * that lost the most to the floor (ties go to the larger count, then to key order).
+   */
+  private static wholePercentages(counts: Record<string, number>, total: number): Record<string, number> {
+    const keys = Object.keys(counts);
+    if (total <= 0) return Object.fromEntries(keys.map((k) => [k, 0]));
+    // Integer floor/remainder rather than float fractions: 1/6 and 4/6 lose the same 2/3 to the floor,
+    // and only integer math sees that tie as a tie instead of ordering it by rounding noise.
+    const shares = keys.map((k, index) => ({ k, index, count: counts[k], floor: Math.floor((counts[k] * 100) / total), rem: (counts[k] * 100) % total }));
+    const result: Record<string, number> = Object.fromEntries(shares.map((s) => [s.k, s.floor]));
+    let missing = 100 - shares.reduce((sum, s) => sum + s.floor, 0);
+    const byRemainder = [...shares].sort((a, b) => b.rem - a.rem || b.count - a.count || a.index - b.index);
+    for (const e of byRemainder) {
+      if (missing <= 0) break;
+      result[e.k] += 1;
+      missing -= 1;
+    }
+    return result;
   }
 
   async repositorySummary(projectId: string) {
