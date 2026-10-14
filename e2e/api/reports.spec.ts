@@ -297,7 +297,10 @@ test.describe("project analytics counters", () => {
     expect(body.cycleCount).toBe(11);
     // 25 cycle items: flaky in all 11 runs, stable and lowFlake in 6 each, old and noSuite in one.
     expect(body.executionTotal).toBe(25);
-    expect(body.executionStatus).toEqual({ Passed: 18, Failed: 6, Untested: 1 });
+    // Every status is reported, the unused ones at 0, in the canonical EXECUTION_STATUSES order.
+    expect(body.executionStatus).toEqual({ Untested: 1, Passed: 18, Failed: 6, Blocked: 0, Skipped: 0, Retest: 0 });
+    expect(Object.keys(body.executionStatus)).toEqual(EXECUTION_STATUS_ORDER);
+    expect(body.executionStatusPercent).toEqual({ Untested: 4, Passed: 72, Failed: 24, Blocked: 0, Skipped: 0, Retest: 0 });
   });
 
   test("RPT-A-02 a soft-deleted test case leaves the counters, and a soft-deleted execution leaves the status map", { tag: '@tesbo.testId("TES-TC-462")' }, async () => {
@@ -339,10 +342,116 @@ test.describe("project analytics counters", () => {
         suiteCount: 0,
         planCount: 0,
         cycleCount: 0,
-        executionStatus: {},
+        executionStatus: ZERO_BY_STATUS,
+        executionStatusPercent: ZERO_BY_STATUS,
         executionTotal: 0,
       });
     });
+  });
+});
+
+/*
+ * Basecamp "[Dashboard] Execution Status counts are incorrect" — the workspace dashboard's breakdown.
+ *
+ * The counts themselves were right; the breakdown around them was not. executionStatus was built
+ * from the GROUP BY rows alone, so a status nobody had used (Blocked, in the reported workspace)
+ * vanished instead of reading "0 of N", and the page rounded each bucket on its own, so 65/35/2/1/1
+ * of 104 rendered as 63+34+2+1+1 = 101%. The percentages now come from the API, largest-remainder
+ * rounded so they always sum to exactly 100.
+ */
+const EXECUTION_STATUS_ORDER = ["Untested", "Passed", "Failed", "Blocked", "Skipped", "Retest"];
+const ZERO_BY_STATUS = Object.fromEntries(EXECUTION_STATUS_ORDER.map((s) => [s, 0]));
+
+/** A run in `projectId` holding one fresh case per entry of `statuses`, each set to that status. */
+async function seedRunWithStatuses(projectId: string, statuses: string[]): Promise<{ run: SeededRun; cases: SeededCase[] }> {
+  const stamp = Date.now();
+  const cases: SeededCase[] = [];
+  for (let i = 0; i < statuses.length; i++) {
+    cases.push(await seedTestCase(asOwner, projectId, { title: `E2E Reports breakdown case ${stamp}-${i}` }));
+  }
+  const run = await seedRun(asOwner, projectId, { name: `E2E Reports breakdown run ${stamp}` });
+  await addRunCases(asOwner, run.id, cases.map((c) => c.id));
+  const executions = await listRunExecutions(asOwner, run.id);
+  setExecutionResults(
+    executions.map((e) => ({ executionId: e.id, status: statuses[cases.findIndex((c) => c.id === e.testcaseId)] })),
+  );
+  return { run, cases };
+}
+
+function sumOf(map: Record<string, number>): number {
+  return Object.values(map).reduce((a, b) => a + b, 0);
+}
+
+test.describe("execution status breakdown and percentages", () => {
+  test("RPT-A-30 percentages sum to exactly 100 where rounding each bucket alone gives 101", async () => {
+    await withEmptyProject(async (projectId) => {
+      // 1/6, 1/6, 4/6: per-bucket Math.round gives 17 + 17 + 67 = 101.
+      await seedRunWithStatuses(projectId, ["Passed", "Failed", "Untested", "Untested", "Untested", "Untested"]);
+      const body = await getJson(asOwner, `/api/projects/${projectId}/analytics`);
+
+      expect(body.executionTotal).toBe(6);
+      expect(body.executionStatus).toEqual({ ...ZERO_BY_STATUS, Untested: 4, Passed: 1, Failed: 1 });
+      expect(sumOf(body.executionStatusPercent)).toBe(100);
+      // All three lose the same 2/3 to the floor, so the two spare points go to the larger count first,
+      // then to the earlier status in canonical order — deterministic, never float noise.
+      expect(body.executionStatusPercent).toEqual({ ...ZERO_BY_STATUS, Untested: 67, Passed: 17, Failed: 16 });
+    });
+  });
+
+  test("RPT-A-31 an even three-way split still sums to 100, and a single status reads 100%", async () => {
+    await withEmptyProject(async (projectId) => {
+      const { run } = await seedRunWithStatuses(projectId, ["Passed", "Failed", "Blocked"]);
+      const split = await getJson(asOwner, `/api/projects/${projectId}/analytics`);
+      expect(split.executionStatusPercent).toEqual({ ...ZERO_BY_STATUS, Passed: 34, Failed: 33, Blocked: 33 });
+
+      // Edge: everything in one status.
+      const executions = await listRunExecutions(asOwner, run.id);
+      setExecutionResults(executions.map((e) => ({ executionId: e.id, status: "Skipped" })));
+      const single = await getJson(asOwner, `/api/projects/${projectId}/analytics`);
+      expect(single.executionStatus).toEqual({ ...ZERO_BY_STATUS, Skipped: 3 });
+      expect(single.executionStatusPercent).toEqual({ ...ZERO_BY_STATUS, Skipped: 100 });
+    });
+  });
+
+  test("RPT-A-32 the workspace breakdown adds up every project, drops deleted runs, and keeps a deleted case's result", async () => {
+    const before = await getJson(asOwner, "/api/workspace/analytics");
+    expect(Object.keys(before.executionStatus)).toEqual(EXECUTION_STATUS_ORDER);
+    expect(sumOf(before.executionStatus)).toBe(before.executionTotal);
+
+    const projectA = await seedProject(asOwner, `E2E ${Date.now()} Reports Workspace A`);
+    const projectB = await seedProject(asOwner, `E2E ${Date.now()} Reports Workspace B`);
+    try {
+      const a = await seedRunWithStatuses(projectA, ["Passed", "Passed"]);
+      const b = await seedRunWithStatuses(projectB, ["Failed", "Blocked", "Retest"]);
+
+      const delta = (now: any, status: string) => now.executionStatus[status] - before.executionStatus[status];
+      const during = await getJson(asOwner, "/api/workspace/analytics");
+      expect(during.executionTotal - before.executionTotal, "both projects are summed").toBe(5);
+      expect(delta(during, "Passed")).toBe(2);
+      expect(delta(during, "Failed")).toBe(1);
+      expect(delta(during, "Blocked")).toBe(1);
+      expect(delta(during, "Retest")).toBe(1);
+      expect(sumOf(during.executionStatus)).toBe(during.executionTotal);
+      expect(sumOf(during.executionStatusPercent)).toBe(100);
+
+      // A deleted test case's result stays counted: the run keeps its snapshot of the case (V119) and
+      // the run page still lists it, so the dashboard must agree with the run page.
+      await asOwner.delete(`/api/projects/${projectB}/testcases/${b.cases[0].id}`);
+      expect((await listRunExecutions(asOwner, b.run.id)).length, "the run page still lists the case").toBe(3);
+      const afterCaseDelete = await getJson(asOwner, "/api/workspace/analytics");
+      expect(delta(afterCaseDelete, "Failed")).toBe(1);
+
+      // A deleted run is not a result at all.
+      const deleted = await asOwner.delete(`/api/cycles/${a.run.id}`, { failOnStatusCode: false });
+      expect(deleted.ok(), `deleting the run — ${deleted.status()}`).toBeTruthy();
+      const afterRunDelete = await getJson(asOwner, "/api/workspace/analytics");
+      expect(delta(afterRunDelete, "Passed")).toBe(0);
+      expect(afterRunDelete.executionTotal - before.executionTotal).toBe(3);
+      expect(sumOf(afterRunDelete.executionStatusPercent)).toBe(100);
+    } finally {
+      purgeProject(projectA);
+      purgeProject(projectB);
+    }
   });
 });
 
@@ -597,6 +706,86 @@ test.describe("traceability matrix", () => {
     await withEmptyProject(async (projectId) => {
       const body = await getJson(asOwner, `/api/projects/${projectId}/reports/requirement-matrix`);
       expect(body).toEqual({ rows: [] });
+    });
+  });
+
+  // The Reports tab pages the matrix by test case; without `limit` the full matrix is unchanged
+  // (RPT-A-19..23), which is what the export and MCP callers rely on.
+  test("RPT-A-23b paging is by test case: a case's runs are never split across pages and no case repeats", async () => {
+    const url = `/api/projects/${fixture.projectId}/reports/requirement-matrix`;
+    const full = await getJson(asOwner, url);
+    const caseIds: string[] = [...new Set<string>(full.rows.map((r: any) => r.testcaseId))];
+    expect(caseIds.length).toBeGreaterThan(2);
+
+    const seen: string[] = [];
+    let rowTotal = 0;
+    for (let offset = 0; offset < caseIds.length; offset += 2) {
+      const page = await getJson(asOwner, `${url}?limit=2&offset=${offset}`);
+      expect(page.total).toBe(caseIds.length);
+      expect(page.limit).toBe(2);
+      expect(page.offset).toBe(offset);
+      const pageCaseIds = [...new Set<string>(page.rows.map((r: any) => r.testcaseId))];
+      expect(pageCaseIds.length).toBeLessThanOrEqual(2);
+      // Every run of a case on the page is present (not cut mid-case).
+      for (const id of pageCaseIds) {
+        expect(page.rows.filter((r: any) => r.testcaseId === id)).toHaveLength(
+          full.rows.filter((r: any) => r.testcaseId === id).length,
+        );
+      }
+      seen.push(...pageCaseIds);
+      rowTotal += page.rows.length;
+    }
+    expect(seen).toHaveLength(caseIds.length);
+    expect(new Set(seen).size).toBe(caseIds.length);
+    expect(rowTotal).toBe(full.rows.length);
+
+    const past = await getJson(asOwner, `${url}?limit=2&offset=${caseIds.length + 10}`);
+    expect(past.rows).toEqual([]);
+    expect(past.total).toBe(caseIds.length);
+  });
+
+  test("RPT-A-23c a server-side search narrows to matching rows and reports the matching case count", async () => {
+    const url = `/api/projects/${fixture.projectId}/reports/requirement-matrix`;
+    const byId = await getJson(
+      asOwner,
+      `${url}?limit=50&offset=0&search=${encodeURIComponent(fixture.cases.flaky.externalId)}`,
+    );
+    expect(byId.total).toBe(1);
+    expect(byId.rows).toHaveLength(11);
+    expect(byId.rows.every((r: any) => r.testcaseId === fixture.cases.flaky.id)).toBeTruthy();
+
+    // A bug title matches only the rows that carry the bug, as the old client-side filter did.
+    const byBug = await getJson(
+      asOwner,
+      `${url}?limit=50&offset=0&search=${encodeURIComponent(fixture.bugTitles.thisWeek)}`,
+    );
+    expect(byBug.rows.length).toBeGreaterThan(0);
+    expect(byBug.rows.every((r: any) => r.bugTitle === fixture.bugTitles.thisWeek)).toBeTruthy();
+
+    const none = await getJson(asOwner, `${url}?limit=50&offset=0&search=zzz-matches-nothing-${Date.now()}`);
+    expect(none).toMatchObject({ rows: [], total: 0 });
+  });
+
+  test("RPT-A-23d search text is literal: LIKE wildcards match nothing, and limit is clamped", async () => {
+    const url = `/api/projects/${fixture.projectId}/reports/requirement-matrix`;
+    // Every fixture title starts "E2E Reports ...", so an unescaped `_` or `%` would match it.
+    const literal = await getJson(asOwner, `${url}?limit=50&offset=0&search=${encodeURIComponent("E2E Reports")}`);
+    expect(literal.total).toBeGreaterThan(0);
+    for (const wildcard of ["E_E Reports", "E%Reports", "E\\E Reports"]) {
+      const body = await getJson(asOwner, `${url}?limit=50&offset=0&search=${encodeURIComponent(wildcard)}`);
+      expect(body.total, `search "${wildcard}" must be matched literally`).toBe(0);
+    }
+    const huge = await getJson(asOwner, `${url}?limit=100000&offset=0`);
+    expect(huge.limit).toBe(200);
+    const junk = await getJson(asOwner, `${url}?limit=abc`);
+    expect(Array.isArray(junk.rows)).toBeTruthy(); // not a number: falls back to the unpaged matrix
+    expect(junk.total).toBeUndefined();
+  });
+
+  test("RPT-A-23e a paged request on an empty project reports zero cases", async () => {
+    await withEmptyProject(async (projectId) => {
+      const body = await getJson(asOwner, `/api/projects/${projectId}/reports/requirement-matrix?limit=50&offset=0`);
+      expect(body).toEqual({ rows: [], total: 0, limit: 50, offset: 0 });
     });
   });
 });
