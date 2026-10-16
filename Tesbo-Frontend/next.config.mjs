@@ -4,13 +4,23 @@ import { withSentryConfig } from "@sentry/nextjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/** @type {import("next").NextConfig} */
+
 const nextConfig = {
-  // Repo root has a lockfile but no `next`; pin Turbopack root so `next` resolves.
   turbopack: {
     root: __dirname,
   },
+
+  async rewrites() {
+    return [
+      {
+        source: "/api/:path*",
+        destination:
+          "https://exquisite-eagerness-production-7e90.up.railway.app/api/:path*",
+      },
+    ];
+  },
 };
+
 
 // Source maps upload is opt-in via SENTRY_AUTH_TOKEN on stage CI only.
 // without an auth token we still wrap for webpack instrumentation but skip uploads.
