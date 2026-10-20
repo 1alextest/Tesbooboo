@@ -91,7 +91,11 @@ export default defineConfig({
          * and without this there is no way to run the suite without reporting now that every
          * checkout carries a working token. TESBO_REPORTER_ENABLED=0 turns it off.
          */
-        enabled: process.env.TESBO_REPORTER_ENABLED !== "0",
+        // Fork/PR CI jobs do not receive project secrets. Reporting is explicitly
+        // disabled unless the workflow supplies all credentials from its trusted context.
+        enabled:
+          process.env.TESBO_REPORTER_ENABLED !== "0" &&
+          Boolean(process.env.TESBO_API_TOKEN?.trim()),
       },
     ],
   ],
