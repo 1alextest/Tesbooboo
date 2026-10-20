@@ -1,0 +1,42 @@
+name: CI hygiene
+
+on:
+  pull_request:
+  push:
+    branches: [development, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  workflow-lint:
+    name: workflow-lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install verified actionlint release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="1.7.7"
+          curl -fLsS --retry 3 "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz" -o /tmp/actionlint.tar.gz
+          curl -fLsS --retry 3 "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_checksums.txt" -o /tmp/checksums.txt
+          grep "actionlint_${version}_linux_amd64.tar.gz" /tmp/checksums.txt | awk '{print $1 "  /tmp/actionlint.tar.gz"}' | sha256sum -c -
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+      - name: Validate GitHub Actions workflows
+        run: /tmp/actionlint -color
+
+  migration-names:
+    name: migration-names
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Validate SQL migration numbering
+        run: node scripts/check-migrations.mjs
