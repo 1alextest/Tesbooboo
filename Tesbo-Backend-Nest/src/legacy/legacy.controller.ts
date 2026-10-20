@@ -891,13 +891,13 @@ export class LegacyController {
   }
 
   @Patch("/api/cycles/schedules/:scheduleId")
-  async updateSchedule(@Req() req: AuthenticatedRequest, @Param("scheduleId") scheduleId: string) {
+  async updateSchedule(@Req() req: AuthenticatedRequest, @Param("scheduleId") _scheduleId: string) {
     await this.legacy.requireSession(req.userId);
     throw new NotImplementedException({ error: "Scheduled runs are not available yet" });
   }
 
   @Delete("/api/cycles/schedules/:scheduleId")
-  async deleteSchedule(@Req() req: AuthenticatedRequest, @Param("scheduleId") scheduleId: string) {
+  async deleteSchedule(@Req() req: AuthenticatedRequest, @Param("scheduleId") _scheduleId: string) {
     await this.legacy.requireSession(req.userId);
     throw new NotImplementedException({ error: "Scheduled runs are not available yet" });
   }
