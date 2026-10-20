@@ -1,0 +1,35 @@
+name: Free repository security
+on:
+  pull_request:
+  push:
+    branches: [development, main]
+  schedule:
+    - cron: "29 2 * * 4"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  workflow-security:
+    name: workflow-security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install zizmor (open source) from PyPI
+        run: pipx install zizmor
+      - name: Report GitHub Actions security findings
+        run: zizmor --format github --min-severity high .github/workflows
+
+  current-tree-secrets:
+    name: current-tree-secrets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Scan current repository contents for secrets
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks:latest dir /repo --redact --exit-code 1

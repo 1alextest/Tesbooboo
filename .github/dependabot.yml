@@ -1,25 +1,63 @@
+# Free Dependabot version updates. All changes arrive as PRs to development.
+# No auto-merge, no paid security subscription.
 version: 2
 updates:
-  - package-ecosystem: npm
-    directory: /Tesbo-Frontend
+  - package-ecosystem: "npm"
+    directory: "/Tesbo-Backend-Nest"
+    target-branch: "development"
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 0
-
-  - package-ecosystem: npm
-    directory: /
+      interval: "weekly"
+    open-pull-requests-limit: 2
+    groups:
+      safe-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "npm"
+    directory: "/Tesbo-Frontend"
+    target-branch: "development"
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 0
-
-  - package-ecosystem: npm
-    directory: /Tesbo-Backend-Nest
+      interval: "weekly"
+    open-pull-requests-limit: 2
+    groups:
+      safe-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "npm"
+    directory: "/e2e"
+    target-branch: "development"
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 0
-
-  - package-ecosystem: github-actions
-    directory: /
+      interval: "weekly"
+    open-pull-requests-limit: 2
+    groups:
+      safe-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "npm"
+    directory: "/sdk/playwright-reporter"
+    target-branch: "development"
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 0
+      interval: "weekly"
+    open-pull-requests-limit: 2
+    groups:
+      safe-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "npm"
+    directory: "/"
+    target-branch: "development"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 2
+    groups:
+      safe-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "development"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 2
+    groups:
+      action-updates:
+        patterns: ["*"]
