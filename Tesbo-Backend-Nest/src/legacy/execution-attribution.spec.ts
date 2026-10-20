@@ -75,17 +75,20 @@ describe("execution attribution", () => {
     const { svc, query } = setup();
     await svc.updateExecution(execution, actor, { actualResult: "Added clarification" });
     const update = query.mock.calls.find(([sql]) => sql.includes("UPDATE executions SET"));
-    expect(update).toBeDefined();
-    expect(update![0]).toContain("executed_by=CASE WHEN $2 IS NULL THEN executed_by ELSE $7 END");
-    expect(update![1][1]).toBeNull();
-    expect(update![1][6]).toBe(actor);
+    if (!update || !update[1]) throw new Error("Expected execution UPDATE with SQL parameters");
+    const [sql, params] = update;
+    expect(sql).toContain("executed_by=CASE WHEN $2 IS NULL THEN executed_by ELSE $7 END");
+    expect(params[1]).toBeNull();
+    expect(params[6]).toBe(actor);
   });
 
   it("attributes an explicit execution status write to the acting user", async () => {
     const { svc, query } = setup();
     await svc.updateExecution(execution, actor, { status: "Failed" });
     const update = query.mock.calls.find(([sql]) => sql.includes("UPDATE executions SET"));
-    expect(update![1][1]).toBe("Failed");
-    expect(update![1][6]).toBe(actor);
+    if (!update || !update[1]) throw new Error("Expected execution UPDATE with SQL parameters");
+    const [, params] = update;
+    expect(params[1]).toBe("Failed");
+    expect(params[6]).toBe(actor);
   });
 });
