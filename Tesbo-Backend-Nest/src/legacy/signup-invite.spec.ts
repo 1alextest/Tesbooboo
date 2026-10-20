@@ -70,7 +70,8 @@ function makeService(opts: {
         ? jest.fn().mockRejectedValue(opts.invitation)
         : jest.fn().mockResolvedValue(opts.invitation),
     logWorkspaceActivity: jest.fn().mockResolvedValue(undefined),
-    logProjectActivity: jest.fn().mockResolvedValue(undefined)
+    logProjectActivity: jest.fn().mockResolvedValue(undefined),
+    notifyInvitationAccepted: jest.fn().mockResolvedValue(undefined)
   } as unknown as LegacyService;
 
   const welcomeEmail = { schedule: jest.fn().mockResolvedValue(undefined) } as unknown as WelcomeEmailService;
@@ -202,6 +203,8 @@ describe("SignupService — invite-based registration", () => {
       expect(legacy.logProjectActivity).toHaveBeenCalledWith(
         "proj-1", "new-user-1", "project_member_added", "project_member", "new-user-1", "bob@example.com", { role: "qa_engineer", via: "invitation_registered" }
       );
+      expect(legacy.notifyInvitationAccepted).toHaveBeenCalledTimes(1);
+      expect(legacy.notifyInvitationAccepted).toHaveBeenCalledWith("inv-1", "new-user-1");
       // The welcome email is scheduled for the committed user, exactly once.
       expect(welcomeEmail.schedule).toHaveBeenCalledTimes(1);
       expect(welcomeEmail.schedule).toHaveBeenCalledWith("new-user-1");

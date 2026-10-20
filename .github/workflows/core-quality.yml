@@ -1,0 +1,91 @@
+name: Core code quality
+
+on:
+  pull_request:
+  push:
+    branches: [development, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-quality:
+    name: backend-quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: Tesbo-Backend-Nest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
+      - run: npm ci --ignore-scripts
+      - name: Backend typecheck
+        run: npm run typecheck
+      - name: Backend lint (frozen legacy baseline; zero new errors)
+        run: node ../scripts/check-lint-baseline.mjs backend
+      - name: Backend production compilation
+        run: npm run build
+      - name: Backend unit and integration regressions
+        run: npm test -- --coverage --coverageReporters=text-summary
+
+  frontend-quality:
+    name: frontend-quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: Tesbo-Frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Tesbo-Frontend/package-lock.json
+      - run: npm ci --ignore-scripts
+      - name: Frontend lint (frozen legacy baseline; zero new errors)
+        run: node ../scripts/check-lint-baseline.mjs frontend
+      - name: Frontend TypeScript
+        run: npx tsc --noEmit
+      - name: Frontend production build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: npm run build
+
+  sdk-quality:
+    name: sdk-quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: sdk/playwright-reporter
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: sdk/playwright-reporter/package-lock.json
+      - run: npm ci --ignore-scripts
+      - name: SDK typecheck
+        run: npm run typecheck
+      - name: SDK tests
+        run: npm test
+      - name: SDK production compilation
+        run: npm run build
