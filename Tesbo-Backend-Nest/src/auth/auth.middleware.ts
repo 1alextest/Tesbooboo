@@ -14,28 +14,28 @@ export class AuthMiddleware implements NestMiddleware {
   ) {}
 
   async use(req: AuthenticatedRequest, _res: Response, next: NextFunction) {
-    // Primary path: browser session cookie.
-    const sessionToken = req.cookies?.[this.config.sessionCookieName];
-    req.userId = sessionToken ? await this.otpService.resolveSession(sessionToken) : null;
+    // Explicit bearer credentials cannot inherit permissions from a browser cookie.
+    const authorization = req.headers?.authorization;
+    const rawHeader = Array.isArray(authorization) ? authorization[0] : authorization;
+    const presentingBearer = /^Bearer(?:\\s|$)/i.test(rawHeader?.trim() ?? "");
+    req.userId = null;
     req.apiToken = null;
 
-    // Secondary path: API bearer token for machine clients (e.g. the MCP server).
-    // Only consulted when there is no valid browser session, so the same API
-    // serves both the frontend and token-authenticated automation.
-    if (!req.userId) {
-      const bearer = this.extractBearerToken(req.headers?.authorization);
-      if (bearer) {
-        const principal = await this.apiTokens.authenticate(bearer);
-        if (principal) {
-          req.userId = principal.userId;
-          req.apiToken = {
-            tokenId: principal.tokenId,
-            userId: principal.userId,
-            projectId: principal.projectId,
-            scopes: principal.scopes
-          };
-        }
+    if (presentingBearer) {
+      const bearer = this.extractBearerToken(authorization);
+      const principal = bearer ? await this.apiTokens.authenticate(bearer) : null;
+      if (principal) {
+        req.userId = principal.userId;
+        req.apiToken = {
+          tokenId: principal.tokenId,
+          userId: principal.userId,
+          projectId: principal.projectId,
+          scopes: principal.scopes
+        };
       }
+    } else {
+      const sessionToken = req.cookies?.[this.config.sessionCookieName];
+      req.userId = sessionToken ? await this.otpService.resolveSession(sessionToken) : null;
     }
 
     next();
