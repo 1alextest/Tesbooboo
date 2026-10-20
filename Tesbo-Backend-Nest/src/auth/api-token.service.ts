@@ -109,9 +109,9 @@ export class ApiTokenService {
     name: string,
     scopesInput?: unknown
   ): Promise<ApiTokenSummary & { token: string }> {
+    const scopes = this.normalizeScopes(scopesInput).join(",");
     const rawToken = this.generateRawToken();
     const tokenHash = this.hashToken(rawToken);
-    const scopes = this.normalizeScopes(scopesInput).join(",");
     const res = await this.db.query(
       `INSERT INTO api_tokens (user_id, project_id, name, token_hash, scopes)
        VALUES ($1, $2, $3, $4, $5)
