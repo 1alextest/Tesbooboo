@@ -30,4 +30,4 @@ jobs:
       - name: TypeScript typecheck
         run: npm run typecheck
       - name: Focused unit and HTTP regressions
-        run: npm test -- --runTestsByPath src/auth/api-token.service.spec.ts src/auth/api-token-rest.guard.spec.ts src/auth/auth.middleware.spec.ts src/mcp/mcp.service.spec.ts
+        run: npm test -- --runTestsByPath src/auth/api-token.service.spec.ts src/auth/api-token-rest.guard.spec.ts src/auth/api-token-rest.integration.spec.ts src/auth/auth.middleware.spec.ts src/mcp/mcp.service.spec.ts
