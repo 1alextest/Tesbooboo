@@ -1,7 +1,7 @@
 import { Controller, Get, INestApplication, Module, Post } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
-import request from "supertest";
+import type { AddressInfo } from "node:net";
 import { ApiTokenRestGuard } from "./api-token-rest.guard";
 import { LegacyService } from "../legacy/legacy.service";
 import type { AuthenticatedRequest } from "../common/request.types";
@@ -21,6 +21,15 @@ class CasesModule {}
 describe("ApiTokenRestGuard at the Nest HTTP boundary", () => {
   let app: INestApplication;
   const member = jest.fn().mockResolvedValue({ id: PROJECT });
+  let baseUrl: string;
+  async function send(method: "GET" | "POST", scope: "read" | "write" = "read") {
+    const response = await fetch(`${baseUrl}/api/projects/${PROJECT}/testcases`, {
+      method,
+      headers: { "x-test-scope": scope, ...(method === "POST" ? { "content-type": "application/json" } : {}) },
+      ...(method === "POST" ? { body: "{}" } : {})
+    });
+    return { status: response.status, body: await response.json() };
+  }
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
@@ -39,34 +48,30 @@ describe("ApiTokenRestGuard at the Nest HTTP boundary", () => {
       };
       next();
     });
-    await app.init();
+    await app.listen(0, "127.0.0.1");
+    baseUrl = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`;
   });
 
   afterAll(async () => { await app?.close(); });
   beforeEach(() => { member.mockClear(); });
 
   it("rejects read-token writes and allows reads", async () => {
-    await request(app.getHttpServer())
-      .post(`/api/projects/${PROJECT}/testcases`)
-      .send({ title: "not allowed" }).expect(403);
+    const rejected = await send("POST");
+    expect(rejected.status).toBe(403);
     expect(member).not.toHaveBeenCalled();
 
-    await request(app.getHttpServer())
-      .get(`/api/projects/${PROJECT}/testcases`)
-      .expect(200, { ok: true });
+    const allowed = await send("GET");
+    expect(allowed).toEqual({ status: 200, body: { ok: true } });
     expect(member).toHaveBeenCalledWith("u", PROJECT);
   });
 
   it("checks membership for writes and denies revoked issuers", async () => {
-    await request(app.getHttpServer())
-      .post(`/api/projects/${PROJECT}/testcases`)
-      .set("x-test-scope", "write")
-      .send({}).expect(201);
+    const allowed = await send("POST", "write");
+    expect(allowed).toEqual({ status: 201, body: { created: true } });
+
     const { ForbiddenException } = await import("@nestjs/common");
     member.mockRejectedValueOnce(new ForbiddenException("revoked"));
-    await request(app.getHttpServer())
-      .post(`/api/projects/${PROJECT}/testcases`)
-      .set("x-test-scope", "write")
-      .send({}).expect(403);
+    const rejected = await send("POST", "write");
+    expect(rejected.status).toBe(403);
   });
 });
