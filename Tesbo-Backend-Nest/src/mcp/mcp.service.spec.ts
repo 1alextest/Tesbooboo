@@ -8,6 +8,7 @@ import { MCP_PROTOCOL_VERSION, MCP_SERVER_INSTRUCTIONS, MCP_SERVER_NAME, RpcCode
 function makeLegacy(overrides: Partial<Record<string, jest.Mock>> = {}) {
   return {
     getProject: jest.fn().mockResolvedValue({ id: "proj-1", name: "Demo" }),
+    requireProjectAccess: jest.fn().mockResolvedValue({ id: "proj-1" }),
     listTestCases: jest.fn().mockResolvedValue({ rows: [{ id: "tc-1" }], total: 1 }),
     createTestCase: jest.fn().mockResolvedValue({ id: "tc-new" }),
     updateTestCase: jest.fn().mockResolvedValue(undefined),
@@ -303,6 +304,31 @@ describe("McpService", () => {
       const svc = new McpService(makeLegacy(), db);
       const res: any = await svc.handleRequest(rpc("tools/list"), principal({ projectId: null }), "proj-1");
       expect(res.error.code).toBe(RpcCode.ProjectScopeDenied);
+    });
+  });
+
+  describe("current issuer membership", () => {
+    it("checks project membership for MCP discovery", async () => {
+      const { db } = makeDb();
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db);
+      await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
+      expect(legacy.requireProjectAccess).toHaveBeenCalledWith("user-1", "proj-1");
+    });
+
+    it("denies a revoked issuer before invoking the tool", async () => {
+      const { db } = makeDb();
+      const legacy = makeLegacy({
+        requireProjectAccess: jest.fn().mockRejectedValue(new (require("@nestjs/common").NotFoundException)("revoked"))
+      });
+      const svc = new McpService(legacy, db);
+      const res: any = await svc.handleRequest(
+        rpc("tools/call", { name: "list_testcases", arguments: {} }),
+        principal(),
+        "proj-1"
+      );
+      expect(res.error.code).toBe(RpcCode.ProjectScopeDenied);
+      expect(legacy.listTestCases).not.toHaveBeenCalled();
     });
   });
 
