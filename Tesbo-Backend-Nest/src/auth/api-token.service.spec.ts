@@ -51,7 +51,7 @@ describe("ApiTokenService", () => {
     });
 
     it("defaults omitted scopes to read only", async () => {
-      const { db, query } = makeDb();
+      const { db, query } = makeDb([{ id: "t", name: "n", scopes: "read", token_hash: "a".repeat(64), last_used_at: null, created_at: "now" }]);
       await new ApiTokenService(db).issueToken("u", "p", "n");
       expect(query.mock.calls[0][1][4]).toBe("read");
     });
@@ -66,7 +66,7 @@ describe("ApiTokenService", () => {
     );
 
     it("deduplicates normalized valid scopes", async () => {
-      const { db, query } = makeDb();
+      const { db, query } = makeDb([{ id: "t", name: "n", scopes: "write,read", token_hash: "b".repeat(64), last_used_at: null, created_at: "now" }]);
       await new ApiTokenService(db).issueToken("u", "p", "n", [" Write ", "READ", "read"]);
       expect(query.mock.calls[0][1][4]).toBe("write,read");
     });
