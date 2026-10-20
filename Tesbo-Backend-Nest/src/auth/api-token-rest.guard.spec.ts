@@ -47,6 +47,24 @@ describe("ApiTokenRestGuard", () => {
     expect(await new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(request(path, "POST"))).toBe(true);
     expect(l.requireProjectAccess).not.toHaveBeenCalled();
   });
+  it.each([
+    "POST /apikeys", "GET /apikeys", "DELETE /apikeys/token-2",
+    "POST /members", "GET /members", "DELETE /members/user-2"
+  ])("blocks bearer project administration %s", async route => {
+    const [method, suffix] = route.split(" ");
+    const l = legacy();
+    await expect(new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(
+      request(`/api/projects/${P}${suffix}`, method, ["read", "write"])
+    )).rejects.toBeInstanceOf(ForbiddenException);
+    expect(l.requireProjectAccess).not.toHaveBeenCalled();
+  });
+
+  it.each(["PATCH", "DELETE"])("blocks bearer project administration %s /projects/:id", async method => {
+    await expect(new ApiTokenRestGuard(legacy() as unknown as LegacyService).canActivate(
+      request(`/api/projects/${P}`, method, ["read", "write"])
+    )).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
   it("denies revoked project membership", async () => {
     const l = legacy(); l.requireProjectAccess.mockRejectedValue(new ForbiddenException());
     await expect(new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(request(`/api/projects/${P}/testcases`, "GET"))).rejects.toBeInstanceOf(ForbiddenException);
