@@ -1,0 +1,86 @@
+name: Behavioral quality
+on:
+  pull_request:
+  push:
+    branches: [development, main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  database-integrity:
+    name: database-integrity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tesbo_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tesbo_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+    defaults:
+      run:
+        working-directory: Tesbo-Backend-Nest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tesbo_ci
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Apply all migrations
+        run: npm run migrate
+      - name: Prove migration runner is idempotent
+        run: npm run migrate
+      - name: Validate schema invariants and real audit triggers
+        run: node scripts/ci/check-db-integrity.cjs
+
+  api-mcp-contracts:
+    name: api-mcp-contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Tesbo-Backend-Nest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
+      - run: npm ci --ignore-scripts
+      - name: Exercise real Nest HTTP auth and MCP service contracts
+        run: npm test -- --runTestsByPath src/auth/api-token-rest.integration.spec.ts src/auth/api-token-rest.guard.spec.ts src/auth/api-token.service.spec.ts src/mcp/mcp.service.spec.ts src/review-board/review-board.http.integration.spec.ts
+
+  transactional-concurrency:
+    name: transactional-concurrency
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Tesbo-Backend-Nest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
+      - run: npm ci --ignore-scripts
+      - name: Deterministic concurrent transitions and data-integrity regressions
+        run: npm test -- --runTestsByPath src/legacy/zyra-plan-concurrency.spec.ts src/legacy/zyra-turn-trace.spec.ts src/integration-sync/integration-sync.processor.spec.ts src/review-board/review-board.integration.spec.ts

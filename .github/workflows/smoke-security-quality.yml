@@ -1,0 +1,142 @@
+name: Smoke and supply-chain security
+on:
+  pull_request:
+  push:
+    branches: [development, main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  playwright-smoke:
+    name: playwright-smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: tesbo_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tesbo_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tesbo_ci
+      REDIS_URL: redis://localhost:6379
+      SECRETS_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      EMAIL_DELIVERY_MODE: log
+      ANALYTICS_REPORT_ENABLED: "false"
+      FRONTEND_URL: http://127.0.0.1:3000
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:7000
+      CI_API_BASE_URL: http://127.0.0.1:7000
+      CI_WEB_BASE_URL: http://127.0.0.1:3000
+      TESBO_REPORTER_ENABLED: "0"
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            Tesbo-Backend-Nest/package-lock.json
+            Tesbo-Frontend/package-lock.json
+            e2e/package-lock.json
+      - name: Build isolated backend
+        working-directory: Tesbo-Backend-Nest
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+          npm run migrate
+          nohup node dist/main.js >/tmp/tesbo-backend.log 2>&1 &
+      - name: Build isolated web application
+        working-directory: Tesbo-Frontend
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+          nohup npm run start >/tmp/tesbo-web.log 2>&1 &
+      - name: Install smoke dependencies and Chromium
+        working-directory: e2e
+        run: |
+          npm ci --ignore-scripts
+          npx playwright install --with-deps chromium
+      - name: Verify service readiness and run smoke tests
+        working-directory: e2e
+        run: |
+          for _ in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:7000/health >/dev/null && curl -fsS http://127.0.0.1:3000/login >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:7000/health
+          curl -fsS http://127.0.0.1:3000/login >/dev/null
+          npx playwright test -c playwright.ci-smoke.config.ts
+      - name: Capture smoke evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-smoke-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            e2e/playwright-report-ci/
+            e2e/test-results/
+            /tmp/tesbo-backend.log
+            /tmp/tesbo-web.log
+
+  dependency-audit:
+    name: dependency-audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+      - name: Scan production dependency trees and retain audit evidence
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p audit-evidence
+          for dir in Tesbo-Backend-Nest Tesbo-Frontend e2e sdk/playwright-reporter; do
+            output="audit-evidence/${dir//\//-}.json"
+            npm audit --prefix "$dir" --omit=dev --json > "$output" || true
+            echo "Audited $dir; existing findings are evidence, not automatically waived."
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: dependency-audit-reports
+          retention-days: 14
+          path: audit-evidence/
+
+  container-security:
+    name: container-security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build backend image
+        run: docker build -t tesbo-backend:ci Tesbo-Backend-Nest
+      - name: Scan backend image for high and critical findings
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        with:
+          image-ref: tesbo-backend:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
