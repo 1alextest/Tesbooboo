@@ -9,7 +9,7 @@ function fixture(principal: object | null = { tokenId: "t", userId: "machine", p
   const otp = { resolveSession: jest.fn().mockResolvedValue("browser") };
   const api = { authenticate: jest.fn().mockResolvedValue(principal) };
   const mw = new AuthMiddleware(
-    { sessionCookieName: "session" } as AppConfigService,
+    { sessionCookieName: "session" } as unknown as AppConfigService,
     otp as unknown as OtpService,
     api as unknown as ApiTokenService
   );
