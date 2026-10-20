@@ -1,0 +1,33 @@
+name: API token authorization
+
+on:
+  pull_request:
+    paths:
+      - "Tesbo-Backend-Nest/src/auth/**"
+      - "Tesbo-Backend-Nest/src/mcp/**"
+      - "Tesbo-Backend-Nest/src/app.module.ts"
+      - ".github/workflows/api-token-boundary.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  authorization:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Tesbo-Backend-Nest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
+      - run: npm ci --ignore-scripts
+      - name: TypeScript typecheck
+        run: npm run typecheck
+      - name: Focused unit and HTTP regressions
+        run: npm test -- --runTestsByPath src/auth/api-token.service.spec.ts src/auth/api-token-rest.guard.spec.ts src/auth/api-token-rest.integration.spec.ts src/auth/auth.middleware.spec.ts src/mcp/mcp.service.spec.ts

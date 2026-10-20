@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { createHash, randomBytes } from "crypto";
 import { DatabaseService } from "../database/database.service";
 
@@ -56,14 +56,19 @@ export class ApiTokenService {
   }
 
   private normalizeScopes(input: unknown): string[] {
+    // Existing UI sends explicit selections. Missing input is read-only;
+    // invalid or empty selections must never silently grant write access.
+    if (input === undefined || input === null) return ["read"];
+    if (!Array.isArray(input) && typeof input !== "string") {
+      throw new BadRequestException({ error: "scopes must be an array or comma-separated string" });
+    }
     const requested = Array.isArray(input)
-      ? input.map((s) => String(s).trim().toLowerCase())
-      : String(input ?? "")
-          .split(",")
-          .map((s) => s.trim().toLowerCase());
-    const filtered = requested.filter((s) => VALID_SCOPES.has(s));
-    // Default to read+write when nothing valid was supplied.
-    return filtered.length ? Array.from(new Set(filtered)) : ["read", "write"];
+      ? input.map((s) => (typeof s === "string" ? s.trim().toLowerCase() : ""))
+      : input.split(",").map((s) => s.trim().toLowerCase());
+    if (!requested.length || requested.some((s) => !VALID_SCOPES.has(s))) {
+      throw new BadRequestException({ error: "scopes must contain only read and/or write" });
+    }
+    return Array.from(new Set(requested));
   }
 
   private toSummary(row: {
@@ -104,9 +109,9 @@ export class ApiTokenService {
     name: string,
     scopesInput?: unknown
   ): Promise<ApiTokenSummary & { token: string }> {
+    const scopes = this.normalizeScopes(scopesInput).join(",");
     const rawToken = this.generateRawToken();
     const tokenHash = this.hashToken(rawToken);
-    const scopes = this.normalizeScopes(scopesInput).join(",");
     const res = await this.db.query(
       `INSERT INTO api_tokens (user_id, project_id, name, token_hash, scopes)
        VALUES ($1, $2, $3, $4, $5)

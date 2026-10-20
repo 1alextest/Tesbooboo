@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { Injectable, Logger } from "@nestjs/common";
+import { ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
 import type { ApiTokenContext } from "../common/request.types";
@@ -132,6 +132,18 @@ export class McpService {
       }
       if (principal.projectId !== urlProjectId) {
         throw new McpError(RpcCode.ProjectScopeDenied, "API token is not scoped to this project");
+      }
+      if (!principal.userId) {
+        throw new McpError(RpcCode.ProjectScopeDenied, "API token has no current project member");
+      }
+      // Project membership and active workspace may have changed since token issuance.
+      try {
+        await this.legacy.requireProjectAccess(principal.userId, principal.projectId);
+      } catch (err) {
+        if (err instanceof NotFoundException || err instanceof ForbiddenException || err instanceof UnauthorizedException) {
+          throw new McpError(RpcCode.ProjectScopeDenied, "API token issuer no longer has access to this project");
+        }
+        throw err;
       }
 
       const params = (req.params ?? {}) as Record<string, unknown>;
