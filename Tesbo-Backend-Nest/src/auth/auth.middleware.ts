@@ -17,7 +17,7 @@ export class AuthMiddleware implements NestMiddleware {
     // Explicit bearer credentials cannot inherit permissions from a browser cookie.
     const authorization = req.headers?.authorization;
     const rawHeader = Array.isArray(authorization) ? authorization[0] : authorization;
-    const presentingBearer = /^Bearer(?:\\s|$)/i.test(rawHeader?.trim() ?? "");
+    const presentingBearer = /^Bearer(?:\s|$)/i.test(rawHeader?.trim() ?? "");
     req.userId = null;
     req.apiToken = null;
 
