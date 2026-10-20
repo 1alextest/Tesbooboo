@@ -1,0 +1,37 @@
+name: Mutation effectiveness
+on:
+  pull_request:
+  schedule:
+    - cron: "23 3 * * 6"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  mutation-critical:
+    name: mutation-critical
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: Tesbo-Backend-Nest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
+      - run: npm ci --ignore-scripts
+      - name: Install Stryker without changing project lockfile
+        run: npm install --no-save --package-lock=false --ignore-scripts @stryker-mutator/core @stryker-mutator/jest-runner
+      - name: Mutate bounded critical security utility and run real Jest assertions
+        run: npx stryker run stryker.ci.config.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: mutation-report
+          if-no-files-found: ignore
+          retention-days: 14
+          path: Tesbo-Backend-Nest/reports/mutation/
