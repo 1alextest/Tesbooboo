@@ -684,10 +684,10 @@ describe("Notion pages, snapshots and linking", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("zyraTicketFromKnowledgeSelection resolves a Notion mirror document to its page id", async () => {
+  it("zyraTicketsFromKnowledgeSelection resolves a Notion mirror document to its page id", async () => {
     const { db, calls } = makeDb([{ match: "FROM knowledge_documents d", rows: [{ provider: "notion", issue_key: PAGE_ID }] }]);
-    const out = await (makeLegacy(db) as any).zyraTicketFromKnowledgeSelection(PROJECT_ID, ["5f9c1f2e-6f3a-4a7e-8b21-0000000000aa"]);
-    expect(out.linked).toEqual({ provider: "notion", issueKey: PAGE_ID });
+    const out = await (makeLegacy(db) as any).zyraTicketsFromKnowledgeSelection(PROJECT_ID, ["5f9c1f2e-6f3a-4a7e-8b21-0000000000aa"]);
+    expect(out).toEqual([{ provider: "notion", issueKey: PAGE_ID }]);
     expect(calls[0].sql).toContain("LEFT JOIN notion_pages n");
     expect(calls[0].sql).toContain("'notion'");
   });
@@ -811,7 +811,8 @@ describe("test case writes carry the Notion link", () => {
       await svc.updateTestCaseWithClient(client, PROJECT_ID, "tc-1", CALLER_ID, body);
       const update = statements.find((s) => s.sql.includes("UPDATE testcases SET"))!;
       expect(maxPlaceholder(update.sql)).toBe(update.params.length);
-      expect(update.params.slice(-3)).toEqual([...link, clears]);
+      expect(update.params.slice(-4, -1)).toEqual([...link, clears]);
+      expect(update.params.at(-1)).toBeNull(); // No external-id rename requested
     }
   });
 
