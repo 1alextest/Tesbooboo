@@ -7142,7 +7142,9 @@ export class LegacyService implements OnModuleInit {
        executed_at=CASE WHEN $2 IS NULL THEN executed_at ELSE now() END,
        defect_key=CASE WHEN $8::boolean THEN NULL ELSE COALESCE($5,defect_key) END,
        defect_url=CASE WHEN $8::boolean THEN NULL ELSE COALESCE($6,defect_url) END,
-       executed_by=$7, updated_at=now()
+       -- Metadata-only edits must not reassign execution provenance to the editor.
+       -- Explicit status writes retain the existing attribution convention.
+       executed_by=CASE WHEN $2 IS NULL THEN executed_by ELSE $7 END, updated_at=now()
        WHERE id=$1 AND deleted_at IS NULL
        RETURNING *`,
       [
