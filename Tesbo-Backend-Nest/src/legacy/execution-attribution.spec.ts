@@ -24,49 +24,6 @@ process.env.SECRETS_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
 
 
 
-function makeRowLockedDb(initialActivePlan: Record<string, unknown> | null): { db: DatabaseService; getActivePlan: () => Record<string, unknown> | null } {
-  let activePlan = initialActivePlan;
-  let chain: Promise<void> = Promise.resolve();
-
-  const db = {
-    query: jest.fn(() => Promise.resolve({ rows: [] })),
-    transaction: jest.fn((fn: (client: { query: jest.Mock }) => Promise<unknown>) => {
-      const prev = chain;
-      let release: () => void = () => undefined;
-      chain = new Promise((resolve) => {
-        release = resolve;
-      });
-      return prev.then(async () => {
-        const client = {
-          query: jest.fn((sql: string, params: unknown[] = []) => {
-            if (sql.includes("SELECT active_plan") && sql.includes("FOR UPDATE")) {
-              return Promise.resolve({ rows: [{ active_plan: activePlan }] });
-            }
-            if (sql.includes("UPDATE zyra_chat_sessions SET active_plan = NULL")) {
-              activePlan = null;
-              return Promise.resolve({ rows: [] });
-            }
-            if (sql.includes("UPDATE zyra_chat_sessions SET active_plan")) {
-              activePlan = JSON.parse(String(params[1]));
-              return Promise.resolve({ rows: [] });
-            }
-            // INSERT INTO zyra_chat_messages / plain UPDATE updated_at from postZyraPlanMessage —
-            // not relevant to the lock itself, just needs to resolve.
-            return Promise.resolve({ rows: [] });
-          })
-        };
-        try {
-          return await fn(client);
-        } finally {
-          release();
-        }
-      });
-    })
-  } as unknown as DatabaseService;
-
-  return { db, getActivePlan: () => activePlan };
-}
-
 function makeLegacy(db: DatabaseService): LegacyService {
   const requestCache = new RequestCacheService({} as unknown as AppConfigService);
   const suitesCache = new SuitesCacheService({} as unknown as Redis, {} as unknown as AppConfigService);
