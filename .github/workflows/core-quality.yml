@@ -33,8 +33,8 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Backend typecheck
         run: npm run typecheck
-      - name: Backend lint
-        run: npm run lint
+      - name: Backend lint (frozen legacy baseline; zero new errors)
+        run: node ../scripts/check-lint-baseline.mjs backend
       - name: Backend production compilation
         run: npm run build
       - name: Backend unit and integration regressions
@@ -57,8 +57,8 @@ jobs:
           cache: npm
           cache-dependency-path: Tesbo-Frontend/package-lock.json
       - run: npm ci --ignore-scripts
-      - name: Frontend lint
-        run: npm run lint
+      - name: Frontend lint (frozen legacy baseline; zero new errors)
+        run: node ../scripts/check-lint-baseline.mjs frontend
       - name: Frontend TypeScript
         run: npx tsc --noEmit
       - name: Frontend production build
