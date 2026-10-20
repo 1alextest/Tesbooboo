@@ -135,14 +135,34 @@ self-heal in sequence, but never run a local suite and a stage suite at the same
 ## Reporting results into Tesbo
 
 `playwright.config.ts` registers `@tesbox/playwright-reporter`, so a run posts its results back into
-the Tesbo project this suite tests (`Tesbo TTM - Web Official`) as one Test Run per
-`playwright test` invocation. The API host and project id are committed there — neither is a secret.
-The token is not: export `TESBO_API_TOKEN` (a `read`+`write` project token from
-**Project -> Settings -> API & MCP**) for the run, or inject it as a credential in CI.
+the configured Tesbo project as one Test Run per `playwright test` invocation.
 
-**With no token the reporter is switched off** and the suite behaves exactly as it did before, except
-in CI, where a missing token fails the run rather than reporting nothing quietly. See the comment on
-`reporter` in `playwright.config.ts` for why that asymmetry exists.
+**Never commit an API token.** The former `e2e/tesbo.config.json` contained a real-looking
+write-capable token and was removed from source control. That token must remain revoked.
+`e2e/tesbo.config.json` is now ignored by Git; the safely shareable
+`e2e/tesbo.config.example.json` has only placeholder public settings.
+
+To report from your own machine, provide `TESBO_BASE_URL`, `TESBO_PROJECT_ID`, and
+`TESBO_API_TOKEN` in the environment. The token must have read/write scope for writing
+test results. You can alternatively create an ignored `e2e/tesbo.config.json` with
+`baseUrl` and `projectId` (never put the token in that file), and provide the token
+through `TESBO_API_TOKEN`.
+
+For GitHub Actions, add `TESBO_API_TOKEN` under repository Actions **Secrets**,
+and `TESBO_BASE_URL` / `TESBO_PROJECT_ID` under Actions **Variables**. Only inject
+the secret into trusted reporting jobs (not untrusted fork pull requests). Example:
+
+```yaml
+env:
+  TESBO_BASE_URL: ${{ vars.TESBO_BASE_URL }}
+  TESBO_PROJECT_ID: ${{ vars.TESBO_PROJECT_ID }}
+  TESBO_API_TOKEN: ${{ secrets.TESBO_API_TOKEN }}
+```
+
+The reporter automatically disables outbound reporting when `TESBO_API_TOKEN` is absent.
+This supports untrusted PR builds without sharing a project write credential.
+When reporting is required for a trusted release job, add an explicit preflight check
+for all three environment values so a missing token cannot silently pass.
 
 Each test is linked to the case it validates by a tag:
 
