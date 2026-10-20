@@ -6587,6 +6587,15 @@ export class LegacyService implements OnModuleInit {
      *                  so a duration is never computed from a null start
      *   → Planning     leaves the original start alone but clears the end: it is not finished
      */
+    // Reuse the canonical run vocabulary also enforced for history imports.
+    // Reject malformed and unknown states before they reach the SQL column or
+    // get silently treated as metadata-only updates.
+    if (body.status !== undefined && body.status !== null &&
+        (typeof body.status !== "string" || !LegacyService.RUN_STATUSES.includes(body.status))) {
+      throw new BadRequestException({
+        error: `status must be one of: ${LegacyService.RUN_STATUSES.join(", ")}`
+      });
+    }
     const status = typeof body.status === "string" ? body.status : null;
     // A run with no cases has nothing to execute or complete; the UI disables both buttons, and
     // this keeps the API from being a way around it.
