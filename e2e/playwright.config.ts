@@ -57,12 +57,11 @@ export default defineConfig({
   /*
    * This suite reports its own results back into Tesbo — the product it tests.
    *
-   * All three values the reporter needs — baseUrl, projectId, token — come from the committed
-   * e2e/tesbo.config.json, which is what `npx @tesbox/playwright-reporter init` writes. Nothing is
-   * passed inline here on purpose. Inline options are the TOP of the reporter's precedence chain
-   * (inline, then environment, then the file), so a value written here could never be overridden by
-   * the file or by a CI secret — and that is exactly how a stage run once reported into a local
-   * instance that was not even running.
+   * The reporter reads baseUrl, projectId, and token from TESBO_BASE_URL,
+   * TESBO_PROJECT_ID, and TESBO_API_TOKEN. An optional ignored local config file
+   * may supply the first two values, never a credential committed to Git.
+   * Keep options out of this block so environment variables always take precedence;
+   * hardcoding them previously caused test results to reach the wrong instance.
    *
    * This block used to carry a hardcoded `http://localhost:1021` fallback, its own
    * TESBO_REPORTER_* environment names, and a four-clause `enabled` gate, none of which exist in
@@ -80,16 +79,16 @@ export default defineConfig({
       "@tesbox/playwright-reporter",
       {
         /*
-         * Recorded on the run so results from a laptop are filterable apart from CI's, which now
-         * matters: the committed config points every checkout at the same Tesbo project, so a local
-         * `scripts/e2e-run.sh` reports there too. `env.environment` is the E2E_ENV file in effect —
-         * "local", "stage" — and "staging" is the fallback when no environment file was loaded.
+         * Recorded on the run so results from a laptop are filterable apart from CI's.
+         * Each environment configures its own explicit target. `env.environment` is
+         * the E2E_ENV file in effect ("local", "stage"); "staging" is the fallback.
          */
         environment: env.environment ?? "staging",
         /*
-         * The one escape hatch. The SDK's `enabled` option has no environment variable of its own,
-         * and without this there is no way to run the suite without reporting now that every
-         * checkout carries a working token. TESBO_REPORTER_ENABLED=0 turns it off.
+         * Require an explicitly injected token to enable reporting; fork PR jobs,
+         * anonymous local runs, and checkouts of the public repo must never
+         * authenticate to the historical project's reporting endpoint.
+         * TESBO_REPORTER_ENABLED=0 remains an explicit local opt-out.
          */
         // Fork/PR CI jobs do not receive project secrets. Reporting is explicitly
         // disabled unless the workflow supplies all credentials from its trusted context.
