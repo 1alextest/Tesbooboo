@@ -12,6 +12,9 @@ const MCP_ROUTE = /^\/api\/(?:mcp|projects\/[0-9a-fA-F-]{36}\/mcp)\/?$/;
 const PROJECT_ROUTE = /^\/api\/projects\/([0-9a-fA-F-]{36})(?:\/|$)/;
 const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
+/** Token credentials cannot administer the project, its members, or further tokens. */
+const CONTROL_PLANE = /^\/(?:apikeys|members)(?:\/|$)/;
+
 @Injectable()
 export class ApiTokenRestGuard implements CanActivate {
   constructor(private readonly legacy: LegacyService) {}
@@ -27,6 +30,18 @@ export class ApiTokenRestGuard implements CanActivate {
     const match = PROJECT_ROUTE.exec(path);
     if (!match || !token.projectId || token.projectId.toLowerCase() !== match[1].toLowerCase()) {
       throw new ForbiddenException({ error: "API token is not authorized for this REST project route" });
+    }
+
+    const projectSuffix = path.slice(match[0].length - (match[0].endsWith("/") ? 1 : 0));
+    // Project administration requires a human session, even for tokens with write scope.
+    // Otherwise a token can mint new tokens, remove members, or archive its own project.
+    if (CONTROL_PLANE.test(projectSuffix) ||
+        (projectSuffix === "" || projectSuffix === "/") && !READ_METHODS.has(req.method.toUpperCase())) {
+      throw new ForbiddenException({ error: "API token cannot administer project settings or credentials" });
+    }
+
+    if (!token.userId) {
+      throw new ForbiddenException({ error: "API token must belong to a current project member" });
     }
 
     const requiredScope = READ_METHODS.has(req.method.toUpperCase()) ? "read" : "write";
