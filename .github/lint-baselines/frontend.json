@@ -1,0 +1,30 @@
+{
+  "app/(app)/projects/[id]/agents/zyra/page.tsx": {
+    "react-hooks/immutability": 1,
+    "react-hooks/set-state-in-effect": 1
+  },
+  "app/(app)/projects/[id]/knowledge-base/page.tsx": {
+    "react-hooks/set-state-in-effect": 5
+  },
+  "app/share/[token]/page.tsx": {
+    "react-hooks/immutability": 1
+  },
+  "components/LogBugDialog.tsx": {
+    "react-hooks/set-state-in-effect": 1
+  },
+  "components/TestCaseRunPicker.tsx": {
+    "react-hooks/set-state-in-effect": 1
+  },
+  "components/WorkspaceSwitcher.tsx": {
+    "react-hooks/immutability": 1
+  },
+  "components/agents/ZyraContextDrawer.tsx": {
+    "react-hooks/set-state-in-effect": 1
+  },
+  "components/project/ProjectDataProvider.tsx": {
+    "react-hooks/set-state-in-effect": 1
+  },
+  "components/ui/ListPagination.tsx": {
+    "react-hooks/set-state-in-effect": 1
+  }
+}
