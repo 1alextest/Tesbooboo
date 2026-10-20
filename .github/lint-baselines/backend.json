@@ -1,0 +1,14 @@
+{
+  "src/integration-sync/integration-sync.processor.spec.ts": {
+    "@typescript-eslint/no-unused-vars": 1
+  },
+  "src/legacy/legacy.controller.ts": {
+    "@typescript-eslint/no-unused-vars": 2
+  },
+  "src/legacy/legacy.service.ts": {
+    "@typescript-eslint/no-unused-vars": 5
+  },
+  "src/mcp/mcp.tools.ts": {
+    "@typescript-eslint/no-unused-vars": 4
+  }
+}
