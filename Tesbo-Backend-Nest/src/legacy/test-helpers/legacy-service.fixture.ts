@@ -13,7 +13,7 @@ import type { CustomFieldsService } from "../../custom-fields/custom-fields.serv
 import type { CustomTagsService } from "../../custom-tags/custom-tags.service";
 import { RequestCacheService } from "../../request-cache/request-cache.service";
 import { ProjectLookupService } from "../../request-cache/project-lookup.service";
-import type { KbExtractionRunnerService } from "./kb-extraction-runner.service";
+import type { KbExtractionRunnerService } from "../kb-extraction-runner.service";
 import { SuitesCacheService } from "../../cache/suites-cache.service";
 import { TestcasesListCacheService } from "../../cache/testcases-list-cache.service";
 import { ProjectOverviewCacheService } from "../../cache/project-overview-cache.service";
