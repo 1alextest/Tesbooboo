@@ -12,7 +12,7 @@ describe("automation Run closure boundary", () => {
   function setup() {
     let closed = false;
     let results = 0;
-    const query = jest.fn(async (sql: string, params: unknown[] = []) => {
+    const query = jest.fn(async (sql: string, _params: unknown[] = []) => {
       if (sql.includes("FROM actors a")) return { rows: [{ id: user }] };
       if (sql.includes("FROM cycles WHERE id = $1 AND project_id") && !sql.includes("FOR UPDATE"))
         return { rows: [{ id: run, name: "CI", closed_at: closed ? "2026-10-21" : null }] };
