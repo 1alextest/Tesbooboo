@@ -370,7 +370,7 @@ export class AutomationService {
     const { found, unknown } = await this.resolveCases(projectId, caseIds);
     if (!found.size) return { attached: 0, unknown };
 
-    const res = await runner.query<{ id: string }>(
+    const res = await (runner as DatabaseService).query<{ id: string }>(
       `WITH input AS (
          SELECT id, ord FROM unnest($2::uuid[]) WITH ORDINALITY AS u(id, ord)
        ),
@@ -692,7 +692,7 @@ export class AutomationService {
   }
 
   private async resultCounts(runId: string, runner: PoolClient | DatabaseService = this.db) {
-    const res = await runner.query<Record<string, string>>(
+    const res = await (runner as DatabaseService).query<Record<string, string>>(
       `SELECT
          COUNT(*)::int AS total,
          COUNT(*) FILTER (WHERE e.status = 'Passed')::int AS passed,
