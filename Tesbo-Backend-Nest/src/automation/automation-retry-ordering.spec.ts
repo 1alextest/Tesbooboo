@@ -46,7 +46,8 @@ describe("automation retry ordering", () => {
     });
     const legacy = { requireProjectAccess: jest.fn().mockResolvedValue({}) } as unknown as LegacyService;
     const svc = new AutomationService({ query } as unknown as DatabaseService, legacy, {} as PlanLimitsService, {} as StorageService);
-    jest.spyOn(svc, "attachCases").mockResolvedValue({ attached: 0, unknown: [] });
+    jest.spyOn(svc as unknown as { attachCases: (...args: unknown[]) => Promise<{ attached: number; unknown: string[] }> }, "attachCases")
+      .mockResolvedValue({ attached: 0, unknown: [] });
     return { svc, query, queries, current: () => current, updated: () => timestampUpdates };
   }
 
