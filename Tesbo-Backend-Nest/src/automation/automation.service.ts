@@ -438,7 +438,7 @@ export class AutomationService {
    */
   async recordResult(userId: string | null | undefined, projectId: string, runId: string, body: Body) {
     await this.legacy.requireProjectAccess(userId, projectId);
-    const run = await this.requireRun(projectId, runId);
+    await this.requireRun(projectId, runId);
     const actorId = (await this.resolveAutomationActorId()) ?? this.requireActor(userId);
 
     const caseId = this.boundedString(body?.caseId, "caseId", MAX_CASE_ID_LENGTH);
