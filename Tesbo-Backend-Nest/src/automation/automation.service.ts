@@ -884,7 +884,7 @@ export class AutomationService {
     const uploaded: Array<{ file: UploadedFile; storageKey: string }> = [];
     try {
       for (const file of files) {
-        const ext = path.extname(file.originalname).replace(/^\\./, "").toLowerCase();
+        const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
         const storageKey = `executions/${projectId}/${executionId}/${randomUUID()}${ext ? `.${ext}` : ""}`;
         await this.storage.put(storageKey, file.buffer, file.mimetype);
         uploaded.push({ file, storageKey });
