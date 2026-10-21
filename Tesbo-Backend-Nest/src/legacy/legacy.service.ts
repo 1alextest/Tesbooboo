@@ -6565,6 +6565,21 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
+  /**
+   * Serialize Run lifecycle changes with case removals. Every writer which can
+   * remove a run's final active case must acquire this same parent-row lock
+   * before checking/mutating membership. Locking the Run alone in updateCycle
+   * would not make the membership check atomic with a concurrent removal.
+   */
+  private async lockActiveCycle(client: PoolClient, cycleId: string) {
+    const res = await client.query<{ status: string | null; name: string; external_id: string | null; owner_id: string | null }>(
+      "SELECT status, name, external_id, owner_id FROM cycles WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+      [cycleId]
+    );
+    if (!res.rows[0]) throw new NotFoundException({ error: "Cycle not found" });
+    return res.rows[0];
+  }
+
   async updateCycle(cycleId: string, userId: string | null | undefined, body: Body) {
     const projectId = await this.requireCycleAccess(userId, cycleId);
     validateBoundedField(body.name, "Test run name", CYCLE_NAME_MAX_LENGTH);
@@ -6597,25 +6612,23 @@ export class LegacyService implements OnModuleInit {
       });
     }
     const status = typeof body.status === "string" ? body.status : null;
-    // A run with no cases has nothing to execute or complete; the UI disables both buttons, and
-    // this keeps the API from being a way around it.
-    if (status === "In Progress" || status === "Completed") {
-      const items = await this.db.query(
-        "SELECT 1 FROM cycle_items WHERE cycle_id = $1 AND deleted_at IS NULL LIMIT 1",
-        [cycleId]
-      );
-      if (!items.rows[0]) {
-        throw new BadRequestException({ error: "Add at least one test case before starting or completing a run" });
-      }
-    }
-    // What the run was before this save, so the status transition can be told after it.
-    const beforeRun = status
-      ? (await this.db.query<{ status: string | null; name: string; external_id: string | null; owner_id: string | null }>(
-          "SELECT status, name, external_id, owner_id FROM cycles WHERE id = $1",
+    // Serialize the case-presence check, previous lifecycle state and status
+    // change with deletions of run membership. The transaction commits before
+    // notification, preventing observers from seeing uncommitted transitions.
+    const beforeRun = await this.db.transaction(async (client) => {
+      const before = await this.lockActiveCycle(client, cycleId);
+      // Policy unchanged: a Run needs one active case to start or complete.
+      // Pending/Untested cases are permitted until product policy is approved.
+      if (status === "In Progress" || status === "Completed") {
+        const items = await client.query(
+          "SELECT 1 FROM cycle_items WHERE cycle_id = $1 AND deleted_at IS NULL LIMIT 1",
           [cycleId]
-        )).rows[0]
-      : undefined;
-    await this.db.query(
+        );
+        if (!items.rows[0]) {
+          throw new BadRequestException({ error: "Add at least one test case before starting or completing a run" });
+        }
+      }
+      await client.query(
       `UPDATE cycles SET name=COALESCE($2,name), description=COALESCE($3,description),
        environment=COALESCE($4,environment), build_version=COALESCE($5,build_version),
        release_name=COALESCE($6,release_name),
@@ -6623,7 +6636,7 @@ export class LegacyService implements OnModuleInit {
        status=COALESCE($9,status),
        started_at=CASE WHEN $9 IN ('In Progress', 'Completed') THEN COALESCE(started_at, now()) ELSE started_at END,
        ended_at=CASE WHEN $9 = 'Completed' THEN now() WHEN $9 IN ('In Progress', 'Planning') THEN NULL ELSE ended_at END,
-       updated_at=now() WHERE id=$1`,
+       updated_at=now() WHERE id=$1 AND deleted_at IS NULL`,
       [
         cycleId,
         body.name || null,
@@ -6636,6 +6649,8 @@ export class LegacyService implements OnModuleInit {
         status
       ]
     );
+      return status ? before : undefined;
+    });
     if (beforeRun && status) await this.notifyRunLifecycle(cycleId, projectId, userId ?? null, beforeRun, status);
   }
 
@@ -6768,6 +6783,7 @@ export class LegacyService implements OnModuleInit {
     await this.requireCycleAccess(userId, cycleId);
     if (!isUuid(testcaseId)) throw new NotFoundException({ error: "Test case not found" });
     await this.db.transaction(async (client) => {
+      await this.lockActiveCycle(client, cycleId);
       const itemRes = await client.query<{ id: string }>(
         `UPDATE cycle_items SET deleted_at = now(), deleted_by = $3
          WHERE cycle_id = $1 AND testcase_id = $2 AND deleted_at IS NULL
@@ -6806,6 +6822,7 @@ export class LegacyService implements OnModuleInit {
     // UPDATE per case (or dropping the entire run). executions are soft-deleted in a second
     // statement scoped to exactly the cycle_items this one just touched.
     await this.db.transaction(async (client) => {
+      await this.lockActiveCycle(client, cycleId);
       const itemsRes = await client.query<{ id: string }>(
         `UPDATE cycle_items SET deleted_at = now(), deleted_by = $3
          WHERE cycle_id = $1 AND testcase_id = ANY($2::uuid[]) AND deleted_at IS NULL

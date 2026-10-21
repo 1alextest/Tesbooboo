@@ -56,8 +56,13 @@ describe("Run lifecycle status validation", () => {
   const actorId = "11a6df91-7f69-4aa1-b999-568091409401";
 
   function setup() {
-    const query = jest.fn(async (_sql: string, _params: unknown[] = []) => ({ rows: [] }));
-    const svc = makeLegacy({ query } as unknown as DatabaseService);
+    const query = jest.fn(async (sql: string, _params: unknown[] = []) => ({
+      rows: sql.includes("FROM cycles WHERE id = $1 AND deleted_at IS NULL FOR UPDATE")
+        ? [{ status: "Planning", name: "Run", external_id: null, owner_id: null }]
+        : []
+    }));
+    const transaction = jest.fn(async <T>(fn: (client: { query: typeof query }) => Promise<T>) => fn({ query }));
+    const svc = makeLegacy({ query, transaction } as unknown as DatabaseService);
     jest.spyOn(svc as unknown as { requireCycleAccess: (...args: unknown[]) => Promise<string> }, "requireCycleAccess")
       .mockResolvedValue("96b4c52b-66cb-4c41-bf57-86c1e5550888");
     return { svc, query };
