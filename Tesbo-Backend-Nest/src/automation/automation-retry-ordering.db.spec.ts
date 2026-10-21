@@ -1,4 +1,5 @@
 import { Client } from "pg";
+import { ConflictException } from "@nestjs/common";
 import type { DatabaseService } from "../database/database.service";
 import type { LegacyService } from "../legacy/legacy.service";
 import type { PlanLimitsService } from "../plan-limits/plan-limits.service";
@@ -72,7 +73,7 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
 
     await svc.recordResult(actor, projectId, runId, { caseId: "RTCI-TC-1", status: "pass", retryCount: 2, durationMs: 123 });
     await expect(svc.recordResult(actor, projectId, runId, { caseId: "RTCI-TC-1", status: "fail", retryCount: 1 }))
-      .rejects.toMatchObject({ status: 409 });
+      .rejects.toBeInstanceOf(ConflictException);
     await svc.recordResult(actor, projectId, runId, { caseId: "RTCI-TC-1", status: "pass", retryCount: 2, durationMs: 123 });
     const r = await db.query<{ status: string; retry_count: number; duration_ms: number }>(
       "SELECT status, retry_count, duration_ms FROM executions WHERE id = $1",
