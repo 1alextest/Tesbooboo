@@ -74,4 +74,34 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     const stored = await setup.query<{ status: string; retry_count: number }>("SELECT status, retry_count FROM executions WHERE id = $1", [executionId]);
     expect(stored.rows[0]).toMatchObject({ status: "Passed", retry_count: 0 });
   });
+  it("serializes close behind a locked result transaction, then rejects later results", async () => {
+    await setup.query(
+      "UPDATE cycles SET closed_at = NULL, close_status = NULL, status = 'In Progress', ended_at = NULL WHERE id = $1",
+      [runId]
+    );
+    await setup.query("BEGIN");
+    await setup.query("SELECT id FROM cycles WHERE id = $1 FOR UPDATE", [runId]);
+    let resolved = false;
+    const closePromise = svc.closeRun(userId, projectId, runId, { status: "completed" })
+      .finally(() => { resolved = true; });
+    try {
+      // Bounded PostgreSQL lock wait: close cannot commit while another
+      // transaction owns the cycle row. This uses a real independent pool client.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(resolved).toBe(false);
+    } finally {
+      await setup.query("COMMIT");
+    }
+    const closed = await closePromise;
+    expect(closed.alreadyClosed).toBe(false);
+    await expect(
+      svc.recordResult(userId, projectId, runId, { caseId: "CLCI-TC-1", status: "fail", retryCount: 1 })
+    ).rejects.toBeInstanceOf(ConflictException);
+    const persisted = await setup.query<{ status: string; closed_at: Date | null }>(
+      "SELECT status, closed_at FROM cycles WHERE id = $1", [runId]
+    );
+    expect(persisted.rows[0].status).toBe("Completed");
+    expect(persisted.rows[0].closed_at).not.toBeNull();
+  });
+
 });
