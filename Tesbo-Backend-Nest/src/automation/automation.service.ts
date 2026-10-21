@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import type { PoolClient } from "pg";
 import { randomUUID } from "crypto";
 import * as path from "path";
 import { DatabaseService } from "../database/database.service";
@@ -362,13 +363,14 @@ export class AutomationService {
   private async attachCases(
     runId: string,
     projectId: string,
-    caseIds: string[]
+    caseIds: string[],
+    client?: PoolClient
   ): Promise<{ attached: number; unknown: string[] }> {
     if (!caseIds.length) return { attached: 0, unknown: [] };
     const { found, unknown } = await this.resolveCases(projectId, caseIds);
     if (!found.size) return { attached: 0, unknown };
 
-    const res = await this.db.query<{ id: string }>(
+    const res = await (client ?? this.db).query<{ id: string }>(
       `WITH input AS (
          SELECT id, ord FROM unnest($2::uuid[]) WITH ORDINALITY AS u(id, ord)
        ),
@@ -433,7 +435,7 @@ export class AutomationService {
    */
   async recordResult(userId: string | null | undefined, projectId: string, runId: string, body: Body) {
     await this.legacy.requireProjectAccess(userId, projectId);
-    const run = await this.requireRun(projectId, runId);
+    await this.requireRun(projectId, runId);
     const actorId = (await this.resolveAutomationActorId()) ?? this.requireActor(userId);
 
     const caseId = this.boundedString(body?.caseId, "caseId", MAX_CASE_ID_LENGTH);
@@ -471,47 +473,47 @@ export class AutomationService {
     const errorMessage = this.boundedString(body?.errorMessage, "errorMessage", MAX_ERROR_MESSAGE_LENGTH);
     const errorStack = this.boundedString(body?.errorStack, "errorStack", MAX_ERROR_STACK_LENGTH);
 
-    // A case the run was not created with is attached now. This is not case *creation*: the case
-    // already exists and was already approved by a person; a suite that grew a test since the run
-    // was opened should still report against it rather than silently dropping the result.
-    await this.attachCases(runId, projectId, [testcase.externalId]);
+    // Result writes and closeRun acquire the same cycle FOR UPDATE lock. A
+    // preflight run read cannot prevent a close arriving between read and write.
+    // The attachment, result update and last_result_at commit atomically.
+    const updated = await this.db.transaction(async (client) => {
+      const locked = await client.query<{ id: string; closed_at: string | null }>(
+        "SELECT id, closed_at FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
+        [runId, projectId]
+      );
+      if (!locked.rows[0]) throw new NotFoundException({ error: "Run not found" });
+      if (locked.rows[0].closed_at) {
+        throw new ConflictException({ error: "This automated run is closed. Late results must not overwrite finalized outcomes." });
+      }
 
-    /*
-     * One statement, resolving the execution through the run and case rather than taking an
-     * execution id from the caller: an SDK never sees Tesbo's uuids, and resolving inside the
-     * UPDATE keeps two shards reporting the same case from interleaving a read and a write.
-     *
-     * `actual_result` is deliberately NOT written. That column is a human tester's prose, and an
-     * SDK overwriting it would destroy notes a person typed; automation failure text goes to
-     * error_message. `defect_key`/`defect_url` are left to the existing manual flow for the same
-     * reason.
-     */
-    const res = await this.db.query<{ id: string; status: string; retry_count: number }>(
-      `UPDATE executions e SET
-         status = $3,
-         executed_at = now(),
-         executed_by = $4,
-         duration_ms = $5,
-         retry_count = CASE WHEN $6::int IS NOT NULL THEN $6::int
-                            WHEN e.status <> 'Untested' THEN e.retry_count + 1
-                            ELSE e.retry_count END,
-         error_message = $7,
-         error_stack = $8,
-         reported_by = 'automation',
-         updated_at = now()
-       FROM cycle_items ci
-       WHERE ci.id = e.cycle_item_id AND ci.cycle_id = $1 AND ci.testcase_id = $2
-         AND e.deleted_at IS NULL
-       RETURNING e.id, e.status, e.retry_count`,
-      [runId, testcase.id, status, actorId, durationMs, suppliedRetryCount, errorMessage, errorStack]
-    );
-    const updated = res.rows[0];
-    if (!updated) {
-      // attachCases above opened the execution, so reaching here means it was soft-deleted.
-      throw new NotFoundException({ error: `The result row for case "${caseId}" in this run is no longer available` });
-    }
+      await this.attachCases(runId, projectId, [testcase.externalId], client);
 
-    await this.db.query("UPDATE cycles SET last_result_at = now(), updated_at = now() WHERE id = $1", [runId]);
+      // Keep human-written actual_result and defect references unchanged.
+      const res = await client.query<{ id: string; status: string; retry_count: number }>(
+        `UPDATE executions e SET
+           status = $3,
+           executed_at = now(),
+           executed_by = $4,
+           duration_ms = $5,
+           retry_count = CASE WHEN $6::int IS NOT NULL THEN $6::int
+                              WHEN e.status <> 'Untested' THEN e.retry_count + 1
+                              ELSE e.retry_count END,
+           error_message = $7,
+           error_stack = $8,
+           reported_by = 'automation',
+           updated_at = now()
+         FROM cycle_items ci
+         WHERE ci.id = e.cycle_item_id AND ci.cycle_id = $1 AND ci.testcase_id = $2
+           AND e.deleted_at IS NULL
+         RETURNING e.id, e.status, e.retry_count`,
+        [runId, testcase.id, status, actorId, durationMs, suppliedRetryCount, errorMessage, errorStack]
+      );
+      if (!res.rows[0]) {
+        throw new NotFoundException({ error: `The result row for case "${caseId}" in this run is no longer available` });
+      }
+      await client.query("UPDATE cycles SET last_result_at = now(), updated_at = now() WHERE id = $1", [runId]);
+      return res.rows[0];
+    });
 
     return {
       runId,
@@ -519,7 +521,7 @@ export class AutomationService {
       executionId: updated.id,
       status: updated.status,
       retryCount: updated.retry_count,
-      runClosed: Boolean(run.closed_at)
+      runClosed: false
     };
   }
 
@@ -566,19 +568,29 @@ export class AutomationService {
       throw new BadRequestException({ error: "status must be one of: completed, incomplete" });
     }
 
-    if (run.closed_at) {
-      // Closing twice is what a retried CI step does. Report the run as it stands rather than
-      // reopening it or erroring — but say so, so an SDK does not treat it as a fresh close.
+    // Serialize close with every automated result write using the cycle lock.
+    // This also makes simultaneous close calls idempotent at the database level.
+    const close = await this.db.transaction(async (client) => {
+      const locked = await client.query<{ id: string; closed_at: string | null }>(
+        "SELECT id, closed_at FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
+        [runId, projectId]
+      );
+      if (!locked.rows[0]) throw new NotFoundException({ error: "Run not found" });
+      if (locked.rows[0].closed_at) return { alreadyClosed: true as const, counts: null };
+
+      const counts = await this.resultCounts(runId, client);
+      await client.query(
+        `UPDATE cycles SET status = 'Completed', ended_at = now(), closed_at = now(), close_status = $2,
+           updated_at = now() WHERE id = $1 AND closed_at IS NULL AND deleted_at IS NULL`,
+        [runId, requested]
+      );
+      return { alreadyClosed: false as const, counts };
+    });
+
+    if (close.alreadyClosed) {
       return { ...(await this.runSummary(runId)), alreadyClosed: true, mismatch: null };
     }
-
-    const counts = await this.resultCounts(runId);
-    await this.db.query(
-      `UPDATE cycles SET status = 'Completed', ended_at = now(), closed_at = now(), close_status = $2,
-         updated_at = now() WHERE id = $1`,
-      [runId, requested]
-    );
-
+    const counts = close.counts!;
     const mismatch = this.summaryMismatch(body?.summary, counts);
     await this.legacy.logProjectActivity(projectId, actorId, "automation_run_closed", "cycle", runId, run.name, {
       closeStatus: requested,
@@ -618,8 +630,8 @@ export class AutomationService {
     return Object.keys(diff).length ? diff : null;
   }
 
-  private async resultCounts(runId: string) {
-    const res = await this.db.query<Record<string, string>>(
+  private async resultCounts(runId: string, client?: PoolClient) {
+    const res = await (client ?? this.db).query<Record<string, string>>(
       `SELECT
          COUNT(*)::int AS total,
          COUNT(*) FILTER (WHERE e.status = 'Passed')::int AS passed,
