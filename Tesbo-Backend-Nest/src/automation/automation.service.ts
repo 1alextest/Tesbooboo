@@ -236,6 +236,28 @@ export class AutomationService {
    * the run both end up with the same one, while a resubmit *after* that run was soft-deleted opens
    * a genuine new run instead of resolving back to a dead one it can never attach cases to again.
    */
+  /**
+   * Resolve external-id replays under the same cycle lock as automation close.
+   * A closed Run is readable/idempotently reusable only when no new case
+   * attachments are requested. The lock makes this rule stable against closeRun.
+   */
+  private async reuseAutomationRun(runId: string, projectId: string, caseIds: string[]) {
+    return this.db.transaction(async (client) => {
+      const res = await client.query<{ id: string; closed_at: Date | null }>(
+        "SELECT id, closed_at FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
+        [runId, projectId]
+      );
+      const run = res.rows[0];
+      if (!run) throw new NotFoundException({ error: "Run not found" });
+      if (run.closed_at && caseIds.length) {
+        throw new ConflictException({ error: "Automation run is closed; cannot attach test cases" });
+      }
+      return run.closed_at
+        ? { attached: 0, unknown: [] as string[] }
+        : this.attachCases(runId, projectId, caseIds, client);
+    });
+  }
+
   async createRun(userId: string | null | undefined, projectId: string, body: Body) {
     await this.legacy.requireProjectAccess(userId, projectId);
     const actorId = (await this.resolveAutomationActorId()) ?? this.requireActor(userId);
@@ -267,7 +289,7 @@ export class AutomationService {
         [projectId, externalId]
       );
       if (existing.rows[0]) {
-        const attached = await this.attachCases(existing.rows[0].id, projectId, caseIds);
+        const attached = await this.reuseAutomationRun(existing.rows[0].id, projectId, caseIds);
         return {
           ...(await this.runSummary(existing.rows[0].id)),
           reused: true,
@@ -323,7 +345,7 @@ export class AutomationService {
           [projectId, externalId]
         );
         if (!raced.rows[0]) throw err;
-        const attached = await this.attachCases(raced.rows[0].id, projectId, caseIds);
+        const attached = await this.reuseAutomationRun(raced.rows[0].id, projectId, caseIds);
         return {
           ...(await this.runSummary(raced.rows[0].id)),
           reused: true,
