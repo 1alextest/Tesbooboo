@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { randomUUID } from "crypto";
 import * as path from "path";
 import { DatabaseService } from "../database/database.service";
@@ -429,7 +429,10 @@ export class AutomationService {
    * stored for visibility": a case that passes on the third attempt reads Passed with
    * retry_count = 2, which is what distinguishes it from one that passed first time. A
    * caller-supplied `retryCount` (Playwright knows its own attempt index) wins over the
-   * increment, so a re-reported result does not inflate the count.
+   * increment. Attempts with lower indexes cannot replace newer attempts; equal-index
+   * exact duplicates return without altering timestamps. Legacy callers without an
+   * explicit index keep the old increment behavior, but cannot provide causal ordering.
+   * A future versioned contract should require attempt identity for all SDKs.
    */
   async recordResult(userId: string | null | undefined, projectId: string, runId: string, body: Body) {
     await this.legacy.requireProjectAccess(userId, projectId);
@@ -502,13 +505,61 @@ export class AutomationService {
        FROM cycle_items ci
        WHERE ci.id = e.cycle_item_id AND ci.cycle_id = $1 AND ci.testcase_id = $2
          AND e.deleted_at IS NULL
+         -- Explicit retry indexes must increase. An old shard is never allowed
+         -- to replace a newer attempt even when HTTP delivery is out of order.
+         AND ($6::int IS NULL OR e.status = 'Untested' OR $6::int > e.retry_count)
        RETURNING e.id, e.status, e.retry_count`,
       [runId, testcase.id, status, actorId, durationMs, suppliedRetryCount, errorMessage, errorStack]
     );
     const updated = res.rows[0];
     if (!updated) {
-      // attachCases above opened the execution, so reaching here means it was soft-deleted.
-      throw new NotFoundException({ error: `The result row for case "${caseId}" in this run is no longer available` });
+      // A rejected conditional UPDATE may be a stale retry, an exact duplicate,
+      // or a concurrently deleted execution. Read only within this run/case.
+      const existing = await this.db.query<{
+        id: string;
+        status: string;
+        retry_count: number;
+        duration_ms: number | null;
+        error_message: string | null;
+        error_stack: string | null;
+        reported_by: string | null;
+      }>(
+        `SELECT e.id, e.status, e.retry_count, e.duration_ms, e.error_message, e.error_stack, e.reported_by
+           FROM executions e
+           JOIN cycle_items ci ON ci.id = e.cycle_item_id
+          WHERE ci.cycle_id = $1 AND ci.testcase_id = $2
+            AND ci.deleted_at IS NULL AND e.deleted_at IS NULL`,
+        [runId, testcase.id]
+      );
+      const current = existing.rows[0];
+      if (!current) {
+        throw new NotFoundException({ error: `The result row for case "${caseId}" in this run is no longer available` });
+      }
+      // Retried transport delivery of the exact same attempt is a no-op:
+      // do not change executed_at, updated_at or the run's last_result_at.
+      if (
+        suppliedRetryCount !== null &&
+        current.reported_by === "automation" &&
+        current.retry_count === suppliedRetryCount &&
+        current.status === status &&
+        current.duration_ms === durationMs &&
+        current.error_message === errorMessage &&
+        current.error_stack === errorStack
+      ) {
+        return {
+          runId,
+          caseId: testcase.externalId,
+          executionId: current.id,
+          status: current.status,
+          retryCount: current.retry_count,
+          runClosed: Boolean(run.closed_at)
+        };
+      }
+      throw new ConflictException({
+        error: "An equal or newer automation attempt is already recorded for this case",
+        storedRetryCount: current.retry_count,
+        submittedRetryCount: suppliedRetryCount
+      });
     }
 
     await this.db.query("UPDATE cycles SET last_result_at = now(), updated_at = now() WHERE id = $1", [runId]);
