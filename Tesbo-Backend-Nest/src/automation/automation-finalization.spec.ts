@@ -18,6 +18,7 @@ describe("automation finalized-run write barriers", () => {
     const deleted: string[] = [];
     const query = jest.fn(async (sql: string) => {
       if (sql.includes("FROM actors a")) return { rows: [{ id: user }] };
+      if (sql.includes("FROM cycles WHERE project_id = $1 AND external_id")) return { rows: [{ id: run }] };
       if (sql.includes("FROM cycles WHERE id = $1 AND project_id") && sql.includes("FOR UPDATE")) {
         return { rows: [{ id: run, closed_at: closed ? new Date() : null }] };
       }
