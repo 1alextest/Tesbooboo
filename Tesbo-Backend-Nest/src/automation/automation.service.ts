@@ -348,6 +348,7 @@ export class AutomationService {
     return {
       ...(await this.runSummary(runId)),
       reused: false,
+      alreadyClosed: false,
       casesAttached: attached.attached,
       unknownCaseIds: attached.unknown
     };
