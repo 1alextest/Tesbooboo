@@ -505,14 +505,46 @@ export class AutomationService {
          FROM cycle_items ci
          WHERE ci.id = e.cycle_item_id AND ci.cycle_id = $1 AND ci.testcase_id = $2
            AND e.deleted_at IS NULL
+           -- Older or equal retry indexes cannot replace a newer verdict.
+           AND ($6::int IS NULL OR e.status = 'Untested' OR $6::int > e.retry_count)
          RETURNING e.id, e.status, e.retry_count`,
         [runId, testcase.id, status, actorId, durationMs, suppliedRetryCount, errorMessage, errorStack]
       );
       if (!res.rows[0]) {
-        throw new NotFoundException({ error: `The result row for case "${caseId}" in this run is no longer available` });
+        const existing = await client.query<{
+          id: string; status: string; retry_count: number;
+          duration_ms: number | null; error_message: string | null;
+          error_stack: string | null; reported_by: string | null;
+        }>(
+          `SELECT e.id, e.status, e.retry_count, e.duration_ms, e.error_message, e.error_stack, e.reported_by
+             FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id
+            WHERE ci.cycle_id = $1 AND ci.testcase_id = $2
+              AND ci.deleted_at IS NULL AND e.deleted_at IS NULL`,
+          [runId, testcase.id]
+        );
+        const current = existing.rows[0];
+        if (!current) {
+          throw new NotFoundException({ error: `The result row for case "${caseId}" in this run is no longer available` });
+        }
+        if (
+          suppliedRetryCount !== null &&
+          current.reported_by === "automation" &&
+          current.retry_count === suppliedRetryCount &&
+          current.status === status &&
+          current.duration_ms === durationMs &&
+          current.error_message === errorMessage &&
+          current.error_stack === errorStack
+        ) {
+          return { ...current, unchanged: true };
+        }
+        throw new ConflictException({
+          error: "An equal or newer automation attempt is already recorded for this case",
+          storedRetryCount: current.retry_count,
+          submittedRetryCount: suppliedRetryCount
+        });
       }
       await client.query("UPDATE cycles SET last_result_at = now(), updated_at = now() WHERE id = $1", [runId]);
-      return res.rows[0];
+      return { ...res.rows[0], unchanged: false };
     });
 
     return {
