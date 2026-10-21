@@ -54,6 +54,20 @@ describe("automation finalized-run write barriers", () => {
     expect(reused.casesAttached).toBe(0);
   });
 
+  it("rejects new membership on a closed run without writing cycle items", async () => {
+    const { svc, query } = setup({ closed: true });
+    // Membership check must fail after finding an approved test case not in the closed run.
+    // Use the real resolver but simulate the absence of the run's case membership.
+    const resolve = jest.spyOn(svc as unknown as { resolveCases: (...args: unknown[]) => Promise<unknown> }, "resolveCases");
+    resolve.mockResolvedValue({
+      found: new Map([["ci-tc-2", { id: "107d75da-e75f-44f3-90a0-9ecdb25f3d18", externalId: "CI-TC-2", title: "New case", status: "Approved" }]]),
+      unknown: []
+    });
+    await expect(svc.createRun(user, project, { name: "Existing", externalId: "ci-123", caseIds: ["CI-TC-2"] }))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(query.mock.calls.some(([sql]) => sql.includes("INSERT INTO cycle_items"))).toBe(false);
+  });
+
   it("rejects evidence once the run is closed without storing files", async () => {
     const { svc, saved } = setup({ closed: true });
     await expect(svc.uploadEvidence(user, project, run, "CI-TC-1", "screenshot", [{
