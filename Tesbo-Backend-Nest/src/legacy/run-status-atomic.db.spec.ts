@@ -48,7 +48,11 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     // Disposable tesbo_ci only; remove every committed fixture even after failures.
     if (setup) {
       try {
-        if (cycleId) await setup.query("DELETE FROM cycles WHERE id = $1", [cycleId]);
+        if (cycleId) {
+          await setup.query("DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id = $1)", [cycleId]);
+          await setup.query("DELETE FROM cycle_items WHERE cycle_id = $1", [cycleId]);
+          await setup.query("DELETE FROM cycles WHERE id = $1", [cycleId]);
+        }
         if (testcaseId) await setup.query("DELETE FROM testcases WHERE id = $1", [testcaseId]);
         if (projectId) await setup.query("DELETE FROM projects WHERE id = $1", [projectId]);
         if (orgId) await setup.query("DELETE FROM organizations WHERE id = $1", [orgId]);
@@ -83,7 +87,7 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     await new Promise((r) => setTimeout(r, 100));
     expect(settled).toBe(false);
     await remover.query("COMMIT");
-    await expect(pending).rejects.toThrow("Add at least one test case");
+    await expect(pending).rejects.toMatchObject({ response: { error: "Add at least one test case before starting or completing a run" } });
     const state = await setup.query<{ status: string }>("SELECT status FROM cycles WHERE id = $1", [cycleId]);
     expect(state.rows[0].status).not.toBe("Completed");
   });
