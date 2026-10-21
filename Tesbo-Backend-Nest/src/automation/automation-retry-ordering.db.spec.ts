@@ -1,4 +1,5 @@
 import { Client } from "pg";
+import type { PoolClient } from "pg";
 import { ConflictException } from "@nestjs/common";
 import type { DatabaseService } from "../database/database.service";
 import type { LegacyService } from "../legacy/legacy.service";
@@ -63,7 +64,10 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
   it("refuses late failed retry and preserves persisted newer Passed row", async () => {
     const legacy = { requireProjectAccess: async () => ({}) } as unknown as LegacyService;
     const svc = new AutomationService(
-      { query: (sql: string, args?: unknown[]) => db.query(sql, args) } as unknown as DatabaseService,
+      { query: (sql: string, args?: unknown[]) => db.query(sql, args),
+        // The test fixture is already inside BEGIN/ROLLBACK on this connection.
+        transaction: async <T>(fn: (client: PoolClient) => Promise<T>) => fn(db as unknown as PoolClient)
+      } as unknown as DatabaseService,
       legacy,
       {} as PlanLimitsService,
       {} as StorageService
