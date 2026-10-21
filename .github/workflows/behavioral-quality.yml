@@ -45,7 +45,7 @@ jobs:
       - name: Validate schema invariants and real audit triggers
         run: node scripts/ci/check-db-integrity.cjs
       - name: Verify execution attribution on migrated PostgreSQL
-        run: npm test -- --runTestsByPath src/legacy/execution-attribution.db.spec.ts
+        run: npm test -- --runTestsByPath src/legacy/execution-attribution.db.spec.ts src/legacy/run-status-atomic.db.spec.ts
 
   api-mcp-contracts:
     name: api-mcp-contracts
