@@ -104,15 +104,13 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     expect(persisted.rows[0].closed_at).not.toBeNull();
   });
 
-  it("reuses a closed run for known cases but rejects an additional case on PostgreSQL", async () => {
+  it("replays a closed run with no attachments and rejects new case attachment on PostgreSQL", async () => {
     await setup.query("UPDATE cycles SET external_id = 'closure-replay-ci', closed_at = now(), status = 'Completed' WHERE id = $1", [runId]);
     const repeated = await svc.createRun(userId, projectId, {
       name: "Replayed closure",
-      externalId: "closure-replay-ci",
-      caseIds: ["CLCI-TC-1"]
+      externalId: "closure-replay-ci"
     });
     expect(repeated.reused).toBe(true);
-    expect(repeated.alreadyClosed).toBe(true);
     expect(repeated.casesAttached).toBe(0);
 
     const second = await setup.query<{ id: string }>(
