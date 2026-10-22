@@ -2,10 +2,10 @@ import { Client, Pool } from "pg";
 import { ConflictException } from "@nestjs/common";
 import { AutomationService } from "./automation.service";
 import { DatabaseService } from "../database/database.service";
+import { makeLegacy } from "../legacy/test-helpers/legacy-service.fixture";
 import type { LegacyService } from "../legacy/legacy.service";
 import type { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import type { StorageService } from "../storage/storage.service";
-import { makeLegacy } from "../legacy/test-helpers/legacy-service.fixture";
 
 const url = process.env.DATABASE_URL ?? "";
 const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
@@ -189,6 +189,56 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     expect(Number(persisted.rows[0].count)).toBe(0);
   });
 
+  it("serializes a manual result write behind run finalization on independent PostgreSQL clients", async () => {
+    // Reset the dedicated automation fixture; no shared uncommitted test data.
+    await setup.query(
+      "UPDATE cycles SET status = 'In Progress', closed_at = NULL, ended_at = NULL WHERE id = $1",
+      [runId]
+    );
+    await setup.query("UPDATE executions SET status = 'Passed' WHERE id = $1", [executionId]);
+
+    const humanService = makeLegacy(new DatabaseService(pool));
+    jest.spyOn(humanService, "requireProjectAccess").mockResolvedValue({} as never);
+    jest.spyOn(humanService, "logProjectActivity").mockResolvedValue(undefined);
+    jest.spyOn(
+      humanService as unknown as { notifyExecutionChange: (...args: unknown[]) => Promise<void> },
+      "notifyExecutionChange"
+    ).mockResolvedValue(undefined);
+
+    // The holder represents an automation close already holding the parent
+    // run lock. The human service uses a separate pool connection.
+    const holder = await pool.connect();
+    let settled = false;
+    let request: Promise<void> | undefined;
+    try {
+      await holder.query("BEGIN");
+      await holder.query("SELECT id FROM cycles WHERE id = $1 FOR UPDATE", [runId]);
+      request = humanService.updateExecution(executionId, userId, { status: "Failed" })
+        .then(() => { settled = true; }, (error: unknown) => { settled = true; throw error; });
+
+      // Ensure the manual edit cannot commit until the lock holder ends.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(settled).toBe(false);
+
+      await holder.query(
+        "UPDATE cycles SET status = 'Completed', closed_at = now(), ended_at = now() WHERE id = $1",
+        [runId]
+      );
+      await holder.query("COMMIT");
+    } catch (error) {
+      await holder.query("ROLLBACK");
+      if (request) await request.catch(() => undefined);
+      throw error;
+    } finally {
+      holder.release();
+    }
+
+    await expect(request).rejects.toBeInstanceOf(ConflictException);
+    const persisted = await setup.query<{ status: string }>(
+      "SELECT status FROM executions WHERE id = $1", [executionId]
+    );
+    expect(persisted.rows[0].status).toBe("Passed");
+  });
   it("blocks a manual evidence upload behind a concurrent automation close and cleans staged files", async () => {
     // Use separate PostgreSQL connections through DatabaseService(pool). A
     // mock transaction sharing a client cannot prove inter-request locking.
