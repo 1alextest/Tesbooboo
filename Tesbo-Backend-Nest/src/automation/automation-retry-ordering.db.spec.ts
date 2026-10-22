@@ -61,11 +61,10 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     }
   });
 
-  it("refuses late failed retry and preserves persisted newer Passed row", async () => {
+  function makeService() {
     const legacy = { requireProjectAccess: async () => ({}) } as unknown as LegacyService;
     const svc = new AutomationService(
       { query: (sql: string, args?: unknown[]) => db.query(sql, args),
-        // The test fixture is already inside BEGIN/ROLLBACK on this connection.
         transaction: async <T>(fn: (client: PoolClient) => Promise<T>) => fn(db as unknown as PoolClient)
       } as unknown as DatabaseService,
       legacy,
@@ -74,7 +73,11 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     );
     jest.spyOn(svc as unknown as { attachCases: (...args: unknown[]) => Promise<{ attached: number; unknown: string[] }> }, "attachCases")
       .mockResolvedValue({ attached: 0, unknown: [] });
+    return svc;
+  }
 
+  it("refuses late failed retry and preserves persisted newer Passed row", async () => {
+    const svc = makeService();
     await svc.recordResult(actor, projectId, runId, { caseId: "RTCI-TC-1", status: "pass", retryCount: 2, durationMs: 123 });
     await expect(svc.recordResult(actor, projectId, runId, { caseId: "RTCI-TC-1", status: "fail", retryCount: 1 }))
       .rejects.toBeInstanceOf(ConflictException);
@@ -85,4 +88,18 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     );
     expect(r.rows[0]).toMatchObject({ status: "Passed", retry_count: 2, duration_ms: 123 });
   });
+  it("preserves the retry watermark after manual Untested reset", async () => {
+    await db.query(
+      "UPDATE executions SET status = 'Untested' WHERE id = $1",
+      [executionId]
+    );
+    await expect(makeService().recordResult(actor, projectId, runId, {
+      caseId: "RTCI-TC-1", status: "fail", retryCount: 1
+    })).rejects.toBeInstanceOf(ConflictException);
+    const row = await db.query<{ status: string; retry_count: number }>(
+      "SELECT status, retry_count FROM executions WHERE id = $1", [executionId]
+    );
+    expect(row.rows[0]).toMatchObject({ status: "Untested", retry_count: 2 });
+  });
+
 });
