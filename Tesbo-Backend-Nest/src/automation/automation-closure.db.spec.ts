@@ -104,4 +104,88 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     expect(persisted.rows[0].closed_at).not.toBeNull();
   });
 
+  it("replays a closed run with no attachments and rejects new case attachment on PostgreSQL", async () => {
+    await setup.query("UPDATE cycles SET external_id = 'closure-replay-ci', closed_at = now(), status = 'Completed' WHERE id = $1", [runId]);
+    const repeated = await svc.createRun(userId, projectId, {
+      name: "Replayed closure",
+      externalId: "closure-replay-ci"
+    });
+    expect(repeated.reused).toBe(true);
+    expect(repeated.casesAttached).toBe(0);
+
+    const second = await setup.query<{ id: string }>(
+      "INSERT INTO testcases (project_id, external_id, title) VALUES ($1, 'CLCI-TC-2', 'Later case') RETURNING id",
+      [projectId]
+    );
+    try {
+      await expect(svc.createRun(userId, projectId, {
+        name: "Replayed closure",
+        externalId: "closure-replay-ci",
+        caseIds: ["CLCI-TC-2"]
+      })).rejects.toBeInstanceOf(ConflictException);
+      const membership = await setup.query<{ count: string }>(
+        "SELECT COUNT(*) AS count FROM cycle_items WHERE cycle_id = $1 AND deleted_at IS NULL",
+        [runId]
+      );
+      expect(Number(membership.rows[0].count)).toBe(1);
+    } finally {
+      await setup.query("DELETE FROM testcases WHERE id = $1", [second.rows[0].id]);
+    }
+  });
+
+  it("commits evidence metadata on an open run using the existing attachment table", async () => {
+    await setup.query("UPDATE cycles SET status = 'In Progress', closed_at = NULL WHERE id = $1", [runId]);
+    const staged: string[] = [];
+    const removed: string[] = [];
+    const storage = {
+      put: async (key: string) => { staged.push(key); },
+      delete: async (key: string) => { removed.push(key); }
+    } as unknown as StorageService;
+    const limits = { checkStorageAvailable: async () => ({ allowed: true }) } as unknown as PlanLimitsService;
+    const legacy = { requireProjectAccess: async () => ({ organization_id: orgId }) } as unknown as LegacyService;
+    const uploadService = new AutomationService(new DatabaseService(pool), legacy, limits, storage);
+    try {
+      const response = await uploadService.uploadEvidence(userId, projectId, runId, "CLCI-TC-1", "screenshot", [{
+        buffer: Buffer.from("test-png-bytes"), originalname: "run-evidence.png", mimetype: "image/png", size: 14
+      }]);
+      expect(response.total).toBe(1);
+      expect(staged).toHaveLength(1);
+      expect(removed).toHaveLength(0);
+      const persisted = await setup.query<{ storage_path: string; evidence_kind: string }>(
+        "SELECT storage_path, evidence_kind FROM attachments WHERE project_id = $1 AND entity_type = 'execution' AND entity_id = $2",
+        [projectId, executionId]
+      );
+      expect(persisted.rows).toMatchObject([{ storage_path: staged[0], evidence_kind: "screenshot" }]);
+    } finally {
+      await setup.query("DELETE FROM attachments WHERE project_id = $1 AND entity_type = 'execution' AND entity_id = $2", [projectId, executionId]);
+    }
+  });
+
+  it("removes staged evidence if the run closes before its metadata transaction", async () => {
+    await setup.query("UPDATE cycles SET status = 'In Progress', closed_at = NULL WHERE id = $1", [runId]);
+    const staged: string[] = [];
+    const removed: string[] = [];
+    const storage = {
+      put: async (key: string) => {
+        staged.push(key);
+        // Simulate a separate request finalizing the run while bytes upload.
+        await setup.query("UPDATE cycles SET status = 'Completed', closed_at = now(), ended_at = now() WHERE id = $1", [runId]);
+      },
+      delete: async (key: string) => { removed.push(key); }
+    } as unknown as StorageService;
+    const limits = { checkStorageAvailable: async () => ({ allowed: true }) } as unknown as PlanLimitsService;
+    const legacy = { requireProjectAccess: async () => ({ organization_id: orgId }) } as unknown as LegacyService;
+    const uploadService = new AutomationService(new DatabaseService(pool), legacy, limits, storage);
+    await expect(uploadService.uploadEvidence(userId, projectId, runId, "CLCI-TC-1", "screenshot", [{
+      buffer: Buffer.from("test-png-bytes"), originalname: "late-evidence.png", mimetype: "image/png", size: 14
+    }])).rejects.toBeInstanceOf(ConflictException);
+    expect(staged).toHaveLength(1);
+    expect(removed).toEqual(staged);
+    const persisted = await setup.query<{ count: string }>(
+      "SELECT COUNT(*) AS count FROM attachments WHERE project_id = $1 AND entity_type = 'execution' AND entity_id = $2",
+      [projectId, executionId]
+    );
+    expect(Number(persisted.rows[0].count)).toBe(0);
+  });
+
 });
