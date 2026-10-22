@@ -1,4 +1,5 @@
 import { Client } from "pg";
+import type { PoolClient } from "pg";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
 import type { DatabaseService } from "../database/database.service";
 
@@ -57,7 +58,13 @@ const canRun = /\/tesbo_ci(?:\?|$)/.test(databaseUrl);
   });
 
   it("retains the persisted executor across metadata updates, but attributes an explicit status write", async () => {
-    const svc = makeLegacy({ query: (sql: string, args?: unknown[]) => client.query(sql, args) } as unknown as DatabaseService);
+    const svc = makeLegacy({
+      query: (sql: string, args?: unknown[]) => client.query(sql, args),
+      // Already within the test's BEGIN/ROLLBACK transaction. Keep both the
+      // initial reads and the locked UPDATE on the same database connection.
+      transaction: async <T>(fn: (locked: PoolClient) => Promise<T>) =>
+        fn(client as unknown as PoolClient)
+    } as unknown as DatabaseService);
     // This test isolates SQL persistence; separate tests cover project authorization.
     jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({} as never);
     jest.spyOn(svc, "logProjectActivity").mockResolvedValue(undefined);
