@@ -20,7 +20,7 @@ describe("automation retry ordering", () => {
       duration_ms: null as number | null,
       error_message: null as string | null,
       error_stack: null as string | null,
-      reported_by: null as string | null
+      reported_by: "human" as string | null
     };
     let timestampUpdates = 0;
     const query = jest.fn(async (sql: string, params: unknown[] = []) => {
@@ -31,7 +31,7 @@ describe("automation retry ordering", () => {
       if (sql.includes("UPDATE executions e SET")) {
         const incoming = params[5] as number | null;
         if (incoming !== null && incoming <= current.retry_count &&
-          !(current.status === "Untested" && current.executed_at === null && current.reported_by === null && current.retry_count === 0 && incoming === 0))
+          !(current.status === "Untested" && current.executed_at === null && current.reported_by === "human" && current.retry_count === 0 && incoming === 0))
           return { rows: [] };
         current = {
           id: execution, status: String(params[2]),
