@@ -19,7 +19,7 @@ describe("historical imports respect finalized automation runs", () => {
     const svc = makeLegacy({ query, transaction } as unknown as DatabaseService);
     jest.spyOn(svc as unknown as { requireCycleAccess: (...args: unknown[]) => Promise<string> }, "requireCycleAccess")
       .mockResolvedValue(project);
-    jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({ caller_role: "project_owner" } as never);
+    jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({ caller_role: "owner" } as never);
     jest.spyOn(svc, "logProjectActivity").mockResolvedValue(undefined);
     return { svc, query, transaction };
   };
