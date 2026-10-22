@@ -7,16 +7,20 @@ describe("execution attribution", () => {
   const actor = "11a6df91-7f69-4aa1-b999-568091409401";
   const project = "96b4c52b-66cb-4c41-bf57-86c1e5550888";
   const execution = "b528478c-c26a-4a4c-af3b-13cb10e4f1f0";
+  const run = "0c4de6af-61f3-453c-8a4b-6173eb7658cd";
   const original = "f899e70f-58c6-4c11-819b-c76590126ae1";
 
   function setup() {
     const query = jest.fn(async (sql: string, params: unknown[] = []) => {
       if (sql.includes("FROM executions e") && sql.includes("WHERE e.id = $1"))
-        return { rows: [{ id: execution, project_id: project, status: "Passed", executed_by: original, assignee_id: null, testcase_title: "Search results" }] };
+        return { rows: [{ id: execution, project_id: project, status: "Passed", executed_by: original, assignee_id: null, testcase_title: "Search results", cycle_id: run }] };
+      if (sql.includes("FROM cycles WHERE id = $1 AND deleted_at IS NULL FOR UPDATE")) 
+        return { rows: [{ source: "manual", closed_at: null }] };
       if (sql.includes("UPDATE executions SET")) return { rows: [{ id: execution, status: params[1] ?? "Passed", executed_by: params[1] ? actor : original, assignee_id: null }] };
       return { rows: [] };
     });
-    const svc = makeLegacy({ query } as unknown as DatabaseService);
+    const transaction = jest.fn(async <T>(fn: (client: { query: typeof query }) => Promise<T>) => fn({ query }));
+    const svc = makeLegacy({ query, transaction } as unknown as DatabaseService);
     jest.spyOn(svc as unknown as { requireProjectAccess: (...args: unknown[]) => Promise<unknown> }, "requireProjectAccess").mockResolvedValue(undefined);
     jest.spyOn(svc as unknown as { logProjectActivity: (...args: unknown[]) => Promise<unknown> }, "logProjectActivity").mockResolvedValue(undefined);
     jest.spyOn(svc as unknown as { notifyExecutionChange: (...args: unknown[]) => Promise<unknown> }, "notifyExecutionChange").mockResolvedValue(undefined);

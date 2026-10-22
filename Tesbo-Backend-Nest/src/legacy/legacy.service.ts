@@ -6572,12 +6572,24 @@ export class LegacyService implements OnModuleInit {
    * would not make the membership check atomic with a concurrent removal.
    */
   private async lockActiveCycle(client: PoolClient, cycleId: string) {
-    const res = await client.query<{ status: string | null; name: string; external_id: string | null; owner_id: string | null }>(
-      "SELECT status, name, external_id, owner_id FROM cycles WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+    const res = await client.query<{ status: string | null; name: string; external_id: string | null; owner_id: string | null; source: string | null; closed_at: Date | null }>(
+      "SELECT status, name, external_id, owner_id, source, closed_at FROM cycles WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
       [cycleId]
     );
     if (!res.rows[0]) throw new NotFoundException({ error: "Cycle not found" });
     return res.rows[0];
+  }
+
+  /**
+   * Automation closeRun owns the final verdict of an automated run. Manual
+   * run actions and MCP result edits share the executions tables, so they
+   * must acquire the parent cycle lock and reject writes after close.
+   * Human-operated manual runs retain their current correction behavior.
+   */
+  private assertAutomatedRunWritable(run: { source?: string | null; closed_at?: Date | null }) {
+    if (run.source === "automation" && run.closed_at) {
+      throw new ConflictException({ error: "This automated run is finalized; use a new run for corrections" });
+    }
   }
 
   async updateCycle(cycleId: string, userId: string | null | undefined, body: Body) {
@@ -6617,6 +6629,12 @@ export class LegacyService implements OnModuleInit {
     // notification, preventing observers from seeing uncommitted transitions.
     const beforeRun = await this.db.transaction(async (client) => {
       const before = await this.lockActiveCycle(client, cycleId);
+      this.assertAutomatedRunWritable(before);
+      // Automated runs cannot be marked Completed through the generic UI
+      // endpoint: only closeRun seals closed_at together with stored counts.
+      if (before.source === "automation" && status) {
+        throw new ConflictException({ error: "Automated run lifecycle must be changed through the automation run API" });
+      }
       // Policy unchanged: a Run needs one active case to start or complete.
       // Pending/Untested cases are permitted until product policy is approved.
       if (status === "In Progress" || status === "Completed") {
@@ -6718,7 +6736,10 @@ export class LegacyService implements OnModuleInit {
     const ids = [...new Set(normalizeJsonArray(raw).map((id) => String(id)).filter((id) => isUuid(id)))];
     if (!ids.length) return { requested, added: 0, skipped: requested };
 
-    const res = await this.db.query<{ id: string }>(
+    const res = await this.db.transaction(async (client) => {
+      const cycle = await this.lockActiveCycle(client, cycleId);
+      this.assertAutomatedRunWritable(cycle);
+      return client.query<{ id: string }>(
       `WITH input AS (
          SELECT id, ord FROM unnest($2::uuid[]) WITH ORDINALITY AS u(id, ord)
        ),
@@ -6766,7 +6787,8 @@ export class LegacyService implements OnModuleInit {
        ON CONFLICT (cycle_item_id) DO NOTHING
        RETURNING id`,
       [cycleId, ids, projectId]
-    );
+      );
+    });
 
     return { requested, added: res.rows.length, skipped: requested - res.rows.length };
   }
@@ -6783,7 +6805,8 @@ export class LegacyService implements OnModuleInit {
     await this.requireCycleAccess(userId, cycleId);
     if (!isUuid(testcaseId)) throw new NotFoundException({ error: "Test case not found" });
     await this.db.transaction(async (client) => {
-      await this.lockActiveCycle(client, cycleId);
+      const cycle = await this.lockActiveCycle(client, cycleId);
+      this.assertAutomatedRunWritable(cycle);
       const itemRes = await client.query<{ id: string }>(
         `UPDATE cycle_items SET deleted_at = now(), deleted_by = $3
          WHERE cycle_id = $1 AND testcase_id = $2 AND deleted_at IS NULL
@@ -6822,7 +6845,8 @@ export class LegacyService implements OnModuleInit {
     // UPDATE per case (or dropping the entire run). executions are soft-deleted in a second
     // statement scoped to exactly the cycle_items this one just touched.
     await this.db.transaction(async (client) => {
-      await this.lockActiveCycle(client, cycleId);
+      const cycle = await this.lockActiveCycle(client, cycleId);
+      this.assertAutomatedRunWritable(cycle);
       const itemsRes = await client.query<{ id: string }>(
         `UPDATE cycle_items SET deleted_at = now(), deleted_by = $3
          WHERE cycle_id = $1 AND testcase_id = ANY($2::uuid[]) AND deleted_at IS NULL
@@ -7117,7 +7141,7 @@ export class LegacyService implements OnModuleInit {
       }
     }
     const before = await this.db.query(
-      `SELECT e.*, c.project_id, COALESCE(NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Untitled test case') AS testcase_title
+      `SELECT e.*, c.project_id, ci.cycle_id, COALESCE(NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Untitled test case') AS testcase_title
        FROM executions e
        JOIN cycle_items ci ON ci.id = e.cycle_item_id
        JOIN cycles c ON c.id = ci.cycle_id
@@ -7161,7 +7185,15 @@ export class LegacyService implements OnModuleInit {
         throw new BadRequestException({ error: "The assignee must be a member of this project" });
       }
     }
-    const res = await this.db.query(
+    const res = await this.db.transaction(async (client) => {
+      // Lock the parent run first, matching automation closeRun's lock order.
+      const locked = await client.query<{ source: string | null; closed_at: Date | null }>(
+        "SELECT source, closed_at FROM cycles WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+        [before.rows[0].cycle_id]
+      );
+      if (!locked.rows[0]) throw new NotFoundException({ error: "Run not found" });
+      this.assertAutomatedRunWritable(locked.rows[0]);
+      return client.query(
       `UPDATE executions SET status=COALESCE($2,status),
        assignee_id=CASE WHEN $9::boolean THEN NULL ELSE COALESCE($3,assignee_id) END,
        actual_result=COALESCE($4,actual_result),
@@ -7184,7 +7216,8 @@ export class LegacyService implements OnModuleInit {
         clearsDefect,
         clearsAssignee
       ]
-    );
+      );
+    });
     // Fire-and-forget: logProjectActivity already swallows its own errors (see its `.catch` below)
     // and its result is never read, so there is no correctness reason for the status-update response
     // — which a user is watching live in the execution table's dropdown — to wait on this write.
