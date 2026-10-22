@@ -1,4 +1,5 @@
 import { Client } from "pg";
+import { ConflictException } from "@nestjs/common";
 import type { PoolClient } from "pg";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
 import type { DatabaseService } from "../database/database.service";
@@ -16,6 +17,8 @@ const canRun = /\/tesbo_ci(?:\?|$)/.test(databaseUrl);
   const actor = "11a6df91-7f69-4aa1-b999-568091409401";
   const original = "f899e70f-58c6-4c11-819b-c76590126ae1";
   let executionId: string;
+  let projectId: string;
+  let testcaseId: string;
 
   beforeAll(async () => {
     client = new Client({ connectionString: databaseUrl });
@@ -36,6 +39,8 @@ const canRun = /\/tesbo_ci(?:\?|$)/.test(databaseUrl);
       "INSERT INTO testcases (project_id, external_id, title) VALUES ($1, 'ATTRCI-TC-1', 'Attribution regression') RETURNING id",
       [project.rows[0].id]
     );
+    projectId = project.rows[0].id;
+    testcaseId = tc.rows[0].id;
     const cycle = await client.query<{ id: string }>(
       "INSERT INTO cycles (project_id, name) VALUES ($1, 'Attribution integration') RETURNING id",
       [project.rows[0].id]
@@ -84,4 +89,55 @@ const canRun = /\/tesbo_ci(?:\?|$)/.test(databaseUrl);
     row = await client.query("SELECT executed_by, status FROM executions WHERE id = $1", [executionId]);
     expect(row.rows[0]).toMatchObject({ executed_by: actor, status: "Failed" });
   });
+  it("rejects manual UI/MCP edits to finalized automated executions, while allowing open ones", async () => {
+    // Reuse the existing test case in a distinct automation Run. All records
+    // remain in this suite's disposable PostgreSQL transaction and roll back.
+    const run = await client.query<{ id: string }>(
+      "INSERT INTO cycles (project_id, name, source, status) VALUES ($1, 'Attribution automation guard', 'automation', 'In Progress') RETURNING id",
+      [projectId]
+    );
+    const item = await client.query<{ id: string }>(
+      "INSERT INTO cycle_items (cycle_id, testcase_id, snapshot_title, position) VALUES ($1, $2, 'Attribution regression', 1) RETURNING id",
+      [run.rows[0].id, testcaseId]
+    );
+    const execution = await client.query<{ id: string }>(
+      "INSERT INTO executions (cycle_item_id, status, executed_by) VALUES ($1, 'Passed', $2) RETURNING id",
+      [item.rows[0].id, original]
+    );
+
+    const svc = makeLegacy({
+      query: (sql: string, args?: unknown[]) => client.query(sql, args),
+      transaction: async <T>(fn: (locked: PoolClient) => Promise<T>) =>
+        fn(client as unknown as PoolClient)
+    } as unknown as DatabaseService);
+    jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({} as never);
+    jest.spyOn(svc, "logProjectActivity").mockResolvedValue(undefined);
+    jest.spyOn(svc as unknown as { notifyExecutionChange: (...args: unknown[]) => Promise<void> }, "notifyExecutionChange")
+      .mockResolvedValue(undefined);
+
+    // An open automation Run still permits authorized manual edits.
+    await svc.updateExecution(execution.rows[0].id, actor, { status: "Failed" });
+    let stored = await client.query<{ status: string }>(
+      "SELECT status FROM executions WHERE id = $1", [execution.rows[0].id]
+    );
+    expect(stored.rows[0].status).toBe("Failed");
+
+    await client.query(
+      "UPDATE cycles SET status = 'Completed', closed_at = now() WHERE id = $1", [run.rows[0].id]
+    );
+    await expect(svc.updateExecution(execution.rows[0].id, actor, { status: "Passed" }))
+      .rejects.toBeInstanceOf(ConflictException);
+    await expect(svc.updateExecution(execution.rows[0].id, actor, { actualResult: "Late human correction" }))
+      .rejects.toBeInstanceOf(ConflictException);
+    await expect(svc.updateExecution(execution.rows[0].id, actor, { assigneeId: null }))
+      .rejects.toBeInstanceOf(ConflictException);
+    stored = await client.query(
+      "SELECT status, executed_by, actual_result FROM executions WHERE id = $1",
+      [execution.rows[0].id]
+    );
+    expect(stored.rows[0]).toMatchObject({
+      status: "Failed", executed_by: actor, actual_result: null
+    });
+  });
+
 });
