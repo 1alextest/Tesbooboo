@@ -16,6 +16,7 @@ describe("automation retry ordering", () => {
     const queries: Array<{ sql: string; params: unknown[] }> = [];
     let current = {
       id: execution, status: "Untested", retry_count: 0,
+      executed_at: null as string | null,
       duration_ms: null as number | null,
       error_message: null as string | null,
       error_stack: null as string | null,
@@ -29,14 +30,16 @@ describe("automation retry ordering", () => {
       if (sql.includes("FROM testcases")) return { rows: [{ id: testcase, external_id: "TES-TC-1", title: "Retry test", status: "Approved" }] };
       if (sql.includes("UPDATE executions e SET")) {
         const incoming = params[5] as number | null;
-        if (incoming !== null && current.status !== "Untested" && incoming <= current.retry_count) return { rows: [] };
+        if (incoming !== null && incoming <= current.retry_count &&
+          !(current.status === "Untested" && current.executed_at === null && current.reported_by === null && current.retry_count === 0 && incoming === 0))
+          return { rows: [] };
         current = {
           id: execution, status: String(params[2]),
           retry_count: incoming ?? (current.status === "Untested" ? current.retry_count : current.retry_count + 1),
           duration_ms: params[4] as number | null,
           error_message: params[6] as string | null,
           error_stack: params[7] as string | null,
-          reported_by: "automation"
+          reported_by: "automation", executed_at: "2026-10-22T05:00:00Z"
         };
         return { rows: [current] };
       }
@@ -81,4 +84,19 @@ describe("automation retry ordering", () => {
       .rejects.toBeInstanceOf(ConflictException);
     expect(current().status).toBe("Passed");
   });
+  it("blocks stale retry after manual reset to Untested", async () => {
+    const { svc, current, updated, query } = setup();
+    await svc.recordResult(actor, project, run, { caseId: "TES-TC-1", status: "pass", retryCount: 2 });
+    // Simulate manual reset while retaining last attempt watermark/provenance.
+    const currentRow = current();
+    currentRow.status = "Untested";
+    await expect(svc.recordResult(actor, project, run, { caseId: "TES-TC-1", status: "fail", retryCount: 1 }))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(current().status).toBe("Untested");
+    expect(current().retry_count).toBe(2);
+    expect(updated()).toBe(1);
+    expect(query.mock.calls.find(([sql]) => sql.includes("UPDATE executions e SET"))?.[0])
+      .toContain("e.executed_at IS NULL");
+  });
+
 });
