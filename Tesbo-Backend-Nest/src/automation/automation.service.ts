@@ -546,7 +546,7 @@ export class AutomationService {
            -- Only a fresh, never-executed row can accept attempt zero.
            -- A manual reset to Untested must not lower the retry watermark.
            OR (e.status = 'Untested' AND e.executed_at IS NULL
-               AND e.reported_by IS NULL AND e.retry_count = 0 AND $6::int = 0)
+               AND e.reported_by = 'human' AND e.retry_count = 0 AND $6::int = 0)
          )
        RETURNING e.id, e.status, e.retry_count`,
       [runId, testcase.id, status, actorId, durationMs, suppliedRetryCount, errorMessage, errorStack]
