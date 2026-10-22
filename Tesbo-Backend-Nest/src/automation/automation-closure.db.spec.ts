@@ -5,6 +5,7 @@ import { DatabaseService } from "../database/database.service";
 import type { LegacyService } from "../legacy/legacy.service";
 import type { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import type { StorageService } from "../storage/storage.service";
+import { makeLegacy } from "../legacy/test-helpers/legacy-service.fixture";
 
 const url = process.env.DATABASE_URL ?? "";
 const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
@@ -186,6 +187,82 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
       [projectId, executionId]
     );
     expect(Number(persisted.rows[0].count)).toBe(0);
+  });
+
+  it("blocks a manual evidence upload behind a concurrent automation close and cleans staged files", async () => {
+    // Use separate PostgreSQL connections through DatabaseService(pool). A
+    // mock transaction sharing a client cannot prove inter-request locking.
+    await setup.query(
+      "UPDATE cycles SET status = 'In Progress', closed_at = NULL, ended_at = NULL WHERE id = $1",
+      [runId]
+    );
+    await setup.query(
+      "DELETE FROM attachments WHERE entity_type = 'execution' AND entity_id = $1",
+      [executionId]
+    );
+
+    const staged: string[] = [];
+    const cleaned: string[] = [];
+    let signalStaged: () => void = () => undefined;
+    const didStage = new Promise<void>((resolve) => { signalStaged = resolve; });
+    const storage = {
+      put: async (key: string) => { staged.push(key); signalStaged(); },
+      delete: async (key: string) => { cleaned.push(key); }
+    } as unknown as StorageService;
+    const human = makeLegacy(new DatabaseService(pool));
+    Object.assign(human, {
+      storage,
+      planLimits: { assertStorageAvailable: async () => undefined }
+    });
+    jest.spyOn(human, "requireProjectAccess").mockResolvedValue({} as never);
+    jest.spyOn(human, "logProjectActivity").mockResolvedValue(undefined);
+
+    const closer = await pool.connect();
+    let transactionOpen = false;
+    let uploadOutcome: Promise<{ error?: unknown; ok?: boolean }> | undefined;
+    try {
+      await closer.query("BEGIN");
+      transactionOpen = true;
+      await closer.query("SELECT id FROM cycles WHERE id = $1 FOR UPDATE", [runId]);
+
+      let settled = false;
+      uploadOutcome = human.uploadExecutionAttachments(runId, userId, executionId, [{
+        buffer: Buffer.from("manual-evidence-bytes"),
+        originalname: "manual-evidence.png",
+        mimetype: "image/png",
+        size: 21
+      }]).then(
+        () => { settled = true; return { ok: true }; },
+        (error: unknown) => { settled = true; return { error }; }
+      );
+
+      await didStage;
+      // The metadata transaction must wait for closer's cycle row lock.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(settled).toBe(false);
+
+      await closer.query(
+        "UPDATE cycles SET status = 'Completed', closed_at = now(), ended_at = now() WHERE id = $1",
+        [runId]
+      );
+      await closer.query("COMMIT");
+      transactionOpen = false;
+
+      const outcome = await uploadOutcome;
+      expect(outcome.error).toBeInstanceOf(ConflictException);
+      expect(outcome.ok).toBeUndefined();
+      expect(staged).toHaveLength(1);
+      expect(cleaned).toEqual(staged);
+      const saved = await setup.query<{ count: string }>(
+        "SELECT COUNT(*) AS count FROM attachments WHERE entity_type = 'execution' AND entity_id = $1 AND deleted_at IS NULL",
+        [executionId]
+      );
+      expect(Number(saved.rows[0].count)).toBe(0);
+    } finally {
+      if (transactionOpen) await closer.query("ROLLBACK");
+      closer.release();
+      if (uploadOutcome) await uploadOutcome;
+    }
   });
 
 });
