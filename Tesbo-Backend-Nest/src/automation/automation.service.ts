@@ -454,7 +454,9 @@ export class AutomationService {
    * retry_count = 2, which is what distinguishes it from one that passed first time. A
    * caller-supplied `retryCount` (Playwright knows its own attempt index) wins over the
    * increment. Attempts with lower indexes cannot replace newer attempts; equal-index
-   * exact duplicates return without altering timestamps. Legacy callers without an
+   * exact duplicates return without altering timestamps. A never-executed row accepts
+   * attempt zero, but a later manual reset to Untested cannot erase the retry
+   * watermark. Legacy callers without an
    * explicit index keep the old increment behavior, but cannot provide causal ordering.
    * A future versioned contract should require attempt identity for all SDKs.
    */
@@ -538,7 +540,14 @@ export class AutomationService {
          AND e.deleted_at IS NULL
          -- Explicit retry indexes must increase. An old shard is never allowed
          -- to replace a newer attempt even when HTTP delivery is out of order.
-         AND ($6::int IS NULL OR e.status = 'Untested' OR $6::int > e.retry_count)
+         AND (
+           $6::int IS NULL
+           OR $6::int > e.retry_count
+           -- Only a fresh, never-executed row can accept attempt zero.
+           -- A manual reset to Untested must not lower the retry watermark.
+           OR (e.status = 'Untested' AND e.executed_at IS NULL
+               AND e.reported_by IS NULL AND e.retry_count = 0 AND $6::int = 0)
+         )
        RETURNING e.id, e.status, e.retry_count`,
       [runId, testcase.id, status, actorId, durationMs, suppliedRetryCount, errorMessage, errorStack]
     );
