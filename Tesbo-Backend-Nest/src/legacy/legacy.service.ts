@@ -8873,9 +8873,11 @@ export class LegacyService implements OnModuleInit {
         }
         return rows;
       });
-      await this.logProjectActivity(projectId, uid, "execution_evidence_uploaded", "execution", executionId, null, {
+      // Once the SQL transaction commits, never delete the stored objects
+      // in response to a secondary activity-log failure.
+      void this.logProjectActivity(projectId, uid, "execution_evidence_uploaded", "execution", executionId, null, {
         files: created.map((file) => ({ id: file.id, fileName: file.fileName }))
-      });
+      }).catch((error: unknown) => this.logger.error(`Evidence activity log failed: ${String(error)}`));
       return { list: created, total: created.length };
     } catch (error) {
       for (const { key } of uploaded) {
