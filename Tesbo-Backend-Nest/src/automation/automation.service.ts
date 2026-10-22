@@ -814,7 +814,10 @@ export class AutomationService {
     files: UploadedFile[]
   ) {
     const project = await this.legacy.requireProjectAccess(userId, projectId);
-    await this.requireRun(projectId, runId);
+    const run = await this.requireRun(projectId, runId);
+    if (run.closed_at) {
+      throw new ConflictException({ error: "This automated run is closed; evidence cannot be added" });
+    }
     const actorId = (await this.resolveAutomationActorId()) ?? this.requireActor(userId);
 
     if (!files || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
@@ -842,10 +845,6 @@ export class AutomationService {
     }
 
     this.assertValidEvidence(files, kind);
-
-    // All-or-nothing on the batch, like assertValidEvidenceFiles: the loop below writes one object
-    // per file, so a mid-loop rejection would leave the accepted ones stored and billed while the
-    // request answers an error.
     const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
     const quota = await this.planLimits.checkStorageAvailable(project.organization_id, totalBytes);
     if (!quota.allowed) {
@@ -862,31 +861,72 @@ export class AutomationService {
       };
     }
 
-    const created: Body[] = [];
-    for (const file of files) {
-      const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
-      const storageKey = `executions/${projectId}/${executionId}/${randomUUID()}${ext ? `.${ext}` : ""}`;
-      await this.storage.put(storageKey, file.buffer, file.mimetype);
-      const res = await this.db.query(
-        `INSERT INTO attachments
-           (project_id, entity_type, entity_id, file_name, content_type, file_size, storage_path, uploaded_by, evidence_kind)
-         VALUES ($1, 'execution', $2, $3, $4, $5, $6, $7, $8)
-         RETURNING id, file_name, content_type, file_size, evidence_kind, created_at`,
-        [
-          projectId,
-          executionId,
-          LegacyService.displayFileName(file.originalname),
-          file.mimetype,
-          file.size,
-          storageKey,
-          actorId,
-          kind
-        ]
-      );
-      created.push(res.rows[0]);
-    }
+    // Object storage cannot participate in a PostgreSQL transaction.
+    // Upload first, then acquire the same run lock as closeRun to commit
+    // evidence metadata. On a late close or DB failure, compensate by
+    // deleting the uploaded objects rather than leaving evidence attached
+    // to a finalized run.
+    const uploaded: Array<{ file: UploadedFile; storageKey: string }> = [];
+    try {
+      for (const file of files) {
+        const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
+        const storageKey = `executions/${projectId}/${executionId}/${randomUUID()}${ext ? `.${ext}` : ""}`;
+        await this.storage.put(storageKey, file.buffer, file.mimetype);
+        uploaded.push({ file, storageKey });
+      }
 
-    return { list: created, total: created.length, skipped: null as null | "quota" };
+      const created = await this.db.transaction(async (client) => {
+        const locked = await client.query<{ id: string; closed_at: Date | null }>(
+          "SELECT id, closed_at FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
+          [runId, projectId]
+        );
+        if (!locked.rows[0]) throw new NotFoundException({ error: "Run not found" });
+        if (locked.rows[0].closed_at) {
+          throw new ConflictException({ error: "This automated run closed while evidence was uploading" });
+        }
+
+        const current = await client.query<{ id: string }>(
+          `SELECT e.id FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id
+             WHERE e.id = $1 AND ci.cycle_id = $2 AND ci.deleted_at IS NULL AND e.deleted_at IS NULL`,
+          [executionId, runId]
+        );
+        if (!current.rows[0]) throw new NotFoundException({ error: "Execution no longer exists" });
+
+        const saved: Body[] = [];
+        for (const { file, storageKey } of uploaded) {
+          const res = await client.query(
+            `INSERT INTO attachments
+               (project_id, entity_type, entity_id, file_name, content_type, file_size, storage_path, uploaded_by, evidence_kind)
+             VALUES ($1, 'execution', $2, $3, $4, $5, $6, $7, $8)
+             RETURNING id, file_name, content_type, file_size, evidence_kind, created_at`,
+            [
+              projectId,
+              executionId,
+              LegacyService.displayFileName(file.originalname),
+              file.mimetype,
+              file.size,
+              storageKey,
+              actorId,
+              kind
+            ]
+          );
+          saved.push(res.rows[0]);
+        }
+        return saved;
+      });
+      return { list: created, total: created.length, skipped: null as null | "quota" };
+    } catch (error) {
+      for (const { storageKey } of uploaded) {
+        try {
+          await this.storage.delete(storageKey);
+        } catch (cleanupError) {
+          this.logger.error(
+            `Could not remove uncommitted evidence object ${storageKey}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`
+          );
+        }
+      }
+      throw error;
+    }
   }
 
   /**
