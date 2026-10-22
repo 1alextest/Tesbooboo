@@ -871,8 +871,12 @@ export class AutomationService {
       for (const file of files) {
         const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
         const storageKey = `executions/${projectId}/${executionId}/${randomUUID()}${ext ? `.${ext}` : ""}`;
-        await this.storage.put(storageKey, file.buffer, file.mimetype);
+        // Record the key before uploading. Some storage failures occur after
+        // bytes have been written but before put() confirms success; those
+        // partially successful objects must be included in compensation.
+        // StorageService.delete is idempotent for absent keys (local/S3).
         uploaded.push({ file, storageKey });
+        await this.storage.put(storageKey, file.buffer, file.mimetype);
       }
 
       const created = await this.db.transaction(async (client) => {
