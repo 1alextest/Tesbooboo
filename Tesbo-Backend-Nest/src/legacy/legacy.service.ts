@@ -7426,6 +7426,15 @@ export class LegacyService implements OnModuleInit {
 
     const refreshSnapshots = body.refreshSnapshots === true;
     const outcome = await this.db.transaction(async (client) => {
+      // Historical imports are intentionally privileged, but must not become
+      // a bypass around an already sealed automation run. Lock the same parent
+      // row as closeRun, so a concurrent close cannot land between the guard
+      // and the imported execution writes. Manual-run migration stays valid.
+      const lockedRun = await this.lockActiveCycle(client, cycleId);
+      this.assertAutomatedRunWritable(lockedRun);
+      if (lockedRun.source === "automation" && runFields.has("closed_at")) {
+        throw new ConflictException({ error: "Automation run finalization is controlled by the automation API" });
+      }
       if (runFields.size) {
         const params: unknown[] = [cycleId];
         const sets = [...runFields].map(([col, value]) => {
