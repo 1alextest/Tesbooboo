@@ -8830,8 +8830,6 @@ export class LegacyService implements OnModuleInit {
     if (!files || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
     const execution = await this.executionOwner(cycleId, executionId);
     const projectId = String(execution.project_id);
-    // Being signed in to the workspace isn't enough: attaching evidence to a run means writing
-    // into that project, so the caller has to be a member of it.
     await this.requireProjectAccess(uid, projectId);
     LegacyService.assertValidEvidenceFiles(files);
     await this.planLimits.assertStorageAvailable(
@@ -8839,22 +8837,55 @@ export class LegacyService implements OnModuleInit {
       files.reduce((sum, file) => sum + file.size, 0)
     );
 
-    const created: Body[] = [];
-    for (const file of files) {
-      const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
-      const storageKey = `executions/${projectId}/${executionId}/${randomUUID()}${ext ? `.${ext}` : ""}`;
-      await this.storage.put(storageKey, file.buffer, file.mimetype);
-      const res = await this.db.query(
-        `INSERT INTO attachments (project_id, entity_type, entity_id, file_name, content_type, file_size, storage_path, uploaded_by)
-         VALUES ($1, 'execution', $2, $3, $4, $5, $6, $7) RETURNING *`,
-        [projectId, executionId, LegacyService.displayFileName(file.originalname), file.mimetype, file.size, storageKey, uid]
-      );
-      created.push(toCamel(res.rows[0]));
+    // Storage is external to PostgreSQL: stage bytes outside the run lock,
+    // then serialize metadata writes with the automation close transaction.
+    const uploaded: Array<{ file: typeof files[number]; key: string }> = [];
+    try {
+      for (const file of files) {
+        const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
+        const key = `executions/${projectId}/${executionId}/${randomUUID()}${ext ? `.${ext}` : ""}`;
+        // Register before the put: a storage driver can write bytes then throw.
+        uploaded.push({ file, key });
+        await this.storage.put(key, file.buffer, file.mimetype);
+      }
+
+      const created = await this.db.transaction(async (client) => {
+        const run = await client.query<{ id: string; source: string | null; closed_at: Date | null }>(
+          "SELECT id, source, closed_at FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
+          [cycleId, projectId]
+        );
+        if (!run.rows[0]) throw new NotFoundException({ error: "Run not found" });
+        this.assertAutomatedRunWritable(run.rows[0]);
+        const target = await client.query<{ id: string }>(
+          `SELECT e.id FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id
+           WHERE e.id = $1 AND ci.cycle_id = $2 AND ci.deleted_at IS NULL AND e.deleted_at IS NULL`,
+          [executionId, cycleId]
+        );
+        if (!target.rows[0]) throw new NotFoundException({ error: "Execution not found" });
+        const rows: Body[] = [];
+        for (const { file, key } of uploaded) {
+          const res = await client.query(
+            `INSERT INTO attachments (project_id, entity_type, entity_id, file_name, content_type, file_size, storage_path, uploaded_by)
+             VALUES ($1, 'execution', $2, $3, $4, $5, $6, $7) RETURNING *`,
+            [projectId, executionId, LegacyService.displayFileName(file.originalname), file.mimetype, file.size, key, uid]
+          );
+          rows.push(toCamel(res.rows[0]));
+        }
+        return rows;
+      });
+      await this.logProjectActivity(projectId, uid, "execution_evidence_uploaded", "execution", executionId, null, {
+        files: created.map((file) => ({ id: file.id, fileName: file.fileName }))
+      });
+      return { list: created, total: created.length };
+    } catch (error) {
+      for (const { key } of uploaded) {
+        try { await this.storage.delete(key); }
+        catch (cleanupError) {
+          this.logger.error(`Failed to clean up uncommitted execution evidence ${key}: ${String(cleanupError)}`);
+        }
+      }
+      throw error;
     }
-    await this.logProjectActivity(projectId, uid, "execution_evidence_uploaded", "execution", executionId, null, {
-      files: created.map((file) => ({ id: file.id, fileName: file.fileName }))
-    });
-    return { list: created, total: created.length };
   }
 
   /**
