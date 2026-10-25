@@ -364,4 +364,20 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     }
   });
 
+  it("accepts an import before closure and rejects it afterward", async () => {
+    await setup.query("UPDATE cycles SET status = 'In Progress', closed_at = NULL, close_status = NULL WHERE id = $1", [runId]);
+    const legacy = makeLegacy(new DatabaseService(pool));
+    jest.spyOn(legacy as unknown as { requireCycleAccess: (...args: unknown[]) => Promise<string> }, "requireCycleAccess").mockResolvedValue(projectId);
+    jest.spyOn(legacy, "requireProjectAccess").mockResolvedValue({ caller_role: "owner" } as never);
+    jest.spyOn(legacy, "logProjectActivity").mockResolvedValue(undefined);
+    const imported = await legacy.importRunHistory(userId, runId, { run: { status: "In Progress" } });
+    expect(imported.runFields).toContain("status");
+    const closed = await svc.closeRun(userId, projectId, runId, { status: "completed" });
+    expect(closed.alreadyClosed).toBe(false);
+    await expect(legacy.importRunHistory(userId, runId, { run: { status: "In Progress" } })).rejects.toBeInstanceOf(ConflictException);
+    const final = await setup.query("SELECT status, closed_at FROM cycles WHERE id = $1", [runId]);
+    expect(final.rows[0].status).toBe("Completed");
+    expect(final.rows[0].closed_at).not.toBeNull();
+  });
+
 });
