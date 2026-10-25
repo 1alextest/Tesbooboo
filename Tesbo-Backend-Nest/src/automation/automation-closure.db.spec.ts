@@ -334,7 +334,7 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
       transactionOpen = true;
       await closer.query("SELECT id FROM cycles WHERE id = $1 FOR UPDATE", [runId]);
       let settled = false;
-      importOutcome = legacy.importRunHistory(userId, runId, { run: { status: "Failed" } }).then(
+      importOutcome = legacy.importRunHistory(userId, runId, { run: { status: "In Progress" } }).then(
         () => { settled = true; return { ok: true }; },
         (error: unknown) => { settled = true; return { error }; }
       );
