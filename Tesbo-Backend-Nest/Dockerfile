@@ -25,12 +25,12 @@ RUN npm install --no-save @tesseract.js-data/eng@1.0.0 \
 # NestJS 10 pins a vulnerable nested Multer. Force its compatible 2.x
 # version to follow the direct dependency; refresh other compatible
 # security patches AFTER installing the OCR data and BEFORE scanning.
-RUN npm pkg set 'overrides.multer=$multer' \
+RUN npm pkg set 'overrides.multer=$multer' 'overrides.body-parser=1.20.9' \
     && npm install --omit=dev --no-audit --no-fund \
     && npm update --omit=dev --no-audit --no-fund \
     && npm install --no-save --omit=dev --no-audit --no-fund glob@10.5.0 \
     && node -e "if(require('glob/package.json').version!=='10.5.0') process.exit(1)" \
-    && npm ls multer proxy-addr --omit=dev --all \
+    && npm ls multer proxy-addr body-parser --omit=dev --all \
     && node -e "const fs=require('fs'); for(const p of ['node_modules/multer/package.json','node_modules/@nestjs/platform-express/node_modules/multer/package.json']) { if(!fs.existsSync(p)) continue; const [major,minor]=require('./'+p).version.split('.').map(Number); if(major!==2 || minor<3) process.exit(1) }"
 
 # Runtime does not execute npm; remove the CLI and its bundled vulnerable tools

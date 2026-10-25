@@ -7,6 +7,10 @@ describe("historical imports respect finalized automation runs", () => {
   const project = "96b4c52b-66cb-4c41-bf57-86c1e5550888";
   const run = "b528478c-c26a-4a4c-af3b-13cb10e4f1f0";
 
+  const expectNoWrites = (query: jest.Mock) => {
+    expect(query.mock.calls.filter(([sql]) => /\\b(?:INSERT|UPDATE|DELETE|TRUNCATE|MERGE)\\b/i.test(sql))).toEqual([]);
+  };
+
   const setup = (source: string, closed: boolean) => {
     const query = jest.fn(async (sql: string) => {
       if (sql.includes("FROM cycles WHERE id = $1") && sql.includes("FOR UPDATE")) {
@@ -29,7 +33,7 @@ describe("historical imports respect finalized automation runs", () => {
     await expect(svc.importRunHistory(user, run, { run: { status: "In Progress" } }))
       .rejects.toBeInstanceOf(ConflictException);
     expect(transaction).toHaveBeenCalledTimes(1);
-    expect(query.mock.calls.some(([sql]) => sql.includes("UPDATE cycles SET"))).toBe(false);
+    expectNoWrites(query);
   });
 
   it("rejects injecting closedAt through the history import of an open automated run", async () => {
@@ -37,7 +41,7 @@ describe("historical imports respect finalized automation runs", () => {
     await expect(svc.importRunHistory(user, run, {
       run: { closedAt: "2026-10-22T12:00:00Z" }
     })).rejects.toBeInstanceOf(ConflictException);
-    expect(query.mock.calls.some(([sql]) => sql.includes("UPDATE cycles SET"))).toBe(false);
+    expectNoWrites(query);
   });
 
   it("preserves authorized historical import for manual runs", async () => {
