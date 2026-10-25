@@ -315,4 +315,53 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     }
   });
 
+  it("serializes historical import behind automation close and preserves finalized run fields", async () => {
+    await setup.query(
+      "UPDATE cycles SET status = 'In Progress', closed_at = NULL, close_status = NULL, ended_at = NULL WHERE id = $1",
+      [runId]
+    );
+    const legacy = makeLegacy(new DatabaseService(pool));
+    jest.spyOn(legacy as unknown as { requireCycleAccess: (...args: unknown[]) => Promise<string> }, "requireCycleAccess")
+      .mockResolvedValue(projectId);
+    jest.spyOn(legacy, "requireProjectAccess").mockResolvedValue({ caller_role: "owner" } as never);
+    jest.spyOn(legacy, "logProjectActivity").mockResolvedValue(undefined);
+
+    const closer = await pool.connect();
+    let transactionOpen = false;
+    let importOutcome: Promise<{ error?: unknown; ok?: boolean }> | undefined;
+    try {
+      await closer.query("BEGIN");
+      transactionOpen = true;
+      await closer.query("SELECT id FROM cycles WHERE id = $1 FOR UPDATE", [runId]);
+      let settled = false;
+      importOutcome = legacy.importRunHistory(userId, runId, { run: { status: "Failed" } }).then(
+        () => { settled = true; return { ok: true }; },
+        (error: unknown) => { settled = true; return { error }; }
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(settled).toBe(false);
+
+      await closer.query(
+        "UPDATE cycles SET status = 'Completed', closed_at = now(), ended_at = now(), close_status = 'completed' WHERE id = $1",
+        [runId]
+      );
+      await closer.query("COMMIT");
+      transactionOpen = false;
+
+      const outcome = await importOutcome;
+      expect(outcome.error).toBeInstanceOf(ConflictException);
+      expect(outcome.ok).toBeUndefined();
+      const persisted = await setup.query<{ status: string; closed_at: Date | null; close_status: string | null }>(
+        "SELECT status, closed_at, close_status FROM cycles WHERE id = $1", [runId]
+      );
+      expect(persisted.rows[0].status).toBe("Completed");
+      expect(persisted.rows[0].closed_at).not.toBeNull();
+      expect(persisted.rows[0].close_status).toBe("completed");
+    } finally {
+      if (transactionOpen) await closer.query("ROLLBACK");
+      closer.release();
+      if (importOutcome) await importOutcome;
+    }
+  });
+
 });
