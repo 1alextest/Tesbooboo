@@ -61,6 +61,10 @@ test-results/
 playwright-report/
 .auth/
 
+# Backend mutation-testing scratch space and generated reports
+/Tesbo-Backend-Nest/.stryker-tmp/
+/Tesbo-Backend-Nest/reports/mutation/
+
 # Personal, machine-local Claude Code overrides (never share across branches/teammates)
 CLAUDE.local.md
 

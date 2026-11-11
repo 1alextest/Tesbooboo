@@ -8,8 +8,49 @@ describe("historical imports respect finalized automation runs", () => {
   const run = "b528478c-c26a-4a4c-af3b-13cb10e4f1f0";
 
   const expectNoWrites = (query: jest.Mock) => {
-    expect(query.mock.calls.filter(([sql]) => /\\b(?:INSERT|UPDATE|DELETE|TRUNCATE|MERGE)\\b/i.test(sql))).toEqual([]);
+    // Importer reads are direct SELECTs; writes include WITH ... UPDATE executions.
+    // Match the leading command, not keywords in a locking clause (FOR UPDATE),
+    // identifier, or selected value. Treat WITH as potentially mutating, and fail
+    // closed on unknown shapes rather than pretending this is a general SQL parser.
+    const commands = query.mock.calls.map(([sql]) => /^\s*([a-z]+)\b/i.exec(sql)?.[1].toUpperCase());
+    for (const command of commands) {
+      expect(command).toMatch(/^(?:SELECT|WITH|INSERT|UPDATE|DELETE|TRUNCATE|MERGE)$/);
+    }
+    expect(commands.filter((command) => command !== "SELECT")).toEqual([]);
   };
+
+  it.each([
+    "UPDATE cycles SET status = 'Failed' WHERE id = $1",
+    "  update cycles\nSET status = 'Failed' WHERE id = $1",
+    "INSERT INTO executions (cycle_item_id) VALUES ($1)",
+    "INSERT INTO executions (cycle_item_id) VALUES ($1) ON CONFLICT DO NOTHING",
+    "DELETE FROM executions WHERE id = $1",
+    "WITH input AS (SELECT $1::uuid AS id), target AS (SELECT id FROM input) UPDATE executions SET status = 'Failed' FROM target WHERE executions.id = target.id",
+    "WITH changed AS (UPDATE cycles SET status = 'Failed' RETURNING id) SELECT id FROM changed",
+    "TRUNCATE TABLE executions",
+    "MERGE INTO executions USING imported ON executions.id = imported.id WHEN MATCHED THEN DELETE"
+  ])("detects attempted SQL writes: %s", (sql) => {
+    const query = jest.fn();
+    query(sql);
+    expect(() => expectNoWrites(query)).toThrow();
+  });
+
+  it.each([
+    "SELECT id FROM cycles WHERE id = $1",
+    "SELECT status, name, external_id, owner_id, source, closed_at FROM cycles WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+    "\n select id FROM cycles WHERE id = $1 for no key update",
+    "SELECT 'UPDATE' AS command FROM cycles"
+  ])("allows non-mutating reads: %s", (sql) => {
+    const query = jest.fn();
+    query(sql);
+    expect(() => expectNoWrites(query)).not.toThrow();
+  });
+
+  it("does not silently accept unsupported SQL command structures", () => {
+    const query = jest.fn();
+    query("CALL update_run_history($1)");
+    expect(() => expectNoWrites(query)).toThrow();
+  });
 
   const setup = (source: string, closed: boolean) => {
     const query = jest.fn(async (sql: string) => {
