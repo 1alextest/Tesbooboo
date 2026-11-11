@@ -748,7 +748,7 @@ test.describe("bug severity is optional", () => {
  * a bug reported from the Bugs page, or a link added later, used to leave the execution Untested, so
  * the run's own numbers said nothing had gone wrong.
  *
- * Decided behaviour: it ALWAYS sets Failed, including over a result someone already recorded — a bug
+ * Manual/open-run behaviour: it sets Failed, including over a result someone already recorded — a bug
  * against a case that currently reads Passed is exactly the case worth flipping. The previous status
  * goes into the activity payload so the override is visible rather than silent.
  */
@@ -911,6 +911,70 @@ test.describe("linking a bug fails the execution", () => {
     const bug = await res.json();
     await request.delete(`/api/bugs/${bug.id}`, { failOnStatusCode: false });
   });
+});
+
+test.describe("bug associations preserve finalized automation", () => {
+  for (const status of ["pass", "fail"]) {
+    for (const closeStatus of ["completed", "incomplete"]) {
+      test(`create and add-link retain a ${status} result after ${closeStatus} closure`, async ({ request }) => {
+        let testcaseId = "";
+        let runId = "";
+        const bugIds: string[] = [];
+        const base = `/api/projects/${ctx.projectId}/automation`;
+        try {
+          const testcaseResponse = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+            data: { title: `E2E Sealed Bug ${status} ${closeStatus} ${Date.now()}` }
+          });
+          expect(testcaseResponse.ok(), await testcaseResponse.text()).toBeTruthy();
+          const testcase = await testcaseResponse.json();
+          testcaseId = testcase.id;
+          const runResponse = await request.post(`${base}/runs`, {
+            data: { name: `E2E Sealed Bug Run ${Date.now()}`, caseIds: [testcase.externalId] }
+          });
+          expect(runResponse.ok(), await runResponse.text()).toBeTruthy();
+          runId = (await runResponse.json()).runId;
+          const recorded = await request.post(`${base}/runs/${runId}/results`, {
+            data: { caseId: testcase.externalId, status, retryCount: 2, durationMs: 123 }
+          });
+          expect(recorded.ok(), await recorded.text()).toBeTruthy();
+          const closed = await request.patch(`${base}/runs/${runId}/close`, { data: { status: closeStatus } });
+          expect(closed.ok(), await closed.text()).toBeTruthy();
+          const closedSummary = await closed.json();
+          const before = await (await request.get(`/api/cycles/${runId}/executions`)).json();
+          const executions = before.list ?? before;
+          expect(executions).toHaveLength(1);
+          const link = { testcaseId, cycleId: runId, executionId: executions[0].id };
+
+          const createdResponse = await request.post(`/api/projects/${ctx.projectId}/bugs`, {
+            data: { title: `E2E Sealed Create ${Date.now()}`, links: [link] }
+          });
+          expect(createdResponse.ok(), await createdResponse.text()).toBeTruthy();
+          const created = await createdResponse.json();
+          bugIds.push(created.id);
+          expect(created.links).toEqual(expect.arrayContaining([expect.objectContaining(link)]));
+          const unlinkedResponse = await request.post(`/api/projects/${ctx.projectId}/bugs`, {
+            data: { title: `E2E Sealed Late Link ${Date.now()}` }
+          });
+          expect(unlinkedResponse.ok(), await unlinkedResponse.text()).toBeTruthy();
+          const unlinked = await unlinkedResponse.json();
+          bugIds.push(unlinked.id);
+          const added = await request.post(`/api/bugs/${unlinked.id}/links`, { data: link });
+          expect(added.ok(), await added.text()).toBeTruthy();
+          expect((await added.json()).links).toEqual(expect.arrayContaining([expect.objectContaining(link)]));
+
+          // Read back persisted API projections, not merely a success toast or status code.
+          expect(await (await request.get(`/api/cycles/${runId}/executions`)).json()).toEqual(before);
+          const repeated = await request.patch(`${base}/runs/${runId}/close`, { data: { status: closeStatus } });
+          expect(repeated.ok(), await repeated.text()).toBeTruthy();
+          expect(await repeated.json()).toEqual({ ...closedSummary, alreadyClosed: true });
+        } finally {
+          for (const id of bugIds) await request.delete(`/api/bugs/${id}`, { failOnStatusCode: false });
+          if (runId) await request.delete(`/api/cycles/${runId}`, { failOnStatusCode: false });
+          if (testcaseId) await request.delete(`/api/projects/${ctx.projectId}/testcases/${testcaseId}`, { failOnStatusCode: false });
+        }
+      });
+    }
+  }
 });
 
 /*

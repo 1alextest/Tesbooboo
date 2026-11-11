@@ -381,6 +381,201 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     expect(final.rows[0].closed_at).not.toBeNull();
   });
 
+  describe("bug associations and sealed verdicts", () => {
+    function bugService(db = new DatabaseService(pool)) {
+      const legacy = makeLegacy(db);
+      jest.spyOn(legacy, "requireProjectAccess").mockResolvedValue({} as never);
+      const activity = jest.spyOn(legacy, "logProjectActivity").mockResolvedValue(undefined);
+      const notification = jest.spyOn(legacy as unknown as { notifyExecutionChange: () => Promise<void> }, "notifyExecutionChange")
+        .mockResolvedValue(undefined);
+      jest.spyOn(legacy as unknown as { notifyBugChange: () => Promise<void> }, "notifyBugChange").mockResolvedValue(undefined);
+      return { legacy, activity, notification };
+    }
+
+    const link = () => ({ testcaseId: caseId, cycleId: runId, executionId });
+    const executionRow = async () => (await setup.query("SELECT * FROM executions WHERE id = $1", [executionId])).rows[0];
+
+    async function resetRun(status = "Passed", source = "automation", runStatus = "In Progress") {
+      await setup.query(
+        "UPDATE cycles SET source = $2, status = $3, closed_at = NULL, close_status = NULL, ended_at = NULL WHERE id = $1",
+        [runId, source, runStatus]
+      );
+      await setup.query(
+        "UPDATE executions SET status = $2, executed_at = '2026-01-01T00:00:00Z', executed_by = $3, reported_by = 'automation', retry_count = 3 WHERE id = $1",
+        [executionId, status, userId]
+      );
+    }
+
+    async function expectBlockedBy(pid: number) {
+      // Observe a real PostgreSQL lock wait, not just an unsettled JavaScript promise.
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        const waiting = await setup.query(
+          "SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND $1 = ANY(pg_blocking_pids(pid))",
+          [pid]
+        );
+        if (waiting.rowCount) return;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error(`No PostgreSQL waiter observed behind backend ${pid}`);
+    }
+
+    afterEach(async () => {
+      // This suite owns the dedicated project; never delete shared application fixtures.
+      await setup.query("DELETE FROM bug_links WHERE bug_id IN (SELECT id FROM bugs WHERE project_id = $1)", [projectId]);
+      await setup.query("DELETE FROM bugs WHERE project_id = $1", [projectId]);
+    });
+
+    it.each([
+      ["Passed", "completed"], ["Failed", "completed"],
+      ["Passed", "incomplete"], ["Failed", "incomplete"]
+    ])("keeps create/add associations without changing sealed %s / %s results", async (status, closeStatus) => {
+      await resetRun(status);
+      const closed = await svc.closeRun(userId, projectId, runId, { status: closeStatus });
+      const before = await executionRow();
+      const runBefore = (await setup.query("SELECT * FROM cycles WHERE id = $1", [runId])).rows[0];
+      const f = bugService();
+      const created = await f.legacy.createBug(projectId, userId, { title: "Sealed create", links: [link()] });
+      expect(created.links).toEqual(expect.arrayContaining([expect.objectContaining(link())]));
+      const existing = await f.legacy.createBug(projectId, userId, { title: "Sealed late link" });
+      const added = await f.legacy.addBugLink(userId, String(existing.id), link());
+      expect(added.links).toEqual(expect.arrayContaining([expect.objectContaining(link())]));
+      await f.legacy.addBugLink(userId, String(existing.id), link());
+      expect(await executionRow()).toEqual(before);
+      expect((await setup.query("SELECT * FROM cycles WHERE id = $1", [runId])).rows[0]).toEqual(runBefore);
+      expect(await svc.closeRun(userId, projectId, runId, { status: closeStatus })).toEqual({ ...closed, alreadyClosed: true });
+      expect(f.activity.mock.calls.filter((call) => call[2] === "execution_updated")).toHaveLength(0);
+      expect(f.notification).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["manual", "Planning"], ["manual", "In Progress"], ["manual", "Completed"], ["automation", "In Progress"]
+    ])("retains failure attribution and duplicate no-churn for %s / %s", async (source, runStatus) => {
+      await resetRun("Passed", source, runStatus);
+      if (source === "manual" && runStatus === "Completed") {
+        await setup.query("UPDATE cycles SET closed_at = now() WHERE id = $1", [runId]);
+      }
+      const f = bugService();
+      const created = await f.legacy.createBug(projectId, userId, { title: "Writable link", links: [link()] });
+      const changed = await executionRow();
+      expect(changed).toMatchObject({ status: "Failed", executed_by: userId });
+      expect(changed.executed_at).not.toEqual(new Date("2026-01-01T00:00:00Z"));
+      await Promise.all([
+        f.legacy.addBugLink(userId, String(created.id), link()),
+        f.legacy.addBugLink(userId, String(created.id), link())
+      ]);
+      expect(await executionRow()).toEqual(changed);
+      expect(f.activity.mock.calls.filter((call) => call[2] === "execution_updated")).toHaveLength(1);
+      expect(f.notification).toHaveBeenCalledTimes(1);
+    });
+
+    it("serializes simultaneous first-time links into one actual result transition", async () => {
+      await resetRun();
+      const f = bugService();
+      const first = await f.legacy.createBug(projectId, userId, { title: "Concurrent first" });
+      const second = await f.legacy.createBug(projectId, userId, { title: "Concurrent second" });
+      await Promise.all([
+        f.legacy.addBugLink(userId, String(first.id), link()),
+        f.legacy.addBugLink(userId, String(second.id), link())
+      ]);
+      expect((await executionRow()).status).toBe("Failed");
+      expect((await f.legacy.getBug(String(first.id))).links).toHaveLength(1);
+      expect((await f.legacy.getBug(String(second.id))).links).toHaveLength(1);
+      expect(f.activity.mock.calls.filter((call) => call[2] === "execution_updated")).toHaveLength(1);
+      expect(f.notification).toHaveBeenCalledTimes(1);
+    });
+
+    it("waits behind close, then keeps the association without changing the verdict", async () => {
+      await resetRun();
+      const before = await executionRow();
+      const f = bugService();
+      const bug = await f.legacy.createBug(projectId, userId, { title: "Close first" });
+      // Existing binding avoids an FK-insert wait masquerading as the helper's parent lock.
+      await setup.query("INSERT INTO bug_links (bug_id, testcase_id, cycle_id, execution_id) VALUES ($1,$2,$3,$4)",
+        [bug.id, caseId, runId, executionId]);
+      const closer = await pool.connect();
+      let request: Promise<unknown> | undefined;
+      let open = false;
+      try {
+        await closer.query("BEGIN");
+        open = true;
+        await closer.query("SELECT id FROM cycles WHERE id = $1 FOR UPDATE", [runId]);
+        let settled = false;
+        request = f.legacy.addBugLink(userId, String(bug.id), link()).finally(() => { settled = true; });
+        const holderPid = (await closer.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+        await expectBlockedBy(holderPid);
+        expect(settled).toBe(false);
+        // A real earlier close writes while holding the production parent lock.
+        await closer.query("UPDATE cycles SET status = 'Completed', closed_at = now(), close_status = 'completed' WHERE id = $1", [runId]);
+        await closer.query("COMMIT");
+        open = false;
+        await request;
+        expect(await executionRow()).toEqual(before);
+        expect((await f.legacy.getBug(String(bug.id))).links).toHaveLength(1);
+        expect(f.notification).not.toHaveBeenCalled();
+      } finally {
+        if (open) await closer.query("ROLLBACK");
+        closer.release();
+        if (request) await request.catch(() => undefined);
+      }
+    });
+
+    it("makes close wait for the actual bug-result write and count its committed failure", async () => {
+      await resetRun();
+      let written!: () => void;
+      const didWrite = new Promise<void>((resolve) => { written = resolve; });
+      let resume!: () => void;
+      let writerPid = 0;
+      const mayCommit = new Promise<void>((resolve) => { resume = resolve; });
+      const observedPool = new Pool({ connectionString: url, max: 1 });
+      const connect = observedPool.connect.bind(observedPool);
+      // Forward real queries, pausing only after the completed production result UPDATE.
+      const observingPool = {
+        query: observedPool.query.bind(observedPool),
+        connect: async () => {
+          const client = await connect();
+          return {
+            query: async (sql: string, params?: unknown[]) => {
+              const result = await client.query(sql, params);
+              if (/^\s*UPDATE executions SET status = 'Failed'/.test(sql)) {
+                expect(result.rowCount).toBe(1);
+                writerPid = (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+                written();
+                await mayCommit;
+              }
+              return result;
+            },
+            release: () => client.release()
+          };
+        }
+      } as unknown as Pool;
+      const f = bugService(new DatabaseService(observingPool));
+      let linked: Promise<unknown> | undefined;
+      let closed: ReturnType<AutomationService["closeRun"]> | undefined;
+      try {
+        linked = f.legacy.createBug(projectId, userId, { title: "Link first", links: [link()] });
+        // Race against request completion so an early failure cannot hang the latch.
+        await Promise.race([didWrite, linked.then(() => { throw new Error("Expected a completed result write"); })]);
+        expect((await executionRow()).status).toBe("Passed"); // UPDATE is still uncommitted.
+        let settled = false;
+        closed = svc.closeRun(userId, projectId, runId, { status: "completed" }).finally(() => { settled = true; });
+        await expectBlockedBy(writerPid);
+        expect(settled).toBe(false);
+        resume();
+        await linked;
+        const result = await closed;
+        expect(result).toMatchObject({ summary: { passed: 0, failed: 1, total: 1 } });
+        expect((await executionRow()).status).toBe("Failed");
+        expect(observedPool.idleCount).toBe(observedPool.totalCount);
+      } finally {
+        resume();
+        if (linked) await linked.catch(() => undefined);
+        if (closed) await closed.catch(() => undefined);
+        await observedPool.end();
+      }
+    });
+  });
+
   it("rolls back an already-written run when a later historical result fails in PostgreSQL", async () => {
     // Committed, dedicated fixtures: the independent setup connection must be
     // able to observe any accidentally committed prefix of the import.

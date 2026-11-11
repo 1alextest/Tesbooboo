@@ -3727,7 +3727,7 @@ the new PostgreSQL result without relabeling #25's unexecuted checks as passes.
 
 | Finding / evidence | Impact and severity | Root cause / proposed remediation | Relationship and disposition |
 |---|---|---|---|
-| `LegacyService.failLinkedExecutions`, called by `createBug` / `addBugLink`, directly updates verdict, time and performer without the parent finalization guard. | High: a bug association can rewrite a finalized automated result and its live summary. Source-confirmed; runtime reproduction pending. | Reuse the parent lock/guard; clarify direct-versus-side-finding semantics, verify complete case/run/execution ownership and atomic rejection. | Phase 1 mutation inventory; deferred to a focused fix, not silently included in #25. |
+| At the integrated baseline, `LegacyService.failLinkedExecutions`, called by `createBug` / `addBugLink`, directly updates verdict, time and performer without the parent finalization guard. | High: a bug association can rewrite a finalized automated result and its live summary. Source-confirmed; baseline runtime reproduction pending. | User selected association-only success for finalized automation: retain valid links without changing sealed results. Serialize result side effects with closure and make UI refresh authoritative state. Atomic rejection is NOT the selected policy. | Focused follow-up after #26; see implementation/verification boundary below. Full direct/side finding semantics remain separately proposed. |
 | At the integration baseline, no history-import test fails after a completed database write. `e2e/api/cycles.spec.ts` invalid-row case fails during validation. | High assurance gap at that baseline. | Extend `automation-closure.db.spec.ts` with a real late PostgreSQL failure, prove earlier writes occurred, and compare persisted run/results/snapshots plus successful follow-up. | PR #26 implements and passes this bounded scenario on disposable migrated PostgreSQL; integration/review and later-stage coverage remain outstanding. |
 | `deleteCycle`, testcase external-ID renaming, project-member removal and sharing can change closed-run records/metadata. REST/MCP bulk updates commit per item. | Policy-dependent integrity/atomicity risks; not all are defects. | Inventory deletion vs result immutability, snapshot identity, assignment cleanup, publication, and partial-batch semantics; preserve existing behavior until policy is approved. | Mutation-path assurance; deferred classification and coverage. |
 | Nested execution PATCH does not pass URL `cycleId` into `updateExecution`; reporter `onEnd` logs closure after a caught close error. | Medium: misleading parent context / false success reporting. Source observations, not reproduced exploits. | Validate parent-child relationship and report close failures truthfully; add transport/reporter regressions. | Separate Phase 1 follow-ups. |
@@ -3735,6 +3735,43 @@ the new PostgreSQL result without relabeling #25's unexecuted checks as passes.
 | `development` ruleset reports an empty required-status-check list and zero required approvals. | Medium governance gap: green checks/review are not presently enforced by that ruleset. | Owner to configure required checks and review policy; continue requiring green checks and human approval operationally. | Verified via GitHub rules API; no settings changed. |
 | Root `CLAUDE.md` describes a shared/macOS stack, whereas current CI provisions disposable PostgreSQL and this workstation is Windows with no Docker CLI. | Verification/environment mismatch; local DB/image/E2E execution cannot be claimed. | Use existing isolated CI, retain its gates, and explicitly report skipped local DB tests. | Infrastructure limitation, not permission to target a shared DB or weaken tests. |
 | The restored Stryker run reports 131 killed, 37 surviving and 1 uncovered mutant in `external-url.util.ts` (77.51%). | Medium assurance gap, not proof that each survivor is a production defect. | Triage equivalent mutants versus missing boundary/credential/address tests in a separate test-strengthening change. | Existing bounded mutation gate passes unchanged (break score 50); survivors are not suppressed. |
+| `createBug` and its REST controller omit user/project membership checks; identity middleware and the no-token branch of `ApiTokenRestGuard` do not require authentication. | High authorization risk, source-confirmed; no disposable HTTP exploit reproduced in this review. | Reuse current user/project authorization at the canonical service boundary and test anonymous/nonmember/current-token cases with persisted-state oracles. The nullable-user MCP rationale is stale relative to current member-bound MCP. | Separate security fix/release blocker; not silently bundled into verdict preservation or claimed resolved by its DB tests. |
+| `addBugLink` does not sanitize targets; create/update sanitize component IDs independently, not the complete testcase/run/execution chain. | High cross-project/relationship-integrity risk, source-confirmed. Independent foreign keys prove existence, not ownership. | Validate the complete authoritative chain, active parents/membership and historical-link edit semantics across create/add/replace, with rejection before unintended writes. | Separate relationship repair/release blocker. Checking the effective persisted execution binding in the verdict helper is NOT a full repair. |
+
+#### Integrated rollback evidence and approved bug-link follow-up
+
+PR [#26](https://github.com/1alextest/Tesbooboo/pull/26) passed **22/22 checks** at
+`9a3c869`; the owner merged it into `development` as `236ace7` on 2026-11-11.
+The [fresh database job](https://github.com/1alextest/Tesbooboo/actions/runs/43107473025/job/130814458229)
+passed **4 suites / 15 tests without skips**, after 144 migrations, the idempotency
+re-run and integrity probes. Its server log confirms the intended U+0000 JSONB
+failure. Backend quality separately passed 1,631 tests with 113 external/DB tests
+skipped; those skips are not database proof. Post-refresh local verification
+timeouts remain timeouts, despite successful isolated CI. No deployment is claimed.
+
+For the next bounded fix the user explicitly selected **keep valid bug associations,
+preserve finalized verdicts**. The implementation branch adds parent-first ordered
+locking and active result/binding re-read; sealed runs produce no result mutation
+or fabricated result event. Manual/open automation auto-failure and already-Failed
+no-churn behavior remain. The run drawer/full execution page refresh the saved
+verdict; sealed automation can display retained associations on Passed results.
+Existing writable-run visibility and UI components remain unchanged.
+
+Verification plan: extend the existing migrated PostgreSQL closure suite for both
+callers, Passed/Failed and completed/incomplete closes, manual/open controls,
+duplicate transitions and both race orders with observed real database lock waits.
+Extend owning API/UI specs and the existing disposable CI smoke test for genuine
+authenticated API/browser readback and reload. Until those tests actually execute,
+they are **planned/added, not runtime passes**. The general shared-stack API/UI
+suites still require their authorized environment/run; bounded CI smoke is not a
+claim that every impacted journey passed.
+
+The callers still commit associations before the result side effect. Unexpected
+postcommit errors/lost acknowledgements and create retry duplication are not made
+atomic/idempotent by this fix. Concurrent unlink/replace is not serialized by the
+cycle lock alone. Complete tuple validation, creation authorization, publication,
+snapshot-ID rename and administrative assignment/deletion policy remain distinct
+follow-ups; no full immutable-attempt/correction model is introduced here.
 
 Next product work remains conditional on Phase 1 gates and recovery of the canonical
 specifications. Existing Zyra chat/staged drafts, MCP and reporter ingestion are
