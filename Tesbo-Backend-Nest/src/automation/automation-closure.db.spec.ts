@@ -1,4 +1,5 @@
 import { Client, Pool } from "pg";
+import type { PoolClient, QueryResult } from "pg";
 import { ConflictException } from "@nestjs/common";
 import { AutomationService } from "./automation.service";
 import { DatabaseService } from "../database/database.service";
@@ -378,6 +379,109 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     const final = await setup.query("SELECT status, closed_at FROM cycles WHERE id = $1", [runId]);
     expect(final.rows[0].status).toBe("Completed");
     expect(final.rows[0].closed_at).not.toBeNull();
+  });
+
+  it("rolls back an already-written run when a later historical result fails in PostgreSQL", async () => {
+    // Committed, dedicated fixtures: the independent setup connection must be
+    // able to observe any accidentally committed prefix of the import.
+    await setup.query(
+      "UPDATE cycles SET status = 'In Progress', closed_at = NULL, close_status = NULL, ended_at = NULL, time_spent_ms = 10, tags = ARRAY['rollback-baseline'] WHERE id = $1",
+      [runId]
+    );
+    await setup.query("UPDATE executions SET status = 'Passed', actual_result = 'Before failed import' WHERE id = $1", [executionId]);
+    await setup.query("UPDATE cycle_items SET snapshot_title = 'Before snapshot refresh' WHERE cycle_id = $1", [runId]);
+
+    const readPersisted = async () => ({
+      run: (await setup.query<Record<string, unknown>>("SELECT * FROM cycles WHERE id = $1", [runId])).rows,
+      executions: (await setup.query<Record<string, unknown>>(
+        "SELECT e.* FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id WHERE ci.cycle_id = $1 ORDER BY e.id", [runId]
+      )).rows,
+      snapshots: (await setup.query<Record<string, unknown>>("SELECT * FROM cycle_items WHERE cycle_id = $1 ORDER BY id", [runId])).rows,
+      audit: (await setup.query<Record<string, unknown>>("SELECT * FROM audit_logs WHERE project_id = $1 ORDER BY id", [projectId])).rows,
+      attachments: (await setup.query<Record<string, unknown>>("SELECT * FROM attachments WHERE project_id = $1 ORDER BY id", [projectId])).rows
+    });
+    const before = await readPersisted();
+    expect(before.run).toHaveLength(1);
+    expect(before.executions).toHaveLength(1);
+    expect(before.snapshots).toHaveLength(1);
+
+    const completedWrites: { rowCount: number | null; pendingRun: Record<string, unknown> }[] = [];
+    // Keep the production transaction implementation, including BEGIN, ROLLBACK
+    // and release. Observe actual completed SQL, never substitute a mock result.
+    // This pool is used only by the importer's promise-based transaction queries.
+    // One connection also makes a successful retry check for an aborted/leaked client.
+    const importPool = new Pool({ connectionString: url, max: 1, connectionTimeoutMillis: 2000 });
+    const checkedOut = new Set<PoolClient>();
+    importPool.on("acquire", (client) => { checkedOut.add(client); });
+    importPool.on("release", (_error, client) => { checkedOut.delete(client); });
+    importPool.on("connect", (client) => {
+      const execute = client.query.bind(client) as (sql: string, values?: unknown[]) => Promise<QueryResult<Record<string, unknown>>>;
+      client.query = (async (sql: string, values?: unknown[]) => {
+        const result = await execute(sql, values);
+        if (/^\s*UPDATE cycles SET\b/i.test(sql)) {
+          const pending = await execute("SELECT * FROM cycles WHERE id = $1", [runId]);
+          completedWrites.push({ rowCount: result.rowCount, pendingRun: pending.rows[0] });
+        }
+        return result;
+      }) as typeof client.query;
+    });
+    const legacy = makeLegacy(new DatabaseService(importPool));
+    jest.spyOn(legacy as unknown as { requireCycleAccess: (...args: unknown[]) => Promise<string> }, "requireCycleAccess")
+      .mockResolvedValue(projectId);
+    jest.spyOn(legacy, "requireProjectAccess").mockResolvedValue({ caller_role: "owner" } as never);
+    const activity = jest.spyOn(legacy, "logProjectActivity").mockResolvedValue(undefined);
+    const runUpdate = { tags: ["rollback-pending"], timeSpentMs: 123 };
+    const resultUpdate = {
+      testcaseId: caseId, status: "Failed", actualResult: "Imported result", durationMs: 42,
+      history: [{ status: "Passed", comment: "Prior attempt" }],
+      stepResults: [{ position: 1, status: "Failed", comment: "Imported step" }]
+    };
+
+    try {
+      // U+0000 passes today's text validation but PostgreSQL rejects its JSONB
+      // escape (22P05) in the result UPDATE, after the run UPDATE has completed.
+      // A validation-only rejection must fail the completed-write assertions below.
+      await expect(legacy.importRunHistory(userId, runId, {
+        run: runUpdate,
+        results: [{ ...resultUpdate, actualResult: "Rejected\u0000result" }],
+        refreshSnapshots: true
+      })).rejects.toMatchObject({ code: "22P05" });
+
+      expect(completedWrites).toHaveLength(1);
+      expect(completedWrites[0].rowCount).toBe(1);
+      expect(completedWrites[0].pendingRun).toMatchObject({
+        tags: ["rollback-pending"], status: "In Progress", source: "automation", closed_at: null, close_status: null
+      });
+      expect(Number(completedWrites[0].pendingRun.time_spent_ms)).toBe(123);
+      // Full persisted rows include lifecycle fields, result/history/step data,
+      // snapshots and timestamps; inspect them outside the failed transaction.
+      expect(await readPersisted()).toEqual(before);
+      expect(activity).not.toHaveBeenCalled();
+      expect(checkedOut.size).toBe(0);
+
+      const retried = await legacy.importRunHistory(userId, runId, {
+        run: runUpdate, results: [resultUpdate], refreshSnapshots: true
+      });
+      expect(retried).toMatchObject({ applied: 1, unmatched: [], refreshedSnapshots: 1 });
+      expect(activity).toHaveBeenCalledTimes(1);
+      const after = await readPersisted();
+      expect(after.run[0]).toMatchObject({
+        status: "In Progress", source: "automation", closed_at: null, close_status: null, ended_at: null,
+        tags: ["rollback-pending"]
+      });
+      expect(Number(after.run[0].time_spent_ms)).toBe(123);
+      expect(after.executions[0]).toMatchObject({
+        status: "Failed", actual_result: resultUpdate.actualResult, duration_ms: resultUpdate.durationMs,
+        history: resultUpdate.history, step_results: resultUpdate.stepResults
+      });
+      expect(after.snapshots[0].snapshot_title).toBe("Closure case");
+      expect(checkedOut.size).toBe(0);
+    } finally {
+      // If the release behavior regresses, retry fails first; destroy the leaked
+      // client afterward so pool.end() cannot hang and conceal that failure.
+      for (const client of checkedOut) client.release(true);
+      await importPool.end();
+    }
   });
 
 });
