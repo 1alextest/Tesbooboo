@@ -77,7 +77,9 @@ test("finalized automation keeps bug links, verdicts and truthful drawer/full-pa
         // Run and testcase deliberately share a title. Only the testcase button opens the drawer;
         // a first text match may instead click the breadcrumb/run heading after a reload.
         if (surface === "drawer") await page.getByRole("button", { name: title, exact: true }).click();
-        await page.getByRole("button", { name: "Log bug", exact: true }).click();
+        // The background row has an icon-only action with the same accessible name.
+        // Exercise the drawer/full-page footer's visible-text action, not an arbitrary match.
+        await page.getByRole("button", { name: "Log bug", exact: true }).filter({ hasText: /^Log bug$/ }).click();
         await expect(page.getByText("Test case marked as Failed", { exact: true })).toHaveCount(0);
         if (surface === "drawer") {
           await page.getByPlaceholder("Brief summary of the bug…").fill(bugTitle);

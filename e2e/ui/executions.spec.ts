@@ -2161,7 +2161,7 @@ test.describe("execution evidence and automation provenance", () => {
           const url = `/projects/${ctx.projectId}/cycles/${runId}`;
           await page.goto(surface === "drawer" ? url : `${url}/execute/${execution.id}`);
           if (surface === "drawer") await page.getByRole("button", { name: testcase.title, exact: true }).click();
-          await page.getByRole("button", { name: "Log bug", exact: true }).click();
+          await page.getByRole("button", { name: "Log bug", exact: true }).filter({ hasText: /^Log bug$/ }).click();
           await expect(page.getByText("Test case marked as Failed", { exact: true })).toHaveCount(0);
           if (mode === "new") {
             await page.getByPlaceholder("Brief summary of the bug…").fill(bugTitle);
