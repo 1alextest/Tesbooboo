@@ -74,7 +74,9 @@ test("finalized automation keeps bug links, verdicts and truthful drawer/full-pa
 
         const runUrl = `${web}/projects/${projectId}/cycles/${runId}`;
         await page.goto(surface === "drawer" ? runUrl : `${runUrl}/execute/${execution.id}`);
-        if (surface === "drawer") await page.getByText(title, { exact: true }).first().click();
+        // Run and testcase deliberately share a title. Only the testcase button opens the drawer;
+        // a first text match may instead click the breadcrumb/run heading after a reload.
+        if (surface === "drawer") await page.getByRole("button", { name: title, exact: true }).click();
         await page.getByRole("button", { name: "Log bug", exact: true }).click();
         await expect(page.getByText("Test case marked as Failed", { exact: true })).toHaveCount(0);
         if (surface === "drawer") {
@@ -106,7 +108,7 @@ test("finalized automation keeps bug links, verdicts and truthful drawer/full-pa
         const repeated = await request.patch(`${base}/automation/runs/${runId}/close`, { data: { status: "completed" } });
         expect(await repeated.json()).toEqual({ ...beforeSummary, alreadyClosed: true });
         await page.reload();
-        if (surface === "drawer") await page.getByText(title, { exact: true }).first().click();
+        if (surface === "drawer") await page.getByRole("button", { name: title, exact: true }).click();
         await expect(page.getByLabel("Bug Title", { exact: true })).toHaveValue(bugTitle);
         await expect(page.getByRole("button", { name: execution.status, exact: true })).toHaveClass(activeColor);
         await testInfo.attach(`${surface}-${status}`, { body: await page.screenshot(), contentType: "image/png" });
