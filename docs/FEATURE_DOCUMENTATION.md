@@ -3735,7 +3735,7 @@ the new PostgreSQL result without relabeling #25's unexecuted checks as passes.
 | `development` ruleset reports an empty required-status-check list and zero required approvals. | Medium governance gap: green checks/review are not presently enforced by that ruleset. | Owner to configure required checks and review policy; continue requiring green checks and human approval operationally. | Verified via GitHub rules API; no settings changed. |
 | Root `CLAUDE.md` describes a shared/macOS stack, whereas current CI provisions disposable PostgreSQL and this workstation is Windows with no Docker CLI. | Verification/environment mismatch; local DB/image/E2E execution cannot be claimed. | Use existing isolated CI, retain its gates, and explicitly report skipped local DB tests. | Infrastructure limitation, not permission to target a shared DB or weaken tests. |
 | The restored Stryker run reports 131 killed, 37 surviving and 1 uncovered mutant in `external-url.util.ts` (77.51%). | Medium assurance gap, not proof that each survivor is a production defect. | Triage equivalent mutants versus missing boundary/credential/address tests in a separate test-strengthening change. | Existing bounded mutation gate passes unchanged (break score 50); survivors are not suppressed. |
-| `createBug` and its REST controller omit user/project membership checks; identity middleware and the no-token branch of `ApiTokenRestGuard` do not require authentication. | High authorization risk, source-confirmed; no disposable HTTP exploit reproduced in this review. | Reuse current user/project authorization at the canonical service boundary and test anonymous/nonmember/current-token cases with persisted-state oracles. The nullable-user MCP rationale is stale relative to current member-bound MCP. | Separate security fix/release blocker; not silently bundled into verdict preservation or claimed resolved by its DB tests. |
+| At the pre-fix baseline, `createBug` and its REST controller omit user/project membership checks; identity middleware and the no-token branch of `ApiTokenRestGuard` do not require authentication. | High authorization risk. A real Nest controller/service harness returned 201 for anonymous and nonmember principals before the fix; identities/DB were simulated, not a production or PostgreSQL exploit. | The focused follow-up invokes existing user/project authorization before bug validation, target resolution or writes. The nullable-user MCP rationale is stale relative to current member-bound MCP. | Separate security fix/release blocker pending fresh database, real-session/token CI and human review; not claimed resolved by verdict-preservation tests. |
 | `addBugLink` does not sanitize targets; create/update sanitize component IDs independently, not the complete testcase/run/execution chain. | High cross-project/relationship-integrity risk, source-confirmed. Independent foreign keys prove existence, not ownership. | Validate the complete authoritative chain, active parents/membership and historical-link edit semantics across create/add/replace, with rejection before unintended writes. | Separate relationship repair/release blocker. Checking the effective persisted execution binding in the verdict helper is NOT a full repair. |
 
 #### Integrated rollback evidence and approved bug-link follow-up
@@ -3777,6 +3777,62 @@ atomic/idempotent by this fix. Concurrent unlink/replace is not serialized by th
 cycle lock alone. Complete tuple validation, creation authorization, publication,
 snapshot-ID rename and administrative assignment/deletion policy remain distinct
 follow-ups; no full immutable-attempt/correction model is introduced here.
+
+#### Current development reconciliation and bug-create authorization slice
+
+The owner merged PR [#27](https://github.com/1alextest/Tesbooboo/pull/27) into
+`development` as `cd1b476` on 2026-11-11 at 23:06:38 UTC. Its final head
+`cee51c9` passed **22/22 checks**:
+[4 PostgreSQL suites / 26 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43115204734/job/130841292034)
+and [3 real API/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43115204720/job/130841292525).
+The browser oracles explicitly require retained Bug Key/Title fields to be visible
+and the correct verdict to persist before/after reload on both existing execution
+surfaces. Earlier fixture/selector failures were corrected without changing product
+policy or weakening assertions; they remain historical failures. This is bounded
+assurance, not independent baseline exploit reproduction, whole impacted-suite
+execution, a release deployment or Phase 1 signoff.
+
+The next focused branch reuses `requireUser` / `requireProjectAccess` at the start
+of `createBug`, including its active-workspace, membership and unarchived-project
+rules. REST and current member-owned MCP use this one writer. No UI, endpoint,
+role policy, authentication system, schema, dependency or CI threshold changes.
+Existing canonical anonymous 400 / inaccessible-project 404 behavior is retained;
+this is not a global HTTP-status cleanup.
+
+Regressions extend the existing HTTP integration, migrated PostgreSQL closure,
+API authorization and disposable smoke owners. The HTTP harness first demonstrated
+the baseline's anonymous/nonmember 201 and missing browser membership check, then
+tests refusal before link reads, ID allocation or mutation. Database cases exercise
+real membership/workspace queries and compare full bug/link/run/execution state.
+The isolated smoke uses genuine browser login, opaque tokens and MCP, including
+revocation, wrong workspace, archived project, invalid/read tokens and authorized
+controls. These added database/real-session tests are **not passes until fresh CI
+actually executes them**; local DB skips and mocked HTTP persistence are not proof.
+
+Scope limits: authorized-request membership revocation racing an already completed
+access check is not made transactionally linearizable here. Existing token-usage
+stamps and workspace self-healing may write authentication/context metadata;
+"no effects on rejection" refers to the asserted Bugs/links/Run/membership snapshot/
+execution domain state, not a promise that all database writes are prohibited.
+Complete relationship validation, add/replace-link concurrency, unsafe mutation
+retry and unexpected postcommit errors remain separately owned blockers.
+
+Remaining mutation inventory is not a list of automatically approved removals:
+
+| Existing writer | Source-grounded boundary / remaining decision |
+|---|---|
+| `deleteCycle` | Its first parent UPDATE serializes the transactional soft-delete cascade, but finalized runs are not rejected. Decide deletion/retention policy separately from verdict immutability. |
+| `updateTestCase` external-ID rename | Rewrites all matching `cycle_items.snapshot_external_id`, including historical rows, without cycle finalization checks. Decide historical identity versus current-case renaming and verify exports/readback. |
+| `removeProjectMember` | Atomically clears execution assignments across the project, including closed runs, without cycle locks. Administrative cleanup versus sealed metadata needs explicit classification. |
+| REST/MCP bulk execution changes | Existing shared per-item guards protect each write, but a later rejection/concurrent close can leave a committed prefix. Whole-request atomicity and truthful partial-batch responses remain distinct work. |
+| REST/MCP permission and plan boundaries | Current member/scope checks are reusable, not a substitute for full parent-child validation. Legacy cycle URLs and MCP aliases require the same entitlement-policy audit; no bypass is declared runtime-reproduced here. |
+| Historical imports | The real rollback test fails after a completed Run UPDATE. U+0000 validation and failure after completed execution/snapshot writes remain separate gaps; the bounded proof is not silently generalized. |
+
+The full canonical eight-file package and
+`Tesbo_Existing_Application_Baseline_v1.0.md` are still unavailable in inspected
+refs. The unmerged index/brief is not authority to invent the missing requirements
+or declare Phase 2 ready. No additional QA specification or competing baseline is
+created by this assurance ledger.
 
 Next product work remains conditional on Phase 1 gates and recovery of the canonical
 specifications. Existing Zyra chat/staged drafts, MCP and reporter ingestion are

@@ -7839,12 +7839,11 @@ export class LegacyService implements OnModuleInit {
   }
 
   async createBug(projectId: string, userId: string | null | undefined, body: Body) {
-    // Deliberately not this.requireUser(userId) — the MCP create_bug tool can call this with a null
-    // userId (an API-token caller with no owning user) and must keep working, same as before this
-    // link-diffing existed. uid is only ever consumed by replaceBugLinks' UPDATE ... deleted_by
-    // branch, which cannot run here (a brand-new bug has no existing links to soft-delete), so
-    // passing null through when there is no authenticated user costs nothing.
-    const uid = userId || null;
+    // REST and MCP share this writer. Current MCP tokens already require a current member;
+    // nullable-user compatibility must not leave browser/anonymous creation unprotected.
+    // Authorize before validation, link resolution, ID allocation or any domain writes.
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
     // A link is required whenever the project actually has test cases/runs to link to — enforced
     // client-side (the UI only lets the field be empty when there's nothing to pick). An empty
     // array is accepted here so reporting a bug is never blocked in a project with no test runs yet.
@@ -7883,7 +7882,7 @@ export class LegacyService implements OnModuleInit {
               body.status || "Open",
               severity,
               priority,
-              userId || null,
+              uid,
               body.integrationProvider || null,
               body.integrationIssueKey || null,
               body.betterbugsUrl || null,
@@ -7904,7 +7903,7 @@ export class LegacyService implements OnModuleInit {
     }
     // After the commit, not inside it: the bug is the record that must exist, and a failure while
     // flipping an execution should not roll back the bug report someone just wrote.
-    await this.failLinkedExecutions(projectId, userId, bugId as string, links);
+    await this.failLinkedExecutions(projectId, uid, bugId as string, links);
     const created: Body = await this.getBug(bugId as string);
     await this.logProjectActivity(projectId, uid, "bug_created", "bug", String(created.id), String(created.title ?? ""), {
       status: created.status ?? null,
