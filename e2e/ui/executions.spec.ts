@@ -2177,12 +2177,16 @@ test.describe("execution evidence and automation provenance", () => {
             await page.getByRole("button", { name: "Link Bug", exact: true }).click();
           }
           await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeHidden();
+          await expect(page.getByLabel("Bug Title", { exact: true })).toBeVisible();
+          await expect(page.getByLabel("Bug Key", { exact: true })).toBeVisible();
           await expect(page.getByLabel("Bug Title", { exact: true })).toHaveValue(bugTitle);
           // An active Passed status button proves the local state was not forced to Failed.
           await expect(page.getByRole("button", { name: "Passed", exact: true })).toHaveClass(/bg-\[var\(--success\)\]/);
           expect(await (await api.get(`/api/cycles/${runId}/executions`)).json()).toEqual(before);
           await page.reload();
           if (surface === "drawer") await page.getByRole("button", { name: testcase.title, exact: true }).click();
+          await expect(page.getByLabel("Bug Title", { exact: true })).toBeVisible();
+          await expect(page.getByLabel("Bug Key", { exact: true })).toBeVisible();
           await expect(page.getByLabel("Bug Title", { exact: true })).toHaveValue(bugTitle);
           await expect(page.getByRole("button", { name: "Passed", exact: true })).toHaveClass(/bg-\[var\(--success\)\]/);
         } finally {

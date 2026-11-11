@@ -99,6 +99,8 @@ test("finalized automation keeps bug links, verdicts and truthful drawer/full-pa
           await page.getByRole("button", { name: "Link Bug", exact: true }).click();
         }
         await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeHidden();
+        await expect(page.getByLabel("Bug Title", { exact: true })).toBeVisible();
+        await expect(page.getByLabel("Bug Key", { exact: true })).toBeVisible();
         await expect(page.getByLabel("Bug Title", { exact: true })).toHaveValue(bugTitle);
         const activeColor = status === "pass" ? /bg-\[var\(--success\)\]/ : /bg-\[var\(--error\)\]/;
         await expect(page.getByRole("button", { name: execution.status, exact: true })).toHaveClass(activeColor);
@@ -111,6 +113,8 @@ test("finalized automation keeps bug links, verdicts and truthful drawer/full-pa
         expect(await repeated.json()).toEqual({ ...beforeSummary, alreadyClosed: true });
         await page.reload();
         if (surface === "drawer") await page.getByRole("button", { name: title, exact: true }).click();
+        await expect(page.getByLabel("Bug Title", { exact: true })).toBeVisible();
+        await expect(page.getByLabel("Bug Key", { exact: true })).toBeVisible();
         await expect(page.getByLabel("Bug Title", { exact: true })).toHaveValue(bugTitle);
         await expect(page.getByRole("button", { name: execution.status, exact: true })).toHaveClass(activeColor);
         await testInfo.attach(`${surface}-${status}`, { body: await page.screenshot(), contentType: "image/png" });
