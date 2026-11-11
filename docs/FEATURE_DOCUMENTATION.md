@@ -3702,12 +3702,33 @@ passed, 6 suites / 112 tests skipped** without their external/DB configuration
 migrated PostgreSQL, browser smoke and container/Trivy results must be verified on
 the latest PR head in CI; local skips do not satisfy those gates.
 
+**Follow-up evidence, PR [#26](https://github.com/1alextest/Tesbooboo/pull/26),
+head `8388650`:** its existing
+[database-integrity job](https://github.com/1alextest/Tesbooboo/actions/runs/43102901520/job/130798649950)
+passed on PostgreSQL 16.15 / Node 22.23.4 after all 144 production migrations,
+their idempotency re-run and integrity probes. All 4 DB suites / 15 tests passed,
+including the new rollback-after-write case. The server log records rejection of
+U+0000 in the result JSONB query; the test requires the preceding real run UPDATE
+and pending changed values, unchanged persisted rows afterward, and a valid retry.
+This is evidence for that bounded failure stage, not rollback after every later
+result/snapshot write, HTTP authorization, real audit delivery or product release.
+The test remains on an unmerged follow-up branch, not in `development` yet.
+
+**CI evidence handling:** during the 2026-11-11 Actions outage, GitHub created
+eight workflow records for #25 without jobs/check runs. An empty Checks list is
+not success. After GitHub reported recovery, the old records still returned
+contradictory queue/cancel/rerun responses while new PR jobs executed. Compare the
+exact head SHA, actual job steps/logs and official service status; retain the
+evidence and do not keep retrying inconsistent control APIs, post fake checks,
+weaken gates or merge on an empty check set. The documentation update records
+the new PostgreSQL result without relabeling #25's unexecuted checks as passes.
+
 #### Adjacent findings and follow-up gates
 
 | Finding / evidence | Impact and severity | Root cause / proposed remediation | Relationship and disposition |
 |---|---|---|---|
 | `LegacyService.failLinkedExecutions`, called by `createBug` / `addBugLink`, directly updates verdict, time and performer without the parent finalization guard. | High: a bug association can rewrite a finalized automated result and its live summary. Source-confirmed; runtime reproduction pending. | Reuse the parent lock/guard; clarify direct-versus-side-finding semantics, verify complete case/run/execution ownership and atomic rejection. | Phase 1 mutation inventory; deferred to a focused fix, not silently included in #25. |
-| No history-import test fails after a completed database write. `e2e/api/cycles.spec.ts` invalid-row case fails during validation. | High assurance gap: partial-write rollback is unproven. | Extend `automation-closure.db.spec.ts` with a real late PostgreSQL failure, prove earlier writes occurred, and compare persisted run/results/snapshots plus successful follow-up. | Next assurance slice after #25; existing disposable CI infrastructure, never the shared application DB. |
+| At the integration baseline, no history-import test fails after a completed database write. `e2e/api/cycles.spec.ts` invalid-row case fails during validation. | High assurance gap at that baseline. | Extend `automation-closure.db.spec.ts` with a real late PostgreSQL failure, prove earlier writes occurred, and compare persisted run/results/snapshots plus successful follow-up. | PR #26 implements and passes this bounded scenario on disposable migrated PostgreSQL; integration/review and later-stage coverage remain outstanding. |
 | `deleteCycle`, testcase external-ID renaming, project-member removal and sharing can change closed-run records/metadata. REST/MCP bulk updates commit per item. | Policy-dependent integrity/atomicity risks; not all are defects. | Inventory deletion vs result immutability, snapshot identity, assignment cleanup, publication, and partial-batch semantics; preserve existing behavior until policy is approved. | Mutation-path assurance; deferred classification and coverage. |
 | Nested execution PATCH does not pass URL `cycleId` into `updateExecution`; reporter `onEnd` logs closure after a caught close error. | Medium: misleading parent context / false success reporting. Source observations, not reproduced exploits. | Validate parent-child relationship and report close failures truthfully; add transport/reporter regressions. | Separate Phase 1 follow-ups. |
 | `ProjectWriteLockGuard` matches project-prefixed REST paths; legacy cycle URLs and `/api/mcp` alias are outside that matcher. | Potential plan-enforcement inconsistency; finalization protections are separate. | Verify all transports against the same entitlement policy before choosing a shared enforcement point. | Side finding; deferred, not a proven authorization exploit. |
