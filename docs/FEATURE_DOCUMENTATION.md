@@ -8,6 +8,11 @@
 > roadmap: the "Features & actions" bullets under each module are written at the granularity of
 > individual test cases, and every section also calls out concrete **edge cases worth testing**.
 
+> **2026-11-11 source recheck:** the original inventory below is historical and
+> contains stale implementation claims. See Appendix E for the bounded Phase 1
+> recheck, PR #25 findings, missing-specification evidence and verification limits.
+> This supplement does not certify the rest of the inventory as current.
+
 ## How this document is organized
 
 Nine modules, roughly in the order a user would encounter them:
@@ -3646,3 +3651,71 @@ exact code. Good first candidates for a bug-bash or a "does this still repro" re
    The PAT auth path no longer exists, so the old PAT-vs-OAuth divergence matrix is obsolete.
 7. **Explicitly deprioritize** everything in section B until product decides whether to build,
    finish, or remove them — cover with a single "stays a stub" smoke test each instead.
+
+### E. Phase 1 assurance recheck — 2026-11-11
+
+Scope: `development` at `c567612`, PR [#25](https://github.com/1alextest/Tesbooboo/pull/25)
+at `c5577fa`, and the follow-up changes on that PR. Source evidence is not runtime
+proof. The named `Tesbo_Existing_Application_Baseline_v1.0.md` was not found in
+available Git refs. `origin/docs/qa-specs-product-direction-20261028` at `d96f24e`
+contains the proposed roadmap index and implementation brief, but not their full
+referenced specification package; that branch is unmerged. Do not create a competing
+baseline or claim the complete roadmap is recovered. Recover/reconcile those sources
+before selecting a later product phase.
+
+Verified existing protections: `LegacyService.lockActiveCycle` and
+`assertAutomatedRunWritable` serialize historical imports and manual mutations with
+automation closure. `DatabaseService.transaction` uses real BEGIN/COMMIT/ROLLBACK;
+`automation-closure.db.spec.ts` exercises migrated PostgreSQL via the existing
+`database-integrity` CI job. Authorization/scope and several other claims in the
+original inventory have changed since its initial audit.
+
+#### PR #25: confirmed failures and bounded repair
+
+- The no-write regex classified the actual `SELECT ... FOR UPDATE` lock as DML.
+  The test now admits direct SELECT reads (including locking reads), rejects DML
+  and `WITH`-prefixed writes, and fails closed on unsupported leading commands.
+  This is a test-local assertion over the importer's single-statement queries,
+  **not** a general SQL parser or a database rollback guarantee. Controls include
+  direct UPDATE/INSERT/DELETE/TRUNCATE/MERGE, upsert, the importer's SELECT-CTE/main
+  UPDATE shape, data-modifying CTEs, mixed case, whitespace and locking SELECT.
+- Mutation CI installed unpinned Stryker after `npm ci`; Docker executed `npm update`
+  after its successful locked install. Both re-resolved Langfuse's broad exporter
+  peer to `0.301.1` (API `^1.10.0`), conflicting with the existing API/SDK graph.
+  The repair locks Stryker, OCR data and the compatible tracing graph, moves image
+  security overrides into the manifest/lock, and removes build-time graph refreshes.
+- Targeted compatible security updates preserve patched body-parser/glob and update
+  Multer, compression, proxy-addr, grpc-js, xmldom and brace-expansion in the lock.
+  Initial production audit: 18 findings (8 high, 1 critical, 9 moderate). After the
+  lock update: 14 moderate, **0 high/critical**. Remaining findings involve NestJS /
+  file-type, archiver/glob/minimatch, qs and ExcelJS/uuid dependency families. These
+  remain open; no ignore entry, severity suppression or gate reduction is introduced.
+  Audit counts are time-sensitive and do not establish a clean image scan.
+
+Local verification of the repair (Windows, Node `24.14.0`, npm `11.9.0`): clean
+development `npm ci --ignore-scripts` and isolated production `npm ci --omit=dev`
+succeed; relevant peer trees pass `npm ls`; locked OCR gzip decompresses correctly.
+Typecheck and build pass; the frozen lint baseline reports 9 existing errors,
+2 warnings and **0 new errors**. Backend coverage run: **80 suites / 1,631 tests
+passed, 6 suites / 112 tests skipped** without their external/DB configuration
+(1,743 tests total). Mutation score: **77.51%**, unchanged scope/threshold. Node 22,
+migrated PostgreSQL, browser smoke and container/Trivy results must be verified on
+the latest PR head in CI; local skips do not satisfy those gates.
+
+#### Adjacent findings and follow-up gates
+
+| Finding / evidence | Impact and severity | Root cause / proposed remediation | Relationship and disposition |
+|---|---|---|---|
+| `LegacyService.failLinkedExecutions`, called by `createBug` / `addBugLink`, directly updates verdict, time and performer without the parent finalization guard. | High: a bug association can rewrite a finalized automated result and its live summary. Source-confirmed; runtime reproduction pending. | Reuse the parent lock/guard; clarify direct-versus-side-finding semantics, verify complete case/run/execution ownership and atomic rejection. | Phase 1 mutation inventory; deferred to a focused fix, not silently included in #25. |
+| No history-import test fails after a completed database write. `e2e/api/cycles.spec.ts` invalid-row case fails during validation. | High assurance gap: partial-write rollback is unproven. | Extend `automation-closure.db.spec.ts` with a real late PostgreSQL failure, prove earlier writes occurred, and compare persisted run/results/snapshots plus successful follow-up. | Next assurance slice after #25; existing disposable CI infrastructure, never the shared application DB. |
+| `deleteCycle`, testcase external-ID renaming, project-member removal and sharing can change closed-run records/metadata. REST/MCP bulk updates commit per item. | Policy-dependent integrity/atomicity risks; not all are defects. | Inventory deletion vs result immutability, snapshot identity, assignment cleanup, publication, and partial-batch semantics; preserve existing behavior until policy is approved. | Mutation-path assurance; deferred classification and coverage. |
+| Nested execution PATCH does not pass URL `cycleId` into `updateExecution`; reporter `onEnd` logs closure after a caught close error. | Medium: misleading parent context / false success reporting. Source observations, not reproduced exploits. | Validate parent-child relationship and report close failures truthfully; add transport/reporter regressions. | Separate Phase 1 follow-ups. |
+| `ProjectWriteLockGuard` matches project-prefixed REST paths; legacy cycle URLs and `/api/mcp` alias are outside that matcher. | Potential plan-enforcement inconsistency; finalization protections are separate. | Verify all transports against the same entitlement policy before choosing a shared enforcement point. | Side finding; deferred, not a proven authorization exploit. |
+| `development` ruleset reports an empty required-status-check list and zero required approvals. | Medium governance gap: green checks/review are not presently enforced by that ruleset. | Owner to configure required checks and review policy; continue requiring green checks and human approval operationally. | Verified via GitHub rules API; no settings changed. |
+| Root `CLAUDE.md` describes a shared/macOS stack, whereas current CI provisions disposable PostgreSQL and this workstation is Windows with no Docker CLI. | Verification/environment mismatch; local DB/image/E2E execution cannot be claimed. | Use existing isolated CI, retain its gates, and explicitly report skipped local DB tests. | Infrastructure limitation, not permission to target a shared DB or weaken tests. |
+| The restored Stryker run reports 131 killed, 37 surviving and 1 uncovered mutant in `external-url.util.ts` (77.51%). | Medium assurance gap, not proof that each survivor is a production defect. | Triage equivalent mutants versus missing boundary/credential/address tests in a separate test-strengthening change. | Existing bounded mutation gate passes unchanged (break score 50); survivors are not suppressed. |
+
+Next product work remains conditional on Phase 1 gates and recovery of the canonical
+specifications. Existing Zyra chat/staged drafts, MCP and reporter ingestion are
+reusable implementation, **not** proof of the proposed immutable approval/apply,
+external client execution/evidence loop or unified Copilot contract.
