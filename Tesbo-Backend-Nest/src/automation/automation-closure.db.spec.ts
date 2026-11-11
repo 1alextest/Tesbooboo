@@ -1,6 +1,6 @@
 import { Client, Pool } from "pg";
 import type { PoolClient, QueryResult } from "pg";
-import { ConflictException } from "@nestjs/common";
+import { BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
 import { AutomationService } from "./automation.service";
 import { DatabaseService } from "../database/database.service";
 import { makeLegacy } from "../legacy/test-helpers/legacy-service.fixture";
@@ -382,9 +382,9 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
   });
 
   describe("bug associations and sealed verdicts", () => {
-    function bugService(db = new DatabaseService(pool)) {
+    function bugService(db = new DatabaseService(pool), mockAuthorization = true) {
       const legacy = makeLegacy(db);
-      jest.spyOn(legacy, "requireProjectAccess").mockResolvedValue({} as never);
+      if (mockAuthorization) jest.spyOn(legacy, "requireProjectAccess").mockResolvedValue({} as never);
       const activity = jest.spyOn(legacy, "logProjectActivity").mockResolvedValue(undefined);
       const notification = jest.spyOn(legacy as unknown as { notifyExecutionChange: () => Promise<void> }, "notifyExecutionChange")
         .mockResolvedValue(undefined);
@@ -424,6 +424,66 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
       // This suite owns the dedicated project; never delete shared application fixtures.
       await setup.query("DELETE FROM bug_links WHERE bug_id IN (SELECT id FROM bugs WHERE project_id = $1)", [projectId]);
       await setup.query("DELETE FROM bugs WHERE project_id = $1", [projectId]);
+    });
+
+    it("authorizes bug creation before domain writes using actual migrated membership/workspace queries", async () => {
+      await resetRun("Passed", "manual");
+      const otherOrg = (await setup.query<{ id: string }>(
+        "INSERT INTO organizations (name, slug) VALUES ('Bug auth other workspace', $1) RETURNING id",
+        [`bug-auth-other-${Date.now()}`]
+      )).rows[0].id;
+      const outsider = (await setup.query<{ id: string }>(
+        "INSERT INTO users (email, name) VALUES ($1, 'Bug auth nonmember') RETURNING id",
+        [`bug-auth-${Date.now()}@tesbo.invalid`]
+      )).rows[0].id;
+      try {
+        await setup.query("INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1,$2,'owner'),($3,$2,'owner'),($1,$4,'qa_engineer')",
+          [orgId, userId, otherOrg, outsider]);
+        await setup.query("INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,'owner')", [projectId, userId]);
+        await setup.query("UPDATE users SET active_organization_id = $1 WHERE id = ANY($2::uuid[])", [orgId, [userId, outsider]]);
+        const persisted = async () => ({
+          execution: await executionRow(),
+          run: (await setup.query("SELECT * FROM cycles WHERE id = $1", [runId])).rows,
+          bugs: (await setup.query("SELECT * FROM bugs WHERE project_id = $1 ORDER BY id", [projectId])).rows,
+          links: (await setup.query("SELECT bl.* FROM bug_links bl JOIN bugs b ON b.id = bl.bug_id WHERE b.project_id = $1 ORDER BY bl.id", [projectId])).rows
+        });
+        const denied = async (actor: string | null | undefined, expected: typeof BadRequestException | typeof NotFoundException, targetProject = projectId) => {
+          const before = await persisted();
+          const f = bugService(undefined, false); // Do NOT stub authorization in this regression.
+          await expect(f.legacy.createBug(targetProject, actor, { title: "Refused bug", links: [link()] })).rejects.toBeInstanceOf(expected);
+          expect(await persisted()).toEqual(before);
+          expect(f.activity).not.toHaveBeenCalled();
+          expect(f.notification).not.toHaveBeenCalled();
+        };
+        await denied(null, BadRequestException);
+        await denied(undefined, BadRequestException);
+        await denied(outsider, NotFoundException); // Same workspace, no project membership.
+        await denied(userId, NotFoundException, "not-a-project-id");
+        await denied(userId, NotFoundException, "00000000-0000-4000-8000-000000000001");
+
+        await setup.query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2", [projectId, userId]);
+        await denied(userId, NotFoundException); // Previously valid member, now revoked.
+        await setup.query("INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,'owner')", [projectId, userId]);
+        await setup.query("UPDATE users SET active_organization_id = $1 WHERE id = $2", [otherOrg, userId]);
+        await denied(userId, NotFoundException); // Real membership, wrong currently active workspace.
+        await setup.query("UPDATE users SET active_organization_id = $1 WHERE id = $2", [orgId, userId]);
+        await setup.query("UPDATE projects SET archived_at = now() WHERE id = $1", [projectId]);
+        await denied(userId, NotFoundException);
+        await setup.query("UPDATE projects SET archived_at = NULL WHERE id = $1", [projectId]);
+
+        const f = bugService(undefined, false);
+        const created = await f.legacy.createBug(projectId, userId, { title: "Authorized member bug", links: [link()] });
+        expect(created).toMatchObject({ reportedBy: userId });
+        expect(created.links).toEqual(expect.arrayContaining([expect.objectContaining(link())]));
+        expect((await executionRow()).status).toBe("Failed"); // Existing open/manual behavior is retained.
+      } finally {
+        await setup.query("UPDATE projects SET archived_at = NULL WHERE id = $1", [projectId]);
+        await setup.query("UPDATE users SET active_organization_id = NULL WHERE id = ANY($1::uuid[])", [[userId, outsider]]);
+        await setup.query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2", [projectId, userId]);
+        await setup.query("DELETE FROM organization_members WHERE user_id = ANY($1::uuid[]) AND organization_id = ANY($2::uuid[])", [[userId, outsider], [orgId, otherOrg]]);
+        await setup.query("DELETE FROM users WHERE id = $1", [outsider]);
+        await setup.query("DELETE FROM organizations WHERE id = $1", [otherOrg]);
+      }
     });
 
     it.each([
