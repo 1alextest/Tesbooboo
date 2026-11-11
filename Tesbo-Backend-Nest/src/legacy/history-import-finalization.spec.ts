@@ -8,8 +8,14 @@ describe("historical imports respect finalized automation runs", () => {
   const run = "b528478c-c26a-4a4c-af3b-13cb10e4f1f0";
 
   const expectNoWrites = (query: jest.Mock) => {
-    expect(query.mock.calls.filter(([sql]) => /\\b(?:INSERT|UPDATE|DELETE|TRUNCATE|MERGE)\\b/i.test(sql))).toEqual([]);
+    expect(query.mock.calls.filter(([sql]) => /\b(?:INSERT|UPDATE|DELETE|TRUNCATE|MERGE)\b/i.test(sql))).toEqual([]);
   };
+
+  it("detects attempted SQL writes in the no-side-effects assertion", () => {
+    const query = jest.fn();
+    query("UPDATE cycles SET status = 'Failed' WHERE id = $1");
+    expect(() => expectNoWrites(query)).toThrow();
+  });
 
   const setup = (source: string, closed: boolean) => {
     const query = jest.fn(async (sql: string) => {
