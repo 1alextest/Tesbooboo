@@ -24,10 +24,8 @@ jobs:
           cache: npm
           cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
       - run: npm ci --ignore-scripts
-      - name: Install Stryker without changing project lockfile
-        run: npm install --no-save --package-lock=false --ignore-scripts @stryker-mutator/core @stryker-mutator/jest-runner
       - name: Mutate bounded critical security utility and run real Jest assertions
-        run: npx stryker run stryker.ci.config.json
+        run: npm run test:mutation
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
