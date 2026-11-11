@@ -26,7 +26,7 @@ test("finalized automation keeps bug links, verdicts and truthful drawer/full-pa
   expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
   const request = page.request; // Share the genuine session cookie with the browser.
   const setup = await request.post(`${api}/api/setup/first-admin`, {
-    data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bug-Links-2026!", orgName: "CI Bug Links", demoData: false }
+    data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!", orgName: "CI Bug Links", demoData: false }
   });
   expect(setup.ok(), await setup.text()).toBeTruthy();
   const projectResponse = await request.post(`${api}/api/projects`, { data: { name: "CI Bug Links", key: "CBL" } });

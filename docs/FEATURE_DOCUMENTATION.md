@@ -3761,8 +3761,13 @@ Verification plan: extend the existing migrated PostgreSQL closure suite for bot
 callers, Passed/Failed and completed/incomplete closes, manual/open controls,
 duplicate transitions and both race orders with observed real database lock waits.
 Extend owning API/UI specs and the existing disposable CI smoke test for genuine
-authenticated API/browser readback and reload. Until those tests actually execute,
-they are **planned/added, not runtime passes**. The general shared-stack API/UI
+authenticated API/browser readback and reload. At follow-up head `aabbdf5`, the
+[migrated PostgreSQL job](https://github.com/1alextest/Tesbooboo/actions/runs/43111730436/job/130829208662)
+passed **all 4 suites / 26 tests without skips**, including both observed lock-wait
+race orders. The initial new browser smoke test stopped during bootstrap because
+its synthetic password exceeded the existing 16-character maximum; no new bug-link
+browser flow ran. The test credential is corrected without changing product policy
+or assertions; fresh-head CI/browser verification remains required. The general shared-stack API/UI
 suites still require their authorized environment/run; bounded CI smoke is not a
 claim that every impacted journey passed.
 
