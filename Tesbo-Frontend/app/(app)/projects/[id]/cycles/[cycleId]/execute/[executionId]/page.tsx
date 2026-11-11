@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   listCycleExecutions,
+  getTestRun,
   updateExecution,
   listBugs,
   removeBugLink,
@@ -72,7 +73,9 @@ export default function ExecutionDetailPage() {
   const [actualResult, setActualResult] = useState("");
   const [assigneeId, setAssigneeId] = useState("");
   const [saving, setSaving] = useState(false);
-  /* Bug Key / Bug Title shown for a Failed execution — read from the real bug(s) filed via "Log
+  const [bugRefreshError, setBugRefreshError] = useState<string | null>(null);
+  const [finalizedAutomation, setFinalizedAutomation] = useState(false);
+  /* Bug Key / Bug Title shown for a linked execution — read from the real bug(s) filed via "Log
      bug" (bugs/bug_links), not the old free-text defectKey/defectUrl columns on the execution row.
      An execution can have more than one bug linked to it, so this is every bug linked to THIS
      execution specifically, not just the first bug linked to its testcase+cycle. */
@@ -90,6 +93,16 @@ export default function ExecutionDetailPage() {
     // the dialog's own answer keeps this correct even if that stops being true.
     onLogged: (exec) => {
       loadLinkedBugs(exec);
+      setBugRefreshError(null);
+      Promise.all([getTestRun(cycleId), listCycleExecutions(cycleId)])
+        .then(([run, list]) => {
+          const current = list.find((item) => item.id === exec.id);
+          if (!current) throw new Error("Execution no longer available");
+          setExecution(current);
+          setStatus(current.status || "Untested");
+          setFinalizedAutomation(run.source === "automation" && run.closedAt != null);
+        })
+        .catch(() => setBugRefreshError("Bug saved, but the execution could not be refreshed. Reload to see its current result."));
     },
   });
 
@@ -144,8 +157,9 @@ export default function ExecutionDetailPage() {
       router.replace("/login");
       return;
     }
-    listCycleExecutions(cycleId)
-      .then((list) => {
+    Promise.all([getTestRun(cycleId), listCycleExecutions(cycleId)])
+      .then(([run, list]) => {
+        setFinalizedAutomation(run.source === "automation" && run.closedAt != null);
         const e = list.find((x) => x.id === executionId);
         if (e) {
           setExecution(e);
@@ -194,6 +208,7 @@ export default function ExecutionDetailPage() {
       </header>
 
       <main className="w-full px-6 py-8">
+        {bugRefreshError && <p role="alert" className="mb-4 text-sm text-[var(--error-foreground)]">{bugRefreshError}</p>}
         <div className="flex items-center gap-3 mb-6">
           <h1 className="text-xl font-bold text-[var(--foreground)]">
             {executionTitle(execution)}
@@ -311,18 +326,16 @@ export default function ExecutionDetailPage() {
           </div>
 
           {/*
-            * Bug Key / Bug Title — shown only for a Failed case that also has at least one real
-            * persisted bug association (linkedBugs, loaded from bug_links via listBugs). Both
-            * conditions matter: Failed alone does not imply a bug exists (only a successful
-            * "Log bug" / "Link Bug" does), and a bug linked while the case was Failed must not
-            * keep showing once the case is Untested/Passed/Skipped/Blocked/Retest. Read-only:
+            * Bug Key / Bug Title — keep the existing Failed-only presentation on writable runs.
+            * Sealed automation also shows its traceability links without implying failure.
+            * A status alone never fabricates a bug association. Read-only:
             * these reflect the real bug(s), not a free-text value typed here. One execution can
             * now have several bugs linked (multi-select existing-bug picker) — a single linked
             * bug keeps the original "Bug Key"/"Bug Title" labels; more than one numbers them
             * ("Bug 1 Key", "Bug 2 Key", …) so none is silently dropped. Every row gets its own
             * Unlink action regardless of count.
             */}
-          <div className="space-y-3" hidden={status !== "Failed" || linkedBugs.length === 0}>
+          <div className="space-y-3" hidden={linkedBugs.length === 0 || (status !== "Failed" && !finalizedAutomation)}>
             {linkedBugs.map((bug, i) => {
               const keyLabel = linkedBugs.length > 1 ? `Bug ${i + 1} Key` : "Bug Key";
               const titleLabel = linkedBugs.length > 1 ? `Bug ${i + 1} Title` : "Bug Title";

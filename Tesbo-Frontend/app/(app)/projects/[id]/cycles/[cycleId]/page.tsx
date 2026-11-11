@@ -459,7 +459,7 @@ export default function TestRunDetailPage() {
   const [panelActualResult, setPanelActualResult] = useState("");
   const [panelAssigneeId, setPanelAssigneeId] = useState("");
   const [panelSaving, setPanelSaving] = useState(false);
-  /* Bug Key / Bug Title shown for a Failed execution — read from the real bug(s) filed via "Log
+  /* Bug Key / Bug Title shown for a linked execution — read from the real bug(s) filed via "Log
      bug" (bugs/bug_links), not the old free-text defectKey/defectUrl columns on the execution row.
      An execution can have more than one bug linked to it, so this is every bug linked to THIS
      execution specifically, not just the first bug linked to its testcase+cycle. */
@@ -478,12 +478,13 @@ export default function TestRunDetailPage() {
   const [copied, setCopied] = useState(false);
 
   const load = useCallback(() => {
-    Promise.all([getTestRun(cycleId), listCycleExecutions(cycleId)])
+    return Promise.all([getTestRun(cycleId), listCycleExecutions(cycleId)])
       .then(([r, e]) => {
         setRun(r);
         setExecutions(e);
         setShareEnabled(r.shareEnabled ?? false);
         setShareToken(r.shareToken ?? null);
+        return e;
       })
       .catch(() => router.replace(`/projects/${projectId}/cycles`))
       .finally(() => setLoading(false));
@@ -498,17 +499,15 @@ export default function TestRunDetailPage() {
     // Report a Bug) closes the panel before opening this dialog, so panelExecution is null exactly
     // when a bug is filed through that path, and the freshly linked Bug Key/Title would otherwise
     // never surface until the user manually reopened the row.
-    //
-    // Force status to "Failed" rather than trusting exec.status: the backend's
-    // failLinkedExecutions unconditionally flips the linked execution to Failed on every successful
-    // "Log bug"/"Link Bug" (see legacy.service.ts), but exec is a snapshot taken when the dialog was
-    // opened. Clicking the "Log bug" footer button (or the row's bug icon) straight from an
-    // Untested/Passed/etc. panel — without first clicking the local "Failed" status button and
-    // Save — carries that stale status into the snapshot, so trusting it here would reopen the
-    // panel on "Untested" and immediately hide the very Bug Key/Title it just fetched.
+    // The dialog's snapshot is not the saved verdict: writable runs can auto-fail, while sealed
+    // automation only gains the association. Always reopen from the authoritative refreshed row.
     onLogged: (exec) => {
-      load();
-      openExecutionPanel({ ...exec, status: "Failed" });
+      void load().then((list) => {
+        if (!list) return;
+        const current = list.find((item) => item.id === exec.id);
+        if (current) openExecutionPanel(current);
+        else closeExecutionPanel();
+      });
     },
   });
 
@@ -2086,17 +2085,15 @@ export default function TestRunDetailPage() {
                 />
               </div>
 
-              {/* Bug Key / Bug Title — shown only for a Failed case that also has at least one real
-                  persisted bug association (panelBugs, loaded from bug_links via listBugs). Both
-                  conditions matter: Failed alone does not imply a bug exists (only a successful
-                  "Log bug" / "Link Bug" does), and a bug linked while the case was Failed must not
-                  keep showing once the case is Untested/Passed/Skipped/Blocked/Retest. Read-only:
+              {/* Bug Key / Bug Title — keep the existing Failed-only presentation on writable runs.
+                  Sealed automation also shows its traceability links without implying failure.
+                  A status alone never fabricates a bug association. Read-only:
                   these reflect the real bug(s), not a free-text value typed here. One execution can
                   now have several bugs linked (multi-select existing-bug picker) — a single linked
                   bug keeps the original "Bug Key"/"Bug Title" labels; more than one numbers them
                   ("Bug 1 Key", "Bug 2 Key", …) so none is silently dropped. Every row gets its own
                   Unlink action regardless of count. */}
-              <div className="space-y-3" hidden={panelStatus !== "Failed" || panelBugs.length === 0}>
+              <div className="space-y-3" hidden={panelBugs.length === 0 || (panelStatus !== "Failed" && !(run?.source === "automation" && run.closedAt != null))}>
                 {panelBugs.map((bug, i) => {
                   const keyLabel = panelBugs.length > 1 ? `Bug ${i + 1} Key` : "Bug Key";
                   const titleLabel = panelBugs.length > 1 ? `Bug ${i + 1} Title` : "Bug Title";

@@ -1910,10 +1910,9 @@ test.describe("run detail — progress, defects and the bug modal", () => {
    * Bug Key/Title. openBugDialogFor(panelExecution) (the footer button's call) snapshots whatever
    * panelExecution.status currently is, which is still the last-*saved* status, not the locally
    * toggled one; onLogged then trusted that stale snapshot when reopening the panel. Since a
-   * successful "Log bug"/"Link Bug" always forces the execution to Failed server-side regardless
-   * (failLinkedExecutions), the fix reopens with status forced to "Failed" rather than trusting the
-   * snapshot, so the case doesn't visibly revert to Untested and the fields it just fetched stay
-   * visible instead of being hidden by the (now-wrong) status.
+    * successful "Log bug"/"Link Bug" changes this manual execution server-side, the panel must
+    * reopen from the saved execution, not the dialog snapshot. Finalized automation is different:
+    * the association succeeds without a verdict change, covered separately below.
    */
   test("EXE-U-31f clicking Log bug without Save first still ends up Failed with the bug visible, not Untested", async ({ page }) => {
     const { cycle, testcase } = await setUpCycleWithOneCase(`UI Log Bug No Save ${Date.now()}`);
@@ -2082,7 +2081,7 @@ test.describe("run detail — progress, defects and the bug modal", () => {
  */
 test.describe("execution evidence and automation provenance", () => {
   /** Drives the automation ingest to produce a real automated run with a failure and evidence. */
-  async function seedAutomatedRun(label: string) {
+  async function seedAutomatedRun(label: string, status = "fail") {
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
     try {
       const testcase = await (
@@ -2108,7 +2107,7 @@ test.describe("execution evidence and automation provenance", () => {
       await api.post(`${base}/runs/${run.runId}/results`, {
         data: {
           caseId: testcase.externalId,
-          status: "fail",
+          status,
           durationMs: 2500,
           retryCount: 2,
           errorMessage: "AssertionError: expected the cart to be empty",
@@ -2135,6 +2134,67 @@ test.describe("execution evidence and automation provenance", () => {
       return { runId: run.runId as string, testcase };
     } finally {
       await api.dispose();
+    }
+  }
+
+  for (const surface of ["drawer", "full page"]) {
+    for (const mode of ["new", "existing"]) {
+      test(`a finalized Passed execution keeps its verdict and shows a ${mode} bug in the ${surface}`, async ({ page }) => {
+        const { runId, testcase } = await seedAutomatedRun(`sealed-${mode}`, "pass");
+        const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+        let existingBugId = "";
+        try {
+          const close = await api.patch(`/api/projects/${ctx.projectId}/automation/runs/${runId}/close`, {
+            data: { status: "completed" }
+          });
+          expect(close.ok(), await close.text()).toBeTruthy();
+          const before = await (await api.get(`/api/cycles/${runId}/executions`)).json();
+          const execution = (before.list ?? before)[0];
+          expect(execution.status).toBe("Passed");
+          const bugTitle = `E2E Sealed UI Bug ${mode} ${Date.now()}`;
+          if (mode === "existing") {
+            const response = await api.post(`/api/projects/${ctx.projectId}/bugs`, { data: { title: bugTitle } });
+            expect(response.ok(), await response.text()).toBeTruthy();
+            existingBugId = (await response.json()).id;
+          }
+
+          const url = `/projects/${ctx.projectId}/cycles/${runId}`;
+          await page.goto(surface === "drawer" ? url : `${url}/execute/${execution.id}`);
+          if (surface === "drawer") await page.getByRole("button", { name: testcase.title, exact: true }).click();
+          await page.getByRole("button", { name: "Log bug", exact: true }).filter({ hasText: /^Log bug$/ }).click();
+          await expect(page.getByText("Test case marked as Failed", { exact: true })).toHaveCount(0);
+          if (mode === "new") {
+            await page.getByPlaceholder("Brief summary of the bug…").fill(bugTitle);
+            await page.getByRole("button", { name: "Report Bug", exact: true }).click();
+          } else {
+            await page.getByRole("button", { name: "Yes, link existing" }).click();
+            await page.getByRole("button", { name: "Existing Tesbo bug", exact: true }).click();
+            await page.getByRole("button", { name: "Choose an existing bug…" }).click();
+            const picker = page.getByTestId("existing-bug-picker");
+            await picker.getByPlaceholder("Search bugs by title…").fill(bugTitle);
+            await picker.getByText(bugTitle, { exact: true }).click();
+            await picker.getByRole("button", { name: "Add Selected (1)", exact: true }).click();
+            await page.getByRole("button", { name: "Link Bug", exact: true }).click();
+          }
+          await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeHidden();
+          await expect(page.getByLabel("Bug Title", { exact: true })).toBeVisible();
+          await expect(page.getByLabel("Bug Key", { exact: true })).toBeVisible();
+          await expect(page.getByLabel("Bug Title", { exact: true })).toHaveValue(bugTitle);
+          // An active Passed status button proves the local state was not forced to Failed.
+          await expect(page.getByRole("button", { name: "Passed", exact: true })).toHaveClass(/bg-\[var\(--success\)\]/);
+          expect(await (await api.get(`/api/cycles/${runId}/executions`)).json()).toEqual(before);
+          await page.reload();
+          if (surface === "drawer") await page.getByRole("button", { name: testcase.title, exact: true }).click();
+          await expect(page.getByLabel("Bug Title", { exact: true })).toBeVisible();
+          await expect(page.getByLabel("Bug Key", { exact: true })).toBeVisible();
+          await expect(page.getByLabel("Bug Title", { exact: true })).toHaveValue(bugTitle);
+          await expect(page.getByRole("button", { name: "Passed", exact: true })).toHaveClass(/bg-\[var\(--success\)\]/);
+        } finally {
+          if (existingBugId) await api.delete(`/api/bugs/${existingBugId}`, { failOnStatusCode: false });
+          await api.dispose();
+          await cleanUp(runId, testcase.id);
+        }
+      });
     }
   }
 

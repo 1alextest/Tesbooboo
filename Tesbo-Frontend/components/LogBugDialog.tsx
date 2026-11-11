@@ -348,7 +348,7 @@ export function useLogBugDialog(params: {
     }
   }
 
-  /* ───── Link this failing execution to everything currently selected — existing Tesbo bugs
+  /* ───── Link this execution to everything currently selected — existing Tesbo bugs
    * (via addBugLink) and/or Jira/Linear tickets (via createBug) — in one action, regardless of
    * which tab (bugExistingChoice) happens to be active when "Link Bug" is clicked. The two kinds
    * of selection live in separate arrays (selectedExistingBugs / selectedIssues) precisely so
@@ -450,7 +450,7 @@ export function useLogBugDialog(params: {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
             </svg>
             <div>
-              <p className="text-sm font-medium text-[var(--status-fail-text)]">Test case marked as Failed</p>
+              <p className="text-sm font-medium text-[var(--status-fail-text)]">Report or link a bug for this execution</p>
               <p className="text-xs text-[var(--status-fail-text)] opacity-80 mt-0.5">
                 {bugExecution?.externalId && <span className="font-mono mr-1">{bugExecution.externalId}</span>}
                 {bugExecution?.title || bugExecution?.snapshotTitle || "Untitled test case"}

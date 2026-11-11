@@ -6586,8 +6586,12 @@ export class LegacyService implements OnModuleInit {
    * must acquire the parent cycle lock and reject writes after close.
    * Human-operated manual runs retain their current correction behavior.
    */
+  private isAutomatedRunFinalized(run: { source?: string | null; closed_at?: Date | null }) {
+    return run.source === "automation" && run.closed_at != null;
+  }
+
   private assertAutomatedRunWritable(run: { source?: string | null; closed_at?: Date | null }) {
-    if (run.source === "automation" && run.closed_at) {
+    if (this.isAutomatedRunFinalized(run)) {
       throw new ConflictException({ error: "This automated run is finalized; use a new run for corrections" });
     }
   }
@@ -7620,37 +7624,67 @@ export class LegacyService implements OnModuleInit {
    * the reverse path — reporting from the Bugs page, or adding a link later — which never touched
    * the execution at all.
    *
-   * Decided behaviour: it ALWAYS sets Failed, including over a result someone already recorded. A
-   * bug against a case that is currently Passed is precisely the case worth flipping, and a rule
-   * with an exception in it ("unless someone passed it") is the kind that quietly does nothing on
-   * the day it matters. The previous status is written into the activity payload so the override is
-   * visible afterwards rather than silent, and an execution that is already Failed is left alone so
-   * re-linking doesn't churn executed_at or spam the activity stream.
+   * Manual and open automated runs retain the existing Passed -> Failed behavior. A finalized
+   * automated run accepts the association for traceability, but its execution is sealed: linking
+   * is not a result correction. Serialize with closeRun on the same parent rows, then re-read the
+   * active persisted associations/status before writing. Already-Failed executions remain no-ops.
    *
    * Scoped by project: a link row can name any execution id, and without the join a caller could
    * flip a result in a workspace they cannot see.
    */
-  private async failLinkedExecutions(projectId: string, actorId: string | null | undefined, links: Body[]) {
+  private async failLinkedExecutions(projectId: string, actorId: string | null | undefined, bugId: string, links: Body[]) {
     const executionIds = [...new Set(links.map((link) => link.executionId).filter((id): id is string => isUuid(String(id ?? ""))))];
     if (executionIds.length === 0) return;
 
-    const affected = await this.db.query(
-      `SELECT e.id, e.status, e.assignee_id, COALESCE(NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Untitled test case') AS testcase_title
-         FROM executions e
-         JOIN cycle_items ci ON ci.id = e.cycle_item_id
-         JOIN cycles c ON c.id = ci.cycle_id
-         LEFT JOIN testcases t ON t.id = ci.testcase_id
-        WHERE e.id = ANY($1::uuid[]) AND e.deleted_at IS NULL AND c.project_id = $2`,
-      [executionIds, projectId]
-    );
-
-    for (const row of affected.rows) {
-      if (row.status === "Failed") continue;
-      await this.db.query(
-        `UPDATE executions SET status = 'Failed', executed_at = now(), executed_by = $2, updated_at = now()
-          WHERE id = $1 AND deleted_at IS NULL`,
-        [row.id, actorId || null]
+    const transitions = await this.db.transaction(async (client) => {
+      // Parent before execution locks, in stable order even for reversed multi-run batches.
+      // Associations were committed by the caller; no new exception for a sealed run may turn
+      // successful linking into an error with a partially persisted request.
+      const runs = await client.query<{ id: string; source: string; closed_at: Date | null }>(
+        `SELECT c.id, c.source, c.closed_at FROM cycles c
+          WHERE c.project_id = $2 AND c.deleted_at IS NULL
+            AND EXISTS (
+              SELECT 1 FROM cycle_items ci JOIN executions e ON e.cycle_item_id = ci.id
+               WHERE ci.cycle_id = c.id AND ci.deleted_at IS NULL AND e.deleted_at IS NULL
+                 AND e.id = ANY($1::uuid[])
+            )
+          ORDER BY c.id FOR UPDATE`,
+        [executionIds, projectId]
       );
+      const writableRunIds = runs.rows.filter((run) => !this.isAutomatedRunFinalized(run)).map((run) => run.id);
+      if (!writableRunIds.length) return [];
+
+      const affected = await client.query(
+        `SELECT e.id, e.status, e.assignee_id,
+                COALESCE(NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Untitled test case') AS testcase_title
+           FROM executions e
+           JOIN cycle_items ci ON ci.id = e.cycle_item_id
+           LEFT JOIN testcases t ON t.id = ci.testcase_id
+          WHERE e.id = ANY($1::uuid[]) AND e.deleted_at IS NULL AND ci.deleted_at IS NULL
+            AND ci.cycle_id = ANY($2::uuid[])
+            AND EXISTS (
+              SELECT 1 FROM bug_links bl JOIN bugs b ON b.id = bl.bug_id
+               WHERE bl.bug_id = $3 AND bl.execution_id = e.id AND bl.deleted_at IS NULL
+                 AND b.project_id = $4 AND b.deleted_at IS NULL
+            )
+          ORDER BY e.id FOR UPDATE OF e`,
+        [executionIds, writableRunIds, bugId, projectId]
+      );
+      const changed: typeof affected.rows = [];
+      for (const row of affected.rows) {
+        if (row.status === "Failed") continue;
+        await client.query(
+          `UPDATE executions SET status = 'Failed', executed_at = now(), executed_by = $2, updated_at = now()
+            WHERE id = $1 AND deleted_at IS NULL`,
+          [row.id, actorId || null]
+        );
+        changed.push(row);
+      }
+      return changed;
+    });
+
+    // Only committed, actual result transitions produce result activity/notifications.
+    for (const row of transitions) {
       await this.logProjectActivity(projectId, actorId ?? null, "execution_updated", "execution", String(row.id), row.testcase_title, {
         reason: "bug_linked",
         before: { status: row.status },
@@ -7870,7 +7904,7 @@ export class LegacyService implements OnModuleInit {
     }
     // After the commit, not inside it: the bug is the record that must exist, and a failure while
     // flipping an execution should not roll back the bug report someone just wrote.
-    await this.failLinkedExecutions(projectId, userId, links);
+    await this.failLinkedExecutions(projectId, userId, bugId as string, links);
     const created: Body = await this.getBug(bugId as string);
     await this.logProjectActivity(projectId, uid, "bug_created", "bug", String(created.id), String(created.title ?? ""), {
       status: created.status ?? null,
@@ -8589,7 +8623,7 @@ export class LegacyService implements OnModuleInit {
     // caller's body, which never carries a project id.
     const owner = await this.db.query<{ project_id: string }>("SELECT project_id FROM bugs WHERE id = $1", [bugId]);
     const projectId = owner.rows[0]?.project_id;
-    if (projectId) await this.failLinkedExecutions(String(projectId), userId, [body]);
+    if (projectId) await this.failLinkedExecutions(String(projectId), userId, bugId, [body]);
     return this.getBug(bugId);
   }
 
