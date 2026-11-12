@@ -98,7 +98,7 @@ Config defaults referenced below (from `Tesbo-Backend-Nest/src/config/app-config
   1. Primary: reads `tesbo_session` cookie, resolves to a `userId` via `sessions.token_hash` lookup (only if `expires_at > now()`); expired/unknown token → `req.userId = null` (not an error — downstream handlers 401/403 as needed).
   2. Secondary (only if no cookie session resolved): parses `Authorization: Bearer <token>`, authenticates against `api_tokens.token_hash` (SHA-256) via `ApiTokenService.authenticate`; on match sets `req.userId` to the token's owning user and `req.apiToken = { tokenId, userId, projectId, scopes }`. Unknown/blank bearer token → falls through as unauthenticated.
   - Practical effect: a request bearing *both* a valid session cookie and a bearer token is treated as the cookie user (cookie wins).
-- **API token (project-scoped machine credential)** — backend-only today (`ApiTokenService`, routes `GET/POST /api/projects/:id/apikeys`, `DELETE /api/projects/:id/apikeys/:keyId`); no frontend UI currently calls these (`lib/api.ts` has no wrapper — confirmed by repo-wide search). Documented here for API-level test coverage:
+- **API token (project-scoped machine credential)** — `ApiTokenService`, routes `GET/POST /api/projects/:id/apikeys`, `DELETE /api/projects/:id/apikeys/:keyId`, and **Project settings → API & MCP** token/connection UI (inventory reconciled 2026-11-12; the earlier backend-only description was stale):
   - Token format: `tsbo_` prefix + 24 random bytes hex; only a SHA-256 hex hash is ever persisted; raw token is returned exactly once, at creation, and is unrecoverable afterward.
   - Scopes: `read`, `write` (comma-stored); invalid/unrecognized scope strings are filtered out; if nothing valid remains, defaults to **both** `read` and `write`.
   - Create requires `name`; 400 if blank. Requires the caller to be a project member (`requireProjectAccess`) of their currently-active workspace's project.
@@ -619,7 +619,7 @@ them a revocable, project-scoped credential instead of sharing a user's session.
 - **Create key** (`POST /api/projects/:id/apikeys` → `createApiKey`): requires `name` (400 if blank); `scopes` optional, normalized to a set of `read`/`write` values (anything invalid is filtered out; if nothing valid remains, defaults to **both** `read` and `write`). Token format: `tsbo_` + 24 random bytes hex; only the SHA-256 hash is persisted (`token_hash`), raw token returned exactly once in the response body. Gated by `requireProjectAccess`, i.e. **any project member** (not just owner/manager) can mint a key.
 - **Revoke key** (`DELETE /api/projects/:id/apikeys/:keyId` → `revokeApiKey`): deletes by `id + project_id`; 404 if not found/already revoked/belongs to a different project. Gated by `requireProjectAccess`.
 - **Authentication path**: `AuthMiddleware` checks bearer tokens against `ApiTokenService.authenticate()` (SHA-256 lookup) only when there's no valid session cookie; on success it stamps `last_used_at` (best-effort, doesn't block the request on failure) and attaches `{tokenId, userId, projectId, scopes}` to the request.
-- **No frontend UI exists for this feature at all** — grepping the entire `Tesbo-Frontend` tree finds zero references to `apikeys`/`createApiKey`/`listApiKeys`/`revokeApiKey`. This is a **backend-only / API-only feature today**; the only way to test it is directly against the REST API (curl/Postman) or once an MCP client consumes it. Worth flagging to QA as "no UI to verify visually — API-level testing only for now."
+- **Frontend onboarding exists:** **Project settings → API & MCP** links to the token page, which lists masked tokens, creates named read/write-scoped tokens, reveals the secret once, revokes tokens and provides CLI/JSON/curl/PowerShell connection snippets. The UI exposes create/revoke to owners/managers; the existing REST service still gates by membership, not that UI role restriction. This batch does not introduce a new credential-issuance policy.
 - Edge cases to test:
   - Create a key with no `scopes` → should default to `["read","write"]`.
   - Create a key with garbage scopes (e.g. `["admin"]`) → should fall back to default read+write (since nothing valid survives the filter).
@@ -629,7 +629,7 @@ them a revocable, project-scoped credential instead of sharing a user's session.
 
 **Key files:**
 - Backend: `legacy.controller.ts:216-229`, `legacy.service.ts:304-326` (thin wrapper), `Tesbo-Backend-Nest/src/auth/api-token.service.ts` (token issuance/hash/validation), `Tesbo-Backend-Nest/src/auth/auth.middleware.ts` (bearer auth path), migration `V*_api_tokens_webhooks.sql`.
-- Frontend: none (feature has no UI as of this writing).
+- Frontend: `Tesbo-Frontend/app/(app)/projects/[id]/settings/api-tokens/page.tsx`, settings `page.tsx`, and `lib/api.ts` (`listApiKeys`, `createApiKey`, `revokeApiKey`, `getMcpUrl`).
 
 ---
 
@@ -3470,25 +3470,24 @@ duplicate bug filing.
 
 **Features & actions:**
 - **Transport & auth**
-  - Single endpoint: `POST /api/projects/:projectId/mcp`, body is JSON-RPC 2.0 (`{jsonrpc:"2.0", id, method, params}`).
+  - Project endpoint: `POST /api/projects/:projectId/mcp`, plus token-project alias `POST /api/mcp`; body is JSON-RPC 2.0 (`{jsonrpc:"2.0", id, method, params}`).
   - Requires `Authorization: Bearer <token>` resolved to an API token principal by `AuthMiddleware`; a browser session (cookie-based) is explicitly rejected with `401 MCP requires a valid API token` — MCP is a machine-only surface, never usable from a logged-in browser tab directly.
   - **Project-scope enforcement:** the token's own `projectId` (baked in at token creation) must equal the `:projectId` in the URL, or the call fails with JSON-RPC error code `-32001` (`ProjectScopeDenied`) — even if a caller correctly guesses/knows another project's id, a token literally cannot act outside the project it was minted for. Tested explicitly: token with no project scope at all is also rejected.
   - **Tool-scope enforcement:** each tool declares `requiredScope: "read"` or `"write"`; the token must carry that scope (tokens can hold `read`, `write`, or both) or the call fails with code `-32002` (`ScopeDenied`), naming the missing scope in the error message.
 - **Protocol methods** (`tools/list`, `tools/call`, `initialize`, `ping`)
-  - `initialize` → returns protocol version `2024-11-05`, server name `tesbo-mcp`, version `0.1.0`, and capabilities (`tools.listChanged: false`, i.e. the tool list is static and won't push change notifications).
+  - `initialize` → supports `2025-06-18` and `2024-11-05` (the latter is the fallback), server name `tesbo-mcp`, version `0.1.0+<deploy>.<tool-fingerprint>`, and capabilities (`tools.listChanged: false`). Returns `mcp-session-id`; stale schema sessions get HTTP 404 and must reinitialize. Initialized notifications get 202; GET/DELETE get 405 (no SSE/session termination).
   - `ping` → empty result, for client keep-alive/liveness checks.
-  - `tools/list` → returns every registered tool's `name`, `description`, and JSON-Schema `inputSchema` (8 tools today — full list below).
+  - `tools/list` → returns every registered tool's `name`, `description`, and JSON-Schema `inputSchema`: **50 tools, 20 read / 30 write** (source/compiled registry inventory reconciled 2026-11-12, not a new expansion in this batch).
   - `tools/call` → dispatches to the named tool with `arguments`; unknown tool name → `MethodNotFound` (-32601); on success wraps the JSON-stringified result as an MCP `content: [{type:"text", text}]` part with `isError:false`; on a handler exception, maps the underlying error (e.g. a `BadRequestException`'s message) onto a `ToolExecutionError` (-32003) rather than leaking a raw 500.
   - Malformed request (missing/wrong `jsonrpc` version, non-string `method`) → `InvalidRequest` (-32600); the request `id` is always echoed back on error responses (including `null` if none was sent), per JSON-RPC spec.
-- **The 8 exposed tools** (each is a thin wrapper over an existing `LegacyService` method, so MCP reuses the exact same code paths/validation as the REST API):
-  1. `list_projects` (read) — returns the single project the token is scoped to (never a cross-project list, since tokens are project-bound).
-  2. `list_testcases` (read) — filters: `suiteId`, `status`, `priority`, `type`, `automationStatus`, `jiraIssueKey`, `search`, `limit` (up to 500), `offset`.
-  3. `create_testcase` (write) — required `title`; optional `suiteId`, `description`, `preconditions`, `steps[]`, `testData`, `priority`, `severity`, `type`, `automationStatus`, `component`, `status`. Missing/blank title → tool execution error before hitting the service. Attributed to the `tesbo-mcp` agent actor.
-  4. `create_suite` (write) — required `name`; optional `parentId` (nest under another suite), `position`.
-  5. `create_cycle_from_plan` (write) — required `name`; optional `planId` (seed from an existing plan), `description`, `environment`, `buildVersion`, `releaseName`.
-  6. `record_execution_result` (write) — required `executionId`, `status`; optional `actualResult`, `defectKey`, `defectUrl`. **Extra project-scope check inside the handler itself**: looks up the execution's owning project via `executions → cycle_items → cycles` and rejects with `ProjectScopeDenied` if it belongs to a different project than the token, or `ToolExecutionError` ("Execution not found") if the execution id doesn't exist at all — this closes the gap where an execution *id* alone wouldn't otherwise prove project ownership. Attributed to the `tesbo-mcp` agent actor.
-  7. `create_bug` (write) — required `title`; optional `description`, `status`, `externalUrl`, `links[]` (`{testcaseId, cycleId, executionId}`). Attributed to the token's **human owner** (`reported_by` column references `users(id)`, not the agent actor) — i.e. bugs filed via MCP show up as reported by the person who created the token, not by "tesbo-mcp".
-  8. `get_requirement_matrix` (read) — full traceability matrix for the project: every test case with its runs, latest execution status, and any linked bugs.
+- **Exposed registry** (thin adapters over the existing services, not independent product workflows):
+  - Project: `list_projects`.
+  - Test cases: `list_testcases`, `get_testcase`, `create_testcase`, `update_testcase`, `archive_testcase`, `restore_testcase`, `duplicate_testcase`, `bulk_create_testcases`, `bulk_update_testcases`, `bulk_archive_testcases`, `get_testcase_bugs`, `get_testcase_executions`, `link_requirement_to_testcase`, `unlink_requirement_from_testcase`.
+  - Suites: `list_suites`, `get_suite`, `create_suite`, `update_suite`, `clone_test_suite`.
+  - Runs/results: `list_test_cycles`, `get_test_cycle`, `create_cycle_from_plan`, `create_cycle_from_testcases`, `record_execution_result`, `list_executions`, `get_execution`, `update_execution_result`, `bulk_record_execution_results`, `get_test_execution_summary`.
+  - Bugs/traceability: `list_bugs`, `get_bug`, `create_bug`, `update_bug`, `link_testcase_to_bug`, `unlink_testcase_from_bug`, `get_requirement_matrix`.
+  - Knowledge Base: `search_knowledge_base`, `list_knowledge_documents`, `get_knowledge_document`, `create_knowledge_document`, `update_knowledge_document`, `move_knowledge_document`, `archive_knowledge_document`, `restore_knowledge_document`, `list_knowledge_folders`, `get_knowledge_folder`, `create_knowledge_folder`, `update_knowledge_folder`, `move_knowledge_folder`.
+  - Testcase writes use the dedicated MCP actor. Suite access checks, bug reporters, execution results and KB writes use the token's human owner where existing user-FK/role checks require it. MCP bulk tools retain explicit per-item outcomes, unlike whole-selection atomic REST bulk mutations.
 - **Actor attribution model:** only write tools resolve/attach an actor id (reads never touch actor columns); the "tesbo-mcp" agent actor id is looked up once from `actors ⋈ agents` (seeded migration V65) and cached for the life of the process.
 - **Edge cases validated by the existing test suite** (`mcp.service.spec.ts`) worth including in a manual QA pass too: non-2.0 payload rejected; unknown method/tool rejected; read tool works with read-only token but write tool is blocked for a read-only token; a client-supplied project id in tool arguments is ignored in favor of the token's own project; underlying service exceptions are mapped to a clean tool error rather than crashing the RPC call.
 
@@ -3496,13 +3495,13 @@ duplicate bug filing.
   - Tokens live in an `api_tokens` table, always project-scoped (not workspace-wide), created via `POST /api/projects/:id/apikeys` (name + optional `scopes` array, defaults to `["read","write"]` if none/invalid given), listed via `GET /api/projects/:id/apikeys` (returns only a masked `tsbo_…<last6ofhash>` prefix, never the secret again), revoked via `DELETE /api/projects/:id/apikeys/:keyId`.
   - Raw token format: `tsbo_` + 24 random bytes (hex); only a SHA-256 hash is ever stored; the raw value is returned exactly once at creation time and is unrecoverable afterward — losing it means issuing a new token.
   - `last_used_at` is stamped best-effort on every successful authentication (used for both REST bearer-auth and MCP).
-  - **Notable gap:** there is no frontend UI anywhere in `Tesbo-Frontend` for creating, listing, or revoking these project API tokens (confirmed via full-tree search — no page/component references `apikeys`). The entire token lifecycle, and therefore the entire MCP onboarding flow, is currently API-only: a developer would need to call `POST /api/projects/:id/apikeys` directly (e.g. via curl/Postman while authenticated with a normal browser session) to obtain a token before an MCP client could ever connect. This should be flagged as a UX/testability gap — QA cannot exercise the "connect an MCP client" journey through the product UI today.
+  - **Existing UI:** **Project settings → API & MCP** offers named token creation, Read/Write selection, one-time reveal, masked listing and revocation, plus connection snippets. A freshly revealed token remains in snippets until reload; clear/reload or mask secrets before captures. Building/testing this flow does not establish a deployed endpoint or a connection from an owner's external client.
 
 **Key files:**
-- Backend (MCP protocol): `Tesbo-Backend-Nest/src/mcp/mcp.controller.ts` (`POST /api/projects/:projectId/mcp`), `Tesbo-Backend-Nest/src/mcp/mcp.service.ts` (JSON-RPC engine: `handleRequest`, `dispatch`, `callTool`), `Tesbo-Backend-Nest/src/mcp/mcp.tools.ts` (the 8-tool registry), `Tesbo-Backend-Nest/src/mcp/mcp.types.ts` (protocol types, error codes), `Tesbo-Backend-Nest/src/mcp/mcp.module.ts`
+- Backend (MCP protocol): `Tesbo-Backend-Nest/src/mcp/mcp.controller.ts` (scoped endpoint and alias), `Tesbo-Backend-Nest/src/mcp/mcp.service.ts` (JSON-RPC engine, scope/membership checks, fingerprint sessions), `Tesbo-Backend-Nest/src/mcp/mcp.tools.ts` (50-tool registry), `Tesbo-Backend-Nest/src/mcp/mcp.types.ts` (protocol types, error codes), `Tesbo-Backend-Nest/src/mcp/mcp.module.ts`
 - Backend tests: `Tesbo-Backend-Nest/src/mcp/mcp.service.spec.ts`
 - Backend (token issuance, shared with REST bearer auth): `Tesbo-Backend-Nest/src/auth/api-token.service.ts` (`ApiTokenService` — `issueToken`, `listTokens`, `revokeToken`, `authenticate`), routes in `Tesbo-Backend-Nest/src/legacy/legacy.controller.ts` (~lines 216–229: `GET/POST /api/projects/:id/apikeys`, `DELETE /api/projects/:id/apikeys/:keyId`), handlers in `Tesbo-Backend-Nest/src/legacy/legacy.service.ts` (`listApiKeys`, `createApiKey`, `revokeApiKey`, ~lines 308–326), `Tesbo-Backend-Nest/src/auth/auth.middleware.ts` (bearer-token resolution)
-- Frontend: none — no page/component manages API tokens or MCP connections today
+- Frontend: `Tesbo-Frontend/app/(app)/projects/[id]/settings/api-tokens/page.tsx`, settings `page.tsx`, `Tesbo-Frontend/lib/api.ts`.
 
 ---
 
@@ -3605,9 +3604,10 @@ exact code. Good first candidates for a bug-bash or a "does this still repro" re
    provider/key, BetterBugs URL): `updateBug` uses `COALESCE(newValue, oldValue)` with
    `body.field || null`, so an empty string is indistinguishable from "not provided" and the old
    value always survives.
-3. **Suite rename silently promotes a child suite to root.** `updateSuite`'s `parentId` is *not*
-   `COALESCE`d — it's always overwritten to `body.parentId ?? null`. The rename UI only sends
-   `{name}`, so renaming a nested (child) suite unexpectedly moves it to the top level.
+3. **Historical suite rename defect, repaired in the repository partial-edit batch below.**
+   The original writer cleared an omitted `parentId`; later UI/MCP read-and-resend workarounds
+   could replay a stale parent. The writer now preserves omission at SQL write time; explicit
+   `null` still moves to root. Rename sends only text and refreshes the authoritative hierarchy.
 4. **`estimatedDuration` is a dead field end-to-end** — present in the DB, the manual test-case
    form, and the import mapping UI, but dropped by both `createTestCase`/`updateTestCase` and the
    import payload. Anything typed there is silently discarded.
@@ -5014,3 +5014,45 @@ not accepted by a green high/critical gate. Canonical companion specification an
 baseline recovery, F2/F3/F6–F8 owner decisions, independent human security/release
 review and Phase 1 exit remain separate. No agent merge, deployment, SDK
 publication, risk acceptance or unapproved Phase 2 capability is included.
+
+### K. Repository partial-edit integrity and connected MCP onboarding (2026-11-12)
+
+**Confirmed defect and scope.** Drawer Archive/Unarchive sends status only, but the
+shared testcase writer previously cleared omitted suite/owner fields. MCP copied
+those values from an earlier read; suite rename had the analogous parent replay.
+Those compensations could overwrite a legitimate concurrent move/reassignment.
+This batch repairs existing edit contracts across REST, MCP and the existing UI;
+it adds no Phase 2 capability or new global concurrency/assignment policy.
+
+`updateTestCaseWithClient` and `updateSuite` now bind explicit presence flags and
+use SQL `CASE` to retain omitted relationships at the actual row write. Explicit
+IDs still move/reassign and explicit null still clears/unparents. MCP archive,
+restore, title/requirement edits and clone relocation send only intended fields;
+suite rename no longer reads/resends the previous parent. Existing authorization,
+external-ID lock ordering, testcase snapshot trigger, custom-field/tag transaction
+boundaries and postcommit effects remain in place. The ordinary full edit form
+remains a full edit, not a new compare-and-swap protocol.
+
+**Verification layers (not interchangeable).** The MCP adapter contract suite
+passes 152 local cases. `repository-partial-edits.db.spec.ts` adds native migrated
+PostgreSQL omission/null/set controls, real blocking-row races through service and
+MCP registry, and actual late SQL/collaborator rollback with complete trigger
+history checks. Its access/caches/custom-field/tag/effect collaborators are
+explicit stubs; it is not HTTP authorization or embedding-provider proof.
+The CI smoke adds genuine browser drawer archive/unarchive/reload, stale rename
+dialog plus concurrent authenticated REST move, and UI-created read-write/read-only
+tokens used from a cookie-free HTTP context for MCP initialize, all-50 discovery,
+attributed partial writes, scope refusal and UI revoke. Independent DB reads
+check history, untouched controls and existing manual run/snapshot/execution rows.
+Captures clear/mask secrets; synthetic record/audit provenance remains until the
+disposable database teardown.
+
+Native DB and connected browser execution require the isolated CI services and
+are not claimed merely because the suites compile or skip locally. Exact-head
+receipts and capture inspection belong in the implementation PR, not a follow-up
+documentation-only CI cycle. The MCP inventory above corrects stale "8 tools/no
+token UI" assertions; this is not a claim that 50 tools were newly built here.
+No deployment/external-client connection, SDK publication, agent merge, human
+review, risk acceptance or Phase 1 exit is implied. Canonical specifications and
+baseline, owner F2/F3/F6–F8 dispositions and remaining moderate/low dependency
+findings remain open.

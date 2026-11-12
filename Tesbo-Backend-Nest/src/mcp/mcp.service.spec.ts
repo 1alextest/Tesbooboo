@@ -1006,15 +1006,12 @@ describe("McpService", () => {
       expect(res.result.isError).toBe(false);
       // Attributed to the resolved MCP agent actor, same as create_testcase, since
       // testcases.updated_by references actors(id) — see mcp.tools.ts's handler comment.
-      // suiteId/ownerId are re-supplied from the current row (preserveOmittedSuiteAndOwner):
-      // updateTestCaseWithClient writes both verbatim (no COALESCE), so omitting them here must
-      // not silently clear them.
+      // Omission reaches the shared writer unchanged: no stale read-and-reapply workaround.
       expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", {
-        title: "New title",
-        suiteId: "suite-current",
-        ownerId: "user-current"
+        title: "New title"
       });
       expect((legacy as any).getTestCase).toHaveBeenCalledWith("tc-1");
+      expect((legacy as any).getTestCase).toHaveBeenCalledTimes(1);
     });
 
     it("denies updating a test case that belongs to another project", async () => {
@@ -1067,15 +1064,12 @@ describe("McpService", () => {
         "proj-1"
       );
       expect(res.result.isError).toBe(false);
-      // Regression: archive_testcase only means to touch status — it must re-supply the test
-      // case's current suiteId/ownerId (fetched via getTestCase), or updateTestCaseWithClient's
-      // no-COALESCE columns silently unassign the suite/owner on every archive.
+      // Archive changes only status; the shared SQL writer preserves live relationships.
       expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", {
-        status: "Archived",
-        suiteId: "suite-current",
-        ownerId: "user-current"
+        status: "Archived"
       });
       expect((legacy as any).getTestCase).toHaveBeenCalledWith("tc-1");
+      expect((legacy as any).getTestCase).toHaveBeenCalledTimes(1);
     });
 
     it("restores a test case by setting status to Draft, attributed to the agent actor", async () => {
@@ -1089,10 +1083,9 @@ describe("McpService", () => {
       );
       expect(res.result.isError).toBe(false);
       expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", {
-        status: "Draft",
-        suiteId: "suite-current",
-        ownerId: "user-current"
+        status: "Draft"
       });
+      expect((legacy as any).getTestCase).toHaveBeenCalledTimes(1);
     });
 
     it("does not fetch or override suiteId/ownerId when the caller already supplied both", async () => {
@@ -1534,14 +1527,12 @@ describe("McpService", () => {
         "proj-1"
       );
       expect(res.result.isError).toBe(false);
-      // Regression: link/unlink_requirement_to_testcase only mean to touch the Jira/Linear
-      // fields — same preserveOmittedSuiteAndOwner fix as update_testcase/archive_testcase.
+      // Requirement edits must not replay an earlier suite/owner snapshot.
       expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", {
         jiraIssueKey: "PROJ-1",
-        jiraUrl: undefined,
-        suiteId: "suite-current",
-        ownerId: "user-current"
+        jiraUrl: undefined
       });
+      expect((legacy as any).getTestCase).toHaveBeenCalledTimes(1);
     });
 
     it("unlinks a test case's Jira requirement by clearing jiraIssueKey/jiraUrl", async () => {
@@ -1556,10 +1547,9 @@ describe("McpService", () => {
       expect(res.result.isError).toBe(false);
       expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", {
         jiraIssueKey: null,
-        jiraUrl: null,
-        suiteId: "suite-current",
-        ownerId: "user-current"
+        jiraUrl: null
       });
+      expect((legacy as any).getTestCase).toHaveBeenCalledTimes(1);
     });
 
     it("links a test case to a Notion page by page id and unlinks it", async () => {
@@ -1577,9 +1567,7 @@ describe("McpService", () => {
       expect(link.result.isError).toBe(false);
       expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", {
         notionPageId: "1429989f-e8ac-4eff-bc8f-57f56486db54",
-        notionUrl: "https://www.notion.so/x",
-        suiteId: "suite-current",
-        ownerId: "user-current"
+        notionUrl: "https://www.notion.so/x"
       });
 
       const unlink: any = await svc.handleRequest(
@@ -1590,9 +1578,7 @@ describe("McpService", () => {
       expect(unlink.result.isError).toBe(false);
       expect((legacy as any).updateTestCase).toHaveBeenLastCalledWith("tc-1", "mcp-actor-1", {
         notionPageId: null,
-        notionUrl: null,
-        suiteId: "suite-current",
-        ownerId: "user-current"
+        notionUrl: null
       });
     });
 
@@ -1729,7 +1715,7 @@ describe("McpService", () => {
       ).toMatch(/"suiteId"/i);
     });
 
-    it("renames a suite while defaulting parentId to its current parent, attributed to the token's user", async () => {
+    it("renames a suite without reading and re-sending its parent, attributed to the token's user", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", suiteProject: "proj-1" });
       const legacy = makeLegacy();
       const svc = new McpService(legacy, db);
@@ -1739,16 +1725,13 @@ describe("McpService", () => {
         "proj-1"
       );
       expect(res.result.isError).toBe(false);
-      // updateSuite() has no COALESCE on parent_id — the tool must supply the suite's own current
-      // parentId ("suite-root", from makeLegacy's listSuites mock) when the caller didn't send one,
-      // or a rename-only call would silently move the suite to the project root. Attributed to
-      // ctx.userId (not the agent actor) since updateSuite requires a real user for its internal
-      // requireProjectAccess check.
+      // Attributed to ctx.userId because updateSuite performs the existing access check.
       expect((legacy as any).updateSuite).toHaveBeenCalledWith("user-7", "suite-1", {
         name: "Renamed",
-        parentId: "suite-root",
+        parentId: undefined,
         position: undefined
       });
+      expect((legacy as any).listSuites).toHaveBeenCalledTimes(1); // Return value only, after the write.
     });
 
     it("reparents a suite to the root when parentId is explicitly null", async () => {
@@ -1819,17 +1802,13 @@ describe("McpService", () => {
       // new suite — the source suite/test case ids are never passed to any write except
       // duplicateTestCase's read-only source-id argument.
       expect((legacy as any).duplicateTestCase).toHaveBeenCalledWith("tc-in-suite-1", "mcp-actor-1");
-      // The relocation call must re-supply the ownerId duplicateTestCase already copied from the
-      // source (updateTestCase writes owner_id verbatim, no COALESCE) — otherwise moving the copy
-      // into its new suite silently drops its owner.
+      // Relocation only changes suite; copied/current ownership is retained by the SQL writer.
       expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-in-suite-1-clone", "mcp-actor-1", {
-        suiteId: "suite-1-clone",
-        ownerId: "owner-copied-1"
+        suiteId: "suite-1-clone"
       });
       expect((legacy as any).duplicateTestCase).toHaveBeenCalledWith("tc-in-suite-2", "mcp-actor-1");
       expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-in-suite-2-clone", "mcp-actor-1", {
-        suiteId: "suite-2-clone",
-        ownerId: "owner-copied-2"
+        suiteId: "suite-2-clone"
       });
       // Never a write keyed on the original suite ids.
       expect((legacy as any).updateSuite).not.toHaveBeenCalled();

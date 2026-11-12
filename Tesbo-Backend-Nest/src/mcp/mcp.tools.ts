@@ -85,22 +85,6 @@ async function requireProjectOwnedRow(
 }
 
 /**
- * updateTestCaseWithClient (legacy.service.ts) writes suite_id and owner_id verbatim — no
- * COALESCE, unlike every other field in that UPDATE. Any caller that omits them gets them
- * silently cleared to NULL. The frontend never notices because its edit form always re-sends the
- * currently-loaded suiteId/ownerId on every save, whether the user touched those fields or not;
- * an MCP caller has no such form state, so a plain {status: "Archived"} call was quietly
- * unassigning the test case's suite. Same reasoning update_suite already applies to parentId —
- * fetch the current values and re-supply whichever one the caller didn't mention.
- */
-async function preserveOmittedSuiteAndOwner(ctx: McpToolContext, testcaseId: string, body: Record<string, unknown>): Promise<void> {
-  if (body.suiteId !== undefined && body.ownerId !== undefined) return;
-  const current = await ctx.legacy.getTestCase(testcaseId);
-  if (body.suiteId === undefined) body.suiteId = current.suiteId ?? null;
-  if (body.ownerId === undefined) body.ownerId = current.ownerId ?? null;
-}
-
-/**
  * Same confirmation as requireProjectOwnedRow, for an execution — executions has no project_id
  * column of its own, so the project comes from a join (executions -> cycle_items -> cycles).
  * Returns the owning cycle id, since every execution-detail tool needs it to call executions().
@@ -316,7 +300,6 @@ export function buildMcpTools(): McpTool[] {
         const body = canonicalizeSeverity(
           Array.isArray(rest.steps) ? { ...rest, steps: JSON.stringify(ctx.legacy.safeSteps(rest.steps)) } : rest
         );
-        await preserveOmittedSuiteAndOwner(ctx, testcaseId, body);
         await ctx.legacy.updateTestCase(testcaseId, ctx.actorId, body);
         return ctx.legacy.getTestCase(testcaseId);
       }
@@ -336,7 +319,6 @@ export function buildMcpTools(): McpTool[] {
         const testcaseId = requireString(args, "testcaseId");
         await requireProjectOwnedRow(ctx, "testcases", testcaseId, "Test case");
         const body: Record<string, unknown> = { status: "Archived" };
-        await preserveOmittedSuiteAndOwner(ctx, testcaseId, body);
         await ctx.legacy.updateTestCase(testcaseId, ctx.actorId, body);
         return ctx.legacy.getTestCase(testcaseId);
       }
@@ -356,7 +338,6 @@ export function buildMcpTools(): McpTool[] {
         const testcaseId = requireString(args, "testcaseId");
         await requireProjectOwnedRow(ctx, "testcases", testcaseId, "Test case");
         const body: Record<string, unknown> = { status: "Draft" };
-        await preserveOmittedSuiteAndOwner(ctx, testcaseId, body);
         await ctx.legacy.updateTestCase(testcaseId, ctx.actorId, body);
         return ctx.legacy.getTestCase(testcaseId);
       }
@@ -602,7 +583,6 @@ export function buildMcpTools(): McpTool[] {
           : notionPageId
             ? { notionPageId, notionUrl: typeof args.notionUrl === "string" ? args.notionUrl : undefined }
             : { linearIssueKey, linearUrl: typeof args.linearUrl === "string" ? args.linearUrl : undefined };
-        await preserveOmittedSuiteAndOwner(ctx, testcaseId, body);
         await ctx.legacy.updateTestCase(testcaseId, ctx.actorId, body);
         return ctx.legacy.getTestCase(testcaseId);
       }
@@ -634,7 +614,6 @@ export function buildMcpTools(): McpTool[] {
             : provider === "notion"
               ? { notionPageId: null, notionUrl: null }
               : { linearIssueKey: null, linearUrl: null };
-        await preserveOmittedSuiteAndOwner(ctx, testcaseId, body);
         await ctx.legacy.updateTestCase(testcaseId, ctx.actorId, body);
         return ctx.legacy.getTestCase(testcaseId);
       }
@@ -691,7 +670,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "update_suite",
       description:
-        "Rename, move, reposition or describe a suite in the token's project. Required: suiteId. Optional: name, description, preconditions (omit to keep the current text, send an empty string to clear it), parentId, position. IMPORTANT: the app's own update always sets the parent from what you send — omitting parentId does NOT keep the current parent the way omitting a field does on update_testcase. This tool defaults parentId to the suite's current parent when you don't pass it, so a rename-only or position-only call won't silently move the suite to the project's root; pass parentId: null explicitly to move it to the root, or another suite's id to reparent it.",
+        "Rename, move, reposition or describe a suite in the token's project. Required: suiteId. Optional: name, description, preconditions (omit to keep the current text, send an empty string to clear it), parentId, position. Omitted fields keep their current values at the actual write; a rename-only or position-only call does not move the suite. Pass parentId: null explicitly to move it to the root, or another suite's id to reparent it.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -712,17 +691,11 @@ export function buildMcpTools(): McpTool[] {
         // row it finds by id (requireSuiteAccess) — so the tool must check project ownership
         // itself before calling it, same as update_testcase.
         await requireProjectOwnedRow(ctx, "suites", suiteId, "Suite");
-        const suites = await ctx.legacy.listSuites(ctx.projectId);
-        const existing = suites.find((s) => s.id === suiteId);
-        if (!existing) throw new McpError(RpcCode.ToolExecutionError, "Suite not found");
-        // updateSuite writes parent_id verbatim (no COALESCE) — default to the current parent so an
-        // omitted parentId doesn't un-parent the suite. See this tool's description.
-        const parentId = args.parentId !== undefined ? (args.parentId as string | null) : existing.parentId;
         await ctx.legacy.updateSuite(ctx.userId, suiteId, {
           name: args.name,
           description: args.description,
           preconditions: args.preconditions,
-          parentId,
+          parentId: args.parentId,
           position: args.position
         });
         return (await ctx.legacy.listSuites(ctx.projectId)).find((s) => s.id === suiteId);
@@ -820,12 +793,10 @@ export function buildMcpTools(): McpTool[] {
           const { rows } = await ctx.legacy.listTestCases(ctx.projectId, { suiteId: node.id, includeArchived: true, limit: 500 });
           for (const tc of rows as Array<{ id: string }>) {
             const duplicated = (await ctx.legacy.duplicateTestCase(tc.id, ctx.actorId)) as Record<string, any>;
-            // duplicateTestCase already copied ownerId from the source onto `duplicated` — this
-            // relocation call must re-supply it (updateTestCase writes owner_id verbatim, no
-            // COALESCE), or moving the copy into its new suite silently drops its owner.
+            // Change only the copy's suite. The shared writer preserves its current owner,
+            // including a legitimate reassignment that happened after duplication.
             await ctx.legacy.updateTestCase(duplicated.id, ctx.actorId, {
-              suiteId: idMap.get(node.id as string),
-              ownerId: duplicated.ownerId ?? null
+              suiteId: idMap.get(node.id as string)
             });
             clonedTestcases.push({ sourceId: tc.id, clonedId: duplicated.id });
           }

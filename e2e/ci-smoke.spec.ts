@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { verifyProductionReporter } from "./utils/ci-reporter";
 import { verifyContentSecurity } from "./utils/ci-content-security";
 import { verifyDocumentWrites } from "./utils/ci-document-writes";
+import { verifyRepositoryPartialEdits } from "./utils/ci-repository-partial-edits";
 
 async function verifyBugCreateAccess(request: APIRequestContext, api: string, projectId: string, ownerId: string, organizationId: string) {
   // Called only after the test's explicit loopback/disposable-database safety checks.
@@ -731,6 +732,22 @@ test("knowledge document saves and restores preserve ordering, drafts and persis
   const consoleErrors: string[] = [];
   page.on("pageerror", (error) => consoleErrors.push(error.message));
   await verifyDocumentWrites(page, api, web, (await created.json()).id, testInfo);
+  expect(consoleErrors).toEqual([]);
+});
+
+test("repository partial edits and UI-created MCP tokens preserve persisted relationships and scope", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy();
+  const ownerId = (await login.json()).userId as string;
+  const created = await page.request.post(`${api}/api/projects`, { data: { name: "CI Repository Integrity", key: "CRI" } });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const consoleErrors: string[] = [];
+  page.on("pageerror", (error) => consoleErrors.push(error.message));
+  await verifyRepositoryPartialEdits(page, api, web, (await created.json()).id, ownerId, testInfo);
   expect(consoleErrors).toEqual([]);
 });
 
