@@ -173,6 +173,80 @@ async function verifyExecutionRunContext(
   expect((await state()).executions.find((row) => row.id === actual.executionId)).toMatchObject({ status: "Passed", executed_by: ownerId });
 }
 
+async function verifyBugLinkReadIsolation(
+  request: APIRequestContext, tokenClient: APIRequestContext, db: Client, api: string, projectId: string,
+  ownerId: string, foreignProject: string, bugId: string,
+  local: { testcaseId: string; cycleId: string; executionId: string },
+  foreign: { testcaseId: string; cycleId: string; executionId: string }
+) {
+  const base = `${api}/api/projects/${projectId}`;
+  const response = await request.post(`${base}/apikeys`, { data: { name: "CI bug-link read isolation", scopes: ["read"] } });
+  expect(response.ok(), await response.text()).toBeTruthy();
+  const token = await response.json();
+  const headers = { Authorization: `Bearer ${token.token}` };
+  try {
+    // Scoped SQL represents a preexisting invalid association. It is not an exploit of #29's writer.
+    await db.query("INSERT INTO bug_links (bug_id, testcase_id, cycle_id, execution_id) VALUES ($1,$2,$3,$4)",
+      [bugId, foreign.testcaseId, foreign.cycleId, foreign.executionId]);
+    await db.query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2", [foreignProject, ownerId]);
+    const inaccessible = await request.get(`${api}/api/projects/${foreignProject}/testcases`);
+    expect(inaccessible.status(), await inaccessible.text()).toBe(404);
+    const tokenDenied = await tokenClient.get(`${api}/api/projects/${foreignProject}/testcases`, { headers });
+    expect(tokenDenied.status(), await tokenDenied.text()).toBe(403);
+    const state = async () => ({
+      bugs: (await db.query("SELECT * FROM bugs WHERE project_id = ANY($1::uuid[]) ORDER BY id", [[projectId, foreignProject]])).rows,
+      links: (await db.query("SELECT bl.* FROM bug_links bl JOIN bugs b ON b.id = bl.bug_id WHERE b.project_id = ANY($1::uuid[]) ORDER BY bl.id", [[projectId, foreignProject]])).rows,
+      cases: (await db.query("SELECT * FROM testcases WHERE id = ANY($1::uuid[]) ORDER BY id", [[local.testcaseId, foreign.testcaseId]])).rows,
+      runs: (await db.query("SELECT * FROM cycles WHERE id = ANY($1::uuid[]) ORDER BY id", [[local.cycleId, foreign.cycleId]])).rows,
+      items: (await db.query("SELECT * FROM cycle_items WHERE cycle_id = ANY($1::uuid[]) ORDER BY id", [[local.cycleId, foreign.cycleId]])).rows,
+      executions: (await db.query("SELECT * FROM executions WHERE id = ANY($1::uuid[]) ORDER BY id", [[local.executionId, foreign.executionId]])).rows
+    });
+    for (const status of ["active", "deleted"]) {
+      if (status === "deleted") {
+        await db.query("UPDATE testcases SET deleted_at = now() WHERE id = $1", [foreign.testcaseId]);
+        await db.query("UPDATE cycles SET deleted_at = now() WHERE id = $1", [foreign.cycleId]);
+      }
+      const before = await state();
+      const results: Array<{ links: Array<Record<string, unknown>> }> = [];
+      const detail = await request.get(`${api}/api/bugs/${bugId}`);
+      expect(detail.ok(), await detail.text()).toBeTruthy();
+      results.push(await detail.json());
+      const filters: Array<Record<string, string>> = [{}, { testcaseId: local.testcaseId, cycleId: local.cycleId }];
+      for (const client of [request, tokenClient]) {
+        for (const params of filters) {
+          const listed = await client.get(`${base}/bugs`, { headers: client === tokenClient ? headers : undefined, params });
+          expect(listed.ok(), await listed.text()).toBeTruthy();
+          const bug = (await listed.json()).find((item: { id: string }) => item.id === bugId);
+          expect(bug).toBeDefined(); results.push(bug);
+        }
+      }
+      for (const [name, args] of [
+        ["get_bug", { bugId }], ["list_bugs", {}], ["get_testcase_bugs", { testcaseId: local.testcaseId }]
+      ] as const) {
+        const called = await tokenClient.post(`${base}/mcp`, { headers, data: { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name, arguments: args } } });
+        expect(called.ok(), await called.text()).toBeTruthy();
+        const result = await called.json(); expect(result.error).toBeUndefined();
+        const data = JSON.parse(result.result.content[0].text);
+        const bug = name === "get_bug" ? data : data.bugs.find((item: { id: string }) => item.id === bugId);
+        expect(bug).toBeDefined(); results.push(bug);
+      }
+      for (const bug of results) {
+        const invalid = bug.links.find((item) => item.testcaseId === foreign.testcaseId);
+        expect(invalid, `${status} historical reference must not disappear`).toMatchObject({
+          ...foreign, testcaseTitle: null, testcaseExternalId: null, cycleName: null
+        });
+        expect(bug.links).toEqual(expect.arrayContaining([expect.objectContaining({
+          ...local, testcaseTitle: expect.any(String), testcaseExternalId: expect.any(String), cycleName: expect.any(String)
+        })]));
+      }
+      expect(await state()).toEqual(before);
+    }
+  } finally {
+    await db.query("INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING", [foreignProject, ownerId]);
+    await request.delete(`${base}/apikeys/${token.id}`, { failOnStatusCode: false });
+  }
+}
+
 async function verifyBugLinkRelationships(request: APIRequestContext, api: string, projectId: string, ownerId: string) {
   // Uses only this smoke journey's guarded, disposable installation and genuine session/token auth.
   const db = new Client({ connectionString: process.env.DATABASE_URL });
@@ -290,6 +364,9 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
     const readd = await request.post(`${api}/api/bugs/${bug.id}/links`, { data: { ...first, id: reported.links[0].id } });
     expect(readd.status(), await readd.text()).toBe(404);
     expect(await persisted()).toEqual(afterRemoval);
+    const readControl = await mcp("create_bug", { title: "CI legacy bug-link read control", links: [second] });
+    bugs.push(readControl.id);
+    await verifyBugLinkReadIsolation(request, tokenClient, db, api, projectId, ownerId, foreignProject, readControl.id, second, foreign);
   } finally {
     for (const id of bugs) await request.delete(`${api}/api/bugs/${id}`, { failOnStatusCode: false });
     if (tokenId) await request.delete(`${base}/apikeys/${tokenId}`, { failOnStatusCode: false });
