@@ -85,7 +85,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: SDK typecheck
         run: npm run typecheck
-      - name: SDK tests
-        run: npm test
       - name: SDK production compilation
         run: npm run build
+      - name: SDK tests
+        run: npm test
