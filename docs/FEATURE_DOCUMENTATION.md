@@ -4288,7 +4288,31 @@ was rejected by Node before dispatch and was corrected to standards-normalized
 lowercase POST without relaxing assertions. The canonical lost-ack and neighboring
 attachment batch/retry selection collected **3 tests**; collection is not execution.
 Frontend and E2E typechecks passed on the full frozen regression selection.
-Isolated real-browser/PostgreSQL baseline and repaired-head results remain pending.
+Regression-only PR [#34](https://github.com/1alextest/Tesbooboo/pull/34) head
+`6e32834` left production code unchanged. Its [isolated smoke baseline](https://github.com/1alextest/Tesbooboo/actions/runs/43241463990/job/131262682558)
+ran **2 passed / 2 failed**: the real browser created **two persisted bugs from
+one save / two dispatched POSTs** after first independently confirming one
+committed bug before response loss; the separate native transport matrix failed
+its 27 intended soft assertions. Later error/draft/reload and original four
+browser journeys did not execute after that genuine duplicate assertion failed,
+so they are not baseline passes. Other **21 triggered checks passed**, including
+the existing database gate; the red smoke gate is not waived.
+
+The production repair now permits the existing one network retry only for
+GET/HEAD. Other recognized network/abort failures produce the unconfirmed-outcome
+warning without automatic replay. Ordinary HTTP and non-network errors, request
+methods/bodies/credentials, deduplication and UI components are unchanged; the
+incorrect delivery/body assumptions in the helper's comment are removed. Local
+repaired transport selection: **1 passed** on installed Node **22.23.1**, with
+all seven lost-response mutation forms and other controls executed. Two Node
+24.14.0 Windows runs reported the test passed/exit 0 but printed a native libuv
+`UV_HANDLE_CLOSING` teardown assertion; they are not clean runtime evidence. No
+tests were skipped/weakened and the global Node version was not switched to hide
+it. Frontend typecheck and frozen lint passed (13 known errors / 10 warnings /
+**0 new errors**). Fresh repaired-head CI and real bundle/UI verification remain
+required. Backend idempotency, manual re-submit duplication, postcommit policy,
+raw fetch upload paths, complete shared-stack coverage and human review remain
+separate; no SDK retry policy, schema, deployment or Phase 1 signoff is changed.
 
 Remaining mutation inventory is not a list of automatically approved removals:
 
