@@ -60,21 +60,26 @@ function isAbortError(e: unknown): boolean {
   return e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
 }
 
+const MUTATION_OUTCOME_UNCONFIRMED =
+  "Request outcome unconfirmed. This action may already have been applied. Refresh to check before trying again.";
+
 async function fetchWithNetworkErrorMessage(
   input: string,
   init: RequestInit
 ): Promise<Response> {
+  const method = (init.method ?? "GET").toUpperCase();
+  const canRetry = method === "GET" || method === "HEAD";
   try {
     return await fetch(input, init);
   } catch (e) {
-    if (isAbortError(e)) throw new Error("The request took too long. Please check your connection and try again.");
+    if (isAbortError(e)) {
+      throw new Error(canRetry ? "The request took too long. Please check your connection and try again." : MUTATION_OUTCOME_UNCONFIRMED);
+    }
     if (!isNetworkFetchError(e)) throw e instanceof Error ? e : new Error(String(e));
-    // A browser keep-alive connection left idle past the server/proxy's keep-alive window fails
-    // on the next write before any bytes reach the server — the request was never delivered, so
-    // retrying once (a fresh connection) is safe even for a POST body. `init.body` here is always
-    // an already-serialized JSON string (see `api()` below), never a one-shot stream, so it can be
-    // resent. This is what a manual page refresh already did to "fix" the error; automate that one
-    // retry instead of surfacing it.
+    // A lost response is indistinguishable from failed delivery: a mutation may already have
+    // committed. Never replay it automatically, including multipart comment/KB writes. Preserve
+    // the existing single retry only for reads; no assumption about replayable bodies is needed.
+    if (!canRetry) throw new Error(MUTATION_OUTCOME_UNCONFIRMED);
     try {
       return await fetch(input, init);
     } catch (e2) {
