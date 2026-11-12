@@ -128,6 +128,133 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
   }
 }
 
+async function verifyBugLinkRelationships(request: APIRequestContext, api: string, projectId: string) {
+  // Uses only this smoke journey's guarded, disposable installation and genuine session/token auth.
+  const db = new Client({ connectionString: process.env.DATABASE_URL });
+  const tokenClient = await newRequest.newContext({ storageState: { cookies: [], origins: [] } });
+  const bugs: string[] = []; const runs: string[] = []; const cases: Array<{ id: string; project: string }> = [];
+  const base = `${api}/api/projects/${projectId}`;
+  let tokenId = "";
+  await db.connect();
+  try {
+    const foreignResponse = await request.post(`${api}/api/projects`, { data: { name: "CI foreign link targets", key: "CFL" } });
+    expect(foreignResponse.ok(), await foreignResponse.text()).toBeTruthy();
+    const foreignProject = (await foreignResponse.json()).id;
+    const targets: Array<{ testcaseId: string; cycleId: string; executionId: string }> = [];
+    for (const [index, project] of [projectId, projectId, foreignProject].entries()) {
+      const caseResponse = await request.post(`${api}/api/projects/${project}/testcases`, { data: { title: `CI relationship case ${index}` } });
+      expect(caseResponse.ok(), await caseResponse.text()).toBeTruthy();
+      const testcaseId = (await caseResponse.json()).id;
+      cases.push({ id: testcaseId, project });
+      const runResponse = await request.post(`${api}/api/projects/${project}/cycles`, { data: { name: `CI relationship run ${index}` } });
+      expect(runResponse.ok(), await runResponse.text()).toBeTruthy();
+      const cycleId = (await runResponse.json()).id; runs.push(cycleId);
+      const attached = await request.post(`${api}/api/cycles/${cycleId}/testcases`, { data: { testcaseIds: [testcaseId] } });
+      expect(attached.ok(), await attached.text()).toBeTruthy();
+      const executionId = (await db.query<{ id: string }>(
+        "SELECT e.id FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id WHERE ci.cycle_id = $1", [cycleId]
+      )).rows[0].id;
+      targets.push({ testcaseId, cycleId, executionId });
+    }
+    const [first, second, foreign] = targets;
+    const tokenResponse = await request.post(`${base}/apikeys`, { data: { name: "CI relationship writer", scopes: ["write"] } });
+    expect(tokenResponse.ok(), await tokenResponse.text()).toBeTruthy();
+    const token = await tokenResponse.json(); tokenId = token.id;
+    const headers = { Authorization: `Bearer ${token.token}` };
+    const initial = await request.post(`${base}/bugs`, { data: { title: "CI atomic relationship edit", links: [{ testcaseId: first.testcaseId }] } });
+    expect(initial.ok(), await initial.text()).toBeTruthy();
+    const bug = await initial.json(); bugs.push(bug.id);
+    const persisted = async () => ({
+      bugs: (await db.query("SELECT * FROM bugs WHERE project_id = ANY($1::uuid[]) ORDER BY id", [[projectId, foreignProject]])).rows,
+      links: (await db.query("SELECT bl.* FROM bug_links bl JOIN bugs b ON b.id = bl.bug_id WHERE b.project_id = ANY($1::uuid[]) ORDER BY bl.id", [[projectId, foreignProject]])).rows,
+      runs: (await db.query("SELECT * FROM cycles WHERE id = ANY($1::uuid[]) ORDER BY id", [runs])).rows,
+      items: (await db.query("SELECT * FROM cycle_items WHERE cycle_id = ANY($1::uuid[]) ORDER BY id", [runs])).rows,
+      executions: (await db.query("SELECT e.* FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id WHERE ci.cycle_id = ANY($1::uuid[]) ORDER BY e.id", [runs])).rows
+    });
+    for (const [invalid, status] of [
+      [{ ...first, testcaseId: foreign.testcaseId }, 404],
+      [{ ...first, executionId: foreign.executionId }, 404],
+      [{ testcaseId: first.testcaseId, cycleId: second.cycleId }, 400],
+      [{ ...first, executionId: second.executionId }, 400],
+      [{ ...first, executionId: "00000000-0000-4000-8000-000000000001" }, 404],
+      [{ ...first, executionId: "malformed" }, 400]
+    ] as const) {
+      for (const transport of ["session", "token", "MCP"]) {
+        for (const operation of ["create", "add", "edit"]) {
+          const before = await persisted();
+          const body = { title: "CI rejected relationship metadata", links: [{ testcaseId: second.testcaseId }, invalid] };
+          const client = transport === "session" ? request : tokenClient;
+          const response = transport === "MCP"
+            ? await client.post(`${base}/mcp`, { headers, data: {
+              jsonrpc: "2.0", id: 3, method: "tools/call", params: {
+                name: operation === "create" ? "create_bug" : operation === "add" ? "link_testcase_to_bug" : "update_bug",
+                arguments: operation === "create" ? body : operation === "add" ? { bugId: bug.id, ...invalid } : { bugId: bug.id, ...body }
+              }
+            } })
+            : await client[operation === "edit" ? "patch" : "post"](
+              operation === "create" ? `${base}/bugs` : `${api}/api/bugs/${bug.id}${operation === "add" ? "/links" : ""}`,
+              { headers: transport === "token" ? headers : undefined, data: operation === "add" ? invalid : body }
+            );
+          const result = await response.json();
+          if (result.id && transport !== "MCP") bugs.push(result.id);
+          if (transport === "MCP") {
+            expect(response.ok()).toBeTruthy();
+            expect(result.error, JSON.stringify(result)).toBeDefined();
+          } else if (transport === "token" && operation !== "create") {
+            // Tokens deliberately cannot use flat /api/bugs routes. Prove this earlier guard
+            // remains intact; session REST and MCP cover the shared edit/add validator below it.
+            expect(response.status(), JSON.stringify(result)).toBe(403);
+            expect(result.error).toBe("API token is not authorized for this REST project route");
+          } else expect(response.status(), `${transport} ${operation}: ${JSON.stringify(result)}`).toBe(status);
+          expect(await persisted(), `${transport} ${operation}`).toEqual(before);
+        }
+      }
+    }
+
+    // Positive controls: real MCP create/add/edit, normal manual auto-failure, no link-row churn,
+    // then metadata edits preserving deleted history and strict refusal after explicit removal.
+    const passed = await request.patch(`${api}/api/cycles/${first.cycleId}/executions/${first.executionId}`, { data: { status: "Passed" } });
+    expect(passed.ok(), await passed.text()).toBeTruthy();
+    const mcp = async (name: string, args: Record<string, unknown>) => {
+      const response = await tokenClient.post(`${base}/mcp`, { headers, data: { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name, arguments: args } } });
+      expect(response.ok(), await response.text()).toBeTruthy();
+      const result = await response.json();
+      expect(result.error, JSON.stringify(result)).toBeUndefined();
+      return JSON.parse(result.result.content[0].text);
+    };
+    const reported = await mcp("create_bug", { title: "CI valid relationship report", links: [first] });
+    bugs.push(reported.id);
+    expect(reported.links).toEqual([expect.objectContaining(first)]);
+    expect((await db.query("SELECT status FROM executions WHERE id = $1", [first.executionId])).rows[0].status).toBe("Failed");
+    const linked = await mcp("link_testcase_to_bug", { bugId: bug.id, ...first });
+    const original = (await db.query("SELECT * FROM bug_links WHERE bug_id = $1 ORDER BY id", [bug.id])).rows;
+    const edited = await mcp("update_bug", { bugId: bug.id, title: "CI valid metadata edit", links: linked.links });
+    expect(edited.links).toEqual(linked.links);
+    expect((await db.query("SELECT * FROM bug_links WHERE bug_id = $1 ORDER BY id", [bug.id])).rows).toEqual(original);
+    expect((await request.delete(`${api}/api/cycles/${first.cycleId}`)).ok()).toBeTruthy();
+    const historical = await mcp("update_bug", { bugId: bug.id, title: "CI historical metadata edit", links: edited.links });
+    expect(historical.links).toEqual(expect.arrayContaining([expect.objectContaining({ ...first, cycleName: expect.stringContaining("(deleted)") })]));
+    expect((await db.query("SELECT * FROM bug_links WHERE bug_id = $1 ORDER BY id", [bug.id])).rows).toEqual(original);
+    const before = await persisted();
+    const refused = await request.post(`${base}/bugs`, { data: { title: "CI deleted target refused", links: [{ testcaseId: second.testcaseId }, first] } });
+    expect(refused.status(), await refused.text()).toBe(404);
+    expect(await persisted()).toEqual(before);
+    await mcp("update_bug", { bugId: bug.id, links: [] });
+    const afterRemoval = await persisted();
+    const readd = await request.post(`${api}/api/bugs/${bug.id}/links`, { data: { ...first, id: reported.links[0].id } });
+    expect(readd.status(), await readd.text()).toBe(404);
+    expect(await persisted()).toEqual(afterRemoval);
+  } finally {
+    for (const id of bugs) await request.delete(`${api}/api/bugs/${id}`, { failOnStatusCode: false });
+    if (tokenId) await request.delete(`${base}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    for (const id of runs) await request.delete(`${api}/api/cycles/${id}`, { failOnStatusCode: false });
+    for (const { id, project } of cases) await request.delete(`${api}/api/projects/${project}/testcases/${id}`, { failOnStatusCode: false });
+    // The dedicated project and immutable audit provenance remain until disposable CI teardown.
+    await tokenClient.dispose();
+    await db.end();
+  }
+}
+
 // CI-only smoke suite: separate from e2e/playwright.config.ts and its
 // tenant-provisioning global setup. Never connects to a shared demo project.
 test("backend health endpoint responds with the expected contract", async ({ request }) => {
@@ -142,7 +269,7 @@ test("fresh installation sends unauthenticated users to setup", async ({ page })
   await expect(page).toHaveURL(/\/setup/);
 });
 
-test("bug creation authorization and finalized automation preserve persisted results and truthful UI", async ({ page }, testInfo) => {
+test("bug authorization, strict relationships and finalized automation preserve persisted results and truthful UI", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   const api = process.env.CI_API_BASE_URL!;
   const web = process.env.CI_WEB_BASE_URL!;
@@ -172,6 +299,7 @@ test("bug creation authorization and finalized automation preserve persisted res
 
   try {
     await verifyBugCreateAccess(request, api, projectId, bootstrap.userId, bootstrap.organizationId);
+    await verifyBugLinkRelationships(request, api, projectId);
     for (const surface of ["drawer", "full-page"]) {
       for (const status of ["pass", "fail"]) {
         const title = `CI sealed ${surface} ${status}`;

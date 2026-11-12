@@ -388,8 +388,8 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
       const activity = jest.spyOn(legacy, "logProjectActivity").mockResolvedValue(undefined);
       const notification = jest.spyOn(legacy as unknown as { notifyExecutionChange: () => Promise<void> }, "notifyExecutionChange")
         .mockResolvedValue(undefined);
-      jest.spyOn(legacy as unknown as { notifyBugChange: () => Promise<void> }, "notifyBugChange").mockResolvedValue(undefined);
-      return { legacy, activity, notification };
+      const bugNotification = jest.spyOn(legacy as unknown as { notifyBugChange: () => Promise<void> }, "notifyBugChange").mockResolvedValue(undefined);
+      return { legacy, activity, notification, bugNotification };
     }
 
     const link = () => ({ testcaseId: caseId, cycleId: runId, executionId });
@@ -484,6 +484,375 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
         await setup.query("DELETE FROM users WHERE id = $1", [outsider]);
         await setup.query("DELETE FROM organizations WHERE id = $1", [otherOrg]);
       }
+    });
+
+    describe("atomic bug-link relationship changes", () => {
+      type Target = { testcaseId: string; cycleId: string; executionId: string };
+      let sibling: Target;
+      let foreign: Target;
+      let foreignProject: string;
+      let createdCases: string[];
+      let createdRuns: string[];
+      let f: ReturnType<typeof bugService>;
+
+      async function seedTarget(project: string, suffix: string): Promise<Target> {
+        const testcaseId = (await setup.query<{ id: string }>(
+          "INSERT INTO testcases (project_id, external_id, title) VALUES ($1,$2,$3) RETURNING id", [project, `${suffix}-TC-1`, `Relationship ${suffix}`]
+        )).rows[0].id;
+        createdCases.push(testcaseId);
+        const cycleId = (await setup.query<{ id: string }>(
+          "INSERT INTO cycles (project_id, name) VALUES ($1,$2) RETURNING id", [project, `Relationship ${suffix}`]
+        )).rows[0].id;
+        createdRuns.push(cycleId);
+        const item = (await setup.query<{ id: string }>(
+          "INSERT INTO cycle_items (cycle_id, testcase_id, snapshot_title) VALUES ($1,$2,$3) RETURNING id", [cycleId, testcaseId, suffix]
+        )).rows[0].id;
+        const id = (await setup.query<{ id: string }>("INSERT INTO executions (cycle_item_id, status) VALUES ($1,'Passed') RETURNING id", [item])).rows[0].id;
+        return { testcaseId, cycleId, executionId: id };
+      }
+
+      beforeEach(async () => {
+        createdCases = []; createdRuns = []; foreignProject = "";
+        await resetRun();
+        foreignProject = (await setup.query<{ id: string }>(
+          "INSERT INTO projects (organization_id, key, name) VALUES ($1,'BLFOREIGN','Foreign relationship fixture') RETURNING id", [orgId]
+        )).rows[0].id;
+        sibling = await seedTarget(projectId, "BLLOCAL");
+        foreign = await seedTarget(foreignProject, "BLFOREIGN");
+        f = bugService(); // Authorization is covered separately; do not claim this is an HTTP test.
+      });
+
+      afterEach(async () => {
+        const projects = [projectId, foreignProject].filter(Boolean);
+        await setup.query("DELETE FROM bug_links WHERE bug_id IN (SELECT id FROM bugs WHERE project_id = ANY($1::uuid[]))", [projects]);
+        await setup.query("DELETE FROM bugs WHERE project_id = ANY($1::uuid[])", [projects]);
+        await setup.query("DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id = ANY($1::uuid[]))", [createdRuns]);
+        await setup.query("DELETE FROM cycle_items WHERE cycle_id = ANY($1::uuid[])", [createdRuns]);
+        await setup.query("DELETE FROM cycles WHERE id = ANY($1::uuid[])", [createdRuns]);
+        await setup.query("DELETE FROM testcases WHERE id = ANY($1::uuid[])", [createdCases]);
+        if (foreignProject) await setup.query("DELETE FROM projects WHERE id = $1", [foreignProject]);
+        await setup.query("UPDATE cycles SET deleted_at = NULL, deleted_by = NULL WHERE id = $1", [runId]);
+        await setup.query("UPDATE cycle_items SET deleted_at = NULL, deleted_by = NULL WHERE cycle_id = $1", [runId]);
+        await setup.query("UPDATE executions SET deleted_at = NULL, deleted_by = NULL WHERE id = $1", [executionId]);
+        await setup.query("UPDATE testcases SET deleted_at = NULL, deleted_by = NULL WHERE id = $1", [caseId]);
+      });
+
+      async function state() {
+        const projects = [projectId, foreignProject];
+        const runs = [runId, ...createdRuns];
+        return {
+          bugs: (await setup.query("SELECT * FROM bugs WHERE project_id = ANY($1::uuid[]) ORDER BY id", [projects])).rows,
+          testcases: (await setup.query("SELECT * FROM testcases WHERE project_id = ANY($1::uuid[]) ORDER BY id", [projects])).rows,
+          links: (await setup.query("SELECT bl.* FROM bug_links bl JOIN bugs b ON b.id = bl.bug_id WHERE b.project_id = ANY($1::uuid[]) ORDER BY bl.id", [projects])).rows,
+          runs: (await setup.query("SELECT * FROM cycles WHERE id = ANY($1::uuid[]) ORDER BY id", [runs])).rows,
+          items: (await setup.query("SELECT * FROM cycle_items WHERE cycle_id = ANY($1::uuid[]) ORDER BY id", [runs])).rows,
+          executions: (await setup.query("SELECT e.* FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id WHERE ci.cycle_id = ANY($1::uuid[]) ORDER BY e.id", [runs])).rows
+        };
+      }
+
+      function gate() {
+        let resolve!: () => void;
+        const promise = new Promise<void>((done) => { resolve = done; });
+        return {
+          resolve,
+          wait: async () => {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              await Promise.race([promise, new Promise<never>((_done, reject) => {
+                timer = setTimeout(() => reject(new Error("Database concurrency gate was not reached/released")), 5_000);
+              })]);
+            } finally {
+              if (timer) clearTimeout(timer);
+            }
+          }
+        };
+      }
+
+      function observedDatabase(afterQuery: (sql: string, client: PoolClient) => Promise<void>) {
+        return new DatabaseService({
+          query: pool.query.bind(pool),
+          connect: async () => {
+            const client = await pool.connect();
+            return {
+              query: async (sql: string, values?: unknown[]) => {
+                const result = await client.query(sql, values);
+                if (sql === "BEGIN") await client.query("SET LOCAL statement_timeout = '8s'");
+                await afterQuery(sql, client);
+                return result;
+              },
+              release: () => client.release()
+            };
+          }
+        } as unknown as Pool);
+      }
+
+      it("commits a link first, then lets deletion preserve its historical association", async () => {
+        const bug = await f.legacy.createBug(projectId, userId, { title: "Link before deletion" });
+        const locked = gate();
+        const resume = gate();
+        let pid = 0;
+        const writer = bugService(observedDatabase(async (sql, client) => {
+          if (!sql.includes("SELECT id, deleted_at FROM cycles")) return;
+          pid = (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+          locked.resolve();
+          await resume.wait();
+        }));
+        const linking = writer.legacy.updateBug(userId, String(bug.id), { title: "Linked before deletion", links: [link()] });
+        let deleting: Promise<unknown> | undefined;
+        try {
+          await Promise.race([locked.wait(), linking]);
+          deleting = f.legacy.deleteCycle(runId, userId);
+          await expectBlockedBy(pid);
+          resume.resolve();
+          await linking;
+          await deleting;
+          const saved = await f.legacy.getBug(String(bug.id));
+          expect(saved).toMatchObject({ title: "Linked before deletion", links: [{ ...link(), cycleName: expect.stringContaining("(deleted)") }] });
+          expect((await setup.query("SELECT deleted_at FROM cycles WHERE id = $1", [runId])).rows[0].deleted_at).not.toBeNull();
+        } finally {
+          resume.resolve();
+          await Promise.allSettled([linking, ...(deleting ? [deleting] : [])]);
+        }
+      }, 20_000);
+
+      it("does not deadlock association edits with manual writes and member cleanup", async () => {
+        await resetRun("Passed", "manual");
+        const member = (await setup.query<{ id: string }>(
+          "INSERT INTO users (email, name) VALUES ($1,'Relationship cleanup member') RETURNING id", [`bug-lock-${Date.now()}@tesbo.invalid`]
+        )).rows[0].id;
+        const cleanupLocked = gate(); const resumeCleanup = gate();
+        const manualLocked = gate(); const resumeManual = gate();
+        let cleanupPid = 0; let manualPid = 0;
+        let cleanup: Promise<unknown> | undefined; let manual: Promise<unknown> | undefined; let linking: Promise<unknown> | undefined;
+        try {
+          await setup.query("INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,'qa_engineer')", [projectId, member]);
+          const bug = await f.legacy.createBug(projectId, userId, { title: "Three writers" });
+          await setup.query("UPDATE bugs SET assignee_id = $2 WHERE id = $1", [bug.id, member]);
+          await setup.query("UPDATE executions SET assignee_id = $2 WHERE id = $1", [executionId, member]);
+          const cleaner = bugService(observedDatabase(async (sql, client) => {
+            if (!sql.includes("UPDATE executions e SET assignee_id = NULL")) return;
+            cleanupPid = (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+            cleanupLocked.resolve();
+            await resumeCleanup.wait();
+          }));
+          jest.spyOn(cleaner.legacy, "requireProjectAccess").mockResolvedValue({ caller_role: "owner" } as never);
+          jest.spyOn(cleaner.legacy as unknown as { notifyUsers: () => Promise<void> }, "notifyUsers").mockResolvedValue(undefined);
+          cleanup = cleaner.legacy.removeProjectMember(userId, projectId, member);
+          await Promise.race([cleanupLocked.wait(), cleanup]);
+          const editor = bugService(observedDatabase(async (sql, client) => {
+            if (!/FROM cycles.*FOR UPDATE/s.test(sql)) return;
+            manualPid = (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+            manualLocked.resolve();
+            await resumeManual.wait();
+          }));
+          manual = editor.legacy.updateExecution(executionId, userId, { status: "Passed" });
+          await Promise.race([manualLocked.wait(), manual]);
+          resumeManual.resolve();
+          await expectBlockedBy(cleanupPid);
+          linking = f.legacy.updateBug(userId, String(bug.id), { title: "Concurrent association saved", links: [link()] });
+          await expectBlockedBy(manualPid);
+          // If linking held the bug before waiting for the cycle, this is the third edge of
+          // cleanup(execution -> bug) -> linking(bug -> cycle) -> manual(cycle -> execution).
+          resumeCleanup.resolve();
+          await Promise.all([cleanup, manual, linking]);
+          expect((await f.legacy.getBug(String(bug.id)))).toMatchObject({ title: "Concurrent association saved", assigneeId: null, links: [expect.objectContaining(link())] });
+          expect(await executionRow()).toMatchObject({ status: "Passed", assignee_id: null });
+          expect((await setup.query("SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2", [projectId, member])).rowCount).toBe(0);
+        } finally {
+          resumeCleanup.resolve(); resumeManual.resolve();
+          await Promise.allSettled([cleanup, manual, linking].filter((promise): promise is Promise<unknown> => !!promise));
+          await setup.query("UPDATE bugs SET assignee_id = NULL WHERE project_id = $1 AND assignee_id = $2", [projectId, member]);
+          await setup.query("UPDATE executions SET assignee_id = NULL WHERE id = $1 AND assignee_id = $2", [executionId, member]);
+          await setup.query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2", [projectId, member]);
+          await setup.query("DELETE FROM users WHERE id = $1", [member]);
+        }
+      }, 20_000);
+
+      it("does not grant a stale historical exemption after concurrent unlink", async () => {
+        const bug = await f.legacy.createBug(projectId, userId, { title: "Before historical unlink", links: [link()] });
+        await f.legacy.deleteCycle(runId, userId);
+        const locked = gate(); const resume = gate();
+        const editor = bugService(observedDatabase(async (sql) => {
+          if (!sql.includes("FOR KEY SHARE OF e")) return;
+          locked.resolve();
+          await resume.wait();
+        }));
+        const editing = editor.legacy.updateBug(userId, String(bug.id), { title: "Must not persist stale edit", links: bug.links })
+          .then(() => ({ error: undefined }), (error: unknown) => ({ error }));
+        try {
+          await Promise.race([locked.wait(), editing]);
+          await f.legacy.removeBugLink(userId, String(bug.id), String(bug.links[0].id));
+          const before = await state();
+          resume.resolve();
+          expect((await editing).error).toBeInstanceOf(NotFoundException);
+          expect(await state()).toEqual(before);
+        } finally {
+          resume.resolve();
+          await editing;
+        }
+      }, 20_000);
+
+      it.each(["foreign case", "foreign run", "foreign execution", "wrong case", "wrong run", "unknown execution", "malformed UUID"])(
+        "rejects %s across create/add/edit without any persisted prefix", async (kind) => {
+          const invalid = kind === "foreign case" ? { ...link(), testcaseId: foreign.testcaseId }
+            : kind === "foreign run" ? { cycleId: foreign.cycleId }
+            : kind === "foreign execution" ? { ...link(), executionId: foreign.executionId }
+            : kind === "wrong case" ? { ...link(), testcaseId: sibling.testcaseId }
+            : kind === "wrong run" ? { cycleId: sibling.cycleId, executionId }
+            : { ...link(), executionId: kind === "malformed UUID" ? "invalid" : "00000000-0000-4000-8000-000000000001" };
+          const expected = kind.startsWith("wrong") || kind === "malformed UUID" ? BadRequestException : NotFoundException;
+          const bug = await f.legacy.createBug(projectId, userId, { title: "Before rejected edit" });
+          for (const operation of [
+            () => f.legacy.createBug(projectId, userId, { title: "Rejected create", links: [{ testcaseId: caseId }, invalid] }),
+            () => f.legacy.addBugLink(userId, String(bug.id), invalid),
+            () => f.legacy.updateBug(userId, String(bug.id), { title: "Must not persist", links: [{ testcaseId: caseId }, invalid] })
+          ]) {
+            const before = await state();
+            f.activity.mockClear(); f.notification.mockClear(); f.bugNotification.mockClear();
+            await expect(operation()).rejects.toBeInstanceOf(expected);
+            expect(await state()).toEqual(before);
+            expect(f.activity).not.toHaveBeenCalled();
+            expect(f.notification).not.toHaveBeenCalled();
+            expect(f.bugNotification).not.toHaveBeenCalled();
+          }
+        }
+      );
+
+      it("retains exact historical tuples/IDs during metadata edits, but refuses a new link after removal", async () => {
+        const bug = await f.legacy.createBug(projectId, userId, { title: "Historical association", links: [link()] });
+        const original = bug.links[0];
+        await f.legacy.deleteCycle(runId, userId);
+        const beforeExecution = await executionRow();
+        const updated = await f.legacy.updateBug(userId, String(bug.id), { title: "Metadata corrected", links: bug.links });
+        expect(updated.links).toMatchObject([{ id: original.id, ...link(), cycleName: expect.stringContaining("(deleted)") }]);
+        expect(await executionRow()).toEqual(beforeExecution);
+        const removed = await f.legacy.updateBug(userId, String(bug.id), { links: [] });
+        expect(removed.links).toEqual([]);
+        const before = await state();
+        await expect(f.legacy.addBugLink(userId, String(bug.id), { ...link(), id: original.id })).rejects.toBeInstanceOf(NotFoundException);
+        expect(await state()).toEqual(before);
+      });
+
+      it.each(["case", "run", "execution", "membership"])("rejects an individually inactive %s across create/add/edit", async (target) => {
+        const bug = await f.legacy.createBug(projectId, userId, { title: "Before inactive-target edit" });
+        if (target === "case") await setup.query("UPDATE testcases SET deleted_at = now() WHERE id = $1", [caseId]);
+        else if (target === "run") await setup.query("UPDATE cycles SET deleted_at = now() WHERE id = $1", [runId]);
+        else if (target === "execution") await setup.query("UPDATE executions SET deleted_at = now() WHERE id = $1", [executionId]);
+        else await setup.query("UPDATE cycle_items SET deleted_at = now() WHERE cycle_id = $1", [runId]);
+        // Omitting the explicit run must not bypass the execution's actual membership/parent check.
+        const invalid = target === "membership" ? { testcaseId: caseId, executionId } : link();
+        for (const operation of [
+          () => f.legacy.createBug(projectId, userId, { title: "Refused inactive target", links: [sibling, invalid] }),
+          () => f.legacy.addBugLink(userId, String(bug.id), invalid),
+          () => f.legacy.updateBug(userId, String(bug.id), { title: "Must not persist", links: [sibling, invalid] })
+        ]) {
+          const before = await state();
+          f.activity.mockClear(); f.notification.mockClear(); f.bugNotification.mockClear();
+          await expect(operation()).rejects.toBeInstanceOf(NotFoundException);
+          expect(await state()).toEqual(before);
+          expect(f.activity).not.toHaveBeenCalled();
+          expect(f.notification).not.toHaveBeenCalled();
+          expect(f.bugNotification).not.toHaveBeenCalled();
+        }
+      });
+
+      it("serializes concurrent nullable-key adds and reversed multi-run replacements", async () => {
+        const first = await f.legacy.createBug(projectId, userId, { title: "Concurrent first" });
+        const second = await f.legacy.createBug(projectId, userId, { title: "Concurrent second" });
+        await Promise.all([
+          f.legacy.addBugLink(userId, String(first.id), { testcaseId: caseId }),
+          f.legacy.addBugLink(userId, String(first.id), { testcaseId: caseId })
+        ]);
+        expect((await f.legacy.getBug(String(first.id))).links).toHaveLength(1);
+        await Promise.all([
+          f.legacy.updateBug(userId, String(first.id), { links: [link(), sibling] }),
+          f.legacy.updateBug(userId, String(second.id), { links: [sibling, link()] })
+        ]);
+        expect((await f.legacy.getBug(String(first.id))).links).toHaveLength(2);
+        expect((await f.legacy.getBug(String(second.id))).links).toHaveLength(2);
+      });
+
+      it("rolls back completed metadata and link writes after a later real PostgreSQL error", async () => {
+        const bug = await f.legacy.createBug(projectId, userId, { title: "Before rollback", links: [{ testcaseId: caseId }] });
+        const before = await state();
+        const mutationPool = new Pool({ connectionString: url, max: 1, connectionTimeoutMillis: 2_000 });
+        const checkedOut = new Set<PoolClient>();
+        mutationPool.on("acquire", (client) => { checkedOut.add(client); });
+        mutationPool.on("release", (_error, client) => { checkedOut.delete(client); });
+        let inject = true;
+        let completedMetadata = 0;
+        let completedLink = 0;
+        let pendingTitle: unknown;
+        const observing = {
+          query: pool.query.bind(pool),
+          connect: async () => {
+            const client = await mutationPool.connect();
+            return {
+              query: async (sql: string, values?: unknown[]) => {
+                const result = await client.query(sql, values);
+                if (inject && /^\s*UPDATE bugs SET/.test(sql)) {
+                  completedMetadata += result.rowCount ?? 0;
+                  pendingTitle = (await client.query("SELECT title FROM bugs WHERE id = $1", [bug.id])).rows[0].title;
+                }
+                if (inject && /^\s*INSERT INTO bug_links/.test(sql)) {
+                  completedLink += result.rowCount ?? 0;
+                  expect((await client.query("SELECT COUNT(*)::int AS count FROM bug_links WHERE bug_id = $1 AND deleted_at IS NULL", [bug.id])).rows[0].count).toBe(2);
+                  await client.query("SELECT 1 / 0"); // Native SQLSTATE 22012, after both completed writes.
+                }
+                return result;
+              },
+              release: () => client.release()
+            };
+          }
+        } as unknown as Pool;
+        const updater = bugService(new DatabaseService(observing));
+        const edit = { title: "Pending rollback title", links: [{ testcaseId: caseId }, { testcaseId: sibling.testcaseId }] };
+        try {
+          await expect(updater.legacy.updateBug(userId, String(bug.id), edit)).rejects.toMatchObject({ code: "22012" });
+          expect(completedMetadata).toBe(1);
+          expect(completedLink).toBe(1);
+          expect(pendingTitle).toBe(edit.title);
+          expect(await state()).toEqual(before);
+          expect(updater.activity).not.toHaveBeenCalled();
+          expect(updater.bugNotification).not.toHaveBeenCalled();
+          expect(checkedOut.size).toBe(0);
+          inject = false;
+          const retry = await updater.legacy.updateBug(userId, String(bug.id), edit);
+          expect(retry.links).toHaveLength(2);
+          expect((await setup.query("SELECT title FROM bugs WHERE id = $1", [bug.id])).rows[0].title).toBe(edit.title);
+          expect(checkedOut.size).toBe(0);
+        } finally {
+          for (const client of checkedOut) client.release(true);
+          await mutationPool.end();
+        }
+      });
+
+      it("waits for deletion and rejects a newly inactive target without a link or metadata prefix", async () => {
+        const bug = await f.legacy.createBug(projectId, userId, { title: "Delete first" });
+        const holder = await pool.connect();
+        let open = false;
+        let outcome: Promise<{ error?: unknown }> | undefined;
+        try {
+          await holder.query("BEGIN"); open = true;
+          await holder.query("SELECT id FROM cycles WHERE id = $1 FOR UPDATE", [runId]);
+          const pid = (await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+          outcome = f.legacy.updateBug(userId, String(bug.id), { title: "Rejected rename", links: [link()] }).then(
+            () => ({}), (error: unknown) => ({ error })
+          );
+          await expectBlockedBy(pid);
+          await holder.query("UPDATE cycles SET deleted_at = now() WHERE id = $1", [runId]);
+          await holder.query("UPDATE cycle_items SET deleted_at = now() WHERE cycle_id = $1", [runId]);
+          await holder.query("UPDATE executions SET deleted_at = now() WHERE id = $1", [executionId]);
+          await holder.query("COMMIT"); open = false;
+          const expected = await state();
+          expect((await outcome).error).toBeInstanceOf(NotFoundException);
+          expect(await state()).toEqual(expected);
+        } finally {
+          if (open) await holder.query("ROLLBACK");
+          holder.release();
+          if (outcome) await outcome;
+        }
+      });
     });
 
     it.each([

@@ -1175,7 +1175,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "create_bug",
       description:
-        "Report a bug in the token's project. Required: title. Optional: description, status, externalUrl, links (array of {testcaseId, cycleId, executionId}). Reported-by is the token's owning user.",
+        "Report a bug in the token's project. Required: title. Optional: description, status, externalUrl, links (array of {testcaseId, cycleId, executionId}). New links must resolve to active targets in this project and a consistent case/run/execution chain; any invalid link rejects the whole report, not just that link. Valid links to finalized automation preserve sealed verdicts. Reported-by is the token's owning user.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -1198,7 +1198,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "update_bug",
       description:
-        "Update a bug in the token's project. Required: bugId. Optional: title, description, status, severity (Critical/High/Medium/Low — pass null or \"\" to clear it back to not selected), priority (P0/P1/P2/P3 — pass null or \"\" to clear it back to untriaged), externalUrl, assigneeId (must already be a member of this project; pass null or \"\" to unassign), links (array of {testcaseId, cycleId, executionId} — replaces the bug's existing links entirely when present, it does not merge with them). Fields you omit keep their current value, except severity/priority/assigneeId which use the explicit-clear convention above.",
+        "Update a bug in the token's project. Required: bugId. Optional: title, description, status, severity (Critical/High/Medium/Low — pass null or \"\" to clear it back to not selected), priority (P0/P1/P2/P3 — pass null or \"\" to clear it back to untriaged), externalUrl, assigneeId (must already be a member of this project; pass null or \"\" to unassign), links (array of {testcaseId, cycleId, executionId} — replaces the bug's existing links entirely when present, it does not merge with them). Invalid new/changed links reject the entire edit, including metadata. Exact valid unchanged historical links may retain deleted local targets; removing one does not permit adding it anew. Fields you omit keep their current value, except severity/priority/assigneeId which use the explicit-clear convention above.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -1229,7 +1229,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "link_testcase_to_bug",
       description:
-        "Link a test case to an existing bug in the token's project (a bug_links row), optionally scoped to a specific cycle/execution. Required: bugId, testcaseId. Optional: cycleId, executionId (if executionId is given and belongs to a live run, that execution is set to Failed — the same behavior linking a bug from a test run in the app has). Calling this again with the same bugId+testcaseId (+cycleId) is safe: the underlying link is looked up by that combination first, so it is updated in place rather than duplicated.",
+        "Link a test case to an existing bug in the token's project (a bug_links row), optionally scoped to a specific cycle/execution. Required: bugId, testcaseId. Optional: cycleId, executionId. New/changed targets must be active in this project and form a consistent case/run/execution chain; an invalid target rejects the request. Valid manual/open-run links retain auto-failure behavior; finalized automation accepts the association without changing its sealed verdict. Calling this again with the same bugId+testcaseId (+cycleId) updates the link in place rather than duplicating it. This tool's ownership checks still refuse deleted targets; use update_bug to preserve an exact valid unchanged historical link.",
       requiredScope: "write",
       inputSchema: {
         type: "object",

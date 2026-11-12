@@ -896,21 +896,80 @@ test.describe("linking a bug fails the execution", () => {
     }
   });
 
-  test("a bogus execution id in the links is ignored rather than 500ing", { tag: '@tesbo.testId("TES-TC-1162")' }, async ({ request }) => {
-    // The id travels in the request body, so it can name anything at all — including an execution in
-    // a workspace the caller cannot see. The project join is what stops that reaching an UPDATE.
+  test("a bogus execution id rejects the whole report without persistence", { tag: '@tesbo.testId("TES-TC-1162")' }, async ({ request }) => {
+    // Approved strict-link policy: do not silently turn an invalid association into an unlinked bug.
     const suffix = `${Date.now()}`;
+    const title = `E2E AutoFail Bogus Execution ${suffix}`;
+    const before = scalar(`SELECT COUNT(*) FROM bugs WHERE project_id = ${literal(ctx.projectId)} AND title = ${literal(title)};`);
     const res = await request.post(`/api/projects/${ctx.projectId}/bugs`, {
       data: {
-        title: `E2E AutoFail Bogus Execution ${suffix}`,
+        title,
         links: [{ executionId: "00000000-0000-0000-0000-000000000000" }],
       },
       failOnStatusCode: false,
     });
-    expect(res.status(), await res.text()).toBeLessThan(300);
-    const bug = await res.json();
-    await request.delete(`/api/bugs/${bug.id}`, { failOnStatusCode: false });
+    expect(res.status(), await res.text()).toBe(404);
+    expect(scalar(`SELECT COUNT(*) FROM bugs WHERE project_id = ${literal(ctx.projectId)} AND title = ${literal(title)};`)).toBe(before);
   });
+});
+
+test("bug create/add/edit reject inconsistent chains and mixed batches without partial writes", async ({ request }) => {
+  const marker = `E2E Atomic Bug Links ${Date.now()}`;
+  const cases: string[] = []; const runs: string[] = []; const bugs: string[] = [];
+  const targets: Array<{ testcaseId: string; cycleId: string; executionId: string }> = [];
+  try {
+    for (const suffix of ["first", "second"]) {
+      const testcaseResponse = await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `${marker} ${suffix}` } });
+      expect(testcaseResponse.ok(), await testcaseResponse.text()).toBeTruthy();
+      const testcaseId = (await testcaseResponse.json()).id;
+      cases.push(testcaseId);
+      const cycleResponse = await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `${marker} ${suffix}` } });
+      expect(cycleResponse.ok(), await cycleResponse.text()).toBeTruthy();
+      const cycleId = (await cycleResponse.json()).id;
+      runs.push(cycleId);
+      expect((await request.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseIds: [testcaseId] } })).ok()).toBeTruthy();
+      const executions = await (await request.get(`/api/cycles/${cycleId}/executions`)).json();
+      targets.push({ testcaseId, cycleId, executionId: (executions.list ?? executions)[0].id });
+    }
+    const created = await request.post(`/api/projects/${ctx.projectId}/bugs`, { data: { title: marker, links: [{ testcaseId: cases[0] }] } });
+    expect(created.ok(), await created.text()).toBeTruthy();
+    const bug = await created.json(); bugs.push(bug.id);
+    const persisted = () => scalar(`SELECT jsonb_build_object(
+      'bugs', (SELECT jsonb_agg(b ORDER BY b.id) FROM bugs b WHERE b.project_id = ${literal(ctx.projectId)} AND b.title LIKE ${literal(`${marker}%`)}),
+      'links', (SELECT jsonb_agg(bl ORDER BY bl.id) FROM bug_links bl JOIN bugs b ON b.id = bl.bug_id WHERE b.project_id = ${literal(ctx.projectId)} AND b.title LIKE ${literal(`${marker}%`)}),
+      'runs', (SELECT jsonb_agg(c ORDER BY c.id) FROM cycles c WHERE c.id IN (${runs.map(literal).join(",")})),
+      'items', (SELECT jsonb_agg(ci ORDER BY ci.id) FROM cycle_items ci WHERE ci.cycle_id IN (${runs.map(literal).join(",")})),
+      'executions', (SELECT jsonb_agg(e ORDER BY e.id) FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id WHERE ci.cycle_id IN (${runs.map(literal).join(",")}))
+    )::text;`);
+    for (const [invalid, status] of [
+      [{ testcaseId: cases[0], cycleId: runs[1] }, 400],
+      [{ testcaseId: cases[0], cycleId: runs[0], executionId: targets[1].executionId }, 400],
+      [{ testcaseId: cases[0], executionId: "00000000-0000-4000-8000-000000000001" }, 404],
+      [{ testcaseId: cases[0], executionId: "malformed" }, 400]
+    ] as const) {
+      for (const operation of ["create", "add", "edit"]) {
+        const before = persisted();
+        const response = operation === "create"
+          ? await request.post(`/api/projects/${ctx.projectId}/bugs`, { data: { title: `${marker} refused create`, links: [{ testcaseId: cases[1] }, invalid] } })
+          : operation === "add"
+            ? await request.post(`/api/bugs/${bug.id}/links`, { data: invalid })
+            : await request.patch(`/api/bugs/${bug.id}`, { data: { title: `${marker} refused edit`, links: [{ testcaseId: cases[1] }, invalid] } });
+        expect(response.status(), `${operation}: ${await response.text()}`).toBe(status);
+        expect(persisted()).toBe(before);
+      }
+    }
+    const valid = await request.post(`/api/bugs/${bug.id}/links`, { data: targets[0] });
+    expect(valid.ok(), await valid.text()).toBeTruthy();
+    expect((await valid.json()).links).toEqual(expect.arrayContaining([expect.objectContaining(targets[0])]));
+    const beforeEdit = scalar(`SELECT row_to_json(bl)::text FROM bug_links bl WHERE id = ${literal(bug.links[0].id)};`);
+    const edit = await request.patch(`/api/bugs/${bug.id}`, { data: { title: `${marker} corrected`, links: (await valid.json()).links } });
+    expect(edit.ok(), await edit.text()).toBeTruthy();
+    expect(scalar(`SELECT row_to_json(bl)::text FROM bug_links bl WHERE id = ${literal(bug.links[0].id)};`)).toBe(beforeEdit);
+  } finally {
+    for (const id of bugs) await request.delete(`/api/bugs/${id}`, { failOnStatusCode: false });
+    for (const id of runs) await request.delete(`/api/cycles/${id}`, { failOnStatusCode: false });
+    for (const id of cases) await request.delete(`/api/projects/${ctx.projectId}/testcases/${id}`, { failOnStatusCode: false });
+  }
 });
 
 test.describe("bug associations preserve finalized automation", () => {
@@ -1189,14 +1248,14 @@ test.describe("bug assignee", () => {
 
 /*
  * Hard-delete remediation Phase 2. Two bug-owned sites from the cycles/cycle_items read-path gap
- * sweep: sanitizeBugLinks' cycle-id validation (a soft-deleted cycle must be refused the same way an
+ * sweep: bug-link cycle-id validation (a soft-deleted cycle must be refused the same way an
  * unknown one already is, not silently accepted into a link) and bugSelect's linked-cycle name (a
  * historical display: the link record should keep saying which run the bug was found in even after
  * that run is gone, marked "(deleted)" rather than dropped — the suites precedent, not the filter
  * precedent the other 15 sites got).
  */
 test.describe("bug links and soft-deleted cycles (hard-delete remediation Phase 2)", () => {
-  test("sanitizeBugLinks refuses a soft-deleted cycle's id the same way it refuses an unknown one", async ({ request }) => {
+  test("a soft-deleted cycle rejects a mixed create batch instead of dropping its ID", async ({ request }) => {
     const cycle = await (
       await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Bug Link Deleted Cycle ${Date.now()}` } })
     ).json();
@@ -1209,25 +1268,16 @@ test.describe("bug links and soft-deleted cycles (hard-delete remediation Phase 
       expect(deleteRes.ok(), `deleting the run — ${await deleteRes.text()}`).toBeTruthy();
       expect(scalar(`SELECT deleted_at IS NOT NULL FROM cycles WHERE id = ${literal(cycle.id)};`)).toBe("t");
 
-      // Before this fix, sanitizeBugLinks' cycle lookup had no deleted_at filter, so a soft-deleted
-      // run's id still passed validation and the link was accepted, pointing traceability at a run
-      // that every other screen already treats as gone.
-      const created = await (
-        await request.post(`/api/projects/${ctx.projectId}/bugs`, {
+      const title = `E2E Bug Against Deleted Cycle ${Date.now()}`;
+      const before = scalar(`SELECT COUNT(*) FROM bugs WHERE project_id = ${literal(ctx.projectId)} AND title = ${literal(title)};`);
+      const response = await request.post(`/api/projects/${ctx.projectId}/bugs`, {
           data: {
-            title: `E2E Bug Against Deleted Cycle ${Date.now()}`,
-            links: [{ testcaseId: testcase.id, cycleId: cycle.id }],
+            title,
+            links: [{ testcaseId: testcase.id }, { testcaseId: testcase.id, cycleId: cycle.id }],
           },
-        })
-      ).json();
-
-      try {
-        expect(created.links).toHaveLength(1);
-        expect(created.links[0].testcaseId, "the testcase half of the link is still valid and kept").toBe(testcase.id);
-        expect(created.links[0].cycleId, "the soft-deleted cycle id must be dropped, same as an unknown one").toBeNull();
-      } finally {
-        await request.delete(`/api/bugs/${created.id}`, { failOnStatusCode: false });
-      }
+        });
+      expect(response.status(), await response.text()).toBe(404);
+      expect(scalar(`SELECT COUNT(*) FROM bugs WHERE project_id = ${literal(ctx.projectId)} AND title = ${literal(title)};`)).toBe(before);
     } finally {
       await request.delete(`/api/projects/${ctx.projectId}/testcases/${testcase.id}`, { failOnStatusCode: false });
     }
@@ -1264,6 +1314,11 @@ test.describe("bug links and soft-deleted cycles (hard-delete remediation Phase 
       expect(afterDelete.links).toHaveLength(1);
       expect(afterDelete.links[0].cycleId, "the link itself is untouched by the run's soft-delete").toBe(cycle.id);
       expect(afterDelete.links[0].cycleName, "the name must be marked deleted, not blanked or left stale").toBe(`${cycle.name} (deleted)`);
+      const linkBefore = scalar(`SELECT row_to_json(bl)::text FROM bug_links bl WHERE id = ${literal(created.links[0].id)};`);
+      const edit = await request.patch(`/api/bugs/${created.id}`, { data: { title: "Historical bug metadata corrected", links: afterDelete.links } });
+      expect(edit.ok(), await edit.text()).toBeTruthy();
+      expect((await edit.json()).links).toEqual(afterDelete.links);
+      expect(scalar(`SELECT row_to_json(bl)::text FROM bug_links bl WHERE id = ${literal(created.links[0].id)};`)).toBe(linkBefore);
     } finally {
       await request.delete(`/api/bugs/${created.id}`, { failOnStatusCode: false });
       await request.delete(`/api/projects/${ctx.projectId}/testcases/${testcase.id}`, { failOnStatusCode: false });
