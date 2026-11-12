@@ -4883,3 +4883,71 @@ PostgreSQL/app execution, independent human security review, all-browser/deploye
 verification, risk acceptance, merge, publication or Phase 2 authorization is
 implied. Canonical companion specifications/baseline and prior F2/F3/F6–F8 owner
 decisions remain separate; this bounded dependency batch does not invent them.
+
+### I. Knowledge-document save/restore integrity batch — 2026-11-12
+
+Base: owner-merged #38, `development@81691dc8f45c22b57c5d6130361f5bde361c0da6`
+(19:34:53 UTC). Its final implementation head `6646324` passed 22/22 checks;
+the merge does not imply independent security review, risk acceptance or Phase 1
+exit. This batch addresses confirmed defects in the existing document workflow,
+not functionality inferred from the still-unavailable canonical Phase 2 baseline.
+
+- The existing per-document advisory lock now covers the fresh locked document,
+  snapshot allocation **or coalesced diff update**, and the live document UPDATE
+  in one transaction. Activity, embeddings and notices remain postcommit. The
+  15-minute coalescing window and V94 version-number uniqueness constraint remain;
+  no migration, historical renumbering, record deletion or association rewrite.
+- Recheck author/mutation access, read-only and managed-memory body rules against
+  the locked document. Restore now enforces the existing provider-mirror read-only
+  rule too. JSON-only changes count as body edits, JSONB object-key reordering does
+  not, and stored JSON `false` survives save/snapshot/restore. A changed generic
+  approved AI-memory body loses approval on restore just as it already does on
+  ordinary editing; an explicit no-op restore keeps approval and adds no snapshot.
+  Changed restored content also requests an embedding refresh after commit.
+- The mounted document's queue serializes submitted save revisions and confirmed
+  restores, collapses duplicate in-flight saves of the same revision and blocks
+  duplicate restores synchronously. A confirmed restore cancels only the unsent
+  debounce; already-submitted edits drain first. A prior failed/uncertain write
+  blocks commands requested before that failure instead of automatically sending
+  them afterward. Genuinely new edits/explicit actions can proceed; no mutation
+  retry, global CAS, command uniqueness or approval-policy redesign is introduced.
+- Responses update the editor only for the current writer/revision. Restore locks
+  editing while pending and replaces content without emitting an autosave event.
+  Client-side navigation flushes a captured valid pending draft and closes/drains
+  already-requested work against its **original document** without updating the
+  destination page. Late loads are ignored. This is not guaranteed delivery after
+  a full browser/tab shutdown, nor cross-tab/cross-user stale-write protection.
+
+`scripts/document-write-queue.test.mjs` has 11 production-source queue cases;
+together with the unchanged eight library regressions, **19/19 pass locally**.
+`knowledge-document-writes.db.spec.ts` adds **24 native PostgreSQL cases** covering
+completed UPDATE + native division-by-zero rollback for snapshots/coalesced diffs/
+restores, commit visibility/effect ordering, four writer-race combinations, fresh
+read-only/deleted/author/managed-memory policy, foreign versions, JSON/approval and
+snapshot-window behavior. These use the real service, migrated SQL and independent
+connections, but stub parent project authorization and postcommit collaborators;
+they are not HTTP authorization proof. Local typechecking is not DB execution.
+
+`e2e/utils/ci-document-writes.ts` reuses the existing isolated smoke/bootstrap and
+real history/editor controls. A fifth outer smoke test covers held pre-delivery
+PATCH, delayed committed ACK with newer edits, duplicate Save/Restore, dropped
+successful save ACK blocking a queued restore, explicit recovery, a real read-only
+HTTP refusal, no restore-triggered autosave, pending/queued client-navigation
+draining and stale-load isolation. Only its final unsent-debounce/Cancel boundary
+uses controlled browser timers; all HTTP/backend/DB persistence remains real.
+Independent fixture steps aggregate failures but still fail the test. Synthetic
+records and immutable audit provenance remain until disposable database teardown.
+Current-head CI receipts and inspected captures belong in the implementation PR,
+not repeated documentation-only commits. Native DB/authenticated app execution is
+unavailable locally; no skipped DB case is counted as a pass.
+
+Fresh backend audit (unchanged dependencies): production **0 critical / 0 high /
+14 moderate**; all dependencies **1 critical / 5 high / 30 moderate / 12 low**.
+The serious entries are development-only `handlebars` (critical), `browserslist`,
+`form-data`, `js-yaml`, `picomatch` and `tmp` (high). Some suggested resolutions
+require a Nest CLI major upgrade; no forced fix, lint-owner/baseline change,
+suppression or risk acceptance is included. These findings remain open follow-up,
+separate from #38's repaired frontend high/critical tree. Existing postcommit
+delivery/lost-COMMIT-ACK limitations, F2/F3/F6–F8 owner dispositions, canonical
+specification recovery and independent human release review remain open. No agent
+merge, deployment, SDK publication or Phase 1/2 authorization is implied.

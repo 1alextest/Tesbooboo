@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useParams } from "@/lib/routeParams";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { JSONContent } from "@tiptap/react";
 import {
@@ -31,6 +31,7 @@ import {
   integrationProviderLabel,
 } from "@/lib/api";
 import { canModifyKnowledgeItem } from "@/lib/knowledge-permissions";
+import { DocumentWriteCancelledError, DocumentWriteQueue } from "@/lib/documentWriteQueue";
 import { Button, Input, Modal, PageLoader, StatusChip } from "@/components/ui";
 import RichTextEditor from "@/components/knowledge-base/RichTextEditor";
 import { DocumentComments } from "@/components/knowledge-base/DocumentComments";
@@ -43,6 +44,7 @@ import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
 
 type SaveStatus = "saved" | "saving" | "unsaved";
+type DocumentPayload = { contentJson: JSONContent; contentHtml: string; contentText: string };
 
 // Keep in sync with MAX_REQUEST_BODY_SIZE / maxRequestBodySize in Tesbo-Backend-Nest/src/config/app-config.service.ts
 const MAX_DOCUMENT_PAYLOAD_BYTES = 20 * 1024 * 1024;
@@ -214,7 +216,11 @@ export default function KnowledgeDocumentPage() {
   const [requireContentAndTitle, setRequireContentAndTitle] = useState(false);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const latestContent = useRef<{ contentJson: JSONContent; contentHtml: string; contentText: string } | null>(null);
+  const latestContent = useRef<DocumentPayload | null>(null);
+  const pendingAutosave = useRef<((visible?: boolean) => void) | null>(null);
+  const latestTitle = useRef("");
+  const editRevision = useRef(0);
+  const writerRef = useRef<DocumentWriteQueue<KnowledgeDocument> | null>(null);
   // Synchronous double-submit guard for restore: state alone can't stop a second click that fires
   // before React re-renders the disabled button, so this is checked and set before any await.
   const restoreInFlightRef = useRef(false);
@@ -228,14 +234,35 @@ export default function KnowledgeDocumentPage() {
   }, []);
 
   useEffect(() => {
+    const writer = new DocumentWriteQueue<KnowledgeDocument>();
+    writerRef.current = writer;
+    editRevision.current = 0;
+    restoreInFlightRef.current = false;
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+      const pending = pendingAutosave.current;
+      pendingAutosave.current = null;
+      // This closure owns the original document, payload and failure generation. Drain it before
+      // closing the old writer, without allowing its response to update the destination page.
+      pending?.(false);
+      writer.close();
+      if (writerRef.current === writer) writerRef.current = null;
+    };
+  }, [projectId, documentId]);
+
+  useEffect(() => {
+    let cancelled = false;
     (async () => {
       if (!currentUser) {
         router.replace("/login");
         return;
       }
+      setLoading(true);
       setCurrentUserId(currentUser.userId);
       try {
         const data = await getKnowledgeDocument(projectId, documentId);
+        if (cancelled) return;
         // Keep the saved body available for explicit saves and title-only edits without relying
         // on the editor to emit a fake content update while its interaction mode is initialized.
         latestContent.current = {
@@ -243,9 +270,16 @@ export default function KnowledgeDocumentPage() {
           contentHtml: data.contentHtml ?? "",
           contentText: data.contentText ?? "",
         };
+        latestTitle.current = data.title;
         setDoc(data);
         setBreadcrumb(data.breadcrumb);
         setTitle(data.title);
+        setSaveStatus("saved");
+        setError(null);
+        setHistoryOpen(false);
+        setConfirmTarget(null);
+        setRestorePhase("idle");
+        setRestoreError(null);
         try {
           setRequireContentAndTitle(window.localStorage.getItem(blankDocumentFlagKey(documentId)) === "1");
         } catch {
@@ -254,11 +288,13 @@ export default function KnowledgeDocumentPage() {
         const role = normalizeRole(projectMembers.find((m) => m.userId === currentUser.userId)?.role ?? "qa_engineer");
         setCanApprove(role === "owner" || role === "manager");
       } catch (err) {
+        if (cancelled) return;
         setError(err instanceof Error ? err.message : "Failed to load document.");
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, documentId, currentUser]);
 
@@ -325,94 +361,81 @@ export default function KnowledgeDocumentPage() {
     if (found) setAnchorMissMessage(null);
   }
 
-  const scheduleSave = useCallback(
-    (nextTitle: string) => {
-      setSaveStatus("unsaved");
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(async () => {
-        const payload = latestContent.current;
-        const size = documentPayloadSize(payload);
-        if (size > MAX_DOCUMENT_PAYLOAD_BYTES) {
-          setError(
-            `This document is ${formatFileSize(size)}, which is over the ${formatFileSize(MAX_DOCUMENT_PAYLOAD_BYTES)} limit we currently support. Split it into smaller documents to save.`
-          );
-          setSaveStatus("unsaved");
-          return;
-        }
-        // Blank (no title, no content) is left "unsaved" rather than errored here — the user
-        // may just be mid-edit (e.g. selected all and deleted before pasting something new).
-        // handleManualSave surfaces a real error if they explicitly try to save while blank.
-        const missingTitle = !nextTitle.trim();
-        const missingContent = !(payload?.contentText ?? "").trim();
-        const incomplete = requireContentAndTitle ? missingTitle || missingContent : missingTitle && missingContent;
-        if (incomplete) {
-          setSaveStatus("unsaved");
-          return;
-        }
-        setSaveStatus("saving");
-        try {
-          const updated = await updateKnowledgeDocument(projectId, documentId, {
-            title: nextTitle,
-            contentJson: payload?.contentJson,
-            contentHtml: payload?.contentHtml,
-            contentText: payload?.contentText,
-          });
-          setDoc(updated);
-          setSaveStatus("saved");
-          setError(null);
-        } catch (err) {
-          setError(err instanceof Error ? err.message : "Failed to save document.");
-          setSaveStatus("unsaved");
-        }
-      }, 1200);
-    },
-    [projectId, documentId, requireContentAndTitle]
-  );
+  function scheduleSave(nextTitle: string) {
+    const writer = writerRef.current;
+    if (!writer || restoreInFlightRef.current || doc?.id !== documentId) return;
+    setSaveStatus("unsaved");
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    const revision = editRevision.current;
+    const generation = writer.capture();
+    const payload = latestContent.current;
+    const pending = (visible = true) => { void saveSnapshot(writer, nextTitle, payload, revision, generation, false, visible); };
+    pendingAutosave.current = pending;
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null;
+      if (pendingAutosave.current === pending) pendingAutosave.current = null;
+      pending();
+    }, 1200);
+  }
 
   function handleEditorUpdate(payload: { json: JSONContent; html: string; text: string }) {
+    if (restoreInFlightRef.current || doc?.id !== documentId) return;
     latestContent.current = { contentJson: payload.json, contentHtml: payload.html, contentText: payload.text };
-    scheduleSave(title);
+    editRevision.current++;
+    scheduleSave(latestTitle.current);
   }
 
   function handleTitleChange(value: string) {
+    if (restoreInFlightRef.current || doc?.id !== documentId) return;
+    latestTitle.current = value;
+    editRevision.current++;
     setTitle(value);
     scheduleSave(value);
   }
 
   async function handleManualSave() {
+    const writer = writerRef.current;
+    if (!writer || restoreInFlightRef.current || doc?.id !== documentId) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    const payload = latestContent.current;
+    saveTimer.current = null;
+    pendingAutosave.current = null;
+    await saveSnapshot(writer, latestTitle.current, latestContent.current, editRevision.current, writer.capture(), true);
+  }
+
+  async function saveSnapshot(writer: DocumentWriteQueue<KnowledgeDocument>, nextTitle: string, payload: DocumentPayload | null, revision: number, generation: number, explicit: boolean, visible = true) {
     const size = documentPayloadSize(payload);
     if (size > MAX_DOCUMENT_PAYLOAD_BYTES) {
-      setError(
+      if (visible) setError(
         `This document is ${formatFileSize(size)}, which is over the ${formatFileSize(MAX_DOCUMENT_PAYLOAD_BYTES)} limit we currently support. Split it into smaller documents to save.`
       );
-      setSaveStatus("unsaved");
+      if (visible) setSaveStatus("unsaved");
       return;
     }
-    const missingTitle = !title.trim();
+    const missingTitle = !nextTitle.trim();
     const missingContent = !(payload?.contentText ?? "").trim();
     if (requireContentAndTitle ? missingTitle || missingContent : missingTitle && missingContent) {
-      setError(
+      if (visible && explicit) setError(
         requireContentAndTitle
           ? "This document needs both a title and content before it can be saved."
           : "A document needs a title or some content — it can't be saved blank."
       );
-      setSaveStatus("unsaved");
+      if (visible) setSaveStatus("unsaved");
       return;
     }
-    setSaveStatus("saving");
+    if (visible) setSaveStatus("saving");
     try {
-      const updated = await updateKnowledgeDocument(projectId, documentId, {
-        title,
+      const updated = await writer.save(revision, () => updateKnowledgeDocument(projectId, documentId, {
+        title: nextTitle,
         contentJson: payload?.contentJson,
         contentHtml: payload?.contentHtml,
         contentText: payload?.contentText,
-      });
+      }), generation);
+      if (!visible || !isMountedRef.current || writerRef.current !== writer || revision !== editRevision.current || restoreInFlightRef.current) return;
       setDoc(updated);
       setSaveStatus("saved");
       setError(null);
     } catch (err) {
+      if (!visible || err instanceof DocumentWriteCancelledError || !isMountedRef.current || writerRef.current !== writer || revision !== editRevision.current || restoreInFlightRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to save document.");
       setSaveStatus("unsaved");
     }
@@ -473,27 +496,30 @@ export default function KnowledgeDocumentPage() {
   }
 
   async function confirmRestoreVersion() {
-    if (!confirmTarget || restoreInFlightRef.current) return;
+    const writer = writerRef.current;
+    if (!confirmTarget || !writer || restoreInFlightRef.current || doc?.id !== documentId) return;
     restoreInFlightRef.current = true;
     setRestorePhase("restoring");
     setRestoreError(null);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    pendingAutosave.current = null; // Only a confirmed restore replaces the unsent debounce draft.
     try {
-      const updated = await restoreKnowledgeDocumentVersion(projectId, documentId, confirmTarget.versionId!);
-      if (!isMountedRef.current) return;
-      // A pending autosave still carries the pre-restore editor content in `latestContent` — left
-      // alone, it fires a few hundred ms later and silently overwrites the restore we just applied.
-      if (saveTimer.current) {
-        clearTimeout(saveTimer.current);
-        saveTimer.current = null;
-      }
+      // Drain earlier in-flight/queued writes before sending the restore. If one fails after this
+      // confirmation, the queue rejects the barrier instead of blindly sending another mutation.
+      const updated = await writer.restore(() => restoreKnowledgeDocumentVersion(projectId, documentId, confirmTarget.versionId!));
+      if (!isMountedRef.current || writerRef.current !== writer) return;
       latestContent.current = {
         contentJson: (updated.contentJson ?? null) as JSONContent,
         contentHtml: updated.contentHtml ?? "",
         contentText: updated.contentText ?? "",
       };
+      latestTitle.current = updated.title;
+      editRevision.current++;
       setDoc(updated);
       setTitle(updated.title);
       setSaveStatus("saved");
+      setError(null);
       // Forces the TipTap instance to actually re-render the restored body — see RichTextEditor,
       // which otherwise only consumes `contentJson`/`contentHtml` once, at mount.
       setContentResetKey((k) => k + 1);
@@ -501,11 +527,12 @@ export default function KnowledgeDocumentPage() {
       setRestorePhase("idle");
       setHistoryOpen(false);
     } catch (err) {
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || writerRef.current !== writer) return;
+      setSaveStatus("unsaved");
       setRestorePhase("error");
       setRestoreError(err instanceof Error ? err.message : "Failed to restore version.");
     } finally {
-      restoreInFlightRef.current = false;
+      if (writerRef.current === writer) restoreInFlightRef.current = false;
     }
   }
 
@@ -534,7 +561,7 @@ export default function KnowledgeDocumentPage() {
     });
   }
 
-  if (loading || !doc) {
+  if (loading || !doc || doc.id !== documentId) {
     return <PageLoader variant="screen" />;
   }
 
@@ -622,7 +649,7 @@ export default function KnowledgeDocumentPage() {
         <Input
           value={title}
           onChange={(e) => handleTitleChange(e.target.value)}
-          readOnly={bodyLocked}
+          readOnly={bodyLocked || restorePhase === "restoring"}
           className={`!h-auto flex-1 border-0 !bg-transparent px-0 text-[26px] font-semibold shadow-none focus:ring-0 ${
             bodyLocked ? "cursor-default" : ""
           }`}
@@ -677,7 +704,7 @@ export default function KnowledgeDocumentPage() {
             )}
           </div>
           {!bodyLocked && (
-            <Button variant="secondary" size="sm" onClick={handleManualSave}>Save</Button>
+            <Button variant="secondary" size="sm" onClick={handleManualSave} disabled={restorePhase === "restoring"}>Save</Button>
           )}
         </div>
       </div>
@@ -770,7 +797,7 @@ export default function KnowledgeDocumentPage() {
           <RichTextEditor
             contentJson={doc.contentJson as JSONContent | null}
             contentHtml={doc.contentHtml}
-            editable={!isSyncedMirror}
+            editable={!isSyncedMirror && restorePhase !== "restoring"}
             onUpdate={handleEditorUpdate}
             resetKey={contentResetKey}
           />
