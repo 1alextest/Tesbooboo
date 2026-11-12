@@ -4208,10 +4208,30 @@ or transaction boundaries. Local repaired owner suite: **25/25 passed**. Backend
 production build and frozen lint passed (9 known errors, 2 warnings, **0 new
 errors**); the initial lint command used the wrong working directory and failed
 before analysis, then the canonical backend-directory invocation ran successfully.
-Fresh repaired-head CI remains required. No shared database, schema, UI,
-dependency, retention/deletion, bulk atomicity, publication or deployment change
-is authorized by this slice. Unpaired-surrogate validation and other mutation/
-postcommit/contract decisions are separate; this is not full import certification.
+Implementation head `5d10bba` passed **22/22 triggered checks**:
+
+- [Migrated PostgreSQL: 4 suites / **62 tests**, no skips](https://github.com/1alextest/Tesbooboo/actions/runs/43227049427/job/131212794633).
+  All seven field-specific refusals and independent state-equality cases pass;
+  all three completed-write fault/rollback/release/retry controls still pass.
+- [Genuine API/MCP/browser smoke: **3 passed**](https://github.com/1alextest/Tesbooboo/actions/runs/43227049177/job/131212794398).
+  All seven HTTP refusals, nonmember/anonymous controls, Unicode/emoji/literal
+  escape round-trip, replay, null clearing, manual-completed and open-automation
+  imports, sealed refusal and inherited four drawer/full-page browser journeys
+  executed. These are the disposable CI smoke assertions, not the full canonical
+  shared-stack `cycles.spec.ts` suite or a new independent visual review.
+- [Backend quality: **1,691 passed / 160 external/DB skips**](https://github.com/1alextest/Tesbooboo/actions/runs/43227049555/job/131212795501).
+  Separate [API/MCP contracts](https://github.com/1alextest/Tesbooboo/actions/runs/43227049427/job/131212794637)
+  passed 206 / skipped 8; [transactional unit regressions](https://github.com/1alextest/Tesbooboo/actions/runs/43227049427/job/131212794252)
+  passed 72 / skipped 90 DB tests. These skips are not relabeled as database passes.
+
+The standalone authorization workflow did not trigger for this slice's paths;
+its prior results are not counted as a fresh check. Native DB/smoke evidence is
+distinct from unit mocks and the unexecuted shared-stack selection. A later
+documentation-only head still requires fresh applicable checks and human review.
+No shared database, schema, UI, dependency, retention/deletion, bulk atomicity,
+publication or deployment change is authorized by this slice. Unpaired-surrogate
+validation and other mutation/postcommit/contract decisions are separate; this is
+not full import certification or Phase 1 completion.
 
 Remaining mutation inventory is not a list of automatically approved removals:
 
@@ -4222,7 +4242,7 @@ Remaining mutation inventory is not a list of automatically approved removals:
 | `removeProjectMember` | Atomically clears execution assignments across the project, including closed runs, without cycle locks. Administrative cleanup versus sealed metadata needs explicit classification. |
 | REST/MCP bulk execution changes | Existing shared per-item guards protect each write, but a later rejection/concurrent close can leave a committed prefix. Whole-request atomicity and truthful partial-batch responses remain distinct work. |
 | REST/MCP permission and plan boundaries | Current member/scope checks are reusable, not a substitute for full parent-child validation. Legacy cycle URLs and MCP aliases require the same entitlement-policy audit; no bypass is declared runtime-reproduced here. |
-| Historical imports | The real rollback test fails after a completed Run UPDATE. U+0000 validation and failure after completed execution/snapshot writes remain separate gaps; the bounded proof is not silently generalized. |
+| Historical imports | This slice adds early U+0000 validation and verified native fault/rollback controls after completed run, execution and snapshot writes. Other invalid Unicode, commit-acknowledgement ambiguity and full shared-stack import/permission coverage remain separate; the three staged SQL faults are not universal rollback or concurrency proof. |
 
 The full canonical eight-file package and
 `Tesbo_Existing_Application_Baseline_v1.0.md` are still unavailable in inspected
