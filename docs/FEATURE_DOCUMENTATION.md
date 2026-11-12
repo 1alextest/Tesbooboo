@@ -4364,6 +4364,48 @@ specifications. Existing Zyra chat/staged drafts, MCP and reporter ingestion are
 reusable implementation, **not** proof of the proposed immutable approval/apply,
 external client execution/evidence loop or unified Copilot contract.
 
+### F.0 Owner decision — conditional Phase 1 exit framework (2026-11-12)
+
+**Decision recorded:** The owner selected a **conditional Phase 1 exit**: resolve verified
+approval-blocking issues, explicitly record lower-risk follow-ups, and then proceed
+under an **approved** Phase 2 roadmap. This approves the **decision framework only**;
+it does not itself certify Phase 1, waive a finding, approve a particular residual
+risk, authorize destructive data cleanup, or approve a Phase 2 specification.
+
+**Finite application and exit gates:**
+
+1. Reconcile the latest `development` commits and relevant PR evidence against
+   the bounded Phase 1 integrity selection below; update superseded F1–F9
+   observations (especially the already merged bulk and dependency fixes) before
+   making a current-risk judgment. A historical finding is not automatically live.
+2. For each remaining finding, document the violated or applicable acceptance
+   contract, reproducibility, evidence, impact, likelihood basis, severity,
+   owner, proposed remedy, and disposition. No unverified assumption becomes a
+   confirmed defect; no missing test becomes a pass.
+3. **Block exit** on a verified unresolved critical/high authorization,
+   cross-project isolation, immutable-finalized-evidence, destructive integrity,
+   or unacceptable unintended-write violation of an approved contract; also on
+   failure of the selected mandatory integration/CI checks. Resolve by reviewed
+   PRs with fresh verification, or obtain an explicit owner decision where the
+   contract itself is genuinely unsettled. Do not silently downgrade severity.
+4. **Defer only with explicit disposition:** moderate/low issues and nonblocking
+   enhancements may move to a prioritized follow-up backlog with accountable
+   owner, impact, conditions for escalation, and review trigger. Deferral is not
+   risk acceptance; acceptance requires separately recorded owner approval.
+5. Require a connected regression across the selected REST/MCP/browser/SDK and
+   PostgreSQL paths, current-head required CI, independent human review, and a
+   dated Phase 1 exit checklist noting unsupported shared-stack/deployment scope.
+6. Recover/reconcile original approved canonical requirements and baseline before
+   authorizing substantive Phase 2 implementation. Missing eight-file specs or
+   baseline must be recorded as missing, **not fabricated**. Proposed roadmap,
+   priorities, requirement links and acceptance criteria require owner approval.
+
+**Next execution order:** finish any in-flight scoped integrity PR (currently
+#42 at the time of this decision), refresh F1–F9 against merged code, resolve
+verified blockers, obtain an explicit Phase 1 exit/sign-off decision, then
+approve and implement the first Phase 2 slice via normal reviewed PRs.
+Do not keep Phase 1 open merely because a new moderate improvement is possible.
+
 ### F. Bounded Phase 1 exit assessment — 2026-11-12 (PROPOSED, not approved)
 
 **Outcome: Phase 1 exit is NOT YET ESTABLISHED; Phase 2 is not authorized.** This
