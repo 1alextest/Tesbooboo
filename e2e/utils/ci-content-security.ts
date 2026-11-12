@@ -37,7 +37,9 @@ export async function verifyContentSecurity(page: Page, api: string, web: string
       await expect(editor.locator("h2")).toHaveText("Patched editor");
       await expect(editor.locator("strong")).toHaveText("Preserved bold");
       await expect(editor.locator("table")).toContainText("café 漢字");
-      await expect(editor.locator('li[data-type="taskItem"]')).toHaveCount(2);
+      await expect(editor.getByRole("checkbox")).toHaveCount(2);
+      await expect(editor.getByRole("checkbox", { name: "Task item checkbox for Checked item", exact: true })).toBeChecked();
+      await expect(editor.getByRole("checkbox", { name: "Task item checkbox for Open item", exact: true })).not.toBeChecked();
       await expect(editor.getByRole("link", { name: "Safe link" })).toHaveAttribute("href", "https://example.invalid/control");
 
       // Exercise the actual HTML paste boundary too. Harmless local sentinels, no exfiltration or
@@ -56,6 +58,8 @@ export async function verifyContentSecurity(page: Page, api: string, web: string
       await page.reload();
       await expect(page.locator(".ProseMirror").first()).toContainText("Untrusted paste");
       await expect(page.locator(".ProseMirror table")).toContainText("café 漢字");
+      await expect(page.locator(".ProseMirror").first().getByRole("checkbox", { name: "Task item checkbox for Checked item", exact: true })).toBeChecked();
+      await expect(page.locator(".ProseMirror").first().getByRole("checkbox", { name: "Task item checkbox for Open item", exact: true })).not.toBeChecked();
       expect(await stored()).toEqual(beforeReload);
       expect(await page.evaluate(() => Reflect.get(window, "__tesboContentProbe"))).toBeUndefined();
       await testInfo.attach("patched-knowledge-editor", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
