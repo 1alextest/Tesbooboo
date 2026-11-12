@@ -386,7 +386,7 @@ export default class TesboReporter implements Reporter {
   }
 
   /**
-   * Drains the in-flight submissions, closes the run, and prints the summary.
+   * Drains the in-flight submissions, requests closure, and prints the acknowledged outcome.
    *
    * An interrupted run (Ctrl-C, or --max-failures tripping) closes as `incomplete`, so the run says
    * outright that results are missing instead of looking like a clean pass over fewer tests.
@@ -410,7 +410,17 @@ export default class TesboReporter implements Reporter {
     });
 
     const counts = `${this.counters.passed} passed, ${this.counters.failed} failed, ${this.counters.skipped} skipped`;
-    console.log(`[tesbo] run ${this.runId} closed (${closeStatus}): ${counts}`);
+    if (closed.ok) {
+      const alreadyClosed = closed.data.alreadyClosed === true;
+      // Older minimal acknowledgements confirm the requested close. An explicit null or an
+      // already-closed response without a status does not confirm that requested final status.
+      const confirmedStatus = closed.data.closeStatus === undefined && !alreadyClosed
+        ? closeStatus
+        : closed.data.closeStatus ?? "status not reported";
+      console.log(`[tesbo] run ${this.runId} ${alreadyClosed ? "already closed" : "closed"} (${confirmedStatus}): ${counts}`);
+    } else {
+      console.warn(`[tesbo] run ${this.runId} closure unconfirmed (requested ${closeStatus}): ${counts} (local results).`);
+    }
 
     this.printUnlinked();
 

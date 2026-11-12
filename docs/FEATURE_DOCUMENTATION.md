@@ -4042,6 +4042,103 @@ the main edit form's refusal to resubmit invalid legacy tuples remain separate
 contract/data decisions; this change does not claim to quarantine all invalid
 relationships or repair every report/legacy convenience-column read.
 
+#### Integrated #31 and truthful reporter closure follow-up
+
+The owner merged PR [#31](https://github.com/1alextest/Tesbooboo/pull/31) as
+`71cfd3f` on 2026-11-12 at 12:06:56 UTC. Final head `e40135f` passed **23/23 checks**:
+[4 PostgreSQL suites / 53 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43150114718/job/130957037454),
+[5 authorization suites / 210 tests](https://github.com/1alextest/Tesbooboo/actions/runs/43150114606/job/130957036709),
+[3 genuine REST/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43150114731/job/130957037601)
+and [1,683 backend tests](https://github.com/1alextest/Tesbooboo/actions/runs/43150114726/job/130957037681)
+(151 external/DB skips in that separate job). Wrong URL parents reject without
+execution mutation; this is not whole mutation-path or release signoff.
+
+The next bounded finding is in the existing Playwright SDK: `onEnd` prints a
+confirmed `closed` line even when `TesboClient.closeRun` returns `ok: false`.
+Its generic JSON-success cast can also accept an empty/wrong-run acknowledgement,
+and an already-closed response can describe a different final status from the
+one just requested. Native HTTP/Playwright regressions below reproduce these
+observations; a `null` acknowledgement also throws from the reporter.
+
+The existing non-fatal ingest policy stays intact: no reporter-side mutation of
+the customer's suite exit code. Failures, timeouts and lost acknowledgements must
+report closure as **unconfirmed**, not assert either closed or still open. Local
+counts and warning diagnostics remain visible. A valid close acknowledgement must
+identify the requested run and match the existing response shape; optional server
+status/idempotency fields are interpreted truthfully without requiring them from
+older minimal responses. No backend closure, permissions, retry policy, result
+model, SDK version or publication is changed by this follow-up.
+
+Regressions extend the owning SDK `index.test.ts` with native loopback HTTP and
+real Playwright CLI child processes using the production reporter build. The
+HTTP server is a controlled fixture, **not PostgreSQL or a production Tesbo API**.
+CLI passing/failing exit-code controls prove pipeline behavior, while lifecycle
+controls cover interrupted/incomplete requests, transient retry success, bad
+acknowledgements, mismatch and missing-result diagnostics. The existing SDK job's
+production build is moved before tests: its old order also let existing bin tests
+return early when `dist` was absent. No command, assertion, scope or threshold is
+removed; this establishes the test prerequisite rather than weakening a gate.
+The initial local baseline was 129 tests / 108 passed / 21 failed / 0 skipped:
+19 reporter regressions and two separate Windows POSIX-permission failures. The
+expanded frozen baseline is **141 tests / 110 passed / 31 failed / 0 skipped**:
+**29 reporter failures** plus the same two permission assertions (`0666` observed
+versus `0600` and initial `0644` expected). Neither assertion is weakened/skipped.
+Actual production-build CLI processes retain 0/1 on denied/lost acknowledgements,
+but `null` makes a passing suite exit **1** via an uncaught `mismatch` access.
+Success, older minimal acknowledgements, acknowledged incomplete closes, retry
+success and mismatch controls pass on the baseline. Nullable historical statuses
+are covered and must not be rejected or described as completed. Frozen dependency
+installation, SDK build/typecheck and whitespace checks passed locally.
+
+Regression-only head `352bb38` was pushed as draft PR
+[#32](https://github.com/1alextest/Tesbooboo/pull/32) before changing production code.
+The [isolated Linux SDK baseline](https://github.com/1alextest/Tesbooboo/actions/runs/43218381737/job/131183354082)
+reproduced **141 tests / 112 passed / 29 failed / 0 skipped**, including the real
+CLI passing-suite exit-1 defect on `null`; both strict permission tests passed on
+Linux. The other 21 triggered checks passed. This baseline is intentionally red,
+not a completed repair or a waiver of that SDK gate.
+
+The bounded repair validates only `closeRun` acknowledgements: exact requested
+run, nullable/well-formed numeric mismatch pairs, optional boolean `alreadyClosed`
+and optional `completed`/`incomplete`/historical-null `closeStatus`. Older minimal
+`{ runId, mismatch: null }` remains valid. Invalid successful acknowledgements are
+counted once and logged without their response body or an extra close replay;
+generic request parsing and transient retries are unchanged. `onEnd` branches on
+the result, preserves local diagnostics and prints supplied server status rather
+than substituting requested status. Missing already-closed and explicit-null
+statuses say `status not reported`. README semantics now distinguish requested
+closure from confirmation without changing startup or non-fatal ingest policy.
+
+The repaired initial local run was **141 tests / 139 passed / 2 failed / 0 skipped**,
+with all 29 reporter regressions fixed and only the unchanged Windows permission
+failures remaining. Two additional controls exercise one-count/no-replay invalid
+acknowledgements with three configured attempts and native multipart quota
+diagnostics/evidence-before-close ordering. One intervening expanded full-suite
+run exceeded its 120-second shell limit; it is not counted as a pass. The completed
+expanded rerun was **143 tests / 141 passed / 2 failed / 0 skipped**, with both extra
+controls and all six production-build passing/failing CLI processes passing;
+only the same Windows permission assertions failed.
+
+Implementation head `9386c12` passed **22/22 triggered checks**:
+
+- [SDK typecheck, production compilation and 143/143 tests, zero skips](https://github.com/1alextest/Tesbooboo/actions/runs/43219986644/job/131188861006),
+  including all six real CLI 0/1 controls, both strict Linux permission tests,
+  nullable historical status, retry, diagnostics and no-replay controls.
+- [Migrated PostgreSQL: 4 existing suites / 53 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43219986568/job/131188754607).
+- [Existing real API/MCP/browser smoke: 3 passed](https://github.com/1alextest/Tesbooboo/actions/runs/43219986574/job/131188753560).
+- [Existing backend quality: 1,683 passed / 151 external/DB skips](https://github.com/1alextest/Tesbooboo/actions/runs/43219986644/job/131188860358).
+  The separate [API/MCP contract job](https://github.com/1alextest/Tesbooboo/actions/runs/43219986568/job/131188754105)
+  passed 206 tests with 8 skips; the [transactional unit job](https://github.com/1alextest/Tesbooboo/actions/runs/43219986568/job/131188754583)
+  passed 72 with 90 DB skips. Those skips are not silently counted as passes;
+  native DB and smoke jobs above supply their own bounded evidence.
+
+The new SDK fixture tests do not prove PostgreSQL persistence, backend close
+races, browser rendering, the entire supported Playwright version range,
+shared-stack release safety or independent human review. The unchanged native
+DB/browser suites are separate evidence, not a relabeling of the SDK fixtures.
+Full existing checks must also be fresh on any later documentation-only head
+before review. Phase 1 remains open; no merge, publication or deployment occurred.
+
 Remaining mutation inventory is not a list of automatically approved removals:
 
 | Existing writer | Source-grounded boundary / remaining decision |

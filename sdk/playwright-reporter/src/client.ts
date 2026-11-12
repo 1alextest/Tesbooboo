@@ -48,10 +48,35 @@ export interface ResultBody {
 /** What a call produced: `ok` with data, or a failure that has already been logged. */
 export type CallResult<T> = { ok: true; data: T } | { ok: false; error: string; status: number | null };
 
+export interface CloseRunResponse {
+  runId: string;
+  mismatch: Record<string, { reported: number; stored: number }> | null;
+  alreadyClosed?: boolean;
+  /** Historical closed runs may have no recorded final status. */
+  closeStatus?: "completed" | "incomplete" | null;
+}
+
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_RETRIES = 3;
 /** Statuses worth retrying: transient server and gateway failures, plus rate limiting. */
 const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Only validate the close acknowledgement; other endpoints keep their existing contract. */
+function isCloseRunResponse(value: unknown, runId: string): value is CloseRunResponse {
+  if (!isRecord(value) || value.runId !== runId) return false;
+  if ("alreadyClosed" in value && typeof value.alreadyClosed !== "boolean") return false;
+  if ("closeStatus" in value && value.closeStatus !== null &&
+      value.closeStatus !== "completed" && value.closeStatus !== "incomplete") return false;
+  if (value.mismatch === null) return true;
+  return isRecord(value.mismatch) && Object.values(value.mismatch).every((pair) =>
+    isRecord(pair) && typeof pair.reported === "number" && Number.isFinite(pair.reported) &&
+    typeof pair.stored === "number" && Number.isFinite(pair.stored)
+  );
+}
 
 export class TesboClient {
   private readonly baseUrl: string;
@@ -168,12 +193,18 @@ export class TesboClient {
     );
   }
 
-  closeRun(runId: string, status: "completed" | "incomplete", summary: Record<string, number>) {
-    return this.request<{ runId: string; mismatch: Record<string, { reported: number; stored: number }> | null }>(
-      "PATCH",
-      `/runs/${runId}/close`,
-      { status, summary }
-    );
+  async closeRun(runId: string, status: "completed" | "incomplete", summary: Record<string, number>): Promise<CallResult<CloseRunResponse>> {
+    const suffix = `/runs/${runId}/close`;
+    const result = await this.request<unknown>("PATCH", suffix, { status, summary });
+    if (!result.ok) return result;
+    if (isCloseRunResponse(result.data, runId)) return { ok: true, data: result.data };
+
+    // HTTP success alone cannot confirm closure. Do not replay an unusable acknowledgement:
+    // the server may already have applied the close. Never print the untrusted response body.
+    const error = "invalid close acknowledgement for the requested run";
+    this.failures += 1;
+    this.log(`[tesbo] PATCH ${suffix} failed: ${error}`);
+    return { ok: false, error, status: null };
   }
 
   /**
