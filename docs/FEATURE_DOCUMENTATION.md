@@ -4428,6 +4428,66 @@ options and input paths and has not been measured. Security disposition is requi
 **not blanket moderate-debt deferral**. Preserve reports and approve any bounded
 dependency follow-up separately; a green collector is not release clearance.
 
+**F9 remediation implementation — 2026-11-12:** a separate compatible dependency
+batch updates Next **16.3.3 → 16.4.6**, Sentry
+**10.73.0 → 10.75.2**, and locked PostHog-transitive DOMPurify **3.4.15 → 3.4.17**
+within PostHog's declared `^3.4.13` range. Next's optional sharp dependency moves
+**0.35.4 → 0.35.5**. React/ReactDOM **19.2.3** and PostHog **1.433.7** remain
+unchanged. The Sentry config import uses its supported `@sentry/nextjs/config`
+entry point rather than the deprecated SDK root export; configuration values and
+telemetry policy are unchanged. No frontend component, proxy/rewrite,
+authentication or evidence policy is replaced; no codemod, React major or
+`npm audit fix --force`.
+Installed version-matched Next guides, peer/engine requirements and applicable
+frontend AGENTS guidance were read. Existing Node 22 CI satisfies the unchanged
+Next Node >=20.9 requirement, and `npm ls` shows a valid, deduplicated peer graph.
+
+Production audit comparison (affected dependency entries, **not distinct exploits**):
+
+| Severity | Baseline retained report | Patched lock, local audit |
+|---|---:|---:|
+| Critical | 3 | **0** |
+| High | 8 | **7** |
+| Moderate | 38 | **39** |
+| Low | 1 | **1** |
+| Total | 50 | **47** |
+
+Next/DOMPurify critical entries and sharp's high entry disappear; Sentry's entry
+changes critical → moderate, explaining the moderate count increase without a new
+advisory family. Remaining high entries are Tiptap core, brace-expansion,
+browserslist, minimatch, ProseMirror View, source-map-js and xlsx. They remain
+visible/unaccepted and require security applicability/disposition; zero critical
+entries is not a clean security certification or Phase 1 release approval.
+
+The existing `frontend-quality` job adds an enforcing
+`npm audit --omit=dev --audit-level=critical` step. The broader artifact collector
+still retains full reports. This **strengthens** CI against future critical
+production advisories; it does not suppress lower findings, reduce frozen lint
+limits, change a test threshold or accept any residual risk. Local locked
+`npm ci --ignore-scripts`, peer checks and the critical-level audit pass. Build,
+typecheck, frozen lint and fresh integrated Linux/backend/SDK/browser evidence are
+recorded in the implementation PR as completed, not inferred from old checks.
+Initial local Windows lint/build commands reached the five-minute process budget;
+the build reported successful production compilation but did not complete its
+TypeScript stage before timeout. Those are **inconclusive**, not passing build/
+lint evidence. The supported config import is used for the next verification;
+unchanged strict CI remains required. `disableLogger` emits an upstream deprecation
+warning; its removal/redesign is not silently mixed into this security patch.
+The audit includes time-sensitive registry metadata; no exploit was executed.
+
+First candidate head `54b2dd5` passed the real integrated app/browser workflow,
+native DB and other checks, but the optional matching ESLint upgrade changed
+React Hooks analysis **7.0.1 → 7.1.1**, exposing 51 diagnostics across unchanged
+pages (effects, purity and memoization). Those observations are not newly
+introduced security-patch behavior or proven incidents, and are not silently
+marked fixed. A mass account/KB/agent/repository UI refactor is outside this
+dependency repair. The candidate therefore removes the unrelated development-
+tooling upgrade: original `eslint-config-next` **16.3.3**, React Hooks **7.0.1**,
+enabled rules, configuration and frozen baseline are retained from `development`.
+No rule disable, baseline increase or vulnerable runtime rollback is used. The
+new critical-production audit gate remains additional enforcement. Fresh CI must
+verify the narrowed patch; the first head's failing lint is not waived as a pass.
+
 F3/F4 tests use real migrated PostgreSQL/production transaction logic and an
 independent reader, with authorization/activity/notification collaborators stubbed
 as disclosed by their owning suite. They are **not** live HTTP fault reproductions,
