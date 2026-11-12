@@ -11327,12 +11327,7 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
-  async updateKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body) {
-    const uid = this.requireUser(userId);
-    await this.requireProjectAccess(uid, projectId);
-    const doc = await this.kbDocument(projectId, documentId);
-    const role = await this.kbProjectRole(uid, projectId);
-    this.kbRequireMutateAccess(role, doc.created_by, uid);
+  private assertKnowledgeDocumentBodyWritable(doc: Body) {
     // Provider-owned mirrors are rewritten wholesale by every sync, so an edit here would be
     // silently discarded later. Comments are the writable channel on these documents — they live
     // in knowledge_document_comments, untouched by sync. Enforced here and not only in the editor,
@@ -11342,7 +11337,39 @@ export class LegacyService implements OnModuleInit {
         error: `"${doc.title}" is synced from ${PROVIDER_FOLDER_NAMES[String(doc.source_provider || "")] || "an integration"} and its body can't be edited because the next sync would overwrite your changes. Add a comment on the document instead.`
       });
     }
+  }
 
+  async updateKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body) {
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    const initial = await this.kbDocument(projectId, documentId);
+    const role = await this.kbProjectRole(uid, projectId);
+    this.kbRequireMutateAccess(role, initial.created_by, uid);
+    this.assertKnowledgeDocumentBodyWritable(initial);
+
+    const { row, before, contentChanged, nextTitle } = await this.db.transaction(async (client) => {
+      // The existing version lock now covers the live write and coalesced diff too, not only
+      // allocation. A snapshot cannot commit without the document change it describes.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`kb-doc-version:${documentId}`]);
+      const locked = await client.query(
+        `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
+         WHERE id = $1 AND project_id = $2 AND is_deleted = false FOR UPDATE`,
+        [documentId, projectId]
+      );
+      if (!locked.rows[0]) throw new NotFoundException({ error: "Document not found" });
+      this.kbRequireMutateAccess(role, locked.rows[0].created_by, uid);
+      this.assertKnowledgeDocumentBodyWritable(locked.rows[0]);
+      return this.writeKnowledgeDocument(client, projectId, uid, documentId, body, locked.rows[0]);
+    });
+    await this.logProjectActivity(projectId, uid, "updated", "knowledge_document", documentId, nextTitle, {});
+    if (contentChanged) this.enqueueEmbedding(row.organization_id, projectId, "document", documentId, "updated");
+    if (contentChanged && !this.isZyraMemoryDocument(before)) {
+      await this.notifyKnowledgeItem({ kind: "updated", projectId, actorId: uid, itemId: documentId, name: nextTitle || before.title, ownerId: before.created_by ?? null, isDocument: true });
+    }
+    return toCamel(row);
+  }
+
+  private async writeKnowledgeDocument(client: PoolClient, projectId: string, uid: string, documentId: string, body: Body, doc: Body) {
     const nextTitle = body.title !== undefined ? String(body.title).trim() : doc.title;
     // Renaming detaches the document from the agent: rememberZyraMemory and zyraMemoryText both look
     // it up BY TITLE, so the old memory becomes unreachable and a second, empty one starts.
@@ -11363,7 +11390,7 @@ export class LegacyService implements OnModuleInit {
     } else if (nextTitle === LegacyService.ZYRA_MEMORY_DOC_TITLE && nextTitle !== doc.title) {
       throw new BadRequestException({ error: LegacyService.ZYRA_MEMORY_RESERVED_TITLE_ERROR });
     }
-    const nextJson = body.contentJson !== undefined ? JSON.stringify(body.contentJson) : doc.content_json ? JSON.stringify(doc.content_json) : null;
+    const nextJson = body.contentJson !== undefined ? JSON.stringify(body.contentJson) : doc.content_json != null ? JSON.stringify(doc.content_json) : null;
     const nextHtml = body.contentHtml !== undefined ? body.contentHtml : doc.content_html;
     const nextText = body.contentText !== undefined ? body.contentText : doc.content_text;
 
@@ -11375,11 +11402,17 @@ export class LegacyService implements OnModuleInit {
     }
     this.assertKnowledgeDocumentPayloadSize(body);
 
+    // JSON-only edits are body edits too; compare using PostgreSQL JSONB semantics so object-key
+    // ordering alone does not invent history or revoke an unchanged document's approval.
+    const jsonChanged = body.contentJson !== undefined && (await client.query<{ changed: boolean }>(
+      "SELECT $1::jsonb IS DISTINCT FROM $2::jsonb AS changed",
+      [doc.content_json != null ? JSON.stringify(doc.content_json) : null, nextJson]
+    )).rows[0].changed;
     const contentChanged =
-      nextTitle !== doc.title || nextHtml !== doc.content_html || nextText !== doc.content_text;
+      nextTitle !== doc.title || nextHtml !== doc.content_html || nextText !== doc.content_text || jsonChanged;
 
     if (contentChanged) {
-      const latest = await this.db.query<{ id: string; title: string; content_text: string | null; created_at: string }>(
+      const latest = await client.query<{ id: string; title: string; content_text: string | null; created_at: string }>(
         "SELECT id, title, content_text, created_at FROM knowledge_document_versions WHERE document_id = $1 ORDER BY version_number DESC LIMIT 1",
         [documentId]
       );
@@ -11395,32 +11428,20 @@ export class LegacyService implements OnModuleInit {
           { title: doc.title, contentText: doc.content_text },
           { title: nextTitle, contentText: nextText }
         );
-        // Serialised per document, and sharing its lock key with restoreKnowledgeDocumentVersion —
-        // MAX(version_number)+1 alone lets a concurrent edit and a concurrent restore compute the
-        // same next number, and the table has no unique constraint to reject the duplicate insert.
-        await this.db.transaction(async (client) => {
-          await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`kb-doc-version:${documentId}`]);
-          const nextVersion = await client.query<{ max: number }>(
-            "SELECT COALESCE(MAX(version_number), 0) + 1 AS max FROM knowledge_document_versions WHERE document_id = $1",
-            [documentId]
-          );
-          await client.query(
-            `INSERT INTO knowledge_document_versions
-               (document_id, version_number, title, content_json, content_html, content_text, created_by, changed_summary, changed_fields)
-             VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9::jsonb)`,
-            [
-              documentId,
-              nextVersion.rows[0].max,
-              doc.title,
-              doc.content_json ? JSON.stringify(doc.content_json) : null,
-              doc.content_html,
-              doc.content_text,
-              uid,
-              diff.summary,
-              JSON.stringify(diff.fields)
-            ]
-          );
-        });
+        // The caller holds the same document/version lock as restore for this entire write.
+        // V94's unique constraint remains an additional guard, not the transaction boundary.
+        const nextVersion = await client.query<{ max: number }>(
+          "SELECT COALESCE(MAX(version_number), 0) + 1 AS max FROM knowledge_document_versions WHERE document_id = $1",
+          [documentId]
+        );
+        await client.query(
+          `INSERT INTO knowledge_document_versions
+             (document_id, version_number, title, content_json, content_html, content_text, created_by, changed_summary, changed_fields)
+           VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9::jsonb)`,
+          [documentId, nextVersion.rows[0].max, doc.title,
+            doc.content_json != null ? JSON.stringify(doc.content_json) : null,
+            doc.content_html, doc.content_text, uid, diff.summary, JSON.stringify(diff.fields)]
+        );
       } else if (latest.rows[0]) {
         // No new row this edit (still inside the snapshot-throttling window) — the existing latest
         // row's "after" state has just moved further along, so its stored diff must move with it.
@@ -11430,7 +11451,7 @@ export class LegacyService implements OnModuleInit {
           { title: latest.rows[0].title, contentText: latest.rows[0].content_text },
           { title: nextTitle, contentText: nextText }
         );
-        await this.db.query(
+        await client.query(
           "UPDATE knowledge_document_versions SET changed_summary = $2, changed_fields = $3::jsonb WHERE id = $1",
           [latest.rows[0].id, diff.summary, JSON.stringify(diff.fields)]
         );
@@ -11451,21 +11472,15 @@ export class LegacyService implements OnModuleInit {
       nextStatus = String(body.status);
     }
 
-    const res = await this.db.query(
+    const res = await client.query(
       `UPDATE knowledge_documents SET title = $2, content_json = $3::jsonb, content_html = $4, content_text = $5,
        document_type = COALESCE($6, document_type), status = $7, reviewed_by = $8, reviewed_at = $9,
        updated_by = $10, updated_at = now()
-       WHERE id = $1 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-      [documentId, nextTitle, nextJson, nextHtml, nextText, body.documentType || null, nextStatus, reviewedBy, reviewedAt, uid]
+        WHERE id = $1 AND project_id = $11 AND is_deleted = false RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+      [documentId, nextTitle, nextJson, nextHtml, nextText, body.documentType || null, nextStatus, reviewedBy, reviewedAt, uid, projectId]
     );
-    await this.logProjectActivity(projectId, uid, "updated", "knowledge_document", documentId, nextTitle, {});
-    if (contentChanged) this.enqueueEmbedding(res.rows[0].organization_id, projectId, "document", documentId, "updated");
-    // A real edit of a person's document: its title or its content. Zyra's own memory document and
-    // read-only provider mirrors are rewritten by the system, not by people, and are not announced.
-    if ((contentChanged || nextTitle !== doc.title) && !this.isZyraMemoryDocument(doc)) {
-      await this.notifyKnowledgeItem({ kind: "updated", projectId, actorId: uid, itemId: documentId, name: nextTitle || doc.title, ownerId: doc.created_by ?? null, isDocument: true });
-    }
-    return toCamel(res.rows[0]);
+    if (!res.rows[0]) throw new NotFoundException({ error: "Document not found" });
+    return { row: res.rows[0], before: doc, contentChanged, nextTitle };
   }
 
   async moveKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body) {
@@ -12298,6 +12313,7 @@ export class LegacyService implements OnModuleInit {
     const doc = await this.kbDocument(projectId, documentId);
     const role = await this.kbProjectRole(uid, projectId);
     this.kbRequireMutateAccess(role, doc.created_by, uid);
+    this.assertKnowledgeDocumentBodyWritable(doc);
     // A restore rewrites the whole body — the same unrestricted edit updateKnowledgeDocument refuses.
     if (this.isZyraMemoryDocument(doc)) {
       throw new BadRequestException({ error: LegacyService.ZYRA_MEMORY_EDIT_ERROR });
@@ -12316,22 +12332,25 @@ export class LegacyService implements OnModuleInit {
 
     // Serialised per document, and sharing its lock key with the auto-snapshot step in
     // updateKnowledgeDocument — a concurrent restore and a concurrent edit both read-then-write
-    // this same version_number sequence, and the table has no unique constraint to reject a
-    // collision. The whole snapshot-then-overwrite sequence also runs inside one transaction so a
+    // this same version_number sequence. V94's unique constraint additionally rejects collisions.
+    // The whole snapshot-then-overwrite sequence also runs inside one transaction so a
     // mid-sequence failure can never leave a snapshot inserted without the restore having applied,
     // or vice versa.
-    const res = await this.db.transaction(async (client) => {
+    const { res, changed } = await this.db.transaction(async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`kb-doc-version:${documentId}`]);
 
       // Re-read the document fresh, inside the lock — `doc` above may already be stale by the time
       // this transaction gets to run, e.g. a concurrent edit committed while we waited on the lock.
       const current = await client.query(
-        `SELECT title, content_json, content_html, content_text FROM knowledge_documents
+        `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
          WHERE id = $1 AND project_id = $2 AND is_deleted = false FOR UPDATE`,
         [documentId, projectId]
       );
       if (!current.rows[0]) throw new NotFoundException({ error: "Document not found" });
       const cur = current.rows[0];
+      this.kbRequireMutateAccess(role, cur.created_by, uid);
+      this.assertKnowledgeDocumentBodyWritable(cur);
+      if (this.isZyraMemoryDocument(cur)) throw new BadRequestException({ error: LegacyService.ZYRA_MEMORY_EDIT_ERROR });
 
       // Restoring a version whose content already matches the current document (restoring the
       // same version twice in a row, or a stray extra click before the UI caught up) has nothing to
@@ -12366,7 +12385,7 @@ export class LegacyService implements OnModuleInit {
             documentId,
             nextVersion.rows[0].max,
             cur.title,
-            cur.content_json ? JSON.stringify(cur.content_json) : null,
+            cur.content_json != null ? JSON.stringify(cur.content_json) : null,
             cur.content_html,
             cur.content_text,
             uid,
@@ -12376,13 +12395,20 @@ export class LegacyService implements OnModuleInit {
         );
       }
 
-      return client.query(
-        `UPDATE knowledge_documents SET title = $2, content_json = $3::jsonb, content_html = $4, content_text = $5, updated_by = $6, updated_at = now()
-         WHERE id = $1 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-        [documentId, v.title, v.content_json ? JSON.stringify(v.content_json) : null, v.content_html, v.content_text, uid]
+      // The existing approved-memory edit rule also applies when the body edit is a restore.
+      const revokeApproval = !isNoop && cur.document_type === "ai_memory" && cur.status === "approved";
+      const restored = await client.query(
+        `UPDATE knowledge_documents SET title = $2, content_json = $3::jsonb, content_html = $4, content_text = $5, updated_by = $6, updated_at = now(),
+         status = $7, reviewed_by = $8, reviewed_at = $9
+         WHERE id = $1 AND project_id = $10 AND is_deleted = false RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [documentId, v.title, v.content_json != null ? JSON.stringify(v.content_json) : null, v.content_html, v.content_text, uid,
+          revokeApproval ? "draft" : cur.status, revokeApproval ? null : cur.reviewed_by, revokeApproval ? null : cur.reviewed_at, projectId]
       );
+      if (!restored.rows[0]) throw new NotFoundException({ error: "Document not found" });
+      return { res: restored, changed: !isNoop };
     });
     await this.logProjectActivity(projectId, uid, "restored_version", "knowledge_document", documentId, res.rows[0].title, { versionNumber: v.version_number });
+    if (changed) this.enqueueEmbedding(res.rows[0].organization_id, projectId, "document", documentId, "updated");
     return toCamel(res.rows[0]);
   }
 

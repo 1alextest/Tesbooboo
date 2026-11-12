@@ -126,7 +126,8 @@ export default function RichTextEditor({
   useEffect(() => {
     if (!editor || resetKey === undefined || resetKey === lastResetKey.current) return;
     lastResetKey.current = resetKey;
-    editor.commands.setContent(contentJson || contentHtml || "<p></p>");
+    // The server already applied the restore. Re-rendering it must not schedule another save.
+    editor.commands.setContent(contentJson || contentHtml || "<p></p>", { emitUpdate: false });
     // contentJson/contentHtml intentionally excluded: this effect keys off `resetKey` alone, so it
     // still fires the FIRST time resetKey changes even if content happens to look referentially
     // stable to React at that instant.

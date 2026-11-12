@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { verifyProductionReporter } from "./utils/ci-reporter";
 import { verifyContentSecurity } from "./utils/ci-content-security";
+import { verifyDocumentWrites } from "./utils/ci-document-writes";
 
 async function verifyBugCreateAccess(request: APIRequestContext, api: string, projectId: string, ownerId: string, organizationId: string) {
   // Called only after the test's explicit loopback/disposable-database safety checks.
@@ -715,6 +716,22 @@ test("history import, bug authorization and finalized automation preserve persis
     for (const id of runs) await request.delete(`${api}/api/cycles/${id}`, { failOnStatusCode: false });
     for (const id of cases) await request.delete(`${base}/testcases/${id}`, { failOnStatusCode: false });
   }
+});
+
+test("knowledge document saves and restores preserve ordering, drafts and persisted history", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  // Reuse the installation/bootstrap above, but give this batch its own project and real session.
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy();
+  const created = await page.request.post(`${api}/api/projects`, { data: { name: "CI Document Integrity", key: "CDI" } });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const consoleErrors: string[] = [];
+  page.on("pageerror", (error) => consoleErrors.push(error.message));
+  await verifyDocumentWrites(page, api, web, (await created.json()).id, testInfo);
+  expect(consoleErrors).toEqual([]);
 });
 
 test("browser API transport never replays ambiguous mutations and retains bounded read retries", async () => {
