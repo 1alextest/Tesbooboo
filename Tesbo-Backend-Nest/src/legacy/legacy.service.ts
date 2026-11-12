@@ -7531,8 +7531,11 @@ export class LegacyService implements OnModuleInit {
           'executionId', bl.execution_id
         ) ORDER BY bl.created_at) AS items
         FROM bug_links bl
-        LEFT JOIN testcases t ON t.id = bl.testcase_id
-        LEFT JOIN cycles c ON c.id = bl.cycle_id
+        -- Existing invalid links are retained as history, not authority to resolve metadata
+        -- from another project. Do not filter deleted local targets: their historical names
+        -- still belong here. Scoping the joins, not the rows, preserves link IDs and edit diffs.
+        LEFT JOIN testcases t ON t.id = bl.testcase_id AND t.project_id = b.project_id
+        LEFT JOIN cycles c ON c.id = bl.cycle_id AND c.project_id = b.project_id
         WHERE bl.bug_id = b.id AND bl.deleted_at IS NULL
       ) links ON true
       LEFT JOIN LATERAL (

@@ -3911,6 +3911,64 @@ are a separate high-priority Phase 1 release blocker. Do not silently purge hist
 or claim this write PR closes it. Unexpected postcommit auto-failure/event errors,
 lost-ack retries and transactional authorization revocation remain out of scope.
 
+#### Integrated #29 and foreign bug-link metadata read follow-up
+
+The owner merged PR [#29](https://github.com/1alextest/Tesbooboo/pull/29) into
+`development` as `9a91878` on 2026-11-12 at 00:50:14 UTC. Final head `81f086b`
+passed **23/23 checks**, including
+[4 PostgreSQL suites / 45 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43128868691/job/130887761079),
+[3 genuine REST/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43128868620/job/130887760617)
+and [1,677 backend tests](https://github.com/1alextest/Tesbooboo/actions/runs/43128868634/job/130887761264)
+(143 external/DB skips in that separate job). It prevents new invalid association
+writes; it does not fix the preexisting-data read disclosure described above.
+
+The next focused branch first adds regressions against this merged baseline,
+before changing production code: scoped fixture SQL creates preexisting invalid
+links, real PostgreSQL detail/list reads must not resolve foreign testcase titles,
+external IDs or run names, and the existing disposable smoke exercises session
+detail/list, token list and MCP get/list/testcase-bugs with genuine authentication.
+The smoke removes the reader's foreign-project membership and requires direct
+session/token refusal as controls. Both active and deleted foreign targets are
+covered, alongside local readable links. These are synthetic fixtures on a
+disposable installation, **not** a production disclosure or a new-writer bypass.
+At test-only head `a82e97f`, [migrated PostgreSQL](https://github.com/1alextest/Tesbooboo/actions/runs/43131096298/job/130895136488)
+failed exactly the two new active/deleted foreign-title assertions (45 prior tests
+passed; 47 total, no skips). [Real HTTP smoke](https://github.com/1alextest/Tesbooboo/actions/runs/43131096173/job/130895135986)
+also failed on returned foreign title, external ID and run name after direct foreign
+project reads were denied. All eight session/token/MCP responses were collected
+before the first metadata assertion failed; that is not a claim that each response
+was individually asserted before the failure. Browser association flows later in
+that smoke did not execute and are not counted as passes at the baseline.
+
+The repair adds project predicates to the two canonical metadata joins, with the
+baseline assertions unchanged. At PR [#30](https://github.com/1alextest/Tesbooboo/pull/30)
+head `ad45693`, **22/22 triggered checks passed**:
+[4 migrated PostgreSQL suites / 47 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43131687944/job/130897095911),
+[3 genuine REST/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43131687918/job/130897094755)
+and [1,677 backend tests](https://github.com/1alextest/Tesbooboo/actions/runs/43131687915/job/130897095283)
+(145 external/DB skips in that separate quality job). All 144 migrations,
+idempotency and integrity probes ran. Both baseline-failing tests and the full
+eight-response read matrix now pass for active/deleted foreign targets, retaining
+the reference rows and proving persisted domain-state equality. Existing local
+deleted-history edits and all four sealed drawer/full-page association/reload
+journeys also pass. The four saved screenshots were inspected; existing viewport
+clipping of lower fields remains, with visibility/values separately asserted.
+The standalone authorization workflow was not triggered because no path in its
+existing auth/MCP/app-module filter changed; it is not counted as a fresh pass.
+The ordinary backend/contracts jobs still ran their owning auth/MCP regressions.
+Local repair verification passed backend typecheck, full-emission compilation,
+frozen lint (0 new errors) and 200 selected unit/HTTP/MCP/finalization tests; its
+42 skipped DB tests are not the database evidence above. Later heads still require
+fresh checks and human review; no merge, deployment or Phase 1 signoff is claimed.
+The repair retains every
+stored link row and its IDs/timestamps, while joining display metadata only within
+the bug's project. Do not omit links, clear IDs, write data on reads or silently
+repair a historical association. Valid local deleted history keeps its existing
+display and edit behavior. Persisted foreign IDs, invalid chain remediation and
+the main edit form's refusal to resubmit invalid legacy tuples remain separate
+contract/data decisions; this change does not claim to quarantine all invalid
+relationships or repair every report/legacy convenience-column read.
+
 Remaining mutation inventory is not a list of automatically approved removals:
 
 | Existing writer | Source-grounded boundary / remaining decision |
