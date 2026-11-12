@@ -3,6 +3,14 @@
 Implementation plan for Basecamp card
 [10189985971](https://app.basecamp.com/5705339/buckets/46336431/card_tables/cards/10189985971).
 
+> **2026-11-12 reconciliation:** Sections 1–6 are historical pre-implementation
+> scoping, not the current missing-feature list. Section 7 records the original
+> delivery; current owners are `src/automation/`, `sdk/playwright-reporter/` and
+> `docs/playwright-integration.md`. Phase 1 repairs and bounded evidence/remaining
+> decisions are tracked in `FEATURE_DOCUMENTATION.md`, section F. Run reuse is
+> conditional on a project/external ID; it is not universal command idempotency.
+> This plan does not authorize retention jobs, new SDKs or the next roadmap phase.
+
 **Card verdict: suggestion / unbuilt feature.** Not a bug. The card is a v0.1 product spec asking for
 dev scoping, so this document is the scoping answer: what the codebase already provides, what is
 genuinely missing, the three traps that will waste a week if nobody names them first, and the

@@ -52,6 +52,7 @@ jobs:
             Tesbo-Backend-Nest/package-lock.json
             Tesbo-Frontend/package-lock.json
             e2e/package-lock.json
+            sdk/playwright-reporter/package-lock.json
       - name: Build isolated backend
         working-directory: Tesbo-Backend-Nest
         run: |
@@ -70,6 +71,11 @@ jobs:
         run: |
           npm ci --ignore-scripts
           npx playwright install --with-deps chromium
+      - name: Build production reporter for the live backend round trip
+        working-directory: sdk/playwright-reporter
+        run: |
+          npm ci --ignore-scripts
+          npm run build
       - name: Verify service readiness and run smoke tests
         working-directory: e2e
         run: |

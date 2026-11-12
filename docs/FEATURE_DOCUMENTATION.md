@@ -4363,3 +4363,271 @@ Next product work remains conditional on Phase 1 gates and recovery of the canon
 specifications. Existing Zyra chat/staged drafts, MCP and reporter ingestion are
 reusable implementation, **not** proof of the proposed immutable approval/apply,
 external client execution/evidence loop or unified Copilot contract.
+
+### F. Bounded Phase 1 exit assessment — 2026-11-12 (PROPOSED, not approved)
+
+**Outcome: Phase 1 exit is NOT YET ESTABLISHED; Phase 2 is not authorized.** This
+is an assessment of the declared integrity slice, not another specification or a
+claim that every Tesbo module/deployment passed. No risks below have been accepted
+by the owner in this assessment. Earlier sections are dated observations; this
+section reconciles the current source rather than treating old findings as live.
+
+#### Integrated source and finite scope
+
+Base: owner-merged `development@ef7f404fbb606545d276e6a6c16ac16b950c1cc3`.
+PR [#34](https://github.com/1alextest/Tesbooboo/pull/34) was owner-merged on
+2026-11-12 at 15:09:44 UTC after final head `ee4904a` passed **22/22 checks**.
+Its final [smoke](https://github.com/1alextest/Tesbooboo/actions/runs/43244124070/job/131272079339)
+passed 4 tests (3 genuine app/API/MCP/browser + 1 native source/HTTP matrix),
+[PostgreSQL](https://github.com/1alextest/Tesbooboo/actions/runs/43244123806/job/131272076256)
+passed 62/no skips and [backend](https://github.com/1alextest/Tesbooboo/actions/runs/43244123226/job/131272074925)
+passed 1,691/skipped 160 external/DB tests. The review's “open draft / 8 workflows”
+is stale; checks and workflow counts are not interchangeable. No agent merge,
+deployment or SDK publication occurred.
+
+Declared review selection: automation create/result/close/evidence; browser helper;
+bug create/update/link and their postcommit work; REST bulk status/assignment;
+actual MCP handlers in `mcp.tools.ts` (not dispatch alone); transaction boundary;
+history import; run soft-delete, snapshot-ID rename, member cleanup, public share
+projection and project-writability aliases. Existing route/scope/transaction tests
+are reused. Sync workers, all billing/account flows, all modules and unsupported
+client/browser matrices are **outside this execution selection**, not certified.
+
+**Proposed stopping rule:** finish this selection and one connected integration
+run; adjudicate the finite findings below. Expand only for a reproducible high or
+critical authorization/isolation, finalized-evidence or unintended-write violation
+of an applicable agreed contract, or a failed selected mandatory regression. New
+moderate debt/usability discoveries get a named disposition and follow-up, not an
+automatic Phase 1 extension. A conditional risk must state its trigger; an absent
+oracle is missing evidence, not proof of safety or an incident. The owner must
+approve the scope/criteria and may require a narrowly named extra release check.
+
+#### Writer / transport disposition matrix
+
+Severity is impact if triggered; likelihood is qualitative (no production rates
+were measured). “Confirmed conditional” describes controlled behavior, not a
+production incident. Test additions below are characterizations, **not approval
+of the behavior they assert**. No product writer/contract changes in this slice.
+
+| ID / path | Evidence and boundary | Severity / likelihood / impact | Applicable criterion and recommended disposition |
+|---|---|---|---|
+| F1 — automation create/result/close | Existing native concurrency tests and service source: project+external-ID run reuse; explicit retry index has exact-duplicate no-churn and monotonic ordering; run lock serializes results/closure; repeated close reads authoritative counts. Missing external ID and legacy missing attempt index do not gain these guarantees. | High if sealed verdicts change / covered paths guarded; legacy/multi-shard delivery risk remains conditional | Preserve existing seal `source=automation && closed_at!=null`, including incomplete closes. Selected integration extends live reporter evidence, not universal exactly-once or shard-coordinator certification. |
+| F2 — browser helper / SDK transport | #34 proves/repairs one-save automatic browser duplication. SDK `client.ts` still has bounded retries for writes; CI-keyed creates and indexed results have specific backend protection, evidence uploads/local unkeyed creates lack general command deduplication. | Moderate / conditional response loss; duplicate runs/evidence or explicit re-submission | Browser criterion satisfied by #34 and rerun. Do not silently port browser policy to SDK. Owner chooses a later versioned idempotency/shard policy if required; existing non-fatal reporting remains. |
+| F3 — bug create/update/link postcommit and transaction ACK | `createBug` commits bug/links before linked-result work/readback; update/add-link also await postcommit work. ID-allocation lock ensures distinct identifiers, not command uniqueness. New native characterizations cover a second-transaction SQL fault and a simulated lost *successful* COMMIT response; explicit caller resubmission can duplicate bugs while sealed rows remain intact. | Moderate, potentially high in bulk automation / conditional infrastructure fault+resubmit; unclear success and duplicate records | No rollback guarantee after COMMIT. `DatabaseService` rollback attempt cannot undo a successful COMMIT. Owner decision on command identity/reconciliation and uncertainty responses; no new policy here. ACK test is injected after real COMMIT, **not a real network-cut experiment**. |
+| F4 — REST bulk status / assignment | Initial IDs are validated together; loop calls `updateExecution` with per-item transactions. New two-item native SQL-fault controls observe first commit, second rollback, whole call rejected. Existing `resolveBulkExecutions` comment explicitly describes atomic intent; it does not provide a batch transaction. | Moderate / conditional later-item fault or concurrent close; user cannot infer applied prefix | Confirmed conditional native behavior at `526fe9e`, not just source suspicion. Recommend a bounded follow-up preserving REST atomic intent, or explicit owner approval of truthful partial-result UX. **Unaccepted decision**, not silently waived because characterization is green. |
+| F5 — MCP bulk handlers | `bulk_record_execution_results` and `bulk_create_testcases` explicitly isolate items/catch errors and return indexed outcomes. Bulk testcase update validates ownership then writes valid IDs together. Real HTTP integration exercises one writable manual result plus one sealed rejection with indexed success/failure. | Low residual on selected path / per-item partial outcome is intentional; no batch rollback promise | Do not conflate with F4. Retain shared per-item authorization/sealing; a tool-level error alone is not a no-write oracle. |
+| F6 — historical bug associations | Earlier native tests retain stored foreign/deleted tuples, suppress foreign resolved metadata, validate new/changed tuples atomically and preserve historical valid associations. Synthetic legacy rows demonstrate possibility, not production prevalence. | High if foreign metadata leaks / covered projection guarded; historical cleanup need unknown | No authorized live inventory was run. Owner approves read-only inventory and any per-record disposition; preserve associations, original IDs and audit. No destructive migration or title-based reassociation. |
+| F7 — indirect historical metadata / deletion | `deleteCycle` soft-deletes transactionally, without sealed-run refusal; testcase external-ID rename rewrites all snapshot IDs; member removal clears assignments including closed runs. | Moderate / ordinary authorized administration; potential loss of historical discoverability/identity, not demonstrated verdict tampering | Explicit retention/correction/identity policy decision, not automatic corruption blocker. Do not break normal completed-manual/open-automation workflows or delete history to resolve it. |
+| F8 — public share / entitlement aliases | `shareCycle` authorizes; `publicCycle` still returns all run columns; public execution projection is narrow (older broad-execution claim is superseded). `ProjectWriteLockGuard` matches project-prefixed URLs, not cycle URLs or `/api/mcp`; membership/token scope are separate guards. | Potential high if sensitive content is published or a lock is contractually bypassed / exposure/policy dependent | Source-confirmed broad projection/route-matcher limits, **not a freshly reproduced unauthorized exploit or approved entitlement exception**. Owner/security reviewer must classify actual public fields/lock contract before exit; cannot accept a confirmed high isolation breach as moderate debt. |
+
+F9 — production dependency reports: the retained `68f4508` audit artifact reports
+frontend **3 critical / 8 high / 38 moderate / 1 low**, backend **14 moderate**,
+and SDK/e2e production trees zero reported. These count affected dependency entries,
+not distinct exploits. Scanner severity is critical/high; likelihood depends on
+options and input paths and has not been measured. Security disposition is required,
+**not blanket moderate-debt deferral**. Preserve reports and approve any bounded
+dependency follow-up separately; a green collector is not release clearance.
+
+F3/F4 tests use real migrated PostgreSQL/production transaction logic and an
+independent reader, with authorization/activity/notification collaborators stubbed
+as disclosed by their owning suite. They are **not** live HTTP fault reproductions,
+independent security review or measurements of fault frequency. Existing genuine
+HTTP/browser authorization controls remain separate. No claim to audit every
+indirect writer, account flow or dependency is made.
+
+#### Connected regression: purpose, reuse and evidence boundaries
+
+Extend `e2e/ci-smoke.spec.ts` using `utils/ci-reporter.ts` and the existing
+`playwright-smoke` job. Build the repository SDK with its lockfile (no install from
+a registry for the reporter under test). The real Playwright child loads
+`sdk/playwright-reporter/dist/index.js`, authenticates using disposable API-created
+project tokens, resolves three existing cases and reports pass/fail/skip plus a
+file-backed log and Playwright's automatic error context. Its deliberate test failure must exit 1 **and** the
+production reporter must acknowledge completed closure with correct local counts.
+No fake HTTP server or direct hook invocation substitutes for this child.
+
+Independent DB readback checks one run, three results, error text and the exact
+two-file evidence set; authenticated download checks the synthetic log's actual
+bytes and attachment disposition. Real REST/MCP rejects a read-token write and late sealed result without
+persisted changes; MCP reads the result, reports a manual/sealed mixed batch
+truthfully and adds a valid bug association without changing sealed state. The
+real frontend reloads that same execution/association. Repeated close must be a
+no-churn authoritative summary. Existing auth/relationship/import, mutation-loss
+and four sealed UI journeys remain selected. Tokens stay in child environment,
+not generated config or attached logs; cleanup soft-deletes synthetic resources
+without deleting their audit/provenance. No shared deployment/data is targeted.
+
+This adds **no new top-level smoke test**: four outer tests remain, with three
+deliberate child test outcomes inside the connected journey. The native owner adds
+four parameterized characterizations. Synthetic log byte readback does not certify
+malware-scan or screenshot/video-storage acceptance. Single-process execution
+does not certify shards, outage behavior or every framework/runtime. Existing SDK
+143-test suite separately covers mocked close failures and production-artifact
+subprocess exit behavior. Windows permission assertions/Node 24 teardown findings
+remain disclosed earlier; Linux CI is required, not local skipped tests as passes.
+
+Initial local checks: SDK production build, E2E/backend typechecks and backend
+frozen lint (9 existing errors, 2 warnings, zero new) passed. Focused local auth/MCP
+selection passed **5 suites / 210 tests**; the unchanged Node 22 native transport
+selection passed one test. Four smoke tests collected with explicit unreachable
+loopback placeholders (collection only). No local PostgreSQL/authenticated app
+execution claimed. These were local results before the implementation-head CI
+below; prior #34 results are inherited evidence, not this head's passes.
+
+Initial assessment CI caught test-harness assumptions without changing production:
+the live reporter needs **read+write**, not write alone, because case resolution
+requires read. Its warning assertion caught that correctly even though the mixed
+child suite closed. Native head `e4fa101` passed 65/66 tests; bulk status failed
+because `ANY(ids)` resolution does not promise input order. The corrected oracle
+records both actual completed UPDATE IDs, requires exactly the requested set,
+then proves the first processed item committed and the second fully rolled back.
+No rollback or no-write assertion is removed. Instrumentation also forwards
+pg-pool's callback query form unchanged, avoiding a test-owned checkout leak; the
+superseded initial native workflow was canceled after that repair, not passed or
+waived. Final results must supersede these test-harness failures explicitly.
+Head `68f4508` passed **66/66 native tests** and **21/22 triggered checks**, but smoke correctly
+failed its initially one-file/original-name assumption: Playwright renames the log
+and adds `error-context.md`. The revised oracle requires exactly those two distinct
+records, validates log size and downloads its exact bytes; it does not relax the
+count to permit arbitrary extras. This is a fixture correction, not an SDK/backend
+repair or evidence of duplicate upload. Later MCP/browser steps were not executed
+after that assertion and are not counted as passing at this head.
+
+Fresh dependency evidence was read from the existing
+[audit artifact job](https://github.com/1alextest/Tesbooboo/actions/runs/43251880689/job/131299565387),
+not inferred from a green icon. The collector intentionally retains `npm audit`
+reports without failing on their findings; it is **not a vulnerability-clearance
+gate**. The frontend lock contains Next 16.3.3, Sentry 10.73.0, DOMPurify 3.4.15,
+Tiptap 3.27.1, ProseMirror View 1.42.0, sharp 0.35.4 and xlsx 0.18.5. Audit lists
+critical entries for Next/Sentry/DOMPurify and high entries including xlsx/editor
+and image-related dependencies. No lock/dependency or audit policy was changed.
+
+Bounded source triage: `ImportTestCasesModal.parseWorkbook` invokes xlsx on
+user-selected CSV/workbook bytes; KB `editorExtensions.ts` loads Tiptap Markdown
+and its editor/paste paths; DOMPurify is pulled through PostHog (`npm ls` verified).
+These are real application dependency paths, **not a reproduced malicious-file,
+paste or DOM exploit**. The inspected app source has no `next/og`/`ImageResponse`,
+`use cache`, `use server`, `next/image`, `dangerouslyAllowSVG`, Sentry `tunnelRoute`
+or cited DOMPurify special-mode configuration matches. Absence of those explicit
+matches is limited negative evidence, not proof that framework-generated or
+dependency-internal paths are unreachable. Before release, security owner confirms
+actual deployed options/paths and safe upgrade/mitigation for applicable advisories
+(e.g. GHSA-vcvr-r3jv-pc5j, GHSA-mchm-gjx6-7h55, GHSA-cg2g-xh64-v4q7 and
+GHSA-4r6h-8v6p-xvw6). Do not downgrade an untriaged critical entry merely to close
+Phase 1, or turn every transitive alert into a new feature requirement.
+
+Implementation head **`526fe9ef20c4a9cd973e241c2d83645a969e1e10` passed 22/22
+triggered checks**. Re-inspected completed logs and retained artifacts:
+
+- [Connected smoke: **4 passed**](https://github.com/1alextest/Tesbooboo/actions/runs/43253126357/job/131304070243)
+  = 3 genuine app/API/MCP/browser tests + 1 native helper-source/HTTP matrix. The
+  mixed child suite intentionally passed one, failed one, skipped one and exited 1;
+  the reporter acknowledged completed closure without ingest warnings. DB/REST/MCP
+  and browser reload assertions all executed. One run/three results, exactly two
+  evidence records, exact authenticated log-byte download, scope/late-write refusal,
+  indexed mixed bulk outcomes, valid association and repeated-close no-churn passed.
+  The inherited auth/import/relationship/mutation-loss/four sealed UI journeys passed.
+- [Migrated PostgreSQL: **4 suites / 66 tests, zero skips**](https://github.com/1alextest/Tesbooboo/actions/runs/43253126947/job/131304072661).
+  F3 proves real bug/link persistence despite the two controlled failures and
+  duplicate records after explicit resubmission, with sealed rows unchanged. F4
+  proves first-processed commit/second rollback for status and assignment. A green
+  characterization does not make those unaccepted outcomes safe or approved.
+- [Backend quality: **1,691 passed / 164 external/DB skips**](https://github.com/1alextest/Tesbooboo/actions/runs/43253126957/job/131304072393).
+  Four new DB characterizations explain the increase from 160 skips; they ran in
+  the native job above, not in this DB-less job. Separate
+  [contracts](https://github.com/1alextest/Tesbooboo/actions/runs/43253126947/job/131304073345)
+  passed 206/skipped 8; [transactional unit selection](https://github.com/1alextest/Tesbooboo/actions/runs/43253126947/job/131304073198)
+  passed 72/skipped 90. No skipped test is relabeled as native persistence proof.
+- [Linux SDK: **143/143**, zero failures](https://github.com/1alextest/Tesbooboo/actions/runs/43253126957/job/131304072455).
+  Frontend typecheck/frozen lint/production build passed. Standalone authorization
+  workflow did not trigger for these paths; local 210-test selection and the
+  separate current-head contract/backend results are disclosed, not a stale gate.
+- [Current implementation-head dependency artifact](https://github.com/1alextest/Tesbooboo/actions/runs/43253126357/job/131304069523)
+  reconfirms the exact F9 counts above. The green collection job is **not** security
+  approval. Findings remain open; no acceptance, suppressions or check weakening.
+
+Inspected all **six** real CI browser captures. The uncertainty warning/draft are
+readable; the reporter execution visibly retains Failed; inherited drawer/full-page
+Passed/Failed styling is intact. Some lower Bug fields/buttons/evidence are outside
+the captured viewport; association values and byte readback have separate automated
+assertions, not a claim that screenshots show them. The owning page-error assertion
+passed. This is agent inspection of CI captures, not independent human security/
+release review, every browser or production verification. Documentation-only final
+reconciliation still requires fresh applicable checks; no final-head PASS is assumed.
+
+#### Non-destructive historical-data decision
+
+1. Obtain owner-approved read-only access to a named environment/schema/build,
+   data-governance limits and consistent snapshot; do not use CI fixture counts
+   as an estimate. Collect aggregate counts first, avoiding bug text/secrets.
+2. Separately inventory active `bug_links` with foreign project parents, missing
+   parents, inconsistent execution→item→run/testcase chains, soft-deleted targets,
+   duplicate tuples, and disagreements with legacy convenience IDs. An authorized
+   historical association to a later-deleted target is not automatically invalid.
+3. Record an access-controlled per-record receipt only where approved; distinguish
+   “unresolved historical”, “confirmed invalid” and “valid preserved historical”.
+   Reconcile reads/exports against authoritative `bug_links`; do not clear stored
+   IDs merely because display projection now hides foreign metadata.
+4. Owner chooses preserve/annotate or evidence-backed audited correction per class,
+   including backup, preview, counts, dry-run, rollback/forward-fix and human review.
+   **No remediation is authorized/run by this assessment.** Production counts,
+   sensitive-field exposure and actual retention obligations remain unknown.
+
+#### Canonical-source and roadmap reconciliation
+
+`origin/docs/qa-specs-product-direction-20261028@d96f24e` contains only
+`docs/qa-orchestration/00_README.md` and `06_IMPLEMENTATION_AGENT_BRIEF.md`;
+they are partial imported working documents (the README begins in a gate table,
+not a complete package header). The six companions (01–05 and
+`07_UI_DESIGN_TASKS.md`), single `Tesbo_Existing_Application_Baseline_v1.0.md`,
+supporting audit receipts and approved matching archive are unavailable. Git
+history search found the two import commits, not the missing originals; configured
+MCP resource discovery returned no resources/templates. No inaccessible provider
+private chats/Project files were searched or recovered.
+
+The working text mentions revision 1.4.19, older Project 1.2 attachments, pinned
+`124f128` code and unresolved replacement/approval. This is **not** sufficient to
+select canonical authority or certify complete FR/AC/QA traceability. Counts in
+that text are planned definitions, not executed tests. Preserve its eight-file
+identity; do not invent companions, copy fragments into `development` as approved,
+create a ninth spec, or reconstruct the missing living baseline from memory.
+
+| Available direction / old claim | Current implementation reconciliation | Status / next dependency |
+|---|---|---|
+| Original ingest/API/evidence/Playwright “unbuilt” plan | Existing automation service, migrations, reporter and execution UI are owners. Plan sections 1–6 are historical; section 7 already records delivery. Header now makes that ordering explicit. | Implemented in source; bounded regression extended, not universal GA certification. |
+| Pinned delivery/authorization/finalized-Bug concerns | PRs #25–#34 repaired named paths; direct/side classification, immutable correction and independent attempt model are not established by those repairs. Manual/open auto-failure intentionally remains. | Partly implemented / broader semantics incomplete or unverified; no full-spec PASS. |
+| Existing Zyra staging/chat, MCP, evidence/KB, review surfaces | Reuse these owners; existing modules do not prove exact-revision human approve→apply, scoped runtime identities or full external execution lifecycle. | Available reuse, proposed orchestration not accepted as delivered. |
+| Session distillation, autonomous exploration, optimization, environments, multimodal, shift-left | Partial working text proposes FR-101–110 and references a separately scoped PR extension that is also unavailable. No implementation authority follows from these headings alone. | Proposed/unverified; recover full sources, charters, targets and acceptance before selecting one increment. |
+| Historical visual “Before” reconstructions and broad public-execution leak claims | Draft itself withdraws reconstructed Before; current public execution projection is narrow. Actual #34 CI screenshots are bounded real captures, not the missing original baseline. | Superseded claims must not become new requirements or reasons to rebuild UI. |
+| Retention, new language SDKs, predictive scoring | No authorization here. Do not infer absence of all implementations without a dedicated source/contract review. | Deferred scope decision, not Phase 1 mandatory feature work. |
+
+**Required handoff:** owner supplies the exact approved eight matching files or
+repository/archive URL+revision+hash, the named living baseline and authority
+confirmation where Project/archive revisions conflict. Request relevant independent
+audit receipts separately. Until then report `BLOCKED_BY_CANONICAL_SOURCE`, not a
+fabricated full roadmap. Local path discovery is not permission to merge that draft.
+
+#### Proposed exit criteria and owner decisions
+
+| Gate | PASS rule (requires owner adoption) | Current assessment |
+|---|---|---|
+| E1 — agreed finite baseline | Owner adopts this scope, acceptance criteria and explicit non-goals | **NOT APPROVED**; current source contracts are evidence, not substitute approval |
+| E2 — critical integrity | No unresolved confirmed high/critical auth/isolation/finalized-verdict or unintended-write violation in the selected paths; negative cases inspect persisted state | Prior fixes evidenced; F8 exposure/entitlement and F9 high/critical advisory applicability/security disposition open, not a blanket PASS |
+| E3 — transaction/duplicate/bulk outcomes | Selected regressions pass; F2–F4 have explicit fix/deferral/policy disposition. Characterization greens cannot waive atomicity/uncertainty | **OPEN DECISIONS**; recommend narrow F4 follow-up before exit unless owner approves an alternative |
+| E4 — connected workflow | Current-head CI runs production reporter→authenticated app→PostgreSQL→MCP→browser with readback/no unintended changes; exact evidence/limits retained | **TECHNICAL PASS at `526fe9e`** within declared limits; documentation-only final head still needs fresh checks, not owner release acceptance |
+| E5 — historical data | No current isolation leak in covered projections; approved read-only inventory/remediation decision distinguishes unknown prevalence from evidence | Synthetic proof only; inventory authorization/disposition **OPEN**, no destructive cleanup |
+| E6 — review and checks | All applicable current-head checks green and required independent human security/release review, with accepted residual risks recorded by owner | **NOT YET REVIEWED**; do not self-certify blind/independent review or release readiness |
+| E7 — next phase authority | Full canonical package/baseline reconciled with implemented/incomplete/unverified/superseded/deferred map and next exact increment approved | **BLOCKED_BY_CANONICAL_SOURCE**; no Phase 2 implementation selected |
+
+**Accepted risks: none recorded.** Proposed defer candidates: moderate dependency/
+lint maintenance (without suppressing checks), unsupported-client portability,
+general command idempotency and retention/correction redesign *only after* owner
+adjudication. High/critical confirmed security/integrity violations cannot be hidden
+in that bucket. Existing moderate audit counts are dated, not a fresh clean scan.
+
+**Recommendation:** review this assessment PR; finish its targeted CI; decide F3/F4
+and classify F8/F9; provide the canonical sources and commission the required human
+review. If a repair is required, authorize a named bounded follow-up rather than
+reopening all modules. Exit is recorded only after adopted criteria pass and the
+owner signs the residual-risk/roadmap decision. No unapproved feature implementation,
+schema migration, historical cleanup, `main` change, deployment or publication.

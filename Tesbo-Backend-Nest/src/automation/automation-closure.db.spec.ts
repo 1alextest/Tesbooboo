@@ -1,6 +1,6 @@
 import { Client, Pool } from "pg";
 import type { PoolClient, QueryResult } from "pg";
-import { BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
 import { AutomationService } from "./automation.service";
 import { DatabaseService } from "../database/database.service";
 import { makeLegacy } from "../legacy/test-helpers/legacy-service.fixture";
@@ -424,6 +424,78 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
       // This suite owns the dedicated project; never delete shared application fixtures.
       await setup.query("DELETE FROM bug_links WHERE bug_id IN (SELECT id FROM bugs WHERE project_id = $1)", [projectId]);
       await setup.query("DELETE FROM bugs WHERE project_id = $1", [projectId]);
+    });
+
+    it.each(["postcommit SQL failure", "lost COMMIT acknowledgement"])("characterizes persisted creation and explicit resubmission after %s without changing sealed results", async (fault) => {
+      await resetRun();
+      await svc.closeRun(userId, projectId, runId, { status: "completed" });
+      const before = {
+        run: (await setup.query("SELECT * FROM cycles WHERE id = $1", [runId])).rows,
+        result: await executionRow(),
+        items: (await setup.query("SELECT * FROM cycle_items WHERE cycle_id = $1 ORDER BY id", [runId])).rows
+      };
+      let inject = true;
+      let committed = 0;
+      let rolledBack = 0;
+      const observed = new Pool({ connectionString: url, max: 1, connectionTimeoutMillis: 2000 });
+      observed.on("connect", (client) => {
+        const original = client.query.bind(client);
+        const execute = original as (sql: string, values?: unknown[]) => Promise<QueryResult<Record<string, unknown>>>;
+        client.query = ((sql: string, values?: unknown[], callback?: (error: Error, result: QueryResult) => void) => {
+          // pg-pool's ordinary reads use callback form; preserve callback/release semantics.
+          if (callback) return original(sql, values ?? [], callback);
+          return (async () => {
+            const result = await execute(sql, values); // Always execute the real statement first.
+            if (sql === "COMMIT") committed++;
+            if (sql === "ROLLBACK") rolledBack++;
+            if (inject && fault === "lost COMMIT acknowledgement" && sql === "COMMIT") {
+              inject = false;
+              // Model the caller losing an already-successful COMMIT response; not a real network cut.
+              throw new Error("Connection terminated unexpectedly");
+            }
+            if (inject && fault === "postcommit SQL failure" && /SELECT c\.id, c\.source, c\.closed_at FROM cycles c/.test(sql)) {
+              inject = false;
+              await execute("SELECT 1 / 0"); // The second transaction fails after bug/link commit.
+            }
+            return result;
+          })();
+        }) as typeof client.query;
+      });
+      const f = bugService(new DatabaseService(observed));
+      const body = { title: `Characterization: ${fault}`, links: [link()] };
+      const persisted = async () => ({
+        bugs: (await setup.query("SELECT * FROM bugs WHERE project_id = $1 AND title = $2 ORDER BY id", [projectId, body.title])).rows,
+        links: (await setup.query("SELECT bl.* FROM bug_links bl JOIN bugs b ON b.id = bl.bug_id WHERE b.project_id = $1 AND b.title = $2 ORDER BY bl.id", [projectId, body.title])).rows
+      });
+      const sealed = async () => ({
+        run: (await setup.query("SELECT * FROM cycles WHERE id = $1", [runId])).rows,
+        result: await executionRow(),
+        items: (await setup.query("SELECT * FROM cycle_items WHERE cycle_id = $1 ORDER BY id", [runId])).rows
+      });
+      try {
+        const failed = f.legacy.createBug(projectId, userId, body);
+        if (fault === "postcommit SQL failure") await expect(failed).rejects.toMatchObject({ code: "22012" });
+        else await expect(failed).rejects.toBeInstanceOf(ServiceUnavailableException);
+        expect(inject).toBe(false);
+        expect(committed).toBe(1);
+        expect(rolledBack).toBe(1); // Cannot undo the preceding successful COMMIT.
+        expect((await persisted()).bugs).toHaveLength(1);
+        expect((await persisted()).links).toHaveLength(1);
+        expect(await sealed()).toEqual(before);
+        expect(f.activity).not.toHaveBeenCalled();
+
+        // Explicit caller resubmission, NOT an SDK/browser automatic replay or approved policy.
+        const retry = await f.legacy.createBug(projectId, userId, body);
+        const after = await persisted();
+        expect(after.bugs).toHaveLength(2);
+        expect(new Set(after.bugs.map((bug) => bug.external_id)).size).toBe(2); // ID uniqueness != command deduplication.
+        expect(after.links).toHaveLength(2);
+        expect(after.bugs.map((bug) => bug.id)).toContain(retry.id);
+        expect(await sealed()).toEqual(before);
+        expect(observed.idleCount).toBe(observed.totalCount);
+      } finally {
+        await observed.end();
+      }
     });
 
     it("authorizes bug creation before domain writes using actual migrated membership/workspace queries", async () => {
@@ -1036,6 +1108,62 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
         await observedPool.end();
       }
     });
+  });
+
+  it.each(["status", "assignment"])("characterizes REST bulk %s committed-prefix behavior on a later native SQL failure", async (kind) => {
+    const batchRun = (await setup.query<{ id: string }>("INSERT INTO cycles (project_id, name, source) VALUES ($1,'Bulk characterization','manual') RETURNING id", [projectId])).rows[0].id;
+    const ids: string[] = [];
+    const cases: string[] = [];
+    const observed = new Pool({ connectionString: url, max: 1, connectionTimeoutMillis: 2000 });
+    const writes: string[] = [];
+    observed.on("connect", (client) => {
+      const original = client.query.bind(client);
+      const execute = original as (sql: string, values?: unknown[]) => Promise<QueryResult<Record<string, unknown>>>;
+      client.query = ((sql: string, values?: unknown[], callback?: (error: Error, result: QueryResult) => void) => {
+        if (callback) return original(sql, values ?? [], callback);
+        return (async () => {
+          const result = await execute(sql, values);
+          if (/^\s*UPDATE executions SET status=COALESCE/.test(sql)) {
+            writes.push(String(values?.[0]));
+            if (writes.length === 2) await execute("SELECT 1 / 0");
+          }
+          return result;
+        })();
+      }) as typeof client.query;
+    });
+    const legacy = makeLegacy(new DatabaseService(observed));
+    jest.spyOn(legacy as unknown as { requireCycleAccess: () => Promise<string> }, "requireCycleAccess").mockResolvedValue(projectId);
+    jest.spyOn(legacy, "requireProjectAccess").mockResolvedValue({} as never);
+    jest.spyOn(legacy, "logProjectActivity").mockResolvedValue(undefined);
+    jest.spyOn(legacy as unknown as { notifyExecutionChange: () => Promise<void> }, "notifyExecutionChange").mockResolvedValue(undefined);
+    try {
+      for (let index = 0; index < 2; index++) {
+        const testcase = (await setup.query<{ id: string }>("INSERT INTO testcases (project_id, external_id, title) VALUES ($1,$2,'Bulk case') RETURNING id", [projectId, `BULK-${kind}-${index}`])).rows[0].id;
+        cases.push(testcase);
+        const item = (await setup.query<{ id: string }>("INSERT INTO cycle_items (cycle_id, testcase_id, position) VALUES ($1,$2,$3) RETURNING id", [batchRun, testcase, index])).rows[0].id;
+        ids.push((await setup.query<{ id: string }>("INSERT INTO executions (cycle_item_id, status, assignee_id) VALUES ($1,'Passed',$2) RETURNING id", [item, userId])).rows[0].id);
+      }
+      const rows = async () => (await setup.query("SELECT * FROM executions WHERE id = ANY($1::uuid[]) ORDER BY id", [ids])).rows;
+      const before = await rows();
+      const call = kind === "status"
+        ? legacy.bulkUpdateExecutionStatus(batchRun, userId, { executionIds: ids, status: "Failed" })
+        : legacy.bulkAssignExecutions(batchRun, userId, { executionIds: ids, assigneeId: null });
+      await expect(call).rejects.toMatchObject({ code: "22012" });
+      expect(writes).toHaveLength(2); // Selection resolution does not promise input order.
+      expect([...writes].sort()).toEqual([...ids].sort());
+      const after = await rows();
+      expect(after.find((row) => row.id === writes[1])).toEqual(before.find((row) => row.id === writes[1]));
+      const first = after.find((row) => row.id === writes[0])!;
+      expect(first).toMatchObject(kind === "status" ? { status: "Failed", assignee_id: userId } : { status: "Passed", assignee_id: null });
+      expect(observed.idleCount).toBe(observed.totalCount);
+      // This test documents an existing mismatch, not acceptance of partial REST/UI semantics.
+    } finally {
+      await observed.end();
+      await setup.query("DELETE FROM executions WHERE id = ANY($1::uuid[])", [ids]);
+      await setup.query("DELETE FROM cycle_items WHERE cycle_id = $1", [batchRun]);
+      await setup.query("DELETE FROM cycles WHERE id = $1", [batchRun]);
+      await setup.query("DELETE FROM testcases WHERE id = ANY($1::uuid[])", [cases]);
+    }
   });
 
   const rejectedHistoryText: Array<{ label: string; run?: Record<string, unknown>; result?: Record<string, unknown> }> = [
