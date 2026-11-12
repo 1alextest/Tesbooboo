@@ -550,6 +550,39 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
         };
       }
 
+      it.each(["active", "deleted"])("does not resolve %s foreign metadata from preexisting invalid links on detail/list reads", async (status) => {
+        const bug = await f.legacy.createBug(projectId, userId, { title: "Legacy invalid association read", links: [link()] });
+        // Simulate preexisting corruption through scoped fixture SQL, not the now-guarded writer.
+        // The fix must not rewrite, soft-delete or silently omit these historical relationship rows.
+        for (const target of [foreign, { ...foreign, cycleId: runId }, { ...link(), cycleId: foreign.cycleId }]) {
+          await setup.query("INSERT INTO bug_links (bug_id, testcase_id, cycle_id, execution_id) VALUES ($1,$2,$3,$4)",
+            [bug.id, target.testcaseId, target.cycleId, target.executionId]);
+        }
+        if (status === "deleted") {
+          await setup.query("UPDATE testcases SET deleted_at = now() WHERE id = $1", [foreign.testcaseId]);
+          await setup.query("UPDATE cycles SET deleted_at = now() WHERE id = $1", [foreign.cycleId]);
+        }
+        const before = await state();
+        const reads = [
+          await f.legacy.getBug(String(bug.id)),
+          ...(await f.legacy.listBugs(projectId)),
+          ...(await f.legacy.listBugs(projectId, { testcaseId: caseId, cycleId: runId }))
+        ];
+        expect(reads).toHaveLength(3);
+        for (const saved of reads) {
+          expect(saved.links).toHaveLength(4);
+          expect(saved.links).toEqual(expect.arrayContaining([expect.objectContaining({ ...link(), testcaseTitle: "Closure case", cycleName: expect.any(String) })]));
+          for (const association of saved.links) {
+            if (association.testcaseId === foreign.testcaseId) {
+              expect(association.testcaseTitle).toBeNull();
+              expect(association.testcaseExternalId).toBeNull();
+            }
+            if (association.cycleId === foreign.cycleId) expect(association.cycleName).toBeNull();
+          }
+        }
+        expect(await state()).toEqual(before);
+      });
+
       function gate() {
         let resolve!: () => void;
         const promise = new Promise<void>((done) => { resolve = done; });
