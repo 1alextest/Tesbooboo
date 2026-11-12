@@ -5101,7 +5101,9 @@ are not HTTP authorization proof.
 The connected smoke adds stale/disconnected controls, deliberate clears/mode
 changes with real uploaded evidence/comments/manual-run links, a committed clear
 with its browser acknowledgement aborted (one attempt, unconfirmed outcome),
-cookie-free REST/MCP writes and anonymous/read-only refusals. Independent DB reads
+session-authenticated REST and cookie-free MCP writes, plus anonymous/read-only
+and unscoped write-token refusals. The legacy unprefixed bug REST route remains
+session-only; no token boundary is expanded. Independent DB reads
 check complete unchanged associations, immutable audit prefixes and an unselected
 control. A synthetic status-only Jira connection exposes the existing controls;
 it does **not** prove OAuth, search, sync or real provider connectivity. Tokens

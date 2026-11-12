@@ -149,14 +149,16 @@ export async function verifyBugMetadataWrites(page: Page, api: string, web: stri
       } finally { await page.unroute(endpoint); }
     });
 
-    await checked("cookie-free REST/MCP clear/set/omission contracts persist and read-only/anonymous attempts change nothing", async () => {
+    await checked("session REST and cookie-free MCP clear/set/omission contracts persist; anonymous/read-only/unscoped-token attempts change nothing", async () => {
       const bug = await fixture("REST MCP");
       const read = await post(`${base}/apikeys`, { name: "CI bug metadata read", scopes: ["read"] }); tokenIds.push(read.id);
       const write = await post(`${base}/apikeys`, { name: "CI bug metadata write", scopes: ["read", "write"] }); tokenIds.push(write.id);
       let id = 0;
       const rpc = async (token: string, name: string, args: Record<string, unknown>) => machine.post(`${base}/mcp`, { headers: { Authorization: `Bearer ${token}` }, data: { jsonrpc: "2.0", id: ++id, method: "tools/call", params: { name, arguments: args } } });
       const before = await state(bug.id);
-      for (const [token, status] of [[undefined, 400], [read.token, 403]] as const) {
+      // /api/bugs/:id has no project prefix: even write tokens are deliberately refused.
+      // Positive REST edits use the genuine session; do not broaden the token allowlist.
+      for (const [token, status] of [[undefined, 400], [read.token, 403], [write.token, 403]] as const) {
         const denied = await machine.patch(`${api}/api/bugs/${bug.id}`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, data: { description: null, externalUrl: null, links: [] } });
         expect(denied.status(), await denied.text()).toBe(status); expect(await state(bug.id)).toEqual(before);
       }
@@ -167,11 +169,7 @@ export async function verifyBugMetadataWrites(page: Page, api: string, web: stri
       const after = await state(bug.id); preserved(before, after);
       expect(after.bug).toEqual({ ...before.bug, description: null, external_url: null, integration_provider: null, integration_issue_key: null, betterbugs_url: null, updated_at: expect.any(Date) });
       expect(after.audit.slice(before.audit.length)).toEqual([expect.objectContaining({ actor_id: ownerId, action: "bug_updated", diff: { fields: ["description", "externalUrl", "integrationProvider", "integrationIssueKey", "betterbugsUrl"] } })]);
-      const replacedResponse = await machine.patch(`${api}/api/bugs/${bug.id}`, {
-        headers: { Authorization: `Bearer ${write.token}` },
-        data: { externalUrl: "https://example.invalid/REST-3", integrationProvider: "JIRA", integrationIssueKey: "REST-3", description: "New body" },
-      });
-      expect(replacedResponse.ok(), await replacedResponse.text()).toBeTruthy(); const replaced = await replacedResponse.json();
+      const replaced = await patch(bug.id, { externalUrl: "https://example.invalid/REST-3", integrationProvider: "JIRA", integrationIssueKey: "REST-3", description: "New body" });
       expect(replaced).toMatchObject({ externalUrl: "https://example.invalid/REST-3", integrationIssueKey: "REST-3", description: "New body", betterbugsUrl: null });
       const renamed = await rpc(write.token, "update_bug", { bugId: bug.id, title: "CI MCP bug title" }); expect((await renamed.json()).error).toBeUndefined();
       expect((await state(bug.id)).bug).toMatchObject({ external_url: "https://example.invalid/REST-3", integration_issue_key: "REST-3", title: "CI MCP bug title" });

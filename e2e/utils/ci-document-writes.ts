@@ -324,8 +324,10 @@ export async function verifyDocumentWrites(page: Page, api: string, web: string,
       await open(doc);
       // Freeze browser timers only for this final journey so the exact unsent-debounce boundary
       // is deterministic. Nest/PostgreSQL and every HTTP response remain real and unmodified.
-      await page.clock.install();
-      await page.clock.pauseAt(new Date());
+      // pauseAt fast-forwards: its target must be ahead of the installed browser clock,
+      // not a fresh host Date that can already be behind after the install round trip.
+      await page.clock.install({ time: new Date("2026-11-12T00:00:00Z") });
+      await page.clock.pauseAt(new Date("2026-11-12T00:01:00Z"));
       try {
         await editor().fill("Draft preserved by Cancel");
         const dialog = await confirmPanel();
