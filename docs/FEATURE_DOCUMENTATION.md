@@ -3911,6 +3911,41 @@ are a separate high-priority Phase 1 release blocker. Do not silently purge hist
 or claim this write PR closes it. Unexpected postcommit auto-failure/event errors,
 lost-ack retries and transactional authorization revocation remain out of scope.
 
+#### Independent execution URL-parent validation follow-up
+
+PR [#30](https://github.com/1alextest/Tesbooboo/pull/30) remains open for human
+review at `8675c02`; its **22 triggered checks passed**, including 47 real
+PostgreSQL tests and the 3-test REST/MCP/browser smoke. It scopes foreign linked
+display metadata without rewriting records. It is **not merged into this branch**.
+The next execution-context repair is independent and based on approved
+`origin/development` at `9a91878`; it does not stack on or copy #30's changes.
+
+Source finding: the nested PATCH route contains `:cycleId`, but the controller
+passes only execution ID, actor and body to `updateExecution`. The canonical
+service checks the execution's actual project and locks its actual run, but never
+compares that run with the URL parent. This is a run-context integrity finding,
+not proof that existing actual-project authorization can be bypassed.
+
+The first regression-only commit checks actual controller/service HTTP wiring
+with synthetic principals/persistence, migrated-PostgreSQL service calls with
+wrong/unknown/malformed context and unchanged full run/item/execution rows, and
+the guarded real-session smoke using another local run, another project's run,
+unknown and malformed URL IDs. A body `cycleId` must not override the URL. Positive
+controls retain matching-run metadata attribution/status edits, uppercase UUIDs,
+existing unscoped MCP calls, anonymous refusal and the flat-route token boundary.
+The owning shared API execution spec is extended as well; full shared-stack
+execution remains pending. The local real Nest controller/service harness returned
+200 for all three wrong/unknown/malformed URL-parent cases (3 new failures,
+10 passes); its principals/persistence are simulated and its 6 DB skips are not
+database evidence. Isolated PostgreSQL and actual-session CI remains pending.
+
+Planned bounded repair: forward the URL parent as service context, reject a
+malformed/mismatched parent before writes, and bind the transactional UPDATE to
+active membership in the parent run already locked by the existing finalization
+guard. Preserve attribution, manual/open-run behavior, closed-automation refusal,
+MCP project/scope checks and bulk per-item semantics. No new result correction,
+history cleanup, role/permission expansion, schema or deployment is authorized.
+
 Remaining mutation inventory is not a list of automatically approved removals:
 
 | Existing writer | Source-grounded boundary / remaining decision |

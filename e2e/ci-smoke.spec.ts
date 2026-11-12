@@ -128,7 +128,52 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
   }
 }
 
-async function verifyBugLinkRelationships(request: APIRequestContext, api: string, projectId: string) {
+async function verifyExecutionRunContext(
+  request: APIRequestContext, tokenClient: APIRequestContext, db: Client, api: string, projectId: string,
+  ownerId: string, targets: Array<{ testcaseId: string; cycleId: string; executionId: string }>, headers: Record<string, string>
+) {
+  const [actual, other, foreign] = targets;
+  const runs = targets.map((target) => target.cycleId);
+  const state = async () => ({
+    runs: (await db.query("SELECT * FROM cycles WHERE id = ANY($1::uuid[]) ORDER BY id", [runs])).rows,
+    items: (await db.query("SELECT * FROM cycle_items WHERE cycle_id = ANY($1::uuid[]) ORDER BY id", [runs])).rows,
+    executions: (await db.query("SELECT e.* FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id WHERE ci.cycle_id = ANY($1::uuid[]) ORDER BY e.id", [runs])).rows
+  });
+  const route = (cycleId: string) => `${api}/api/cycles/${cycleId}/executions/${actual.executionId}`;
+  for (const cycleId of [other.cycleId, foreign.cycleId, "00000000-0000-4000-8000-000000000001", "not-a-run-id"]) {
+    const before = await state();
+    const response = await request.patch(route(cycleId), { data: {
+      status: "Blocked", actualResult: "Wrong URL context must not persist", assigneeId: null, cycleId: actual.cycleId
+    } });
+    const after = await state();
+    const saved = after.executions.find((row) => row.id === actual.executionId);
+    expect(response.status(), `URL ${cycleId}; persisted status=${saved?.status}, notes=${saved?.actual_result}, performer=${saved?.executed_by}`).toBe(404);
+    expect(after).toEqual(before);
+  }
+  for (const token of [false, true]) {
+    const before = await state();
+    const refused = await tokenClient.patch(route(actual.cycleId), { headers: token ? headers : undefined, data: { status: "Failed" } });
+    expect(refused.status(), await refused.text()).toBe(token ? 403 : 400);
+    expect(await state()).toEqual(before);
+  }
+  const priorExecutor = (await state()).executions.find((row) => row.id === actual.executionId)?.executed_by;
+  const notes = await request.patch(route(actual.cycleId.toUpperCase()), { data: { actualResult: "Correct-run clarification" } });
+  expect(notes.ok(), await notes.text()).toBeTruthy();
+  expect((await state()).executions.find((row) => row.id === actual.executionId))
+    .toMatchObject({ actual_result: "Correct-run clarification", executed_by: priorExecutor });
+  const passed = await request.patch(route(actual.cycleId), { data: { status: "Passed" } });
+  expect(passed.ok(), await passed.text()).toBeTruthy();
+  expect((await state()).executions.find((row) => row.id === actual.executionId)).toMatchObject({ status: "Passed", executed_by: ownerId });
+  // MCP does not use a nested run URL. Keep its existing project-owned execution writer working.
+  const called = await tokenClient.post(`${api}/api/projects/${projectId}/mcp`, { headers, data: {
+    jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "record_execution_result", arguments: { executionId: actual.executionId, status: "Passed" } }
+  } });
+  expect(called.ok(), await called.text()).toBeTruthy();
+  expect((await called.json()).error).toBeUndefined();
+  expect((await state()).executions.find((row) => row.id === actual.executionId)).toMatchObject({ status: "Passed", executed_by: ownerId });
+}
+
+async function verifyBugLinkRelationships(request: APIRequestContext, api: string, projectId: string, ownerId: string) {
   // Uses only this smoke journey's guarded, disposable installation and genuine session/token auth.
   const db = new Client({ connectionString: process.env.DATABASE_URL });
   const tokenClient = await newRequest.newContext({ storageState: { cookies: [], origins: [] } });
@@ -161,6 +206,7 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
     expect(tokenResponse.ok(), await tokenResponse.text()).toBeTruthy();
     const token = await tokenResponse.json(); tokenId = token.id;
     const headers = { Authorization: `Bearer ${token.token}` };
+    await verifyExecutionRunContext(request, tokenClient, db, api, projectId, ownerId, targets, headers);
     const initial = await request.post(`${base}/bugs`, { data: { title: "CI atomic relationship edit", links: [{ testcaseId: first.testcaseId }] } });
     expect(initial.ok(), await initial.text()).toBeTruthy();
     const bug = await initial.json(); bugs.push(bug.id);
@@ -299,7 +345,7 @@ test("bug authorization, strict relationships and finalized automation preserve 
 
   try {
     await verifyBugCreateAccess(request, api, projectId, bootstrap.userId, bootstrap.organizationId);
-    await verifyBugLinkRelationships(request, api, projectId);
+    await verifyBugLinkRelationships(request, api, projectId, bootstrap.userId);
     for (const surface of ["drawer", "full-page"]) {
       for (const status of ["pass", "fail"]) {
         const title = `CI sealed ${surface} ${status}`;

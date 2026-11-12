@@ -1,5 +1,5 @@
 import { Client } from "pg";
-import { ConflictException } from "@nestjs/common";
+import { ConflictException, NotFoundException } from "@nestjs/common";
 import type { PoolClient } from "pg";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
 import type { DatabaseService } from "../database/database.service";
@@ -19,6 +19,8 @@ const canRun = /\/tesbo_ci(?:\?|$)/.test(databaseUrl);
   let executionId: string;
   let projectId: string;
   let testcaseId: string;
+  let runId: string;
+  let otherRunId: string;
 
   beforeAll(async () => {
     client = new Client({ connectionString: databaseUrl });
@@ -54,6 +56,10 @@ const canRun = /\/tesbo_ci(?:\?|$)/.test(databaseUrl);
       [item.rows[0].id, original]
     );
     executionId = e.rows[0].id;
+    runId = cycle.rows[0].id;
+    otherRunId = (await client.query<{ id: string }>(
+      "INSERT INTO cycles (project_id, name) VALUES ($1, 'Other attribution run') RETURNING id", [projectId]
+    )).rows[0].id;
   });
 
   afterAll(async () => {
@@ -88,6 +94,42 @@ const canRun = /\/tesbo_ci(?:\?|$)/.test(databaseUrl);
     await svc.updateExecution(executionId, actor, { status: "Failed" });
     row = await client.query("SELECT executed_by, status FROM executions WHERE id = $1", [executionId]);
     expect(row.rows[0]).toMatchObject({ executed_by: actor, status: "Failed" });
+  });
+
+  it.each(["other run", "unknown run", "malformed run"])("rejects %s context with persisted rows and provenance unchanged", async (kind) => {
+    const svc = makeLegacy({
+      query: (sql: string, args?: unknown[]) => client.query(sql, args),
+      // Real SQL on this suite's rolled-back fixture transaction; not a new rollback-after-write claim.
+      transaction: async <T>(fn: (locked: PoolClient) => Promise<T>) => fn(client as unknown as PoolClient)
+    } as unknown as DatabaseService);
+    jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({} as never);
+    const activity = jest.spyOn(svc, "logProjectActivity").mockResolvedValue(undefined);
+    const notify = jest.spyOn(svc as unknown as { notifyExecutionChange: () => Promise<void> }, "notifyExecutionChange").mockResolvedValue(undefined);
+    const state = async () => ({
+      runs: (await client.query("SELECT * FROM cycles WHERE project_id = $1 ORDER BY id", [projectId])).rows,
+      items: (await client.query("SELECT ci.* FROM cycle_items ci JOIN cycles c ON c.id = ci.cycle_id WHERE c.project_id = $1 ORDER BY ci.id", [projectId])).rows,
+      executions: (await client.query("SELECT e.* FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id JOIN cycles c ON c.id = ci.cycle_id WHERE c.project_id = $1 ORDER BY e.id", [projectId])).rows
+    });
+    const before = await state();
+    const context = { quietStatus: false, expectedCycleId: kind === "other run" ? otherRunId : kind === "unknown run" ? "00000000-0000-4000-8000-000000000001" : "malformed" };
+    await expect(svc.updateExecution(executionId, actor, { status: "Blocked", actualResult: "Must not persist" }, context)).rejects.toBeInstanceOf(NotFoundException);
+    expect(await state()).toEqual(before);
+    expect(activity).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("accepts matching URL context without changing metadata-only executor attribution", async () => {
+    const svc = makeLegacy({
+      query: (sql: string, args?: unknown[]) => client.query(sql, args),
+      transaction: async <T>(fn: (locked: PoolClient) => Promise<T>) => fn(client as unknown as PoolClient)
+    } as unknown as DatabaseService);
+    jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({} as never);
+    jest.spyOn(svc, "logProjectActivity").mockResolvedValue(undefined);
+    jest.spyOn(svc as unknown as { notifyExecutionChange: () => Promise<void> }, "notifyExecutionChange").mockResolvedValue(undefined);
+    const before = (await client.query("SELECT executed_by FROM executions WHERE id = $1", [executionId])).rows[0];
+    const context = { quietStatus: false, expectedCycleId: runId.toUpperCase() };
+    await svc.updateExecution(executionId, actor, { actualResult: "Matching-context clarification" }, context);
+    expect((await client.query("SELECT executed_by, actual_result FROM executions WHERE id = $1", [executionId])).rows[0])
+      .toEqual({ executed_by: before.executed_by, actual_result: "Matching-context clarification" });
   });
   it("rejects manual UI/MCP edits to finalized automated executions, while allowing open ones", async () => {
     // Reuse the existing test case in a distinct automation Run. All records
