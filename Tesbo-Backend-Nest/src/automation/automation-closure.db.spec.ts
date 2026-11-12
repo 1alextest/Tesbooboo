@@ -439,21 +439,26 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
       let rolledBack = 0;
       const observed = new Pool({ connectionString: url, max: 1, connectionTimeoutMillis: 2000 });
       observed.on("connect", (client) => {
-        const execute = client.query.bind(client) as (sql: string, values?: unknown[]) => Promise<QueryResult<Record<string, unknown>>>;
-        client.query = (async (sql: string, values?: unknown[]) => {
-          const result = await execute(sql, values); // Always execute the real statement first.
-          if (sql === "COMMIT") committed++;
-          if (sql === "ROLLBACK") rolledBack++;
-          if (inject && fault === "lost COMMIT acknowledgement" && sql === "COMMIT") {
-            inject = false;
-            // Model the caller losing an already-successful COMMIT response; not a real network cut.
-            throw new Error("Connection terminated unexpectedly");
-          }
-          if (inject && fault === "postcommit SQL failure" && /SELECT c\.id, c\.source, c\.closed_at FROM cycles c/.test(sql)) {
-            inject = false;
-            await execute("SELECT 1 / 0"); // The second transaction fails after bug/link commit.
-          }
-          return result;
+        const original = client.query.bind(client);
+        const execute = original as (sql: string, values?: unknown[]) => Promise<QueryResult<Record<string, unknown>>>;
+        client.query = ((sql: string, values?: unknown[], callback?: (error: Error, result: QueryResult) => void) => {
+          // pg-pool's ordinary reads use callback form; preserve callback/release semantics.
+          if (callback) return original(sql, values ?? [], callback);
+          return (async () => {
+            const result = await execute(sql, values); // Always execute the real statement first.
+            if (sql === "COMMIT") committed++;
+            if (sql === "ROLLBACK") rolledBack++;
+            if (inject && fault === "lost COMMIT acknowledgement" && sql === "COMMIT") {
+              inject = false;
+              // Model the caller losing an already-successful COMMIT response; not a real network cut.
+              throw new Error("Connection terminated unexpectedly");
+            }
+            if (inject && fault === "postcommit SQL failure" && /SELECT c\.id, c\.source, c\.closed_at FROM cycles c/.test(sql)) {
+              inject = false;
+              await execute("SELECT 1 / 0"); // The second transaction fails after bug/link commit.
+            }
+            return result;
+          })();
         }) as typeof client.query;
       });
       const f = bugService(new DatabaseService(observed));
@@ -1112,11 +1117,15 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     const observed = new Pool({ connectionString: url, max: 1, connectionTimeoutMillis: 2000 });
     let writes = 0;
     observed.on("connect", (client) => {
-      const execute = client.query.bind(client) as (sql: string, values?: unknown[]) => Promise<QueryResult<Record<string, unknown>>>;
-      client.query = (async (sql: string, values?: unknown[]) => {
-        const result = await execute(sql, values);
-        if (/^\s*UPDATE executions SET status=COALESCE/.test(sql) && ++writes === 2) await execute("SELECT 1 / 0");
-        return result;
+      const original = client.query.bind(client);
+      const execute = original as (sql: string, values?: unknown[]) => Promise<QueryResult<Record<string, unknown>>>;
+      client.query = ((sql: string, values?: unknown[], callback?: (error: Error, result: QueryResult) => void) => {
+        if (callback) return original(sql, values ?? [], callback);
+        return (async () => {
+          const result = await execute(sql, values);
+          if (/^\s*UPDATE executions SET status=COALESCE/.test(sql) && ++writes === 2) await execute("SELECT 1 / 0");
+          return result;
+        })();
       }) as typeof client.query;
     });
     const legacy = makeLegacy(new DatabaseService(observed));
