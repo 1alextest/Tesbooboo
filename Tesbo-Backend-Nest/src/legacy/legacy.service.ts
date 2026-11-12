@@ -7694,50 +7694,125 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
-  /*
-   * Link targets have to exist in THIS project before they reach an insert.
-   *
-   * `bugs.execution_id`, `testcase_id` and `cycle_id` are all foreign keys, and the ids arrive in a
-   * request body — so a caller naming an execution that does not exist (a stale tab, a copied id, a
-   * CI script with the wrong run) produced a 23503 foreign-key violation, which surfaces as a 500.
-   * Found by the regression test written for the auto-fail change: "a bogus execution id in the
-   * links is ignored rather than 500ing" was asserting the behaviour this now has.
-   *
-   * Unresolvable ids are dropped rather than rejected: a bug report is worth keeping even when one
-   * of its links is stale, and the link rows are a convenience, not the record. A link with nothing
-   * left to point at is dropped entirely.
-   */
-  private async sanitizeBugLinks(projectId: string, links: Body[]): Promise<Body[]> {
-    if (!links.length) return links;
-    const ids = (key: string) => [...new Set(links.map((l) => String(l?.[key] ?? "")).filter((v) => isUuid(v)))];
-    const [testcaseIds, cycleIds, executionIds] = [ids("testcaseId"), ids("cycleId"), ids("executionId")];
+  private bugLinkKey(link: Body, withExecution = false): string {
+    return `${link.testcaseId || ""}|${link.cycleId || ""}${withExecution ? `|${link.executionId || ""}` : ""}`;
+  }
 
-    const resolved = async (sql: string, candidates: string[]): Promise<Set<string>> => {
-      if (!candidates.length) return new Set();
-      const res = await this.db.query<{ id: string }>(sql, [candidates, projectId]);
-      return new Set(res.rows.map((row) => String(row.id)));
+  /** New/changed invalid links reject the entire request; never silently discard target IDs. */
+  private parseBugLinks(raw: unknown): Body[] {
+    if (raw === undefined) return [];
+    if (!Array.isArray(raw)) throw new BadRequestException({ error: "links must be an array", field: "links" });
+    const desired = new Map<string, Body>();
+    for (const value of raw) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new BadRequestException({ error: "Each bug link must be an object", field: "links" });
+      }
+      const link: Body = {};
+      for (const key of ["testcaseId", "cycleId", "executionId"]) {
+        const id = (value as Body)[key];
+        if (id === undefined || id === null || id === "") link[key] = null;
+        else if (typeof id === "string" && isUuid(id)) link[key] = id.toLowerCase();
+        else throw new BadRequestException({ error: `Invalid ${key} in bug links`, field: "links" });
+      }
+      if (!link.testcaseId && !link.cycleId && !link.executionId) {
+        throw new BadRequestException({ error: "A bug link must name a test case, run or execution", field: "links" });
+      }
+      const key = this.bugLinkKey(link);
+      const previous = desired.get(key);
+      if (previous && previous.executionId !== link.executionId) {
+        throw new BadRequestException({ error: "Conflicting execution bindings for the same bug link", field: "links" });
+      }
+      desired.set(key, link);
+    }
+    return [...desired.values()];
+  }
+
+  private async lockBugLinksOwner(client: PoolClient, bugId: string, projectId: string) {
+    const owner = await client.query(
+      "SELECT id FROM bugs WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE", [bugId, projectId]
+    );
+    if (!owner.rows[0]) throw new NotFoundException({ error: "Bug not found" });
+    const existing = await client.query(
+      "SELECT id, testcase_id, cycle_id, execution_id FROM bug_links WHERE bug_id = $1 AND deleted_at IS NULL", [bugId]
+    );
+    return existing.rows.map(toCamel);
+  }
+
+  private async lockBugLinkTargets(client: PoolClient, projectId: string, links: Body[]): Promise<(existing?: Body[]) => void> {
+    if (!links.length) return () => undefined;
+    const ids = (key: string) => [...new Set(links.map((link) => link[key]).filter((id): id is string => typeof id === "string"))];
+    const executionIds = ids("executionId");
+    // Discover actual parents without locking foreign-project rows. Re-read the chain after
+    // acquiring all parents, so an earlier observation can never authorize a different parent.
+    const executions = executionIds.length ? (await client.query(
+      `SELECT e.id, ci.cycle_id, ci.testcase_id FROM executions e
+         JOIN cycle_items ci ON ci.id = e.cycle_item_id
+         JOIN cycles c ON c.id = ci.cycle_id AND c.project_id = $2
+         JOIN testcases t ON t.id = ci.testcase_id AND t.project_id = $2
+        WHERE e.id = ANY($1::uuid[])`, [executionIds, projectId]
+    )).rows : [];
+    const cycleIds = [...new Set([...ids("cycleId"), ...executions.map((row) => String(row.cycle_id))])];
+    const testcaseIds = [...new Set([...ids("testcaseId"), ...executions.map((row) => String(row.testcase_id))])];
+    const cycles = cycleIds.length ? (await client.query(
+      "SELECT id, deleted_at FROM cycles WHERE id = ANY($1::uuid[]) AND project_id = $2 ORDER BY id FOR UPDATE", [cycleIds, projectId]
+    )).rows : [];
+    const testcases = testcaseIds.length ? (await client.query(
+      "SELECT id, deleted_at FROM testcases WHERE id = ANY($1::uuid[]) AND project_id = $2 ORDER BY id FOR SHARE", [testcaseIds, projectId]
+    )).rows : [];
+    const pairs = links.filter((link) => link.testcaseId && link.cycleId);
+    const memberships = pairs.length ? (await client.query(
+      `SELECT ci.testcase_id, ci.cycle_id, ci.deleted_at FROM cycle_items ci
+         JOIN unnest($1::uuid[], $2::uuid[]) AS wanted(testcase_id, cycle_id)
+           ON wanted.testcase_id = ci.testcase_id AND wanted.cycle_id = ci.cycle_id
+         JOIN cycles c ON c.id = ci.cycle_id AND c.project_id = $3
+         JOIN testcases t ON t.id = ci.testcase_id AND t.project_id = $3
+         ORDER BY ci.id FOR SHARE OF ci`,
+      [pairs.map((link) => link.testcaseId), pairs.map((link) => link.cycleId), projectId]
+    )).rows : [];
+    const authoritative = executionIds.length ? (await client.query(
+      `SELECT e.id, e.deleted_at, ci.testcase_id, ci.cycle_id, ci.deleted_at AS item_deleted_at
+         FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id
+         JOIN cycles c ON c.id = ci.cycle_id AND c.project_id = $2
+         JOIN testcases t ON t.id = ci.testcase_id AND t.project_id = $2
+        WHERE e.id = ANY($1::uuid[]) ORDER BY e.id FOR KEY SHARE OF e`, [executionIds, projectId]
+    )).rows : [];
+    // KEY SHARE is deliberate: association validation does not change execution data and must
+    // remain compatible with administrative assignee cleanup (execution -> bug). Parent locks
+    // already exclude application writers that delete/move run membership or executions.
+    const cycleById = new Map(cycles.map((row) => [String(row.id), row]));
+    const testcaseById = new Map(testcases.map((row) => [String(row.id), row]));
+    const executionById = new Map(authoritative.map((row) => [String(row.id), row]));
+    // Target locks precede the bug lock. Otherwise member cleanup (execution -> bug) plus a
+    // manual writer (cycle -> execution) could form a three-way deadlock with bug -> cycle.
+    // The returned validator runs only after the bug lock and a fresh association read, so a
+    // concurrently removed/rebound link cannot authorize a new link to deleted history.
+    return (existing: Body[] = []) => {
+      const preserved = new Set(existing.map((link) => this.bugLinkKey(link, true)));
+      const missing = () => new NotFoundException({ error: "Bug link target not found", field: "links" });
+      for (const link of links) {
+        // Only an exact existing tuple may retain deleted local history; a caller-supplied link id
+        // alone grants nothing, and a changed binding must satisfy all active-target checks.
+        const historical = preserved.has(this.bugLinkKey(link, true));
+        const validTarget = (rows: Map<string, Body>, id: string) => {
+          const row = rows.get(id);
+          return !!row && (historical || !row.deleted_at);
+        };
+        if (link.testcaseId && !validTarget(testcaseById, link.testcaseId)) throw missing();
+        if (link.cycleId && !validTarget(cycleById, link.cycleId)) throw missing();
+        if (link.testcaseId && link.cycleId && !memberships.some((row) =>
+          row.testcase_id === link.testcaseId && row.cycle_id === link.cycleId && (historical || !row.deleted_at))) {
+          throw new BadRequestException({ error: "Test case is not linked to the specified run", field: "links" });
+        }
+        if (link.executionId) {
+          const execution = executionById.get(link.executionId);
+          if (!execution || (!historical && (execution.deleted_at || execution.item_deleted_at)) ||
+              !validTarget(cycleById, String(execution.cycle_id)) || !validTarget(testcaseById, String(execution.testcase_id))) throw missing();
+          if ((link.testcaseId && link.testcaseId !== execution.testcase_id) || (link.cycleId && link.cycleId !== execution.cycle_id)) {
+            throw new BadRequestException({ error: "Execution does not match the specified test case and run", field: "links" });
+          }
+        }
+      }
     };
-    const [validTestcases, validCycles, validExecutions] = await Promise.all([
-      resolved("SELECT id FROM testcases WHERE id = ANY($1::uuid[]) AND project_id = $2 AND deleted_at IS NULL", testcaseIds),
-      resolved("SELECT id FROM cycles WHERE id = ANY($1::uuid[]) AND project_id = $2 AND deleted_at IS NULL", cycleIds),
-      resolved(
-        `SELECT e.id FROM executions e
-           JOIN cycle_items ci ON ci.id = e.cycle_item_id
-           JOIN cycles c ON c.id = ci.cycle_id
-          WHERE e.id = ANY($1::uuid[]) AND c.project_id = $2 AND e.deleted_at IS NULL`,
-        executionIds
-      )
-    ]);
-
-    const keep = (value: unknown, valid: Set<string>) => (valid.has(String(value ?? "")) ? String(value) : null);
-    return links
-      .map((link) => ({
-        ...link,
-        testcaseId: keep(link?.testcaseId, validTestcases),
-        cycleId: keep(link?.cycleId, validCycles),
-        executionId: keep(link?.executionId, validExecutions)
-      }))
-      .filter((link) => link.testcaseId || link.cycleId || link.executionId);
   }
 
   // A blind delete-all-then-reinsert (the pre-Phase-7 shape) can no longer be a real DELETE, and
@@ -7849,7 +7924,7 @@ export class LegacyService implements OnModuleInit {
     // array is accepted here so reporting a bug is never blocked in a project with no test runs yet.
     validateBoundedField(body.title, "Bug title", BUG_TITLE_MAX_LENGTH);
     validateBoundedField(body.externalUrl, "External URL", BUG_EXTERNAL_URL_MAX_LENGTH);
-    const links = await this.sanitizeBugLinks(projectId, normalizeJsonArray(body.links));
+    const links = this.parseBugLinks(body.links);
     const severity = this.parseBugSeverity(body.severity);
     const priority = this.parseBugPriority(body.priority);
     const assigneeId = await this.parseBugAssignee(projectId, body.assigneeId);
@@ -7866,6 +7941,8 @@ export class LegacyService implements OnModuleInit {
           // not just the retry above, is what makes concurrent creates converge instead of both
           // reading the same MAX and colliding again.
           await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`bug-external-id:${projectId}`]);
+          const validateLinks = await this.lockBugLinkTargets(client, projectId, links);
+          validateLinks();
           const externalId = await this.nextBugExternalId(projectId, client);
           const res = await client.query(
             `INSERT INTO bugs (project_id, external_id, execution_id, testcase_id, cycle_id, title, description, external_url, status, severity, priority, reported_by, integration_provider, integration_issue_key, betterbugs_url, assignee_id)
@@ -8537,6 +8614,7 @@ export class LegacyService implements OnModuleInit {
   async updateBug(userId: string | null | undefined, bugId: string, body: Body) {
     const uid = this.requireUser(userId);
     const projectId = await this.requireBugAccess(userId, bugId);
+    const links = body.links === undefined ? undefined : this.parseBugLinks(body.links);
     // Same refusal as createBug — an unknown severity on edit hit the same constraint and the same
     // opaque 500. Severity can be cleared since V130, with the same explicit-null-or-"" convention as
     // priority below; an absent key still leaves the stored value alone.
@@ -8557,35 +8635,36 @@ export class LegacyService implements OnModuleInit {
     const clearsAssignee = body.assigneeId === null || body.assigneeId === "";
     const assigneeId = await this.parseBugAssignee(projectId, body.assigneeId);
     const before = await this.getBug(bugId);
-    await this.db.query(
-      `UPDATE bugs SET title=COALESCE($2,title), description=COALESCE($3,description), external_url=COALESCE($4,external_url),
+    await this.db.transaction(async (client) => {
+      const validateLinks = await this.lockBugLinkTargets(client, projectId, links ?? []);
+      const existing = await this.lockBugLinksOwner(client, bugId, projectId);
+      validateLinks(existing);
+      await client.query(
+        `UPDATE bugs SET title=COALESCE($2,title), description=COALESCE($3,description), external_url=COALESCE($4,external_url),
        status=COALESCE($5,status), severity=CASE WHEN $14::boolean THEN NULL ELSE COALESCE($6,severity) END, priority=CASE WHEN $10::boolean THEN NULL ELSE COALESCE($11,priority) END,
        integration_provider=COALESCE($7,integration_provider), integration_issue_key=COALESCE($8,integration_issue_key),
        betterbugs_url=COALESCE($9,betterbugs_url),
        assignee_id=CASE WHEN $12::boolean THEN NULL ELSE COALESCE($13,assignee_id) END,
        updated_at=now() WHERE id=$1`,
-      [
-        bugId,
-        body.title || null,
-        body.description || null,
-        body.externalUrl || null,
-        body.status || null,
-        severity,
-        body.integrationProvider || null,
-        body.integrationIssueKey || null,
-        body.betterbugsUrl || null,
-        clearsPriority,
-        priority,
-        clearsAssignee,
-        assigneeId,
-        clearsSeverity
-      ]
-    );
-    if (Array.isArray(body.links)) {
-      const owner = await this.db.query<{ project_id: string }>("SELECT project_id FROM bugs WHERE id = $1", [bugId]);
-      const sanitized = await this.sanitizeBugLinks(String(owner.rows[0]?.project_id ?? ""), normalizeJsonArray(body.links));
-      await this.db.transaction((client) => this.replaceBugLinks(client, bugId, uid, sanitized));
-    }
+        [
+          bugId,
+          body.title || null,
+          body.description || null,
+          body.externalUrl || null,
+          body.status || null,
+          severity,
+          body.integrationProvider || null,
+          body.integrationIssueKey || null,
+          body.betterbugsUrl || null,
+          clearsPriority,
+          priority,
+          clearsAssignee,
+          assigneeId,
+          clearsSeverity
+        ]
+      );
+      if (links !== undefined) await this.replaceBugLinks(client, bugId, uid, links);
+    });
     const after = await this.getBug(bugId);
     await this.logBugChanges(projectId, uid, before, after);
     await this.notifyBugChange(projectId, uid, before, after);
@@ -8593,46 +8672,35 @@ export class LegacyService implements OnModuleInit {
   }
 
   async addBugLink(userId: string | null | undefined, bugId: string, body: Body) {
-    await this.requireBugAccess(userId, bugId);
-    if (!body.testcaseId && !body.cycleId) throw new BadRequestException({ error: "testcaseId or cycleId is required." });
-    const testcaseId = body.testcaseId || null;
-    const cycleId = body.cycleId || null;
-    const executionId = body.executionId || null;
-    // IS NOT DISTINCT FROM, not ON CONFLICT alone: the partial unique index treats two NULL
-    // cycle_id rows as non-duplicates, so a bug already linked to this test case with no run would
-    // otherwise pass as "new" and insert a second identical row — same root cause as
-    // replaceBugLinks' own comment above.
-    const existing = await this.db.query<{ id: string; execution_id: string | null }>(
-      `SELECT id, execution_id FROM bug_links WHERE bug_id = $1 AND deleted_at IS NULL
-       AND testcase_id IS NOT DISTINCT FROM $2 AND cycle_id IS NOT DISTINCT FROM $3`,
-      [bugId, testcaseId, cycleId]
-    );
-    if (existing.rows[0]) {
-      if (executionId !== existing.rows[0].execution_id) {
-        await this.db.query("UPDATE bug_links SET execution_id = $2 WHERE id = $1", [existing.rows[0].id, executionId]);
-      }
-    } else {
-      await this.db.query(
-        `INSERT INTO bug_links (bug_id, testcase_id, cycle_id, execution_id) VALUES ($1,$2,$3,$4)
-         ON CONFLICT (bug_id, testcase_id, cycle_id) WHERE deleted_at IS NULL DO NOTHING`,
-        [bugId, testcaseId, cycleId, executionId]
-      );
-    }
-    // requireBugAccess already resolved this bug's project; re-read it rather than trusting the
-    // caller's body, which never carries a project id.
-    const owner = await this.db.query<{ project_id: string }>("SELECT project_id FROM bugs WHERE id = $1", [bugId]);
-    const projectId = owner.rows[0]?.project_id;
-    if (projectId) await this.failLinkedExecutions(String(projectId), userId, bugId, [body]);
+    const uid = this.requireUser(userId);
+    const projectId = await this.requireBugAccess(uid, bugId);
+    const links = this.parseBugLinks([body]);
+    const link = links[0];
+    if (!link.testcaseId && !link.cycleId) throw new BadRequestException({ error: "testcaseId or cycleId is required." });
+    await this.db.transaction(async (client) => {
+      const validateLinks = await this.lockBugLinkTargets(client, projectId, links);
+      const existing = await this.lockBugLinksOwner(client, bugId, projectId);
+      validateLinks(existing);
+      const desired = new Map(existing.map((item) => [this.bugLinkKey(item), item]));
+      desired.set(this.bugLinkKey(link), link);
+      // The bug lock serializes nullable-key inserts/rebindings with replace and unlink; SQL's
+      // NULL-distinct unique index alone cannot make concurrent testcase-only links idempotent.
+      await this.replaceBugLinks(client, bugId, uid, [...desired.values()]);
+    });
+    await this.failLinkedExecutions(projectId, uid, bugId, links);
     return this.getBug(bugId);
   }
 
   async removeBugLink(userId: string | null | undefined, bugId: string, linkId: string) {
     const uid = this.requireUser(userId);
-    await this.requireBugAccess(userId, bugId);
-    await this.db.query(
-      "UPDATE bug_links SET deleted_at = now(), deleted_by = $3 WHERE id = $1 AND bug_id = $2 AND deleted_at IS NULL",
-      [linkId, bugId, uid]
-    );
+    const projectId = await this.requireBugAccess(userId, bugId);
+    await this.db.transaction(async (client) => {
+      await this.lockBugLinksOwner(client, bugId, projectId);
+      await client.query(
+        "UPDATE bug_links SET deleted_at = now(), deleted_by = $3 WHERE id = $1 AND bug_id = $2 AND deleted_at IS NULL",
+        [linkId, bugId, uid]
+      );
+    });
     return this.getBug(bugId);
   }
 

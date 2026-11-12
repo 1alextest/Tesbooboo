@@ -3735,7 +3735,7 @@ the new PostgreSQL result without relabeling #25's unexecuted checks as passes.
 | `development` ruleset reports an empty required-status-check list and zero required approvals. | Medium governance gap: green checks/review are not presently enforced by that ruleset. | Owner to configure required checks and review policy; continue requiring green checks and human approval operationally. | Verified via GitHub rules API; no settings changed. |
 | Root `CLAUDE.md` describes a shared/macOS stack, whereas current CI provisions disposable PostgreSQL and this workstation is Windows with no Docker CLI. | Verification/environment mismatch; local DB/image/E2E execution cannot be claimed. | Use existing isolated CI, retain its gates, and explicitly report skipped local DB tests. | Infrastructure limitation, not permission to target a shared DB or weaken tests. |
 | The restored Stryker run reports 131 killed, 37 surviving and 1 uncovered mutant in `external-url.util.ts` (77.51%). | Medium assurance gap, not proof that each survivor is a production defect. | Triage equivalent mutants versus missing boundary/credential/address tests in a separate test-strengthening change. | Existing bounded mutation gate passes unchanged (break score 50); survivors are not suppressed. |
-| At the pre-fix baseline, `createBug` and its REST controller omit user/project membership checks; identity middleware and the no-token branch of `ApiTokenRestGuard` do not require authentication. | High authorization risk. A real Nest controller/service harness returned 201 for anonymous and nonmember principals before the fix; identities/DB were simulated, not a production or PostgreSQL exploit. | The focused follow-up invokes existing user/project authorization before bug validation, target resolution or writes. The nullable-user MCP rationale is stale relative to current member-bound MCP. | Separate security fix/release blocker pending fresh database, real-session/token CI and human review; not claimed resolved by verdict-preservation tests. |
+| At the pre-fix baseline, `createBug` and its REST controller omit user/project membership checks; identity middleware and the no-token branch of `ApiTokenRestGuard` do not require authentication. | High authorization risk. A real Nest controller/service harness returned 201 for anonymous and nonmember principals before the fix; identities/DB were simulated, not a production or PostgreSQL exploit. | The focused follow-up invokes existing user/project authorization before bug validation, target resolution or writes. The nullable-user MCP rationale is stale relative to current member-bound MCP. | PR #28 owner-merged with fresh database/session/token/MCP evidence below; not claimed resolved by verdict-preservation tests or a full authorization audit. |
 | `addBugLink` does not sanitize targets; create/update sanitize component IDs independently, not the complete testcase/run/execution chain. | High cross-project/relationship-integrity risk, source-confirmed. Independent foreign keys prove existence, not ownership. | Validate the complete authoritative chain, active parents/membership and historical-link edit semantics across create/add/replace, with rejection before unintended writes. | Separate relationship repair/release blocker. Checking the effective persisted execution binding in the verdict helper is NOT a full repair. |
 
 #### Integrated rollback evidence and approved bug-link follow-up
@@ -3816,6 +3816,74 @@ stamps and workspace self-healing may write authentication/context metadata;
 execution domain state, not a promise that all database writes are prohibited.
 Complete relationship validation, add/replace-link concurrency, unsafe mutation
 retry and unexpected postcommit errors remain separately owned blockers.
+
+#### Integrated #28 evidence and strict relationship-validation slice
+
+The owner merged PR [#28](https://github.com/1alextest/Tesbooboo/pull/28) into
+`development` as `aa665f4` on 2026-11-11 at 23:46:43 UTC. Final head `255f132`
+passed **23/23 checks**, including
+[4 PostgreSQL suites / 27 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43119287273/job/130855305201),
+[5 authorization suites / 205 tests](https://github.com/1alextest/Tesbooboo/actions/runs/43119287409/job/130855305062)
+and [3 real session/token/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43119288432/job/130855308634).
+Backend quality passed 1,645 tests, with 125 external/DB tests skipped in that
+separate job. No agent merge, deployment, complete authorization certification or
+Phase 1 completion is implied.
+
+For the next bounded relationship repair, the user explicitly selected **atomic
+rejection** of malformed, missing, foreign-project or mismatched **new/changed**
+bug-link targets. This deliberately supersedes create/edit's stale-ID-dropping
+contract; the existing API tests are updated to assert whole-request rejection,
+not removed. It does not change #27's separate policy: a valid association to a
+finalized automated run succeeds without altering its verdict.
+
+The shared `LegacyService` writer parses/normalizes/deduplicates link tuples and
+validates project ownership, live new targets, testcase/run membership and actual
+execution parents. Create and edit commit metadata and relationships together;
+add/replace/unlink serialize on the bug row. Owned run locks precede testcase,
+membership and execution locks, then the bug lock and fresh existing-link read.
+This prevents stale historical exemptions and avoids the bug -> run -> execution
+-> bug lock cycle with manual edits and project-member cleanup. Execution KEY SHARE
+is deliberate: administrative non-key assignment updates remain compatible.
+
+An exact unchanged, locally owned, consistent historical tuple can retain deleted
+targets and its original link row/ID/timestamp during ordinary metadata edits.
+Foreign/mismatched historical tuples are not exempt, a supplied link ID grants
+nothing, and removal does not authorize later re-adding deleted targets. Existing
+partial associations and empty link arrays remain supported; add-link still needs
+testcaseId or cycleId. MCP retains its additional project-bound ownership checks,
+including live-target checks for its dedicated link tool; its descriptions now
+state strict rejection and sealed-verdict behavior truthfully. No new UI, endpoint,
+schema, dependency, workflow or relaxed CI/security gate is introduced.
+
+Verification owners: the new parser/chain unit spec, existing authorization/finalization
+and MCP specs, existing migrated PostgreSQL closure suite, `e2e/api/bugs.spec.ts`
+and the guarded disposable `e2e/ci-smoke.spec.ts`. Database cases compare full
+bug/link/run/membership/execution rows after rejected create/add/edit, test both
+deletion orderings, nullable-key concurrency, opposite multi-run order, stale
+historical unlink and the actual three-writer interaction. The edit rollback
+observer forwards real driver queries, observes completed metadata UPDATE and
+link INSERT plus their pending values, then causes native SQLSTATE `22012` with
+`SELECT 1 / 0`; it requires complete persisted rollback, no success events, released
+clients and a valid retry. Mocked persistence and local skipped DB tests do not
+satisfy any of those database assertions.
+
+Local initial verification: backend/E2E typechecks and full-emission backend
+compilation passed; frozen lint has 9 existing errors / 2 warnings / **0 new errors**.
+The selected unit/HTTP/MCP/finalization run passed **4 suites / 191 tests**, with its
+unconfigured DB suite skipped. New database cases, actual REST/MCP refusal and
+browser readback are **pending fresh isolated CI**, not claimed as local passes.
+Full impacted shared-stack API/UI execution and independent original-baseline
+runtime reproduction/review remain outstanding.
+
+**Scoped open security finding:** preexisting invalid `bug_links` rows can still
+resolve foreign testcase titles/external IDs and run names through `bugSelect`'s
+unrestricted metadata joins. This is source-confirmed, not a reproduced production
+disclosure. The write validator prevents new invalid associations; it does **not**
+repair, hide, migrate or delete existing records. Read-path ownership filtering,
+an inventory of invalid rows and an owner-approved, history-preserving remediation
+are a separate high-priority Phase 1 release blocker. Do not silently purge history
+or claim this write PR closes it. Unexpected postcommit auto-failure/event errors,
+lost-ack retries and transactional authorization revocation remain out of scope.
 
 Remaining mutation inventory is not a list of automatically approved removals:
 
