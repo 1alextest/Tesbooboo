@@ -187,3 +187,84 @@ describe("bug creation through the actual controller/service HTTP boundary", () 
     expect(await response.json()).toMatchObject({ id: bugId });
   });
 });
+
+describe("execution run context through the actual controller/service HTTP boundary", () => {
+  const memberId = "22222222-2222-4222-8222-222222222222";
+  const runId = "55555555-5555-4555-8555-555555555555";
+  const executionId = "66666666-6666-4666-8666-666666666666";
+  const otherRun = "77777777-7777-4777-8777-777777777777";
+  const query = jest.fn(async (sql: string, values?: unknown[]) => {
+    if (sql.includes("FROM executions e") && sql.includes("WHERE e.id = $1")) {
+      return { rows: [{ id: executionId, project_id: PROJECT, cycle_id: runId, status: "Passed", executed_by: memberId, assignee_id: null }] };
+    }
+    if (sql.includes("FROM cycles") && sql.includes("FOR UPDATE")) return { rows: [{ source: "manual", closed_at: null }] };
+    if (sql.includes("UPDATE executions SET")) return { rows: [{ id: executionId, status: values?.[1] ?? "Passed", assignee_id: null }] };
+    return { rows: [] };
+  });
+  const transaction = jest.fn(async (work: (client: { query: typeof query }) => Promise<unknown>) => work({ query }));
+  let app: INestApplication;
+  let baseUrl: string;
+  let activity: jest.SpyInstance;
+  let notify: jest.SpyInstance;
+
+  beforeAll(async () => {
+    const service = makeLegacy({ query, transaction } as unknown as DatabaseService);
+    jest.spyOn(service, "requireProjectAccess").mockImplementation(async (actor) => {
+      if (actor !== memberId) throw new NotFoundException({ error: "Project not found" });
+      return {} as never;
+    });
+    activity = jest.spyOn(service, "logProjectActivity").mockResolvedValue(undefined);
+    notify = jest.spyOn(service as unknown as { notifyExecutionChange: () => Promise<void> }, "notifyExecutionChange").mockResolvedValue(undefined);
+    const module = await Test.createTestingModule({
+      controllers: [LegacyController],
+      providers: [
+        { provide: LegacyService, useValue: service },
+        { provide: CustomFieldsService, useValue: {} },
+        { provide: ZyraProgressService, useValue: {} },
+        { provide: WelcomeEmailService, useValue: {} },
+        { provide: APP_GUARD, useClass: ApiTokenRestGuard }
+      ]
+    }).compile();
+    app = module.createNestApplication();
+    // Real Nest controller and service; synthetic principals and SQL effects, not cookie/DB proof.
+    app.use((req: AuthenticatedRequest, _res: unknown, next: () => void) => {
+      req.userId = typeof req.headers["x-test-user"] === "string" ? req.headers["x-test-user"] : null;
+      if (req.headers["x-test-token"]) req.apiToken = { tokenId: "fixture", userId: req.userId, projectId: PROJECT, scopes: ["write"] };
+      next();
+    });
+    await app.listen(0, "127.0.0.1");
+    baseUrl = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`;
+  });
+  afterAll(async () => { await app?.close(); });
+  beforeEach(() => { query.mockClear(); transaction.mockClear(); activity.mockClear(); notify.mockClear(); });
+
+  async function patchRun(cycleId: string, actor: string | null = memberId, token = false) {
+    return fetch(`${baseUrl}/api/cycles/${cycleId}/executions/${executionId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", ...(actor ? { "x-test-user": actor } : {}), ...(token ? { "x-test-token": "1" } : {}) },
+      // A body parent must not override the authoritative URL parent.
+      body: JSON.stringify({ status: "Blocked", actualResult: "Scoped edit", cycleId: runId })
+    });
+  }
+
+  it.each([otherRun, "00000000-0000-4000-8000-000000000001", "not-a-run-id"])("rejects URL run %s before mutation or success events", async (cycleId) => {
+    expect((await patchRun(cycleId)).status).toBe(404);
+    expect(transaction).not.toHaveBeenCalled();
+    expect(query.mock.calls.some(([sql]) => /^\s*(UPDATE|INSERT|DELETE)\b/.test(sql))).toBe(false);
+    expect(activity).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("keeps matching-run browser writes allowed", async () => {
+    expect((await patchRun(runId)).status).toBe(200);
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls.some(([sql]) => sql.includes("UPDATE executions SET"))).toBe(true);
+  });
+
+  it("retains anonymous, inaccessible-project and flat token-route refusals", async () => {
+    expect((await patchRun(runId, null)).status).toBe(400);
+    expect((await patchRun(runId, otherRun)).status).toBe(404);
+    expect((await patchRun(runId, memberId, true)).status).toBe(403);
+    expect(transaction).not.toHaveBeenCalled();
+    expect(activity).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
+  });
+});
