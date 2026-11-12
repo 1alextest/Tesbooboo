@@ -1,4 +1,4 @@
-import { ConflictException } from "@nestjs/common";
+import { BadRequestException, ConflictException } from "@nestjs/common";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
 import type { DatabaseService } from "../database/database.service";
 
@@ -53,7 +53,7 @@ describe("historical imports respect finalized automation runs", () => {
   });
 
   const setup = (source: string, closed: boolean) => {
-    const query = jest.fn(async (sql: string) => {
+    const query = jest.fn(async (sql: string, _values?: unknown[]) => {
       if (sql.includes("FROM cycles WHERE id = $1") && sql.includes("FOR UPDATE")) {
         return { rows: [{ id: run, source, closed_at: closed ? new Date() : null }] };
       }
@@ -90,5 +90,64 @@ describe("historical imports respect finalized automation runs", () => {
     const result = await svc.importRunHistory(user, run, { run: { status: "Completed" } });
     expect(result.runFields).toEqual(["status"]);
     expect(query.mock.calls.some(([sql]) => sql.includes("UPDATE cycles SET"))).toBe(true);
+  });
+
+  const testcaseId = "55555555-5555-4555-8555-555555555555";
+  const otherCaseId = "66666666-6666-4666-8666-666666666666";
+  const nul = "before\u0000after";
+  const invalidText = [
+    { label: "results[1].actualResult", result: { actualResult: nul } },
+    { label: "results[1].errorMessage", result: { errorMessage: nul } },
+    { label: "results[1].errorStack", result: { errorStack: nul } },
+    { label: "results[1].stepResults[0].comment", result: { stepResults: [{ position: 1, status: "Failed", comment: nul }] } },
+    { label: "results[1].history[0].comment", result: { history: [{ status: "Passed", comment: nul }] } },
+    { label: "results[1].history[0].errorStack", result: { history: [{ status: "Passed", errorStack: nul }] } }
+  ];
+
+  it.each(invalidText)("rejects U+0000 in $label before any transaction or writes", async ({ label, result }) => {
+    const { svc, query, transaction } = setup("manual", false);
+    await expect(svc.importRunHistory(user, run, {
+      run: { tags: ["Must not persist"], timeSpentMs: 321 },
+      results: [{ testcaseId, status: "Passed" }, { testcaseId: otherCaseId, ...result }],
+      refreshSnapshots: true
+    })).rejects.toMatchObject({ response: { error: `${label} must not contain U+0000` } });
+    expect(transaction).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    expect(svc.logProjectActivity).not.toHaveBeenCalled();
+  });
+
+  it("rejects U+0000 in run tags before any transaction or writes", async () => {
+    const { svc, query, transaction } = setup("manual", false);
+    await expect(svc.importRunHistory(user, run, { run: { tags: ["valid", nul] } }))
+      .rejects.toMatchObject({ response: { error: "run.tags[1] must not contain U+0000" } });
+    expect(transaction).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    expect(svc.logProjectActivity).not.toHaveBeenCalled();
+  });
+
+  it("preserves valid Unicode, literal escape text, nulls and the historical text-length boundary", async () => {
+    const { svc, query } = setup("manual", true);
+    const text = "日本語 café 😀\n\t literal \\u0000";
+    const maxText = "x".repeat(1_000_000);
+    await svc.importRunHistory(user, run, {
+      run: { tags: ["  Smoke 😀  ", "SMOKE 😀"] },
+      results: [{
+        testcaseId, actualResult: text, errorMessage: null, errorStack: maxText,
+        stepResults: [{ position: 1, status: "Passed", comment: text }],
+        history: [{ status: "Passed", comment: text, errorStack: null }]
+      }]
+    });
+    const resultWrite = query.mock.calls.find(([sql]) => sql.includes("UPDATE executions e SET"));
+    expect(JSON.parse(String(resultWrite?.[1]?.[1]))[0]).toEqual({
+      testcaseId, actualResult: text, errorMessage: null, errorStack: maxText,
+      stepResults: [{ position: 1, status: "Passed", comment: text }],
+      history: [{ status: "Passed", comment: text, errorStack: null }]
+    });
+    const runWrite = query.mock.calls.find(([sql]) => sql.includes("UPDATE cycles SET"));
+    expect(runWrite?.[1]?.[1]).toEqual(["Smoke 😀"]);
+    const tooLong = setup("manual", false);
+    await expect(tooLong.svc.importRunHistory(user, run, { results: [{ testcaseId, actualResult: `${maxText}x` }] }))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(tooLong.transaction).not.toHaveBeenCalled();
   });
 });

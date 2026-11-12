@@ -1142,6 +1142,7 @@ test.describe("run history import", () => {
     const { cycleId, caseIds } = await seedRun(request, 1);
     try {
       const stack = `Error: boom\n${"    at frame (file.js:1:1)\n".repeat(5000)}`; // ~130k characters
+      const actualResult = "Passed on the third try — 日本語 café 😀; literal \\u0000";
       expect(stack.length).toBeGreaterThan(100_000);
       const res = await request.post(importUrl(cycleId), {
         data: {
@@ -1149,7 +1150,7 @@ test.describe("run history import", () => {
             {
               testcaseId: caseIds[0],
               status: "Passed",
-              actualResult: "Passed on the third try",
+              actualResult,
               executedAt: "2024-03-08T09:30:00Z",
               durationMs: 2_100_000_000, // 24+ days, still inside the 32-bit column
               errorMessage: "Timeout",
@@ -1174,7 +1175,7 @@ test.describe("run history import", () => {
       const [row] = await (await request.get(`/api/cycles/${cycleId}/executions`)).json();
       expect(row).toMatchObject({
         status: "Passed",
-        actualResult: "Passed on the third try",
+        actualResult,
         durationMs: 2_100_000_000,
         errorMessage: "Timeout",
         reportedBy: "automation",
@@ -1312,6 +1313,7 @@ test.describe("run history import", () => {
       await bad({ run: { tags: "a" } }, /tags/);
       await bad({ run: { tags: ["x".repeat(41)] } }, /1 to 40/);
       await bad({ run: { tags: [""] } }, /1 to 40/);
+      await bad({ run: { tags: ["bad\u0000tag"] } }, /run\.tags\[0\].*U\+0000/);
       await bad({ run: { tags: Array.from({ length: 21 }, (_, i) => `t${i}`) } }, /at most 20/);
       await bad({ results: {} }, /results must be an array/);
       await bad({ results: Array.from({ length: 501 }, () => ok) }, /at most 500/);
@@ -1322,6 +1324,13 @@ test.describe("run history import", () => {
       await bad({ results: [{ ...ok, executedAt: "yesterday" }] }, /executedAt/);
       await bad({ results: [{ ...ok, durationMs: 2_147_483_648 }] }, /durationMs/);
       await bad({ results: [{ ...ok, errorStack: "x".repeat(1_000_001) }] }, /too long/);
+      for (const field of ["actualResult", "errorMessage", "errorStack"]) {
+        await bad({ results: [{ ...ok, [field]: "bad\u0000text" }] }, new RegExp(`results\\[0\\]\\.${field}.*U\\+0000`));
+      }
+      await bad({ results: [{ ...ok, stepResults: [{ position: 1, status: "Passed", comment: "bad\u0000step" }] }] }, /stepResults\[0\]\.comment.*U\+0000/);
+      for (const field of ["comment", "errorStack"]) {
+        await bad({ results: [{ ...ok, history: [{ status: "Passed", [field]: "bad\u0000history" }] }] }, new RegExp(`history\\[0\\]\\.${field}.*U\\+0000`));
+      }
       await bad({ results: [{ ...ok, reportedBy: "bot" }] }, /reportedBy/);
       await bad({ results: [{ ...ok, stepResults: [{ position: 0, status: "Passed" }] }] }, /position/);
       await bad({ results: [{ ...ok, stepResults: [{ position: 1, status: "Passed" }, { position: 1, status: "Failed" }] }] }, /appears twice/);

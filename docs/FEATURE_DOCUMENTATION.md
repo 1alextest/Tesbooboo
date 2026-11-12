@@ -4139,6 +4139,100 @@ DB/browser suites are separate evidence, not a relabeling of the SDK fixtures.
 Full existing checks must also be fresh on any later documentation-only head
 before review. Phase 1 remains open; no merge, publication or deployment occurred.
 
+#### Integrated #32 and historical-import text / later-write rollback slice
+
+The owner merged PR [#32](https://github.com/1alextest/Tesbooboo/pull/32) as
+`27173f0` on 2026-11-12 at 13:01:34 UTC. Final head `80ec90c` passed **22/22
+triggered checks**, including [143 SDK tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43220931436/job/131191951029),
+[53 migrated PostgreSQL tests](https://github.com/1alextest/Tesbooboo/actions/runs/43220931518/job/131191952015)
+and [3 real API/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43220931505/job/131191951828).
+This integrates truthful reporter close outcomes; the two unchanged local Windows
+permission failures and broader Phase 1 / human release-review gates remain open.
+
+The next bounded slice reuses `LegacyService.historyText`, the existing history
+import owners and the current disposable database/smoke jobs. U+0000 is accepted
+by the current validator, although PostgreSQL cannot store it in text/JSONB.
+The earlier #26 rollback proof already observed native JSONB rejection after a
+completed run write; it did not provide a field-specific 400 or cover completed
+execution/snapshot rollback stages. No unmerged commits were found on the two
+existing history-import/finalization branches before selecting this follow-up.
+
+Regressions enumerate six result/nested text locations and run tags, require
+whole-request rejection before the import transaction, and compare independent
+persisted run/results/snapshots/audit/attachments state in native PostgreSQL and
+genuine authenticated HTTP. Positive controls retain valid Unicode/emoji, literal
+`\\u0000` text, null/omitted fields, text limits, tag deduplication, replay, manual
+closed imports, open automation and finalized-automation refusal. Existing owner
+and access boundaries stay unchanged; plan-guard consistency remains separate.
+
+The original rollback oracle deliberately used invalid U+0000 text. Rejecting
+that text earlier must not turn rollback assurance into validation-only coverage.
+The replacement parameterized oracle forwards actual production run, execution
+and snapshot UPDATEs, observes the changed pending rows on that same connection,
+then issues a native `SELECT 1 / 0` at each completed stage. It retains production
+BEGIN/ROLLBACK/release, independent-client state equality and a valid single-pool
+retry. This is explicit deterministic fault injection, not a natural production
+failure or concurrency claim; it strengthens stage coverage without weakening the
+no-prefix/rollback assertions or changing the transaction implementation.
+
+Local regression-only execution: **25 tests / 18 passed / 7 failed**, the seven
+intended U+0000 validation refusals; the persistence in that unit fixture is
+mocked, not database evidence. An earlier 120-second test command timed out and
+is not counted as a pass. Backend and E2E typechecks passed. Canonical history
+import test collection failed because `e2e/.auth/context.json` is absent; its zero
+collected tests are not a pass. No session state was fabricated and no shared
+database was targeted.
+
+Regression-only PR [#33](https://github.com/1alextest/Tesbooboo/pull/33) head
+`852d45e` left production code unchanged. Its
+[migrated PostgreSQL baseline](https://github.com/1alextest/Tesbooboo/actions/runs/43225995109/job/131209202943)
+ran **62 tests / 55 passed / 7 failed / no skips**: all seven new cases preserved
+independently read domain state, then failed because they received native database
+errors rather than `BadRequestException`. All three completed-write rollback,
+release and valid-retry stage controls passed already, proving existing atomicity
+at those stages rather than inventing a transaction defect. Server logs show the
+intended invalid UTF8/Unicode errors and injected division-by-zero faults.
+[Genuine HTTP baseline](https://github.com/1alextest/Tesbooboo/actions/runs/43225995124/job/131209204306)
+returned 500 for the first bad tag after persisted-state equality passed. Its two
+earlier smoke tests passed; later text cases, positive controls and browser flows
+did not execute and are not counted as baseline passes. The
+[backend baseline](https://github.com/1alextest/Tesbooboo/actions/runs/43225995154/job/131209203076)
+passed 1,684 tests, failed the seven expected unit cases and skipped 160 external/DB
+tests. All other 19 triggered checks passed; this intentionally red baseline does
+not waive any gate.
+
+The bounded production repair adds the U+0000 refusal to the existing shared
+`historyText` validator and reuses it for indexed run tags. It neither rewrites
+text nor changes limits, normalization, authorization, finalization, SQL, locking
+or transaction boundaries. Local repaired owner suite: **25/25 passed**. Backend
+production build and frozen lint passed (9 known errors, 2 warnings, **0 new
+errors**); the initial lint command used the wrong working directory and failed
+before analysis, then the canonical backend-directory invocation ran successfully.
+Implementation head `5d10bba` passed **22/22 triggered checks**:
+
+- [Migrated PostgreSQL: 4 suites / **62 tests**, no skips](https://github.com/1alextest/Tesbooboo/actions/runs/43227049427/job/131212794633).
+  All seven field-specific refusals and independent state-equality cases pass;
+  all three completed-write fault/rollback/release/retry controls still pass.
+- [Genuine API/MCP/browser smoke: **3 passed**](https://github.com/1alextest/Tesbooboo/actions/runs/43227049177/job/131212794398).
+  All seven HTTP refusals, nonmember/anonymous controls, Unicode/emoji/literal
+  escape round-trip, replay, null clearing, manual-completed and open-automation
+  imports, sealed refusal and inherited four drawer/full-page browser journeys
+  executed. These are the disposable CI smoke assertions, not the full canonical
+  shared-stack `cycles.spec.ts` suite or a new independent visual review.
+- [Backend quality: **1,691 passed / 160 external/DB skips**](https://github.com/1alextest/Tesbooboo/actions/runs/43227049555/job/131212795501).
+  Separate [API/MCP contracts](https://github.com/1alextest/Tesbooboo/actions/runs/43227049427/job/131212794637)
+  passed 206 / skipped 8; [transactional unit regressions](https://github.com/1alextest/Tesbooboo/actions/runs/43227049427/job/131212794252)
+  passed 72 / skipped 90 DB tests. These skips are not relabeled as database passes.
+
+The standalone authorization workflow did not trigger for this slice's paths;
+its prior results are not counted as a fresh check. Native DB/smoke evidence is
+distinct from unit mocks and the unexecuted shared-stack selection. A later
+documentation-only head still requires fresh applicable checks and human review.
+No shared database, schema, UI, dependency, retention/deletion, bulk atomicity,
+publication or deployment change is authorized by this slice. Unpaired-surrogate
+validation and other mutation/postcommit/contract decisions are separate; this is
+not full import certification or Phase 1 completion.
+
 Remaining mutation inventory is not a list of automatically approved removals:
 
 | Existing writer | Source-grounded boundary / remaining decision |
@@ -4148,7 +4242,7 @@ Remaining mutation inventory is not a list of automatically approved removals:
 | `removeProjectMember` | Atomically clears execution assignments across the project, including closed runs, without cycle locks. Administrative cleanup versus sealed metadata needs explicit classification. |
 | REST/MCP bulk execution changes | Existing shared per-item guards protect each write, but a later rejection/concurrent close can leave a committed prefix. Whole-request atomicity and truthful partial-batch responses remain distinct work. |
 | REST/MCP permission and plan boundaries | Current member/scope checks are reusable, not a substitute for full parent-child validation. Legacy cycle URLs and MCP aliases require the same entitlement-policy audit; no bypass is declared runtime-reproduced here. |
-| Historical imports | The real rollback test fails after a completed Run UPDATE. U+0000 validation and failure after completed execution/snapshot writes remain separate gaps; the bounded proof is not silently generalized. |
+| Historical imports | This slice adds early U+0000 validation and verified native fault/rollback controls after completed run, execution and snapshot writes. Other invalid Unicode, commit-acknowledgement ambiguity and full shared-stack import/permission coverage remain separate; the three staged SQL faults are not universal rollback or concurrency proof. |
 
 The full canonical eight-file package and
 `Tesbo_Existing_Application_Baseline_v1.0.md` are still unavailable in inspected
