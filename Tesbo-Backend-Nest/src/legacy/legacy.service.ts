@@ -7305,6 +7305,9 @@ export class LegacyService implements OnModuleInit {
     if (raw.length > LegacyService.HISTORY_IMPORT_MAX_TEXT) {
       throw new BadRequestException({ error: `${label} is too long (${raw.length} characters, the limit is ${LegacyService.HISTORY_IMPORT_MAX_TEXT})` });
     }
+    // PostgreSQL text/JSONB cannot represent U+0000. Reject it during full-payload
+    // normalization, before any run/result/snapshot writes, rather than stripping it.
+    if (raw.includes("\u0000")) throw new BadRequestException({ error: `${label} must not contain U+0000` });
     return raw;
   }
 
@@ -7343,9 +7346,10 @@ export class LegacyService implements OnModuleInit {
       if (!Array.isArray(run.tags)) throw new BadRequestException({ error: "run.tags must be an array of strings" });
       const seen = new Set<string>();
       const tags: string[] = [];
-      for (const raw of run.tags) {
+      for (const [index, raw] of run.tags.entries()) {
         const tag = typeof raw === "string" ? raw.trim() : "";
         if (!tag || tag.length > 40) throw new BadRequestException({ error: "Each run tag must be 1 to 40 characters" });
+        LegacyService.historyText(tag, `run.tags[${index}]`);
         if (seen.has(tag.toLowerCase())) continue;
         seen.add(tag.toLowerCase());
         tags.push(tag);

@@ -4181,9 +4181,37 @@ mocked, not database evidence. An earlier 120-second test command timed out and
 is not counted as a pass. Backend and E2E typechecks passed. Canonical history
 import test collection failed because `e2e/.auth/context.json` is absent; its zero
 collected tests are not a pass. No session state was fabricated and no shared
-database was targeted. Native database, real HTTP and repaired-head CI results
-are still pending. No shared database, schema, UI, dependency, retention/deletion,
-bulk atomicity, publication or deployment change is authorized by this slice.
+database was targeted.
+
+Regression-only PR [#33](https://github.com/1alextest/Tesbooboo/pull/33) head
+`852d45e` left production code unchanged. Its
+[migrated PostgreSQL baseline](https://github.com/1alextest/Tesbooboo/actions/runs/43225995109/job/131209202943)
+ran **62 tests / 55 passed / 7 failed / no skips**: all seven new cases preserved
+independently read domain state, then failed because they received native database
+errors rather than `BadRequestException`. All three completed-write rollback,
+release and valid-retry stage controls passed already, proving existing atomicity
+at those stages rather than inventing a transaction defect. Server logs show the
+intended invalid UTF8/Unicode errors and injected division-by-zero faults.
+[Genuine HTTP baseline](https://github.com/1alextest/Tesbooboo/actions/runs/43225995124/job/131209204306)
+returned 500 for the first bad tag after persisted-state equality passed. Its two
+earlier smoke tests passed; later text cases, positive controls and browser flows
+did not execute and are not counted as baseline passes. The
+[backend baseline](https://github.com/1alextest/Tesbooboo/actions/runs/43225995154/job/131209203076)
+passed 1,684 tests, failed the seven expected unit cases and skipped 160 external/DB
+tests. All other 19 triggered checks passed; this intentionally red baseline does
+not waive any gate.
+
+The bounded production repair adds the U+0000 refusal to the existing shared
+`historyText` validator and reuses it for indexed run tags. It neither rewrites
+text nor changes limits, normalization, authorization, finalization, SQL, locking
+or transaction boundaries. Local repaired owner suite: **25/25 passed**. Backend
+production build and frozen lint passed (9 known errors, 2 warnings, **0 new
+errors**); the initial lint command used the wrong working directory and failed
+before analysis, then the canonical backend-directory invocation ran successfully.
+Fresh repaired-head CI remains required. No shared database, schema, UI,
+dependency, retention/deletion, bulk atomicity, publication or deployment change
+is authorized by this slice. Unpaired-surrogate validation and other mutation/
+postcommit/contract decisions are separate; this is not full import certification.
 
 Remaining mutation inventory is not a list of automatically approved removals:
 
