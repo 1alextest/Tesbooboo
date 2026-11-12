@@ -4429,7 +4429,7 @@ options and input paths and has not been measured. Security disposition is requi
 dependency follow-up separately; a green collector is not release clearance.
 
 **F9 remediation implementation — 2026-11-12:** a separate compatible dependency
-batch updates Next **16.3.3 → 16.4.6** (matching `eslint-config-next`), Sentry
+batch updates Next **16.3.3 → 16.4.6**, Sentry
 **10.73.0 → 10.75.2**, and locked PostHog-transitive DOMPurify **3.4.15 → 3.4.17**
 within PostHog's declared `^3.4.13` range. Next's optional sharp dependency moves
 **0.35.4 → 0.35.5**. React/ReactDOM **19.2.3** and PostHog **1.433.7** remain
@@ -4474,6 +4474,19 @@ lint evidence. The supported config import is used for the next verification;
 unchanged strict CI remains required. `disableLogger` emits an upstream deprecation
 warning; its removal/redesign is not silently mixed into this security patch.
 The audit includes time-sensitive registry metadata; no exploit was executed.
+
+First candidate head `54b2dd5` passed the real integrated app/browser workflow,
+native DB and other checks, but the optional matching ESLint upgrade changed
+React Hooks analysis **7.0.1 → 7.1.1**, exposing 51 diagnostics across unchanged
+pages (effects, purity and memoization). Those observations are not newly
+introduced security-patch behavior or proven incidents, and are not silently
+marked fixed. A mass account/KB/agent/repository UI refactor is outside this
+dependency repair. The candidate therefore removes the unrelated development-
+tooling upgrade: original `eslint-config-next` **16.3.3**, React Hooks **7.0.1**,
+enabled rules, configuration and frozen baseline are retained from `development`.
+No rule disable, baseline increase or vulnerable runtime rollback is used. The
+new critical-production audit gate remains additional enforcement. Fresh CI must
+verify the narrowed patch; the first head's failing lint is not waived as a pass.
 
 F3/F4 tests use real migrated PostgreSQL/production transaction logic and an
 independent reader, with authorization/activity/notification collaborators stubbed
