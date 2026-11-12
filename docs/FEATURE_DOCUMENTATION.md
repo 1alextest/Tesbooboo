@@ -3941,7 +3941,26 @@ was individually asserted before the failure. Browser association flows later in
 that smoke did not execute and are not counted as passes at the baseline.
 
 The repair adds project predicates to the two canonical metadata joins, with the
-baseline assertions unchanged. Fresh-head CI is still required. It retains every
+baseline assertions unchanged. At PR [#30](https://github.com/1alextest/Tesbooboo/pull/30)
+head `ad45693`, **22/22 triggered checks passed**:
+[4 migrated PostgreSQL suites / 47 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43131687944/job/130897095911),
+[3 genuine REST/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43131687918/job/130897094755)
+and [1,677 backend tests](https://github.com/1alextest/Tesbooboo/actions/runs/43131687915/job/130897095283)
+(145 external/DB skips in that separate quality job). All 144 migrations,
+idempotency and integrity probes ran. Both baseline-failing tests and the full
+eight-response read matrix now pass for active/deleted foreign targets, retaining
+the reference rows and proving persisted domain-state equality. Existing local
+deleted-history edits and all four sealed drawer/full-page association/reload
+journeys also pass. The four saved screenshots were inspected; existing viewport
+clipping of lower fields remains, with visibility/values separately asserted.
+The standalone authorization workflow was not triggered because no path in its
+existing auth/MCP/app-module filter changed; it is not counted as a fresh pass.
+The ordinary backend/contracts jobs still ran their owning auth/MCP regressions.
+Local repair verification passed backend typecheck, full-emission compilation,
+frozen lint (0 new errors) and 200 selected unit/HTTP/MCP/finalization tests; its
+42 skipped DB tests are not the database evidence above. Later heads still require
+fresh checks and human review; no merge, deployment or Phase 1 signoff is claimed.
+The repair retains every
 stored link row and its IDs/timestamps, while joining display metadata only within
 the bug's project. Do not omit links, clear IDs, write data on reads or silently
 repair a historical association. Valid local deleted history keeps its existing
