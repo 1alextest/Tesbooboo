@@ -35,6 +35,18 @@ jobs:
         run: npm run typecheck
       - name: Backend lint (frozen legacy baseline; zero new errors)
         run: node ../scripts/check-lint-baseline.mjs backend
+      - name: Backend production and development high/critical-advisory gate
+        run: npm audit --audit-level=high --json > backend-audit-all.json
+      - name: Retain complete backend development and production audit
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: backend-all-dependency-audit
+          if-no-files-found: error
+          retention-days: 14
+          path: Tesbo-Backend-Nest/backend-audit-all.json
+      - name: Backend development-tool security and CLI compatibility regressions
+        run: node --test ../scripts/backend-toolchain-security.test.mjs
       - name: Backend production compilation
         run: npm run build
       - name: Backend unit and integration regressions

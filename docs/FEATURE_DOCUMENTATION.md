@@ -4951,3 +4951,66 @@ separate from #38's repaired frontend high/critical tree. Existing postcommit
 delivery/lost-COMMIT-ACK limitations, F2/F3/F6–F8 owner dispositions, canonical
 specification recovery and independent human release review remain open. No agent
 merge, deployment, SDK publication or Phase 1/2 authorization is implied.
+
+### J. Backend development-dependency security and toolchain compatibility — 2026-11-12
+
+Base: owner-merged #39, `development@60558ee3d6002aa7b32562149182cfa549bc719d`
+(20:35:11 UTC). Its implementation head `4914695` passed 22/22 checks,
+101 native DB tests (24 new document cases), 1,697 backend passes, 143 SDK
+passes and five outer browser smoke tests. All 18 captures were inspected;
+the final receipt is in #39, not a documentation-only implementation commit.
+Owner merge still does not imply independent security review or Phase 1 exit.
+
+This bounded follow-up repairs the **six previously disclosed backend development
+critical/high dependency entries together** while keeping the approved runtime,
+compiler, test, mutation and lint owners installed at their existing versions.
+In-range lock refreshes cover Handlebars **4.7.10**, Browserslist **4.29.5**
+(including its same-major browser-data/cache helper chain), Form Data **4.0.6**,
+and both YAML lines (**3.15.2 / 4.3.2**). Three version-qualified overrides
+replace only the affected pinned transitive versions: Inquirer **8.2.6 → 8.2.7**,
+Inquirer **9.2.15 → 9.3.8**, and Picomatch **4.0.1 → 4.0.4**. The Inquirer
+maintenance releases move to the maintainer's `@inquirer/external-editor` and
+remove the legacy editor's vulnerable `tmp` 0.0.x chain; `tmp` is not forcibly
+overridden across incompatible pre-1.0 API ranges. Existing 2.x Picomatch
+consumers retain patched **2.3.2** rather than being forced onto 4.x.
+
+Nest runtime **10.4.22**, CLI **10.4.9**, schematics **10.2.3**, Devkit
+**17.3.11**, TypeScript **5.9.3**, Jest **29.7.0**, ts-jest **29.4.11**, Stryker
+**10.1.1**, ESLint **9.39.4** and TypeScript ESLint **8.59.4** remain unchanged.
+No force/legacy-peer-deps installation, unsupported package substitution,
+lint-rule/baseline expansion or runtime/deployment/schema/product-policy change.
+The before/after lock comparison separately verifies all **444 production lock
+entries** (including dependency metadata/integrity) and both direct dependency
+declarations are unchanged; no development fix is presented as a repaired
+backend production vulnerability. Scanner recommendations for a Nest CLI 12 major
+are not followed merely because they are the scanner's default suggestion.
+
+`scripts/backend-toolchain-security.test.mjs` exercises the actual installed
+dependencies and the affected owners' resolved copies. **Before reinstall**, all
+eight selected security regressions fail against the old installed libraries:
+the harmless AST sentinel executes, Function is exposed through constructor
+lookup, multipart CRLF becomes a header, hostile browser stats crash, old query
+results never evict, Devkit's extglob child exceeds its eight-second bound, and
+both YAML lines ignore the configured empty-merge-work budget. These are local
+library reproductions, **not proof of exploitable remote application endpoints**.
+The tests use no shell/exfiltration payload. YAML/extglob/cache checks run in
+bounded child processes, with ordinary matching/alias/Unicode controls retained.
+
+The same suite verifies locked owner versions, patched dependency lines and
+unchanged 2.x consumers; performs actual Nest dry-run generation without writes;
+generates a service in its own disposable directory, compiles and executes it
+with **both TypeScript and webpack**; and checks both maintained Inquirer editor
+paths' Unicode temporary-file creation/cleanup. Only self-created scratch paths
+are removed. Full backend build/Jest, native DB, mutation and connected HTTP/
+browser workflows remain independently required, not replaced by these probes.
+CI adds an enforcing **all-dependency high/critical** backend audit gate, matching
+the frontend's existing gate, without weakening the full report collector.
+
+Exact current-head audit/test/build receipts are reconciled in the implementation
+PR after CI and artifact inspection. Fresh local all-dependency audit reports
+**0 critical / 0 high / 29 moderate / 10 low**, versus the retained pre-change
+**1 / 5 / 30 / 12**; production remains **0 / 0 / 14 / 0**. Moderate/low findings remain open and are
+not accepted by a green high/critical gate. Canonical companion specification and
+baseline recovery, F2/F3/F6–F8 owner decisions, independent human security/release
+review and Phase 1 exit remain separate. No agent merge, deployment, SDK
+publication, risk acceptance or unapproved Phase 2 capability is included.
