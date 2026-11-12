@@ -3,6 +3,7 @@ import { Client } from "pg";
 import { hashPasswordForSeed } from "./utils/password";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { verifyProductionReporter } from "./utils/ci-reporter";
 
 async function verifyBugCreateAccess(request: APIRequestContext, api: string, projectId: string, ownerId: string, organizationId: string) {
   // Called only after the test's explicit loopback/disposable-database safety checks.
@@ -625,6 +626,7 @@ test("history import, bug authorization and finalized automation preserve persis
     await verifyBugCreateAccess(request, api, projectId, bootstrap.userId, bootstrap.organizationId);
     await verifyBugLinkRelationships(request, api, projectId, bootstrap.userId);
     await verifyBrowserMutationResponseLoss(page, api, web, projectId, testInfo);
+    await verifyProductionReporter(page, api, web, projectId, testInfo);
     for (const surface of ["drawer", "full-page"]) {
       for (const status of ["pass", "fail"]) {
         const title = `CI sealed ${surface} ${status}`;
