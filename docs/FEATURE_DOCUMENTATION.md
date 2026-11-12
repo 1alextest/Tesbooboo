@@ -4088,9 +4088,40 @@ but `null` makes a passing suite exit **1** via an uncaught `mismatch` access.
 Success, older minimal acknowledgements, acknowledged incomplete closes, retry
 success and mismatch controls pass on the baseline. Nullable historical statuses
 are covered and must not be rejected or described as completed. Frozen dependency
-installation, SDK build/typecheck and whitespace checks passed locally. Isolated
-Linux baseline and fresh repaired-head CI remain pending; no PostgreSQL, browser
-rendering, shared-stack release or independent human review is claimed here.
+installation, SDK build/typecheck and whitespace checks passed locally.
+
+Regression-only head `352bb38` was pushed as draft PR
+[#32](https://github.com/1alextest/Tesbooboo/pull/32) before changing production code.
+The [isolated Linux SDK baseline](https://github.com/1alextest/Tesbooboo/actions/runs/43218381737/job/131183354082)
+reproduced **141 tests / 112 passed / 29 failed / 0 skipped**, including the real
+CLI passing-suite exit-1 defect on `null`; both strict permission tests passed on
+Linux. The other 21 triggered checks passed. This baseline is intentionally red,
+not a completed repair or a waiver of that SDK gate.
+
+The bounded repair validates only `closeRun` acknowledgements: exact requested
+run, nullable/well-formed numeric mismatch pairs, optional boolean `alreadyClosed`
+and optional `completed`/`incomplete`/historical-null `closeStatus`. Older minimal
+`{ runId, mismatch: null }` remains valid. Invalid successful acknowledgements are
+counted once and logged without their response body or an extra close replay;
+generic request parsing and transient retries are unchanged. `onEnd` branches on
+the result, preserves local diagnostics and prints supplied server status rather
+than substituting requested status. Missing already-closed and explicit-null
+statuses say `status not reported`. README semantics now distinguish requested
+closure from confirmation without changing startup or non-fatal ingest policy.
+
+The repaired initial local run was **141 tests / 139 passed / 2 failed / 0 skipped**,
+with all 29 reporter regressions fixed and only the unchanged Windows permission
+failures remaining. Two additional controls exercise one-count/no-replay invalid
+acknowledgements with three configured attempts and native multipart quota
+diagnostics/evidence-before-close ordering. One intervening expanded full-suite
+run exceeded its 120-second shell limit; it is not counted as a pass. The completed
+expanded rerun was **143 tests / 141 passed / 2 failed / 0 skipped**, with both extra
+controls and all six production-build passing/failing CLI processes passing;
+only the same Windows permission assertions failed. Fresh repaired-head CI remains
+pending. These new tests do not
+prove PostgreSQL persistence, backend close races, browser rendering, the entire
+supported Playwright version range, shared-stack release safety or independent
+human review. Phase 1 remains open; no merge, publication or deployment occurred.
 
 Remaining mutation inventory is not a list of automatically approved removals:
 

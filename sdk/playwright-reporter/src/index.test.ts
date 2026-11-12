@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { FullConfig, Suite } from "@playwright/test/reporter";
-import TesboReporter from "./index";
+import TesboReporter, { TesboClient } from "./index";
 import { ENV_BASE_URL, ENV_PROJECT_ID, ENV_TOKEN } from "./config";
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -189,11 +189,13 @@ async function withIngest(
   const server = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
-    const parsed = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown> : {};
+    const parsed = chunks.length && req.headers["content-type"]?.includes("application/json")
+      ? JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown> : {};
     calls.push({ method: req.method ?? "", url: req.url ?? "", body: parsed });
     if (req.headers.authorization !== `Bearer ${TOKEN}`) { json(res, 403, { error: "Fixture token required" }); return; }
     if (req.url?.endsWith("/cases/resolve")) { json(res, 200, { known: [{ caseId: CASE }], unknown: [] }); return; }
     if (req.url?.endsWith("/runs")) { json(res, 201, { runId: RUN, reused: false }); return; }
+    if (req.url?.endsWith("/evidence")) { json(res, 200, { total: 0, skipped: "quota" }); return; }
     if (req.url?.endsWith("/results")) {
       json(res, outcome === "unknown-result" ? 404 : 200, outcome === "unknown-result" ? { error: "Fixture case disappeared" } : { executionId: "fixture", status: "Passed", retryCount: 0 }); return;
     }
@@ -234,14 +236,17 @@ function linkedTest(): TestCase {
   return { tags: [`@tesbo.testId("${CASE}")`], annotations: [], titlePath: () => ["close fixture"] } as unknown as TestCase;
 }
 
-async function runLifecycle(baseUrl: string, status: FullResult["status"] = "passed", extra: { retries?: number; unlinked?: boolean } = {}) {
-  const reporter = new TesboReporter({ baseUrl, projectId: PROJECT, token: TOKEN, retries: extra.retries ?? 1, timeoutMs: 1_000, attachEvidence: "never" });
+async function runLifecycle(baseUrl: string, status: FullResult["status"] = "passed", extra: { retries?: number; unlinked?: boolean; evidence?: string } = {}) {
+  const reporter = new TesboReporter({ baseUrl, projectId: PROJECT, token: TOKEN, retries: extra.retries ?? 1, timeoutMs: 1_000, attachEvidence: extra.evidence ? "always" : "never" });
   const tagged = linkedTest();
   const unlinked = { tags: [], annotations: [], titlePath: () => ["unlinked fixture"] } as unknown as TestCase;
   const suite = { allTests: () => extra.unlinked ? [tagged, unlinked] : [tagged] } as unknown as Suite;
   return captureLogs(async () => {
     await reporter.onBegin(fakeConfig, suite);
-    reporter.onTestEnd(tagged, { status: "passed", duration: 1, retry: 0, attachments: [] } as unknown as TestResult);
+    reporter.onTestEnd(tagged, {
+      status: "passed", duration: 1, retry: 0,
+      attachments: extra.evidence ? [{ name: "screenshot", path: extra.evidence, contentType: "image/png" }] : []
+    } as unknown as TestResult);
     if (extra.unlinked) reporter.onTestEnd(unlinked, { status: "passed", duration: 1, retry: 0, attachments: [] } as unknown as TestResult);
     await reporter.onEnd({ status } as FullResult);
   });
@@ -365,6 +370,38 @@ test("closure failure does not suppress unlinked, unknown-case or request-failur
     assert.match(logs, /1 result\(s\) had no matching test case/);
     assert.match(logs, /2 request\(s\) to Tesbo failed/);
   });
+});
+
+test("an unusable successful close acknowledgement is counted once without replay or response-body logging", async () => {
+  await withIngest("invalid-pair", async (baseUrl, calls) => {
+    const logs: string[] = [];
+    const client = new TesboClient({ baseUrl, projectId: PROJECT, token: TOKEN, retries: 3, timeoutMs: 1_000, log: (line) => logs.push(line) });
+    const closed = await client.closeRun(RUN, "completed", { total: 1 });
+    assert.equal(closed.ok, false);
+    assert.equal(client.failures, 1);
+    assert.equal(calls.filter((call) => call.url.endsWith("/close")).length, 1);
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /invalid close acknowledgement/);
+    assert.doesNotMatch(logs[0], /reported|stored/);
+    assert.equal(logs[0].includes(TOKEN), false);
+  });
+});
+
+test("closure failure retains quota diagnostics and drains evidence before closing", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tesbo-reporter-evidence-"));
+  try {
+    const evidence = path.join(dir, "fixture.png");
+    await fs.writeFile(evidence, "fixture upload bytes; no browser capture");
+    await withIngest("denied", async (baseUrl, calls) => {
+      const logs = await runLifecycle(baseUrl, "passed", { evidence });
+      assert.deepEqual(calls.slice(-2).map((call) => call.url.split("/").pop()), ["evidence", "close"]);
+      assert.match(logs, /closure unconfirmed/);
+      assert.match(logs, /1 evidence file\(s\) were skipped: the workspace's storage quota is full/);
+      assert.match(logs, /1 request\(s\) to Tesbo failed/);
+    });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }); // Only this test's newly-created directory.
+  }
 });
 
 for (const outcome of ["denied", "null", "lost-ack"] as const) {
