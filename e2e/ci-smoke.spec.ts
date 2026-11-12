@@ -200,7 +200,12 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
           if (transport === "MCP") {
             expect(response.ok()).toBeTruthy();
             expect(result.error, JSON.stringify(result)).toBeDefined();
-          } else expect(response.status(), JSON.stringify(result)).toBe(status);
+          } else if (transport === "token" && operation !== "create") {
+            // Tokens deliberately cannot use flat /api/bugs routes. Prove this earlier guard
+            // remains intact; session REST and MCP cover the shared edit/add validator below it.
+            expect(response.status(), JSON.stringify(result)).toBe(403);
+            expect(result.error).toBe("API token is not authorized for this REST project route");
+          } else expect(response.status(), `${transport} ${operation}: ${JSON.stringify(result)}`).toBe(status);
           expect(await persisted(), `${transport} ${operation}`).toEqual(before);
         }
       }

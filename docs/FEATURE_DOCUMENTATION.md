@@ -3869,9 +3869,20 @@ satisfy any of those database assertions.
 
 Local initial verification: backend/E2E typechecks and full-emission backend
 compilation passed; frozen lint has 9 existing errors / 2 warnings / **0 new errors**.
-The selected unit/HTTP/MCP/finalization run passed **4 suites / 191 tests**, with its
-unconfigured DB suite skipped. New database cases, actual REST/MCP refusal and
-browser readback are **pending fresh isolated CI**, not claimed as local passes.
+The initial selected unit/HTTP/MCP/finalization run passed **4 suites / 191 tests**,
+with its unconfigured DB suite skipped. The later full local coverage run passed
+**82 suites / 1,672 tests**, with **6 suites / 139 external-or-DB tests skipped**.
+At PR [#29](https://github.com/1alextest/Tesbooboo/pull/29) head `52233fe`, the
+[real database job](https://github.com/1alextest/Tesbooboo/actions/runs/43127489133/job/130883161533)
+passed **4 suites / 41 tests without skips**, including the new rollback and lock
+regressions. The server records the intended division-by-zero SQL failure.
+The [first smoke run](https://github.com/1alextest/Tesbooboo/actions/runs/43127489093/job/130883161190)
+failed before the browser association flows: its new test expected a target 404
+on flat bug routes where tokens are intentionally refused with 403. The test now
+requires that exact earlier guard rejection; session REST and MCP exercise the
+edit/add validator, while token REST exercises project-prefixed create validation.
+No token permission or guard is broadened. Additional individually inactive target
+controls are added; **fresh-head CI/transport/browser verification remains pending**.
 Full impacted shared-stack API/UI execution and independent original-baseline
 runtime reproduction/review remain outstanding.
 

@@ -70,6 +70,19 @@ describe("strict bug-link relationship validation", () => {
     await expect(f.validate([{ testcaseId: testcase, cycleId: run }])).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it.each(["case", "run", "execution", "membership", "implicit membership"])("refuses an individually deleted %s for a new association", async (target) => {
+    const f = fixture();
+    if (target === "case") f.rows.cases[0].deleted_at = new Date();
+    else if (target === "run") f.rows.cycles[0].deleted_at = new Date();
+    else if (target === "execution") f.rows.executions[0].deleted_at = new Date();
+    else {
+      f.rows.memberships[0].deleted_at = new Date();
+      f.rows.executions[0].item_deleted_at = new Date();
+    }
+    const association = target === "implicit membership" ? { testcaseId: testcase, executionId: execution } : full;
+    await expect(f.validate([association])).rejects.toBeInstanceOf(target === "membership" ? BadRequestException : NotFoundException);
+  });
+
   it("rejects an execution whose authoritative case differs even when the supplied pair exists", async () => {
     const f = fixture();
     f.rows.cases.push({ id: other, deleted_at: null });

@@ -534,6 +534,7 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
         await setup.query("UPDATE cycles SET deleted_at = NULL, deleted_by = NULL WHERE id = $1", [runId]);
         await setup.query("UPDATE cycle_items SET deleted_at = NULL, deleted_by = NULL WHERE cycle_id = $1", [runId]);
         await setup.query("UPDATE executions SET deleted_at = NULL, deleted_by = NULL WHERE id = $1", [executionId]);
+        await setup.query("UPDATE testcases SET deleted_at = NULL, deleted_by = NULL WHERE id = $1", [caseId]);
       });
 
       async function state() {
@@ -541,6 +542,7 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
         const runs = [runId, ...createdRuns];
         return {
           bugs: (await setup.query("SELECT * FROM bugs WHERE project_id = ANY($1::uuid[]) ORDER BY id", [projects])).rows,
+          testcases: (await setup.query("SELECT * FROM testcases WHERE project_id = ANY($1::uuid[]) ORDER BY id", [projects])).rows,
           links: (await setup.query("SELECT bl.* FROM bug_links bl JOIN bugs b ON b.id = bl.bug_id WHERE b.project_id = ANY($1::uuid[]) ORDER BY bl.id", [projects])).rows,
           runs: (await setup.query("SELECT * FROM cycles WHERE id = ANY($1::uuid[]) ORDER BY id", [runs])).rows,
           items: (await setup.query("SELECT * FROM cycle_items WHERE cycle_id = ANY($1::uuid[]) ORDER BY id", [runs])).rows,
@@ -729,6 +731,29 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
         const before = await state();
         await expect(f.legacy.addBugLink(userId, String(bug.id), { ...link(), id: original.id })).rejects.toBeInstanceOf(NotFoundException);
         expect(await state()).toEqual(before);
+      });
+
+      it.each(["case", "run", "execution", "membership"])("rejects an individually inactive %s across create/add/edit", async (target) => {
+        const bug = await f.legacy.createBug(projectId, userId, { title: "Before inactive-target edit" });
+        if (target === "case") await setup.query("UPDATE testcases SET deleted_at = now() WHERE id = $1", [caseId]);
+        else if (target === "run") await setup.query("UPDATE cycles SET deleted_at = now() WHERE id = $1", [runId]);
+        else if (target === "execution") await setup.query("UPDATE executions SET deleted_at = now() WHERE id = $1", [executionId]);
+        else await setup.query("UPDATE cycle_items SET deleted_at = now() WHERE cycle_id = $1", [runId]);
+        // Omitting the explicit run must not bypass the execution's actual membership/parent check.
+        const invalid = target === "membership" ? { testcaseId: caseId, executionId } : link();
+        for (const operation of [
+          () => f.legacy.createBug(projectId, userId, { title: "Refused inactive target", links: [sibling, invalid] }),
+          () => f.legacy.addBugLink(userId, String(bug.id), invalid),
+          () => f.legacy.updateBug(userId, String(bug.id), { title: "Must not persist", links: [sibling, invalid] })
+        ]) {
+          const before = await state();
+          f.activity.mockClear(); f.notification.mockClear(); f.bugNotification.mockClear();
+          await expect(operation()).rejects.toBeInstanceOf(NotFoundException);
+          expect(await state()).toEqual(before);
+          expect(f.activity).not.toHaveBeenCalled();
+          expect(f.notification).not.toHaveBeenCalled();
+          expect(f.bugNotification).not.toHaveBeenCalled();
+        }
       });
 
       it("serializes concurrent nullable-key adds and reversed multi-run replacements", async () => {
