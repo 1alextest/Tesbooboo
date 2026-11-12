@@ -85,8 +85,19 @@ test.skip('skipped reporter control', { tag: '@tesbo.testId("${cases[2].external
     }
     const failed = before.results.find((row) => row.testcase_id === cases[1].id)!;
     expect(failed.error_message).toContain("Intentional CI reporter failure");
-    expect(before.evidence).toHaveLength(1);
-    expect(before.evidence[0]).toMatchObject({ entity_id: failed.id, evidence_kind: "log", file_name: "failure.log" });
+    // Playwright copies path attachments to hashed names and adds its own failure context.
+    // Assert the exact two-file set, not an arbitrary >=1 allowance that could hide duplicates.
+    expect(before.evidence).toHaveLength(2);
+    const logs = before.evidence.filter((row) => /^failure-log-[a-f0-9]{40}\.log$/.test(row.file_name));
+    expect(logs).toHaveLength(1);
+    expect(before.evidence.filter((row) => row.file_name === "error-context.md")).toHaveLength(1);
+    for (const row of before.evidence) expect(row).toMatchObject({ entity_id: failed.id, evidence_kind: "log" });
+    expect(Number(logs[0].file_size)).toBe(Buffer.byteLength("CI real reporter failure evidence"));
+    const download = await request.get(`${api}/api/cycles/${runId}/executions/${failed.id}/attachments/${logs[0].id}/download`);
+    expect(download.ok(), await download.text()).toBeTruthy();
+    expect(download.headers()["content-disposition"]).toMatch(/^attachment;/);
+    expect(await download.text()).toBe("CI real reporter failure evidence");
+    expect(await sealed()).toEqual(before);
 
     const mcp = async (scope: number, tool: string, args: Record<string, unknown>) => {
       const response = await anonymous.post(`${base}/mcp`, {

@@ -4433,13 +4433,14 @@ Extend `e2e/ci-smoke.spec.ts` using `utils/ci-reporter.ts` and the existing
 `playwright-smoke` job. Build the repository SDK with its lockfile (no install from
 a registry for the reporter under test). The real Playwright child loads
 `sdk/playwright-reporter/dist/index.js`, authenticates using disposable API-created
-project tokens, resolves three existing cases and reports pass/fail/skip plus one
-file-backed log attachment. Its deliberate test failure must exit 1 **and** the
+project tokens, resolves three existing cases and reports pass/fail/skip plus a
+file-backed log and Playwright's automatic error context. Its deliberate test failure must exit 1 **and** the
 production reporter must acknowledge completed closure with correct local counts.
 No fake HTTP server or direct hook invocation substitutes for this child.
 
-Independent DB readback checks one run, three results, error text and evidence
-metadata. Real REST/MCP rejects a read-token write and late sealed result without
+Independent DB readback checks one run, three results, error text and the exact
+two-file evidence set; authenticated download checks the synthetic log's actual
+bytes and attachment disposition. Real REST/MCP rejects a read-token write and late sealed result without
 persisted changes; MCP reads the result, reports a manual/sealed mixed batch
 truthfully and adds a valid bug association without changing sealed state. The
 real frontend reloads that same execution/association. Repeated close must be a
@@ -4450,8 +4451,8 @@ without deleting their audit/provenance. No shared deployment/data is targeted.
 
 This adds **no new top-level smoke test**: four outer tests remain, with three
 deliberate child test outcomes inside the connected journey. The native owner adds
-four parameterized characterizations. Evidence-file metadata is not a byte-download,
-malware-scan or screenshot/video-storage acceptance test. Single-process execution
+four parameterized characterizations. Synthetic log byte readback does not certify
+malware-scan or screenshot/video-storage acceptance. Single-process execution
 does not certify shards, outage behavior or every framework/runtime. Existing SDK
 143-test suite separately covers mocked close failures and production-artifact
 subprocess exit behavior. Windows permission assertions/Node 24 teardown findings
@@ -4476,6 +4477,13 @@ No rollback or no-write assertion is removed. Instrumentation also forwards
 pg-pool's callback query form unchanged, avoiding a test-owned checkout leak; the
 superseded initial native workflow was canceled after that repair, not passed or
 waived. Final results must supersede these test-harness failures explicitly.
+Head `68f4508` passed **66/66 native tests** and **21/22 triggered checks**, but smoke correctly
+failed its initially one-file/original-name assumption: Playwright renames the log
+and adds `error-context.md`. The revised oracle requires exactly those two distinct
+records, validates log size and downloads its exact bytes; it does not relax the
+count to permit arbitrary extras. This is a fixture correction, not an SDK/backend
+repair or evidence of duplicate upload. Later MCP/browser steps were not executed
+after that assertion and are not counted as passing at this head.
 
 #### Non-destructive historical-data decision
 
