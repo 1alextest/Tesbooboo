@@ -3,7 +3,7 @@ import { Client } from "pg";
 import * as XLSX from "xlsx";
 
 async function paste(editor: Locator, text: string, html?: string) {
-  await editor.click();
+  await editor.focus(); // Do not move the caret after the caller deliberately selected the end.
   await editor.evaluate((element, data) => {
     const clipboard = new DataTransfer();
     clipboard.setData("text/plain", data.text);
@@ -20,9 +20,20 @@ export async function verifyContentSecurity(page: Page, api: string, web: string
   let documentId = "";
   let bugId = "";
   const importedIds: string[] = [];
+  const failures: unknown[] = [];
+  // These journeys have separate fixtures. Report all independent failures in one CI run, but
+  // always reject the test afterward; catching here must never turn a failed check into green.
+  const checkedStep = async (name: string, run: () => Promise<void>) => {
+    try {
+      await test.step(name, run);
+    } catch (error) {
+      failures.push(error);
+      await testInfo.attach(`content-flow-failure-${failures.length}`, { body: await page.screenshot(), contentType: "image/png" });
+    }
+  };
   await db.connect();
   try {
-    await test.step("patched knowledge editor preserves Markdown/table/task/link content through save and reload", async () => {
+    await checkedStep("patched knowledge editor preserves Markdown/table/task/link content through save and reload", async () => {
       const root = await request.get(`${base}/knowledge-base/folders/tree`);
       expect(root.ok(), await root.text()).toBeTruthy();
       const created = await request.post(`${base}/knowledge-base/documents`, {
@@ -65,11 +76,12 @@ export async function verifyContentSecurity(page: Page, api: string, web: string
       await testInfo.attach("patched-knowledge-editor", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
     });
 
-    await test.step("patched bug comment editor retains Markdown serialization and does not persist executable pasted HTML", async () => {
+    await checkedStep("patched bug comment editor retains Markdown serialization and does not persist executable pasted HTML", async () => {
       const created = await request.post(`${base}/bugs`, { data: { title: "CI patched comment control" } });
       expect(created.ok(), await created.text()).toBeTruthy();
       bugId = (await created.json()).id;
       await page.goto(`${web}/projects/${projectId}/bugs/${bugId}`);
+      await page.getByTestId("bug-comment-open").click();
       const editor = page.getByRole("textbox", { name: "Add a comment", exact: true });
       await expect(editor).toBeVisible();
       await paste(editor, "**Comment bold** and [Comment link](https://example.invalid/comment)\n- preserved item");
@@ -92,7 +104,7 @@ export async function verifyContentSecurity(page: Page, api: string, web: string
       await testInfo.attach("patched-comment-editor", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
     });
 
-    await test.step("rejected file types and a cancelled preview never create test cases", async () => {
+    await checkedStep("rejected file types and a cancelled preview never create test cases", async () => {
       const rows = async () => (await db.query("SELECT * FROM testcases WHERE project_id = $1 AND deleted_at IS NULL ORDER BY id", [projectId])).rows;
       const before = await rows();
       await page.goto(`${web}/projects/${projectId}/testcases`);
@@ -111,7 +123,7 @@ export async function verifyContentSecurity(page: Page, api: string, web: string
     });
 
     for (const format of ["csv", "csv-1251", "xlsx", "xls"]) {
-      await test.step(`patched ${format} importer maps, persists and reloads Unicode/steps without importing the unselected sheet`, async () => {
+      await checkedStep(`patched ${format} importer maps, persists and reloads Unicode/steps without importing the unselected sheet`, async () => {
         const title = format === "csv-1251" ? "CI legacy Привет" : `CI ${format} Привет café 漢字`;
         const description = format === "csv-1251" ? "Привет" : "Quoted, multiline\nsecond line";
         const rows = [["Title", "Description", "Steps"], [title, description, "Open => Visible"]];
@@ -154,6 +166,7 @@ export async function verifyContentSecurity(page: Page, api: string, web: string
         if (format === "xls") await testInfo.attach("patched-legacy-xls-import", { body: await page.screenshot(), contentType: "image/png" });
       });
     }
+    if (failures.length) throw new AggregateError(failures, `${failures.length} content-security journeys failed; see the failed steps and captures`);
   } finally {
     if (documentId) await request.delete(`${base}/knowledge-base/documents/${documentId}`, { failOnStatusCode: false });
     if (bugId) await request.delete(`${api}/api/bugs/${bugId}`, { failOnStatusCode: false });
