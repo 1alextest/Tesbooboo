@@ -15,6 +15,7 @@ async function paste(editor: Locator, text: string, html?: string) {
 /** Reuses the existing smoke's authenticated disposable project; no fabricated API responses. */
 export async function verifyContentSecurity(page: Page, api: string, web: string, projectId: string, testInfo: TestInfo) {
   const request = page.request;
+  const importDialog = page.getByRole("dialog", { name: "Import Test Cases", exact: true });
   const base = `${api}/api/projects/${projectId}`;
   const db = new Client({ connectionString: process.env.DATABASE_URL });
   let documentId = "";
@@ -109,16 +110,17 @@ export async function verifyContentSecurity(page: Page, api: string, web: string
       const before = await rows();
       await page.goto(`${web}/projects/${projectId}/testcases`);
       await page.getByRole("button", { name: "Import", exact: true }).click();
-      await page.locator('input[type="file"]').setInputFiles({ name: "rejected.pdf", mimeType: "application/pdf", buffer: Buffer.from("synthetic unsupported file") });
-      await expect(page.getByText('Unsupported file format ".pdf". Please upload a .csv, .xlsx, or .xls file.')).toBeVisible();
-      await expect(page.getByRole("button", { name: "Next", exact: true })).toBeDisabled();
+      await importDialog.locator('input[type="file"]').setInputFiles({ name: "rejected.pdf", mimeType: "application/pdf", buffer: Buffer.from("synthetic unsupported file") });
+      await expect(importDialog.getByText('Unsupported file format ".pdf". Please upload a .csv, .xlsx, or .xls file.')).toBeVisible();
+      await expect(importDialog.getByRole("button", { name: "Next", exact: true })).toBeDisabled();
       expect(await rows()).toEqual(before);
-      await page.locator('input[type="file"]').setInputFiles({ name: "cancel.csv", mimeType: "text/csv", buffer: Buffer.from("Title\nCI cancelled import must not persist\n") });
-      await page.getByRole("button", { name: "Next", exact: true }).click();
-      await expect(page.getByText("Map your file columns to test case fields.")).toBeVisible();
+      await importDialog.locator('input[type="file"]').setInputFiles({ name: "cancel.csv", mimeType: "text/csv", buffer: Buffer.from("Title\nCI cancelled import must not persist\n") });
+      await importDialog.getByRole("button", { name: "Next", exact: true }).click();
+      await expect(importDialog.getByText("Map your file columns to test case fields.")).toBeVisible();
       expect(await rows()).toEqual(before);
-      await page.getByRole("button", { name: "Back", exact: true }).click();
-      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      await importDialog.getByRole("button", { name: "Back", exact: true }).click();
+      await importDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(importDialog).toHaveCount(0);
       expect(await rows()).toEqual(before);
     });
 
@@ -142,16 +144,16 @@ export async function verifyContentSecurity(page: Page, api: string, web: string
         const before = (await db.query("SELECT * FROM testcases WHERE project_id = $1 AND deleted_at IS NULL ORDER BY id", [projectId])).rows;
         await page.goto(`${web}/projects/${projectId}/testcases`);
         await page.getByRole("button", { name: "Import", exact: true }).click();
-        await page.locator('input[type="file"]').setInputFiles({ name: `security.${format.startsWith("csv") ? "csv" : format}`, mimeType: format.startsWith("csv") ? "text/csv" : "application/octet-stream", buffer });
-        await page.getByRole("button", { name: "Next", exact: true }).click();
-        await expect(page.getByText("Map your file columns to test case fields.")).toBeVisible();
+        await importDialog.locator('input[type="file"]').setInputFiles({ name: `security.${format.startsWith("csv") ? "csv" : format}`, mimeType: format.startsWith("csv") ? "text/csv" : "application/octet-stream", buffer });
+        await importDialog.getByRole("button", { name: "Next", exact: true }).click();
+        await expect(importDialog.getByText("Map your file columns to test case fields.")).toBeVisible();
         if (!format.startsWith("csv")) {
           // Real worksheet selection remaps headers. Both sheets are title-bearing on purpose.
-          await page.locator('select').filter({ has: page.locator('option[value="Cases"]') }).selectOption("Cases");
+          await importDialog.locator('select').filter({ has: page.locator('option[value="Cases"]') }).selectOption("Cases");
         }
         expect((await db.query("SELECT * FROM testcases WHERE project_id = $1 AND deleted_at IS NULL ORDER BY id", [projectId])).rows).toEqual(before);
-        await page.getByRole("button", { name: "Import 1 rows", exact: true }).click();
-        await expect(page.getByText("Import complete.", { exact: true })).toBeVisible();
+        await importDialog.getByRole("button", { name: "Import 1 rows", exact: true }).click();
+        await expect(importDialog.getByText("Import complete.", { exact: true })).toBeVisible();
         const stored = (await db.query("SELECT id, title, description, steps FROM testcases WHERE project_id = $1 AND deleted_at IS NULL AND title = $2", [projectId, title])).rows;
         importedIds.push(...stored.map((row) => row.id));
         expect(stored).toHaveLength(1);
@@ -160,7 +162,8 @@ export async function verifyContentSecurity(page: Page, api: string, web: string
         const after = (await db.query("SELECT * FROM testcases WHERE project_id = $1 AND deleted_at IS NULL ORDER BY id", [projectId])).rows;
         expect(after).toHaveLength(before.length + 1);
         expect(after.filter((row) => row.id !== stored[0].id)).toEqual(before);
-        await page.getByRole("button", { name: "Done", exact: true }).click();
+        await importDialog.getByRole("button", { name: "Done", exact: true }).click();
+        await expect(importDialog).toHaveCount(0);
         await page.reload();
         await expect(page.getByRole("button", { name: title, exact: true })).toBeVisible();
         if (format === "xls") await testInfo.attach("patched-legacy-xls-import", { body: await page.screenshot(), contentType: "image/png" });
