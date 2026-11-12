@@ -236,6 +236,13 @@ export default function KnowledgeDocumentPage() {
       setCurrentUserId(currentUser.userId);
       try {
         const data = await getKnowledgeDocument(projectId, documentId);
+        // Keep the saved body available for explicit saves and title-only edits without relying
+        // on the editor to emit a fake content update while its interaction mode is initialized.
+        latestContent.current = {
+          contentJson: (data.contentJson ?? null) as JSONContent,
+          contentHtml: data.contentHtml ?? "",
+          contentText: data.contentText ?? "",
+        };
         setDoc(data);
         setBreadcrumb(data.breadcrumb);
         setTitle(data.title);

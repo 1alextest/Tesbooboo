@@ -74,6 +74,9 @@ export async function verifyContentSecurity(page: Page, api: string, web: string
       const observe = (request: Request) => { if (isSave(request)) saves.push(request.url()); };
       page.on("request", observe);
       try {
+        // Existing Blank-document rule requires both title and body; an unchanged explicit save
+        // must still have the loaded body after initialization stops emitting fake content edits.
+        await page.evaluate((id) => localStorage.setItem(`kb-blank-doc:${id}`, "1"), documentId);
         await page.reload();
         await expect(page.locator(".ProseMirror").first()).toContainText("Untrusted paste");
         await expect(page.locator(".ProseMirror table")).toContainText("café 漢字");
@@ -93,6 +96,13 @@ export async function verifyContentSecurity(page: Page, api: string, web: string
       } finally {
         page.off("request", observe);
       }
+      const explicitSave = page.waitForResponse((response) => isSave(response.request()));
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      const response = await explicitSave;
+      expect(response.ok(), await response.text()).toBeTruthy();
+      expect(await stored()).toMatchObject({ content_json: beforeReload.content_json, content_html: beforeReload.content_html, content_text: beforeReload.content_text });
+      await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+      await page.evaluate((id) => localStorage.removeItem(`kb-blank-doc:${id}`), documentId);
       expect(await page.evaluate(() => Reflect.get(window, "__tesboContentProbe"))).toBeUndefined();
       await testInfo.attach("patched-knowledge-editor", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
     });
