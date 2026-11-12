@@ -4117,11 +4117,27 @@ diagnostics/evidence-before-close ordering. One intervening expanded full-suite
 run exceeded its 120-second shell limit; it is not counted as a pass. The completed
 expanded rerun was **143 tests / 141 passed / 2 failed / 0 skipped**, with both extra
 controls and all six production-build passing/failing CLI processes passing;
-only the same Windows permission assertions failed. Fresh repaired-head CI remains
-pending. These new tests do not
-prove PostgreSQL persistence, backend close races, browser rendering, the entire
-supported Playwright version range, shared-stack release safety or independent
-human review. Phase 1 remains open; no merge, publication or deployment occurred.
+only the same Windows permission assertions failed.
+
+Implementation head `9386c12` passed **22/22 triggered checks**:
+
+- [SDK typecheck, production compilation and 143/143 tests, zero skips](https://github.com/1alextest/Tesbooboo/actions/runs/43219986644/job/131188861006),
+  including all six real CLI 0/1 controls, both strict Linux permission tests,
+  nullable historical status, retry, diagnostics and no-replay controls.
+- [Migrated PostgreSQL: 4 existing suites / 53 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43219986568/job/131188754607).
+- [Existing real API/MCP/browser smoke: 3 passed](https://github.com/1alextest/Tesbooboo/actions/runs/43219986574/job/131188753560).
+- [Existing backend quality: 1,683 passed / 151 external/DB skips](https://github.com/1alextest/Tesbooboo/actions/runs/43219986644/job/131188860358).
+  The separate [API/MCP contract job](https://github.com/1alextest/Tesbooboo/actions/runs/43219986568/job/131188754105)
+  passed 206 tests with 8 skips; the [transactional unit job](https://github.com/1alextest/Tesbooboo/actions/runs/43219986568/job/131188754583)
+  passed 72 with 90 DB skips. Those skips are not silently counted as passes;
+  native DB and smoke jobs above supply their own bounded evidence.
+
+The new SDK fixture tests do not prove PostgreSQL persistence, backend close
+races, browser rendering, the entire supported Playwright version range,
+shared-stack release safety or independent human review. The unchanged native
+DB/browser suites are separate evidence, not a relabeling of the SDK fixtures.
+Full existing checks must also be fresh on any later documentation-only head
+before review. Phase 1 remains open; no merge, publication or deployment occurred.
 
 Remaining mutation inventory is not a list of automatically approved removals:
 
