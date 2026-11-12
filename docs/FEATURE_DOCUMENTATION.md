@@ -4795,3 +4795,76 @@ an evidence-only commit/retest loop after every successful implementation head.
 criteria/risk decisions, canonical eight-file/baseline recovery and required human
 security/release review remain distinct. The known frontend high/critical audit
 findings are not repaired, suppressed or accepted by this bulk-operation batch.
+
+### H. Rich-content dependency security and connected compatibility batch — 2026-11-12
+
+Base: owner-merged #37, `development@6567733ad269251f3eef539b9298cc7553f9ccdf`
+(17:59:50 UTC). Its corrected head `a62ae64` passed 22/22 checks, including the
+actual critical-production gate, complete build, 77 native DB tests and connected
+browser workflows. Owner merge is not independent review or Phase 1 acceptance.
+
+This follow-up repairs the remaining **seven high frontend production dependency
+entries together**, rather than making one PR per transitive package. TipTap's
+whole installed family is pinned to **3.33.1**, with core/PM peers explicit;
+ProseMirror View moves to **1.42.9**. Sentry stays on v10 (**10.78.0**, not v11),
+which supplies a compatible patched bundler dependency chain. Targeted in-range
+refreshes cover brace-expansion, minimatch, browserslist and source-map-js; no
+forced audit fix, incompatible override or React/Next/lint-toolchain upgrade.
+ESLint **9.39.2**, Next config/plugin **16.3.3**, React Hooks **7.0.1**, enabled
+rules and frozen baseline remain. Six development-only transitive entries also
+receive in-range security fixes: nested brace-expansion/minimatch, flatted,
+js-yaml, picomatch and zod. This removes the four remaining development-only high
+entries without upgrading the lint owners; it is not described as a byte-identical
+complete development dependency tree.
+
+The npm `xlsx` endpoint is unmaintained. Use the maintainer-documented **SheetJS
+0.20.3** distribution at `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`,
+with SHA-512 lock integrity, for both production and E2E fixtures. This is the
+same library/API, not an unofficial fork or a replacement that loses `.xls`.
+Its Apache-2.0 license remains. Clean builds now require access to that official
+CDN; availability and artifact provenance remain review considerations, not
+independently certified by a checksum. No scripts are enabled to install it.
+Existing `.csv`/`.xlsx`/`.xls`, UTF-8/Windows-1251 decoding, sheet/column mapping,
+20MB file limit, step parsing, default suites and custom-field behavior are not
+redesigned; no historical data/schema or backend writer changes are made.
+
+Fresh retained local **production** audit: **0 critical / 0 high / 7 moderate /
+1 low**, versus #37's 0/7/39/1. These are affected dependency entries, not counts
+of reproduced exploits. The all-dependency tree separately reports **0 critical /
+0 high / 15 moderate / 1 low** after the bounded development-transitive fixes.
+The existing enforcing frontend gate is strengthened from **production critical
+to all-dependency high/critical** (`npm audit --audit-level=high`); the full report
+collector remains.
+Moderate/low findings still require their own applicability/disposition; this is
+not a clean-security certificate or a Phase 1 exit decision.
+
+`scripts/frontend-content-security.test.mjs` exercises the frontend's actual
+installed libraries: one matched patched peer family/official SheetJS lock,
+prototype-shaped attributes without inherited event handlers, complete block and
+inline Markdown-tokenizer adversarial inputs in separately bounded child
+processes, and XLSX/BIFF8/CSV Unicode, multiple sheets, quoted newlines, cached
+formulas and prototype-shaped header text. **Before reinstall**, both 128KiB+
+tokenizer regressions hit the eight-second child deadline on installed core
+3.27.1; the merge-attributes control already passed and is not falsely claimed
+as a newly reproduced old-version defect. The deadline is a generous regression
+bound, not a production performance or asymptotic-complexity certification.
+
+`e2e/utils/ci-content-security.ts` extends the existing isolated smoke/bootstrap,
+not a new deployment/test stack. Actual KB and bug-comment editors paste ordinary
+Markdown plus synthetic malicious HTML, save to the real backend, verify stored
+content independently in PostgreSQL and reload. Headers/bold/tables/tasks/links
+and comment Markdown must survive; script/event/javascript-link payloads must not.
+Actual import UI covers BOM-less Unicode CSV, Windows-1251 CSV, XLSX and legacy
+BIFF8 `.xls`, explicit worksheet selection, descriptions/steps, preview without
+persistence, completion/reload and unchanged case counts/unselected worksheets.
+Unsupported files and cancelled previews must leave full stored rows unchanged.
+The original four outer smoke tests and all prior assertions remain; the
+integrated test's budget grows to three minutes for the additional real journeys,
+not retries or waived failures. Three captures document the new UI states.
+
+Local/CI results and final receipts are reconciled in the implementation PR as
+they complete, without a documentation-only follow-up commit. No local native
+PostgreSQL/app execution, independent human security review, all-browser/deployed
+verification, risk acceptance, merge, publication or Phase 2 authorization is
+implied. Canonical companion specifications/baseline and prior F2/F3/F6–F8 owner
+decisions remain separate; this bounded dependency batch does not invent them.
