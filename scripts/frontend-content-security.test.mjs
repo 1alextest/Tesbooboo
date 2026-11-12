@@ -33,6 +33,20 @@ test("TipTap mergeAttributes does not turn an own __proto__ value into inherited
   assert.equal(result["data-control"], "normal");
 });
 
+test("TipTap interaction-mode changes can suppress content-update callbacks while explicit updates still emit", () => {
+  // Direct installed API contract, not a React mount or persistence surrogate. The real browser
+  // reload regression separately verifies the component chooses false and sends no save request.
+  const emitted = [];
+  const configured = [];
+  const target = { setOptions: (value) => configured.push(value), emit: (name) => emitted.push(name), state: { tr: {} } };
+  core.Editor.prototype.setEditable.call(target, false, false);
+  core.Editor.prototype.setEditable.call(target, true, false);
+  assert.deepEqual(configured, [{ editable: false }, { editable: true }]);
+  assert.deepEqual(emitted, []);
+  core.Editor.prototype.setEditable.call(target, true);
+  assert.deepEqual(emitted, ["update"]);
+});
+
 for (const kind of ["block", "inline"]) {
   test(`complete ${kind} Markdown attribute tokenizer handles adversarial prefixes within a bounded child process`, () => {
     // GHSA-j95f-988m-3j2f shapes, synthetic/local only. A separate process bounds the old quadratic

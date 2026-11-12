@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
+import { errors, expect, test, type Locator, type Page, type Request, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
 import * as XLSX from "xlsx";
 
@@ -62,17 +62,37 @@ export async function verifyContentSecurity(page: Page, api: string, web: string
       await expect(editor.locator('script, [onerror], a[href^="javascript:"]')).toHaveCount(0);
       expect(await page.evaluate(() => Reflect.get(window, "__tesboContentProbe"))).toBeUndefined();
       await page.getByRole("button", { name: "Save", exact: true }).click();
-      const stored = async () => (await db.query("SELECT content_json, content_html, content_text FROM knowledge_documents WHERE id = $1", [documentId])).rows[0];
+      const stored = async () => (await db.query("SELECT content_json, content_html, content_text, updated_at FROM knowledge_documents WHERE id = $1", [documentId])).rows[0];
       await expect.poll(async () => (await stored()).content_html).toContain("Untrusted paste");
       const beforeReload = await stored();
       expect(beforeReload.content_html).toContain("<strong>Preserved bold</strong>");
       expect(beforeReload.content_html).not.toMatch(/<script|\sonerror=|href="javascript:/i);
-      await page.reload();
-      await expect(page.locator(".ProseMirror").first()).toContainText("Untrusted paste");
-      await expect(page.locator(".ProseMirror table")).toContainText("café 漢字");
-      await expect(page.locator(".ProseMirror").first().getByRole("checkbox", { name: "Task item checkbox for Checked item", exact: true })).toBeChecked();
-      await expect(page.locator(".ProseMirror").first().getByRole("checkbox", { name: "Task item checkbox for Open item", exact: true })).not.toBeChecked();
-      expect(await stored()).toEqual(beforeReload);
+      const versions = async () => (await db.query("SELECT * FROM knowledge_document_versions WHERE document_id = $1 ORDER BY id", [documentId])).rows;
+      const beforeVersions = await versions();
+      const saves: string[] = [];
+      const isSave = (request: Request) => request.method() === "PATCH" && request.url() === `${base}/knowledge-base/documents/${documentId}`;
+      const observe = (request: Request) => { if (isSave(request)) saves.push(request.url()); };
+      page.on("request", observe);
+      try {
+        await page.reload();
+        await expect(page.locator(".ProseMirror").first()).toContainText("Untrusted paste");
+        await expect(page.locator(".ProseMirror table")).toContainText("café 漢字");
+        await expect(page.locator(".ProseMirror").first().getByRole("checkbox", { name: "Task item checkbox for Checked item", exact: true })).toBeChecked();
+        await expect(page.locator(".ProseMirror").first().getByRole("checkbox", { name: "Task item checkbox for Open item", exact: true })).not.toBeChecked();
+        await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+        // Observe absence beyond the actual 1200ms autosave debounce, starting AFTER hydration.
+        // The listener above also records an earlier save during reload; no blind sleep/retry.
+        const saved = await page.waitForRequest(isSave, { timeout: 1600 }).then(() => true, (error: unknown) => {
+          if (error instanceof errors.TimeoutError) return false;
+          throw error;
+        });
+        expect(saved).toBe(false);
+        expect(saves).toEqual([]);
+        expect(await stored()).toEqual(beforeReload);
+        expect(await versions()).toEqual(beforeVersions);
+      } finally {
+        page.off("request", observe);
+      }
       expect(await page.evaluate(() => Reflect.get(window, "__tesboContentProbe"))).toBeUndefined();
       await testInfo.attach("patched-knowledge-editor", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
     });

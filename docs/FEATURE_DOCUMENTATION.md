@@ -4862,6 +4862,17 @@ The original four outer smoke tests and all prior assertions remain; the
 integrated test's budget grows to three minutes for the additional real journeys,
 not retries or waived failures. Three captures document the new UI states.
 
+Inspection of the first fully green head's KB capture exposed a real no-op
+autosave: `RichTextEditor` called `setEditable(editable)` on mount, and TipTap's
+default `emitUpdate=true` made the document look dirty and schedule a save even
+without a content edit. Mode changes now explicitly suppress that content event;
+actual typing/paste/manual-save updates remain unchanged. The connected reload
+regression checks Saved state, no PATCH during reload or beyond the actual
+1200ms debounce, unchanged stored content/**updated_at**, and unchanged version
+rows. An eighth direct-library case checks the installed API's event contract,
+not a mocked persistence claim. This fixes observed unintended-write scheduling
+in the selected workflow, not a new retention/approval/versioning policy.
+
 Local/CI results and final receipts are reconciled in the implementation PR as
 they complete, without a documentation-only follow-up commit. No local native
 PostgreSQL/app execution, independent human security review, all-browser/deployed
