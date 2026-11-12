@@ -4309,10 +4309,38 @@ all seven lost-response mutation forms and other controls executed. Two Node
 `UV_HANDLE_CLOSING` teardown assertion; they are not clean runtime evidence. No
 tests were skipped/weakened and the global Node version was not switched to hide
 it. Frontend typecheck and frozen lint passed (13 known errors / 10 warnings /
-**0 new errors**). Fresh repaired-head CI and real bundle/UI verification remain
-required. Backend idempotency, manual re-submit duplication, postcommit policy,
-raw fetch upload paths, complete shared-stack coverage and human review remain
-separate; no SDK retry policy, schema, deployment or Phase 1 signoff is changed.
+**0 new errors**).
+
+Implementation head `6fac1ae` passed **22/22 triggered checks**:
+
+- [Existing smoke job: **4 passed**](https://github.com/1alextest/Tesbooboo/actions/runs/43242700248/job/131267116592)
+  means **3 genuine app/API/MCP/browser tests plus 1 native source/transport
+  matrix**, not four browser/PostgreSQL tests. The real served bundle made one
+  POST, persisted one bug, preserved the sealed run/results, retained the draft
+  and unconfirmed-outcome message, and recovered the association on reload.
+  Original auth/relationship/import controls and four sealed UI journeys passed.
+- [Migrated PostgreSQL: **4 suites / 62 tests**, no skips](https://github.com/1alextest/Tesbooboo/actions/runs/43242699669/job/131267115045).
+- [Backend quality: **1,691 passed / 160 external/DB skips**](https://github.com/1alextest/Tesbooboo/actions/runs/43242700182/job/131267116745).
+  Separate [API/MCP contracts](https://github.com/1alextest/Tesbooboo/actions/runs/43242699669/job/131267114937)
+  passed 206 / skipped 8; [transactional unit regressions](https://github.com/1alextest/Tesbooboo/actions/runs/43242699669/job/131267114329)
+  passed 72 / skipped 90 DB tests. Skips are not counted as native DB proof.
+- [Frontend lint/typecheck/production build passed](https://github.com/1alextest/Tesbooboo/actions/runs/43242700182/job/131267116507).
+  The standalone authorization workflow did not trigger for these paths and is
+  not represented as a fresh pass.
+
+The baseline screenshot was inspected and visibly shows two same-title bug
+associations after the dialog closed. All five repaired screenshots were also
+inspected: the new warning is readable and its draft remains, while expected
+sealed verdict styling persists. Some lower fields/buttons remain outside the
+captured viewport; their values/enabled state have separate automated assertions,
+not a claim that every control appears in the screenshot. No page exceptions
+were reported by the owning smoke assertion. These are automated CI browser
+captures plus agent inspection, **not independent human review** or every browser
+engine/full shared-stack suite. Any later documentation-only head still needs
+fresh applicable checks before review. Backend idempotency, manual re-submit
+duplication, postcommit policy, raw fetch upload paths and response-body parsing
+errors remain separate; no SDK retry policy, schema, deployment or Phase 1
+signoff is changed.
 
 Remaining mutation inventory is not a list of automatically approved removals:
 
