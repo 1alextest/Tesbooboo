@@ -3931,9 +3931,17 @@ The smoke removes the reader's foreign-project membership and requires direct
 session/token refusal as controls. Both active and deleted foreign targets are
 covered, alongside local readable links. These are synthetic fixtures on a
 disposable installation, **not** a production disclosure or a new-writer bypass.
-Runtime reproduction remains pending until those tests actually run in CI.
+At test-only head `a82e97f`, [migrated PostgreSQL](https://github.com/1alextest/Tesbooboo/actions/runs/43131096298/job/130895136488)
+failed exactly the two new active/deleted foreign-title assertions (45 prior tests
+passed; 47 total, no skips). [Real HTTP smoke](https://github.com/1alextest/Tesbooboo/actions/runs/43131096173/job/130895135986)
+also failed on returned foreign title, external ID and run name after direct foreign
+project reads were denied. All eight session/token/MCP responses were collected
+before the first metadata assertion failed; that is not a claim that each response
+was individually asserted before the failure. Browser association flows later in
+that smoke did not execute and are not counted as passes at the baseline.
 
-The intended repair is narrowly scoped metadata lookup isolation: retain every
+The repair adds project predicates to the two canonical metadata joins, with the
+baseline assertions unchanged. Fresh-head CI is still required. It retains every
 stored link row and its IDs/timestamps, while joining display metadata only within
 the bug's project. Do not omit links, clear IDs, write data on reads or silently
 repair a historical association. Valid local deleted history keeps its existing
