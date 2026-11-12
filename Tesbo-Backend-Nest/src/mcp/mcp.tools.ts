@@ -1169,18 +1169,21 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "update_bug",
       description:
-        "Update a bug in the token's project. Required: bugId. Optional: title, description, status, severity (Critical/High/Medium/Low — pass null or \"\" to clear it back to not selected), priority (P0/P1/P2/P3 — pass null or \"\" to clear it back to untriaged), externalUrl, assigneeId (must already be a member of this project; pass null or \"\" to unassign), links (array of {testcaseId, cycleId, executionId} — replaces the bug's existing links entirely when present, it does not merge with them). Invalid new/changed links reject the entire edit, including metadata. Exact valid unchanged historical links may retain deleted local targets; removing one does not permit adding it anew. Fields you omit keep their current value, except severity/priority/assigneeId which use the explicit-clear convention above.",
+        "Update a bug in the token's project. Required: bugId. Optional: title, description, status, severity (Critical/High/Medium/Low), priority (P0/P1/P2/P3), externalUrl, integrationProvider, integrationIssueKey, betterbugsUrl, assigneeId (must already be a member of this project), links (array of {testcaseId, cycleId, executionId} — replaces existing links entirely when present, not a merge). Omitted fields keep their live values. Send null or an empty string to clear description/external tracking/BetterBugs fields or severity/priority, or to unassign assigneeId. Clearing a complete external association requires sending externalUrl, integrationProvider and integrationIssueKey explicitly. Invalid new/changed links reject the entire edit including metadata. Exact valid unchanged historical links may retain deleted local targets; removing one does not permit adding it anew.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
         properties: {
           bugId: { type: "string" },
           title: { type: "string" },
-          description: { type: "string" },
+          description: { type: ["string", "null"] },
           status: { type: "string" },
           severity: { type: ["string", "null"] },
           priority: { type: ["string", "null"] },
-          externalUrl: { type: "string" },
+          externalUrl: { type: ["string", "null"] },
+          integrationProvider: { type: ["string", "null"] },
+          integrationIssueKey: { type: ["string", "null"] },
+          betterbugsUrl: { type: ["string", "null"] },
           assigneeId: { type: ["string", "null"] },
           links: { type: "array" }
         },

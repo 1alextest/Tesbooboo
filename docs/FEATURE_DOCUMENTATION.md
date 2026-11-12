@@ -1256,7 +1256,7 @@ requiring a full external issue tracker.
 - Creating a bug with an empty/whitespace-only title via direct API call (bypassing the frontend's disabled-button guard) — the bug is created titled `"Untitled bug"` rather than being rejected.
 - Sending an invalid `severity` value (e.g. `"Urgent"`) directly to the API — this is **not validated in the service layer**, so it fails at the DB CHECK constraint and surfaces as an unhandled 500-style DB error rather than a clean validation message.
 - Setting `status` to an arbitrary string (e.g. `"Won't Fix"`) via direct API/PATCH — accepted silently (no DB constraint), but then the bug **disappears from every Kanban column** (columns are hard-coded to the 4 known statuses) and cannot be selected via the List-view status filter dropdown (also hard-coded to the 4 values); it only remains visible under "All Statuses" in list view.
-- **Clearing a previously-set field never works**: `updateBug` builds its SQL with `COALESCE($n, column)` and the controller/service pass `body.field || null` for `description`, `externalUrl`, `integrationProvider`, `integrationIssueKey`, and `betterbugsUrl`. Sending an empty string (or explicit `null`) for any of these is indistinguishable from "not provided," so `COALESCE` keeps the **old** value. Concretely: editing a bug, blanking out the Description textarea, and saving does **not** clear the description — the previous text persists. Same for unlinking an external ticket URL or switching evidence mode away from BetterBugs (see Evidence section) — these fields can only ever be overwritten with another non-empty value, never cleared.
+- **Historical clear defect, repaired in the bug-edit integrity batch below:** `updateBug` formerly collapsed null/empty metadata into omission through `body.field || null` and `COALESCE`. Description, external URL/provider/key and BetterBugs URL now use presence-aware SQL writes: omission preserves the live column, explicit null/empty clears the named field, and explicit text replaces it. Complete external unlinking requires all three external association fields explicitly; they remain independently editable.
 - Deleting a bug does **not** clean up its attachments: `deleteBug` only issues `DELETE FROM bugs WHERE id = $1`. The generic `attachments` table has no FK to `bugs` (it's a polymorphic `entity_type`/`entity_id` pair), so rows referencing the deleted bug — and the underlying files in storage — are orphaned indefinitely (storage leak). Worth testing explicitly: create a bug, attach a file, delete the bug, confirm the file/row still exist.
 - No role/permission gating on any bug endpoint: the controller methods for get/update/delete/link/attachment routes never call the app's `requireUser`-style check and there is no project-membership check either (confirmed no `@UseGuards`/role decorators on these routes, and `AuthMiddleware` only *resolves* `req.userId`, it never blocks the request). Any caller who can reach the API and knows/guesses a `bugId` (or `attachmentId`) — regardless of which project or organization they belong to — can view, edit, delete it, or add/remove its links and attachments. Worth testing as an authorization/IDOR case: user from Project B (or an unauthenticated request, since `userId` can be `null`) hitting `GET/PATCH/DELETE /api/bugs/:bugId` for a bug in Project A.
 - Deleting a **test case** that is hard-deleted (e.g. via "delete suite → delete test cases" bulk mode) cascades and removes the corresponding `bug_links` row entirely (`ON DELETE CASCADE` on `testcase_id`). Deleting a **test run (cycle)** instead just nulls out that link's `cycle_id`/`execution_id` (`ON DELETE SET NULL`) — the bug stays linked to the test case but loses which run/execution surfaced it. Both are worth testing explicitly, since the resulting bug-link states differ.
@@ -1389,7 +1389,7 @@ without requiring every team to use the same evidence-capture tool.
 - No MIME/extension restriction — uploading an executable, script, or disguised file type is accepted and later served back with its original client-supplied content-type; worth a security-review pass even though this isn't unique to bugs (attachments table is shared/generic).
 - Downloading/deleting an attachment whose underlying storage object was removed out-of-band (e.g. bucket lifecycle rule, manual deletion) → `getBugAttachmentAccess` explicitly checks `storage.exists()` first and returns 404 `"File content is not available"` rather than silently failing or serving a corrupt response.
 - Deleting the **only** attachment on a bug, or the only "evidence" of any kind — no warning; the bug just reverts to showing no evidence.
-- Switching evidence mode from **BetterBugs Link** back to **Files** and uploading new files does **not** clear the previously-set `betterbugsUrl` on save (same root cause as the "fields can't be cleared" gap in the CRUD section: the edit form sends `betterbugsUrl: undefined` when mode is Files, which is dropped from the JSON body entirely, so `COALESCE` preserves the old value). Net effect: the bug detail view's evidence block checks `betterbugsUrl` truthiness **before** attachments, so it will keep showing the stale BetterBugs link and never show the newly-uploaded files, even though the UI now displays them in the edit modal. This is a concrete, high-value test case.
+- **Historical evidence-mode defect, repaired below:** deliberate switching from BetterBugs Link to Files now sends `betterbugsUrl: null`, exposing retained attachments in the detail view. Untouched evidence controls omit the URL, so stale forms cannot replay it over another writer. Switching modes does not delete existing files.
 - Deleting a bug entirely orphans its attachment rows/files (see CRUD section) — no cascade delete exists for the generic `attachments` table.
 
 **Key files:**
@@ -1427,7 +1427,7 @@ where the real defect lives.
 
 **Edge cases / validation gaps worth testing:**
 - Pasting a non-URL string into the self-logged URL field — only browser-native `type="url"` validation applies; no server-side URL validation exists (`externalUrl` is stored as-is).
-- Switching from "myself"/Jira back to "Log into Tesbo" on an existing bug does not clear `externalUrl`/`integrationProvider` server-side (same `COALESCE`-preservation gap noted earlier) — the ticket reference silently persists and keeps showing in the bug detail view even though the UI implies it was removed.
+- **Historical tracking-mode defect, repaired below:** deliberate switching from "myself"/Jira to "Log into Tesbo" now explicitly clears external URL/provider/key. Untouched or disconnected tracking controls omit those fields instead of silently clearing or replaying them.
 - Choosing "Other" as the self-logged system with a Jira/Linear-style URL — `integrationProvider` is stored as `null` in this case (only `"JIRA"`/`"LINEAR"` are ever sent), so the detail view falls back to the generic "Bug Link" label even if the URL is actually a Jira/Linear link.
 - No indication anywhere that this reference is a point-in-time snapshot — if the external ticket's status/title changes later, Tesbo has no way of knowing (this is a manual link only, not a synced one, unlike the separate Jira/Linear integration module).
 
@@ -3600,10 +3600,10 @@ exact code. Good first candidates for a bug-bash or a "does this still repro" re
    picker (both in the Failed-execution dialog and the standalone Bugs page) is displayed on
    screen but never sent in the `createBug`/`updateBug` payload (`integrationIssueKey` is
    hard-coded `null`). File a bug, pick a ticket, save, reopen — the ticket reference is missing.
-2. **Fields can never be cleared once set** (bug description, external URL, integration
-   provider/key, BetterBugs URL): `updateBug` uses `COALESCE(newValue, oldValue)` with
-   `body.field || null`, so an empty string is indistinguishable from "not provided" and the old
-   value always survives.
+2. **Historical bug metadata clear defect, repaired in the bug-edit integrity batch below.**
+   Description, external URL/provider/key and BetterBugs URL now distinguish omitted values
+   from explicit null/empty at SQL write time. Existing UI controls send deliberate clears
+   and omit untouched/disconnected metadata instead of replaying stale values.
 3. **Historical suite rename defect, repaired in the repository partial-edit batch below.**
    The original writer cleared an omitted `parentId`; later UI/MCP read-and-resend workarounds
    could replay a stale parent. The writer now preserves omission at SQL write time; explicit
@@ -5060,3 +5060,58 @@ No deployment/external-client connection, SDK publication, agent merge, human
 review, risk acceptance or Phase 1 exit is implied. Canonical specifications and
 baseline, owner F2/F3/F6–F8 dispositions and remaining moderate/low dependency
 findings remain open.
+
+### L. Bug-edit metadata integrity across REST, MCP and the existing UI (2026-11-12)
+
+Base: owner-merged #41, `development@dc4f552f931469f88e9e935d310d04a28333934a`
+(22:14:18 UTC). That head passed 23/23 checks, 126 native DB tests, 1,697 backend
+passes, 143 Linux SDK passes and six outer browser smoke tests; its 24 captures
+were inspected. Those are #41 receipts, not results for this batch.
+
+**Existing-workflow repair.** Bug updates now distinguish omission, null/empty and
+explicit text for description, external URL/provider/key and BetterBugs URL at
+the SQL write. Omitted columns retain their live values; null/empty clears only
+its named field. To unlink a whole external association, explicitly clear all
+three external fields. No automatic relationship redesign or new provider policy
+is introduced. The MCP `update_bug` schema advertises the same nullable fields;
+the tool inventory remains 50.
+
+The existing edit form tracks deliberate tracking/evidence edits. Untouched or
+disconnected tracking controls omit those fields; explicit destination/evidence
+mode changes send the required clears. Existing comments, files, links, identity,
+assignment and normal manual-run behavior are preserved. Other authoring controls
+retain their existing full-edit semantics: this is not global compare-and-swap.
+Null descriptions initialize as blank text instead of an uncontrolled textarea.
+
+Before/after bug snapshots are read through the transaction client under the
+existing bug lock, after the established target locks. The returned value and
+postcommit activity/notification inputs therefore describe this writer's own
+transition, not an earlier snapshot or a later committed writer. **Activity is
+still best-effort and postcommit**; this repair does not make audit delivery
+atomic/durable or remove transaction-acknowledgement uncertainty.
+
+**Verification layers.** Two MCP adapter cases cover null/empty forwarding without
+stale reads. The 24 new native PostgreSQL cases cover five-field null/empty/set
+semantics, omission/no-op, service/registry blocking-row races, late native SQL
+faults after metadata/link changes, pending-write invisibility, own-result
+attribution and invalid-edit refusal. Access and notification collaborators are
+explicitly stubbed there; bug/link/comment/file/audit SQL is real. Those tests
+are not HTTP authorization proof.
+
+The connected smoke adds stale/disconnected controls, deliberate clears/mode
+changes with real uploaded evidence/comments/manual-run links, a committed clear
+with its browser acknowledgement aborted (one attempt, unconfirmed outcome),
+session-authenticated REST and cookie-free MCP writes, plus anonymous/read-only
+and unscoped write-token refusals. The legacy unprefixed bug REST route remains
+session-only; no token boundary is expanded. Independent DB reads
+check complete unchanged associations, immutable audit prefixes and an unselected
+control. A synthetic status-only Jira connection exposes the existing controls;
+it does **not** prove OAuth, search, sync or real provider connectivity. Tokens
+are revoked and dummy credentials cleared; record/audit provenance remains until
+isolated DB teardown.
+
+Native/browser execution requires isolated CI, not just local compilation or
+skips. Exact-head results and inspected captures belong in the implementation
+PR. No SDK publication, deployment, agent merge, independent human review, risk
+acceptance or Phase 1/2 exit is implied. Canonical specification/baseline recovery,
+owner F2/F3/F6–F8 dispositions and disclosed moderate/low findings remain open.
