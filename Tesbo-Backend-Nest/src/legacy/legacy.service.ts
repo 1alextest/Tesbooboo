@@ -8656,8 +8656,17 @@ export class LegacyService implements OnModuleInit {
   async getBug(bugId: string) {
     const res = await this.db.query(this.bugSelect("b.id = $1"), [bugId]);
     if (!res.rows[0]) throw new NotFoundException({ error: "Bug not found" });
-    const row = res.rows[0];
+    return this.bugView(res.rows[0]);
+  }
+
+  private bugView(row: Body) {
     return { ...toCamel(row), links: normalizeJsonArray(row.links).map(toCamel), attachments: normalizeJsonArray(row.attachments).map(toCamel) };
+  }
+
+  private async getBugWithClient(client: PoolClient, bugId: string) {
+    const res = await client.query(this.bugSelect("b.id = $1"), [bugId]);
+    if (!res.rows[0]) throw new NotFoundException({ error: "Bug not found" });
+    return this.bugView(res.rows[0]);
   }
 
   async updateBug(userId: string | null | undefined, bugId: string, body: Body) {
@@ -8672,8 +8681,7 @@ export class LegacyService implements OnModuleInit {
     validateBoundedField(body.title, "Bug title", BUG_TITLE_MAX_LENGTH);
     validateBoundedField(body.externalUrl, "External URL", BUG_EXTERNAL_URL_MAX_LENGTH);
     /*
-     * Priority is the one field here that can be cleared. COALESCE means "absent leaves it alone",
-     * which is right for every other column, but an explicitly sent null has to be able to take a
+     * Priority's explicit null has to be able to take a
      * bug back to untriaged — so it gets its own flag rather than another COALESCE.
      */
     const clearsPriority = body.priority === null || body.priority === "";
@@ -8683,38 +8691,45 @@ export class LegacyService implements OnModuleInit {
     // hidden from the picker.
     const clearsAssignee = body.assigneeId === null || body.assigneeId === "";
     const assigneeId = await this.parseBugAssignee(projectId, body.assigneeId);
-    const before = await this.getBug(bugId);
-    await this.db.transaction(async (client) => {
+    const { before, after } = await this.db.transaction(async (client) => {
       const validateLinks = await this.lockBugLinkTargets(client, projectId, links ?? []);
       const existing = await this.lockBugLinksOwner(client, bugId, projectId);
       validateLinks(existing);
+      // Preserve targets-before-bug lock ordering. Capture fresh before/after under the existing
+      // bug lock so neither an earlier snapshot nor a later writer is attributed to this edit.
+      const before = await this.getBugWithClient(client, bugId);
       await client.query(
-        `UPDATE bugs SET title=COALESCE($2,title), description=COALESCE($3,description), external_url=COALESCE($4,external_url),
+        `UPDATE bugs SET title=COALESCE($2,title), description=CASE WHEN $15::boolean THEN $3 ELSE description END, external_url=CASE WHEN $16::boolean THEN $4 ELSE external_url END,
        status=COALESCE($5,status), severity=CASE WHEN $14::boolean THEN NULL ELSE COALESCE($6,severity) END, priority=CASE WHEN $10::boolean THEN NULL ELSE COALESCE($11,priority) END,
-       integration_provider=COALESCE($7,integration_provider), integration_issue_key=COALESCE($8,integration_issue_key),
-       betterbugs_url=COALESCE($9,betterbugs_url),
+       integration_provider=CASE WHEN $17::boolean THEN $7 ELSE integration_provider END, integration_issue_key=CASE WHEN $18::boolean THEN $8 ELSE integration_issue_key END,
+       betterbugs_url=CASE WHEN $19::boolean THEN $9 ELSE betterbugs_url END,
        assignee_id=CASE WHEN $12::boolean THEN NULL ELSE COALESCE($13,assignee_id) END,
        updated_at=now() WHERE id=$1`,
         [
           bugId,
           body.title || null,
-          body.description || null,
-          body.externalUrl || null,
+          body.description ?? null,
+          body.externalUrl ?? null,
           body.status || null,
           severity,
-          body.integrationProvider || null,
-          body.integrationIssueKey || null,
-          body.betterbugsUrl || null,
+          body.integrationProvider ?? null,
+          body.integrationIssueKey ?? null,
+          body.betterbugsUrl ?? null,
           clearsPriority,
           priority,
           clearsAssignee,
           assigneeId,
-          clearsSeverity
+          clearsSeverity,
+          body.description !== undefined,
+          body.externalUrl !== undefined,
+          body.integrationProvider !== undefined,
+          body.integrationIssueKey !== undefined,
+          body.betterbugsUrl !== undefined
         ]
       );
       if (links !== undefined) await this.replaceBugLinks(client, bugId, uid, links);
+      return { before, after: await this.getBugWithClient(client, bugId) };
     });
-    const after = await this.getBug(bugId);
     await this.logBugChanges(projectId, uid, before, after);
     await this.notifyBugChange(projectId, uid, before, after);
     return after;

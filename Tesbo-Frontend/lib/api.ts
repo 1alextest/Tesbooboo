@@ -3003,8 +3003,9 @@ export async function createBug(projectId: string, data: {
 
 export async function updateBug(bugId: string, data: {
   title?: string;
-  description?: string;
-  externalUrl?: string;
+  // Omitted metadata stays unchanged; null/empty explicitly clears the named field.
+  description?: string | null;
+  externalUrl?: string | null;
   status?: string;
   // null clears it back to not selected; omitted leaves the stored value alone.
   severity?: BugSeverity | null;

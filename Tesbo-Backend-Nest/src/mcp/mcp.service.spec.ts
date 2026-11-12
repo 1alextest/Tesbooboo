@@ -1877,6 +1877,15 @@ describe("McpService", () => {
   });
 
   describe("list_bugs / get_bug / update_bug project scoping", () => {
+    it.each([null, ""])("forwards explicit metadata clears (%j) without adding omitted fields or reading a stale bug", async (value) => {
+      const { db } = makeDb({ mcpActorId: "mcp-actor-1", bugProject: "proj-1" });
+      const legacy = makeLegacy(), svc = new McpService(legacy, db);
+      const body = { description: value, externalUrl: value, integrationProvider: value, integrationIssueKey: value, betterbugsUrl: value };
+      const response: any = await svc.handleRequest(rpc("tools/call", { name: "update_bug", arguments: { bugId: "bug-1", ...body } }), principal({ userId: "user-7" }), "proj-1");
+      expect(response.result.isError).toBe(false);
+      expect((legacy as any).updateBug).toHaveBeenCalledWith("user-7", "bug-1", body);
+      expect((legacy as any).getBug).not.toHaveBeenCalled();
+    });
     it("lists bugs scoped to the token's project with filters forwarded", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();

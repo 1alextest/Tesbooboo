@@ -66,7 +66,7 @@ export default function EditBugModal({
     normalizedProvider === "JIRA" || normalizedProvider === "LINEAR" ? normalizedProvider : "OTHER";
 
   const [editTitle, setEditTitle] = useState(bug.title);
-  const [editDesc, setEditDesc] = useState(bug.description);
+  const [editDesc, setEditDesc] = useState(bug.description || "");
   const [editPriority, setEditPriority] = useState<BugPriority | "">(bug.priority ?? "");
   const [editSeverity, setEditSeverity] = useState<BugSeverity | "">(bug.severity ?? "");
   const [editLinks, setEditLinks] = useState<LinkRow[]>(() =>
@@ -89,6 +89,7 @@ export default function EditBugModal({
       : null
   );
   const [editIssuePickerOpen, setEditIssuePickerOpen] = useState(false);
+  const [trackingChanged, setTrackingChanged] = useState(false);
 
   // Switching which system (Jira/Linear/Other) is selected has to drop a previously-picked issue
   // that belongs to a different provider — otherwise a Jira key saved while Linear is selected
@@ -96,6 +97,7 @@ export default function EditBugModal({
   // into the Linear picker's result list (it's kept "selected" there purely by key match failing
   // to exclude it).
   function handleEditSystemChange(system: SelfLoggedSystem) {
+    setTrackingChanged(true);
     setEditSelfSystem(system);
     setEditSelectedIssue((prev) => {
       if (prev && prev.provider !== system) {
@@ -111,6 +113,7 @@ export default function EditBugModal({
   const [editStagedFiles, setEditStagedFiles] = useState<File[]>([]);
   const [editAttachments, setEditAttachments] = useState<BugAttachment[]>(bug.attachments);
   const [editBetterbugsUrl, setEditBetterbugsUrl] = useState(bug.betterbugsUrl || "");
+  const [evidenceChanged, setEvidenceChanged] = useState(false);
   const [editStatus, setEditStatus] = useState(bug.status);
   const [editAssigneeId, setEditAssigneeId] = useState(bug.assigneeId || "");
   const [saving, setSaving] = useState(false);
@@ -153,10 +156,13 @@ export default function EditBugModal({
         severity: editSeverity || null,
         priority: editPriority || null,
         assigneeId: editAssigneeId || null,
-        externalUrl: selfLogged ? editUrl.trim() : undefined,
-        integrationProvider: selfLogged && editSelfSystem !== "OTHER" ? editSelfSystem : null,
-        integrationIssueKey: selfLogged && editSelfSystem !== "OTHER" ? editSelectedIssue?.key || null : null,
-        betterbugsUrl: editEvidenceMode === "BETTERBUGS" ? editBetterbugsUrl.trim() : undefined,
+        // Hidden/disconnected or untouched controls must neither clear nor replay old metadata.
+        ...(trackingChanged && (jiraConnected || linearConnected) ? {
+          externalUrl: selfLogged ? editUrl.trim() || null : null,
+          integrationProvider: selfLogged && editSelfSystem !== "OTHER" ? editSelfSystem : null,
+          integrationIssueKey: selfLogged && editSelfSystem !== "OTHER" ? editSelectedIssue?.key || null : null,
+        } : {}),
+        ...(evidenceChanged ? { betterbugsUrl: editEvidenceMode === "BETTERBUGS" ? editBetterbugsUrl.trim() || null : null } : {}),
         links: editLinks.map((link) => ({
           testcaseId: link.testcaseId,
           cycleId: link.cycleId,
@@ -282,14 +288,14 @@ export default function EditBugModal({
       </div>
       <BugEvidenceField
         mode={editEvidenceMode}
-        onModeChange={setEditEvidenceMode}
+        onModeChange={(mode) => { setEvidenceChanged(true); setEditEvidenceMode(mode); }}
         stagedFiles={editStagedFiles}
         onStagedFilesChange={setEditStagedFiles}
         existingAttachments={editAttachments}
         onRemoveExisting={handleRemoveEditAttachment}
         downloadUrl={(attachmentId) => getBugAttachmentDownloadUrl(projectId, attachmentId)}
         betterbugsUrl={editBetterbugsUrl}
-        onBetterbugsUrlChange={setEditBetterbugsUrl}
+        onBetterbugsUrlChange={(value) => { setEvidenceChanged(true); setEditBetterbugsUrl(value); }}
       />
       <Field>
         <FieldLabel>
@@ -305,7 +311,7 @@ export default function EditBugModal({
       {(jiraConnected || linearConnected) && (
         <Field>
           <FieldLabel>Where should this be tracked?</FieldLabel>
-          <TrackingDestinationField destination={editDestination} onChange={setEditDestination} />
+          <TrackingDestinationField destination={editDestination} onChange={(value) => { setTrackingChanged(true); setEditDestination(value); }} />
         </Field>
       )}
       {(jiraConnected || linearConnected) && editDestination === "SELF" && (
@@ -315,7 +321,7 @@ export default function EditBugModal({
           system={editSelfSystem}
           onSystemChange={handleEditSystemChange}
           url={editUrl}
-          onUrlChange={setEditUrl}
+          onUrlChange={(value) => { setTrackingChanged(true); setEditUrl(value); }}
           renderUrlField={(system, defaultField) => {
             if (system === "OTHER") return defaultField;
             return (
@@ -359,6 +365,7 @@ export default function EditBugModal({
           selectedIssues={editSelectedIssue ? [editSelectedIssue] : []}
           mode="single"
           onConfirm={(issues) => {
+            setTrackingChanged(true);
             const issue = issues[0] ?? null;
             setEditSelectedIssue(issue);
             setEditUrl(issue?.url ?? "");
