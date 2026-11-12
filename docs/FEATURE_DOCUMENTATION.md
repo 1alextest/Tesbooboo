@@ -5044,6 +5044,10 @@ dialog plus concurrent authenticated REST move, and UI-created read-write/read-o
 tokens used from a cookie-free HTTP context for MCP initialize, all-50 discovery,
 attributed partial writes, scope refusal and UI revoke. Independent DB reads
 check history, untouched controls and existing manual run/snapshot/execution rows.
+Live testcase embedding bookkeeping also fires the existing snapshot trigger:
+browser assertions retain every raw history row/prefix, require exact authored
+transitions and allow extra snapshots only when adjacent states differ solely in
+embedding status/hash and update time (never suite/owner/content/attribution).
 Captures clear/mask secrets; synthetic record/audit provenance remains until the
 disposable database teardown.
 

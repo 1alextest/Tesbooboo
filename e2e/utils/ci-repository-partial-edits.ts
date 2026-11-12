@@ -1,5 +1,6 @@
 import { expect, request as newRequest, test, type Page, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
+import { isDeepStrictEqual } from "node:util";
 
 const advertisedTools = `list_projects list_testcases get_testcase create_testcase update_testcase archive_testcase restore_testcase duplicate_testcase bulk_create_testcases bulk_update_testcases bulk_archive_testcases get_testcase_bugs get_testcase_executions link_requirement_to_testcase unlink_requirement_from_testcase list_suites get_suite create_suite update_suite clone_test_suite list_test_cycles get_test_cycle create_cycle_from_plan create_cycle_from_testcases record_execution_result list_executions get_execution update_execution_result bulk_record_execution_results get_test_execution_summary list_bugs get_bug create_bug update_bug link_testcase_to_bug unlink_testcase_from_bug get_requirement_matrix search_knowledge_base list_knowledge_documents get_knowledge_document create_knowledge_document update_knowledge_document move_knowledge_document archive_knowledge_document restore_knowledge_document list_knowledge_folders get_knowledge_folder create_knowledge_folder update_knowledge_folder move_knowledge_folder`.split(" ");
 
@@ -28,17 +29,48 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
     expect(response.ok(), await response.text()).toBeTruthy();
   }
   const caseState = async (id: string) => ({
-    row: (await db.query("SELECT * FROM testcases WHERE id = $1", [id])).rows[0],
+    // Match the trigger's JSON timestamp representation, including native microseconds.
+    row: (await db.query("SELECT to_jsonb(t) AS row FROM testcases t WHERE id = $1", [id])).rows[0].row as Record<string, unknown>,
     versions: (await db.query("SELECT * FROM testcase_versions WHERE testcase_id = $1 ORDER BY version", [id])).rows,
   });
   const projectState = async () => ({
-    cases: (await db.query("SELECT * FROM testcases WHERE project_id = $1 ORDER BY id", [projectId])).rows,
+    cases: (await db.query("SELECT to_jsonb(t) AS row FROM testcases t WHERE project_id = $1 ORDER BY id", [projectId])).rows.map((item) => item.row as Record<string, unknown>),
     history: (await db.query("SELECT v.* FROM testcase_versions v JOIN testcases t ON t.id = v.testcase_id WHERE t.project_id = $1 ORDER BY v.testcase_id,v.version", [projectId])).rows,
     suites: (await db.query("SELECT * FROM suites WHERE project_id = $1 ORDER BY id", [projectId])).rows,
     runs: (await db.query("SELECT * FROM cycles WHERE project_id = $1 ORDER BY id", [projectId])).rows,
     items: (await db.query("SELECT ci.* FROM cycle_items ci JOIN cycles c ON c.id = ci.cycle_id WHERE c.project_id = $1 ORDER BY ci.id", [projectId])).rows,
     executions: (await db.query("SELECT e.* FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id JOIN cycles c ON c.id = ci.cycle_id WHERE c.project_id = $1 ORDER BY e.id", [projectId])).rows,
   });
+  // Existing live ingestion/worker updates also fire the immutable testcase snapshot trigger.
+  // Keep EVERY raw history row and require its prefix to survive. Count an additional row as
+  // bookkeeping only when adjacent snapshots/live content agree on ALL non-bookkeeping fields.
+  // In particular, suite/owner/status/body/attribution/search-vector are never excluded.
+  const domain = (row: Record<string, unknown>) => Object.fromEntries(Object.entries(row).filter(([key]) => !["embedding_status", "embedding_content_hash", "updated_at"].includes(key)));
+  function expectHistory(before: Awaited<ReturnType<typeof caseState>>, after: Awaited<ReturnType<typeof caseState>>, changes: number, actor?: string) {
+    expect(after.versions.slice(0, before.versions.length)).toEqual(before.versions);
+    expect(after.versions.map((version) => version.version)).toEqual(after.versions.map((_, index) => index + 1));
+    const authored = after.versions.slice(before.versions.length).filter((version, offset) => {
+      const next = after.versions[before.versions.length + offset + 1]?.snapshot ?? after.row;
+      return !isDeepStrictEqual(domain(version.snapshot), domain(next));
+    });
+    expect(authored, "exact authored changes; any extra snapshots must differ ONLY in embedding bookkeeping/time").toHaveLength(changes);
+    if (changes === 1) {
+      expect(domain(authored[0].snapshot)).toEqual(domain(before.row));
+      expect(authored[0].changed_by).toBe(actor);
+    }
+  }
+  function expectCaseUnchanged(before: Awaited<ReturnType<typeof caseState>>, after: Awaited<ReturnType<typeof caseState>>) {
+    expect(domain(after.row)).toEqual(domain(before.row)); expectHistory(before, after, 0);
+  }
+  function expectProjectUnchanged(before: Awaited<ReturnType<typeof projectState>>, after: Awaited<ReturnType<typeof projectState>>) {
+    expect(after.cases.map((row) => row.id)).toEqual(before.cases.map((row) => row.id));
+    for (const row of before.cases) {
+      expectCaseUnchanged({ row, versions: before.history.filter((version) => version.testcase_id === row.id) }, {
+        row: after.cases.find((item) => item.id === row.id)!, versions: after.history.filter((version) => version.testcase_id === row.id),
+      });
+    }
+    for (const key of ["suites", "runs", "items", "executions"] as const) expect(after[key]).toEqual(before[key]);
+  }
   const panel = () => page.locator("aside").filter({ has: page.locator("#panel-form-global") });
   const suiteField = () => panel().locator("select").filter({ has: page.locator('option[value=""]', { hasText: "No suite" }) });
   async function openCase(title: string, suite: string) {
@@ -76,9 +108,8 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
       await expect(panel().getByRole("button", { name: "Unarchive", exact: true })).toBeEnabled();
       await expect(suiteField()).toHaveValue(first.id);
       const middle = await caseState(selected.id);
-      expect(middle.row).toEqual({ ...before.row, status: "Archived", updated_at: expect.any(Date) });
-      expect(middle.versions).toHaveLength(before.versions.length + 1);
-      expect(middle.versions.at(-1)).toMatchObject({ changed_by: ownerId, snapshot: expect.objectContaining({ suite_id: first.id, owner_id: ownerId, status: "Draft" }) });
+      expect(domain(middle.row)).toEqual({ ...domain(before.row), status: "Archived" });
+      expectHistory(before, middle, 1, ownerId);
       await capture("repository-archived-case-retains-suite");
       const restoredResponse = page.waitForResponse((response) => response.url() === `${base}/testcases/${selected.id}` && response.request().method() === "PUT");
       await panel().getByRole("button", { name: "Unarchive", exact: true }).click();
@@ -89,10 +120,10 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
       await openCase(selected.title, first.name);
       await expect(suiteField()).toHaveValue(first.id);
       const after = await caseState(selected.id);
-      expect(after.row).toEqual({ ...before.row, updated_at: expect.any(Date) });
-      expect(after.versions).toHaveLength(before.versions.length + 2);
-      expect(after.versions.at(-1)).toMatchObject({ snapshot: expect.objectContaining({ suite_id: first.id, owner_id: ownerId, status: "Archived" }) });
-      expect(await associations()).toEqual(associationsBefore); expect(await caseState(control.id)).toEqual(controlBefore);
+      expect(domain(after.row)).toEqual(domain(before.row));
+      expectHistory(middle, after, 1, ownerId);
+      expectHistory(before, after, 2);
+      expect(await associations()).toEqual(associationsBefore); expectCaseUnchanged(controlBefore, await caseState(control.id));
       await capture("repository-restored-case-after-reload");
     });
 
@@ -101,7 +132,8 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
       const expand = page.getByTestId(`suite-expand-${first.id}`);
       await expand.click();
       await page.getByRole("button", { name: child.name, exact: true }).click();
-      await page.getByTitle("Rename suite", { exact: true }).click();
+      // The sidebar has hidden per-row Rename icons too; target the visible content action.
+      await page.getByRole("button", { name: "Rename suite", exact: true }).click();
       const modal = page.getByRole("heading", { name: "Rename suite", exact: true }).locator("..");
       const name = modal.locator("input[type=text]");
       await expect(name).toHaveValue(child.name);
@@ -121,7 +153,7 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
       await page.getByTestId(`suite-expand-${second.id}`).click();
       await page.getByRole("button", { name: "CI Renamed without moving", exact: true }).click();
       await expect(page.getByTestId("suite-details")).toContainText("Edited description");
-      expect(await associations()).toEqual(associationsBefore); expect(await caseState(control.id)).toEqual(controlBefore);
+      expect(await associations()).toEqual(associationsBefore); expectCaseUnchanged(controlBefore, await caseState(control.id));
       await capture("repository-renamed-suite-under-concurrent-parent");
     });
 
@@ -187,8 +219,7 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
         await call(write.secret, session, name, { testcaseId: created.id, ...args });
         const after = await caseState(created.id);
         expect(after.row).toMatchObject({ suite_id: first.id, owner_id: ownerId, description: "MCP body", updated_by: mcpActor, ...expected });
-        expect(after.versions).toHaveLength(before.versions.length + 1);
-        expect(after.versions.at(-1)).toMatchObject({ changed_by: mcpActor, snapshot: expect.objectContaining({ suite_id: first.id, owner_id: ownerId }) });
+        expectHistory(before, after, 1, mcpActor);
       }
       await call(write.secret, session, "update_testcase", { testcaseId: created.id, suiteId: null });
       expect((await caseState(created.id)).row).toMatchObject({ suite_id: null, owner_id: ownerId });
@@ -202,7 +233,7 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
       const beforeDenied = await projectState();
       const denied = await rpc(read.secret, "tools/call", { name: "archive_testcase", arguments: { testcaseId: created.id } }, readSession);
       expect(denied.status()).toBe(201); expect((await denied.json()).error).toMatchObject({ code: -32002 });
-      expect(await projectState()).toEqual(beforeDenied);
+      expectProjectUnchanged(beforeDenied, await projectState());
       await capture("mcp-ui-issued-tokens-with-secret-cleared");
       for (const token of [read, write]) {
         const row = page.getByRole("row").filter({ hasText: token.name });
@@ -210,18 +241,18 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
         await row.getByRole("button", { name: "Revoke", exact: true }).click();
         expect((await revoked).ok()).toBeTruthy(); await expect(row).toHaveCount(0);
         const refusal = await rpc(token.secret, "tools/call", { name: "archive_testcase", arguments: { testcaseId: created.id } }, token.id === read.id ? readSession : session);
-        expect(refusal.status()).toBe(401); expect(await projectState()).toEqual(beforeDenied);
+        expect(refusal.status()).toBe(401); expectProjectUnchanged(beforeDenied, await projectState());
         expect((await db.query("SELECT id FROM api_tokens WHERE id = $1", [token.id])).rowCount).toBe(0);
       }
       await page.reload();
       await expect(page.getByText("No API tokens yet.", { exact: false })).toBeVisible();
-      expect(await associations()).toEqual(associationsBefore); expect(await caseState(control.id)).toEqual(controlBefore);
+      expect(await associations()).toEqual(associationsBefore); expectCaseUnchanged(controlBefore, await caseState(control.id));
       await capture("mcp-tokens-revoked-and-domain-state-preserved");
       await openCase("CI MCP partial title", second.name);
       await expect(suiteField()).toHaveValue(second.id);
       await capture("mcp-created-and-edited-case-in-real-repository");
     });
-    expect(await caseState(control.id)).toEqual(controlBefore);
+    expectCaseUnchanged(controlBefore, await caseState(control.id));
     expect(await associations()).toEqual(associationsBefore);
     if (failures.length) throw new AggregateError(failures, `${failures.length} repository/MCP journey step(s) failed`);
   } finally {

@@ -811,8 +811,12 @@ describe("test case writes carry the Notion link", () => {
       await svc.updateTestCaseWithClient(client, PROJECT_ID, "tc-1", CALLER_ID, body);
       const update = statements.find((s) => s.sql.includes("UPDATE testcases SET"))!;
       expect(maxPlaceholder(update.sql)).toBe(update.params.length);
-      expect(update.params.slice(-4, -1)).toEqual([...link, clears]);
-      expect(update.params.at(-1)).toBeNull(); // No external-id rename requested
+      // Notion's existing $31..$33 slots stay fixed when unrelated presence flags are appended.
+      expect(update.sql).toContain("notion_page_id=CASE WHEN $33::boolean THEN NULL ELSE COALESCE($31,notion_page_id) END");
+      expect(update.sql).toContain("notion_url=CASE WHEN $33::boolean THEN NULL ELSE COALESCE($32,notion_url) END");
+      expect(update.params.slice(30, 33)).toEqual([...link, clears]);
+      expect(update.params[33]).toBeNull(); // $34: no external-id rename requested.
+      expect(update.params.slice(34)).toEqual([false, false]); // Suite/owner omitted, not cleared.
     }
   });
 
