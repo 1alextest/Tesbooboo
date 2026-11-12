@@ -3730,7 +3730,7 @@ the new PostgreSQL result without relabeling #25's unexecuted checks as passes.
 | At the integrated baseline, `LegacyService.failLinkedExecutions`, called by `createBug` / `addBugLink`, directly updates verdict, time and performer without the parent finalization guard. | High: a bug association can rewrite a finalized automated result and its live summary. Source-confirmed; baseline runtime reproduction pending. | User selected association-only success for finalized automation: retain valid links without changing sealed results. Serialize result side effects with closure and make UI refresh authoritative state. Atomic rejection is NOT the selected policy. | Focused follow-up after #26; see implementation/verification boundary below. Full direct/side finding semantics remain separately proposed. |
 | At the integration baseline, no history-import test fails after a completed database write. `e2e/api/cycles.spec.ts` invalid-row case fails during validation. | High assurance gap at that baseline. | Extend `automation-closure.db.spec.ts` with a real late PostgreSQL failure, prove earlier writes occurred, and compare persisted run/results/snapshots plus successful follow-up. | PR #26 implements and passes this bounded scenario on disposable migrated PostgreSQL; integration/review and later-stage coverage remain outstanding. |
 | `deleteCycle`, testcase external-ID renaming, project-member removal and sharing can change closed-run records/metadata. REST/MCP bulk updates commit per item. | Policy-dependent integrity/atomicity risks; not all are defects. | Inventory deletion vs result immutability, snapshot identity, assignment cleanup, publication, and partial-batch semantics; preserve existing behavior until policy is approved. | Mutation-path assurance; deferred classification and coverage. |
-| Nested execution PATCH does not pass URL `cycleId` into `updateExecution`; reporter `onEnd` logs closure after a caught close error. | Medium: misleading parent context / false success reporting. Source observations, not reproduced exploits. | Validate parent-child relationship and report close failures truthfully; add transport/reporter regressions. | Separate Phase 1 follow-ups. |
+| At the baseline, nested execution PATCH does not pass URL `cycleId` into `updateExecution`; reporter `onEnd` logs closure after a caught close error. | Medium: misleading parent context / false success reporting. | Validate parent-child relationship and report close failures truthfully; add transport/reporter regressions. | Execution context reproduced and repaired in PR #31 below, pending integration/review; reporter close-failure handling remains separate. |
 | `ProjectWriteLockGuard` matches project-prefixed REST paths; legacy cycle URLs and `/api/mcp` alias are outside that matcher. | Potential plan-enforcement inconsistency; finalization protections are separate. | Verify all transports against the same entitlement policy before choosing a shared enforcement point. | Side finding; deferred, not a proven authorization exploit. |
 | `development` ruleset reports an empty required-status-check list and zero required approvals. | Medium governance gap: green checks/review are not presently enforced by that ruleset. | Owner to configure required checks and review policy; continue requiring green checks and human approval operationally. | Verified via GitHub rules API; no settings changed. |
 | Root `CLAUDE.md` describes a shared/macOS stack, whereas current CI provisions disposable PostgreSQL and this workstation is Windows with no Docker CLI. | Verification/environment mismatch; local DB/image/E2E execution cannot be claimed. | Use existing isolated CI, retain its gates, and explicitly report skipped local DB tests. | Infrastructure limitation, not permission to target a shared DB or weaken tests. |
@@ -3964,7 +3964,22 @@ writes inside the existing rolled-back test transaction, **not** concurrent-clie
 evidence, a supported reparent API, or a new rollback-after-write guarantee.
 Local repair verification passes typecheck, full-emission backend compilation,
 frozen lint (0 new errors) and 6 targeted suites / 216 tests; 8 unconfigured DB
-tests are skipped, not passes. Fresh repaired-head CI remains required.
+tests are skipped, not passes. At repaired head `ae38a0e`, **23/23 checks passed**:
+[4 PostgreSQL suites / 53 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43149343074/job/130954564723),
+[5 authorization suites / 210 tests](https://github.com/1alextest/Tesbooboo/actions/runs/43149343070/job/130954564508),
+[3 real REST/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43149343116/job/130954564787)
+and [1,683 backend tests](https://github.com/1alextest/Tesbooboo/actions/runs/43149343128/job/130954564768)
+(151 external/DB skips in that separate job, not database evidence). The database
+job ran all 144 migrations, idempotency and integrity probes. The unchanged
+baseline refusals, added late-binding SQL controls, genuine wrong-URL state-equality
+matrix, matching-run metadata/status/MCP controls and inherited #28–#30
+authorization/link/historical/finalization/browser/reload assertions passed.
+Four saved sealed-result screenshots were inspected; lower fields remain partly
+outside the captured viewport, with values/visibility separately asserted by
+Playwright. No page exceptions; backend warnings are deliberately unconfigured
+embeddings keys, not a reason to provision paid services. Later documentation-only
+heads still require fresh checks and human review. This is not Phase 1/release
+signoff or proof that every remaining mutation path has been audited.
 Preserve attribution, manual/open-run behavior, closed-automation refusal,
 MCP project/scope checks and bulk per-item semantics. No new result correction,
 history cleanup, role/permission expansion, schema or deployment is authorized.
