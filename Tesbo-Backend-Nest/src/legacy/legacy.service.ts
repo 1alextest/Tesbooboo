@@ -7116,8 +7116,17 @@ export class LegacyService implements OnModuleInit {
     return this.executions(cycleId);
   }
 
-  async updateExecution(executionId: string, actorId: string | null | undefined, body: Body, opts: { quietStatus?: boolean } = {}) {
+  async updateExecution(
+    executionId: string, actorId: string | null | undefined, body: Body,
+    opts: { quietStatus?: boolean; expectedCycleId?: string } = {}
+  ) {
     const uid = this.requireUser(actorId);
+    // The nested REST parent is trusted route context, never a body field. MCP and bulk
+    // callers without a nested URL still resolve/authorize the execution's actual parent.
+    const expectedCycleId = opts.expectedCycleId;
+    if (expectedCycleId !== undefined && !isUuid(expectedCycleId)) {
+      throw new NotFoundException({ error: "Execution not found" });
+    }
     /*
      * Basecamp 10189985971 (automation ingest scoping) surfaced this as a pre-existing defect.
      *
@@ -7147,13 +7156,15 @@ export class LegacyService implements OnModuleInit {
     const before = await this.db.query(
       `SELECT e.*, c.project_id, ci.cycle_id, COALESCE(NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Untitled test case') AS testcase_title
        FROM executions e
-       JOIN cycle_items ci ON ci.id = e.cycle_item_id
-       JOIN cycles c ON c.id = ci.cycle_id
+       JOIN cycle_items ci ON ci.id = e.cycle_item_id AND ci.deleted_at IS NULL
+       JOIN cycles c ON c.id = ci.cycle_id AND c.deleted_at IS NULL
        LEFT JOIN testcases t ON t.id = ci.testcase_id
        WHERE e.id = $1 AND e.deleted_at IS NULL`,
       [executionId]
     );
-    if (!before.rows[0]) throw new NotFoundException({ error: "Execution not found" });
+    if (!before.rows[0] || (expectedCycleId !== undefined && String(before.rows[0].cycle_id) !== expectedCycleId.toLowerCase())) {
+      throw new NotFoundException({ error: "Execution not found" });
+    }
     // The execution was resolved but its project never was: a signed-in caller from any workspace
     // could rewrite another team's result by execution id.
     await this.requireProjectAccess(uid, before.rows[0].project_id);
@@ -7197,7 +7208,7 @@ export class LegacyService implements OnModuleInit {
       );
       if (!locked.rows[0]) throw new NotFoundException({ error: "Run not found" });
       this.assertAutomatedRunWritable(locked.rows[0]);
-      return client.query(
+      const updated = await client.query(
       `UPDATE executions SET status=COALESCE($2,status),
        assignee_id=CASE WHEN $9::boolean THEN NULL ELSE COALESCE($3,assignee_id) END,
        actual_result=COALESCE($4,actual_result),
@@ -7208,6 +7219,7 @@ export class LegacyService implements OnModuleInit {
        -- Explicit status writes retain the existing attribution convention.
        executed_by=CASE WHEN $2 IS NULL THEN executed_by ELSE $7 END, updated_at=now()
        WHERE id=$1 AND deleted_at IS NULL
+         AND cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id = $10::uuid AND deleted_at IS NULL)
        RETURNING *`,
       [
         executionId,
@@ -7218,9 +7230,14 @@ export class LegacyService implements OnModuleInit {
         body.defectUrl || null,
         uid,
         clearsDefect,
-        clearsAssignee
+        clearsAssignee,
+        before.rows[0].cycle_id
       ]
       );
+      // Membership/result deletion or rebinding after the initial read must not turn an
+      // unavailable child into a successful edit/event, nor update a different run's result.
+      if (!updated.rows[0]) throw new NotFoundException({ error: "Execution not found" });
+      return updated;
     });
     // Fire-and-forget: logProjectActivity already swallows its own errors (see its `.catch` below)
     // and its result is never read, so there is no correctness reason for the status-update response

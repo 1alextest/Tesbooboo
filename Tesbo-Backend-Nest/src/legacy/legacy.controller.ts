@@ -724,8 +724,13 @@ export class LegacyController {
   }
 
   @Patch("/api/cycles/:cycleId/executions/:executionId")
-  updateExecution(@Req() req: AuthenticatedRequest, @Param("executionId") executionId: string, @Body() body: Record<string, any>) {
-    return this.legacy.updateExecution(executionId, req.userId, body);
+  updateExecution(
+    @Req() req: AuthenticatedRequest,
+    @Param("executionId") executionId: string,
+    @Body() body: Record<string, any>,
+    @Param("cycleId") cycleId: string
+  ) {
+    return this.legacy.updateExecution(executionId, req.userId, body, { expectedCycleId: cycleId });
   }
 
   @Post("/api/cycles/:cycleId/executions/:executionId/attachments")

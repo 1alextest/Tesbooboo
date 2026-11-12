@@ -3942,12 +3942,30 @@ The owning shared API execution spec is extended as well; full shared-stack
 execution remains pending. The local real Nest controller/service harness returned
 200 for all three wrong/unknown/malformed URL-parent cases (3 new failures,
 10 passes); its principals/persistence are simulated and its 6 DB skips are not
-database evidence. Isolated PostgreSQL and actual-session CI remains pending.
+database evidence. At combined-baseline head `8ee3cda`,
+[migrated PostgreSQL](https://github.com/1alextest/Tesbooboo/actions/runs/43147876666/job/130949857526)
+reproduced all three context refusals resolving instead of rejecting (3 failures,
+48 passes, 51 total without skips).
+[Real-session smoke](https://github.com/1alextest/Tesbooboo/actions/runs/43147876702/job/130949857480)
+returned 200 for the first wrong local-run URL and independently read back the
+persisted Blocked verdict, submitted notes and acting performer. It stopped there;
+later foreign/unknown/malformed and browser flows are not baseline passes.
+[Authorization HTTP CI](https://github.com/1alextest/Tesbooboo/actions/runs/43147876544/job/130949856569)
+also reproduced the three 200 responses (207 other tests passed). This is actual
+disposable DB/session evidence, not a production or cross-project-access exploit.
 
-Planned bounded repair: forward the URL parent as service context, reject a
-malformed/mismatched parent before writes, and bind the transactional UPDATE to
+The bounded implementation forwards the URL parent as service context, rejects a
+malformed/mismatched parent before writes, and binds the transactional UPDATE to
 active membership in the parent run already locked by the existing finalization
-guard. Preserve attribution, manual/open-run behavior, closed-automation refusal,
+guard. It refuses a zero-row UPDATE before any success event. Additional real SQL
+fixtures change membership/binding after the initial read to verify the UPDATE's
+predicate independently of the early guard; those tests use completed fixture
+writes inside the existing rolled-back test transaction, **not** concurrent-client
+evidence, a supported reparent API, or a new rollback-after-write guarantee.
+Local repair verification passes typecheck, full-emission backend compilation,
+frozen lint (0 new errors) and 6 targeted suites / 216 tests; 8 unconfigured DB
+tests are skipped, not passes. Fresh repaired-head CI remains required.
+Preserve attribution, manual/open-run behavior, closed-automation refusal,
 MCP project/scope checks and bulk per-item semantics. No new result correction,
 history cleanup, role/permission expansion, schema or deployment is authorized.
 
