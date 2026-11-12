@@ -108,6 +108,7 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
       expect(created.links).toEqual(expect.arrayContaining([expect.objectContaining(body.links[0])]));
       expect((await persisted()).execution[0]).toMatchObject({ status: "Failed", executed_by: ownerId });
     }
+    await verifyHistoryImportText(request, nonmember, anonymous, db, api, projectId);
   } finally {
     await db.query("UPDATE users SET active_organization_id = $1 WHERE id = $2", [organizationId, ownerId]);
     await db.query("UPDATE projects SET archived_at = NULL WHERE id = $1", [projectId]);
@@ -125,6 +126,110 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
     await anonymous.dispose();
     await nonmember.dispose();
     await db.end();
+  }
+}
+
+async function verifyHistoryImportText(
+  request: APIRequestContext, nonmember: APIRequestContext, anonymous: APIRequestContext,
+  db: Client, api: string, projectId: string
+) {
+  // Reuse this smoke's genuine sessions and already safety-checked disposable DB connection.
+  const base = `${api}/api/projects/${projectId}`;
+  const cases: Array<{ id: string; externalId: string }> = [];
+  const runs: string[] = [];
+  const endpoint = (runId: string) => `${api}/api/cycles/${runId}/history-import`;
+  const state = async () => ({
+    runs: (await db.query("SELECT * FROM cycles WHERE id = ANY($1::uuid[]) ORDER BY id", [runs])).rows,
+    snapshots: (await db.query("SELECT * FROM cycle_items WHERE cycle_id = ANY($1::uuid[]) ORDER BY id", [runs])).rows,
+    executions: (await db.query("SELECT e.* FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id WHERE ci.cycle_id = ANY($1::uuid[]) ORDER BY e.id", [runs])).rows,
+    cases: (await db.query("SELECT * FROM testcases WHERE id = ANY($1::uuid[]) ORDER BY id", [cases.map((item) => item.id)])).rows,
+    audit: (await db.query("SELECT * FROM audit_logs WHERE project_id = $1 AND entity_id::text = ANY($2::text[]) ORDER BY id", [projectId, runs])).rows,
+    attachments: (await db.query("SELECT * FROM attachments WHERE project_id = $1 AND entity_id::text = ANY($2::text[]) ORDER BY id", [projectId, runs])).rows
+  });
+  try {
+    for (let i = 0; i < 2; i++) {
+      const created = await request.post(`${base}/testcases`, { data: { title: `CI history text ${i}` } });
+      expect(created.ok(), await created.text()).toBeTruthy();
+      cases.push(await created.json());
+    }
+    const manual = await request.post(`${base}/cycles`, { data: { name: "CI history text" } });
+    expect(manual.ok(), await manual.text()).toBeTruthy();
+    const runId = (await manual.json()).id as string;
+    runs.push(runId);
+    const attached = await request.post(`${api}/api/cycles/${runId}/testcases`, { data: { testcaseIds: cases.map((item) => item.id) } });
+    expect(attached.ok(), await attached.text()).toBeTruthy();
+    const before = await state();
+    const nul = "before\u0000after";
+    const invalid: Array<{ label: string; run?: Record<string, unknown>; result?: Record<string, unknown> }> = [
+      { label: "run.tags[1]", run: { tags: ["valid", nul] } },
+      { label: "results[1].actualResult", result: { actualResult: nul } },
+      { label: "results[1].errorMessage", result: { errorMessage: nul } },
+      { label: "results[1].errorStack", result: { errorStack: nul } },
+      { label: "results[1].stepResults[0].comment", result: { stepResults: [{ position: 1, status: "Failed", comment: nul }] } },
+      { label: "results[1].history[0].comment", result: { history: [{ status: "Passed", comment: nul }] } },
+      { label: "results[1].history[0].errorStack", result: { history: [{ status: "Passed", errorStack: nul }] } }
+    ];
+    for (const item of invalid) {
+      const response = await request.post(endpoint(runId), { data: {
+        run: { tags: ["Must not persist"], timeSpentMs: 321, ...item.run },
+        results: [{ testcaseId: cases[0].id, status: "Failed", actualResult: "Must not persist" }, { testcaseId: cases[1].id, ...item.result }],
+        refreshSnapshots: true
+      } });
+      // Inspect independent persisted rows even on the intentionally failing baseline HTTP assertion.
+      expect(await state()).toEqual(before);
+      expect(response.status(), `${item.label}: ${await response.text()}`).toBe(400);
+      expect(await response.json()).toMatchObject({ error: `${item.label} must not contain U+0000` });
+    }
+    for (const [client, expected] of [[anonymous, 400], [nonmember, 404]] as const) {
+      const response = await client.post(endpoint(runId), { data: { run: { tags: ["Unauthorized"] } } });
+      expect(response.status(), await response.text()).toBe(expected);
+      expect(await state()).toEqual(before);
+    }
+
+    const text = "日本語 café 😀\n\t literal \\u0000";
+    const payload = {
+      run: { status: "Completed", closedAt: "2024-03-13T15:18:01Z", closeStatus: "completed", tags: [" Smoke 😀 ", "SMOKE 😀"] },
+      results: [{ testcaseId: cases[0].id, status: "Passed", actualResult: text, errorMessage: null, errorStack: text,
+        stepResults: [{ position: 1, status: "Passed", comment: text }], history: [{ status: "Passed", comment: text, errorStack: null }] }],
+      refreshSnapshots: true
+    };
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const accepted = await request.post(endpoint(runId), { data: payload });
+      expect(accepted.ok(), await accepted.text()).toBeTruthy();
+      expect(await accepted.json()).toMatchObject({ applied: 1, unmatched: [], refreshedSnapshots: 2 });
+    }
+    let saved = await state();
+    expect(saved.executions).toHaveLength(2);
+    const original = before.executions.find((row) => row.cycle_item_id === before.snapshots.find((item) => item.testcase_id === cases[0].id)?.id)!;
+    expect(saved.executions.find((row) => row.id === original.id)).toMatchObject({
+      status: "Passed", actual_result: text, error_message: null, error_stack: text,
+      step_results: payload.results[0].stepResults, history: payload.results[0].history,
+      executed_by: original.executed_by, assignee_id: original.assignee_id
+    });
+    expect(saved.runs[0]).toMatchObject({ status: "Completed", source: "manual", close_status: "completed", tags: ["Smoke 😀"] });
+    const clear = await request.post(endpoint(runId), { data: { results: [{ testcaseId: cases[0].id, actualResult: null, errorStack: null, history: null, stepResults: null }] } });
+    expect(clear.ok(), await clear.text()).toBeTruthy();
+    const empty = await request.post(endpoint(runId), { data: {} });
+    expect(await empty.json()).toMatchObject({ applied: 0, unmatched: [], refreshedSnapshots: 0, runFields: [] });
+    saved = await state();
+    expect(saved.executions.find((row) => row.id === original.id)).toMatchObject({ status: "Passed", actual_result: null, error_stack: null, history: null, step_results: null });
+
+    const automation = await request.post(`${base}/automation/runs`, { data: { name: "CI history automation control", caseIds: [cases[0].externalId] } });
+    expect(automation.ok(), await automation.text()).toBeTruthy();
+    const automationId = (await automation.json()).runId as string;
+    runs.push(automationId);
+    const open = await request.post(endpoint(automationId), { data: { results: [{ testcaseId: cases[0].id, actualResult: text }] } });
+    expect(open.ok(), await open.text()).toBeTruthy();
+    expect((await open.json()).applied).toBe(1);
+    const closed = await request.patch(`${base}/automation/runs/${automationId}/close`, { data: { status: "incomplete" } });
+    expect(closed.ok(), await closed.text()).toBeTruthy();
+    const sealed = await state();
+    const refused = await request.post(endpoint(automationId), { data: { results: [{ testcaseId: cases[0].id, actualResult: "Must not rewrite sealed result" }] } });
+    expect(refused.status(), await refused.text()).toBe(409);
+    expect(await state()).toEqual(sealed);
+  } finally {
+    for (const id of runs) await request.delete(`${api}/api/cycles/${id}`, { failOnStatusCode: false });
+    for (const item of cases) await request.delete(`${base}/testcases/${item.id}`, { failOnStatusCode: false });
   }
 }
 
@@ -392,7 +497,7 @@ test("fresh installation sends unauthenticated users to setup", async ({ page })
   await expect(page).toHaveURL(/\/setup/);
 });
 
-test("bug authorization, strict relationships and finalized automation preserve persisted results and truthful UI", async ({ page }, testInfo) => {
+test("history import, bug authorization and finalized automation preserve persisted results and truthful UI", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   const api = process.env.CI_API_BASE_URL!;
   const web = process.env.CI_WEB_BASE_URL!;

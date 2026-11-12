@@ -4139,6 +4139,52 @@ DB/browser suites are separate evidence, not a relabeling of the SDK fixtures.
 Full existing checks must also be fresh on any later documentation-only head
 before review. Phase 1 remains open; no merge, publication or deployment occurred.
 
+#### Integrated #32 and historical-import text / later-write rollback slice
+
+The owner merged PR [#32](https://github.com/1alextest/Tesbooboo/pull/32) as
+`27173f0` on 2026-11-12 at 13:01:34 UTC. Final head `80ec90c` passed **22/22
+triggered checks**, including [143 SDK tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43220931436/job/131191951029),
+[53 migrated PostgreSQL tests](https://github.com/1alextest/Tesbooboo/actions/runs/43220931518/job/131191952015)
+and [3 real API/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43220931505/job/131191951828).
+This integrates truthful reporter close outcomes; the two unchanged local Windows
+permission failures and broader Phase 1 / human release-review gates remain open.
+
+The next bounded slice reuses `LegacyService.historyText`, the existing history
+import owners and the current disposable database/smoke jobs. U+0000 is accepted
+by the current validator, although PostgreSQL cannot store it in text/JSONB.
+The earlier #26 rollback proof already observed native JSONB rejection after a
+completed run write; it did not provide a field-specific 400 or cover completed
+execution/snapshot rollback stages. No unmerged commits were found on the two
+existing history-import/finalization branches before selecting this follow-up.
+
+Regressions enumerate six result/nested text locations and run tags, require
+whole-request rejection before the import transaction, and compare independent
+persisted run/results/snapshots/audit/attachments state in native PostgreSQL and
+genuine authenticated HTTP. Positive controls retain valid Unicode/emoji, literal
+`\\u0000` text, null/omitted fields, text limits, tag deduplication, replay, manual
+closed imports, open automation and finalized-automation refusal. Existing owner
+and access boundaries stay unchanged; plan-guard consistency remains separate.
+
+The original rollback oracle deliberately used invalid U+0000 text. Rejecting
+that text earlier must not turn rollback assurance into validation-only coverage.
+The replacement parameterized oracle forwards actual production run, execution
+and snapshot UPDATEs, observes the changed pending rows on that same connection,
+then issues a native `SELECT 1 / 0` at each completed stage. It retains production
+BEGIN/ROLLBACK/release, independent-client state equality and a valid single-pool
+retry. This is explicit deterministic fault injection, not a natural production
+failure or concurrency claim; it strengthens stage coverage without weakening the
+no-prefix/rollback assertions or changing the transaction implementation.
+
+Local regression-only execution: **25 tests / 18 passed / 7 failed**, the seven
+intended U+0000 validation refusals; the persistence in that unit fixture is
+mocked, not database evidence. An earlier 120-second test command timed out and
+is not counted as a pass. Backend and E2E typechecks passed. Canonical history
+import test collection failed because `e2e/.auth/context.json` is absent; its zero
+collected tests are not a pass. No session state was fabricated and no shared
+database was targeted. Native database, real HTTP and repaired-head CI results
+are still pending. No shared database, schema, UI, dependency, retention/deletion,
+bulk atomicity, publication or deployment change is authorized by this slice.
+
 Remaining mutation inventory is not a list of automatically approved removals:
 
 | Existing writer | Source-grounded boundary / remaining decision |

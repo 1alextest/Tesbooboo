@@ -1038,7 +1038,46 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     });
   });
 
-  it("rolls back an already-written run when a later historical result fails in PostgreSQL", async () => {
+  const rejectedHistoryText: Array<{ label: string; run?: Record<string, unknown>; result?: Record<string, unknown> }> = [
+    { label: "run.tags[1]", run: { tags: ["valid", "bad\u0000tag"] } },
+    { label: "results[1].actualResult", result: { actualResult: "bad\u0000result" } },
+    { label: "results[1].errorMessage", result: { errorMessage: "bad\u0000message" } },
+    { label: "results[1].errorStack", result: { errorStack: "bad\u0000stack" } },
+    { label: "results[1].stepResults[0].comment", result: { stepResults: [{ position: 1, status: "Failed", comment: "bad\u0000step" }] } },
+    { label: "results[1].history[0].comment", result: { history: [{ status: "Passed", comment: "bad\u0000history" }] } },
+    { label: "results[1].history[0].errorStack", result: { history: [{ status: "Passed", errorStack: "bad\u0000stack" }] } }
+  ];
+
+  it.each(rejectedHistoryText)("refuses U+0000 at $label with a field-specific 400 and persisted domain state unchanged", async (invalid) => {
+    await setup.query("UPDATE cycles SET source = 'automation', closed_at = NULL, close_status = NULL, status = 'In Progress' WHERE id = $1", [runId]);
+    const state = async () => ({
+      run: (await setup.query("SELECT * FROM cycles WHERE id = $1", [runId])).rows,
+      executions: (await setup.query("SELECT e.* FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id WHERE ci.cycle_id = $1 ORDER BY e.id", [runId])).rows,
+      snapshots: (await setup.query("SELECT * FROM cycle_items WHERE cycle_id = $1 ORDER BY id", [runId])).rows,
+      audit: (await setup.query("SELECT * FROM audit_logs WHERE project_id = $1 ORDER BY id", [projectId])).rows,
+      attachments: (await setup.query("SELECT * FROM attachments WHERE project_id = $1 ORDER BY id", [projectId])).rows
+    });
+    const before = await state();
+    const legacy = makeLegacy(new DatabaseService(pool));
+    // Authorization is owned separately by genuine-session smoke; this oracle observes real persistence.
+    jest.spyOn(legacy as unknown as { requireCycleAccess: (...args: unknown[]) => Promise<string> }, "requireCycleAccess").mockResolvedValue(projectId);
+    jest.spyOn(legacy, "requireProjectAccess").mockResolvedValue({ caller_role: "owner" } as never);
+    const activity = jest.spyOn(legacy, "logProjectActivity").mockResolvedValue(undefined);
+    const error = await legacy.importRunHistory(userId, runId, {
+      run: { tags: ["Must not persist"], timeSpentMs: 321, ...invalid.run },
+      results: [
+        { testcaseId: caseId, status: "Failed", actualResult: "Valid preceding row must not persist" },
+        { testcaseId: "66666666-6666-4666-8666-666666666666", ...invalid.result }
+      ],
+      refreshSnapshots: true
+    }).then(() => null, (failure: unknown) => failure);
+    expect(await state()).toEqual(before);
+    expect(activity).not.toHaveBeenCalled();
+    expect(error).toBeInstanceOf(BadRequestException);
+    expect((error as BadRequestException).getResponse()).toEqual({ error: `${invalid.label} must not contain U+0000` });
+  });
+
+  it.each(["run", "execution", "snapshot"])("rolls back historical import after the completed %s write and a later native PostgreSQL failure", async (failureStage) => {
     // Committed, dedicated fixtures: the independent setup connection must be
     // able to observe any accidentally committed prefix of the import.
     await setup.query(
@@ -1048,21 +1087,23 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     await setup.query("UPDATE executions SET status = 'Passed', actual_result = 'Before failed import' WHERE id = $1", [executionId]);
     await setup.query("UPDATE cycle_items SET snapshot_title = 'Before snapshot refresh' WHERE cycle_id = $1", [runId]);
 
-    const readPersisted = async () => ({
-      run: (await setup.query<Record<string, unknown>>("SELECT * FROM cycles WHERE id = $1", [runId])).rows,
-      executions: (await setup.query<Record<string, unknown>>(
+    type Read = (sql: string, values?: unknown[]) => Promise<QueryResult<Record<string, unknown>>>;
+    const readPersisted = async (read: Read = (sql, values) => setup.query(sql, values)) => ({
+      run: (await read("SELECT * FROM cycles WHERE id = $1", [runId])).rows,
+      executions: (await read(
         "SELECT e.* FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id WHERE ci.cycle_id = $1 ORDER BY e.id", [runId]
       )).rows,
-      snapshots: (await setup.query<Record<string, unknown>>("SELECT * FROM cycle_items WHERE cycle_id = $1 ORDER BY id", [runId])).rows,
-      audit: (await setup.query<Record<string, unknown>>("SELECT * FROM audit_logs WHERE project_id = $1 ORDER BY id", [projectId])).rows,
-      attachments: (await setup.query<Record<string, unknown>>("SELECT * FROM attachments WHERE project_id = $1 ORDER BY id", [projectId])).rows
+      snapshots: (await read("SELECT * FROM cycle_items WHERE cycle_id = $1 ORDER BY id", [runId])).rows,
+      audit: (await read("SELECT * FROM audit_logs WHERE project_id = $1 ORDER BY id", [projectId])).rows,
+      attachments: (await read("SELECT * FROM attachments WHERE project_id = $1 ORDER BY id", [projectId])).rows
     });
     const before = await readPersisted();
     expect(before.run).toHaveLength(1);
     expect(before.executions).toHaveLength(1);
     expect(before.snapshots).toHaveLength(1);
 
-    const completedWrites: { rowCount: number | null; pendingRun: Record<string, unknown> }[] = [];
+    const completedWrites: { stage: string; rowCount: number | null; pending: Awaited<ReturnType<typeof readPersisted>> }[] = [];
+    let inject = true;
     // Keep the production transaction implementation, including BEGIN, ROLLBACK
     // and release. Observe actual completed SQL, never substitute a mock result.
     // This pool is used only by the importer's promise-based transaction queries.
@@ -1075,9 +1116,15 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
       const execute = client.query.bind(client) as (sql: string, values?: unknown[]) => Promise<QueryResult<Record<string, unknown>>>;
       client.query = (async (sql: string, values?: unknown[]) => {
         const result = await execute(sql, values);
-        if (/^\s*UPDATE cycles SET\b/i.test(sql)) {
-          const pending = await execute("SELECT * FROM cycles WHERE id = $1", [runId]);
-          completedWrites.push({ rowCount: result.rowCount, pendingRun: pending.rows[0] });
+        const stage = /^\s*UPDATE cycles SET\b/i.test(sql) ? "run"
+          : /^\s*WITH input AS\b/i.test(sql) && /UPDATE executions e SET/.test(sql) ? "execution"
+          : /^\s*UPDATE cycle_items ci SET\b/i.test(sql) ? "snapshot" : null;
+        if (inject && stage) {
+          completedWrites.push({ stage, rowCount: result.rowCount, pending: await readPersisted(execute) });
+          // Reuse the existing bug-link rollback owner's native SQL fault pattern.
+          // Forward each production write first, then fail on this same transaction client.
+          // Invalid user text is a separate validation oracle, not this rollback trigger.
+          if (stage === failureStage) await execute("SELECT 1 / 0");
         }
         return result;
       }) as typeof client.query;
@@ -1095,27 +1142,32 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     };
 
     try {
-      // U+0000 passes today's text validation but PostgreSQL rejects its JSONB
-      // escape (22P05) in the result UPDATE, after the run UPDATE has completed.
-      // A validation-only rejection must fail the completed-write assertions below.
       await expect(legacy.importRunHistory(userId, runId, {
         run: runUpdate,
-        results: [{ ...resultUpdate, actualResult: "Rejected\u0000result" }],
+        results: [resultUpdate],
         refreshSnapshots: true
-      })).rejects.toMatchObject({ code: "22P05" });
+      })).rejects.toMatchObject({ code: "22012" });
 
-      expect(completedWrites).toHaveLength(1);
-      expect(completedWrites[0].rowCount).toBe(1);
-      expect(completedWrites[0].pendingRun).toMatchObject({
-        tags: ["rollback-pending"], status: "In Progress", source: "automation", closed_at: null, close_status: null
-      });
-      expect(Number(completedWrites[0].pendingRun.time_spent_ms)).toBe(123);
+      expect(completedWrites.map((write) => write.stage)).toEqual(["run", "execution", "snapshot"].slice(0, ["run", "execution", "snapshot"].indexOf(failureStage) + 1));
+      for (const write of completedWrites) {
+        expect(write.rowCount).toBe(1);
+        expect(write.pending.run[0]).toMatchObject({
+          tags: ["rollback-pending"], status: "In Progress", source: "automation", closed_at: null, close_status: null
+        });
+        expect(Number(write.pending.run[0].time_spent_ms)).toBe(123);
+        if (write.stage !== "run") expect(write.pending.executions[0]).toMatchObject({
+          status: "Failed", actual_result: resultUpdate.actualResult, duration_ms: resultUpdate.durationMs,
+          history: resultUpdate.history, step_results: resultUpdate.stepResults
+        });
+        if (write.stage === "snapshot") expect(write.pending.snapshots[0].snapshot_title).toBe("Closure case");
+      }
       // Full persisted rows include lifecycle fields, result/history/step data,
       // snapshots and timestamps; inspect them outside the failed transaction.
       expect(await readPersisted()).toEqual(before);
       expect(activity).not.toHaveBeenCalled();
       expect(checkedOut.size).toBe(0);
 
+      inject = false;
       const retried = await legacy.importRunHistory(userId, runId, {
         run: runUpdate, results: [resultUpdate], refreshSnapshots: true
       });
