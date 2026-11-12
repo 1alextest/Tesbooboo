@@ -4233,6 +4233,63 @@ publication or deployment change is authorized by this slice. Unpaired-surrogate
 validation and other mutation/postcommit/contract decisions are separate; this is
 not full import certification or Phase 1 completion.
 
+#### Integrated #33 and browser mutation replay follow-up
+
+The owner merged PR [#33](https://github.com/1alextest/Tesbooboo/pull/33) as
+`d2c2ea6` on 2026-11-12 at 13:39:49 UTC. Final head `20b9fd4` passed **22/22
+triggered checks**, including [62 native PostgreSQL tests](https://github.com/1alextest/Tesbooboo/actions/runs/43227925620/job/131215871447),
+[3 genuine API/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43227925632/job/131215871546)
+and [1,691 backend passes / 160 external/DB skips](https://github.com/1alextest/Tesbooboo/actions/runs/43227925773/job/131215871388).
+Full shared-stack import coverage and the remaining Phase 1 gates are not closed
+by that owner merge.
+
+The next focused finding is in `Tesbo-Frontend/lib/api.ts`:
+`fetchWithNetworkErrorMessage` automatically repeats a fetch after any recognized
+network error, including POST/PUT/PATCH/DELETE and multipart comment/KB uploads.
+Its source comment assumes the first request never reached the server. A browser
+network error cannot establish that: a response can be lost after a committed
+write. Backend create/notification ambiguity and full idempotency remain separate;
+this slice must not change transaction policy or silently claim a failed write
+was rolled back. No open PR or unmerged matching retry branch was found first.
+
+The planned repair confines the existing one retry to GET/HEAD. Ambiguous mutation
+network/abort errors must instead say **request outcome unconfirmed**, acknowledge
+possible application and advise checking current state before another attempt.
+Preserve existing HTTP errors/successes, bounded read retries, GET in-flight
+collapse, credentials/body handling and the UI's existing error/draft controls.
+No new option silently treats a mutation or an idempotency-looking header as safe.
+
+Regressions extend the existing smoke owner, not a new test project. A native
+ephemeral HTTP fixture exercises the production helper source under Playwright:
+five JSON method forms, multipart comment/KB callers, applied-before-abort,
+GET/HEAD retry, exhausted reads, pre-aborted reads, GET dedup/freshness, HTTP
+403/503 and empty-success controls. A narrow adapter translates Node's native
+socket-loss `fetch failed` into the browser's `Failed to fetch`; requests and
+response loss are real, but fixture application counts are **not PostgreSQL** and
+this source-level test is **not the served browser bundle**. Local configuration
+uses unreachable loopback app URL placeholders only for the transport-only grep;
+those app tests are not selected and no shared service/session is fabricated.
+
+The genuine CI browser scenario dispatches the real dialog's create request to
+Nest, holds its successful response after a DB read confirms one committed bug,
+then drops only the acknowledgement. After the UI settles, an independent DB
+read must show exactly one bug/one dispatched POST, the sealed run/results must
+remain unchanged, and the dialog must retain its draft with truthful uncertainty.
+Reload must recover the actual association without a second save. The canonical
+`e2e/ui/bugs.spec.ts` also gains this failure path on its existing report surface.
+The original four sealed browser journeys and earlier auth/relationship/import
+controls remain intact. Native source and real browser/PostgreSQL evidence are
+kept separate. The frozen local native selection is **one failed Playwright test
+with 27 failed soft assertions**, not 27 test cases: all five JSON method forms
+and both multipart callers sent two requests/applied twice to the fixture and
+returned success; applied-before-abort suggested retry instead of uncertainty.
+Read/body/HTTP controls executed and passed. An initial lowercase PATCH fixture
+was rejected by Node before dispatch and was corrected to standards-normalized
+lowercase POST without relaxing assertions. The canonical lost-ack and neighboring
+attachment batch/retry selection collected **3 tests**; collection is not execution.
+Frontend and E2E typechecks passed on the full frozen regression selection.
+Isolated real-browser/PostgreSQL baseline and repaired-head results remain pending.
+
 Remaining mutation inventory is not a list of automatically approved removals:
 
 | Existing writer | Source-grounded boundary / remaining decision |

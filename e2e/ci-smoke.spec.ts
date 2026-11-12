@@ -1,6 +1,8 @@
-import { expect, request as newRequest, test, type APIRequestContext } from "@playwright/test";
+import { expect, request as newRequest, test, type APIRequestContext, type Page, type Route, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
 import { hashPasswordForSeed } from "./utils/password";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 
 async function verifyBugCreateAccess(request: APIRequestContext, api: string, projectId: string, ownerId: string, organizationId: string) {
   // Called only after the test's explicit loopback/disposable-database safety checks.
@@ -483,6 +485,100 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
   }
 }
 
+async function verifyBrowserMutationResponseLoss(page: Page, api: string, web: string, projectId: string, testInfo: TestInfo) {
+  // The caller already enforced loopback URLs and the disposable tesbo_ci database.
+  const db = new Client({ connectionString: process.env.DATABASE_URL });
+  const request = page.request;
+  const base = `${api}/api/projects/${projectId}`;
+  const bugs: string[] = [];
+  let caseId = "";
+  let runId = "";
+  let attempts = 0;
+  let committed!: () => void;
+  let rejectCommit!: (error: unknown) => void;
+  const didCommit = new Promise<void>((resolve, reject) => { committed = resolve; rejectCommit = reject; });
+  let release!: () => void;
+  const mayDrop = new Promise<void>((resolve) => { release = resolve; });
+  let dropped!: () => void;
+  const didDrop = new Promise<void>((resolve) => { dropped = resolve; });
+  const handler = async (route: Route) => {
+    if (route.request().method() !== "POST") { await route.continue(); return; }
+    attempts += 1;
+    try {
+      // Actually dispatch to Nest and await its committed response. Only then lose the browser's
+      // acknowledgement. This is not route.abort() before delivery or mocked successful creation.
+      const response = await route.fetch({ maxRetries: 0 });
+      expect(response.ok(), await response.text()).toBeTruthy();
+      bugs.push((await response.json()).id);
+      if (attempts === 1) {
+        committed();
+        await mayDrop;
+        await route.abort("failed");
+        dropped();
+      } else await route.fulfill({ response });
+    } catch (error) {
+      rejectCommit(error);
+      throw error;
+    }
+  };
+  await db.connect();
+  try {
+    const title = "CI lost browser create acknowledgement";
+    const testcaseResponse = await request.post(`${base}/testcases`, { data: { title } });
+    expect(testcaseResponse.ok(), await testcaseResponse.text()).toBeTruthy();
+    const testcase = await testcaseResponse.json();
+    caseId = testcase.id;
+    const runResponse = await request.post(`${base}/automation/runs`, { data: { name: title, caseIds: [testcase.externalId] } });
+    expect(runResponse.ok(), await runResponse.text()).toBeTruthy();
+    runId = (await runResponse.json()).runId;
+    const resultResponse = await request.post(`${base}/automation/runs/${runId}/results`, { data: { caseId: testcase.externalId, status: "pass", retryCount: 0 } });
+    expect(resultResponse.ok(), await resultResponse.text()).toBeTruthy();
+    const executionId = (await resultResponse.json()).executionId as string;
+    const close = await request.patch(`${base}/automation/runs/${runId}/close`, { data: { status: "completed" } });
+    expect(close.ok(), await close.text()).toBeTruthy();
+    const sealedState = async () => ({
+      run: (await db.query("SELECT * FROM cycles WHERE id = $1", [runId])).rows,
+      items: (await db.query("SELECT * FROM cycle_items WHERE cycle_id = $1 ORDER BY id", [runId])).rows,
+      execution: (await db.query("SELECT * FROM executions WHERE id = $1", [executionId])).rows
+    });
+    const storedBugs = async () => (await db.query("SELECT * FROM bugs WHERE project_id = $1 AND title = $2 AND deleted_at IS NULL ORDER BY id", [projectId, title])).rows;
+    const before = await sealedState();
+    await page.goto(`${web}/projects/${projectId}/cycles/${runId}/execute/${executionId}`);
+    await page.getByRole("button", { name: "Log bug", exact: true }).filter({ hasText: /^Log bug$/ }).click();
+    await page.getByPlaceholder("Brief summary of the bug…").fill(title);
+    await page.route(`${base}/bugs`, handler);
+    await page.getByRole("button", { name: "Report Bug", exact: true }).click();
+    await didCommit;
+    expect(await storedBugs(), "a real bug is already committed before the acknowledgement is dropped").toHaveLength(1);
+    await expect(page.getByRole("button", { name: "Creating…", exact: true })).toBeVisible();
+    release();
+    await didDrop;
+    await expect(page.getByRole("button", { name: "Creating…", exact: true })).toHaveCount(0);
+    const persisted = await storedBugs();
+    expect(persisted, `one user save dispatched ${attempts} POST requests and persisted ${persisted.length} bugs`).toHaveLength(1);
+    expect(attempts).toBe(1);
+    expect(await sealedState()).toEqual(before);
+    await expect(page.getByTestId("log-bug-error")).toContainText(/outcome unconfirmed/i);
+    await expect(page.getByTestId("log-bug-error")).toContainText(/check|refresh/i);
+    await expect(page.getByPlaceholder("Brief summary of the bug…")).toHaveValue(title);
+    await expect(page.getByRole("button", { name: "Report Bug", exact: true })).toBeEnabled();
+    await testInfo.attach("lost-create-acknowledgement", { body: await page.screenshot(), contentType: "image/png" });
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.reload();
+    await expect(page.getByLabel("Bug Title", { exact: true })).toHaveValue(title);
+    await expect(page.getByRole("button", { name: "Passed", exact: true })).toHaveClass(/bg-\[var\(--success\)\]/);
+    expect(await storedBugs()).toHaveLength(1);
+    expect(await sealedState()).toEqual(before);
+  } finally {
+    release();
+    await page.unroute(`${base}/bugs`, handler);
+    for (const id of bugs) await request.delete(`${api}/api/bugs/${id}`, { failOnStatusCode: false });
+    if (runId) await request.delete(`${api}/api/cycles/${runId}`, { failOnStatusCode: false });
+    if (caseId) await request.delete(`${base}/testcases/${caseId}`, { failOnStatusCode: false });
+    await db.end();
+  }
+}
+
 // CI-only smoke suite: separate from e2e/playwright.config.ts and its
 // tenant-provisioning global setup. Never connects to a shared demo project.
 test("backend health endpoint responds with the expected contract", async ({ request }) => {
@@ -528,6 +624,7 @@ test("history import, bug authorization and finalized automation preserve persis
   try {
     await verifyBugCreateAccess(request, api, projectId, bootstrap.userId, bootstrap.organizationId);
     await verifyBugLinkRelationships(request, api, projectId, bootstrap.userId);
+    await verifyBrowserMutationResponseLoss(page, api, web, projectId, testInfo);
     for (const surface of ["drawer", "full-page"]) {
       for (const status of ["pass", "fail"]) {
         const title = `CI sealed ${surface} ${status}`;
@@ -613,5 +710,114 @@ test("history import, bug authorization and finalized automation preserve persis
     for (const id of bugs) await request.delete(`${api}/api/bugs/${id}`, { failOnStatusCode: false });
     for (const id of runs) await request.delete(`${api}/api/cycles/${id}`, { failOnStatusCode: false });
     for (const id of cases) await request.delete(`${base}/testcases/${id}`, { failOnStatusCode: false });
+  }
+});
+
+test("browser API transport never replays ambiguous mutations and retains bounded read retries", async () => {
+  // Actual loopback HTTP and the production helper source, not a database or a browser bundle.
+  // Node reports socket loss as "fetch failed"; the small adapter below presents the equivalent
+  // browser "Failed to fetch" error without fabricating an HTTP response or skipping the request.
+  const calls = new Map<string, number>();
+  const applied = new Map<string, number>();
+  const bodies = new Map<string, { body: string; contentType: string }>();
+  let abortApplied!: () => void;
+  const didApplyBeforeAbort = new Promise<void>((resolve) => { abortApplied = resolve; });
+  const server = createServer(async (req, res) => {
+    const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const count = (calls.get(pathname) ?? 0) + 1;
+    calls.set(pathname, count);
+    bodies.set(pathname, { body: Buffer.concat(chunks).toString(), contentType: req.headers["content-type"] ?? "" });
+    if (pathname.startsWith("/lost-") || pathname.includes("/comments") || pathname.endsWith("/files/upload") || pathname === "/abort-write") {
+      applied.set(pathname, (applied.get(pathname) ?? 0) + 1);
+      if (pathname === "/abort-write") { abortApplied(); return; }
+      if (count === 1) { req.socket.destroy(); return; } // Applied, but no acknowledgement.
+    }
+    if (pathname.startsWith("/read-") && (count === 1 || pathname === "/read-never")) { req.socket.destroy(); return; }
+    if (pathname === "/status-403" || pathname === "/status-503") {
+      res.writeHead(pathname === "/status-403" ? 403 : 503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "Fixture HTTP refusal" })); return;
+    }
+    if (req.method === "HEAD" || pathname === "/empty") { res.writeHead(204); res.end(); return; }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ id: "fixture", ok: true, list: [], total: 0 }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const previousBase = process.env.NEXT_PUBLIC_API_URL;
+  const realFetch = globalThis.fetch;
+  try {
+    process.env.NEXT_PUBLIC_API_URL = base;
+    globalThis.fetch = async (input, init) => {
+      try { return await realFetch(input, init); }
+      catch (error) {
+        if (error instanceof TypeError && error.message === "fetch failed") throw new TypeError("Failed to fetch");
+        throw error;
+      }
+    };
+    const browserApi = await import("../Tesbo-Frontend/lib/api");
+    expect(browserApi.API_BASE).toBe(base);
+    const errorFrom = async (promise: Promise<unknown>) => promise.then(() => "", (error: unknown) => error instanceof Error ? error.message : String(error));
+    for (const method of ["POST", "PUT", "PATCH", "DELETE", "post"]) {
+      const pathname = `/lost-${method}`;
+      const error = await errorFrom(browserApi.api(pathname, { method, body: { title: "Fixture mutation" } }));
+      expect.soft(calls.get(pathname), `${method}: wire requests`).toBe(1);
+      expect.soft(applied.get(pathname), `${method}: controlled fixture applications, not PostgreSQL`).toBe(1);
+      expect.soft(error, `${method}: must not report success or assume the server stayed unchanged`).toMatch(/outcome unconfirmed/i);
+      expect.soft(error).toMatch(/check|refresh/i);
+      expect(bodies.get(pathname)).toEqual({ body: JSON.stringify({ title: "Fixture mutation" }), contentType: "application/json" });
+    }
+    const file = new File(["Fixture multipart bytes"], "fixture.txt", { type: "text/plain" });
+    const commentPath = "/api/projects/fixture/bugs/fixture/comments";
+    const commentError = await errorFrom(browserApi.createBugComment("fixture", "fixture", "Fixture comment", [file]));
+    expect.soft(calls.get(commentPath), "multipart comment must not be resent").toBe(1);
+    expect.soft(applied.get(commentPath)).toBe(1);
+    expect.soft(commentError).toMatch(/outcome unconfirmed/i);
+    expect(bodies.get(commentPath)?.contentType).toMatch(/^multipart\/form-data; boundary=/);
+    expect(bodies.get(commentPath)?.body).toContain("Fixture multipart bytes");
+    const uploadPath = "/api/projects/fixture/knowledge-base/files/upload";
+    const uploadError = await errorFrom(browserApi.uploadKnowledgeFiles("fixture", "folder", [file]));
+    expect.soft(calls.get(uploadPath), "multipart KB upload must not be resent").toBe(1);
+    expect.soft(applied.get(uploadPath)).toBe(1);
+    expect.soft(uploadError).toMatch(/outcome unconfirmed/i);
+    expect(bodies.get(uploadPath)?.contentType).toMatch(/^multipart\/form-data; boundary=/);
+    expect(bodies.get(uploadPath)?.body).toContain("Fixture multipart bytes");
+
+    const controller = new AbortController();
+    const pending = errorFrom(browserApi.api("/abort-write", { method: "POST", body: { title: "Applied before abort" }, signal: controller.signal }));
+    await didApplyBeforeAbort;
+    controller.abort();
+    expect.soft(await pending).toMatch(/outcome unconfirmed/i);
+    expect(calls.get("/abort-write")).toBe(1);
+    expect(applied.get("/abort-write")).toBe(1);
+
+    expect(await browserApi.api("/read-default")).toMatchObject({ ok: true });
+    expect(await browserApi.api("/read-head", { method: "HEAD" })).toBeUndefined();
+    expect(calls.get("/read-default")).toBe(2);
+    expect(calls.get("/read-head")).toBe(2);
+    expect(await errorFrom(browserApi.api("/read-never"))).toMatch(/blocked or could not reach the API/);
+    expect(calls.get("/read-never")).toBe(2); // A failed retry must not recurse indefinitely.
+    const readAbort = new AbortController();
+    readAbort.abort();
+    expect(await errorFrom(browserApi.api("/aborted-read", { signal: readAbort.signal }))).toMatch(/request took too long/);
+    expect(calls.get("/aborted-read") ?? 0).toBe(0);
+    await Promise.all([browserApi.api("/dedupe"), browserApi.api("/dedupe")]);
+    expect(calls.get("/dedupe")).toBe(1);
+    await browserApi.api("/dedupe");
+    expect(calls.get("/dedupe")).toBe(2); // In-flight collapse, not a stale-value cache.
+    for (const pathname of ["/status-403", "/status-503"]) {
+      expect(await errorFrom(browserApi.api(pathname, { method: "POST", body: {} }))).toBe("Fixture HTTP refusal");
+      expect(calls.get(pathname)).toBe(1); // Neither HTTP errors nor mutation statuses are retried.
+    }
+    expect(await browserApi.api("/empty", { method: "POST", body: {} })).toBeUndefined();
+    expect(calls.get("/empty")).toBe(1);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (previousBase === undefined) delete process.env.NEXT_PUBLIC_API_URL;
+    else process.env.NEXT_PUBLIC_API_URL = previousBase;
+    const stopped = new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    server.closeAllConnections();
+    await stopped;
   }
 });
