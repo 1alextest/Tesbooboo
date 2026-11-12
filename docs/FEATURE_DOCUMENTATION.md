@@ -4400,8 +4400,8 @@ risk, authorize destructive data cleanup, or approve a Phase 2 specification.
    baseline must be recorded as missing, **not fabricated**. Proposed roadmap,
    priorities, requirement links and acceptance criteria require owner approval.
 
-**Next execution order:** finish any in-flight scoped integrity PR (currently
-#42 at the time of this decision), refresh F1–F9 against merged code, resolve
+**Next execution order:** reconcile already merged scoped integrity work (including
+#42), refresh F1–F9 against merged code, resolve
 verified blockers, obtain an explicit Phase 1 exit/sign-off decision, then
 approve and implement the first Phase 2 slice via normal reviewed PRs.
 Do not keep Phase 1 open merely because a new moderate improvement is possible.
