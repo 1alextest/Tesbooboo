@@ -3882,7 +3882,22 @@ on flat bug routes where tokens are intentionally refused with 403. The test now
 requires that exact earlier guard rejection; session REST and MCP exercise the
 edit/add validator, while token REST exercises project-prefixed create validation.
 No token permission or guard is broadened. Additional individually inactive target
-controls are added; **fresh-head CI/transport/browser verification remains pending**.
+controls are added. At head `2db62aa`, **23/23 checks passed**:
+[4 migrated PostgreSQL suites / 45 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43128186395/job/130885496211),
+[3 real REST/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43128186408/job/130885496010)
+and [1,677 backend tests](https://github.com/1alextest/Tesbooboo/actions/runs/43128186371/job/130885495824)
+(143 external/DB skips in that separate quality job, not database proof). The
+database job again applied all 144 migrations, proved idempotency/integrity and
+logged the intended late division-by-zero error. The smoke retained all prior
+authorization and sealed-result UI/readback/reload assertions while adding strict
+relationship refusals and valid historical edits. Its four saved Passed/Failed
+drawer/full-page screenshots were inspected; viewport images show the expected
+verdicts, with lower bug fields partly below the captured viewport. Their values
+and visibility are asserted separately in Playwright. Page exceptions were absent;
+backend warnings concern deliberately unconfigured embeddings keys, not permission
+to provision a paid service. This evidence applies to this bounded change; any
+later PR head still requires its own checks and human review. No merge/deployment
+or Phase 1 completion is claimed.
 Full impacted shared-stack API/UI execution and independent original-baseline
 runtime reproduction/review remain outstanding.
 
