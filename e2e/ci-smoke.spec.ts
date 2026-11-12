@@ -626,7 +626,7 @@ test("history import, bug authorization and finalized automation preserve persis
     await verifyBugCreateAccess(request, api, projectId, bootstrap.userId, bootstrap.organizationId);
     await verifyBugLinkRelationships(request, api, projectId, bootstrap.userId);
     await verifyBrowserMutationResponseLoss(page, api, web, projectId, testInfo);
-    await verifyProductionReporter(page, api, web, projectId, testInfo);
+    await verifyProductionReporter(page, api, web, projectId, bootstrap.userId, testInfo);
     for (const surface of ["drawer", "full-page"]) {
       for (const status of ["pass", "fail"]) {
         const title = `CI sealed ${surface} ${status}`;

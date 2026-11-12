@@ -5,7 +5,7 @@ import path from "node:path";
 import { Client } from "pg";
 
 /** Extends ci-smoke's safety-checked, disposable bootstrap; never targets a shared tenant. */
-export async function verifyProductionReporter(page: Page, api: string, web: string, projectId: string, testInfo: TestInfo) {
+export async function verifyProductionReporter(page: Page, api: string, web: string, projectId: string, ownerId: string, testInfo: TestInfo) {
   for (const target of [api, web, process.env.DATABASE_URL!]) {
     expect(["localhost", "127.0.0.1"]).toContain(new URL(target).hostname);
   }
@@ -119,14 +119,86 @@ test.skip('skipped reporter control', { tag: '@tesbo.testId("${cases[2].external
     const late = await request.post(`${base}/automation/runs/${runId}/results`, { data: { caseId: cases[1].externalId, status: "pass", retryCount: 1 } });
     expect(late.status()).toBe(409);
     expect(await sealed()).toEqual(before);
+    for (const [suffix, data] of [
+      ["bulk-status", { executionIds: before.results.slice(0, 2).map((row) => row.id), status: "Passed" }],
+      ["bulk-assign", { executionIds: before.results.slice(0, 2).map((row) => row.id), assigneeId: null }]
+    ] as const) {
+      const response = await request.post(`${api}/api/cycles/${runId}/executions/${suffix}`, { data });
+      expect(response.status(), await response.text()).toBe(409);
+      expect(await sealed()).toEqual(before);
+    }
 
     // MCP bulk deliberately reports per-item outcomes, unlike the REST whole-selection UI.
     const manual = await request.post(`${base}/cycles`, { data: { name: "CI reporter manual control" } });
     expect(manual.ok(), await manual.text()).toBeTruthy();
     manualId = (await manual.json()).id;
-    const attached = await request.post(`${api}/api/cycles/${manualId}/testcases`, { data: { testcaseIds: [cases[0].id] } });
+    const attached = await request.post(`${api}/api/cycles/${manualId}/testcases`, { data: { testcaseIds: cases.map((testcase) => testcase.id) } });
     expect(attached.ok(), await attached.text()).toBeTruthy();
-    const manualExecution = (await db.query("SELECT e.id FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id WHERE ci.cycle_id = $1", [manualId])).rows[0].id;
+    const manualRows = async () => (await db.query("SELECT e.* FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id WHERE ci.cycle_id = $1 ORDER BY array_position($2::uuid[], ci.testcase_id)", [manualId, cases.map((testcase) => testcase.id)])).rows;
+    const initial = await manualRows();
+    expect(initial).toHaveLength(3);
+    const selection = initial.slice(0, 2).map((row) => row.id);
+    const assignUrl = `${api}/api/cycles/${manualId}/executions/bulk-assign`;
+    const statusUrl = `${api}/api/cycles/${manualId}/executions/bulk-status`;
+    for (const url of [statusUrl, assignUrl]) {
+      const data = url === statusUrl ? { executionIds: selection, status: "Passed" } : { executionIds: selection, assigneeId: ownerId };
+      expect((await anonymous.post(url, { data })).status()).toBe(400);
+      expect((await anonymous.post(url, { data, headers: { Authorization: `Bearer ${tokens[1].token}` } })).status()).toBe(403);
+      const wrongRun = await request.post(url, { data: { ...data, executionIds: [selection[0], failed.id] } });
+      expect(wrongRun.status(), await wrongRun.text()).toBe(404);
+      expect(await manualRows()).toEqual(initial);
+      expect(await sealed()).toEqual(before);
+    }
+    const status = await request.post(statusUrl, { data: { executionIds: selection, status: "Passed" } });
+    expect(status.ok(), await status.text()).toBeTruthy();
+    expect(await status.json()).toEqual({ updated: 2, status: "Passed" });
+    const beforeAssign = await manualRows();
+    expect(beforeAssign.slice(0, 2).every((row) => row.status === "Passed" && row.assignee_id === null)).toBe(true);
+    expect(beforeAssign[2]).toEqual(initial[2]);
+
+    // Drive the actual existing bulk-assignment modal. A stale/foreign selection is forwarded
+    // to the real backend (never a fabricated failure), then the unchanged selection can succeed.
+    const membersResponse = await request.get(`${base}/members`);
+    expect(membersResponse.ok(), await membersResponse.text()).toBeTruthy();
+    const members = await membersResponse.json() as Array<{ userId: string; name: string; email: string }>;
+    const owner = members.find((member) => member.userId === ownerId)!;
+    expect(owner).toBeDefined();
+    await page.goto(`${web}/projects/${projectId}/cycles/${manualId}`);
+    for (const title of ["reporter pass", "reporter failure"]) {
+      await page.getByRole("checkbox", { name: `Select ${title}`, exact: true }).check();
+    }
+    await page.getByTestId("run-bulk-assign").click();
+    await page.getByLabel("Assign selected test cases to").selectOption(ownerId);
+    await page.route(assignUrl, (route) => route.request().method() === "POST"
+      ? route.continue({ postData: JSON.stringify({ ...route.request().postDataJSON(), executionIds: [selection[0], failed.id] }) })
+      : route.continue());
+    const rejected = page.waitForResponse((response) => response.url() === assignUrl && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Assign 2", exact: true }).click();
+    expect((await rejected).status()).toBe(404);
+    await expect(page.getByText("Execution not found", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Assign selected test cases to")).toHaveValue(ownerId);
+    await expect(page.getByRole("button", { name: "Assign 2", exact: true })).toBeEnabled();
+    expect(await manualRows()).toEqual(beforeAssign);
+    expect(await sealed()).toEqual(before);
+    await testInfo.attach("atomic-bulk-assignment-rejection", { body: await page.screenshot(), contentType: "image/png" });
+    await page.unroute(assignUrl);
+    const assigned = page.waitForResponse((response) => response.url() === assignUrl && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Assign 2", exact: true }).click();
+    const assignedResponse = await assigned;
+    expect(assignedResponse.ok(), await assignedResponse.text()).toBeTruthy();
+    expect(await assignedResponse.json()).toEqual({ updated: 2, assigneeId: ownerId });
+    await expect(page.getByLabel("Assign selected test cases to")).toHaveCount(0);
+    await page.reload();
+    for (const title of ["reporter pass", "reporter failure"]) {
+      const row = page.getByRole("row").filter({ has: page.getByRole("button", { name: title, exact: true }) });
+      await expect(row.getByRole("cell").nth(5)).toContainText(owner.name || owner.email);
+    }
+    const assignedRows = await manualRows();
+    expect(assignedRows.slice(0, 2).every((row) => row.assignee_id === ownerId && row.status === "Passed")).toBe(true);
+    expect(assignedRows[2]).toEqual(initial[2]);
+    await testInfo.attach("atomic-bulk-assignment-success", { body: await page.screenshot(), contentType: "image/png" });
+
+    const manualExecution = initial[0].id;
     const bulk = await mcp(0, "bulk_record_execution_results", { results: [{ executionId: manualExecution, status: "Failed" }, { executionId: failed.id, status: "Passed" }] });
     expect(bulk.error).toBeUndefined();
     expect(JSON.parse(bulk.result.content[0].text)).toMatchObject({ total: 2, succeeded: 1, failed: 1, results: [{ index: 0, ok: true }, { index: 1, ok: false }] });
@@ -154,7 +226,10 @@ test.skip('skipped reporter control', { tag: '@tesbo.testId("${cases[2].external
     if (bugId) await request.delete(`${api}/api/bugs/${bugId}`, { failOnStatusCode: false });
     const created = await db.query("SELECT id FROM cycles WHERE project_id = $1 AND name = $2 AND deleted_at IS NULL", [projectId, name]);
     for (const row of created.rows) await request.delete(`${api}/api/cycles/${row.id}`, { failOnStatusCode: false });
-    if (manualId) await request.delete(`${api}/api/cycles/${manualId}`, { failOnStatusCode: false });
+    if (manualId) {
+      await page.unroute(`${api}/api/cycles/${manualId}/executions/bulk-assign`);
+      await request.delete(`${api}/api/cycles/${manualId}`, { failOnStatusCode: false });
+    }
     for (const token of tokens) await request.delete(`${base}/apikeys/${token.id}`, { failOnStatusCode: false });
     for (const testcase of cases) await request.delete(`${base}/testcases/${testcase.id}`, { failOnStatusCode: false });
     await anonymous.dispose();

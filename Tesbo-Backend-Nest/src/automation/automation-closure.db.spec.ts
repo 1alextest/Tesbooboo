@@ -1110,7 +1110,9 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     });
   });
 
-  it.each(["status", "assignment"])("characterizes REST bulk %s committed-prefix behavior on a later native SQL failure", async (kind) => {
+  it.each(["Failed", "Skipped", "assignment"])("rolls back every REST bulk %s write on a later native SQL failure, without publishing success effects", async (mode) => {
+    const kind = mode === "assignment" ? "assignment" : "status";
+    const status = mode === "assignment" ? "Failed" : mode;
     const batchRun = (await setup.query<{ id: string }>("INSERT INTO cycles (project_id, name, source) VALUES ($1,'Bulk characterization','manual') RETURNING id", [projectId])).rows[0].id;
     const ids: string[] = [];
     const cases: string[] = [];
@@ -1134,8 +1136,9 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     const legacy = makeLegacy(new DatabaseService(observed));
     jest.spyOn(legacy as unknown as { requireCycleAccess: () => Promise<string> }, "requireCycleAccess").mockResolvedValue(projectId);
     jest.spyOn(legacy, "requireProjectAccess").mockResolvedValue({} as never);
-    jest.spyOn(legacy, "logProjectActivity").mockResolvedValue(undefined);
-    jest.spyOn(legacy as unknown as { notifyExecutionChange: () => Promise<void> }, "notifyExecutionChange").mockResolvedValue(undefined);
+    const activity = jest.spyOn(legacy, "logProjectActivity").mockResolvedValue(undefined);
+    const notification = jest.spyOn(legacy as unknown as { notifyExecutionChange: () => Promise<void> }, "notifyExecutionChange").mockResolvedValue(undefined);
+    const summary = jest.spyOn(legacy as unknown as { notifyBulkStatusChange: () => Promise<void> }, "notifyBulkStatusChange").mockResolvedValue(undefined);
     try {
       for (let index = 0; index < 2; index++) {
         const testcase = (await setup.query<{ id: string }>("INSERT INTO testcases (project_id, external_id, title) VALUES ($1,$2,'Bulk case') RETURNING id", [projectId, `BULK-${kind}-${index}`])).rows[0].id;
@@ -1146,17 +1149,22 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
       const rows = async () => (await setup.query("SELECT * FROM executions WHERE id = ANY($1::uuid[]) ORDER BY id", [ids])).rows;
       const before = await rows();
       const call = kind === "status"
-        ? legacy.bulkUpdateExecutionStatus(batchRun, userId, { executionIds: ids, status: "Failed" })
+        ? legacy.bulkUpdateExecutionStatus(batchRun, userId, { executionIds: ids, status })
         : legacy.bulkAssignExecutions(batchRun, userId, { executionIds: ids, assigneeId: null });
       await expect(call).rejects.toMatchObject({ code: "22012" });
       expect(writes).toHaveLength(2); // Selection resolution does not promise input order.
       expect([...writes].sort()).toEqual([...ids].sort());
-      const after = await rows();
-      expect(after.find((row) => row.id === writes[1])).toEqual(before.find((row) => row.id === writes[1]));
-      const first = after.find((row) => row.id === writes[0])!;
-      expect(first).toMatchObject(kind === "status" ? { status: "Failed", assignee_id: userId } : { status: "Passed", assignee_id: null });
+      expect(await rows()).toEqual(before); // Includes the formerly committed first row and all timestamps.
+      expect(activity).not.toHaveBeenCalled();
+      expect(notification).not.toHaveBeenCalled();
+      expect(summary).not.toHaveBeenCalled();
       expect(observed.idleCount).toBe(observed.totalCount);
-      // This test documents an existing mismatch, not acceptance of partial REST/UI semantics.
+      const retried = kind === "status"
+        ? await legacy.bulkUpdateExecutionStatus(batchRun, userId, { executionIds: ids, status })
+        : await legacy.bulkAssignExecutions(batchRun, userId, { executionIds: ids, assigneeId: null });
+      expect(retried.updated).toBe(2);
+      for (const row of await rows()) expect(row).toMatchObject(kind === "status" ? { status, assignee_id: userId } : { status: "Passed", assignee_id: null });
+      expect(activity).toHaveBeenCalledTimes(2);
     } finally {
       await observed.end();
       await setup.query("DELETE FROM executions WHERE id = ANY($1::uuid[])", [ids]);
@@ -1164,6 +1172,206 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
       await setup.query("DELETE FROM cycles WHERE id = $1", [batchRun]);
       await setup.query("DELETE FROM testcases WHERE id = ANY($1::uuid[])", [cases]);
     }
+  });
+
+  describe("atomic REST execution batch workflows", () => {
+    let batchRun: string;
+    let cases: string[];
+    let ids: string[];
+    let legacy: LegacyService;
+    let activity: jest.SpyInstance;
+    let notification: jest.SpyInstance;
+    let summary: jest.SpyInstance;
+    const assignee = "3cb006c6-102c-42ec-998f-4392238d3134";
+
+    beforeAll(async () => {
+      await setup.query("INSERT INTO users (id, email, name) VALUES ($1,'ci-bulk-assignee@tesbo.invalid','Bulk assignee')", [assignee]);
+    });
+    afterAll(async () => {
+      await setup.query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2", [projectId, assignee]);
+      await setup.query("DELETE FROM users WHERE id = $1", [assignee]);
+    });
+    beforeEach(async () => {
+      cases = []; ids = [];
+      await setup.query("INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,'qa_engineer') ON CONFLICT DO NOTHING", [projectId, assignee]);
+      batchRun = (await setup.query<{ id: string }>("INSERT INTO cycles (project_id, name, source) VALUES ($1,'Atomic batch workflow','automation') RETURNING id", [projectId])).rows[0].id;
+      for (let index = 0; index < 3; index++) {
+        const testcase = (await setup.query<{ id: string }>("INSERT INTO testcases (project_id, external_id, title) VALUES ($1,$2,'Batch workflow case') RETURNING id", [projectId, `BAT-TC-${index}`])).rows[0].id;
+        cases.push(testcase);
+        const item = (await setup.query<{ id: string }>("INSERT INTO cycle_items (cycle_id, testcase_id, snapshot_title, position) VALUES ($1,$2,'Batch workflow snapshot',$3) RETURNING id", [batchRun, testcase, index])).rows[0].id;
+        ids.push((await setup.query<{ id: string }>("INSERT INTO executions (cycle_item_id, status, executed_by, executed_at, actual_result, defect_key, defect_url, assignee_id) VALUES ($1,'Passed',$2,'2026-01-01T00:00:00Z','Preserved notes','OLD-1','https://tesbo.invalid/old',$3) RETURNING id", [item, userId, assignee])).rows[0].id);
+      }
+      legacy = makeLegacy(new DatabaseService(pool));
+      jest.spyOn(legacy as unknown as { requireCycleAccess: () => Promise<string> }, "requireCycleAccess").mockResolvedValue(projectId);
+      jest.spyOn(legacy, "requireProjectAccess").mockResolvedValue({} as never);
+      activity = jest.spyOn(legacy, "logProjectActivity").mockResolvedValue(undefined);
+      notification = jest.spyOn(legacy as unknown as { notifyExecutionChange: (...args: unknown[]) => Promise<void> }, "notifyExecutionChange").mockResolvedValue(undefined);
+      summary = jest.spyOn(legacy as unknown as { notifyBulkStatusChange: (...args: unknown[]) => Promise<void> }, "notifyBulkStatusChange").mockResolvedValue(undefined);
+    });
+    afterEach(async () => {
+      await setup.query("DELETE FROM executions WHERE id = ANY($1::uuid[])", [ids]);
+      await setup.query("DELETE FROM cycle_items WHERE cycle_id = $1", [batchRun]);
+      await setup.query("DELETE FROM cycles WHERE id = $1", [batchRun]);
+      await setup.query("DELETE FROM testcases WHERE id = ANY($1::uuid[])", [cases]);
+    });
+    const rows = async () => (await setup.query("SELECT * FROM executions WHERE id = ANY($1::uuid[]) ORDER BY id", [ids])).rows;
+    const apply = (kind: string, selected = ids.slice(0, 2)) => kind === "status"
+      ? legacy.bulkUpdateExecutionStatus(batchRun, userId, { executionIds: selected, status: "Failed" })
+      : legacy.bulkAssignExecutions(batchRun, userId, { executionIds: selected, assigneeId: null });
+    async function waitForBlocker(pid: number) {
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        if ((await setup.query("SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND $1 = ANY(pg_blocking_pids(pid))", [pid])).rowCount) return;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error(`No PostgreSQL lock waiter behind ${pid}`);
+    }
+
+    it.each(["status", "assignment"])("commits the entire %s selection before events, retaining unselected rows and manual correction behavior", async (kind) => {
+      await setup.query("UPDATE cycles SET source = 'manual', status = 'Completed', closed_at = now() WHERE id = $1", [batchRun]);
+      const before = await rows();
+      let expected: Record<string, unknown> = kind === "status" ? { status: "Failed" } : { assignee_id: null };
+      notification.mockImplementation(async () => {
+        // Independent connection sees BOTH changes before the very first notification.
+        const stored = await rows();
+        for (const id of ids.slice(0, 2)) expect(stored.find((row) => row.id === id)).toMatchObject(expected);
+      });
+      expect(await apply(kind)).toMatchObject({ updated: 2 });
+      const after = await rows();
+      expect(after.find((row) => row.id === ids[2])).toEqual(before.find((row) => row.id === ids[2]));
+      for (const id of ids.slice(0, 2)) {
+        const old = before.find((row) => row.id === id)!;
+        expect(after.find((row) => row.id === id)).toMatchObject({ actual_result: old.actual_result, executed_by: old.executed_by, defect_key: old.defect_key, defect_url: old.defect_url });
+        if (kind === "assignment") expect(after.find((row) => row.id === id)?.executed_at).toEqual(old.executed_at);
+      }
+      expect(activity).toHaveBeenCalledTimes(2);
+      expect(notification).toHaveBeenCalledTimes(2);
+      expect(summary).not.toHaveBeenCalled();
+      // Returning to a non-failing status preserves assignments/notes and clears legacy defect fields.
+      expected = { status: "Skipped" };
+      await legacy.bulkUpdateExecutionStatus(batchRun, userId, { executionIds: ids.slice(0, 2), status: "Skipped" });
+      for (const row of await rows()) if (ids.slice(0, 2).includes(row.id)) expect(row).toMatchObject({ status: "Skipped", actual_result: "Preserved notes", defect_key: null, defect_url: null });
+      expect(summary).toHaveBeenCalledTimes(1);
+      expect(notification.mock.calls.slice(-2).every((call) => (call[3] as { quietStatus?: boolean }).quietStatus)).toBe(true);
+      expected = { status: "Skipped", assignee_id: assignee };
+      await legacy.bulkAssignExecutions(batchRun, userId, { executionIds: ids.slice(0, 2), assigneeId: assignee });
+      for (const row of await rows()) if (ids.slice(0, 2).includes(row.id)) expect(row).toMatchObject({ status: "Skipped", assignee_id: assignee });
+    });
+
+    it.each(["status", "assignment"])("rejects malformed, duplicate, missing, wrong-run and inactive %s selections before any writes/events", async (kind) => {
+      const invalid = [[], [ids[0], ids[0]], [ids[0], "bad-id"], [ids[0], "00000000-0000-4000-8000-000000000001"], [ids[0], executionId]];
+      for (const selected of invalid) {
+        const before = await rows();
+        await expect(apply(kind, selected)).rejects.toBeInstanceOf(selected.length ? NotFoundException : BadRequestException);
+        expect(await rows()).toEqual(before);
+      }
+      for (const table of ["executions", "cycle_items"]) {
+        const item = (await setup.query<{ cycle_item_id: string }>("SELECT cycle_item_id FROM executions WHERE id = $1", [ids[1]])).rows[0].cycle_item_id;
+        const target = table === "executions" ? ids[1] : item;
+        await setup.query(`UPDATE ${table} SET deleted_at = now() WHERE id = $1`, [target]);
+        const before = await rows();
+        await expect(apply(kind)).rejects.toBeInstanceOf(NotFoundException);
+        expect(await rows()).toEqual(before);
+        await setup.query(`UPDATE ${table} SET deleted_at = NULL WHERE id = $1`, [target]);
+      }
+      expect(activity).not.toHaveBeenCalled(); expect(notification).not.toHaveBeenCalled(); expect(summary).not.toHaveBeenCalled();
+    });
+
+    it("refuses invalid/non-member assignees without changing any selected rows or emitting events", async () => {
+      const before = await rows();
+      await expect(legacy.bulkAssignExecutions(batchRun, userId, { executionIds: ids, assigneeId: "bad-id" })).rejects.toBeInstanceOf(NotFoundException);
+      await setup.query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2", [projectId, assignee]);
+      await expect(legacy.bulkAssignExecutions(batchRun, userId, { executionIds: ids, assigneeId: assignee })).rejects.toBeInstanceOf(BadRequestException);
+      expect(await rows()).toEqual(before);
+      expect(activity).not.toHaveBeenCalled(); expect(notification).not.toHaveBeenCalled();
+    });
+
+    it("serializes bulk assignment with actual project-member removal without leaving a dangling assignment", async () => {
+      await setup.query("UPDATE cycles SET source = 'manual' WHERE id = $1", [batchRun]);
+      jest.spyOn(legacy, "requireProjectAccess").mockResolvedValue({ caller_role: "owner", name: "Atomic batch" } as never);
+      jest.spyOn(legacy as unknown as { notifyUsers: (...args: unknown[]) => Promise<void> }, "notifyUsers").mockResolvedValue(undefined);
+      const writer = legacy as unknown as { writeExecution: (client: PoolClient, ...args: unknown[]) => Promise<unknown> };
+      const original = writer.writeExecution.bind(writer);
+      let locked!: () => void; const didWrite = new Promise<void>((resolve) => { locked = resolve; });
+      let resume!: () => void; const mayFinish = new Promise<void>((resolve) => { resume = resolve; });
+      let count = 0; let pid = 0;
+      jest.spyOn(writer, "writeExecution").mockImplementation(async (client, ...args) => {
+        const result = await original(client, ...args);
+        if (++count === 1) { pid = (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid; locked(); await mayFinish; }
+        return result;
+      });
+      const writing = legacy.bulkAssignExecutions(batchRun, userId, { executionIds: ids.slice(0, 2), assigneeId: assignee });
+      let removing: Promise<void> | undefined;
+      try {
+        await Promise.race([didWrite, writing.then(() => { throw new Error("Batch did not reach the barrier"); })]);
+        removing = legacy.removeProjectMember(userId, projectId, assignee);
+        await waitForBlocker(pid);
+        resume(); await writing; await removing;
+        expect((await rows()).every((row) => row.assignee_id === null)).toBe(true);
+        expect((await setup.query("SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2", [projectId, assignee])).rowCount).toBe(0);
+      } finally { resume(); await writing.catch(() => undefined); if (removing) await removing.catch(() => undefined); }
+    }, 15_000);
+
+    it.each(["status", "assignment"])("waits for actual automation closure then refuses the entire %s batch", async (kind) => {
+      const observed = new Pool({ connectionString: url, max: 1 });
+      let locked!: () => void; const didLock = new Promise<void>((resolve) => { locked = resolve; });
+      let resume!: () => void; const mayClose = new Promise<void>((resolve) => { resume = resolve; });
+      let pid = 0;
+      observed.on("connect", (client) => {
+        const original = client.query.bind(client);
+        const execute = original as (sql: string, values?: unknown[]) => Promise<QueryResult<Record<string, unknown>>>;
+        client.query = ((sql: string, values?: unknown[], callback?: (error: Error, result: QueryResult) => void) => {
+          if (callback) return original(sql, values ?? [], callback);
+          return (async () => {
+            const result = await execute(sql, values);
+            if (/SELECT id, closed_at FROM cycles/.test(sql) && /FOR UPDATE/.test(sql)) {
+              pid = Number((await execute("SELECT pg_backend_pid() AS pid")).rows[0].pid); locked(); await mayClose;
+            }
+            return result;
+          })();
+        }) as typeof client.query;
+      });
+      const closer = new AutomationService(new DatabaseService(observed), { requireProjectAccess: async () => ({}), logProjectActivity: async () => undefined } as unknown as LegacyService, {} as PlanLimitsService, {} as StorageService);
+      let pending: Promise<unknown> | undefined;
+      const closing = closer.closeRun(userId, projectId, batchRun, { status: "incomplete" });
+      try {
+        await Promise.race([didLock, closing.then(() => { throw new Error("Close did not reach the barrier"); })]);
+        const before = await rows();
+        pending = apply(kind).then(() => null, (error: unknown) => error);
+        await waitForBlocker(pid);
+        resume(); await closing;
+        expect(await pending).toBeInstanceOf(ConflictException);
+        expect(await rows()).toEqual(before);
+        expect(activity).not.toHaveBeenCalled(); expect(notification).not.toHaveBeenCalled();
+      } finally { resume(); await closing.catch(() => undefined); if (pending) await pending; await observed.end(); }
+    }, 15_000);
+
+    it.each(["status", "assignment"])("makes real automation close wait until all %s writes commit", async (kind) => {
+      const writer = legacy as unknown as { writeExecution: (client: PoolClient, ...args: unknown[]) => Promise<unknown> };
+      const original = writer.writeExecution.bind(writer);
+      let locked!: () => void; const didWrite = new Promise<void>((resolve) => { locked = resolve; });
+      let resume!: () => void; const mayFinish = new Promise<void>((resolve) => { resume = resolve; });
+      let count = 0; let pid = 0;
+      jest.spyOn(writer, "writeExecution").mockImplementation(async (client, ...args) => {
+        const result = await original(client, ...args);
+        if (++count === 1) { pid = (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid; locked(); await mayFinish; }
+        return result;
+      });
+      let closing: ReturnType<AutomationService["closeRun"]> | undefined;
+      const writing = apply(kind);
+      try {
+        await Promise.race([didWrite, writing.then(() => { throw new Error("Batch did not reach the barrier"); })]);
+        const before = await rows();
+        expect(before.every((row) => row.status === "Passed" && row.assignee_id === assignee)).toBe(true); // No visible prefix.
+        closing = svc.closeRun(userId, projectId, batchRun, { status: "completed" });
+        await waitForBlocker(pid);
+        resume(); await writing;
+        expect(await closing).toMatchObject({ summary: kind === "status" ? { failed: 2, passed: 1, total: 3 } : { passed: 3, total: 3 } });
+        const sealed = await rows();
+        await expect(apply(kind)).rejects.toBeInstanceOf(ConflictException);
+        expect(await rows()).toEqual(sealed);
+      } finally { resume(); await writing.catch(() => undefined); if (closing) await closing.catch(() => undefined); }
+    }, 15_000);
   });
 
   const rejectedHistoryText: Array<{ label: string; run?: Record<string, unknown>; result?: Record<string, unknown> }> = [
