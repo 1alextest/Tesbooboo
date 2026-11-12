@@ -6966,17 +6966,45 @@ export class LegacyService implements OnModuleInit {
    * to tell which half of their selection took effect, and the UI offers these actions on a
    * multi-select where "some of them" is not a state the user can see.
    */
-  private async resolveBulkExecutions(cycleId: string, body: Body): Promise<string[]> {
+  private async resolveBulkExecutions(client: PoolClient, cycleId: string, projectId: string, body: Body): Promise<Body[]> {
     const ids = normalizeJsonArray(body.executionIds).map((id) => String(id));
     if (!ids.length) throw new BadRequestException({ error: "executionIds is required" });
     if (!ids.every((id) => isUuid(id))) throw new NotFoundException({ error: "Execution not found" });
-    const res = await this.db.query<{ id: string }>(
-      `SELECT e.id FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id
-       WHERE ci.cycle_id = $1 AND e.id = ANY($2::uuid[]) AND e.deleted_at IS NULL`,
-      [cycleId, ids]
+    const res = await client.query(
+      `SELECT e.*, c.project_id, ci.cycle_id,
+              COALESCE(NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Untitled test case') AS testcase_title,
+              COALESCE(NULLIF(t.external_id, ''), NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Test case') AS tc_label
+       FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id AND ci.deleted_at IS NULL
+       JOIN cycles c ON c.id = ci.cycle_id AND c.deleted_at IS NULL
+       LEFT JOIN testcases t ON t.id = ci.testcase_id
+       WHERE ci.cycle_id = $1 AND e.id = ANY($2::uuid[]) AND e.deleted_at IS NULL AND c.project_id = $3
+       ORDER BY e.id FOR UPDATE OF ci, e`,
+      [cycleId, ids, projectId]
     );
     if (res.rows.length !== ids.length) throw new NotFoundException({ error: "Execution not found" });
-    return res.rows.map((row) => row.id);
+    return res.rows;
+  }
+
+  /** One parent lock, one selection snapshot and one transaction for the entire REST batch. */
+  private async writeBulkExecutions(cycleId: string, projectId: string, uid: string, body: Body, changes: Body, assigneeId: string | null = null) {
+    return this.db.transaction(async (client) => {
+      this.assertAutomatedRunWritable(await this.lockActiveCycle(client, cycleId));
+      if (assigneeId !== null) {
+        // Hold membership until commit. Member cleanup deletes this row before touching executions,
+        // so it either completes first (we refuse) or waits and clears assignments after our batch.
+        const member = await client.query(
+          "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2 FOR KEY SHARE",
+          [projectId, assigneeId]
+        );
+        if (!member.rows[0]) throw new BadRequestException({ error: "The assignee must be a member of this project" });
+      }
+      const selected = await this.resolveBulkExecutions(client, cycleId, projectId, body);
+      const transitions: Array<{ before: Body; after: Body }> = [];
+      for (const before of selected) {
+        transitions.push({ before, after: await this.writeExecution(client, before, uid, changes, assigneeId) });
+      }
+      return transitions;
+    });
   }
 
   /**
@@ -6987,37 +7015,25 @@ export class LegacyService implements OnModuleInit {
    */
   async bulkUpdateExecutionStatus(cycleId: string, userId: string | null | undefined, body: Body) {
     const uid = this.requireUser(userId);
-    await this.requireCycleAccess(uid, cycleId);
+    const projectId = await this.requireCycleAccess(uid, cycleId);
     const status = String(body.status || "").trim();
     if (!LegacyService.EXECUTION_STATUSES.includes(status)) {
       throw new BadRequestException({
         error: `status must be one of: ${LegacyService.EXECUTION_STATUSES.join(", ")}`
       });
     }
-    const executionIds = await this.resolveBulkExecutions(cycleId, body);
     // Failed / Blocked keep their per-case matrix notifications. Any other status would otherwise be
     // one notification per case, so for those the per-case notice is silenced and each assignee gets
     // a single summary below. The "before" picture has to be read first — updateExecution overwrites it.
-    const summarise = status !== "Failed" && status !== "Blocked" && executionIds.length > 0;
-    const before = summarise ? await this.executionsBeforeBulkStatus(executionIds) : [];
-    for (const executionId of executionIds) {
-      await this.updateExecution(executionId, uid, { status }, { quietStatus: summarise });
+    const transitions = await this.writeBulkExecutions(cycleId, projectId, uid, body, { status });
+    const summarise = status !== "Failed" && status !== "Blocked";
+    for (const { before, after } of transitions) {
+      await this.publishExecutionChange(before, after, uid, { quietStatus: summarise });
     }
-    if (summarise) await this.notifyBulkStatusChange(cycleId, uid, status, before);
-    return { updated: executionIds.length, status };
-  }
-
-  private async executionsBeforeBulkStatus(executionIds: string[]): Promise<Array<{ status: string; assignee_id: string | null; tc_label: string }>> {
-    const res = await this.db.query<{ status: string; assignee_id: string | null; tc_label: string }>(
-      `SELECT e.status, e.assignee_id,
-              COALESCE(NULLIF(t.external_id, ''), NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Test case') AS tc_label
-       FROM executions e
-       JOIN cycle_items ci ON ci.id = e.cycle_item_id
-       LEFT JOIN testcases t ON t.id = ci.testcase_id
-       WHERE e.id = ANY($1::uuid[]) AND e.deleted_at IS NULL`,
-      [executionIds]
-    );
-    return res.rows;
+    if (summarise) await this.notifyBulkStatusChange(cycleId, uid, status, transitions.map(({ before }) => ({
+      status: before.status, assignee_id: before.assignee_id, tc_label: before.tc_label
+    })));
+    return { updated: transitions.length, status };
   }
 
   /** One notification per assignee covering every case of theirs whose status actually changed. */
@@ -7069,19 +7085,12 @@ export class LegacyService implements OnModuleInit {
     const assigneeId = body.assigneeId === null || body.assigneeId === undefined ? null : String(body.assigneeId);
     if (assigneeId !== null) {
       if (!isUuid(assigneeId)) throw new NotFoundException({ error: "Assignee not found" });
-      const member = await this.db.query(
-        "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2",
-        [projectId, assigneeId]
-      );
-      if (!member.rows[0]) {
-        throw new BadRequestException({ error: "The assignee must be a member of this project" });
-      }
     }
-    const executionIds = await this.resolveBulkExecutions(cycleId, body);
-    for (const executionId of executionIds) {
-      await this.updateExecution(executionId, uid, { assigneeId });
+    const transitions = await this.writeBulkExecutions(cycleId, projectId, uid, body, { assigneeId }, assigneeId);
+    for (const { before, after } of transitions) {
+      await this.publishExecutionChange(before, after, uid);
     }
-    return { updated: executionIds.length, assigneeId };
+    return { updated: transitions.length, assigneeId };
   }
 
   /**
@@ -7179,7 +7188,6 @@ export class LegacyService implements OnModuleInit {
      * the database and in every export that reads it. A defect on a case that is no longer failing
      * is not data worth keeping — the bug itself, and its link, are what survive.
      */
-    const clearsDefect = typeof body.status === "string" && body.status !== "" && body.status !== "Failed";
     /*
      * "[Test Runs] Unable to assign test cases for execution": assignee_id used to be written
      * unconditionally as `body.assigneeId ?? null`, so any PATCH that didn't mention it — every
@@ -7187,7 +7195,6 @@ export class LegacyService implements OnModuleInit {
      * had just set. Same explicit-clear convention as clearsDefect/clearsPriority: key absent leaves
      * the column alone (COALESCE), key sent as null/"" clears it on purpose.
      */
-    const clearsAssignee = body.assigneeId === null || body.assigneeId === "";
     let assigneeId: string | null = null;
     if (body.assigneeId !== undefined && body.assigneeId !== null && body.assigneeId !== "") {
       assigneeId = String(body.assigneeId);
@@ -7200,7 +7207,7 @@ export class LegacyService implements OnModuleInit {
         throw new BadRequestException({ error: "The assignee must be a member of this project" });
       }
     }
-    const res = await this.db.transaction(async (client) => {
+    const after = await this.db.transaction(async (client) => {
       // Lock the parent run first, matching automation closeRun's lock order.
       const locked = await client.query<{ source: string | null; closed_at: Date | null }>(
         "SELECT source, closed_at FROM cycles WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
@@ -7208,7 +7215,16 @@ export class LegacyService implements OnModuleInit {
       );
       if (!locked.rows[0]) throw new NotFoundException({ error: "Run not found" });
       this.assertAutomatedRunWritable(locked.rows[0]);
-      const updated = await client.query(
+      return this.writeExecution(client, before.rows[0], uid, body, assigneeId);
+    });
+    await this.publishExecutionChange(before.rows[0], after, uid, opts);
+  }
+
+  /** Shared row writer: caller owns the parent lock and transaction (single, MCP or REST bulk). */
+  private async writeExecution(client: PoolClient, before: Body, uid: string, body: Body, assigneeId: string | null): Promise<Body> {
+    const clearsDefect = typeof body.status === "string" && body.status !== "" && body.status !== "Failed";
+    const clearsAssignee = body.assigneeId === null || body.assigneeId === "";
+    const updated = await client.query(
       `UPDATE executions SET status=COALESCE($2,status),
        assignee_id=CASE WHEN $9::boolean THEN NULL ELSE COALESCE($3,assignee_id) END,
        actual_result=COALESCE($4,actual_result),
@@ -7222,7 +7238,7 @@ export class LegacyService implements OnModuleInit {
          AND cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id = $10::uuid AND deleted_at IS NULL)
        RETURNING *`,
       [
-        executionId,
+        before.id,
         body.status || null,
         assigneeId,
         body.actualResult || null,
@@ -7231,31 +7247,35 @@ export class LegacyService implements OnModuleInit {
         uid,
         clearsDefect,
         clearsAssignee,
-        before.rows[0].cycle_id
+        before.cycle_id
       ]
       );
       // Membership/result deletion or rebinding after the initial read must not turn an
       // unavailable child into a successful edit/event, nor update a different run's result.
       if (!updated.rows[0]) throw new NotFoundException({ error: "Execution not found" });
-      return updated;
-    });
+      return updated.rows[0];
+  }
+
+  /** Called only after the owning single/batch COMMIT; rolled-back rows emit no success effects. */
+  private async publishExecutionChange(before: Body, after: Body, uid: string, opts: { quietStatus?: boolean } = {}) {
     // Fire-and-forget: logProjectActivity already swallows its own errors (see its `.catch` below)
     // and its result is never read, so there is no correctness reason for the status-update response
     // — which a user is watching live in the execution table's dropdown — to wait on this write.
+    const auditBefore = { ...before };
+    delete auditBefore.tc_label; // Batch-notification projection, not an execution/audit field.
     void this.logProjectActivity(
-      before.rows[0].project_id,
+      before.project_id,
       uid,
       "execution_updated",
       "execution",
-      executionId,
-      before.rows[0].testcase_title,
-      { before: toCamel(before.rows[0]), after: toCamel(res.rows[0]) }
+      String(before.id),
+      before.testcase_title,
+      { before: toCamel(auditBefore), after: toCamel(after) }
     );
     // Only when something notifiable moved (a new assignee or a new status), so a save that changes
     // neither does not pay for the extra lookups.
-    const after = res.rows[0];
-    if (after && (after.assignee_id !== before.rows[0].assignee_id || after.status !== before.rows[0].status)) {
-      await this.notifyExecutionChange(executionId, uid, { status: before.rows[0].status ?? null, assigneeId: before.rows[0].assignee_id ?? null }, opts);
+    if (after.assignee_id !== before.assignee_id || after.status !== before.status) {
+      await this.notifyExecutionChange(String(before.id), uid, { status: before.status ?? null, assigneeId: before.assignee_id ?? null }, opts);
     }
   }
 

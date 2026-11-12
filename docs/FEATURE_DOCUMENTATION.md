@@ -4631,3 +4631,107 @@ review. If a repair is required, authorize a named bounded follow-up rather than
 reopening all modules. Exit is recorded only after adopted criteria pass and the
 owner signs the residual-risk/roadmap decision. No unapproved feature implementation,
 schema migration, historical cleanup, `main` change, deployment or publication.
+
+### G. Atomic bulk execution workflows — implementation batch (2026-11-12)
+
+**Purpose:** deliver both REST bulk status and bulk assignment repairs together,
+with shared writer extraction, concurrent lifecycle/member controls and real UI
+coverage in the same PR. This implements the existing `resolveBulkExecutions`
+atomicity contract; it does not adopt a new partial-result policy or declare
+general exactly-once effects. Base is owner-merged #35,
+`development@e538f2783fc267aba4b887701632b37ba174d0b5`. Its head `f17aea6` passed
+the original 22-check rollup and all eight requested workflow reruns. The owner
+merged at 16:25:55 UTC; extra reruns finished afterward. No agent merge or
+independent review/risk acceptance is inferred from that merge.
+
+#### Implementation and preserved behavior
+
+- `LegacyService.writeBulkExecutions` owns **one transaction and parent Run lock**
+  for the entire REST selection, checking the existing automation seal before any
+  row writes. Resolution now occurs inside that transaction, requiring every
+  execution and active cycle-item to belong to the authorized active run/project.
+  Stable ordered row locks prevent deletion/rebinding between validation and write.
+  Existing empty/malformed/duplicate/missing selection rejection is retained.
+- Non-null bulk assignment verifies/holds the project-membership row with
+  `FOR KEY SHARE` before acquiring execution locks. Actual member removal deletes
+  membership before clearing assignments: it either wins first and the batch is
+  refused, or waits and clears assignments after the complete batch commits.
+- Single-result REST and MCP writes retain their own transaction and authorization
+  entry points. The extracted `writeExecution` is their **same SQL writer**, reused
+  by the batch instead of nesting per-item transactions. Metadata-only edits keep
+  execution provenance; status changes retain existing actor/time conventions;
+  status-only edits preserve assignees; non-failing statuses clear legacy defect
+  fields; notes and valid Bug associations are not discarded. Completed manual
+  runs stay correctable; open automation remains writable; completed/incomplete
+  closed automation rejects the whole batch.
+- Row activity/notifications are published only after the owning COMMIT. Failed/
+  Blocked keep per-case notices; other bulk status changes retain one per-assignee
+  summary and quiet per-case status notices. Batch-only notification labels are
+  excluded from execution audit payloads. Native SQL failure during any selected
+  write rolls back all prior selected writes and emits no success effects.
+- MCP `bulk_record_execution_results` **still uses its explicit indexed per-item
+  contract**, including partial success. It is not silently converted to REST
+  atomic semantics. Public response shapes and existing frontend components,
+  selection/error handling, styling and navigation are unchanged.
+
+Atomic row writes do **not** resolve a lost successful COMMIT acknowledgement,
+explicit duplicate command submission, all postcommit delivery races or guaranteed
+audit/outbox delivery. The existing activity/notification error policy remains;
+those separate F2/F3 decisions and all F8/F9 security dispositions remain open.
+No schema, dependency, entitlement, deletion/retention or approved-roadmap policy
+change is included. No unapproved Phase 2 capability is inferred from draft specs.
+
+#### Regression scope and evidence boundaries
+
+Reuse `automation-closure.db.spec.ts`: strengthen the prior #35 committed-prefix
+characterizations into full-row rollback regressions for Failed, summarized Skipped
+and unassignment. Both production updates execute before a later native SQL error;
+an independent connection must observe **all original rows/timestamps unchanged**,
+no activity/notifications, then a clean successful whole-selection retry.
+Historical #35 evidence already proves the old defect; no extra red-only PR is
+created solely to reproduce it again.
+
+The same native owner adds completed-manual success/unselected/provenance/defect
+controls; empty, duplicate, malformed, unknown, wrong-run and soft-deleted
+execution/item selections; invalid/non-member assignment; actual automation-close
+races in both orders for both actions; and actual project-member removal versus
+bulk assignment. Race barriers observe completed SQL and PostgreSQL lock waiters,
+not just elapsed time. Independent reads verify no visible prefix while a batch
+is pending and authoritative close counts after all writes commit. Authorization,
+activity and notification collaborators are stubbed in these native tests; actual
+HTTP authorization is exercised separately, not mislabeled as native auth proof.
+
+Extend `execution-attribution.spec.ts` with transaction/event ordering controls:
+one transaction and one parent authorization, no calls to the public per-item
+writer loop, no effects when a later writer rejects, and no transaction entry
+after denied parent access. These are **unit orchestration tests**, not persistence
+or rollback proof. Existing single/MCP attribution and context regressions remain.
+
+Extend the existing production-reporter smoke, not a new test stack: a three-case
+manual run exercises REST status selection and real anonymous/read-token/wrong-run
+refusals for both routes; the existing assignment modal submits a forwarded stale/
+foreign selection to the **real backend**, receives 404 and must retain selection,
+assignee choice and an actionable error without changing any rows. After removal
+of that controlled interception, the same two selected cases are assigned, then
+browser reload and independent DB readback verify both assignments and the untouched
+third case. There is no fabricated failure/success response. Two captures cover
+the rejection and successful existing UI. The same connected journey still verifies
+the SDK, evidence bytes, MCP per-item outcomes and sealed associations. REST bulk
+changes against that finalized reporter run must return 409 without any sealed
+state changes. Four outer smoke tests remain; assertions/child outcomes are not
+inflated into separate outer test counts.
+
+Local backend/E2E typechecks and frozen backend lint pass (9 known errors,
+2 warnings, zero new errors). The corrected focused local selection passed
+**8 suites / 191 tests**, covering attribution, MCP, HTTP token guards and existing
+automation closure/retry/evidence/finalization controls. Fresh current-head
+CI is recorded in the PR as it completes; native PostgreSQL/browser execution is
+not claimed locally (Docker/psql were not available in this session). No skipped
+DB test or inherited #35 check is relabeled as this batch's runtime proof. Final
+CI receipts are reconciled in the same PR description/comment rather than creating
+an evidence-only commit/retest loop after every successful implementation head.
+
+**Release boundary:** reviewable implementation progress, not Phase 1 exit. Owner
+criteria/risk decisions, canonical eight-file/baseline recovery and required human
+security/release review remain distinct. The known frontend high/critical audit
+findings are not repaired, suppressed or accepted by this bulk-operation batch.
