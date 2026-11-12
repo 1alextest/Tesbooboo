@@ -59,10 +59,12 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Frontend lint (frozen legacy baseline; zero new errors)
         run: node ../scripts/check-lint-baseline.mjs frontend
-      - name: Frontend production critical-advisory gate
-        run: npm audit --omit=dev --audit-level=critical
+      - name: Frontend production and development high/critical-advisory gate
+        run: npm audit --audit-level=high
       - name: Frontend TypeScript
         run: npx tsc --noEmit
+      - name: Frontend content dependency security regressions
+        run: node --test ../scripts/frontend-content-security.test.mjs
       - name: Frontend production build
         env:
           NEXT_TELEMETRY_DISABLED: "1"

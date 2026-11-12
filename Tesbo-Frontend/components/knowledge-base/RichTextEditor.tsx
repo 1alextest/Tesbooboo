@@ -114,7 +114,9 @@ export default function RichTextEditor({
   editorRef.current = editor;
 
   useEffect(() => {
-    editor?.setEditable(editable);
+    // Changing interaction mode is not a content edit. TipTap emits an update by default, which
+    // otherwise marks an unchanged document dirty and schedules an autosave on every mount.
+    editor?.setEditable(editable, false);
   }, [editable, editor]);
 
   // Only fires on a real `resetKey` change (the caller bumping it after e.g. a version restore),

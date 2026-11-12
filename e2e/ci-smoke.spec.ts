@@ -4,6 +4,7 @@ import { hashPasswordForSeed } from "./utils/password";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { verifyProductionReporter } from "./utils/ci-reporter";
+import { verifyContentSecurity } from "./utils/ci-content-security";
 
 async function verifyBugCreateAccess(request: APIRequestContext, api: string, projectId: string, ownerId: string, organizationId: string) {
   // Called only after the test's explicit loopback/disposable-database safety checks.
@@ -595,7 +596,7 @@ test("fresh installation sends unauthenticated users to setup", async ({ page })
 });
 
 test("history import, bug authorization and finalized automation preserve persisted results and truthful UI", async ({ page }, testInfo) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const api = process.env.CI_API_BASE_URL!;
   const web = process.env.CI_WEB_BASE_URL!;
   // This test bootstraps a fresh installation. Explicit loopback URLs AND the existing
@@ -627,6 +628,7 @@ test("history import, bug authorization and finalized automation preserve persis
     await verifyBugLinkRelationships(request, api, projectId, bootstrap.userId);
     await verifyBrowserMutationResponseLoss(page, api, web, projectId, testInfo);
     await verifyProductionReporter(page, api, web, projectId, bootstrap.userId, testInfo);
+    await verifyContentSecurity(page, api, web, projectId, testInfo);
     for (const surface of ["drawer", "full-page"]) {
       for (const status of ["pass", "fail"]) {
         const title = `CI sealed ${surface} ${status}`;
