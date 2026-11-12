@@ -14,6 +14,7 @@ const fields = [
 
 (/\/tesbo_ci(?:\?|$)/.test(url) ? describe : describe.skip)("bug metadata writes — migrated PostgreSQL", () => {
   let setup: Client, pool: Pool, projectId: string, testcaseId: string, bugId: string, controlId: string;
+  let bugSequence = 0;
   const owner = randomUUID(), other = randomUUID(), stamp = randomUUID();
   beforeAll(async () => {
     setup = new Client({ connectionString: url }); await setup.connect();
@@ -34,8 +35,8 @@ const fields = [
   afterAll(async () => { await pool?.end(); await setup?.end(); }); // Preserve fixture/audit provenance until CI teardown.
   async function seed(title: string) {
     return (await setup.query<{ id: string }>(
-      `INSERT INTO bugs (project_id,title,description,external_url,integration_provider,integration_issue_key,betterbugs_url,reported_by,assignee_id,priority,severity)
-       VALUES ($1,$2,'Original description','https://example.invalid/BUG-1','JIRA','BUG-1','https://example.invalid/session',$3,$3,'P2','Medium') RETURNING id`, [projectId, title, owner]
+      `INSERT INTO bugs (project_id,title,description,external_url,integration_provider,integration_issue_key,betterbugs_url,reported_by,assignee_id,priority,severity,external_id)
+       VALUES ($1,$2,'Original description','https://example.invalid/BUG-1','JIRA','BUG-1','https://example.invalid/session',$3,$3,'P2','Medium',$4) RETURNING id`, [projectId, title, owner, `BUGEDIT-BUG-${++bugSequence}`]
     )).rows[0].id;
   }
   const state = async () => ({
