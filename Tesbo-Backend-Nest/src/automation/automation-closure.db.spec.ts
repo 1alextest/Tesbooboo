@@ -1115,7 +1115,7 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     const ids: string[] = [];
     const cases: string[] = [];
     const observed = new Pool({ connectionString: url, max: 1, connectionTimeoutMillis: 2000 });
-    let writes = 0;
+    const writes: string[] = [];
     observed.on("connect", (client) => {
       const original = client.query.bind(client);
       const execute = original as (sql: string, values?: unknown[]) => Promise<QueryResult<Record<string, unknown>>>;
@@ -1123,7 +1123,10 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
         if (callback) return original(sql, values ?? [], callback);
         return (async () => {
           const result = await execute(sql, values);
-          if (/^\s*UPDATE executions SET status=COALESCE/.test(sql) && ++writes === 2) await execute("SELECT 1 / 0");
+          if (/^\s*UPDATE executions SET status=COALESCE/.test(sql)) {
+            writes.push(String(values?.[0]));
+            if (writes.length === 2) await execute("SELECT 1 / 0");
+          }
           return result;
         })();
       }) as typeof client.query;
@@ -1146,10 +1149,11 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
         ? legacy.bulkUpdateExecutionStatus(batchRun, userId, { executionIds: ids, status: "Failed" })
         : legacy.bulkAssignExecutions(batchRun, userId, { executionIds: ids, assigneeId: null });
       await expect(call).rejects.toMatchObject({ code: "22012" });
-      expect(writes).toBe(2); // Both real updates executed; only the first transaction committed.
+      expect(writes).toHaveLength(2); // Selection resolution does not promise input order.
+      expect([...writes].sort()).toEqual([...ids].sort());
       const after = await rows();
-      expect(after.find((row) => row.id === ids[1])).toEqual(before.find((row) => row.id === ids[1]));
-      const first = after.find((row) => row.id === ids[0])!;
+      expect(after.find((row) => row.id === writes[1])).toEqual(before.find((row) => row.id === writes[1]));
+      const first = after.find((row) => row.id === writes[0])!;
       expect(first).toMatchObject(kind === "status" ? { status: "Failed", assignee_id: userId } : { status: "Passed", assignee_id: null });
       expect(observed.idleCount).toBe(observed.totalCount);
       // This test documents an existing mismatch, not acceptance of partial REST/UI semantics.

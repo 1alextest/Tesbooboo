@@ -26,8 +26,8 @@ export async function verifyProductionReporter(page: Page, api: string, web: str
       expect(response.ok(), await response.text()).toBeTruthy();
       cases.push(await response.json());
     }
-    for (const scope of ["write", "read"]) {
-      const response = await request.post(`${base}/apikeys`, { data: { name: `CI reporter ${scope}`, scopes: [scope] } });
+    for (const scopes of [["read", "write"], ["read"]]) {
+      const response = await request.post(`${base}/apikeys`, { data: { name: `CI reporter ${scopes.join("+")}`, scopes } });
       expect(response.ok(), await response.text()).toBeTruthy();
       tokens.push(await response.json());
     }

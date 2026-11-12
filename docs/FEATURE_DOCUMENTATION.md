@@ -4458,9 +4458,24 @@ subprocess exit behavior. Windows permission assertions/Node 24 teardown finding
 remain disclosed earlier; Linux CI is required, not local skipped tests as passes.
 
 Initial local checks: SDK production build, E2E/backend typechecks and backend
-frozen lint (9 existing errors, 2 warnings, zero new) passed. No local PostgreSQL or
-authenticated app execution claimed. **Fresh assessment-head CI/runtime evidence
-is pending**; prior #34 results are inherited evidence, not this head's passes.
+frozen lint (9 existing errors, 2 warnings, zero new) passed. Focused local auth/MCP
+selection passed **5 suites / 210 tests**; the unchanged Node 22 native transport
+selection passed one test. Four smoke tests collected with explicit unreachable
+loopback placeholders (collection only). No local PostgreSQL/authenticated app
+execution claimed. **Fresh final assessment-head CI/runtime evidence is pending**;
+prior #34 results are inherited evidence, not this head's passes.
+
+Initial assessment CI caught test-harness assumptions without changing production:
+the live reporter needs **read+write**, not write alone, because case resolution
+requires read. Its warning assertion caught that correctly even though the mixed
+child suite closed. Native head `e4fa101` passed 65/66 tests; bulk status failed
+because `ANY(ids)` resolution does not promise input order. The corrected oracle
+records both actual completed UPDATE IDs, requires exactly the requested set,
+then proves the first processed item committed and the second fully rolled back.
+No rollback or no-write assertion is removed. Instrumentation also forwards
+pg-pool's callback query form unchanged, avoiding a test-owned checkout leak; the
+superseded initial native workflow was canceled after that repair, not passed or
+waived. Final results must supersede these test-harness failures explicitly.
 
 #### Non-destructive historical-data decision
 
