@@ -4116,8 +4116,8 @@ export class LegacyService implements OnModuleInit {
     const parentId = body.parentId ?? null;
     if (parentId) await this.requireLiveSuiteInProject(projectId, parentId);
     await this.db.query(
-      "UPDATE suites SET name = COALESCE($2, name), parent_id = $3, position = COALESCE($4, position), description = COALESCE($5, description), preconditions = COALESCE($6, preconditions), updated_at = now() WHERE id = $1",
-      [suiteId, body.name ?? null, parentId, body.position ?? null, description, preconditions]
+      "UPDATE suites SET name = COALESCE($2, name), parent_id = CASE WHEN $7::boolean THEN $3 ELSE parent_id END, position = COALESCE($4, position), description = COALESCE($5, description), preconditions = COALESCE($6, preconditions), updated_at = now() WHERE id = $1",
+      [suiteId, body.name ?? null, parentId, body.position ?? null, description, preconditions, body.parentId !== undefined]
     );
     await this.suitesCache.invalidate(projectId);
     await this.testcasesListCache.invalidate(projectId);
@@ -5679,15 +5679,18 @@ export class LegacyService implements OnModuleInit {
     const clearsJira = body.jiraIssueKey === null || body.jiraIssueKey === "";
     const clearsLinear = body.linearIssueKey === null || body.linearIssueKey === "";
     const clearsNotion = body.notionPageId === null || body.notionPageId === "";
+    // Partial edits (drawer Archive/Restore, REST, MCP and Zyra) must preserve omitted
+    // relationships at the actual row write, not by copying a possibly stale prior read.
+    // Explicit null still means unassign; explicit IDs still mean move/reassign.
     const res = await client.query(
       `UPDATE testcases SET
-       suite_id=$2, title=COALESCE($3,title), description=COALESCE($4,description),
+       suite_id=CASE WHEN $35::boolean THEN $2 ELSE suite_id END, title=COALESCE($3,title), description=COALESCE($4,description),
        preconditions=COALESCE($5,preconditions), postconditions=COALESCE($6,postconditions),
        steps=COALESCE($7::jsonb,steps), test_data=COALESCE($8,test_data), priority=COALESCE($9,priority),
        severity=COALESCE($10,severity), type=COALESCE($11,type), automation_status=COALESCE($12,automation_status),
        automation_repo=COALESCE($13,automation_repo), automation_path=COALESCE($14,automation_path),
        automation_test_name=COALESCE($15,automation_test_name), automation_framework=COALESCE($16,automation_framework),
-       automation_tags=COALESCE($17,automation_tags), owner_id=$18, component=COALESCE($19,component),
+       automation_tags=COALESCE($17,automation_tags), owner_id=CASE WHEN $36::boolean THEN $18 ELSE owner_id END, component=COALESCE($19,component),
        status=COALESCE($20,status),
        jira_issue_key=CASE WHEN $29::boolean THEN NULL ELSE COALESCE($21,jira_issue_key) END,
        jira_url=CASE WHEN $29::boolean THEN NULL ELSE COALESCE($22,jira_url) END,
@@ -5738,7 +5741,9 @@ export class LegacyService implements OnModuleInit {
         body.notionPageId ?? null,
         body.notionUrl ?? null,
         clearsNotion,
-        newExternalId
+        newExternalId,
+        body.suiteId !== undefined,
+        body.ownerId !== undefined
       ]
     );
     const row = res.rows[0];

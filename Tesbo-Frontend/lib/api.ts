@@ -1570,7 +1570,7 @@ export async function createSuite(
   return api<SuiteNode>(`/api/projects/${projectId}/suites`, { method: "POST", body: data });
 }
 
-/** parentId: the backend writes it verbatim (no COALESCE), so always send the current parent (or null for root) with any edit that should not move the suite. */
+/** Omit parentId to preserve the live parent; send null for root or an ID to request a move. */
 export async function updateSuite(
   suiteId: string,
   data: { name?: string; description?: string; preconditions?: string; parentId?: string | null; position?: number },

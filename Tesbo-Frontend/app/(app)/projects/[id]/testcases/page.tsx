@@ -1319,27 +1319,17 @@ export default function TestCasesPage() {
     setRenameSuiteError("");
     try {
       const trimmedName = renameSuiteInputValue.trim();
-      // The backend writes parent_id verbatim (no COALESCE), so an edit that omits it would move the
-      // suite to the root. Sending the current parent back keeps the suite where it is.
-      const current = suites.find((suite) => suite.id === renameSuiteId);
+      // A text edit does not request a move. Let the writer preserve the live parent rather
+      // than re-sending one from a potentially stale sidebar snapshot.
       await updateSuite(renameSuiteId, {
         name: trimmedName,
         description: renameSuiteDescription.trim(),
         preconditions: renameSuitePreconditions.trim(),
-        parentId: current?.parentId ?? null,
       });
       setIsRenameSuiteModalOpen(false);
       setRenameSuiteId(null);
-      // NOT patched client-side, deliberately, unlike suite create: the backend's updateSuite writes
-      // `parent_id = $3` with no COALESCE (unlike name/position), so a rename call that omits
-      // parentId — which this one always does — silently reparents the suite to root server-side.
-      // That's a pre-existing backend bug, out of scope here, but a client-only name patch would
-      // additionally HIDE it for the rest of this SPA session (the stale local parentId keeps
-      // showing the suite nested where it was, while the server now disagrees) — a real change in
-      // what the user sees after a rename, which the "no behaviour change" bar for this phase
-      // doesn't allow. A real listSuites() refetch keeps today's actual behavior (any such
-      // reparenting is visible immediately) while still skipping the repoSummary/
-      // customFieldDefinitions/paginated-list refetch a full refreshData() would also do.
+      // Refresh authoritative hierarchy/text, including any concurrent explicit move, without
+      // the unrelated repository/custom-field/paginated-list work of a full refreshData().
       const freshSuites = await listSuites(projectId);
       applyTestCasesPatch({ suites: freshSuites });
     } catch (err) {
