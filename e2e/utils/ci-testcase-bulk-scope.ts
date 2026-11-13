@@ -273,8 +273,16 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       await expect(modal).toBeHidden(); const after = await state(); expectPreserved(before, after, [control.id]);
       expect(after.cases.find((row) => row.id === control.id)).toMatchObject({ suite_id: valid.id, priority: "P2", description: "Preserve bulk body", owner_id: ownerId });
       await page.reload();
-      await expect(page.getByRole("row").filter({ has: page.getByRole("button", { name: control.title, exact: true }) })).toContainText(valid.name);
+      // Suite is not a default table column. Prove membership through the actual tree/list UI.
+      await page.getByRole("button", { name: valid.name, exact: true }).click();
+      await expect(page).toHaveURL(`${web}/projects/${projectId}/testcases?suiteId=${valid.id}`);
+      await expect(page.getByRole("button", { name: control.title, exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "CI Bulk Created Session", exact: true })).toHaveCount(0);
       await testInfo.attach("stale-suite-recovered-move-after-reload", { body: await page.screenshot(), contentType: "image/png" });
+      await page.getByRole("button", { name: suite.name, exact: true }).click();
+      await expect(page).toHaveURL(`${web}/projects/${projectId}/testcases?suiteId=${suite.id}`);
+      await expect(page.getByRole("button", { name: "CI Bulk Created Session", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: control.title, exact: true })).toHaveCount(0);
     });
 
     await verifySuiteDeleteScope({ page, api, web, db, other, machine, projectId, foreignProject, ownerId, outsider, tokens: tokenByScope, testInfo });
