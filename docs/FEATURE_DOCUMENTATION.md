@@ -13,6 +13,11 @@
 > recheck, PR #25 findings, missing-specification evidence and verification limits.
 > This supplement does not certify the rest of the inventory as current.
 
+> **Current exit decision pack:** Appendix E, **F.1** reconciles owner-merged
+> #36–#43 against the historical F1–F9 assessment. F.0 adopts the conditional-exit
+> framework only. Neither this inventory nor a green CI badge is Phase 1 sign-off
+> or authorization to implement the incomplete Phase 2 specification package.
+
 ## How this document is organized
 
 Nine modules, roughly in the order a user would encounter them:
@@ -4406,7 +4411,147 @@ verified blockers, obtain an explicit Phase 1 exit/sign-off decision, then
 approve and implement the first Phase 2 slice via normal reviewed PRs.
 Do not keep Phase 1 open merely because a new moderate improvement is possible.
 
-### F. Bounded Phase 1 exit assessment — 2026-11-12 (PROPOSED, not approved)
+### F.1 Current conditional-exit reconciliation — through owner-merged #43
+
+**Decision status: `CONDITIONAL_EXIT_NOT_ESTABLISHED`.** This is the finite
+evidence/decision register requested by F.0, not a new specification, risk waiver,
+independent review, or another feature-hardening programme. The historical F
+assessment below remains an as-of-#35 receipt; use this section for current
+dispositions. No fresh production exploit, live-data inventory or shared-stack
+UAT was run for this reconciliation.
+
+**Reconciled source:** `development@95da2f6e56817164923d0cea11d693c451ab2975`.
+Owner-merged #42 is `72f5f57e3097dc6de5cc898821364ccac20d20cf`; #43 adds only
+the 42-line F.0 policy section relative to that merge, with no product change.
+#43 was merged at **2026-11-13 00:30:49 UTC / November 12, 19:30:49 Jamaica**.
+Thus a report ending at #41 omits both the bug-edit repair and the adopted exit
+framework. Owner merge is not independent security review or acceptance of risks.
+
+#### Verified progress, without combining different test populations
+
+The latest inspected **functional** receipt is
+[#42, head `6c90d741fac82603bbca5d51a5bfeb04c8225f7e`](https://github.com/1alextest/Tesbooboo/pull/42#issuecomment-6838320899):
+**23/23 checks**, **150 native PostgreSQL tests / zero skips** (126 existing + 24
+bug-edit cases), **1,699 backend passes / 248 DB-dependent skips**, **143 Linux
+SDK passes**, **11 toolchain passes**, **19 frontend security/queue passes** and
+**seven outer smoke passes** with zero retries/flaky/skipped tests. These are
+separate jobs, not a count of unique tests or full UAT. The report and 29 unique
+captures were inspected, with viewport/transition limitations disclosed in that
+receipt. Successful external embeddings, real tracker connectivity and deployed
+external-client acceptance were not established.
+
+| Merged batch | Current accomplishment | What it does not establish |
+|---|---|---|
+| #36 | Whole-selection REST bulk status/assignment transaction, native late-fault rollback and connected UI controls | Universal command deduplication or durable postcommit effects |
+| #37–#38, #40 | Frontend production/development and backend development high/critical dependency repairs, enforcing gates and workflow/toolchain regressions | Zero moderate/low findings, independent provenance review or release approval |
+| #39 | Document/version atomicity, fresh locked policy/readback, per-editor save/restore/navigation ordering | Global cross-tab/user CAS, guaranteed delivery after browser shutdown |
+| #41 | SQL-time testcase suite/owner and suite-parent omission preservation; real UI token → cookie-free MCP discovery/write/refusal/revoke | Deployment or certification of an owner's external client |
+| #42 | Bug null/empty/set versus omission semantics; deliberate UI clears; locked before/after attribution across shared REST/MCP writer | Atomic/durable audit delivery, broader finding classification or immutable correction model |
+| #43 | Owner-selected conditional-exit framework and finite escalation rule | Actual exit, acceptance of a particular residual finding or approval of a Phase 2 slice |
+
+#### Current F1–F9 register
+
+`RESOLVED_SCOPED` closes only the named observed defect. `COVERED_SCOPED` retains
+the mandatory contract/regressions, not a universal guarantee. `DECISION_REQUIRED`
+is not acceptance or deferral. `DEFER_PROPOSED` requires a separately recorded
+owner decision before leaving the exit checklist. No production fault frequency
+was measured. Accountable **roles below are proposed; named assignees and dates
+have not been appointed**.
+
+| ID | Applicable contract and present evidence | Impact / likelihood basis | Current disposition and proposed accountable role |
+|---|---|---|---|
+| F1 | Automation seal remains `source === "automation" && closed_at != null`; native closure/retry/evidence races and reporter→DB→MCP→browser checks remain selected. Manual completed runs stay correctable. | High if sealed verdict/evidence changes; covered negative controls pass. Legacy attempt/shard delivery outside those controls remains unverified. | **COVERED_SCOPED**. Backend/SDK maintainer retains tests; no new attempt/shard coordinator authorized. |
+| F2 | Browser automatic mutation replay repaired in #34 and rerun through #42. `sdk/playwright-reporter/src/client.ts` still retries writes; keyed creates/indexed results have specific protection, not all uploads/unkeyed creates. | Moderate under transient response loss/retry; duplicate submissions/evidence possible. Conditional mechanism, not measured production prevalence. | Browser part **RESOLVED_SCOPED**; SDK **DEFER_PROPOSED**, subject to owner disposition. Proposed SDK maintainer owns a versioned reliability plan, not an unapproved transport-policy change. |
+| F3 | `DatabaseService.transaction` cannot roll back a successful COMMIT. Native closure-suite tests still demonstrate persisted bug/link creation plus explicit-resubmission duplicates after controlled postcommit/ACK faults. #42 fixes snapshots, not this uncertainty. `logProjectActivity` remains best-effort/postcommit. | Moderate, potentially high for consequential bulk/effect loss: committed data can accompany an error; audit/effect delivery can fail. Tests inject after actual COMMIT, not a real network-cut experiment. | **DECISION_REQUIRED**. Product owner + backend/release owner must define acceptable reconciliation/critical-audit guarantees before choosing repair versus a bounded follow-up; no exactly-once/outbox commitment is invented. |
+| F4 | `LegacyService.writeBulkExecutions` now owns one transaction and parent lock for the entire REST selection. Native later-item failures require full rollback; real UI refusal/success controls run in smoke. | Historical committed-prefix defect was reproducible; the original characterization is superseded by #36's rollback oracle. Postcommit delivery still belongs to F3. | **RESOLVED_SCOPED** by #36. Do not schedule the same atomicity repair again or substitute MCP's different contract. Proposed backend/QA owners retain the regression. |
+| F5 | `bulk_record_execution_results` and `bulk_create_testcases` retain explicit indexed per-item outcomes through their shared authorized writers; connected mixed manual/sealed controls pass. | Low residual for the selected contract; an item failure intentionally does not roll back successful siblings. | **COVERED_SCOPED**, intentional semantics, not the F4 defect. Proposed MCP maintainer preserves scope/sealing and truthful outcomes. |
+| F6 | New/changed bug tuples are validated; foreign display-metadata joins are project-scoped; valid historical/deleted local associations remain. Native synthetic fixtures establish behavior, not live prevalence. | High if foreign metadata leaks; covered reader/writer controls pass. The number and meaning of existing invalid rows are unknown. | Isolation repair **COVERED_SCOPED**; historical-data **DECISION_REQUIRED**. Data owner approves an environment/snapshot and read-only inventory or explicitly dispositions the unknown; no deletion/reassociation is authorized. |
+| F7 | `deleteCycle` soft-deletes transactionally; testcase ID rename still rewrites `cycle_items.snapshot_external_id`; member removal still clears assignments on historical executions. Those are distinct from a sealed verdict correction. | Moderate source-confirmed administrative/history effects; no newly demonstrated unauthorized verdict mutation. Actual retention/correction obligations are unsettled. | **DECISION_REQUIRED**. Product/data owner selects historical identity, deletion visibility and assignment retention policy. Broader correction/attempt features remain unapproved, not mandatory infrastructure work. |
+| F8a | `publicCycle` still returns `SELECT * FROM cycles`; `publicCycleExecutions` already has a narrow six-column projection. Share tokens persist across disable/re-enable. | Potential high depending on exposed run fields and publication/revocation contract; broad projection/reuse is source-confirmed, not a fresh sensitive-data exploit. | **DECISION_REQUIRED before exit**, product + security owner: approve exact public fields/revocation semantics and classify exposure. No claim that the historical broad-execution leak remains live; no silent moderate-risk deferral. |
+| F8b | `ProjectWriteLockGuard` matches project-prefixed paths only. Legacy cycle URLs and `/api/mcp` still require explicit entitlement-contract classification; current membership/token scope checks do not by themselves establish plan writability. | Potential high if an approved restriction is bypassed; route-matcher limit is source-confirmed. A generic claim of unauthorized project access is not established by that fact. | **DECISION_REQUIRED before exit**, product/billing + security owner: state supported locked-project operations and required parity, then authorize a named reproducer/repair if violated. Do not rewrite billing/credentials by assumption. |
+| F9 | Latest inspected #42 artifacts: zero critical/high; backend all-tree **29 moderate/10 low**, production **14 moderate**; frontend Linux all-tree **16 moderate/1 low**, production **7 moderate/1 low**. Production E2E/SDK: zero reported. Frozen lint remains **9 backend/13 frontend known errors**, zero new. | Original critical/high advisory entries are remediated by #37–#38/#40. Remaining scanner entries are not distinct exploit counts; applicability/likelihood still needs review. | Original critical/high entries **RESOLVED_SCOPED**; moderate/low and lint follow-ups **DEFER_PROPOSED**, not accepted. Proposed dependency/security owner retains full reports, CDN/provenance review and enforcing gates. |
+
+Source owners re-read for this reconciliation:
+[`legacy.service.ts`](../Tesbo-Backend-Nest/src/legacy/legacy.service.ts)
+(`publicCycle`, `writeBulkExecutions`, `removeProjectMember`, `deleteCycle`,
+testcase snapshot-ID update, `updateBug`, `logProjectActivity`),
+[`automation-closure.db.spec.ts`](../Tesbo-Backend-Nest/src/automation/automation-closure.db.spec.ts),
+[`mcp.tools.ts`](../Tesbo-Backend-Nest/src/mcp/mcp.tools.ts),
+[`project-write-lock.guard.ts`](../Tesbo-Backend-Nest/src/plan-limits/project-write-lock.guard.ts),
+and [`client.ts`](../sdk/playwright-reporter/src/client.ts). This named selection
+is not a fresh all-method security audit.
+
+#### Finite owner/reviewer action list and stopping rule
+
+| Decision | Required record, owner and proposed review trigger |
+|---|---|
+| D1 — confirm selection | Product/release owner confirms the bounded F scope, mandatory integration checks, supported environment and explicit non-goals. F.0's framework adoption is not an unsigned checklist silently becoming signed. |
+| D2 — F8 publication/entitlement | Product/security owners record actual contracts and classify F8a/F8b before exit. A verified unresolved high/critical violation blocks exit under F.0; uncertainty cannot be marked safe. Any required fix is one named bounded increment through existing owners. |
+| D3 — uncertainty and historical policy | Product/backend/data owners choose fix, explicitly scoped follow-up or further evidence for F3/F6/F7. For F6, name environment, read-only authority, privacy limits and snapshot first; collect aggregates before sensitive per-record receipts. No destructive cleanup. |
+| D4 — proposed follow-ups | Owner separately dispositions F2/F9, appoints named maintainers and a review date. Proposed triggers: confirmed duplicate/effect-loss incident, expanded SDK/runtime contract, new high/critical advisory, relevant dependency upgrade, or before the next release using the affected path. Without names/date/decision these remain open, not accepted backlog items. |
+| D5 — independent review and exit | Appoint an independent human security/release reviewer and provide scope, source/evidence and unsupported scenarios. Record reviewer findings and a dated owner exit decision. Agent source review, CI and owner merge do not meet this gate. |
+| D6 — Phase 2 authority | Supply the matching approved package/baseline, reconcile requirement statuses, and approve one exact user-facing increment with acceptance tests, exclusions and existing-module owners. No feature implementation starts from strategic headings alone. |
+
+**No indefinite expansion:** this reconciliation selects no new general hardening
+project. Preserve the current mandatory regressions. Reopen implementation only
+for a verified blocking contract violation, a failed selected required check, or
+an explicitly approved next scope. A new moderate opportunity alone is not a
+reason to extend Phase 1. No residual risk is accepted by this register.
+
+#### E1–E7 checklist refreshed, not signed
+
+| Gate | Current status / remaining signature or evidence |
+|---|---|
+| E1 — finite baseline | **PARTIAL**: framework adopted in #43; D1's exact exit selection/criteria sign-off not recorded here. |
+| E2 — critical integrity | Named fixes evidenced; F4 and original high/critical F9 no longer open defects. **OPEN** pending F8 contracts/classification and independent security adjudication; no blanket whole-app PASS. |
+| E3 — transaction/duplicate outcomes | F4 repaired. **OPEN** for explicit F2/F3 dispositions; successful characterizations do not waive uncertainty. |
+| E4 — connected workflow | **TECHNICAL PASS at #42 head `6c90d74`** for the seven-test isolated selection. Not full shared-stack/deployed/browser-matrix UAT; this document's later CI is a separate receipt. |
+| E5 — historical data | Covered projections preserve isolation; live inventory prevalence **UNKNOWN**, authorization/disposition **OPEN** (D3). |
+| E6 — checks and independent review | #42 exact-head checks/evidence are retained. **INDEPENDENT_REVIEW_NOT_RUN / EXIT_NOT_SIGNED**; current documentation head requires its own applicable checks. |
+| E7 — next-phase authority | **BLOCKED_BY_CANONICAL_SOURCE**; complete approved package/baseline and a selected Phase 2 increment are not available/approved. |
+
+#### Canonical-source recovery receipt and minimum unblock
+
+Bounded recovery recheck found:
+
+- Fetched repository refs/history contain two imported working files on
+  `origin/docs/qa-specs-product-direction-20261028@d96f24e`: `00_README.md`
+  (Git blob `9f2b919a3a689779048c0b3aebcfa6b789147080`) and
+  `06_IMPLEMENTATION_AGENT_BRIEF.md`
+  (`48142bb976cb7138878b1d6ae8c8c0ac930f1743`). The six companions, including
+  the actual requirements/design/backlog matrices, are absent. The separate
+  session-distillation branch adds no `docs/qa-orchestration` files.
+- History retains the two import commits (`d96f24e`, `c689222`), not the missing
+  originals. GitHub Releases lists no archive; repository Issues are disabled.
+  Configured MCP discovery returns no resources/templates. Targeted filename
+  search under the approved local OpenCode workspace parent found no
+  `Tesbo_Existing_Application_Baseline_v1.0.md`. This is not an assertion about
+  inaccessible private chats, other disks, or all possible external sources.
+- The README is a partial working text that starts inside a gate table. It
+  references older Project 1.2 attachments, revised 1.4.19 direction and an earlier
+  1.4.17 archive hash; a referenced hash is not a recovered/verified archive.
+  These conflicts cannot be resolved by choosing the newest-looking label.
+
+**Minimum owner handoff:** attach the original eight matching `00`–`07` files
+(preserving their existing names), or an accessible repository/archive URL plus
+revision and checksum; supply the single named living baseline; confirm which
+revision/source is approved when Project attachments and working exports differ.
+Supply referenced audit receipts/reviewer charters for any assurance claims they
+must substantiate. Do not invent missing IDs/acceptance criteria or create a ninth
+spec, parallel baseline or guessed roadmap to fill the gap.
+
+After recovery, reconcile each approved requirement as implemented (with evidence),
+incomplete, unverified, superseded or explicitly deferred, mapping to existing
+Test Cases/Runs/Bugs/Requirements/KB/Zyra/MCP/reporter owners. Ask the owner to
+approve **one** requirement-linked increment with observable acceptance and
+non-goals. Until that handoff, substantive Phase 2 coding is blocked rather than
+being replaced by indefinite isolated infrastructure work.
+
+### F. Historical bounded Phase 1 exit assessment — 2026-11-12 (as of #35)
+
+**Historical status below is preserved, not the current exit register.** F.0
+records the subsequently adopted framework; F.1 reconciles #36–#43. In particular,
+the old F4 committed-prefix and F9 critical/high counts are not current findings.
 
 **Outcome: Phase 1 exit is NOT YET ESTABLISHED; Phase 2 is not authorized.** This
 is an assessment of the declared integrity slice, not another specification or a
