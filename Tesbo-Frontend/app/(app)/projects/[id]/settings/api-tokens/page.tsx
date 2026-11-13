@@ -209,7 +209,17 @@ export default function ApiTokensPage() {
     setCreateError(null);
     try {
       const result = await createApiKey(projectId, { name, scopes });
-      setTokens((prev) => [result, ...prev]);
+      // Store only the public metadata in the token list. The secret belongs exclusively
+      // to the short-lived one-time reveal and must not survive in list state.
+      const publicToken: ApiToken = {
+        id: result.id,
+        name: result.name,
+        scopes: result.scopes,
+        tokenPrefix: result.tokenPrefix,
+        lastUsedAt: result.lastUsedAt,
+        createdAt: result.createdAt,
+      };
+      setTokens((prev) => [publicToken, ...prev]);
       setRevealedToken(result);
       setCreateStep("reveal");
     } catch (err) {
@@ -224,6 +234,7 @@ export default function ApiTokensPage() {
     try {
       await revokeApiKey(projectId, tokenId);
       setTokens((prev) => prev.filter((t) => t.id !== tokenId));
+      setRevealedToken((prev) => (prev?.id === tokenId ? null : prev));
     } catch {
       setListError("Failed to revoke token.");
     } finally {
@@ -428,7 +439,7 @@ export default defineConfig({
           <p className="mt-1 text-sm text-[var(--muted)]">
             {revealedToken
               ? "Your new token was shown once. Keep it in a secret store; the examples use placeholders."
-              : <>Replace <code className="font-mono text-xs">&lt;YOUR_API_TOKEN&gt;</code> below with a token from the list above.</>}
+              : <>Replace <code className="font-mono text-xs">&lt;YOUR_API_TOKEN&gt;</code> with a token saved securely when it was created. Existing tokens cannot be viewed again.</>}
           </p>
         </div>
 
@@ -565,6 +576,8 @@ export default defineConfig({
           </div>
         )}
       </Card>
+
+      <McpConnectionCheck mcpUrl={mcpUrl} projectName={projectName || projectId} />
 
       <Card className="p-4 space-y-4">
         <div>
@@ -757,5 +770,88 @@ export default defineConfig({
         )}
       </Modal>
     </StandardPageLayout>
+  );
+}
+
+/**
+ * A read-only, user-triggered diagnostic. It never persists credentials, invokes a write
+ * tool, creates server tokens, or claims that downstream writes/reporting were tested.
+ */
+function McpConnectionCheck({ mcpUrl, projectName }: { mcpUrl: string; projectName: string }) {
+  const [token, setToken] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  async function checkConnection() {
+    const candidate = token.trim();
+    if (!candidate || checking) return;
+    setChecking(true);
+    setResult(null);
+    try {
+      const response = await fetch(mcpUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${candidate}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error(
+          response.status === 401 || response.status === 403
+            ? "Token was rejected or does not have access to this project."
+            : `API endpoint returned HTTP ${response.status}. Check the configured API URL.`
+        );
+      }
+      const payload: unknown = await response.json();
+      const tools = (
+        payload && typeof payload === "object" && "result" in payload &&
+        payload.result && typeof payload.result === "object" &&
+        "tools" in payload.result
+      ) ? payload.result.tools : null;
+      if (!Array.isArray(tools)) {
+        throw new Error("Endpoint did not return an MCP tools list.");
+      }
+      setResult({
+        ok: true,
+        message: `Connected to ${projectName}: ${tools.length} MCP tools advertised. This verifies project access and discovery, not write permissions or reporting.`,
+      });
+      setToken("");
+    } catch (error) {
+      setResult({
+        ok: false,
+        message: error instanceof Error && error.message !== "Failed to fetch"
+          ? error.message
+          : "Connection could not be verified from this browser. Check API URL, network/CORS, and token; or run opencode mcp list.",
+      });
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  return (
+    <Card className="p-4 space-y-3">
+      <div>
+        <h2 className="text-base font-semibold text-[var(--foreground)]">Check MCP connection</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Verify this project&apos;s endpoint and token using read-only tool discovery. The token is held in this page only during the check and is not saved.
+        </p>
+      </div>
+      <p className="break-all font-mono text-xs text-[var(--muted)]">{mcpUrl}</p>
+      <form onSubmit={(event) => { event.preventDefault(); void checkConnection(); }} className="flex flex-wrap items-end gap-2">
+        <Field>
+          <FieldLabel>API token</FieldLabel>
+          <Input type="password" autoComplete="off" value={token} onChange={(event) => { setToken(event.target.value); setResult(null); }} placeholder="Paste a token for this project" disabled={checking} />
+        </Field>
+        <Button type="submit" disabled={!token.trim() || checking}>{checking ? "Checking…" : "Check connection"}</Button>
+      </form>
+      {result && (
+        <p role="status" className={`text-sm ${result.ok ? "text-[var(--success-foreground)]" : "text-[var(--error-foreground)]"}`}>
+          {result.message}
+        </p>
+      )}
+    </Card>
   );
 }
