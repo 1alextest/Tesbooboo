@@ -19,6 +19,10 @@ export async function verifyPlanProjectLineage(page: Page, api: string, web: str
   });
   try {
     const plan = await post(`${base}/plans`, { name: "CI Local Lineage Plan" });
+    await test.step("a genuinely empty Plan retains the existing no-associated-runs guidance", async () => {
+      await page.goto(`${web}/projects/${projectId}/plans/${plan.id}`);
+      await expect(page.getByText("No test runs associated with this plan yet. Create a new run or link an existing one to start tracking progress.", { exact: true })).toBeVisible();
+    });
     const foreign = await post(`${other}/plans`, { name: "CI PRIVATE foreign Plan" });
     const suite = await post(`${base}/suites`, { name: "CI Local Lineage Suite" });
     const foreignSuite = await post(`${other}/suites`, { name: "CI PRIVATE foreign Suite" });
@@ -81,6 +85,8 @@ export async function verifyPlanProjectLineage(page: Page, api: string, web: str
       expect(await state()).toEqual(before);
       await page.goto(`${web}/projects/${projectId}/plans/${plan.id}`);
       await expect(page.getByRole("link", { name: run.name, exact: true })).toBeVisible();
+      await expect(page.getByText("No execution data is available for the associated runs yet. Add test cases to a run to start tracking progress.", { exact: true })).toBeVisible();
+      await expect(page.getByText(/No test runs associated with this plan yet/)).toHaveCount(0);
       await expect(page.locator("body")).not.toContainText("CI PRIVATE");
       await testInfo.attach("plan-project-scoped-runs-with-invalid-history-retained", { body: await page.screenshot(), contentType: "image/png" });
     });
@@ -93,6 +99,8 @@ export async function verifyPlanProjectLineage(page: Page, api: string, web: str
       expect((await saved).ok()).toBeTruthy();
       await page.reload();
       await expect(page.getByRole("link", { name: unlinked.name, exact: true })).toBeVisible();
+      await expect(page.getByText("No execution data is available for the associated runs yet. Add test cases to a run to start tracking progress.", { exact: true })).toBeVisible();
+      await expect(page.getByText(/No test runs associated with this plan yet/)).toHaveCount(0);
       expect((await db.query("SELECT plan_id FROM cycles WHERE id=$1", [unlinked.id])).rows[0].plan_id).toBe(plan.id);
       await expect(page.locator("body")).not.toContainText("CI PRIVATE");
       await testInfo.attach("plan-valid-ui-run-association-after-reload", { body: await page.screenshot(), contentType: "image/png" });

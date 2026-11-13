@@ -5414,3 +5414,12 @@ available branch still contains only `00_README.md` and
 F.1/D6's canonical-source/one-exact-increment approval gate remains applicable
 to new orchestration capabilities. No replacement spec/baseline, destructive
 cleanup, new entitlement policy, agent merge, deployment or release sign-off.
+
+Exact-head artifact inspection of the first lineage implementation exposed an
+additional existing Plan-page accuracy defect: the page used zero execution
+rows as proof that no Runs were associated, while displaying two actual Runs
+beneath that message. Keep the existing section/layout; select its guidance by
+the actual associated Run count, distinguishing no Runs from Runs with no
+execution data. Extend the genuine browser test for both cases and repeat the
+final-head verification. This is an observed same-build UI contradiction, not
+a screenshot reconstruction or a new workflow feature.
