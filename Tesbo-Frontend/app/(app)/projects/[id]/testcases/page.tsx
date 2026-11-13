@@ -460,7 +460,7 @@ export default function TestCasesPage() {
   const [deleteSuiteId, setDeleteSuiteId] = useState<string | null>(null);
   const [deleteSuiteSaving, setDeleteSuiteSaving] = useState(false);
   const [deleteSuiteError, setDeleteSuiteError] = useState<string | null>(null);
-  const [suiteDeleteRefreshFailed, setSuiteDeleteRefreshFailed] = useState(false);
+  const [repositoryRefreshWarning, setRepositoryRefreshWarning] = useState<"suite-delete" | "bulk" | null>(null);
 
   const [isRenameSuiteModalOpen, setIsRenameSuiteModalOpen] = useState(false);
   const [renameSuiteId, setRenameSuiteId] = useState<string | null>(null);
@@ -534,7 +534,7 @@ export default function TestCasesPage() {
     setPageCache(cacheKey, next);
     setSuites(next.suites);
     setRepoSummary(next.repoSummary);
-    setSuiteDeleteRefreshFailed(false);
+    setRepositoryRefreshWarning(null);
   }, [projectId, customFieldDefinitions, customTags, cacheKey]);
 
   useEffect(() => {
@@ -1214,6 +1214,7 @@ export default function TestCasesPage() {
     if (bulkAction === "update" && !bulkUpdateHasChanges) return;
     setBulkSaving(true);
     setBulkError(null);
+    let actionConfirmed = false;
     try {
       if (bulkAction === "delete") {
         await bulkDeleteTestCases(projectId, { testcaseIds: selectedCaseIds });
@@ -1238,25 +1239,33 @@ export default function TestCasesPage() {
           suiteId: bulkTargetSuiteId || UNASSIGNED_SUITE_ID,
         });
       }
+      actionConfirmed = true;
       const refreshPanelTestcaseId = panelTestcaseId && selectedCaseIdSet.has(panelTestcaseId) ? panelTestcaseId : null;
+      // The mutation succeeded. Retire the submitted selection/dialog before any
+      // follow-up read: a refresh failure must not offer to submit the same write again.
+      setSelectedCaseIds([]);
+      setIsBulkActionModalOpen(false);
+      setBulkAction("");
+      setBulkTargetSuiteId("");
+      if (bulkAction === "delete" && refreshPanelTestcaseId) closePanel();
       // Kept as a real refetch, deliberately: a bulk selection can include records never fully
       // loaded (selectAllMatchingCases only ever accumulates ids), so their prior status/suite isn't
       // known here and can't be safely patched — only the now-redundant customFieldDefinitions
       // refetch is dropped (bulk actions never touch field definitions).
       await loadSuitesAndSummary();
       await loadSelectedSuiteCases();
-      if (bulkAction === "delete" && refreshPanelTestcaseId) {
-        closePanel();
-      } else if (refreshPanelTestcaseId) {
+      if (bulkAction !== "delete" && refreshPanelTestcaseId) {
         await openViewPanel(refreshPanelTestcaseId);
       }
-      setSelectedCaseIds([]);
-      setIsBulkActionModalOpen(false);
-      setBulkAction("");
-      setBulkTargetSuiteId("");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to apply bulk action.";
-      setBulkError(message);
+      if (actionConfirmed) {
+        // Reuse Suite deletion's repository recovery; the list loader still owns
+        // its separate inline Retry when it handles a paginated-list read failure.
+        setRepositoryRefreshWarning("bulk");
+      } else {
+        const message = err instanceof Error ? err.message : "Failed to apply bulk action.";
+        setBulkError(message);
+      }
     } finally {
       setBulkSaving(false);
     }
@@ -1373,7 +1382,7 @@ export default function TestCasesPage() {
     if (!deleteSuiteId || deleteSuiteSaving) return;
     setDeleteSuiteSaving(true);
     setDeleteSuiteError(null);
-    setSuiteDeleteRefreshFailed(false);
+    setRepositoryRefreshWarning(null);
     let deletionConfirmed = false;
     try {
       await deleteSuite(deleteSuiteId, mode);
@@ -1394,7 +1403,7 @@ export default function TestCasesPage() {
     } catch (err) {
       if (deletionConfirmed) {
         // DELETE succeeded. Keep the modal closed and never offer a blind repeat of it.
-        setSuiteDeleteRefreshFailed(true);
+        setRepositoryRefreshWarning("suite-delete");
       } else {
         // Preserve the transport's "outcome unconfirmed" wording after response loss;
         // a rejected promise does not establish that the server rolled back.
@@ -2275,9 +2284,9 @@ export default function TestCasesPage() {
                 )}
 
                 {/* Content */}
-                {suiteDeleteRefreshFailed && (
+                {repositoryRefreshWarning && (
                   <div role="alert" className="mx-4 mt-3 rounded-lg border border-[var(--warning)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--warning-foreground)]">
-                    <p>Suite deleted, but the repository could not be refreshed. Reload to see its current state.</p>
+                    <p>{repositoryRefreshWarning === "suite-delete" ? "Suite deleted" : "Bulk action completed"}, but the repository could not be refreshed. Reload to see its current state.</p>
                     <Button variant="secondary" className="mt-2" onClick={() => window.location.reload()}>Reload repository</Button>
                   </div>
                 )}

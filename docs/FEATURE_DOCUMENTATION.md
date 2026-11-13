@@ -5683,6 +5683,19 @@ nonmember and bearer refusals remain separate, unchanged controls.
 - Bulk update cannot confirm with every field on "Leave unchanged" (button and
   handler guard). All bulk form fields are disabled while saving; failures retain
   selected cases and chosen values. Bulk-delete guidance reflects retained history.
+- Continued owner-requested recovery reuses that same repository warning/reload
+  block for confirmed bulk writes whose Suite-list refresh fails. The submitted
+  selection/dialog is retired as soon as the write succeeds, and a deleted case's
+  open panel is closed before refresh. Genuine write refusals still retain the
+  form/selection. The existing paginated-list error and read-only Retry remain
+  their own recovery owner, without a second banner or new notification system.
+
+**Bulk continuation reproduced before repair:** test-only `22bf1cd` performed a
+real successful bulk update, verified PostgreSQL priority/history and preserved
+unselected/foreign rows, then failed because the submission modal remained visible
+with Confirm enabled after a controlled failed follow-up Suite read. Decoded
+report: 9 expected / 1 unexpected. This is a failed post-write read, not a lost
+mutation response, production outage or new server-side uncertainty policy.
 
 **Verification owners:** extend `ci-suite-delete-scope.ts` and
 `ci-testcase-bulk-scope.ts`, not a parallel fixture/framework. Keep all ten outer
@@ -5695,6 +5708,14 @@ retention. Compare actual PostgreSQL rows/history and capture visible states;
 compilation or synthetic requests alone are not UI acceptance. Exact-head results,
 failed-first evidence and inspected captures belong in PR comments/metadata, not
 evidence-only commits.
+
+The bulk continuation extends the same helper, surviving local control, native
+history/activity oracles and canonical project route. Update, unassign, archive
+and delete each commit through the real writer before a controlled Suite-read
+failure; assert one submission/history/activity change, closed dialog, reload and
+authoritative content. A separate list-read refusal exercises its existing inline
+Retry with no competing banner. No new outer test, identity, framework, transport
+retry, backend policy or duplicated recovery component is introduced.
 
 Counts/hierarchy are an advisory loaded snapshot, not a concurrency guarantee.
 PR #54 owns assignment-versus-deletion consistency; hierarchy-parent/cycle races,
