@@ -493,7 +493,11 @@ export default function PlanDetailPage() {
               {progress && total === 0 && (
                 <section className="mb-5 rounded-[10px] border border-dashed border-[var(--border)] p-8 text-center">
                   <IconClipboardList size={36} stroke={1.25} className="mx-auto text-[var(--muted-soft)]" />
-                  <p className="mt-3 text-[13px] text-[var(--muted-soft)]">No test runs associated with this plan yet. Create a new run or link an existing one to start tracking progress.</p>
+                  <p className="mt-3 text-[13px] text-[var(--muted-soft)]">
+                    {runs.length === 0
+                      ? "No test runs associated with this plan yet. Create a new run or link an existing one to start tracking progress."
+                      : "No execution data is available for the associated runs yet. Add test cases to a run to start tracking progress."}
+                  </p>
                 </section>
               )}
 
