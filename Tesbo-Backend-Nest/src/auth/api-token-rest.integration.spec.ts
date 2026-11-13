@@ -268,3 +268,86 @@ describe("execution run context through the actual controller/service HTTP bound
     expect(activity).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
   });
 });
+
+describe("testcase bulk-create through the actual controller/service HTTP boundary", () => {
+  const member = "22222222-2222-4222-8222-222222222222", outsider = "33333333-3333-4333-8333-333333333333";
+  const query = jest.fn(async (sql: string, values?: unknown[]) => ({
+    rows: /INSERT INTO testcases/.test(sql)
+      ? (JSON.parse(String(values?.[2])) as Array<Record<string, unknown>>).map((row, index) => ({ ...row, id: `44444444-4444-4444-8444-44444444444${index}`, project_id: PROJECT, created_by: member, updated_by: member }))
+      : [],
+  }));
+  const transaction = jest.fn(async (work: (client: { query: typeof query }) => Promise<unknown>) => work({ query }));
+  const access = jest.fn(async (actor: string | null | undefined, project: string) => {
+    if (actor !== member || project !== PROJECT) throw new NotFoundException({ error: "Project not found" });
+    return {} as never;
+  });
+  let app: INestApplication, baseUrl: string;
+  let activity: jest.SpyInstance, suites: jest.SpyInstance, cases: jest.SpyInstance;
+  beforeAll(async () => {
+    const svc = makeLegacy({ query, transaction } as unknown as DatabaseService);
+    jest.spyOn(svc, "requireProjectAccess").mockImplementation(access);
+    activity = jest.spyOn(svc, "logProjectActivity").mockResolvedValue(undefined);
+    const internals = svc as unknown as {
+      externalIdPrefix: () => Promise<string>; maxExternalIdSeq: () => Promise<number>;
+      suitesCache: { invalidate: (id: string) => Promise<void> }; testcasesListCache: { invalidate: (id: string) => Promise<void> };
+    };
+    jest.spyOn(internals, "externalIdPrefix").mockResolvedValue("BULK");
+    jest.spyOn(internals, "maxExternalIdSeq").mockResolvedValue(0);
+    suites = jest.spyOn(internals.suitesCache, "invalidate").mockResolvedValue(undefined);
+    cases = jest.spyOn(internals.testcasesListCache, "invalidate").mockResolvedValue(undefined);
+    const module = await Test.createTestingModule({
+      controllers: [LegacyController],
+      providers: [
+        { provide: LegacyService, useValue: svc }, { provide: CustomFieldsService, useValue: {} },
+        { provide: ZyraProgressService, useValue: {} }, { provide: WelcomeEmailService, useValue: {} },
+        { provide: APP_GUARD, useClass: ApiTokenRestGuard },
+      ],
+    }).compile();
+    app = module.createNestApplication();
+    // Actual controller, guard and writer with synthetic principals/SQL, not real cookie/DB proof.
+    app.use((req: AuthenticatedRequest, _res: unknown, next: () => void) => {
+      req.userId = typeof req.headers["x-test-user"] === "string" ? req.headers["x-test-user"] : null;
+      const scope = req.headers["x-test-scope"];
+      if (scope === "read" || scope === "write") req.apiToken = { tokenId: "fixture", userId: req.userId, projectId: PROJECT, scopes: [scope] };
+      next();
+    });
+    await app.listen(0, "127.0.0.1"); baseUrl = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`;
+  });
+  afterAll(async () => { await app?.close(); });
+  beforeEach(() => { query.mockClear(); transaction.mockClear(); access.mockClear(); activity.mockClear(); suites.mockClear(); cases.mockClear(); });
+  const valid = { testcases: [{ title: "First case" }, { title: "Second case" }] };
+  async function send(actor?: string, scope?: "read" | "write", body: unknown = valid) {
+    return fetch(`${baseUrl}/api/projects/${PROJECT}/testcases/bulk-create`, { method: "POST", headers: {
+      "content-type": "application/json", ...(actor ? { "x-test-user": actor } : {}), ...(scope ? { "x-test-scope": scope } : {}),
+    }, body: JSON.stringify(body) });
+  }
+  const noEffects = () => {
+    expect(query).not.toHaveBeenCalled(); expect(transaction).not.toHaveBeenCalled(); expect(activity).not.toHaveBeenCalled();
+    expect(suites).not.toHaveBeenCalled(); expect(cases).not.toHaveBeenCalled();
+  };
+  it("refuses anonymous bulk creation before any transaction", async () => { expect((await send()).status).toBe(400); noEffects(); });
+  it.each([
+    ["ordinary", valid], ["empty", { testcases: [] }], ["malformed field", { testcases: [{ title: "x".repeat(513) }] }],
+  ])("refuses a nonmember's %s batch before validation or side effects", async (_label, body) => {
+    expect((await send(outsider, undefined, body)).status).toBe(404); expect(access).toHaveBeenCalledWith(outsider, PROJECT); noEffects();
+  });
+  it("keeps read-token writes refused", async () => { expect((await send(member, "read")).status).toBe(403); noEffects(); });
+  it.each([undefined, "write"] as const)("allows a current member using %s with unchanged batch shape and attribution", async (scope) => {
+    const response = await send(member, scope); expect(response.status).toBe(201);
+    expect(access).toHaveBeenCalledWith(member, PROJECT); expect(transaction).toHaveBeenCalledTimes(1);
+    expect(await response.json()).toMatchObject({ createdCount: 2, created: [
+      expect.objectContaining({ title: "First case", projectId: PROJECT, createdBy: member }),
+      expect.objectContaining({ title: "Second case", projectId: PROJECT, createdBy: member }),
+    ] });
+  });
+  it("preserves the authorized empty-batch response without writes", async () => {
+    const response = await send(member, undefined, { testcases: [] }); expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ created: [], createdCount: 0 }); expect(access).toHaveBeenCalledWith(member, PROJECT); noEffects();
+  });
+  it.each([
+    ["field length", { testcases: [{ title: "x".repeat(513) }] }],
+    ["batch limit", { testcases: Array.from({ length: 501 }, () => ({ title: "Limit control" })) }],
+  ])("retains the authorized %s validation before SQL", async (_label, body) => {
+    expect((await send(member, undefined, body)).status).toBe(400); expect(access).toHaveBeenCalledWith(member, PROJECT); noEffects();
+  });
+});

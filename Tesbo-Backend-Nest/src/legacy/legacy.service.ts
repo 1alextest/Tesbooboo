@@ -4983,6 +4983,7 @@ export class LegacyService implements OnModuleInit {
 
   async bulkCreateTestCases(projectId: string, actorId: string | null | undefined, body: Body) {
     const uid = this.requireUser(actorId);
+    await this.requireProjectAccess(uid, projectId);
     const incoming: Body[] = Array.isArray(body.testcases)
       ? body.testcases.filter((row: unknown): row is Body => !!row && typeof row === "object")
       : [];
