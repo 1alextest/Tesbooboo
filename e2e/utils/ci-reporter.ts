@@ -221,6 +221,18 @@ test.skip('skipped reporter control', { tag: '@tesbo.testId("${cases[2].external
     await expect(page.getByLabel("Bug Title", { exact: true })).toHaveValue("CI reporter linked finding");
     await testInfo.attach("production-reporter-browser-readback", { body: await page.screenshot(), contentType: "image/png" });
     expect(await sealed()).toEqual(before);
+
+    // Owner-approved D2/F8a contract: reuse the manual control after the sealed-state checks.
+    const shared = await request.post(`${api}/api/cycles/${manualId}/share`, { data: { enabled: true } });
+    expect(shared.ok(), await shared.text()).toBeTruthy();
+    const share = await shared.json();
+    expect(share.shareEnabled).toBe(true);
+    expect(share.shareToken).toMatch(/^[a-f0-9]{48}$/);
+    const publicRun = await anonymous.get(`${api}/api/public/shared-runs/${share.shareToken}`);
+    expect(publicRun.status(), await publicRun.text()).toBe(200);
+    expect(Object.keys(await publicRun.json()).sort()).toEqual([
+      "name", "status", "description", "environment", "buildVersion", "createdAt", "startedAt", "endedAt"
+    ].sort());
   } finally {
     // Only soft-delete our synthetic resources. Preserve their audit/provenance until service teardown.
     if (bugId) await request.delete(`${api}/api/bugs/${bugId}`, { failOnStatusCode: false });
