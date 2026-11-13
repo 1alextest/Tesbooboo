@@ -5423,3 +5423,56 @@ the actual associated Run count, distinguishing no Runs from Runs with no
 execution data. Extend the genuine browser test for both cases and repeat the
 final-head verification. This is an observed same-build UI contradiction, not
 a screenshot reconstruction or a new workflow feature.
+
+### O. Testcase bulk target isolation (2026-11-13, pending verification)
+
+Owner-merged #48 (`4e2de3e`) is the base for this independently justified existing
+writer repair. Its [final-head receipt](https://github.com/1alextest/Tesbooboo/pull/48#issuecomment-6841978564)
+remains separate from this increment's verification. Newly available PR #49's GAE
+living draft explicitly forbids implementation before its owner decisions and
+review gates; it is not the recovered approved orchestration package or authority
+to introduce a revision/publishing/Copilot engine.
+
+**Confirmed mechanism:** REST bulk update/delete authorize the URL project, then
+the shared `bulkUpdateTestCases` / `bulkDeleteTestCases` SQL matched caller-supplied
+testcase IDs without a project predicate. MCP already partitions its IDs before
+calling the shared update writer; that adapter protection did not protect REST.
+Two failing-first actual-service tests selected a foreign row in a mixed selection
+on the old source. Their SQL-selection fixture is not native PostgreSQL or a live
+exploit; the real migrated-DB and genuine-session controls are separately required.
+Potential impact is unauthorized cross-project metadata changes or soft-deletion,
+so this is not an optional generic hardening opportunity or a new Phase 2 feature.
+
+**Bounded contract:** add the authorized project to the actual UPDATE predicate.
+Keep the existing single-statement eligible-row mutation, void REST responses,
+empty-array no-op, missing/deleted-ID filtering, field omission/blank behavior,
+and bulk `suiteId: "none"` sentinel. Foreign IDs now behave like missing IDs; a
+mixed selection may affect only its project-owned active rows. This is not a new
+whole-input validation/rejection policy. MCP's existing per-item outcomes remain
+unchanged. Activity `testcaseIds` comes from `RETURNING id`, so UI counts describe
+actual affected rows (deduplicated by SQL); `requestedCount` separately records
+input size without inserting foreign target IDs into the affected-ID list.
+Existing audit/history rows are not rewritten. Best-effort postcommit activity
+delivery remains F3's separately unaccepted uncertainty, not a new durability claim.
+
+**Existing owners/tests:** `legacy.service.ts` and the two legacy bulk controllers;
+MCP registry adapters remain unchanged. Extend `repository-partial-edits.db.spec.ts`
+(already selected by native DB CI) for mixed/foreign/unknown/deleted/empty input,
+duplicate IDs, exact untouched rows/history, actual activity IDs and PostgreSQL
+statement-level rollback after a late trigger fault. Native access/cache/activity
+collaborators are explicitly stubbed. Extend the existing isolated smoke with a
+tenth journey in `ci-testcase-bulk-scope.ts`: two genuinely separate tenant sessions,
+cookie-free Read/Write bearers, membership/scope refusals, REST/MCP mixed input,
+the existing bulk update/delete modal, controlled refusal/recovery and persisted
+reload. Fixture records and immutable provenance remain until disposable CI
+teardown; synthetic tokens are explicitly revoked.
+
+This scope does not validate Suite/owner association inputs, change sharing or
+entitlement policies, repair historical foreign associations, or certify all
+repository mutations. Source inspection also found Suite-association/deletion
+predicates needing their own bounded reproduction and disposition; they are not
+silently marked repaired by this target-ID fix. No shared-data mutation, deployment,
+agent merge, SDK publication, new orchestration authority or Phase 1 exit.
+Exact-head CI/results and inspected browser captures belong in the implementation
+PR, not an evidence-only commit. Local compilation/unit passes alone are unfinished
+verification; malformed-UUID driver behavior is characterized, not newly redesigned.

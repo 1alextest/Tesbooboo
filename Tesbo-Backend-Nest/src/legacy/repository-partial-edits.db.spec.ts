@@ -16,7 +16,7 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
 
 (enabled ? describe : describe.skip)("repository partial edits — migrated PostgreSQL", () => {
   let setup: Client, pool: Pool;
-  let projectId: string, root: string, nextRoot: string, child: string, testcaseId: string, control: string;
+  let projectId: string, otherProjectId: string, root: string, nextRoot: string, child: string, testcaseId: string, control: string;
   const owner = randomUUID(), otherOwner = randomUUID(), stamp = randomUUID();
   let sequence = 0;
 
@@ -26,6 +26,7 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
     await setup.query("INSERT INTO users (id,email,name) VALUES ($1,$2,'Repository owner'),($3,$4,'New owner')", [owner, `repo-${stamp}@tesbo.invalid`, otherOwner, `repo-other-${stamp}@tesbo.invalid`]);
     const org = (await setup.query<{ id: string }>("INSERT INTO organizations (name,slug) VALUES ('Repository integrity',$1) RETURNING id", [`repo-${stamp}`])).rows[0].id;
     projectId = (await setup.query<{ id: string }>("INSERT INTO projects (organization_id,key,name) VALUES ($1,'REPO','Repository integrity') RETURNING id", [org])).rows[0].id;
+    otherProjectId = (await setup.query<{ id: string }>("INSERT INTO projects (organization_id,key,name) VALUES ($1,'OTHER','Bulk isolation control') RETURNING id", [org])).rows[0].id;
     await setup.query("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'owner'),($1,$3,'qa_engineer')", [projectId, owner, otherOwner]);
     root = await suite("Original parent"); nextRoot = await suite("Concurrent parent");
     control = await seedCase("Unselected control");
@@ -195,5 +196,85 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
     await expect(f.svc.updateTestCase(testcaseId, owner, { status: "Archived", customTagIds: [] })).rejects.toThrow("Controlled custom-tag");
     expect(f.fields).toHaveBeenCalledTimes(1); expect(f.tags).toHaveBeenCalledTimes(1);
     expect(await state()).toEqual(before); expect(f.activity).not.toHaveBeenCalled(); expect(f.embedding).not.toHaveBeenCalled();
+  });
+
+  describe.each(["update", "delete"])("bulk %s SQL project scope", (kind) => {
+    const bulkState = async () => ({
+      cases: (await setup.query("SELECT * FROM testcases WHERE project_id=ANY($1::uuid[]) ORDER BY id", [[projectId, otherProjectId]])).rows,
+      versions: (await setup.query("SELECT v.* FROM testcase_versions v JOIN testcases t ON t.id=v.testcase_id WHERE t.project_id=ANY($1::uuid[]) ORDER BY v.testcase_id,v.version", [[projectId, otherProjectId]])).rows,
+    });
+    async function foreignCase() {
+      return (await setup.query("INSERT INTO testcases (project_id,external_id,title) VALUES ($1,$2,'Foreign bulk control') RETURNING id", [otherProjectId, `FOREIGN-${++sequence}`])).rows[0].id as string;
+    }
+    const invoke = (f: ReturnType<typeof service>, ids: string[]) => kind === "update"
+      ? f.svc.bulkUpdateTestCases(projectId, owner, { testcaseIds: ids, priority: "P0", severity: "High" })
+      : f.svc.bulkDeleteTestCases(projectId, owner, ids);
+
+    it("only changes active project-owned rows in a mixed, duplicated selection; history and activity use actual affected IDs", async () => {
+      const foreign = await foreignCase(), deleted = await seedCase("Previously deleted control");
+      await setup.query("UPDATE testcases SET deleted_at=now() WHERE id=$1", [deleted]);
+      const before = await bulkState(), f = service();
+      await invoke(f, [testcaseId, foreign, deleted, randomUUID(), testcaseId]);
+      const after = await bulkState();
+      for (const row of before.cases) {
+        const actual = after.cases.find((item) => item.id === row.id);
+        if (row.id !== testcaseId) expect(actual).toEqual(row);
+        else expect(actual).toEqual({ ...row, ...(kind === "update" ? { priority: "P0", severity: "High" } : { deleted_at: expect.any(Date), deleted_by: owner }), updated_by: owner, updated_at: expect.any(Date) });
+        const oldHistory = before.versions.filter((version) => version.testcase_id === row.id);
+        const newHistory = after.versions.filter((version) => version.testcase_id === row.id);
+        expect(newHistory.slice(0, oldHistory.length)).toEqual(oldHistory);
+        expect(newHistory).toHaveLength(oldHistory.length + (row.id === testcaseId ? 1 : 0));
+        if (row.id === testcaseId) expect(newHistory.at(-1)).toMatchObject({ changed_by: owner, snapshot: expect.objectContaining({ suite_id: root, owner_id: owner, title: row.title }) });
+      }
+      expect(f.activity.mock.calls[0][6]).toMatchObject({ testcaseIds: [testcaseId], requestedCount: 5 });
+    });
+
+    it.each(["foreign", "unknown", "deleted", "empty"])("keeps %s-only selections as non-disclosing no-ops", async (selection) => {
+      const foreign = await foreignCase();
+      if (selection === "deleted") await setup.query("UPDATE testcases SET deleted_at=now() WHERE id=$1", [testcaseId]);
+      const ids = selection === "foreign" ? [foreign] : selection === "unknown" ? [randomUUID()] : selection === "deleted" ? [testcaseId] : [];
+      const before = await bulkState(), f = service(); await invoke(f, ids);
+      expect(await bulkState()).toEqual(before);
+      if (!ids.length) expect(f.activity).not.toHaveBeenCalled();
+      else expect(f.activity.mock.calls[0][6]).toMatchObject({ testcaseIds: [], requestedCount: 1 });
+    });
+
+    it("does not commit a prefix or produce activity when the existing UUID cast fails", async () => {
+      const before = await bulkState(), f = service();
+      await expect(invoke(f, [testcaseId, "not-a-uuid"])).rejects.toMatchObject({ code: "22P02" });
+      expect(await bulkState()).toEqual(before); expect(f.activity).not.toHaveBeenCalled();
+      expect(f.suitesInvalidation).not.toHaveBeenCalled(); expect(f.casesInvalidation).not.toHaveBeenCalled();
+    });
+
+    it("rolls back the completed SQL statement and its history when an AFTER-statement trigger fails", async () => {
+      const name = `bulk_fault_${randomUUID().replace(/-/g, "")}`;
+      const before = await bulkState(), f = service();
+      // Disposable CI only. The AFTER STATEMENT trigger observes both row/history writes before
+      // raising, so this is a late database fault, not a mock or a post-COMMIT exception.
+      await setup.query(`CREATE FUNCTION ${name}() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM testcase_versions WHERE testcase_id='${testcaseId}'::uuid) THEN
+            RAISE EXCEPTION 'bulk fault did not observe history';
+          END IF;
+          RAISE EXCEPTION 'controlled bulk statement fault';
+        END $$`);
+      await setup.query(`CREATE TRIGGER ${name} AFTER UPDATE ON testcases FOR EACH STATEMENT EXECUTE FUNCTION ${name}()`);
+      try {
+        await expect(invoke(f, [testcaseId, control])).rejects.toMatchObject({ code: "P0001", message: "controlled bulk statement fault" });
+        expect(await bulkState()).toEqual(before); expect(f.activity).not.toHaveBeenCalled();
+        expect(f.suitesInvalidation).not.toHaveBeenCalled(); expect(f.casesInvalidation).not.toHaveBeenCalled();
+      } finally {
+        await setup.query(`DROP TRIGGER ${name} ON testcases`); await setup.query(`DROP FUNCTION ${name}()`);
+      }
+    });
+  });
+
+  it("bulk update keeps blank-field omission and the existing explicit unassign sentinel", async () => {
+    const f = service(), before = await state();
+    await f.svc.bulkUpdateTestCases(projectId, owner, { testcaseIds: [testcaseId], suiteId: "none", priority: "", severity: "" });
+    const after = await state();
+    expect(after.row).toEqual({ ...before.row, suite_id: null, updated_by: owner, updated_at: expect.any(Date) });
+    expect(after.versions).toHaveLength(before.versions.length + 1);
+    unchangedOutsideCase(before, after);
   });
 });

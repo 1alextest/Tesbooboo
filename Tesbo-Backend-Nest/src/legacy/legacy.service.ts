@@ -5946,13 +5946,16 @@ export class LegacyService implements OnModuleInit {
      * to unfiled cases is also the value that makes a case unfiled.
      */
     const clearSuite = String(body.suiteId ?? "").toLowerCase() === "none";
-    await this.db.query(
+    // Authorizing the URL project does not authorize arbitrary IDs in the body. Scope the
+    // actual write too; foreign IDs behave like missing IDs, without changing the bulk API.
+    const updated = await this.db.query<{ id: string }>(
       `UPDATE testcases SET priority=COALESCE($2,priority),
        suite_id = CASE WHEN $8::boolean THEN NULL ELSE COALESCE($3::uuid, suite_id) END,
        status=COALESCE($4,status), owner_id=COALESCE($5,owner_id), automation_status=COALESCE($6,automation_status),
        severity=COALESCE($9,severity),
        updated_by=$7, updated_at=now()
-       WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`,
+       WHERE id = ANY($1::uuid[]) AND project_id = $10 AND deleted_at IS NULL
+       RETURNING id`,
       [
         ids,
         body.priority || null,
@@ -5962,11 +5965,13 @@ export class LegacyService implements OnModuleInit {
         body.automationStatus || null,
         uid,
         clearSuite,
-        body.severity || null
+        body.severity || null,
+        projectId
       ]
     );
     await this.logProjectActivity(projectId, uid, "testcase_bulk_updated", "testcase", null, null, {
-      testcaseIds: ids,
+      testcaseIds: updated.rows.map((row) => row.id),
+      requestedCount: ids.length,
       fields: { priority: body.priority || null, suiteId: body.suiteId || null, status: body.status || null, ownerId: body.ownerId || null, automationStatus: body.automationStatus || null, severity: body.severity || null }
     });
     await this.suitesCache.invalidate(projectId);
@@ -5977,11 +5982,13 @@ export class LegacyService implements OnModuleInit {
     const uid = this.requireUser(actorId);
     await this.requireProjectAccess(uid, projectId);
     if (!ids.length) return;
-    await this.db.query(
-      "UPDATE testcases SET deleted_at = now(), deleted_by = $2, updated_by = $2, updated_at = now() WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL",
-      [ids, uid]
+    const deleted = await this.db.query<{ id: string }>(
+      "UPDATE testcases SET deleted_at = now(), deleted_by = $2, updated_by = $2, updated_at = now() WHERE id = ANY($1::uuid[]) AND project_id = $3 AND deleted_at IS NULL RETURNING id",
+      [ids, uid, projectId]
     );
-    await this.logProjectActivity(projectId, uid, "testcase_bulk_deleted", "testcase", null, null, { testcaseIds: ids });
+    await this.logProjectActivity(projectId, uid, "testcase_bulk_deleted", "testcase", null, null, {
+      testcaseIds: deleted.rows.map((row) => row.id), requestedCount: ids.length
+    });
     await this.suitesCache.invalidate(projectId);
     await this.testcasesListCache.invalidate(projectId);
   }
