@@ -802,7 +802,7 @@ test("Plan and Run references enforce project lineage across HTTP, MCP and the e
   expect(errors).toEqual([]);
 });
 
-test("testcase bulk update/delete only affect their URL project through REST, MCP and the existing UI", async ({ page }, testInfo) => {
+test("testcase bulk writers and Suite removal preserve project isolation through REST, MCP and the existing UI", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
   for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);

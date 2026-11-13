@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expect, request as newRequest, test, type Page, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
 import { hashPasswordForSeed } from "./password";
+import { verifySuiteDeleteScope } from "./ci-suite-delete-scope";
 
 /** Existing bulk API/UI contract on the disposable smoke stack, with a truly separate tenant. */
 export async function verifyTestcaseBulkScope(page: Page, api: string, web: string, projectId: string, ownerId: string, testInfo: TestInfo) {
@@ -153,6 +154,7 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       await expect(page.locator("body")).not.toContainText(foreign.title);
       await testInfo.attach("bulk-activity-counts-actual-project-rows", { body: await page.screenshot(), contentType: "image/png" });
     });
+    await verifySuiteDeleteScope({ page, api, web, db, other, machine, projectId, foreignProject, ownerId, outsider, tokens: tokenByScope, testInfo });
   } finally {
     for (const id of tokens) expect((await page.request.delete(`${base}/apikeys/${id}`)).ok()).toBeTruthy();
     await machine.dispose(); await other.dispose(); await db.end(); // Preserve synthetic history/audit until disposable DB teardown.

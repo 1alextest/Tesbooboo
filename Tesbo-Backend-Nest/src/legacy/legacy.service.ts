@@ -4030,7 +4030,7 @@ export class LegacyService implements OnModuleInit {
        recursive_counts AS (
          SELECT d.root_id, COUNT(t.id)::int AS recursive_test_case_count
          FROM descendants d
-         LEFT JOIN testcases t ON t.suite_id = d.node_id AND t.deleted_at IS NULL
+         LEFT JOIN testcases t ON t.suite_id = d.node_id AND t.project_id = $1 AND t.deleted_at IS NULL
          GROUP BY d.root_id
        )
        SELECT s.id, s.parent_id, s.name, s.description, s.preconditions, s.position, s.created_at,
@@ -4040,7 +4040,7 @@ export class LegacyService implements OnModuleInit {
                 0
               )::int AS recursive_test_case_count
        FROM suites s
-       LEFT JOIN testcases t ON t.suite_id = s.id AND t.deleted_at IS NULL
+       LEFT JOIN testcases t ON t.suite_id = s.id AND t.project_id = s.project_id AND t.deleted_at IS NULL
        WHERE s.project_id = $1 AND s.deleted_at IS NULL
        GROUP BY s.id
        ORDER BY s.position, s.name`,
@@ -4190,17 +4190,19 @@ export class LegacyService implements OnModuleInit {
       // rather than proceeding to update zero rows and reporting success.
       if (!subtreeIds.length) throw new NotFoundException({ error: "Suite not found" });
 
+      // Suite ownership does not establish ownership of every testcase pointing at it.
+      // Preserve foreign historical/inconsistent references without mutating those rows.
       if (mode === "deleteTestcases") {
         await client.query(
           `UPDATE testcases SET deleted_at = now(), deleted_by = $2, updated_by = $2, updated_at = now()
-           WHERE suite_id = ANY($1::uuid[]) AND deleted_at IS NULL`,
-          [subtreeIds, uid]
+           WHERE suite_id = ANY($1::uuid[]) AND project_id = $3 AND deleted_at IS NULL`,
+          [subtreeIds, uid, projectId]
         );
       } else {
         await client.query(
           `UPDATE testcases SET suite_id = NULL, updated_at = now()
-           WHERE suite_id = ANY($1::uuid[]) AND deleted_at IS NULL`,
-          [subtreeIds]
+           WHERE suite_id = ANY($1::uuid[]) AND project_id = $2 AND deleted_at IS NULL`,
+          [subtreeIds, projectId]
         );
       }
       await client.query(
@@ -24829,7 +24831,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   private async projectSuiteSummaries(projectId: string): Promise<Array<{ id: string; name: string; testCaseCount: number }>> {
     const suites = await this.db.query(
       `SELECT s.id, s.name, COUNT(t.id)::int AS test_case_count
-       FROM suites s LEFT JOIN testcases t ON t.suite_id = s.id AND t.deleted_at IS NULL AND COALESCE(t.status,'') <> 'Archived'
+       FROM suites s LEFT JOIN testcases t ON t.suite_id = s.id AND t.project_id = s.project_id AND t.deleted_at IS NULL AND COALESCE(t.status,'') <> 'Archived'
        WHERE s.project_id = $1 AND s.deleted_at IS NULL
        GROUP BY s.id, s.name
        ORDER BY s.position, s.name
