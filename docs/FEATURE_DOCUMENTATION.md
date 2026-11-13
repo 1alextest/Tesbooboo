@@ -5575,3 +5575,62 @@ repair and are not certified safe. No schema, deployment, agent merge, SDK
 publication, canonical auto-publish policy change, independent-review substitute,
 risk acceptance or Phase 1/2 exit. The merged #51 review's approval/source gates
 remain applicable to new governance features.
+
+### S. Existing repository UI deletion and recovery (2026-11-13, review pending)
+
+This is the finite UI/UX batch previously requested by the owner, kept separate
+from PR #54's shared Suite-reference repair and its tested head. Base is
+owner-merged #53. Waiting for #54's human review is not permission to merge it or
+declare Phase 1 complete. This increment changes no backend, schema, transport
+retry policy, publication authority, governance workflow or Copilot system.
+
+**Reproduced before repair:** test-only PR #55 head `ede5f8e` extended the existing
+isolated two-tenant Suite journey with one controlled pre-delivery 403. The actual
+browser showed no inline deletion error, and the attached page-error record
+contained the refusal as an uncaught exception. The decoded report was 9 expected /
+1 unexpected; later deletion/readback steps did not execute. The failure screenshot
+also showed the existing misleading "Default Suite", permanent-erasure and
+descendants "may" be affected wording. The request interception is not evidence
+of a real entitlement transition or server outage; the existing genuine anonymous,
+nonmember and bearer refusals remain separate, unchanged controls.
+
+**Existing owners and behavior:**
+
+- `app/(app)/projects/[id]/testcases/page.tsx` catches deletion failures inside the
+  existing modal, renders an alert and offers a read-only full reload. API errors
+  retain their original wording, including "outcome unconfirmed" after transport
+  loss; no automatic DELETE replay or promise of server rollback is introduced.
+- Opening/closing a dialog clears its prior error. Both delete choices and Cancel
+  remain disabled during the request, including Escape/backdrop close protection.
+- Count and subtree guidance use the existing Suite list/recursive testcase count
+  and a cycle-safe descendant walk. Zero-case copy is distinct. Both options remove
+  every descendant; retained cases become unassigned under the existing "No suites"
+  node. Removed cases leave existing run results and version history intact; no
+  restore capability or physical-erasure guarantee is invented.
+- Successful ancestor deletion clears an active child/grandchild Suite filter.
+  Navigation owns the new list fetch instead of starting one through the deleted
+  child's old closure. Unrelated and "No suites" views keep their context.
+- A confirmed DELETE followed by a failed Suite-list refresh closes the delete
+  modal and shows a separate reload warning. It does not describe the committed
+  deletion as an unconfirmed write or offer to repeat it blindly.
+- Bulk update cannot confirm with every field on "Leave unchanged" (button and
+  handler guard). All bulk form fields are disabled while saving; failures retain
+  selected cases and chosen values. Bulk-delete guidance reflects retained history.
+
+**Verification owners:** extend `ci-suite-delete-scope.ts` and
+`ci-testcase-bulk-scope.ts`, not a parallel fixture/framework. Keep all ten outer
+smoke tests, page-error oracle, 120-second timeout, zero retries and existing
+authorization/foreign-row/history/readback checks. Added journeys cover pending
+controls, 403/cancel/reopen, pre-delivery network loss without replay, both subtree
+deletion modes, empty and deep Suites, no-suite navigation, successful deletion
+with controlled refresh failure, reload recovery, and bulk no-change/refusal/input
+retention. Compare actual PostgreSQL rows/history and capture visible states;
+compilation or synthetic requests alone are not UI acceptance. Exact-head results,
+failed-first evidence and inspected captures belong in PR comments/metadata, not
+evidence-only commits.
+
+Counts/hierarchy are an advisory loaded snapshot, not a concurrency guarantee.
+PR #54 owns assignment-versus-deletion consistency; hierarchy-parent/cycle races,
+historical cleanup, unknown postcommit outcomes, independent security/release
+review, deployed acceptance and the existing F.1/D1–D6 owner decisions remain
+outside this UI repair. No broader Phase 1/2 sign-off is implied.

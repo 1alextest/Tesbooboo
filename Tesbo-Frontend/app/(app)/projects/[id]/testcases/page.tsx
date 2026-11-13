@@ -455,9 +455,12 @@ export default function TestCasesPage() {
   const [bulkAutomationStatus, setBulkAutomationStatus] = useState("Not Automated");
   const [bulkSeverity, setBulkSeverity] = useState("Medium");
   const [bulkTargetSuiteId, setBulkTargetSuiteId] = useState("");
+  const bulkUpdateHasChanges = [bulkStatus, bulkPriority, bulkAutomationStatus, bulkSeverity].some((value) => value !== BULK_NO_CHANGE);
 
   const [deleteSuiteId, setDeleteSuiteId] = useState<string | null>(null);
   const [deleteSuiteSaving, setDeleteSuiteSaving] = useState(false);
+  const [deleteSuiteError, setDeleteSuiteError] = useState<string | null>(null);
+  const [suiteDeleteRefreshFailed, setSuiteDeleteRefreshFailed] = useState(false);
 
   const [isRenameSuiteModalOpen, setIsRenameSuiteModalOpen] = useState(false);
   const [renameSuiteId, setRenameSuiteId] = useState<string | null>(null);
@@ -531,6 +534,7 @@ export default function TestCasesPage() {
     setPageCache(cacheKey, next);
     setSuites(next.suites);
     setRepoSummary(next.repoSummary);
+    setSuiteDeleteRefreshFailed(false);
   }, [projectId, customFieldDefinitions, customTags, cacheKey]);
 
   useEffect(() => {
@@ -576,6 +580,20 @@ export default function TestCasesPage() {
     for (const [key, list] of map) map.set(key, sortSuites(list));
     return map;
   }, [suites]);
+  const deleteSuiteSubtreeIds = useMemo(() => {
+    const ids = new Set<string>();
+    const pending = deleteSuiteId ? [deleteSuiteId] : [];
+    while (pending.length) {
+      const id = pending.pop()!;
+      if (ids.has(id)) continue;
+      ids.add(id);
+      for (const child of childrenBySuiteId.get(id) ?? []) pending.push(child.id);
+    }
+    return ids;
+  }, [deleteSuiteId, childrenBySuiteId]);
+  const suiteToDelete = suites.find((suite) => suite.id === deleteSuiteId);
+  const deleteSuiteDescendantCount = Math.max(0, deleteSuiteSubtreeIds.size - 1);
+  const deleteSuiteCaseCount = suiteToDelete?.recursiveTestCaseCount ?? 0;
   const selectedSuite = useMemo(
     () => suites.find((suite) => suite.id === activeSuiteId) ?? null,
     [suites, activeSuiteId]
@@ -1193,6 +1211,7 @@ export default function TestCasesPage() {
 
   async function handleBulkActionConfirm() {
     if (!bulkAction || selectedCaseIds.length === 0 || bulkSaving) return;
+    if (bulkAction === "update" && !bulkUpdateHasChanges) return;
     setBulkSaving(true);
     setBulkError(null);
     try {
@@ -1339,12 +1358,28 @@ export default function TestCasesPage() {
     }
   }
 
+  function openDeleteSuiteModal(suiteId: string) {
+    setDeleteSuiteError(null);
+    setDeleteSuiteId(suiteId);
+  }
+
+  function closeDeleteSuiteModal() {
+    if (deleteSuiteSaving) return;
+    setDeleteSuiteId(null);
+    setDeleteSuiteError(null);
+  }
+
   async function handleDeleteSuiteConfirm(mode: "deleteTestcases" | "moveToDefault") {
     if (!deleteSuiteId || deleteSuiteSaving) return;
     setDeleteSuiteSaving(true);
+    setDeleteSuiteError(null);
+    setSuiteDeleteRefreshFailed(false);
+    let deletionConfirmed = false;
     try {
       await deleteSuite(deleteSuiteId, mode);
-      if (activeSuiteId === deleteSuiteId) {
+      deletionConfirmed = true;
+      const viewingDeletedSubtree = !!activeSuiteId && deleteSuiteSubtreeIds.has(activeSuiteId);
+      if (viewingDeletedSubtree) {
         router.replace(`/projects/${projectId}/testcases`);
       }
       setDeleteSuiteId(null);
@@ -1353,7 +1388,18 @@ export default function TestCasesPage() {
       // compute. Only the redundant customFieldDefinitions refetch is dropped (a suite delete never
       // touches field definitions).
       await loadSuitesAndSummary();
-      await loadSelectedSuiteCases();
+      // Navigation owns the next list fetch. Do not start another request through the
+      // old closure for a child whose entire subtree was just removed.
+      if (!viewingDeletedSubtree) await loadSelectedSuiteCases();
+    } catch (err) {
+      if (deletionConfirmed) {
+        // DELETE succeeded. Keep the modal closed and never offer a blind repeat of it.
+        setSuiteDeleteRefreshFailed(true);
+      } else {
+        // Preserve the transport's "outcome unconfirmed" wording after response loss;
+        // a rejected promise does not establish that the server rolled back.
+        setDeleteSuiteError(err instanceof Error ? err.message : "Could not confirm suite deletion.");
+      }
     } finally {
       setDeleteSuiteSaving(false);
     }
@@ -1859,7 +1905,7 @@ export default function TestCasesPage() {
                                 title="Delete suite"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setDeleteSuiteId(suite.id);
+                                  openDeleteSuiteModal(suite.id);
                                 }}
                                 className="mr-1 flex h-5 w-5 items-center justify-center rounded text-[var(--error-foreground)] hover:bg-[var(--surface)] hover:opacity-80"
                               >
@@ -1926,7 +1972,7 @@ export default function TestCasesPage() {
                                         title="Delete suite"
                                         onClick={(e) => {
                                           e.stopPropagation();
-                                          setDeleteSuiteId(child.id);
+                                          openDeleteSuiteModal(child.id);
                                         }}
                                         className="flex h-5 w-5 items-center justify-center rounded text-[var(--error-foreground)] hover:bg-[var(--surface)] hover:opacity-80"
                                       >
@@ -2229,6 +2275,12 @@ export default function TestCasesPage() {
                 )}
 
                 {/* Content */}
+                {suiteDeleteRefreshFailed && (
+                  <div role="alert" className="mx-4 mt-3 rounded-lg border border-[var(--warning)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--warning-foreground)]">
+                    <p>Suite deleted, but the repository could not be refreshed. Reload to see its current state.</p>
+                    <Button variant="secondary" className="mt-2" onClick={() => window.location.reload()}>Reload repository</Button>
+                  </div>
+                )}
                 {suiteCasesError ? (
                   <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-4 text-sm text-[var(--error-foreground)]">
                     <p>{suiteCasesError}</p>
@@ -2958,16 +3010,21 @@ export default function TestCasesPage() {
       {/* ── Delete Suite Modal ── */}
       <Modal
         open={!!deleteSuiteId}
-        onClose={() => { if (!deleteSuiteSaving) setDeleteSuiteId(null); }}
+        onClose={closeDeleteSuiteModal}
         title="Delete suite"
       >
         <p className="text-sm text-[var(--muted)]">
-          This suite contains test cases. What would you like to do with them?
+          Delete &ldquo;{suiteToDelete?.name ?? "this suite"}&rdquo;?
         </p>
-        {deleteSuiteId && (childrenBySuiteId.get(deleteSuiteId)?.length ?? 0) > 0 && (
+        <p className="mt-2 text-sm text-[var(--muted)]">
+          {deleteSuiteCaseCount === 0
+            ? `No test cases are currently assigned to this suite${deleteSuiteDescendantCount ? " or its sub-suites" : ""}.`
+            : `${deleteSuiteCaseCount} test case${deleteSuiteCaseCount === 1 ? " is" : "s are"} currently assigned to this suite${deleteSuiteDescendantCount ? " and its sub-suites" : ""}.`}
+        </p>
+        {deleteSuiteDescendantCount > 0 && (
           <p className="mt-2 rounded-lg border border-[var(--warning)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--warning-foreground)]">
-            This suite has {childrenBySuiteId.get(deleteSuiteId)?.length} sub-suite
-            {childrenBySuiteId.get(deleteSuiteId)?.length === 1 ? "" : "s"}. Deleting it may affect those too.
+            Both options delete this suite and its {deleteSuiteDescendantCount} sub-suite
+            {deleteSuiteDescendantCount === 1 ? "" : "s"}, including any nested suites.
           </p>
         )}
         <div className="mt-5 flex flex-col gap-3">
@@ -2978,7 +3035,7 @@ export default function TestCasesPage() {
             className="w-full rounded-lg border border-[var(--border)] px-4 py-3 text-left hover:bg-[var(--surface-secondary)] disabled:opacity-50"
           >
             <span className="block text-sm font-medium text-[var(--foreground)]">Delete suite only</span>
-            <span className="mt-0.5 block text-xs text-[var(--muted)]">Move all test cases to the Default Suite</span>
+            <span className="mt-0.5 block text-xs text-[var(--muted)]">Keep all test cases from this suite and its sub-suites, unassigned under &ldquo;No suites&rdquo;.</span>
           </button>
           <button
             type="button"
@@ -2987,16 +3044,23 @@ export default function TestCasesPage() {
             className="w-full rounded-lg border border-[var(--error)] px-4 py-3 text-left hover:bg-[var(--surface-secondary)] disabled:opacity-50"
           >
             <span className="block text-sm font-medium text-[var(--error-foreground)]">Delete suite and all test cases</span>
-            <span className="mt-0.5 block text-xs text-[var(--muted)]">Permanently delete the suite and all its test cases</span>
+            <span className="mt-0.5 block text-xs text-[var(--muted)]">Remove test cases in this suite and every sub-suite from the repository.</span>
           </button>
         </div>
+        <p className="mt-3 text-xs text-[var(--muted)]">Existing run results and test case version history are retained.</p>
+        {deleteSuiteError && (
+          <div role="alert" className="mt-3 rounded-lg border border-[var(--error)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--error-foreground)]">
+            <p>{deleteSuiteError}</p>
+            <Button variant="secondary" className="mt-2" onClick={() => window.location.reload()}>Reload repository</Button>
+          </div>
+        )}
         {deleteSuiteSaving && (
           <p className="mt-3 text-xs text-[var(--muted)]">Processing...</p>
         )}
         <div className="mt-4 flex justify-end">
           <Button
             variant="secondary"
-            onClick={() => { if (!deleteSuiteSaving) setDeleteSuiteId(null); }}
+            onClick={closeDeleteSuiteModal}
             disabled={deleteSuiteSaving}
           >
             Cancel
@@ -3019,6 +3083,7 @@ export default function TestCasesPage() {
           <FieldLabel>Action</FieldLabel>
           <Select
             value={bulkAction}
+            disabled={bulkSaving}
             onChange={(e) => setBulkAction(e.target.value as BulkAction)}
           >
             <option value="">Select an action…</option>
@@ -3034,6 +3099,7 @@ export default function TestCasesPage() {
             <FieldLabel>Target suite</FieldLabel>
             <Select
               value={bulkTargetSuiteId}
+              disabled={bulkSaving}
               onChange={(e) => setBulkTargetSuiteId(e.target.value)}
             >
               <option value="">Unassigned (no suite)</option>
@@ -3049,28 +3115,28 @@ export default function TestCasesPage() {
           <div className="mt-4 grid grid-cols-2 gap-3">
             <Field>
               <FieldLabel>Status</FieldLabel>
-              <Select value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)}>
+              <Select value={bulkStatus} disabled={bulkSaving} onChange={(e) => setBulkStatus(e.target.value)}>
                 <option value={BULK_NO_CHANGE}>Leave unchanged</option>
                 {TESTCASE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
               </Select>
             </Field>
             <Field>
               <FieldLabel>Priority</FieldLabel>
-              <Select value={bulkPriority} onChange={(e) => setBulkPriority(e.target.value)}>
+              <Select value={bulkPriority} disabled={bulkSaving} onChange={(e) => setBulkPriority(e.target.value)}>
                 <option value={BULK_NO_CHANGE}>Leave unchanged</option>
                 {TESTCASE_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
               </Select>
             </Field>
             <Field>
               <FieldLabel>Automation Type</FieldLabel>
-              <Select value={bulkAutomationStatus} onChange={(e) => setBulkAutomationStatus(e.target.value)}>
+              <Select value={bulkAutomationStatus} disabled={bulkSaving} onChange={(e) => setBulkAutomationStatus(e.target.value)}>
                 <option value={BULK_NO_CHANGE}>Leave unchanged</option>
                 {TESTCASE_AUTOMATION_TYPES.map((a) => <option key={a} value={a}>{a}</option>)}
               </Select>
             </Field>
             <Field>
               <FieldLabel>Severity</FieldLabel>
-              <Select value={bulkSeverity} onChange={(e) => setBulkSeverity(e.target.value)}>
+              <Select value={bulkSeverity} disabled={bulkSaving} onChange={(e) => setBulkSeverity(e.target.value)}>
                 <option value={BULK_NO_CHANGE}>Leave unchanged</option>
                 {TESTCASE_SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
               </Select>
@@ -3080,6 +3146,7 @@ export default function TestCasesPage() {
             Only the fields you change are applied — anything left on &ldquo;Leave unchanged&rdquo; keeps its
             current value on every selected test case.
           </p>
+          {!bulkUpdateHasChanges && <p className="mt-2 text-xs text-[var(--muted)]">Choose at least one field to update.</p>}
           </>
         )}
 
@@ -3091,12 +3158,12 @@ export default function TestCasesPage() {
 
         {bulkAction === "delete" && (
           <p className="mt-4 rounded-lg border border-[var(--error)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--error-foreground)]">
-            This permanently deletes the selected test cases. This action cannot be undone.
+            Remove the selected test cases from the repository. Existing run results and test case version history are retained.
           </p>
         )}
 
         {bulkError && (
-          <p className="mt-3 rounded-lg border border-[var(--error)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--error-foreground)]">
+          <p role="alert" className="mt-3 rounded-lg border border-[var(--error)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--error-foreground)]">
             {bulkError}
           </p>
         )}
@@ -3108,7 +3175,7 @@ export default function TestCasesPage() {
           <Button
             variant={bulkAction === "delete" ? "destructive" : "primary"}
             onClick={() => void handleBulkActionConfirm()}
-            disabled={!bulkAction || bulkSaving}
+            disabled={!bulkAction || bulkSaving || selectedCaseIds.length === 0 || (bulkAction === "update" && !bulkUpdateHasChanges)}
           >
             {bulkSaving ? "Applying..." : "Confirm"}
           </Button>

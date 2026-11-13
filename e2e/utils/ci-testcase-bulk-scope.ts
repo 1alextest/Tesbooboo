@@ -106,12 +106,27 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       await page.getByRole("button", { name: "Bulk actions", exact: true }).click();
       const modal = page.getByRole("heading", { name: "Bulk actions", exact: true }).locator("..");
       await modal.locator("select").filter({ has: page.locator('option[value="update"]') }).selectOption("update");
-      await modal.locator("select").filter({ has: page.locator('option[value="P0"]') }).selectOption("P0");
+      const priority = modal.locator("select").filter({ has: page.locator('option[value="P0"]') });
+      await expect(modal.getByRole("button", { name: "Confirm", exact: true })).toBeDisabled();
+      await expect(modal).toContainText("Choose at least one field to update.");
+      await testInfo.attach("bulk-update-no-changes-cannot-confirm", { body: await page.screenshot(), contentType: "image/png" });
+      await priority.selectOption("P0"); await expect(modal.getByRole("button", { name: "Confirm", exact: true })).toBeEnabled();
+      await priority.selectOption(""); await expect(modal.getByRole("button", { name: "Confirm", exact: true })).toBeDisabled();
+      await priority.selectOption("P0");
       const before = await state();
       // One controlled pre-delivery 403, not a real entitlement transition or backend outage.
-      await page.route(endpoint("update"), async (route) => route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "CI controlled bulk refusal" }) }), { times: 1 });
-      await modal.getByRole("button", { name: "Confirm", exact: true }).click();
+      let release!: () => void, reached!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; }), intercepted = new Promise<void>((resolve) => { reached = resolve; });
+      await page.route(endpoint("update"), async (route) => { reached(); await gate; await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "CI controlled bulk refusal" }) }); }, { times: 1 });
+      try {
+        await modal.getByRole("button", { name: "Confirm", exact: true }).click(); await intercepted;
+        for (const field of await modal.locator("select").all()) await expect(field).toBeDisabled();
+        await expect(modal.getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
+      } finally { release(); }
       await expect(modal.getByText("CI controlled bulk refusal", { exact: true })).toBeVisible(); expect(await state()).toEqual(before);
+      await expect(priority).toHaveValue("P0"); await expect(modal).toContainText("2 test cases selected");
+      for (const field of await modal.locator("select").all()) await expect(field).toBeEnabled();
+      await testInfo.attach("bulk-refusal-keeps-input-and-selection", { body: await page.screenshot(), contentType: "image/png" });
       const saved = page.waitForResponse((response) => response.url() === endpoint("update") && response.request().method() === "POST");
       await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await saved).ok()).toBeTruthy();
       await expect(modal).toBeHidden();
@@ -134,6 +149,9 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       await page.getByRole("button", { name: "Bulk actions", exact: true }).click();
       const modal = page.getByRole("heading", { name: "Bulk actions", exact: true }).locator("..");
       await modal.locator("select").selectOption("delete");
+      await expect(modal).toContainText("Existing run results and test case version history are retained.");
+      await expect(modal).not.toContainText(/permanently deletes/i);
+      await testInfo.attach("bulk-delete-truthful-history-guidance", { body: await page.screenshot(), contentType: "image/png" });
       const saved = page.waitForResponse((item) => item.url() === endpoint("delete") && item.request().method() === "POST");
       await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await saved).ok()).toBeTruthy();
       await expect(modal).toBeHidden(); await page.reload();
