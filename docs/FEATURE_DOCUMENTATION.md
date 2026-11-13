@@ -5158,7 +5158,7 @@ PR. No SDK publication, deployment, agent merge, independent human review, risk
 acceptance or Phase 1/2 exit is implied. Canonical specification/baseline recovery,
 owner F2/F3/F6–F8 dispositions and disclosed moderate/low findings remain open.
 
-### L. Review Board and API/MCP onboarding UI accuracy (2026-11-12, pending review)
+### M. Review Board and API/MCP onboarding UI accuracy (2026-11-12, pending review)
 
 Two narrowly scoped presentation changes preserve existing routes, roles, token issuance,
 MCP contracts and Playwright reporting; neither is a new agent or repository subsystem.
@@ -5178,11 +5178,20 @@ MCP contracts and Playwright reporting; neither is a new agent or repository sub
   be retrieved after creation. Config examples use placeholders or OpenCode's
   environment-variable substitution.
 - OpenCode's documented remote MCP V2 configuration extends the existing
-  Claude/generic onboarding tab set. A manual connection diagnostic invokes
-  only JSON-RPC `tools/list` on the configured project-scoped URL using the
-  user-supplied temporary bearer token. A reported success establishes endpoint
-  reachability, project access, and tool discovery only, not write authorization,
-  reporter delivery, or an external deployment's whole-client compatibility.
+  Claude/generic onboarding tab set (`mcp.servers`, remote type, `oauth: false`,
+  environment-substituted bearer header). Official references:
+  https://opencode.ai/docs/mcp-servers and https://opencode.ai/docs/config.
+  This is documentation-verified syntax, not a live external-client certification.
+- The manual connection diagnostic uses only JSON-RPC `tools/list` and the
+  read-only `list_projects` query on the configured project-scoped URL. Success
+  requires a matching returned project ID and a successful Read-scoped query.
+  Discovery alone advertises all 50 tools regardless of token scopes and cannot
+  certify writes. No write permission or reporter delivery is tested. The
+  submitted token is cleared on either outcome; requests omit cookies, refuse
+  redirects and share a 10-second deadline. Unmount/project changes cancel the
+  check. HTTP, JSON-RPC, malformed-response and network failures fail closed
+  without displaying raw remote error text. Token last-used bookkeeping can
+  update; authored project records are not intentionally mutated.
 - `API_BASE` is the configured `NEXT_PUBLIC_API_URL` (or local fallback).
   App and API hosts can coincide behind a reverse proxy, so the UI no longer
   asserts they must differ. The project breadcrumb is derived from the
@@ -5190,8 +5199,19 @@ MCP contracts and Playwright reporting; neither is a new agent or repository sub
   selector; the DMIS/Nesberry screenshot alone is not proof of cross-project
   leakage. No speculative routing mutation was made.
 
+Implementation owners are the existing ReviewBoard component/review-board API
+and worker (#45), token settings page/API token service/MCP controller and tool
+registry (#46); tests extend `ci-review-board-ui.ts`, the existing
+`ci-repository-partial-edits.ts` token journey, and the frontend Node regression
+step. No new test framework or integration subsystem is introduced. Existing
+reporter configuration and server scope defaults/contracts are unchanged; only
+new tokens created in this UI require deliberate Write opt-in. Pending creation
+cannot be dismissed by Escape/backdrop before its one-time reveal.
+
 The PRs must independently pass latest-head CI and review before merging.
-Browser CORS reachability, actual one-time secret exposure semantics and the
-new connection diagnostic's deployed behavior need verification on an authorized
-environment. No credential, deployment, schema, authorization policy or
-Phase 2 approval is introduced.
+Browser tests cover isolated genuine issuance, read/write use, denial/revocation,
+diagnostic/config/credential clearing and unchanged domain records. Controlled
+malformed/network fixtures and unit timeout/cancellation checks are not real
+provider outages. Deployed CORS/routing and actual OpenCode/reporter-client
+compatibility still need authorized environment verification. No credential,
+deployment, schema, authorization policy or Phase 2 approval is introduced.

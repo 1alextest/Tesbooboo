@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useParams } from "@/lib/routeParams";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { IconKey } from "@tabler/icons-react";
 import {
   API_BASE,
@@ -18,6 +18,7 @@ import { PageHeader, StandardPageLayout, Breadcrumbs } from "@/components/workfl
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
 import { formatDate as formatDateShared } from "@/lib/date";
+import { checkMcpConnection } from "@/lib/mcpConnectionCheck";
 
 type ConnectTab = "claudeCode" | "claudeDesktop" | "opencode" | "other";
 
@@ -193,6 +194,7 @@ export default function ApiTokensPage() {
 
   async function handleCreateToken(e: FormEvent) {
     e.preventDefault();
+    if (creating) return;
     const name = newTokenName.trim();
     if (!name) {
       setCreateError("Name is required.");
@@ -243,7 +245,7 @@ export default function ApiTokensPage() {
   }
 
   function closeCreateModal() {
-    if (createStep === "reveal") return;
+    if (creating || createStep === "reveal") return;
     setCreateModalOpen(false);
   }
 
@@ -521,7 +523,7 @@ export default defineConfig({
         {connectTab === "opencode" && (
           <div className="space-y-3">
             <p className="text-sm text-[var(--muted)]">
-              Add this to <code className="font-mono">opencode.jsonc</code> in your project.
+              Merge this server entry into <code className="font-mono">opencode.jsonc</code> in your project, preserving other settings.
               Set <code className="font-mono">TESBO_API_TOKEN</code> in your local environment or secrets manager, not in source control.
             </p>
             <div className="relative">
@@ -577,7 +579,7 @@ export default defineConfig({
         )}
       </Card>
 
-      <McpConnectionCheck mcpUrl={mcpUrl} projectName={projectName || projectId} />
+      <McpConnectionCheck key={`${projectId}:${mcpUrl}`} mcpUrl={mcpUrl} projectId={projectId} projectName={projectName || projectId} />
 
       <Card className="p-4 space-y-4">
         <div>
@@ -616,17 +618,12 @@ export default defineConfig({
             <div className="flex items-start gap-3 px-3 py-2">
               <div className="min-w-0 flex-1">
                 <code className="font-mono text-xs text-[var(--foreground)]">TESBO_API_TOKEN</code>
-                {revealedToken ? (
-                  <p className="mt-0.5 break-all font-mono text-xs text-[var(--muted)]">{revealedToken.token}</p>
-                ) : (
-                  <p className="mt-0.5 text-xs text-[var(--muted)]">
-                    Create a token above with <strong>Read</strong> and <strong>Write</strong>. It is shown only
-                    once, so keep it in your CI secrets — never in{" "}
-                    <code className="font-mono">playwright.config.ts</code>.
-                  </p>
-                )}
+                <p className="mt-0.5 text-xs text-[var(--muted)]">
+                  Create a token above with <strong>Read</strong> and <strong>Write</strong>. It is shown only
+                  once, so keep it in your CI secrets — never in{" "}
+                  <code className="font-mono">playwright.config.ts</code>.
+                </p>
               </div>
-              {revealedToken && <CopyButton value={revealedToken.token} iconOnly />}
             </div>
           </div>
         </div>
@@ -759,7 +756,7 @@ export default defineConfig({
               <CopyButton value={revealedToken.token} label="Copy" />
             </div>
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              This is the only time you&apos;ll see this token. Copy it now — for example, paste it directly into the connection instructions below.
+              This is the only time you&apos;ll see this token. Copy it now into your secrets manager or CI secrets, never into source control.
             </div>
             <div className="flex justify-end">
               <Button type="button" onClick={finishReveal}>
@@ -777,57 +774,43 @@ export default defineConfig({
  * A read-only, user-triggered diagnostic. It never persists credentials, invokes a write
  * tool, creates server tokens, or claims that downstream writes/reporting were tested.
  */
-function McpConnectionCheck({ mcpUrl, projectName }: { mcpUrl: string; projectName: string }) {
+function McpConnectionCheck({ mcpUrl, projectId, projectName }: { mcpUrl: string; projectId: string; projectName: string }) {
   const [token, setToken] = useState("");
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const activeCheck = useRef<AbortController | null>(null);
+
+  useEffect(() => () => {
+    activeCheck.current?.abort();
+    activeCheck.current = null;
+  }, []);
 
   async function checkConnection() {
     const candidate = token.trim();
-    if (!candidate || checking) return;
+    if (!candidate || activeCheck.current) return;
+    const controller = new AbortController();
+    activeCheck.current = controller;
+    setToken("");
     setChecking(true);
     setResult(null);
     try {
-      const response = await fetch(mcpUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${candidate}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
-        cache: "no-store",
-      });
-      if (!response.ok) {
-        throw new Error(
-          response.status === 401 || response.status === 403
-            ? "Token was rejected or does not have access to this project."
-            : `API endpoint returned HTTP ${response.status}. Check the configured API URL.`
-        );
-      }
-      const payload: unknown = await response.json();
-      const tools = (
-        payload && typeof payload === "object" && "result" in payload &&
-        payload.result && typeof payload.result === "object" &&
-        "tools" in payload.result
-      ) ? payload.result.tools : null;
-      if (!Array.isArray(tools)) {
-        throw new Error("Endpoint did not return an MCP tools list.");
-      }
+      const toolCount = await checkMcpConnection(mcpUrl, projectId, candidate, controller.signal);
+      if (activeCheck.current !== controller) return;
       setResult({
         ok: true,
-        message: `Connected to ${projectName}: ${tools.length} MCP tools advertised. This verifies project access and discovery, not write permissions or reporting.`,
+        message: `Connected to ${projectName}: Read permission and project identity verified; ${toolCount} MCP tools advertised. Discovery includes write tools regardless of token scope. Write permissions and reporting were not tested.`,
       });
-      setToken("");
     } catch (error) {
+      if (activeCheck.current !== controller) return;
       setResult({
         ok: false,
-        message: error instanceof Error && error.message !== "Failed to fetch"
-          ? error.message
-          : "Connection could not be verified from this browser. Check API URL, network/CORS, and token; or run opencode mcp list.",
+        message: error instanceof Error ? error.message : "Connection could not be verified.",
       });
     } finally {
-      setChecking(false);
+      if (activeCheck.current === controller) {
+        activeCheck.current = null;
+        setChecking(false);
+      }
     }
   }
 
@@ -836,7 +819,7 @@ function McpConnectionCheck({ mcpUrl, projectName }: { mcpUrl: string; projectNa
       <div>
         <h2 className="text-base font-semibold text-[var(--foreground)]">Check MCP connection</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Verify this project&apos;s endpoint and token using read-only tool discovery. The token is held in this page only during the check and is not saved.
+          Verify discovery and Read permission with a read-only project query. The submitted token is cleared from the input and not saved. The check stops after 10 seconds; it never tests writes or reporter delivery.
         </p>
       </div>
       <p className="break-all font-mono text-xs text-[var(--muted)]">{mcpUrl}</p>
