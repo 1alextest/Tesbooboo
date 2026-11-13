@@ -47,6 +47,22 @@ export async function verifySuiteDeleteScope(ctx: {
       await testInfo.attach(`suite-${mode}-local-only-count`, { body: await page.screenshot(), contentType: "image/png" });
       await rootRow.hover(); await rootRow.getByTitle("Delete suite", { exact: true }).click();
       const modal = page.getByRole("heading", { name: "Delete suite", exact: true }).locator("..");
+      if (mode === "moveToDefault") {
+        const pageErrors: string[] = [], recordError = (error: Error) => pageErrors.push(error.message);
+        page.on("pageerror", recordError);
+        try {
+          // Controlled pre-delivery refusal, not a real entitlement change or outage. The
+          // anonymous/nonmember/bearer controls above still exercise genuine server refusals.
+          await page.route((url) => url.href.startsWith(`${api}/api/suites/${root.id}?`), (route) => route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "CI controlled Suite deletion refusal" }) }), { times: 1 });
+          await modal.getByRole("button", { name: /^Delete suite only/ }).click();
+          await expect(modal.getByRole("alert")).toContainText("CI controlled Suite deletion refusal");
+          expect(await state()).toEqual(before); await expect(modal.getByRole("button", { name: /^Delete suite only/ })).toBeEnabled();
+        } finally {
+          await testInfo.attach("suite-delete-refusal-visible-recovery", { body: await page.screenshot(), contentType: "image/png" });
+          await testInfo.attach("suite-delete-refusal-page-errors", { body: JSON.stringify(pageErrors), contentType: "application/json" });
+          page.off("pageerror", recordError);
+        }
+      }
       const saved = page.waitForResponse((response) => response.url().startsWith(`${api}/api/suites/${root.id}?`) && response.request().method() === "DELETE");
       await modal.getByRole("button", { name: mode === "moveToDefault" ? /^Delete suite only/ : /^Delete suite and all test cases/ }).click();
       const response = await saved; expect(response.ok(), await response.text()).toBeTruthy(); await expect(modal).toBeHidden();
