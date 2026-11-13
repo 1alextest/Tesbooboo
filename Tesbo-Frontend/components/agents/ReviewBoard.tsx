@@ -229,18 +229,22 @@ function ReviewWorkspace({ projectId }: { projectId: string }) {
   const checkedCases = analysis?.testcasesAnalyzed;
   const emptyTitle = !neverFound
     ? `Nothing in “${FILTERS.find((f) => f.key === filter)?.label}”`
-    : checkedCases === 0
-      ? "No test cases were checked"
-      : checkedCases === 1
-        ? "At least two test cases are needed"
-        : "No duplicate or similar test cases found";
+    : checkedCases == null
+      ? "Analysis coverage unavailable"
+      : checkedCases === 0
+        ? "No test cases were checked"
+        : checkedCases === 1
+          ? "At least two test cases are needed"
+          : "No duplicate or similar test cases found";
   const emptyDescription = !neverFound
     ? "Use the tabs above to look at the other groups."
-    : checkedCases === 0
-      ? "This analysis compared no test cases. Confirm the project and add or update test cases before analysing again."
-      : checkedCases === 1
-        ? "Only one test case was checked, so a similarity comparison could not be made."
-        : "No duplicate or similar pairs were identified among the cases checked. Analyse again after changing test cases.";
+    : checkedCases == null
+      ? "The previous analysis did not report how many cases were compared. Analyse again to verify coverage."
+      : checkedCases === 0
+        ? "This analysis compared no test cases. Confirm the project and add or update test cases before analysing again."
+        : checkedCases === 1
+          ? "Only one test case was checked, so a similarity comparison could not be made."
+          : "No duplicate or similar pairs were identified among the cases checked. Analyse again after changing test cases.";
   const busyRun = starting || active;
 
   return (
