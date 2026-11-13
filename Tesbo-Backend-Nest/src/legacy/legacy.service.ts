@@ -6566,10 +6566,13 @@ export class LegacyService implements OnModuleInit {
   }
 
   async publicCycle(token: string) {
+    // Publish only the eight owner-approved fields rendered by the existing share page.
+    // Never select the full internal Run: new columns must not become public by default.
     // deleted_at IS NULL: a soft-deleted run's public share link must go dead, not keep resolving
     // to a "deleted" run forever (hard-delete remediation Phase 1).
     const res = await this.db.query(
-      "SELECT * FROM cycles WHERE share_token = $1 AND share_enabled = true AND deleted_at IS NULL",
+      `SELECT name, status, description, environment, build_version, created_at, started_at, ended_at
+       FROM cycles WHERE share_token = $1 AND share_enabled = true AND deleted_at IS NULL`,
       [token]
     );
     if (!res.rows[0]) throw new NotFoundException({ error: "Shared run not found" });
