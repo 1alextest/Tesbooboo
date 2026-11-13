@@ -277,4 +277,36 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
     expect(after.versions).toHaveLength(before.versions.length + 1);
     unchangedOutsideCase(before, after);
   });
+
+  it("authorized bulk-create retains two-row persistence, fields, attribution and unselected history", async () => {
+    const f = service(), before = await state();
+    const result = await f.svc.bulkCreateTestCases(projectId, owner, { testcases: [
+      { title: "Native bulk first", externalId: `NB-${randomUUID().slice(0, 8)}`, suiteId: root, priority: "P0", customFieldValues: { retained: "value" } },
+      { title: "Native bulk second", externalId: `NB-${randomUUID().slice(0, 8)}`, suiteId: nextRoot, priority: "P1" },
+    ] });
+    expect(result.createdCount).toBe(2); expect(result.created).toHaveLength(2);
+    expect(result.created.map((row) => row.title).sort()).toEqual(["Native bulk first", "Native bulk second"]);
+    const rows = (await setup.query("SELECT * FROM testcases WHERE id=ANY($1::uuid[]) ORDER BY title", [result.created.map((row) => row.id)])).rows;
+    expect(rows.map((row) => [row.suite_id, row.priority, row.created_by, row.updated_by])).toEqual([[root, "P0", owner, owner], [nextRoot, "P1", owner, owner]]);
+    expect(f.fields).toHaveBeenCalledTimes(1); expect(f.activity).toHaveBeenCalledTimes(1);
+    expect(await state()).toEqual(before);
+  });
+
+  it("rolls back the completed native bulk INSERT if the later custom-field collaborator refuses", async () => {
+    const f = service(), before = (await setup.query("SELECT * FROM testcases WHERE project_id=$1 ORDER BY id", [projectId])).rows;
+    f.fields.mockRejectedValueOnce(new Error("Controlled bulk-create field fault"));
+    await expect(f.svc.bulkCreateTestCases(projectId, owner, { testcases: [
+      { title: "Must roll back first", suiteId: root, customFieldValues: { late: true } }, { title: "Must roll back second" },
+    ] })).rejects.toThrow("Controlled bulk-create field fault");
+    expect(f.fields).toHaveBeenCalledTimes(1); expect(f.activity).not.toHaveBeenCalled();
+    expect(f.suitesInvalidation).not.toHaveBeenCalled(); expect(f.casesInvalidation).not.toHaveBeenCalled();
+    expect((await setup.query("SELECT * FROM testcases WHERE project_id=$1 ORDER BY id", [projectId])).rows).toEqual(before);
+  });
+
+  it("authorized empty bulk-create remains a write/effect-free response", async () => {
+    const f = service(), before = await state();
+    expect(await f.svc.bulkCreateTestCases(projectId, owner, { testcases: [] })).toEqual({ created: [], createdCount: 0 });
+    expect(await state()).toEqual(before); expect(f.activity).not.toHaveBeenCalled(); expect(f.fields).not.toHaveBeenCalled();
+    expect(f.suitesInvalidation).not.toHaveBeenCalled(); expect(f.casesInvalidation).not.toHaveBeenCalled();
+  });
 });

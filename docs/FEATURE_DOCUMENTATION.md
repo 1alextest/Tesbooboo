@@ -5527,3 +5527,51 @@ Final native/browser execution and capture review require the exact PR head;
 local unit/build checks alone do not complete verification. Receipts belong in
 PR metadata/comments. No agent merge/readiness action, shared data mutation,
 deployment, SDK publication, risk waiver or Phase 1/2 sign-off.
+
+### Q. REST testcase bulk-create project access (2026-11-13, pending verification)
+
+Base is owner-merged #52, `development@6781937`. While examining the remaining
+testcase/Suite-assignment seam, the actual REST bulk-create writer exposed a more
+direct authorization defect: `bulkCreateTestCases` required a signed-in actor but
+did not call `requireProjectAccess` for its target project. The controller directly
+calls this writer; browser requests do not inherit the bearer-only REST guard's
+membership check. A bulk-create request could therefore insert cases into a
+project the signed-in actor could not access. This is a bounded existing writer
+repair, not an approved new orchestration capability.
+
+Ten tests extend the existing real Nest controller/service/guard HTTP suite.
+The failing-first selection had seven failures: an ordinary nonmember batch
+returned 201, an empty one returned 201, invalid fields returned validation rather
+than authorization refusal, and permitted browser paths never checked access.
+Anonymous and bearer controls already worked. SQL/principals are explicit fixtures
+in that HTTP suite, not proof of a production exploit or genuine cookies/DB.
+
+**One-line production repair:** reuse `requireProjectAccess(uid, projectId)`
+immediately after `requireUser`, before batch parsing, empty returns, validation,
+allocation or transaction work. Preserve valid-member batch shape/fields/actor,
+500-row limit, existing empty response, atomic insertion and current custom-field
+collaboration. MCP `bulk_create_testcases` deliberately creates individual cases
+through a different existing writer; do not redirect it or change its per-item
+contract to claim coverage of this REST batch path. No new permission framework.
+
+Native verification extends existing `repository-partial-edits.db.spec.ts` with
+three cases for actual two-row insertion/attribution, late collaborator failure
+after INSERT with full rollback, and authorized empty-batch no effects. Access,
+cache and custom-field collaborators are explicitly stubbed there. Existing
+two-tenant smoke extends its genuine REST session/bearer refusals, including
+ordinary/empty/malformed nonmember batches and both tenant directions. It compares
+complete project case/history/audit populations before refusal and verifies real
+member-session/Write-token batch persistence plus repository browser reload.
+There is no current UI caller of `bulkCreateTestCases` beyond its exported API
+helper; this proves HTTP-created data displayed by the existing UI, not a new
+bulk-create form. Keep every previous smoke assertion, ten outer cases and all
+required native suites. Tokens revoked; provenance retained until CI teardown.
+
+Local full focused selection passes 223/223; build/typecheck/frozen lint checks
+and exact-head native/browser execution remain separately reported in PR metadata.
+Do not substitute local passes for connected execution. Suite/owner reference
+validation and arbitrary foreign display joins remain outside this authorization
+repair and are not certified safe. No schema, deployment, agent merge, SDK
+publication, canonical auto-publish policy change, independent-review substitute,
+risk acceptance or Phase 1/2 exit. The merged #51 review's approval/source gates
+remain applicable to new governance features.

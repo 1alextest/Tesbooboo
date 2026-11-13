@@ -154,6 +154,52 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       await expect(page.locator("body")).not.toContainText(foreign.title);
       await testInfo.attach("bulk-activity-counts-actual-project-rows", { body: await page.screenshot(), contentType: "image/png" });
     });
+    await test.step("REST bulk-create checks real project access before empty/invalid payloads and preserves valid persisted batches", async () => {
+      const fullState = async () => ({
+        cases: (await db.query("SELECT * FROM testcases WHERE project_id=ANY($1::uuid[]) ORDER BY id", [[projectId, foreignProject]])).rows,
+        history: (await db.query("SELECT v.* FROM testcase_versions v JOIN testcases t ON t.id=v.testcase_id WHERE t.project_id=ANY($1::uuid[]) ORDER BY v.testcase_id,v.version", [[projectId, foreignProject]])).rows,
+        audit: (await db.query("SELECT * FROM audit_logs WHERE project_id=ANY($1::uuid[]) ORDER BY id", [[projectId, foreignProject]])).rows,
+      });
+      const before = await fullState(), path = `${base}/testcases/bulk-create`;
+      const ordinary = { testcases: [{ title: "CI must not create in another tenant" }] };
+      for (const body of [ordinary, { testcases: [] }, { testcases: [{ title: "x".repeat(513) }] }]) {
+        const denied = await other.post(path, { data: body }); expect(denied.status(), await denied.text()).toBe(404);
+        expect(await fullState()).toEqual(before);
+      }
+      expect((await machine.post(path, { data: ordinary })).status()).toBe(400); expect(await fullState()).toEqual(before);
+      expect((await machine.post(path, { headers: { Authorization: `Bearer ${tokenByScope.read}` }, data: ordinary })).status()).toBe(403);
+      expect(await fullState()).toEqual(before);
+      // The member's token is still checked against membership and active workspace by the
+      // existing guard; do not change that contract or assume MCP calls this REST batch writer.
+      const deniedForeign = await page.request.post(`${api}/api/projects/${foreignProject}/testcases/bulk-create`, { data: ordinary });
+      expect(deniedForeign.status(), await deniedForeign.text()).toBe(404); expect(await fullState()).toEqual(before);
+      const empty = await page.request.post(path, { data: { testcases: [] } }); expect(empty.ok()).toBeTruthy();
+      expect(await empty.json()).toEqual({ created: [], createdCount: 0 }); expect(await fullState()).toEqual(before);
+      const createdIds: string[] = [];
+      for (const bearer of [false, true]) {
+        const response = await (bearer ? machine : page.request).post(path, {
+          ...(bearer ? { headers: { Authorization: `Bearer ${tokenByScope.write}` } } : {}),
+          data: { testcases: [{ title: `CI Bulk Created ${bearer ? "Token" : "Session"}`, suiteId: suite.id, priority: "P1" }] },
+        });
+        expect(response.status(), await response.text()).toBe(201); const result = await response.json();
+        expect(result).toMatchObject({ createdCount: 1, created: [expect.objectContaining({ projectId, createdBy: ownerId, updatedBy: ownerId, suiteId: suite.id, priority: "P1" })] });
+        createdIds.push(result.created[0].id);
+      }
+      const after = await fullState();
+      expect(after.cases.filter((row) => !createdIds.includes(row.id))).toEqual(before.cases);
+      expect(after.history).toEqual(before.history);
+      for (const row of before.audit) expect(after.audit.find((item) => item.id === row.id)).toEqual(row);
+      const addedEvents = after.audit.filter((row) => !before.audit.some((old) => old.id === row.id));
+      expect(addedEvents).toHaveLength(2);
+      expect(addedEvents.map((row) => row.action)).toEqual(["testcase_bulk_created", "testcase_bulk_created"]);
+      for (const row of addedEvents) expect(row).toMatchObject({ project_id: projectId, actor_id: ownerId, diff: { count: 1, testcaseIds: [expect.any(String)] } });
+      await page.goto(`${web}/projects/${projectId}/testcases`); await page.reload();
+      await expect(page.getByRole("button", { name: "CI Bulk Created Session", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "CI Bulk Created Token", exact: true })).toBeVisible();
+      await expect(page.locator("body")).not.toContainText("CI must not create in another tenant");
+      await testInfo.attach("bulk-create-authorized-session-and-token-readback", { body: await page.screenshot(), contentType: "image/png" });
+    });
+
     await verifySuiteDeleteScope({ page, api, web, db, other, machine, projectId, foreignProject, ownerId, outsider, tokens: tokenByScope, testInfo });
   } finally {
     for (const id of tokens) expect((await page.request.delete(`${base}/apikeys/${id}`)).ok()).toBeTruthy();
