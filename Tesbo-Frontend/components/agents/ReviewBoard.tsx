@@ -124,6 +124,7 @@ function ReviewWorkspace({ projectId }: { projectId: string }) {
   const [filter, setFilter] = useState<ReviewStatus>("pending");
   const [offset, setOffset] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [analysisLoadError, setAnalysisLoadError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -140,9 +141,11 @@ function ReviewWorkspace({ projectId }: { projectId: string }) {
     try {
       const run = await getReviewAnalysis(projectId);
       setAnalysis(run);
+      setAnalysisLoadError(null);
       return run;
     } catch (err) {
-      setLoadError(errText(err, "Failed to load the analysis."));
+      // A successful recommendation read must not erase an analysis read failure.
+      setAnalysisLoadError(errText(err, "Failed to load the analysis."));
       setAnalysis((prev) => (prev === undefined ? null : prev));
       return undefined;
     }
@@ -177,6 +180,7 @@ function ReviewWorkspace({ projectId }: { projectId: string }) {
       try {
         const run = await getReviewAnalysis(projectId);
         setAnalysis(run);
+        setAnalysisLoadError(null);
         if (run && !RUN_ACTIVE.has(run.status)) {
           setOffset(0);
           await loadList();
@@ -262,7 +266,7 @@ function ReviewWorkspace({ projectId }: { projectId: string }) {
               </p>
             </div>
           </div>
-          <Button type="button" size="lg" onClick={() => void handleStart()} disabled={busyRun || analysis === undefined}>
+          <Button type="button" size="lg" onClick={() => void handleStart()} disabled={busyRun || analysis === undefined || !!analysisLoadError}>
             <span className="inline-flex items-center gap-2">
               <IconRefresh size={17} stroke={1.9} className={busyRun ? "animate-spin" : undefined} />
               {busyRun ? "Analysing…" : analysis?.status === "completed" ? "Analyse again" : "Start Analysing"}
@@ -274,7 +278,7 @@ function ReviewWorkspace({ projectId }: { projectId: string }) {
 
         {analysis === undefined && <PageLoader variant="inline" label="Loading analysis…" />}
 
-        {analysis === null && !loadError && (
+        {analysis === null && !loadError && !analysisLoadError && (
           <div className="grid gap-3 border-t border-[var(--border)] pt-4 sm:grid-cols-3">
             {[
               ["1", "Analyse", "We compare the title, steps, expected results and test data of every test case."],
@@ -315,7 +319,7 @@ function ReviewWorkspace({ projectId }: { projectId: string }) {
             <dl className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-[var(--muted)]">
               <div className="flex gap-1.5"><dt>Last analysed</dt><dd className="font-medium text-[var(--foreground)]">{fmtDate(analysis.finishedAt)}</dd></div>
               <div className="flex gap-1.5"><dt>Test cases checked</dt><dd className="font-medium text-[var(--foreground)]">{analysis.testcasesAnalyzed ?? "Not available"}</dd></div>
-              <div className="flex gap-1.5"><dt>Pairs found</dt><dd className="font-medium text-[var(--foreground)]">{analysis.pairsFound ?? 0}</dd></div>
+              <div className="flex gap-1.5"><dt>Pairs found</dt><dd className="font-medium text-[var(--foreground)]">{analysis.pairsFound ?? "Not available"}</dd></div>
             </dl>
             {analysis.truncated && (
               <p className="text-xs text-[var(--warning-foreground)]">Only the most similar pairs are listed. Resolve some and analyse again to see the rest.</p>
@@ -325,6 +329,12 @@ function ReviewWorkspace({ projectId }: { projectId: string }) {
       </Card>
 
       {loadError && <p role="alert" className={errorBox}>{loadError}</p>}
+      {analysisLoadError && (
+        <div role="alert" className={`${errorBox} flex flex-wrap items-center justify-between gap-2`}>
+          <span>Analysis could not be loaded: {analysisLoadError}</span>
+          <Button type="button" size="sm" variant="secondary" onClick={() => void loadAnalysis()}>Retry loading analysis</Button>
+        </div>
+      )}
       {actionError && <p role="alert" className={errorBox}>{actionError}</p>}
       {notice && (
         <p role="status" className="flex items-start gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2.5 text-sm text-[var(--foreground)]">
@@ -360,7 +370,7 @@ function ReviewWorkspace({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      {empty && analysis?.status === "completed" && (
+      {empty && analysis?.status === "completed" && !loadError && !analysisLoadError && (
         <section className="rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface)] p-10 text-center">
           <IconChecklist size={30} stroke={1.5} className="mx-auto text-[var(--muted-soft)]" />
           <h3 className="mt-3 text-sm font-semibold text-[var(--foreground)]">

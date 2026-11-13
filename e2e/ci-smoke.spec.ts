@@ -8,6 +8,7 @@ import { verifyContentSecurity } from "./utils/ci-content-security";
 import { verifyDocumentWrites } from "./utils/ci-document-writes";
 import { verifyRepositoryPartialEdits } from "./utils/ci-repository-partial-edits";
 import { verifyBugMetadataWrites } from "./utils/ci-bug-metadata-writes";
+import { verifyReviewBoardUi } from "./utils/ci-review-board-ui";
 
 async function verifyBugCreateAccess(request: APIRequestContext, api: string, projectId: string, ownerId: string, organizationId: string) {
   // Called only after the test's explicit loopback/disposable-database safety checks.
@@ -766,6 +767,20 @@ test("bug metadata edits preserve explicit clears, live omissions, evidence and 
   page.on("pageerror", (error) => consoleErrors.push(error.message));
   await verifyBugMetadataWrites(page, api, web, (await created.json()).id, ownerId, testInfo);
   expect(consoleErrors).toEqual([]);
+});
+
+test("Review Board distinguishes coverage, failures, filters and project context", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy();
+  const created = await page.request.post(`${api}/api/projects`, { data: { name: "CI Review Scope", key: "CRV" } });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyReviewBoardUi(page, api, web, (await created.json()).id, testInfo);
+  expect(errors).toEqual([]);
 });
 
 test("browser API transport never replays ambiguous mutations and retains bounded read retries", async () => {
