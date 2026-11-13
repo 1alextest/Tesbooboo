@@ -5476,3 +5476,54 @@ agent merge, SDK publication, new orchestration authority or Phase 1 exit.
 Exact-head CI/results and inspected browser captures belong in the implementation
 PR, not an evidence-only commit. Local compilation/unit passes alone are unfinished
 verification; malformed-UUID driver behavior is characterized, not newly redesigned.
+
+### P. Suite subtree deletion and count isolation (2026-11-13, pending verification)
+
+Continue O's explicitly recorded Suite candidate from owner-merged #50, base
+`development@081462e`. The bounded reproducer confirmed both `deleteSuite` modes
+selected a foreign testcase when its `suite_id` referenced the local subtree.
+Two committed failing-first actual-service tests reproduce that selection with
+an explicit SQL-selection fixture, not native SQL or a production-data exploit.
+`requireSuiteAccess` protects the Suite, while the recursive walk already protects
+Suite children by project; neither established ownership of every referencing
+testcase. This is a destructive cross-project write boundary, not new governance.
+
+Extend the existing transaction's testcase UPDATE predicates with the authorized
+project. Preserve `moveToDefault` unassignment and `deleteTestcases` soft-deletion
+for the entire valid local subtree, existing actor/history conventions, parent
+advisory lock and postcommit cache invalidation. Foreign testcase/Suite rows and
+raw invalid associations remain unchanged rather than deleted/reassigned. No
+claim that historical invalid associations are valid or globally inventoried.
+
+Match the existing list's direct/recursive testcase joins and lightweight Zyra
+Suite-summary join by project too. These counts must not include foreign rows
+merely because an invalid Suite reference exists. The cache and UI are reused,
+not replaced. This does not validate new Suite/owner references or redesign tree
+concurrency, archived-case semantics, sharing, entitlement or retention policy.
+
+Test owners: `suite-delete-project-scope.spec.ts`, seven native migrated-PostgreSQL
+cases in `suite-project-isolation.db.spec.ts`, and the existing two-tenant smoke
+extended in `ci-suite-delete-scope.ts`. Native tests cover exact foreign/control
+rows/history, project-scoped counts, malformed/missing Suite refusals, both local
+subtree modes, repeated refusal, sealed Run witnesses and rollback of completed
+case/history writes after a later Suite-update fault. Access/cache collaborators
+are explicitly stubbed there. Genuine session, cookie-free bearer and MCP count
+readback, both current Suite-modal choices, local persisted reload and separate
+tenant readback supply different connected evidence. Retain all ten existing
+outer smoke cases and prior assertions; no new test framework, timeout increase,
+retry, baseline relaxation or evidence cleanup.
+
+Current roadmap context changed: PR #51 reports indexed recovery of all eight
+v1.4.18 originals and moves GAE to noncanonical reconciliation material. This
+session read its source/precedence crosswalk; the raw canonical package/baseline
+is still not available in this checkout. The reconciliation explicitly leaves
+P-07/FR-033 auto-publication amendments, in-place source updates, independent
+review/Graph/White gates unapproved. Do not repeat the old global claim that no
+indexed detailed sources exist, or use their reported recovery as approval to
+implement a duplicate publisher/guide/Copilot engine. This existing isolation
+repair does not implement or approve those new features.
+
+Final native/browser execution and capture review require the exact PR head;
+local unit/build checks alone do not complete verification. Receipts belong in
+PR metadata/comments. No agent merge/readiness action, shared data mutation,
+deployment, SDK publication, risk waiver or Phase 1/2 sign-off.
