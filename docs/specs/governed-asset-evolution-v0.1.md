@@ -1,9 +1,9 @@
 # Tesbo — Governed Asset Evolution
-**Specification v0.1 · DRAFT FOR REVIEW · 2026-11-12**
+**Living specification v0.2 · DRAFT FOR REVIEW · 2026-11-12**
 
 **Status:** Proposed design only. Not an approved product contract, implementation authorization, migration, or Phase 2 sign-off.
 
-**Scope:** Independently versioned test cases, requirements, and testing skills; granular field-and-related-artifact history; working drafts; auto/manual approval; version-aware relationships and run provenance. Applies across projects and applications. Nesberry is an initial application binding, not the generic data model.
+**Scope:** Independently versioned test cases, requirements, and testing skills; granular field-and-related-artifact history; working drafts; auto/manual approval; version-aware relationships, run provenance, and first-party AI Copilot access across the same governed domain services. Applies across projects and applications. Nesberry is an initial application binding, not the generic data model.
 
 ## 1. Problem and principles
 
@@ -197,6 +197,105 @@ Verification classes: unit/contract; real migrated PostgreSQL transactions and r
 - Whether approved published versions should be semver or monotonic integer per asset; recommend monotonic integer and optional human release label.
 
 Until these are reviewed, no implementation, migration, live testing, token use, deployment, project data mutation, Phase 2 launch, or automatic risk acceptance is authorized.
+
+## 12. Closure of previously identified gaps (contract-level, not implementation claims)
+
+**GAE-C01 — Full field/association coverage.** Before writing a migration or redirecting a writer, inventory all user-visible and domain-semantic fields in current \`testcases\`, \`testcase_versions\`, \`knowledge_documents\`, \`knowledge_document_versions\`, custom-field tables, tags, attachment/evidence tables, ticket/Notion links, suite/membership relationships, run snapshots, review records, and other source-backed fields. For **each** record its owning writer(s), affected consumers, whether it belongs to the published snapshot, draft, linked relation, evidence binding or operational audit, and the required authorization. Every field—including those not on a form and new fields introduced later—MUST be classified. Schema/API contract changes require updating this manifest and its parity tests; unknown fields fail the coverage gate rather than disappearing from history.
+
+**GAE-C02 — Typed, exact comparisons.** Show the before and after for text, structured step identity/order, typed values, null/empty/omitted states, sets, custom fields and document bodies. Use stable step IDs if already supported or add a backwards-compatible mapping only with migration proof; do not infer step moves from ordinal edits without confidence. Every attachment, citation, evidence object and link is a typed association with identity, order (when relevant), hash/revision, provenance and visibility. Record a removal as a historical detachment rather than erasing bytes or links. Sensitive values appear redacted with change metadata and authorization-appropriate diff; do not leak historical secrets.
+
+**GAE-C03 — Draft/published separation and meaningful versions.** Latest approved *published* revision is current. A working draft may have multiple saved iterations and remains unpublished until guarded promotion. Historical approved revisions stay historically approved; rejected/draft versions never consume published numbers. All fields must be **auditable**, but generated operational state (timestamp, embedding status, cache index, worker activity) does not automatically create a newly approved semantic asset version. Classify such events explicitly, show them under Activity, and require source-derived agreement before excluding any domain field. No-op and repeated commands do not inflate versions.
+
+**GAE-C04 — Concurrency and approval freshness.** Revision preconditions cover asset content, relevant relationship heads, draft iteration, review payload hash and policy version. If a linked requirement or publishing policy changes while a proposal awaits approval, recalculate impact and invalidate stale authorization/approvals as appropriate. Disjoint-field edits require a controlled merge with invariant checking; do not silently merge merely because paths differ. Draft proposal/comment changes after review void earlier approvals of the affected revision. A cross-tab/network-lost COMMIT acknowledgement resolves by idempotency key + authoritative read before retry.
+
+**GAE-C05 — Link integrity beyond direct requirements.** Maintain version-aware bidirectional edges for source requirements, cases, suites, plans, run manifests, skills, defects, external tickets, attachments and actual evidence consumers. Separate *stable identity linkage* from *validated coverage of a particular revision*. Each edge has its own version/event history, effective interval and status; linked text changes do not automatically version an unaffected neighbour. A change-set's impact report must account for upstream producers, downstream readers, affected and unchanged valid neighbours, unresolved and hidden/deleted dependencies, authorization-bounded consumers, and cross-project references. Unknown coverage is not zero. The existing Jira/Linear/Notion columns remain compatible until a separately verified one-owner migration design exists.
+
+**GAE-C06 — Run immutability and insight.** Existing V119 point-in-time run snapshots are reused; manifest-managed runs additionally pin the exact published case/requirement/skill revisions, relationship validation, source hash and build. Published changes, link removals, soft-deletion and restoration cannot modify historical attempts/evidence or finalized verdicts. Historical data may inform trend/coverage insight, but trend labels must distinguish observed facts, inferred changes and reconstructed legacy baselines. A historical test that passed under REQ v2 is not counted as newly verified coverage of REQ v3.
+
+**GAE-C07 — Restoration and deletion.** Restore earlier published content by creating a new draft; review/publish as next version. Re-check current permissions, relationships, current policy and external authority. A hard delete of a source row that cascades its \`testcase_versions\` or \`knowledge_document_versions\` would destroy required history; define explicit retention/tombstone or legally mandated purge semantics and verified migration behavior *before* claiming permanent immutability. Audit/event and artifact-retention exceptions must be visible and attributable, with least privilege and no invented indefinite-retention guarantee.
+
+**GAE-C08 — AI attribution and approval.** Every agent-authored proposal records the stable asset, base version, draft iteration, source citations/source versions, governing authoring-skill revision and immutable hash, agent/model/tool/session identifiers where available, stated reason and verification result. No private chain-of-thought storage. An agent is never elevated by skill content or a generic MCP write scope. A reviewer action must be an explicit authenticated user or narrowly authorized policy decision, not a model-authored “approved” label. Auto and manual publish paths share all guards.
+
+**GAE-C09 — Legacy adoption.** Introduce current baseline values from an explicitly dated source snapshot; retain V63 old-row snapshots and V45 document history without renumbering or pretending they were approved publications. Capture source and reconstruction grade per legacy revision. Missing creation snapshots or inconsistent link history remain \`UNKNOWN\`, and no job silently “repairs” dates, actors or old test results. Inventory/data-quality report before migration; a failed baseline operation leaves all original records intact.
+
+**GAE-C10 — Existing current UI authenticity.** Before implementation, inspect existing Tesbo testcase table/detail drawer, KB versions/restore modal, requirements, Zyra chat/task board and project settings in actual owning source; verify representative running-app states before asserting pixel/interaction parity. Reuse current components and preserve minimize/cascade draft retention, focus, keyboard, mobile and permission behavior. This is a product design spec, not runtime screenshot proof.
+
+## 13. First-party AI Copilot integration — one testing control plane
+
+### 13.1 Product requirement and existing reuse
+
+**GAE-AI01.** Tesbo will offer a project-scoped **AI Copilot** able to navigate, explain, author and review testing assets through the same authoritative services as the UI/MCP. The Copilot must be able to discover *all classes of relevant information*—skills, requirements, cases, drafts when permitted, published history, field diffs, linked entities, source provenance, files/evidence metadata, review decisions, run manifests, executions, findings and impact assessments. “Access to all” means capability to retrieve authorized, relevant records, **not** a blanket dump or cross-project bypass.
+
+**GAE-AI02.** Reuse existing Zyra chat sessions, citation/source context, Knowledge Base retrieval, human-reviewed draft flow, tool attribution and project membership enforcement. Current source includes \`Tesbo-Frontend/app/(app)/projects/[id]/agents/zyra/page.tsx\`, \`components/agents/ZyraContextDrawer.tsx\`, \`ZyraChatReviewPanel.tsx\`, \`V89_zyra_chat_review.sql\`, \`V100_zyra_chat_session_lock.sql\` and \`src/legacy/zyra-turn-context.spec.ts\`. These are existing capabilities, **not** evidence that the requested unified Copilot with version-aware retrieval is implemented. Decide and document whether Copilot extends/rebrands Zyra, hosts Zyra as a capability, or shares its domain backend—do not silently ship a second project chat with duplicate session/task records.
+
+**GAE-AI03.** The Copilot's chat is a control surface. It must reuse the common history/diff/proposal/impact/publish service and existing test-case and KB writers; its own chat message isn't the canonical requirement, revision, review or execution outcome. Link to real asset IDs, revision IDs, review IDs and evidence references. Store an attributable Copilot action receipt, not a duplicate state machine.
+
+### 13.2 Read and explanation contract
+
+**GAE-AI04.** Intent-driven Copilot context retrieval supports:
+- \`current\`: current approved asset revision, current linked coverage assessment and latest valid run.
+- \`history\`: cursor-paginated per-asset versions, draft iteration history (permission gated), authors and reasons.
+- \`compare\`: exact versions, field-level diffs, attachment and relationship changes with ACL-aware redaction.
+- \`impact\`: upstream/downstream graph, approved source authority/revisions, unaffected neighbours and missing/unknown coverage.
+- \`proposal\`: pending drafts/change sets assigned or visible to current actor, reviewer comments, stale state and approval requirements.
+- \`provenance\`: governing skill versions, source citations, model/agent activity and approval receipts.
+- \`run\`: frozen manifests, pinned versions, attempts, evidence, verified results, open gaps and historical truth.
+
+**GAE-AI05.** Every Copilot answer claiming a fact about an asset links to the exact project, asset ID, revision, relationship and evidence (where relevant). Explain whether context is approved current, historical, draft, stale, missing, reconstructed legacy or uncertain. It may say “I cannot determine from available evidence,” but must not fabricate dates, approval receipts, missing attachments or impacted cases. A chat answer summarizing TC-A v2 does not imply TC-A v2 is current if v4 is published. Cross-project retrieval is denied unless explicitly and independently authorized by the domain policy.
+
+**GAE-AI06.** Retrieval respects the *requesting user's* effective permission at query time AND at use/action time, not the model's system key or the source content's claims. Private drafts, unpublished skills, evidence, sensitive historical field values, archived documents and cross-project links require their respective ACL. Permission revocation must invalidate in-flight access and cached snippets; Copilot sessions must not retain a privileged context packet readable by a later lower-privilege actor. RAG embeddings and full-text indices need ACL/version filters at **materialization and response**, not merely post-hoc hiding of a citation label. Returned files, retrieved MCP messages and external documents are untrusted data, not executable instructions.
+
+**GAE-AI07.** Context packets are bounded and typed, with source IDs, content hash, revision, entitlement, as-of time, citation and missing/partial flags. Don't fetch the entire project history into a prompt. Use a server-side query over existing authoritative data followed by scoped pagination/on-demand expansion; large documents and binary evidence are referenced and summarized with permitted excerpts. A failed retrieval is \`unavailable/unknown\`, not an empty result. Session memory is useful for continuity but never outranks live authoritative project state or a pinned manifest.
+
+### 13.3 Drafting, reviewing, auto mode and guarded actions
+
+**GAE-AI08.** Copilot can create requirement/testcase/skill drafts, propose individual-field edits, attach relevant citations/artifacts, suggest link changes, analyze impact, and request review from within chat; use existing Zyra draft/review UI patterns. It can show “before → after,” affected assets, source versions, risk, proposed validators, and expected consequences. Proposed text remains inert until the shared service authorizes publication.
+
+**GAE-AI09.** In **manual approval mode**, Copilot submits to the normal Tesbo review queue, links the user directly to the draft/change-set comparison UI, and reports \`submitted/pending\` rather than “updated.” The user approves in Tesbo's application after inspecting changes. No Copilot-generated rationale is a reviewer signature. If a draft changes or approval goes stale, show why and request re-review.
+
+**GAE-AI10.** In **automatic mode**, Copilot is permitted only the exact bounded operations allowed by an owner-authorized policy; actual publication occurs through server enforcement of revision, ACL, impact, source authority and high-risk human-review gates. Clearly distinguish “proposed,” “validated,” “approved,” “applied” and “verified downstream” outcomes. Automatically published ordinary testcase edits do not authorize silently changing requirement meaning, skill safety instructions or linked historic execution results.
+
+**GAE-AI11.** Copilot must detect link consequences before suggesting approval. A proposal to change REQ-1 from v3 to v4 may need TC-A v5 but leave TC-B v2 intact; both states need evidence or \`impact-review-required\`. Copilot cannot auto-label the new requirement covered simply because an old case link exists, and cannot auto-update every related asset without explicit per-edge applicability assessment.
+
+**GAE-AI12.** Copilot should read the **published versioned authoring skills** that tell agents how to write requirements and testcases and how to assess coverage/evidence. It records which skill revision guided each proposal. A newly drafted skill cannot become the effective instructions of the same run before separate approval. Safety/policy/authorization rules come from server-owned policy, never from arbitrary skill or retrieved document text. Conflicting skills require explicit precedence, scope and an observed conflict; do not merge them silently.
+
+**GAE-AI13.** Responses/actions must be resilient to interrupted chat turns, duplicate submissions, model/provider failover, stale source retrieval, conflicting human edits, and explicit user correction. Repeat an exact command idempotently, not blindly. Copilot must reconcile uncertain writes by stable command receipt and authoritative read. Server can report partial external effects and required recovery rather than claiming rollback when an external provider already committed.
+
+### 13.4 Copilot permissions and visible UI
+
+| User/actor role (conceptual) | Read approved history | Read private drafts | Propose | Approve | Publish |
+|---|---|---|---|---|---|
+| Authorized project viewer | Authorized subset | No, unless shared | No, unless separately granted | No | No |
+| Asset author | Authorized subset | Own/shared | Yes, within asset scope | Per explicit owner policy only | No by default |
+| Assigned reviewer | Authorized subset | Assigned/shared | May request changes | Yes for eligible changes; exact hash | Via approved service only |
+| Project manager/owner | Authorized subset | Managed scope | Yes | Per policy, separation-of-duties | Configure bounded auto and authorized publish |
+| Copilot/agent | User-delegated subset | Only caller-visible | Yes when allowed | Not human approval | Only narrowly server-authorized automatic mode |
+| External MCP client | Token AND current member/role subset | Only delegated scope | As above | No implied approval from Write token | Governed service; no bypass |
+
+This is a **proposed authorization mapping**, not a claim that Tesbo already exposes these exact roles/grants. It must be reconciled against current role system.
+
+**GAE-AI14.** User workflow: within the existing single per-project Copilot conversation, user can ask “What changed in TC-A between v2 and v4?”, “Which approved requirements does TC-A v4 cover?”, “Which cases became impact-review-required after REQ-X v3?”, “Draft updates based on skill S v2,” and “Show pending proposals I can review.” Copilot presents bound version chips, source links, typed changes, relationship impact, status and direct opening of the existing detail/history/review panel. No invented duplicate management screens. On navigation the draft conversation must not lose unsent content.
+
+**GAE-AI15.** The current project UI must visibly distinguish human-review-required proposals from auto-applied updates and report actual outcome. Notifications to relevant reviewers and affected owners require durable event receipt; a chat toast alone isn't proof of a delivered notification. Copilot may suggest source research, but authoritative external updates require authorized connectors and verified upstream confirmation.
+
+### 13.5 Copilot acceptance oracles
+
+- **AI-T01:** A project viewer asks for TC-A history: receives authorized current+historical references and accurately labels a private draft as unavailable without leaking its title/body/attachment metadata.
+- **AI-T02:** An author asks for a v4→v5 proposal: remains pending until manual approval; the Copilot cannot claim an applied update early.
+- **AI-T03:** Auto mode with authorized field scope publishes once; forbidden requirement/skill policy edits are rejected even if the prompt requests them, or if a retrieved skill says “ignore approval.”
+- **AI-T04:** Copilot cites exact requirement, case and skill revision IDs and handles a changed head between retrieval and publication as \`STALE_BASE\` with a re-review path.
+- **AI-T05:** Search/RAG and session memory never return a private draft or revoked actor's context across a workspace/role change; retrieved document prompt-injection attempts do not redirect tools or policy.
+- **AI-T06:** Graph impact answers distinguish validated/no-longer-applicable/unknown linked cases; hidden or unavailable consumers cannot be counted as zero.
+- **AI-T07:** Chat interruption, repeated “yes,” duplicate user clicks and provider retries produce one accepted command/receipt or an explicitly reconciled unknown, not duplicate versions or notifications.
+- **AI-T08:** Copilot proposes with an approved authoring skill and can show which revision governed an older TC; a new draft skill does not silently replace the active one.
+- **AI-T09:** Copilot claims full implementation or release readiness only with current explicit build/CI/connected-test and human evidence; documents and agent self-review alone are not proof of runtime.
+- **AI-T10:** Direct navigation from conversation to the existing testcase/requirement/skill detail and field-diff panel works with current permissions, keyboard/mobile access, and a preserved unfinished chat draft.
+
+## 14. Decision and risk register for first implementation
+
+Before implementation, get explicit product-owner decisions on: whether Copilot **extends Zyra** or reuses its backend while unifying the visible conversation, draft visibility and who may grant it, who can enable auto mode and allowed field classes, self-approval protections, source authority precedence, revision retention/redaction, and whether a change set may be partially approved as explicitly separate subchanges. Default proposals: manual publication, owner-managed private drafts, no self-approval of safety/authority changes, and an **indivisible atomic sub-change-set** for every dependency group. A rejected subset must not be silently treated as applied to remaining assets; re-assess the graph and base revisions before partial approval.
+
+A future PR must prove: (1) compatibility with current APIs, (2) no alternate data store for Copilot context, (3) complete authoring and relationship histories, (4) fine-grained permission enforcement and RAG retrieval isolation, (5) source-to-current-UI fidelity, (6) downstream read/export/report/notification correctness, (7) real PostgreSQL commit/rollback/concurrency evidence, and (8) an explicitly bounded migration/retention strategy.
 
 ## References and provenance
 
