@@ -353,6 +353,20 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
     expect(await state()).toEqual(before);
   });
 
+  it.each(["foreign", "deleted"])("preserves an omitted legacy %s Suite relationship rather than silently repairing history", async (kind) => {
+    const target = (await setup.query("INSERT INTO suites (project_id,name,deleted_at) VALUES ($1,'Legacy unchanged Suite',CASE WHEN $2 THEN now() ELSE NULL END) RETURNING id", [kind === "foreign" ? otherProjectId : projectId, kind === "deleted"])).rows[0].id;
+    await setup.query("UPDATE testcases SET suite_id=$2 WHERE id=$1", [testcaseId, target]);
+    const before = await state(); await service().svc.updateTestCase(testcaseId, owner, { priority: "P0" });
+    const after = await state(); expect(after.row).toMatchObject({ suite_id: target, priority: "P0" });
+    expect(after.versions.at(-1)).toMatchObject({ snapshot: expect.objectContaining({ suite_id: target, priority: before.row.priority }) });
+    unchangedOutsideCase(before, after);
+  });
+
+  it("deduplicates case-insensitive Suite IDs in a valid bulk-create without changing the stored relation", async () => {
+    const result = await service().svc.bulkCreateTestCases(projectId, owner, { testcases: [{ title: "Lowercase Suite", suiteId: root }, { title: "Uppercase Suite", suiteId: root.toUpperCase() }] });
+    expect(result.createdCount).toBe(2); for (const row of result.created) expect(row.suiteId).toBe(root);
+  });
+
   const raceWriters = ["create", "update", "bulk-create", "bulk-update", "duplicate"] as const;
   function writeToSuite(writer: typeof raceWriters[number], f: ReturnType<typeof service>, target: string) {
     if (writer === "create") return f.svc.createTestCase(projectId, owner, { title: "Race create", suiteId: target });
@@ -499,5 +513,34 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
         expect((await setup.query("SELECT * FROM ai_generation_requests WHERE id=$1", [task])).rows).toEqual(reviewBefore);
       } finally { await observed.end(); }
     });
+  });
+
+  it.each([false, true])("Zyra direct move revalidates its resolved target after concurrent deletion: %s", async (deleted) => {
+    const target = await suite("Direct chat move"), before = await state(); let resolved = false;
+    const observed = observedPool(async (sql) => {
+      if (!resolved && sql.startsWith("SELECT id, name FROM suites WHERE project_id = $1 AND id = $2::uuid")) {
+        resolved = true; if (deleted) await service().svc.deleteSuite(owner, target, "moveToDefault");
+      }
+    });
+    const f = service(observed);
+    const internals = f.svc as unknown as {
+      resolveZyraActor: (id: string) => Promise<string>;
+      zyraProjectCapabilities: (id: string) => Promise<{ suiteOperations: boolean }>;
+      applyZyraChatOperations: (...args: unknown[]) => Promise<{ activity: Array<{ title: string }>; moveBreakdown: Array<{ suiteId: string; count: number }> }>;
+    };
+    jest.spyOn(internals, "resolveZyraActor").mockResolvedValue(owner);
+    jest.spyOn(internals, "zyraProjectCapabilities").mockResolvedValue({ suiteOperations: true });
+    try {
+      const result = await internals.applyZyraChatOperations(projectId, owner, randomUUID(), [{ type: "move_to_suite", suiteId: target, testcaseIds: [testcaseId] }]);
+      expect(resolved).toBe(true);
+      if (deleted) {
+        expect(await state()).toEqual(before); expect(result.moveBreakdown).toEqual([]);
+        expect(result.activity).toContainEqual(expect.objectContaining({ title: "An operation failed unexpectedly" }));
+        expect(f.activity).not.toHaveBeenCalled();
+      } else {
+        expect((await state()).row).toMatchObject({ suite_id: target });
+        expect(result.moveBreakdown).toEqual([expect.objectContaining({ suiteId: target, count: 1 })]);
+      }
+    } finally { await observed.end(); }
   });
 });

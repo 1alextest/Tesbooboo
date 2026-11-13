@@ -16,12 +16,17 @@ describe("testcase bulk writers — project scope at the actual UPDATE", () => {
     const writes: string[] = [];
     const query = jest.fn(async (sql: string, values: unknown[] = []) => {
       // SQL-selection double only: native PostgreSQL owns actual predicates, triggers and rollback.
+      if (sql === "SELECT pg_advisory_xact_lock(hashtext($1))") {
+        expect(values).toEqual([`suite-tree:${project}`]); return { rows: [] };
+      }
+      expect(sql).toMatch(/^UPDATE testcases SET/);
       const scope = /project_id\s*=\s*\$(\d+)/.exec(sql);
       const selected = rows.filter((row) => (values[0] as string[]).includes(row.id) && row.deleted_at === null && (!scope || row.project_id === values[Number(scope[1]) - 1]));
       writes.push(...selected.map((row) => row.id));
       return { rows: selected.map(({ id }) => ({ id })) };
     });
-    const svc = makeLegacy({ query } as unknown as DatabaseService);
+    const transaction = jest.fn(async <T>(work: (client: { query: typeof query }) => Promise<T>) => work({ query }));
+    const svc = makeLegacy({ query, transaction } as unknown as DatabaseService);
     jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({} as never);
     const activity = jest.spyOn(svc, "logProjectActivity").mockResolvedValue(undefined);
     const internals = svc as unknown as { suitesCache: SuitesCacheService; testcasesListCache: TestcasesListCacheService };
@@ -30,15 +35,18 @@ describe("testcase bulk writers — project scope at the actual UPDATE", () => {
     const run = (kind: string, ids: string[]) => kind === "update"
       ? svc.bulkUpdateTestCases(project, user, { testcaseIds: ids, priority: "P0" })
       : svc.bulkDeleteTestCases(project, user, ids);
-    return { writes, query, activity, run };
+    return { writes, query, transaction, activity, run };
   }
   it.each(["update", "delete"])("%s never touches a foreign case even in an otherwise valid mixed selection", async (kind) => {
     const f = fixture(); await f.run(kind, [local, foreign, deleted]);
     expect(f.writes).toEqual([local]);
     expect(f.activity.mock.calls[0][6]).toMatchObject({ testcaseIds: [local] });
+    expect(f.transaction).toHaveBeenCalledTimes(kind === "update" ? 1 : 0);
+    if (kind === "update") expect(f.query.mock.calls[0][0]).toContain("pg_advisory_xact_lock");
   });
   it.each(["update", "delete"])("%s retains the empty-selection no-op", async (kind) => {
     const f = fixture(); await f.run(kind, []);
     expect(f.query).not.toHaveBeenCalled(); expect(f.activity).not.toHaveBeenCalled();
+    expect(f.transaction).not.toHaveBeenCalled();
   });
 });

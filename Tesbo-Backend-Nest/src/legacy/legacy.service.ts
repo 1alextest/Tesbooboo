@@ -6003,25 +6003,25 @@ export class LegacyService implements OnModuleInit {
       await this.lockTestcaseSuiteWrites(client, projectId);
       await this.assertTestcaseSuites(client, projectId, [clearSuite ? null : body.suiteId || null]);
       return client.query<{ id: string }>(
-      `UPDATE testcases SET priority=COALESCE($2,priority),
-       suite_id = CASE WHEN $8::boolean THEN NULL ELSE COALESCE($3::uuid, suite_id) END,
-       status=COALESCE($4,status), owner_id=COALESCE($5,owner_id), automation_status=COALESCE($6,automation_status),
-       severity=COALESCE($9,severity),
-       updated_by=$7, updated_at=now()
-       WHERE id = ANY($1::uuid[]) AND project_id = $10 AND deleted_at IS NULL
-       RETURNING id`,
-      [
-        ids,
-        body.priority || null,
-        clearSuite ? null : body.suiteId || null,
-        body.status || null,
-        body.ownerId || null,
-        body.automationStatus || null,
-        uid,
-        clearSuite,
-        body.severity || null,
-        projectId
-      ]
+        `UPDATE testcases SET priority=COALESCE($2,priority),
+         suite_id = CASE WHEN $8::boolean THEN NULL ELSE COALESCE($3::uuid, suite_id) END,
+         status=COALESCE($4,status), owner_id=COALESCE($5,owner_id), automation_status=COALESCE($6,automation_status),
+         severity=COALESCE($9,severity),
+         updated_by=$7, updated_at=now()
+         WHERE id = ANY($1::uuid[]) AND project_id = $10 AND deleted_at IS NULL
+         RETURNING id`,
+        [
+          ids,
+          body.priority || null,
+          clearSuite ? null : body.suiteId || null,
+          body.status || null,
+          body.ownerId || null,
+          body.automationStatus || null,
+          uid,
+          clearSuite,
+          body.severity || null,
+          projectId
+        ]
       );
     });
     await this.logProjectActivity(projectId, uid, "testcase_bulk_updated", "testcase", null, null, {
