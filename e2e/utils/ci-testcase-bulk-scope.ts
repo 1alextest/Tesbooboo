@@ -249,6 +249,10 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
     });
 
     await test.step("a real stale Suite choice preserves the existing bulk form and selection, then recovers to a valid target", async () => {
+      const projectResponse = await page.request.get(base); expect(projectResponse.ok()).toBeTruthy();
+      const project = await projectResponse.json(); expect(project).toMatchObject({ id: projectId, key: expect.any(String) });
+      // RouteParamsProvider canonicalizes UUID links to the project's readable key.
+      const repositoryUrl = `${web}/projects/${encodeURIComponent(project.key)}/testcases`;
       const stale = await post(`${base}/suites`, { name: "CI Stale bulk destination" });
       const valid = await post(`${base}/suites`, { name: "CI Recovered bulk destination" });
       await page.goto(`${web}/projects/${projectId}/testcases`); await page.reload();
@@ -275,12 +279,12 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       await page.reload();
       // Suite is not a default table column. Prove membership through the actual tree/list UI.
       await page.getByRole("button", { name: valid.name, exact: true }).click();
-      await expect(page).toHaveURL(`${web}/projects/${projectId}/testcases?suiteId=${valid.id}`);
+      await expect(page).toHaveURL(`${repositoryUrl}?suiteId=${valid.id}`);
       await expect(page.getByRole("button", { name: control.title, exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "CI Bulk Created Session", exact: true })).toHaveCount(0);
       await testInfo.attach("stale-suite-recovered-move-after-reload", { body: await page.screenshot(), contentType: "image/png" });
       await page.getByRole("button", { name: suite.name, exact: true }).click();
-      await expect(page).toHaveURL(`${web}/projects/${projectId}/testcases?suiteId=${suite.id}`);
+      await expect(page).toHaveURL(`${repositoryUrl}?suiteId=${suite.id}`);
       await expect(page.getByRole("button", { name: "CI Bulk Created Session", exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: control.title, exact: true })).toHaveCount(0);
     });
