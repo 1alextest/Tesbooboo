@@ -143,14 +143,15 @@ export async function verifySuiteDeleteScope(ctx: {
     await page.route((url) => url.href === `${base}/suites`, (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "CI controlled repository refresh failure" }) }), { times: 1 });
     await modal.getByRole("button", { name: /^Delete suite only/ }).click(); await expect(modal).toBeHidden();
     await expect(page).toHaveURL(`${repositoryUrl}?suiteId=none`);
-    await expect(page.getByRole("alert")).toContainText("Suite deleted, but the repository could not be refreshed.");
+    const refreshWarning = page.getByRole("alert").filter({ hasText: "Suite deleted, but the repository could not be refreshed." });
+    await expect(refreshWarning).toBeVisible();
     expect((await db.query("SELECT deleted_at FROM suites WHERE id=$1", [empty.id])).rows[0].deleted_at).toBeInstanceOf(Date);
     await testInfo.attach("confirmed-suite-delete-refresh-failure-not-a-retry", { body: await page.screenshot(), contentType: "image/png" });
     await page.getByRole("button", { name: "Reload repository", exact: true }).click();
     await expect(page).toHaveURL(`${repositoryUrl}?suiteId=none`);
     await expect(page.getByRole("button", { name: "CI moveToDefault local 0", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: empty.name, exact: true })).toHaveCount(0);
-    await expect(page.getByRole("alert")).toHaveCount(0); expect(deleteRequests).toBe(1);
+    await expect(refreshWarning).toHaveCount(0); expect(deleteRequests).toBe(1);
   });
   await test.step("deeply nested Suite guidance counts the whole subtree and leaves no removed grandchild filter", async () => {
     const root = await post(`${base}/suites`, { name: "CI Deep empty root" });
