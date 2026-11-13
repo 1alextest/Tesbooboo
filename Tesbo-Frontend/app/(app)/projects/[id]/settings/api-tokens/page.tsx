@@ -19,7 +19,7 @@ import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
 import { formatDate as formatDateShared } from "@/lib/date";
 
-type ConnectTab = "claudeCode" | "claudeDesktop" | "other";
+type ConnectTab = "claudeCode" | "claudeDesktop" | "opencode" | "other";
 
 function normalizeRole(role: string): "owner" | "manager" | "qa_engineer" {
   const n = (role ?? "").trim().toLowerCase().replace(/-/g, "_").replace(/ /g, "_");
@@ -148,7 +148,7 @@ export default function ApiTokensPage() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [createStep, setCreateStep] = useState<"form" | "reveal">("form");
   const [newTokenName, setNewTokenName] = useState("");
-  const [newTokenScopes, setNewTokenScopes] = useState({ read: true, write: true });
+  const [newTokenScopes, setNewTokenScopes] = useState({ read: true, write: false });
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [revealedToken, setRevealedToken] = useState<ApiTokenWithSecret | null>(null);
@@ -184,8 +184,9 @@ export default function ApiTokensPage() {
 
   function openCreateModal() {
     setNewTokenName("");
-    setNewTokenScopes({ read: true, write: true });
+    setNewTokenScopes({ read: true, write: false });
     setCreateError(null);
+    setRevealedToken(null);
     setCreateStep("form");
     setCreateModalOpen(true);
   }
@@ -236,14 +237,17 @@ export default function ApiTokensPage() {
   }
 
   function finishReveal() {
+    // Do not retain an exposed one-time credential in the page after dismissal.
+    setRevealedToken(null);
     setCreateModalOpen(false);
     setCreateStep("form");
     setNewTokenName("");
-    setNewTokenScopes({ read: true, write: true });
+    setNewTokenScopes({ read: true, write: false });
   }
 
   const mcpUrl = getMcpUrl(projectId);
-  const tokenForSnippets = revealedToken?.token ?? "<YOUR_API_TOKEN>";
+  // Never embed a secret in copied shell/config snippets: it can outlive the one-time reveal.
+  const tokenForSnippets = "<YOUR_API_TOKEN>";
 
   /*
    * `--scope user`, not the CLI's default `local` scope. A local-scope server is stored in
@@ -276,6 +280,22 @@ export default function ApiTokensPage() {
   const powershellSnippet = `$headers = @{ Authorization = "Bearer ${tokenForSnippets}" }
 $body = '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 Invoke-RestMethod -Uri "${mcpUrl}" -Method Post -Headers $headers -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 10`;
+
+  // OpenCode V2 remote MCP config uses an environment reference, not a committed token.
+  // The endpoint is scoped to this project and the server performs authorization.
+  const opencodeConfig = `{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "tesbo": {
+        "type": "remote",
+        "url": "${mcpUrl}",
+        "oauth": false,
+        "headers": { "Authorization": "Bearer {env:TESBO_API_TOKEN}" }
+      }
+    }
+  }
+}`;
 
   const reporterInstall = `npm install --save-dev @tesbox/playwright-reporter
 npx @tesbox/playwright-reporter init`;
@@ -407,7 +427,7 @@ export default defineConfig({
           <h2 className="text-base font-semibold text-[var(--foreground)]">Connect an MCP client</h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
             {revealedToken
-              ? "Showing the token you just created — copy it into your config now."
+              ? "Your new token was shown once. Keep it in a secret store; the examples use placeholders."
               : <>Replace <code className="font-mono text-xs">&lt;YOUR_API_TOKEN&gt;</code> below with a token from the list above.</>}
           </p>
         </div>
@@ -433,6 +453,15 @@ export default defineConfig({
           </button>
           <button
             type="button"
+            onClick={() => setConnectTab("opencode")}
+            className={`flex-1 rounded-md px-3 py-1.5 font-medium transition-colors ${
+              connectTab === "opencode" ? "bg-[var(--surface)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted)]"
+            }`}
+          >
+            OpenCode
+          </button>
+          <button
+            type="button"
             onClick={() => setConnectTab("other")}
             className={`flex-1 rounded-md px-3 py-1.5 font-medium transition-colors ${
               connectTab === "other" ? "bg-[var(--surface)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted)]"
@@ -442,12 +471,14 @@ export default defineConfig({
           </button>
         </div>
 
+        {connectTab !== "opencode" && connectTab !== "other" && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           Registering a new MCP server doesn&apos;t reach a session that&apos;s already running — it&apos;s only
           picked up on startup. Start a new Claude Code session (or, in the VS Code / JetBrains extension, run{" "}
           <strong>Developer: Reload Window</strong>) before the new tools show up in{" "}
           <code className="font-mono">/mcp</code>.
         </div>
+        )}
 
         {connectTab === "claudeCode" && (
           <div className="space-y-3">
@@ -473,6 +504,22 @@ export default defineConfig({
               <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto whitespace-pre">{mcpJsonSnippet}</pre>
               <CopyButton value={mcpJsonSnippet} iconOnly className="absolute right-2 top-2" />
             </div>
+          </div>
+        )}
+
+        {connectTab === "opencode" && (
+          <div className="space-y-3">
+            <p className="text-sm text-[var(--muted)]">
+              Add this to <code className="font-mono">opencode.jsonc</code> in your project.
+              Set <code className="font-mono">TESBO_API_TOKEN</code> in your local environment or secrets manager, not in source control.
+            </p>
+            <div className="relative">
+              <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto whitespace-pre">{opencodeConfig}</pre>
+              <CopyButton value={opencodeConfig} iconOnly className="absolute right-2 top-2" />
+            </div>
+            <p className="text-xs text-[var(--muted-soft)]">
+              Run <code className="font-mono">opencode mcp list</code> or open <code className="font-mono">/mcps</code> in OpenCode to check the connection. A new session may be required after updating your environment.
+            </p>
           </div>
         )}
 
@@ -539,8 +586,8 @@ export default defineConfig({
                 <code className="font-mono text-xs text-[var(--foreground)]">TESBO_BASE_URL</code>
                 <p className="mt-0.5 break-all font-mono text-xs text-[var(--muted)]">{API_BASE}</p>
                 <p className="mt-0.5 text-xs text-[var(--muted-soft)]">
-                  This project&apos;s API host. Not the web app host — pointing at the app makes every call
-                  404 while your suite stays green.
+                  Configured API base URL. Some deployments serve the API and web app on the same host;
+                  use this URL and verify the endpoint before reporting test results.
                 </p>
               </div>
               <CopyButton value={API_BASE} iconOnly />
@@ -637,6 +684,11 @@ export default defineConfig({
                 autoFocus
               />
             </Field>
+            <p className="text-xs text-[var(--muted)]">
+              Project: <strong>{projectName || projectId}</strong>. Read is selected by default.
+              Enable Write only for agents or reporters that need to change data.
+              Automated Playwright reporting needs Read and Write.
+            </p>
             <div className="space-y-3">
               <label className="flex items-start gap-3 cursor-pointer">
                 <input
@@ -664,7 +716,7 @@ export default defineConfig({
                 <div>
                   <span className="text-sm font-medium text-[var(--foreground)]">Write</span>
                   <p className="text-xs text-[var(--muted)] mt-0.5">
-                    Create test cases, suites, cycles, execution results, and bugs.
+                    Create or modify test cases, suites, runs, execution results, and bugs. Write actions remain subject to server-side authorization.
                   </p>
                 </div>
               </label>
