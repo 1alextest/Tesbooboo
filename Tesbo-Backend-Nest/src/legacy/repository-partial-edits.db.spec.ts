@@ -309,4 +309,28 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
     expect(await state()).toEqual(before); expect(f.activity).not.toHaveBeenCalled(); expect(f.fields).not.toHaveBeenCalled();
     expect(f.suitesInvalidation).not.toHaveBeenCalled(); expect(f.casesInvalidation).not.toHaveBeenCalled();
   });
+
+  describe.each(["create", "update", "bulk-create", "bulk-update"])("%s suite reference boundary", (writer) => {
+    it.each(["foreign", "deleted", "missing", "malformed"])("refuses a %s suite without changing records, history or effects", async (kind) => {
+      const target = kind === "foreign"
+        ? (await setup.query("INSERT INTO suites (project_id,name) VALUES ($1,'Private suite') RETURNING id", [otherProjectId])).rows[0].id
+        : kind === "deleted"
+          ? (await setup.query("INSERT INTO suites (project_id,name,deleted_at) VALUES ($1,'Deleted suite',now()) RETURNING id", [projectId])).rows[0].id
+          : kind === "missing" ? randomUUID() : "not-a-suite-id";
+      const snapshot = async () => ({
+        cases: (await setup.query("SELECT * FROM testcases WHERE project_id=ANY($1::uuid[]) ORDER BY id", [[projectId, otherProjectId]])).rows,
+        history: (await setup.query("SELECT v.* FROM testcase_versions v JOIN testcases t ON t.id=v.testcase_id WHERE t.project_id=ANY($1::uuid[]) ORDER BY v.testcase_id,v.version", [[projectId, otherProjectId]])).rows,
+        suites: (await setup.query("SELECT * FROM suites WHERE project_id=ANY($1::uuid[]) ORDER BY id", [[projectId, otherProjectId]])).rows,
+      });
+      const before = await snapshot(), f = service();
+      const body = { suiteId: target, title: "Must not write an invalid suite" };
+      const writing = writer === "create" ? f.svc.createTestCase(projectId, owner, body)
+        : writer === "update" ? f.svc.updateTestCase(testcaseId, owner, body)
+          : writer === "bulk-create" ? f.svc.bulkCreateTestCases(projectId, owner, { testcases: [{ title: "Valid prefix", suiteId: root }, body] })
+            : f.svc.bulkUpdateTestCases(projectId, owner, { testcaseIds: [testcaseId, control], suiteId: target, priority: "P0" });
+      await expect(writing).rejects.toMatchObject({ response: { error: "suiteId must reference an active suite in this project" }, status: 400 });
+      expect(await snapshot()).toEqual(before);
+      for (const effect of [f.fields, f.tags, f.activity, f.embedding, f.notice, f.suitesInvalidation, f.casesInvalidation]) expect(effect).not.toHaveBeenCalled();
+    });
+  });
 });
