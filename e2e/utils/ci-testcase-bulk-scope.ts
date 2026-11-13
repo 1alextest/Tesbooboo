@@ -308,6 +308,24 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
     });
 
     await verifySuiteDeleteScope({ page, api, web, db, other, machine, projectId, foreignProject, ownerId, outsider, tokens: tokenByScope, testInfo });
+    await test.step("a confirmed bulk write does not reopen submission when its follow-up Suite refresh fails", async () => {
+      // Reuse the surviving local control and existing two-tenant fixture. The POST
+      // reaches the real writer; only the subsequent read receives a controlled 500.
+      await page.goto(`${web}/projects/${projectId}/testcases`);
+      await page.getByRole("checkbox", { name: `Select ${control.title}`, exact: true }).check();
+      await page.getByRole("button", { name: "Bulk actions", exact: true }).click();
+      const modal = page.getByRole("heading", { name: "Bulk actions", exact: true }).locator("..");
+      await modal.locator("select").filter({ has: page.locator('option[value="update"]') }).selectOption("update");
+      await modal.locator("select").filter({ has: page.locator('option[value="P1"]') }).selectOption("P1");
+      const before = await state();
+      await page.route((url) => url.href === `${base}/suites`, (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "CI controlled bulk refresh failure" }) }), { times: 1 });
+      const saved = page.waitForResponse((response) => response.url() === endpoint("update") && response.request().method() === "POST");
+      await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await saved).ok()).toBeTruthy();
+      const after = await state(); expectPreserved(before, after, [control.id]);
+      expect(after.cases.find((row) => row.id === control.id)).toMatchObject({ priority: "P1" });
+      try { await expect(modal).toBeHidden(); }
+      finally { await testInfo.attach("confirmed-bulk-write-refresh-failure", { body: await page.screenshot(), contentType: "image/png" }); }
+    });
   } finally {
     for (const id of tokens) expect((await page.request.delete(`${base}/apikeys/${id}`)).ok()).toBeTruthy();
     await machine.dispose(); await other.dispose(); await db.end(); // Preserve synthetic history/audit until disposable DB teardown.
