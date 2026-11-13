@@ -1,9 +1,9 @@
 # Tesbo — Governed Asset Evolution
-**Living specification v0.3 · DRAFT FOR REVIEW · 2026-11-12**
+**Living specification v0.4 · DRAFT FOR REVIEW · 2026-11-12**
 
 > **Canonical living specification.** This file intentionally has a version-neutral path. The internal draft version advances on review while the document is edited in place; no separate v0.1/v0.2/v0.3 copies are authoritative.
 >
-> **Revision log:** v0.1 initial asset/version/change-set contract; v0.2 strengthened field/relationship/legacy history and first-party Copilot integration; v0.3 full charter-lens review, Copilot session continuity, temporal provenance and security/Graph gaps. Each remains a **proposal** until explicit owner decisions and independent evidence gates are met.
+> **Revision log:** v0.1 initial asset/version/change-set contract; v0.2 strengthened field/relationship/legacy history and first-party Copilot integration; v0.3 charter-lens desk review, Copilot session continuity, temporal provenance and security/Graph gaps; v0.4 original Tesbo nine-role reconciliation, separate simulation lane, and outstanding exact-client/identity gates. Each remains a **proposal** until explicit owner decisions and independent evidence gates are met.
 
 **Status:** Proposed design only. Not an approved product contract, implementation authorization, migration, or Phase 2 sign-off.
 
@@ -315,7 +315,7 @@ Before implementation, get explicit product-owner decisions on: whether Copilot 
 
 A future PR must prove: (1) compatibility with current APIs, (2) no alternate data store for Copilot context, (3) complete authoring and relationship histories, (4) fine-grained permission enforcement and RAG retrieval isolation, (5) source-to-current-UI fidelity, (6) downstream read/export/report/notification correctness, (7) real PostgreSQL commit/rollback/concurrency evidence, and (8) an explicitly bounded migration/retention strategy.
 
-## 15. Full-team framework review receipt and findings (2026-11-12)
+## 15. Role-based desk review receipt and findings (2026-11-12; not full-team certification)
 
 ### Review context, actual execution and authority
 
@@ -347,9 +347,9 @@ Framework authority inspected: Nesberry \`.kiro/steering/teams/README.md\` and \
 
 The review identified **17 distinct challenged obligations** (some already covered, some strengthened below, some blocked pending evidence). It did **not** justify another test-management domain, second generic Copilot session system, second approval board or generalized microservice. Existing testcases, KB, Zyra, MCP, attachment storage, audit and run records remain owners. Similar risks from multiple lenses are consolidated into the single relevant owner rather than repeated as separate requirements. **Severity here is design risk if unmitigated, not a reproduced production security incident.**
 
-### Scope of “full teams”
+### Scope and limitations of this role-lens assessment
 
-This review covers each canonical role and specialist as a **design lens**, plus a conceptual Graph edge check and White gate application. It does NOT certify actual team-agent orchestration, fresh independent reviewers, complete source/app journeys or machine-executed Graph closure. In the canonical process, real independent reviewers, role-specific receipts and runnable tool evidence must be attached before White freeze. Treat unsupported proof as \`UNVERIFIED\`, not as a pass. Future full-system journey claims require a four-source journey inventory and an explicit not-run/blocked ledger rather than a few sampled examples.
+This review covers each of Nesberry's ten currently named canonical roles as a **design lens**, plus a conceptual Graph edge check and White gate application. The original Tesbo roster (nine roles) and separate Simulation lane are reconciled in §17; they were **not** included as fresh independent executions in this pass. It does NOT certify actual team-agent orchestration, fresh independent reviewers, complete source/app journeys or machine-executed Graph closure. In the canonical process, real independent reviewers, role-specific receipts and runnable tool evidence must be attached before White freeze. Treat unsupported proof as \`UNVERIFIED\`, not as a pass. Future full-system journey claims require a four-source journey inventory and an explicit not-run/blocked ledger rather than a few sampled examples.
 
 ## 16. Amendments raised by full-team challenge
 
@@ -386,6 +386,111 @@ This review covers each canonical role and specialist as a **design lens**, plus
 **Blockers to finalize v1:** external requirement ownership/version precedence; exact approved/draft status semantics versus testcase lifecycle; private draft/Copilot permissions; publish auto-policy classes and separation of duties; complete field/association ownership inventory; immutability-vs-purge retention; and whether the first slice may expose versioned link reads before a unified relationship writer is ready.
 
 **Can be staged with named limits:** bulk history UX, full semantic diff sophistication, all external connector write-backs, cross-application skill effectiveness claims, multi-hop graph visualization, large-scale archive/pagination tuning and optional execution workers. These do not excuse incorrect permissions, missing historical bindings or false approval/coverage claims.
+
+## 17. Reconciliation with original Tesbo assurance roster and Simulation (2026-11-12)
+
+### 17.1 Accurate roster: canonical teams versus specialist activities
+
+**Source of truth for the pre-existing Tesbo assurance workflow:** the October 17, 2026 artifacts \`Tesbo_Full_Assurance_Review_2026-10-17.md\` and \`Tesbo_Full_Assurance_Review_v1.4.4_to_v1.4.5_2026-10-17.md\`. They reviewed the **eight-file Tesbo specification package** then at revisions 1.2 and 1.4.4→1.4.5, not this new GAE draft, and must not be presented as fresh independent review of v0.4.
+
+The agreed **nine Tesbo review roles** are: **Blue, Red, White, Green, Security, Purple, QA, Grey/SUJT and Graph Assurance**. The newer Nesberry orchestration adds **Elephant-Gold** as a tenth distinct cold-review role. Its method is useful for Tesbo as an additional independent check; it was not proven to be a ratified Tesbo-specific team in the older nine-role package. **Simulation** is a separately accountable exact-workflow *assurance activity*, not a substitute for Grey/SUJT and not quietly folded into a role count.
+
+| Role or activity | October Tesbo baseline | v0.4 activity actually performed | Required real completion |
+|---|---|---|---|
+| Blue | Team role | Source-grounded desk lens | Independent code-author/maintainer-grounded inventory of all versioned fields, writers, consumers, dependency scopes and approvals |
+| Red | Team role | Desk premise/hostile-case lens | Independent negative-design proof and direct bypass/attack challenge against actual code and contracts |
+| Green | Team role | Desk reuse/distillation lens | Independent reuse, relationship-seam and portability evidence; no redundant Copilot/KB/requirements owner |
+| White | Team role; pre and final | Conceptual gate ONLY | Independent pre-architecture and final decision after all actual receipts; currently **NOT FROZEN** |
+| Security | Team role | Desk threat lens | Auth, external-client consent, private draft/AI egress, agent/browser authority and denial tests |
+| Purple | Team role | Draft design-charter desk lens | Existing UI source and authentic runtime baseline, UX/keyboard/touch/responsive and trust-state checks |
+| QA | Team role | Source-informed lifecycle lens | Real migrated DB, API/MCP, client, concurrency, migration, retry, evidence-byte and report/commit race tests |
+| Grey/SUJT | Team role | User-journey conceptual lens | Independent 4-source full journey inventory and actual G0/G1/G2 distinction, with blocked/not-run accounting |
+| Graph Assurance | Harness/role in Tesbo roster | Conceptual edge challenges ONLY | Executed deterministic ownership→invariant→writer→reader→test→evidence ledger and independent artifact output |
+| Elephant-Gold | Nesberry later tenth role | Not independently invoked; cold-review stance interpreted as a desk lens | Independent reviewer actually starts cold, ignores prior conclusions and supplies direct source/spec-code drift receipts |
+| **Simulation** | **Separate required activity** | **NOT executed for GAE v0.4** | Concrete exact ChatGPT→Tesbo MCP→OpenCode/Chrome MCP→report/evidence→ChatGPT/Copilot analysis→human revision review/approval/retest→published assets with real receipts |
+
+**Specialist sub-lenses, NOT invented core-team memberships:** AI assurance (prompts, model routing, retrieval, memory, tool use and hallucinated authority); privacy/data governance (PII, exports, historical evidence and model egress); and SRE/operability (queue/backpressure, logs/metrics, retries, storage and outage recovery). Route them to Security, QA, Blue and Graph with named owners/receipts, or obtain an explicitly delegated specialist review if a qualified reviewer is available. Do not say these sub-lenses were independent teams simply because they appear in a checklist.
+
+**Status:** All nine original roles and the newer Elephant-Gold lens are **ACCOUNTED FOR AS METHODS**. They are not independently completed for v0.4; the exact Simulation, real graph harness, runtime UI, current full eight-file reconciliation and White freeze remain **NOT RUN / BLOCKED**. The phrase “full teams completed” is prohibited in release or PR summaries until separately executed receipts substantiate it.
+
+### 17.2 Original Tesbo workflow that must remain a first-class acceptance path
+
+The former Tesbo review explicitly required **two equal entry paths**:
+1. **External ChatGPT/Claude through Tesbo MCP:** QA user agrees an exact testing brief, the external client stores a durable project-scoped task with complete source/authorization context, an individually registered OpenCode/Hermes/etc. installation claims it, and that installation uses *its own* Chrome MCP/browser tools. Tesbo coordinates but does not assert physical control of an independent browser.
+2. **Native Tesbo AI Copilot:** user interacts through one Copilot chatbox with project QA Sessions and selectable native/connected AI backend, reusing the **same task/report/retest/evidence/proposal/published records** and independently selected executor as the external entry path.
+
+**Boundary:** Native Copilot cannot be the only authorized route; its chat session is not the QA-session/task/report aggregate. Existing V41 Zyra chat conversation and V89 draft-review links are reuse candidates, but a project QA Session may need a minimal independent parent for multiple chat threads, tasks, summaries and execution attempts. Do not replace or copy chat history into a second competing source of truth. Actual multi-project discovery/consent and multi-provider compatibility must be designed and tested separately; current project tokens are project-scoped.
+
+**Source-to-output lineage:** exact prompt bytes/hash → approved scope/source revisions → executor/client+task attempt identity → observed environment+actions → admitted immutable original report and evidence bytes → separate analyst interpretation with citations/uncertainty → immutable proposal revisions/base/link-impact → distinct authenticated human approvals or narrow automatic policy → exact selected publish receipt and run/testcase/requirement/skill current versions. An agent report or transcript is not itself product verification; a newly authored case after exploration cannot be declared previously executed. Future retest targets a frozen approved case revision and retains earlier failures.
+
+### 17.3 Prior Tesbo acceptance gaps not adequately called out in v0.3
+
+These are historical review risks to **RECHECK AGAINST CURRENT SOURCE**, NOT all assumed to remain open:
+
+| Prior October review issue | Current source observation / boundary | GAE contract addition |
+|---|---|---|
+| **AS-01 token scopes** | Current \`ApiTokenService.normalizeScopes\` defaults absent scopes to \`read\` and rejects invalid/empty scope sets (improvement since the older review). Existing previously issued credentials, token migration and revocation are still an unverified migration concern. | Explicit old-token inventory/rotation/upgrade gate, not a stale claim that current default is Read+Write |
+| **AS-02 protected writers** | \`mcp.tools.ts\` still names direct case and KB mutation tools gated by read/write scope; GAE is not implemented. | Uniform proof that REST/MCP/Copilot/Zyra/import/bulk/background cannot bypass proposed approval/publish rules |
+| **AS-03 project MCP OFF / consent** | Project membership/token read-write enforcement is visible in \`mcp.service.ts\`; the inspected service does not demonstrate project/client/session OFF-by-default and named consent grants. Full deployment/config proof unavailable. | Policy and server enforcement before listing/calling tools, with deny for preexisting/legacy credentials; feature-gate state verified, not guessed |
+| **AS-04 external client identity** | Current MCP token is one project identity, including shared alias \`/api/mcp\`; a human-account multi-project connector and external client-registration consent scheme was not demonstrated. | Explicit human⇄client⇄project⇄session⇄executor attribution, grants/consent and revocation; named client instance, no provider-as-identity |
+| **AS-05 exact loop / AS-12 interoperability** | No current real ChatGPT and OpenCode/Chrome client exchange was executed for this GAE review. | Require real endpoint handshake, task claim, evidence byte/content completeness, screenshot inspection and source/readback in a fresh authorized external session |
+| **AS-06 true actor attribution** | MCP writes may carry a shared agent actor or the token issuer user FK; these aren't independently sufficient to identify an external runtime installation and approval authority. | Persist initiating human, external connector, executor instance, actual tool actor and immutable approval identity separately |
+| **AS-07 session ownership** | \`zyra_chat_sessions\` is a chat conversation, not proof of a parent aggregate for many QA threads/tasks/retests. | Reconcile minimal QA Session versus existing conversation/plan/task semantics; no second chat history store |
+| **AS-08 KB source uniqueness** | V45 original \`knowledge_documents(source_provider,source_external_id)\` index lacks explicit project; later migrations/active constraint must be reviewed before a live defect claim. | Source identity and duplicate/clone semantics must be project-appropriate, verified against final schema; do not leak another project's existence |
+| **AS-09 historical requirements** | Current external ticket refs and KB snapshots do not alone certify prior Jira/Linear/Notion text at dispatch. | Pin authoritative external requirement revision/content hash and state \`UNKNOWN\` if absent |
+| **AS-10 order / AS-11 revocation races** | Permission/consent must be enforced before external task pickup/AI provider egress; revocation during reserve/upload/finalize/apply is an explicit boundary. | Deny before execution, recheck at linearized commit, fence stale executor leases, reconcile post-commit effects |
+| **AS-13/14 untrusted summaries and target enforcement** | External executor owns its browser; task text is not a physical network permission barrier. | Attribute observed target/build/actions, trustworthy environment-side policy when available, evidence completeness and verified limits |
+| **AS-15 native Copilot backend** | Existing Zyra UI and chat routes are not a demonstrated general-purpose multi-backend project Sessions Copilot. | One native UI, adapter compatibility check, model/tool/session permissions, streaming/resume/cancel proof |
+
+The original October review recorded **93 planned acceptance scenarios with zero product tests in that review**; those counts are historical and are **not automatically current GAE coverage**. Reconcile the eight authoritative original specifications and current protected-writer plans before accepting a Phase 2 implementation roadmap. No requirement ID, prior reviewer decision or approved test is copied here as freshly executed.
+
+### 17.4 Mandatory Simulation ledger — G0 design scenarios, G2 execution unproven
+
+**SIM-GAE-01: external model, manual approval, revision lineage (G0, designed NOT RUN).**
+1. QA human defines a user goal and approved target/permission manifest with the external ChatGPT client.
+2. ChatGPT uses **authorized Tesbo MCP** to store the exact task/context/source versions; server returns stable receipt. No official case/result/bug modified.
+3. Individually registered OpenCode installation claims task through its own identity, executes permitted Chrome MCP/browser journey and records observed targets, actions and blocked conditions; Tesbo does not falsely claim it launched the browser.
+4. External client submits immutable admitted report and actual artifact/evidence bytes; separate read retrieves exact content and proves completeness; unsafe content is quarantined/redacted with auditable derivative.
+5. ChatGPT or native Copilot reads source/evidence and proposes TC-A v5 draft D1 based on TC-A v4, REQ-X current source revision and skill S v2. A new finding may propose a new case but must not claim it was executed after creation.
+6. Human modifies draft D2, changes link-impact to another requirement, requests actual retest; current approved TC-A v4 and all old run/evidence remain unchanged. Stale original approval is invalidated.
+7. Authorized agent retests against the **exact approved target case revision** when available; manual reviewer approves selected exact proposal revisions, rejects others. One shared guarded publish produces TC-A v5, relation revision, audit and receipt once; no unapproved GitLab filing/other side effect.
+8. Fresh authorized external session discovers the project task and exact prior state without user pasting chat IDs; unauthorized/other-project client sees nothing. Gaps and pending/unrun conditions remain visible.
+
+**SIM-GAE-02: native Copilot, bounded automatic case update (G0, designed NOT RUN).**
+1. User in project Copilot selects project QA Session, approved authoring skill revision and permitted source scope; current user/role and project policy are resolved.
+2. Copilot proposes a permitted low-risk field change to TC-B v2 based on current published head, including source citations. In manual mode this remains pending. In narrowly authorized auto mode the exact same guarded shared service may publish v3.
+3. If the requirement source, approval policy or TC-B head changed while the model was reasoning, stale apply refuses and prepares an impact/review proposal; no blind replay.
+4. A skill-policy modification, external authoritative requirement meaning change, private draft read or session-disabled MCP tool is blocked even if natural-language instructions request it.
+5. An interrupted success acknowledgment is resolved by the stored command/receipt and readback, not by duplicate publication.
+6. Switching to another project/model/session removes prior private context and does not leak evidence; activity shows who did what and exactly which revision was committed.
+
+**SIM-GAE-03: calibration counterexamples (G0 proposed, G1/G2 NOT RUN).** Include (a) known bad testcase logic the system should reject, (b) legitimate alternate workflow to accept, (c) inaccessible/ambiguous requirement source returning \`NEEDS_ORACLE\` or UNKNOWN, (d) Chrome/tool failure while product remains unproven, (e) authorized duplicate submission and distinct later update, (f) changed target build after task dispatch, and (g) two linked requirement changes needing independent review.
+
+**Required actual receipts before "complete simulation":** independent actual OpenCode/Chrome execution with known allowed host, actual deployed SHA, real signed-in/-out identities where authorized, task/report/evidence object IDs, downloaded bytes/hashes, human review events, exact API/MCP readbacks, denied second project and role-changed actor, full G2/G3 not-run ledger. At this design stage all above are **proposed journeys**, not executed tests or verified performance.
+
+### 17.5 AI Assurance / Privacy / SRE specialist coverage (without inventing teams)
+
+- **AI Assurance within Security + QA:** instruction hierarchy and prompt injection in untrusted requirements/skills, RAG retrieval freshness and context isolation, model/tool routing and fallback, exact source revision grounding, hallucination and unsupported “success,” generated-output calibration, cost/context limits, and agent self-approval prevention.
+- **Privacy / data governance within Security + Blue:** field-level confidentiality of old versions, cross-tenant retrieval, PII in screenshots/files/EXIF/logs, exports/signed URLs/referrers, model-provider egress and retention, deletion-versus-provenance tensions, and protection of draft visibility after access revocation.
+- **SRE/operations within QA + Blue + Graph:** report-upload partial failures, worker leases and fencing, queue backlog, retries/circuit breakers, LLM/provider outages, storage exhaustion, audit/outbox lag, metrics and recovery procedures; show operator-reachable signals and evidence the alert gets to its owner.
+
+These specialist lenses were **not independently executed** for v0.4 and need named delegated owners/receipts when their boundary is in scope. They do not confer any new account/tool access.
+
+### 17.6 Full assurance / White freeze criteria and evidence ledger
+
+The original Tesbo nine-role and later Nesberry ten-role charters are **accounted for**, but formal full assurance remains **BLOCKED** until:
+
+1. Recover and read current **eight Tesbo authoritative specs** and all approved addenda, with exact file/revision receipts; compare this GAE proposal against their active requirements/design/tasks/QA.
+2. Create the independent **four-source journey universe** from actor jobs, specifications, actual route/UI/MCP/CLI surfaces and data ownership. Include internal Copilot, external ChatGPT/MCP and simulator-only fallback; record all alternate entry points, roles, lifecycle, source/consumer and crossed trust boundaries.
+3. For each material journey, record source-linked oracle, expected outcome, explicit G0/G1/G2/G3 proof tier, PASS/FAIL/NOT RUN/BLOCKED/UNKNOWN, and gaps. A representative G0 example does not establish universe coverage.
+4. Get separate Blue/Red/Green/White/Security/Purple/QA/Grey review receipts with actual source and independently grounded counterexamples; optional added Elephant-Gold truly cold receipt; no correlated self-review counted as independent.
+5. Execute real Graph closeout on source→revision→relation→plan/run→attempt→evidence→review→publication→report/effect, with non-vacuity failure controls; don't substitute an authored table for a graph harness run.
+6. Authenticate existing Tesbo UI from current source plus actual runtime captures before claiming visual parity; do human/keyboard/mobile and non-happy-path checks at appropriate stage.
+7. Obtain owner decisions on project MCP/client consent, exact protected writer/approval policy, native Copilot vs existing Zyra ownership, external requirement source authority, draft visibility and legally safe revision/evidence retention.
+8. Run real targeted migrated PG/API/MCP/auth/browser tests, and eventually the **actual external client/executor** loop; no source-only coverage accepted as operational PASS. Record absent tools/environments separately.
+9. White records *NOT FROZEN* until requirements/design/tasks, reuse inventory, owner decisions and actual evidence are reconciled. New GAE spec changes mandate a targeted delta re-review; CI green for documentation cannot be called a product/security review.
+
+**Current outcome for this supplement:** **ROSTER RECONCILED; SIMULATION SCENARIOS SPELLED OUT; FULL TEAM EXECUTION NOT PERFORMED; WHITE NOT FROZEN; implementation not authorized.** This supersedes any earlier unqualified “all teams complete” statement in the review receipt without erasing that earlier historical desk exercise.
 
 ## References and provenance
 
