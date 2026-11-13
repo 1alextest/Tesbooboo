@@ -5641,3 +5641,84 @@ remain open until the responsible owner records them; no green test run supplies
 the missing signatures or ratifies bounded automatic publication. The indexed
 eight-source reconciliation in `docs/reviews/` remains noncanonical and does not
 authorize a ninth spec or a duplicate Copilot/review system.
+
+### S. Existing repository UI deletion and recovery (2026-11-13, review pending)
+
+This is the finite UI/UX batch previously requested by the owner, kept separate
+from PR #54's shared Suite-reference repair and its tested head. Initially based
+on #53; owner-merged #54 (`e578a27`) is now integrated, retaining Section R and
+both regression sets. Owner merge is not independent review or Phase 1 sign-off.
+This increment changes no backend, schema, transport retry policy, publication
+authority, governance workflow or Copilot system.
+
+**Reproduced before repair:** test-only PR #55 head `ede5f8e` extended the existing
+isolated two-tenant Suite journey with one controlled pre-delivery 403. The actual
+browser showed no inline deletion error, and the attached page-error record
+contained the refusal as an uncaught exception. The decoded report was 9 expected /
+1 unexpected; later deletion/readback steps did not execute. The failure screenshot
+also showed the existing misleading "Default Suite", permanent-erasure and
+descendants "may" be affected wording. The request interception is not evidence
+of a real entitlement transition or server outage; the existing genuine anonymous,
+nonmember and bearer refusals remain separate, unchanged controls.
+
+**Existing owners and behavior:**
+
+- `app/(app)/projects/[id]/testcases/page.tsx` catches deletion failures inside the
+  existing modal, renders an alert and offers a read-only full reload. API errors
+  retain their original wording, including "outcome unconfirmed" after transport
+  loss; no automatic DELETE replay or promise of server rollback is introduced.
+- Opening/closing a dialog clears its prior error. Both delete choices and Cancel
+  remain disabled during the request, including Escape/backdrop close protection.
+- Count and subtree guidance use the existing Suite list/recursive testcase count
+  and a cycle-safe descendant walk. Zero-case copy is distinct. Both options remove
+  every descendant; retained cases become unassigned under the existing "No suites"
+  node. Removed cases leave existing run results and version history intact; no
+  restore capability or physical-erasure guarantee is invented.
+- Successful ancestor deletion clears an active child/grandchild Suite filter.
+  Navigation owns the new list fetch instead of starting one through the deleted
+  child's old closure. Unrelated and "No suites" views keep their context.
+- A confirmed DELETE followed by a failed Suite-list refresh closes the delete
+  modal and shows a separate reload warning. It does not describe the committed
+  deletion as an unconfirmed write or offer to repeat it blindly.
+- Bulk update cannot confirm with every field on "Leave unchanged" (button and
+  handler guard). All bulk form fields are disabled while saving; failures retain
+  selected cases and chosen values. Bulk-delete guidance reflects retained history.
+- Continued owner-requested recovery reuses that same repository warning/reload
+  block for confirmed bulk writes whose Suite-list refresh fails. The submitted
+  selection/dialog is retired as soon as the write succeeds, and a deleted case's
+  open panel is closed before refresh. Genuine write refusals still retain the
+  form/selection. The existing paginated-list error and read-only Retry remain
+  their own recovery owner, without a second banner or new notification system.
+
+**Bulk continuation reproduced before repair:** test-only `22bf1cd` performed a
+real successful bulk update, verified PostgreSQL priority/history and preserved
+unselected/foreign rows, then failed because the submission modal remained visible
+with Confirm enabled after a controlled failed follow-up Suite read. Decoded
+report: 9 expected / 1 unexpected. This is a failed post-write read, not a lost
+mutation response, production outage or new server-side uncertainty policy.
+
+**Verification owners:** extend `ci-suite-delete-scope.ts` and
+`ci-testcase-bulk-scope.ts`, not a parallel fixture/framework. Keep all ten outer
+smoke tests, page-error oracle, 120-second timeout, zero retries and existing
+authorization/foreign-row/history/readback checks. Added journeys cover pending
+controls, 403/cancel/reopen, pre-delivery network loss without replay, both subtree
+deletion modes, empty and deep Suites, no-suite navigation, successful deletion
+with controlled refresh failure, reload recovery, and bulk no-change/refusal/input
+retention. Compare actual PostgreSQL rows/history and capture visible states;
+compilation or synthetic requests alone are not UI acceptance. Exact-head results,
+failed-first evidence and inspected captures belong in PR comments/metadata, not
+evidence-only commits.
+
+The bulk continuation extends the same helper, surviving local control, native
+history/activity oracles and canonical project route. Update, unassign, archive
+and delete each commit through the real writer before a controlled Suite-read
+failure; assert one submission/history/activity change, closed dialog, reload and
+authoritative content. A separate list-read refusal exercises its existing inline
+Retry with no competing banner. No new outer test, identity, framework, transport
+retry, backend policy or duplicated recovery component is introduced.
+
+Counts/hierarchy are an advisory loaded snapshot, not a concurrency guarantee.
+PR #54 owns assignment-versus-deletion consistency; hierarchy-parent/cycle races,
+historical cleanup, unknown postcommit outcomes, independent security/release
+review, deployed acceptance and the existing F.1/D1–D6 owner decisions remain
+outside this UI repair. No broader Phase 1/2 sign-off is implied.

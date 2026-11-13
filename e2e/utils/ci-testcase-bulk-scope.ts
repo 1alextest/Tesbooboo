@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect, request as newRequest, test, type Page, type TestInfo } from "@playwright/test";
+import { expect, request as newRequest, test, type Page, type Request, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
 import { hashPasswordForSeed } from "./password";
 import { verifySuiteDeleteScope } from "./ci-suite-delete-scope";
@@ -52,6 +52,10 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       const issued = await post(`${base}/apikeys`, { name: `CI Bulk ${scope}`, scopes: [scope] }); tokens.push(issued.id); tokenByScope[scope] = issued.token;
     }
     const endpoint = (kind: string) => `${base}/testcases/bulk-${kind}`;
+    const projectResponse = await page.request.get(base); expect(projectResponse.ok()).toBeTruthy();
+    const project = await projectResponse.json(); expect(project).toMatchObject({ id: projectId, key: expect.any(String) });
+    // Reuse the canonical route for stale-target and refresh-recovery journeys.
+    const repositoryUrl = `${web}/projects/${encodeURIComponent(project.key)}/testcases`;
 
     await test.step("genuine anonymous, nonmember and read-only bearer requests are refused before any row/history/activity write", async () => {
       expect((await page.request.get(`${api}/api/projects/${foreignProject}/testcases/${foreign.id}`)).status()).toBe(404);
@@ -106,12 +110,27 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       await page.getByRole("button", { name: "Bulk actions", exact: true }).click();
       const modal = page.getByRole("heading", { name: "Bulk actions", exact: true }).locator("..");
       await modal.locator("select").filter({ has: page.locator('option[value="update"]') }).selectOption("update");
-      await modal.locator("select").filter({ has: page.locator('option[value="P0"]') }).selectOption("P0");
+      const priority = modal.locator("select").filter({ has: page.locator('option[value="P0"]') });
+      await expect(modal.getByRole("button", { name: "Confirm", exact: true })).toBeDisabled();
+      await expect(modal).toContainText("Choose at least one field to update.");
+      await testInfo.attach("bulk-update-no-changes-cannot-confirm", { body: await page.screenshot(), contentType: "image/png" });
+      await priority.selectOption("P0"); await expect(modal.getByRole("button", { name: "Confirm", exact: true })).toBeEnabled();
+      await priority.selectOption(""); await expect(modal.getByRole("button", { name: "Confirm", exact: true })).toBeDisabled();
+      await priority.selectOption("P0");
       const before = await state();
       // One controlled pre-delivery 403, not a real entitlement transition or backend outage.
-      await page.route(endpoint("update"), async (route) => route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "CI controlled bulk refusal" }) }), { times: 1 });
-      await modal.getByRole("button", { name: "Confirm", exact: true }).click();
+      let release!: () => void, reached!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; }), intercepted = new Promise<void>((resolve) => { reached = resolve; });
+      await page.route(endpoint("update"), async (route) => { reached(); await gate; await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "CI controlled bulk refusal" }) }); }, { times: 1 });
+      try {
+        await modal.getByRole("button", { name: "Confirm", exact: true }).click(); await intercepted;
+        for (const field of await modal.locator("select").all()) await expect(field).toBeDisabled();
+        await expect(modal.getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
+      } finally { release(); }
       await expect(modal.getByText("CI controlled bulk refusal", { exact: true })).toBeVisible(); expect(await state()).toEqual(before);
+      await expect(priority).toHaveValue("P0"); await expect(modal).toContainText("2 test cases selected");
+      for (const field of await modal.locator("select").all()) await expect(field).toBeEnabled();
+      await testInfo.attach("bulk-refusal-keeps-input-and-selection", { body: await page.screenshot(), contentType: "image/png" });
       const saved = page.waitForResponse((response) => response.url() === endpoint("update") && response.request().method() === "POST");
       await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await saved).ok()).toBeTruthy();
       await expect(modal).toBeHidden();
@@ -134,6 +153,9 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       await page.getByRole("button", { name: "Bulk actions", exact: true }).click();
       const modal = page.getByRole("heading", { name: "Bulk actions", exact: true }).locator("..");
       await modal.locator("select").selectOption("delete");
+      await expect(modal).toContainText("Existing run results and test case version history are retained.");
+      await expect(modal).not.toContainText(/permanently deletes/i);
+      await testInfo.attach("bulk-delete-truthful-history-guidance", { body: await page.screenshot(), contentType: "image/png" });
       const saved = page.waitForResponse((item) => item.url() === endpoint("delete") && item.request().method() === "POST");
       await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await saved).ok()).toBeTruthy();
       await expect(modal).toBeHidden(); await page.reload();
@@ -249,10 +271,6 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
     });
 
     await test.step("a real stale Suite choice preserves the existing bulk form and selection, then recovers to a valid target", async () => {
-      const projectResponse = await page.request.get(base); expect(projectResponse.ok()).toBeTruthy();
-      const project = await projectResponse.json(); expect(project).toMatchObject({ id: projectId, key: expect.any(String) });
-      // RouteParamsProvider canonicalizes UUID links to the project's readable key.
-      const repositoryUrl = `${web}/projects/${encodeURIComponent(project.key)}/testcases`;
       const stale = await post(`${base}/suites`, { name: "CI Stale bulk destination" });
       const valid = await post(`${base}/suites`, { name: "CI Recovered bulk destination" });
       await page.goto(`${web}/projects/${projectId}/testcases`); await page.reload();
@@ -290,6 +308,78 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
     });
 
     await verifySuiteDeleteScope({ page, api, web, db, other, machine, projectId, foreignProject, ownerId, outsider, tokens: tokenByScope, testInfo });
+    for (const scenario of ["update", "move", "list-refresh", "archive", "delete"] as const) {
+      await test.step(`confirmed bulk ${scenario} recovers through existing read-only controls without resubmission`, async () => {
+        // Reuse the surviving control, DB/history oracle and two-tenant fixture, not
+        // new accounts or seed infrastructure. Every POST reaches the real writer.
+        await page.goto(repositoryUrl);
+        const statusFilter = page.locator("select").filter({ has: page.locator('option[value="Archived"]') });
+        if (scenario === "delete") await statusFilter.selectOption("Archived");
+        await page.getByRole("checkbox", { name: `Select ${control.title}`, exact: true }).check();
+        await page.getByRole("button", { name: "Bulk actions", exact: true }).click();
+        const modal = page.getByRole("heading", { name: "Bulk actions", exact: true }).locator("..");
+        const action = scenario === "list-refresh" ? "update" : scenario;
+        await modal.locator("select").filter({ has: page.locator('option[value="update"]') }).selectOption(action);
+        if (action === "update") await modal.locator("select").filter({ has: page.locator('option[value="P1"]') }).selectOption(scenario === "update" ? "P1" : "P2");
+        // Move keeps the existing explicit unassignment option; later scenarios
+        // prove its persisted No suites membership instead of guessing a UI patch.
+        const before = await state(), events = await activity();
+        const mutationUrl = endpoint(action === "delete" ? "delete" : "update");
+        let submissions = 0, refusedReads = 0;
+        const countSubmission = (req: Request) => { if (req.method() === "POST" && req.url() === mutationUrl) submissions += 1; };
+        page.on("request", countSubmission);
+        try {
+          await page.route((url) => scenario === "list-refresh" ? url.pathname === new URL(`${base}/testcases`).pathname : url.href === `${base}/suites`, (route) => {
+            refusedReads += 1;
+            return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "CI controlled bulk refresh failure" }) });
+          }, { times: 1 });
+          const saved = page.waitForResponse((response) => response.url() === mutationUrl && response.request().method() === "POST");
+          await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await saved).ok()).toBeTruthy();
+          const after = await state(); expectPreserved(before, after, [control.id]);
+          const updated = after.cases.find((row) => row.id === control.id);
+          expect(updated).toMatchObject(scenario === "update" ? { priority: "P1" } : scenario === "move" ? { suite_id: null } : scenario === "list-refresh" ? { priority: "P2" } : scenario === "archive" ? { status: "Archived", deleted_at: null } : { deleted_at: expect.any(Date), deleted_by: ownerId });
+          const nextEvents = await activity(); expect(nextEvents).toHaveLength(events.length + 1);
+          expect(nextEvents.at(-1).diff.testcaseIds).toEqual([control.id]);
+          await expect(modal).toBeHidden();
+          const warning = page.getByRole("alert").filter({ hasText: "Bulk action completed, but the repository could not be refreshed." });
+          if (scenario === "list-refresh") {
+            // The list loader already owns its inline Retry. Do not add a second
+            // competing warning/recovery control for an error it already handles.
+            await expect(warning).toHaveCount(0);
+            await expect(page.getByText("CI controlled bulk refresh failure", { exact: true })).toBeVisible();
+            await page.getByTestId("testcases-retry").click();
+          } else {
+            await expect(warning).toBeVisible();
+            await expect(page.getByRole("button", { name: "Bulk actions", exact: true })).toHaveCount(0);
+            await testInfo.attach(`confirmed-bulk-${scenario}-refresh-warning`, { body: await page.screenshot(), contentType: "image/png" });
+            await page.getByRole("button", { name: "Reload repository", exact: true }).click();
+          }
+          await expect(page).toHaveURL(repositoryUrl);
+          // Actual content, not early DOM absence, proves the read/reload finished.
+          await expect(page.getByRole("button", { name: "CI moveToDefault local 0", exact: true })).toBeVisible();
+          await expect(warning).toHaveCount(0);
+          if (scenario === "archive" || scenario === "delete") {
+            await expect(page.getByRole("button", { name: control.title, exact: true })).toHaveCount(0);
+            await statusFilter.selectOption("Archived");
+            if (scenario === "archive") await expect(page.getByRole("button", { name: control.title, exact: true })).toBeVisible();
+            else await expect(page.getByRole("button", { name: control.title, exact: true })).toHaveCount(0);
+          } else {
+            const row = page.getByRole("row").filter({ has: page.getByRole("button", { name: control.title, exact: true }) });
+            await expect(row).toContainText(updated.priority);
+            if (scenario === "move") {
+              const noSuites = page.getByRole("button", { name: /^No suites \d+$/ });
+              await expect(noSuites).toBeVisible(); await noSuites.click();
+              await expect(page).toHaveURL(`${repositoryUrl}?suiteId=none`);
+              await expect(page.getByRole("button", { name: control.title, exact: true })).toBeVisible();
+            }
+          }
+          await expect(page.locator("body")).not.toContainText("CI PRIVATE");
+          expect(refusedReads).toBe(1); expect(submissions).toBe(1);
+          expect(await state()).toEqual(after); expect(await activity()).toEqual(nextEvents);
+          await testInfo.attach(`confirmed-bulk-${scenario}-recovered-without-resubmission`, { body: await page.screenshot(), contentType: "image/png" });
+        } finally { page.off("request", countSubmission); }
+      });
+    }
   } finally {
     for (const id of tokens) expect((await page.request.delete(`${base}/apikeys/${id}`)).ok()).toBeTruthy();
     await machine.dispose(); await other.dispose(); await db.end(); // Preserve synthetic history/audit until disposable DB teardown.
