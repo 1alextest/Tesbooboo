@@ -367,7 +367,8 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
             const row = page.getByRole("row").filter({ has: page.getByRole("button", { name: control.title, exact: true }) });
             await expect(row).toContainText(updated.priority);
             if (scenario === "move") {
-              await page.getByRole("button", { name: "No suites", exact: true }).click();
+              const noSuites = page.getByRole("button", { name: /^No suites \d+$/ });
+              await expect(noSuites).toBeVisible(); await noSuites.click();
               await expect(page).toHaveURL(`${repositoryUrl}?suiteId=none`);
               await expect(page.getByRole("button", { name: control.title, exact: true })).toBeVisible();
             }
