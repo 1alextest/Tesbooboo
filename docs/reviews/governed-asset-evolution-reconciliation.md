@@ -1,11 +1,11 @@
-# Tesbo — Governed Asset Evolution
-**Living specification v0.4 · DRAFT FOR REVIEW · 2026-11-12**
+# Tesbo — Governed Asset Evolution: Design Reconciliation Review
+**Review proposal v0.5 · NOT A NINTH CANONICAL SPEC · 2026-11-12**
 
-> **Canonical living specification.** This file intentionally has a version-neutral path. The internal draft version advances on review while the document is edited in place; no separate v0.1/v0.2/v0.3 copies are authoritative.
+> **Noncanonical review artifact.** The recovered Tesbo `00_README.md` P-14 requires exactly the **eight existing canonical Markdown specifications** (`00_README.md` through `07_UI_DESIGN_TASKS.md`). The approved original package is the working authority. This document is a consolidated proposal/source-reconciliation receipt, not a ninth competing requirements, design, task or QA source. Any accepted changes must be made *in place* in the eight originals with approved IDs and review.
 >
-> **Revision log:** v0.1 initial asset/version/change-set contract; v0.2 strengthened field/relationship/legacy history and first-party Copilot integration; v0.3 charter-lens desk review, Copilot session continuity, temporal provenance and security/Graph gaps; v0.4 original Tesbo nine-role reconciliation, separate simulation lane, and outstanding exact-client/identity gates. Each remains a **proposal** until explicit owner decisions and independent evidence gates are met.
+> **Revision log:** v0.1 initial asset/version/change-set contract; v0.2 strengthened field/relationship/legacy history and first-party Copilot integration; v0.3 charter-lens desk review, Copilot session continuity, temporal provenance and security/Graph gaps; v0.4 original Tesbo nine-role reconciliation, separate simulation lane, and outstanding exact-client/identity gates; v0.5 read all eight indexed Tesbo 1.4.18 files, reconciled owner overlaps and an approval-mode conflict, and routed this file out of canonical specs. Each remains a **proposal** until explicit owner decisions and independent evidence gates are met.
 
-**Status:** Proposed design only. Not an approved product contract, implementation authorization, migration, or Phase 2 sign-off.
+**Status:** Noncanonical design/review proposal only. Tesbo's eight original v1.4.18 specs remain authoritative until explicitly amended. Not a migration, implementation authorization, approval-policy change, or Phase 2 sign-off.
 
 **Scope:** Independently versioned test cases, requirements, and testing skills; granular field-and-related-artifact history; working drafts; auto/manual approval; version-aware relationships, run provenance, and first-party AI Copilot access across the same governed domain services. Applies across projects and applications. Nesberry is an initial application binding, not the generic data model.
 
@@ -491,6 +491,68 @@ The original Tesbo nine-role and later Nesberry ten-role charters are **accounte
 9. White records *NOT FROZEN* until requirements/design/tasks, reuse inventory, owner decisions and actual evidence are reconciled. New GAE spec changes mandate a targeted delta re-review; CI green for documentation cannot be called a product/security review.
 
 **Current outcome for this supplement:** **ROSTER RECONCILED; SIMULATION SCENARIOS SPELLED OUT; FULL TEAM EXECUTION NOT PERFORMED; WHITE NOT FROZEN; implementation not authorized.** This supersedes any earlier unqualified “all teams complete” statement in the review receipt without erasing that earlier historical desk exercise.
+
+
+## 18. Crosswalk against recovered Tesbo eight-spec package v1.4.18 (2026-10-28)
+
+### 18.1 Scope, evidence strength and precedence
+
+This review read the **indexed content of all eight original project specifications** at reported revision **1.4.18**, modified October 28, 2026: \`00_README.md\`, \`01_PRODUCT_REQUIREMENTS.md\`, \`02_WORKFLOW_AND_UX_SPEC.md\`, \`03_TECHNICAL_DESIGN.md\`, \`04_MCP_API_CONTRACTS.md\`, \`05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md\`, \`06_IMPLEMENTATION_AGENT_BRIEF.md\`, \`07_UI_DESIGN_TASKS.md\`. The README declares 105 FR, 12 NFR, 72 AC, 77 tasks and 423 planned QA cases; **declared counts, not a fresh byte-level checker result**. Raw-file materialization was unavailable. These files are materially newer than previously cited 1.4.4/1.4.5 or 1.4.6 baselines; their own audit references historical fork SHA \`124f1280\`, not a confirmed current deployed build. No live environment tested.
+
+**Critical authority finding GAE-18-01 (blocking):** Original README **P-14** and \`06_IMPLEMENTATION_AGENT_BRIEF.md\` require maintaining **only the eight original canonical filenames and existing ZIP**, with amendments integrated into the owning sections and original IDs. The former \`docs/specs/governed-asset-evolution.md\` looked like a ninth canonical source; placing this document under \`docs/reviews/\` fixes that source-of-authority conflict *for this PR*. The eight original source attachments were NOT modified, overwritten or regenerated; accepted edits still need an authorized in-place update and versioned ZIP/byte verification.
+
+### 18.2 Reuse and overlap mapping (new work must not reinvent these)
+
+| Canonical original | Existing binding capability and IDs | GAE reconciliation / actual delta |
+|---|---|---|
+| **00_README** | **P-05** canonical KB/history; **P-07** human exact approved publication; **P-14** exactly eight specifications; **P-17** external and native equal AI entry paths; **P-18** project external MCP off by default; P-01 reuse-first and P-20 existing modules. | Do not invent a second spec package, Copilot, KB, permission system or publisher. **Requested auto mode needs an explicit P-07 amendment**, not implied permission. |
+| **01_PRODUCT_REQUIREMENTS** | **FR-027–037** shared Zyra-derived staging, logical operations, exact field diffs, immutable proposal revisions, comments, human approve and selected apply, existing testcase version history; **FR-046** per-project format profiles; **FR-076–077** versioned QA Standards & Playbooks, effective guides and native/external MCP consumption; **FR-078** case evolution; **FR-080–084** condition/step IDs, typed historical links, hover/focus history, attempted-version provenance; **FR-101–105** governed learning/discovery and spec amendments. | A wholly new GAE approval engine, skills store, generic graph or Copilot learning module duplicates already specified owners. Real incremental requirements: approved-vs-working **per-asset** draft streams for *requirements and skills as well as cases*, typed attachment/custom-field/link history, source-revision/coverage validity, cross-asset atomic change-set semantics, and owner-ratified auto-publication if chosen. |
+| **02_WORKFLOW_AND_UX_SPEC** | **WF-05/06** draft correction/partial merge; **WF-09** finding triage; **WF-10** QA Standards & Playbooks; **WF-11** actionable step execution; **WF-12** contextual change history; **WF-13** typed relationships. Single native Copilot and QA-session UX already described. | Integrate per-item current/past/draft view and independent requirement/skill histories into WF-10/12/13. Do not add another top-level page or independent review workspace. |
+| **03_TECHNICAL_DESIGN** | \`ai_generation_requests\`/Zyra staging, \`zyraSaveAttempt\`, V63 testcase history, V119 run snapshots, KB versioning, shared guarded selected apply; §10 stable operation/receipt; **revision 1.4.8 expressly proposes one \`qa_guide\` identity with immutable revisions, scope/inheritance/effective manifest and source-linked consumption**. Modular monolith. | Prior GAE idea for new \`asset_change_set\` or \`qa_skill\` storage is **not justified unchanged**. First show which existing shared staging/review and \`qa_guide\` constructs cannot express new per-asset draft/version/publishing invariants; no competing writer/table until negative-design proof. |
+| **04_MCP_API_CONTRACTS** | Existing proposed task/report/proposal operations, \`list_case_versions\`/\`get_case_version\`, \`propose_qa_guide_revision\`, draft amendments and product discovery. **Initial no-agent-merge** prohibits assistant credentials from approving/publishing in MVP. | Extend proposed history/diff/guide/impact APIs, not a duplicate MCP catalogue. A true agent auto-publish capability needs an explicit authorization/policy revision and denial tests across direct REST/MCP/import/Zyra paths. |
+| **05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN** | **T-304** shared review, **T-422** QA Standards & Playbooks, **T-407/T-409/T-411–414** sessions/Copilot/project MCP. **QA-242–248** guide/version and case-history checks; **QA-261–268** typed relationships, hover/focus and historical checks; **QA-404–423** session learning/discovery. | Extend existing backlog IDs with scoped changes/dependencies. New QA IDs only for genuinely missing per-requirement/skill publication streams, auto-policy security, all-field/attachment consistency and multi-asset transaction tests. Do not count any planned scenario as executed. |
+| **06_IMPLEMENTATION_AGENT_BRIEF** | Read all eight, protect exact human-reviewed publication, source-first reuse, no duplicate spec package, PR-only development and no deployment claim without proof. | Update brief in place only once owner approves the amended policy and actual implementation sequence. This review document is a *review input*, never a ninth new agent instruction package. |
+| **07_UI_DESIGN_TASKS** | **D-05** shared Change requests; **D-13** Copilot; **D-14** QA Standards & Playbooks; **D-15** finding/case evolution; **D-16/D-17** action history and contextual microhistory; **D-18** Learning & Product Discoveries in Sessions. Authentic current-screen proof mandatory. | Extend existing row/detail/drawer/history/compare/reviewer UI with per-asset version, drafts, field/link/evidence diff, accessibility, and Copilot deep-link. Reconstruct actual source and running UI before asserting visual parity. |
+
+**New semantic scope is not zero:** GAE requests that every **individual requirement and skill** has its own approved published version and draft iteration history, just as each case does, with comprehensive field/linked-object history and a new optional auto-update governance mode. The original pack specifies important pieces but does not fully settle this combined model.
+
+### 18.3 Owner-policy conflict (GAE-18-02, MUST resolve before auto implementation)
+
+Current **P-07, FR-032/033/037, MCP no-agent-merge and the implementation brief** require an authenticated **human** to approve an exact revision and separately apply selected operations into protected official records. The user subsequently requested **two modes**: automatic agent application of authorized case/requirement/skill updates, or manual approval in the application. This is a real, deliberate change request, not an already-approved exception.
+
+**Proposed safe reconciliation for owner's decision:**
+- Manual remains binding for all protected publication **until** the eight originals are amended. Automatic proposal preparation can be implemented without publication authority; do not falsely call it the requested auto-publishing feature.
+- An opt-in automatic publish policy, if ratified, must bind project, actor/client/runtime, asset type, fields/operation, effective guide/skill, base revision, approval-risk class, temporal budget, revocation and an exact durable signed policy decision. A generic \`read/write\` MCP token or “AI approved=true” is never a delegation.
+- Preserve mandatory human review for sensitive authoritative requirement semantics, security/evidence retention policy, executable guide/skill safety constraints, cross-project links and historical accepted results unless a separately ratified bounded exception exists. A policy author cannot be its own unreviewed privileged publisher.
+- Revise P-07/FR-033, affected Workflow/Technical/MCP/Backlog/Agent Brief/UI sections **together**, then test denied direct bypasses, revocation/lease races, mixed client identity, stale version, lost commit ACK and actual approved auto apply through the same guarded domain service. A proposal is never a publication receipt.
+- Normal case changes still preserve revisioned exact history, relationship impact and old run evidence. “Auto” must not silently rewrite linked neighbours or external Jira/Linear/Notion requirements.
+
+### 18.4 Second-pass adversarial counterexamples against original 1.4.18 (desk review, NOT independent team agent)
+
+| Test challenge | Expected truth / disposition |
+|---|---|
+| Create a second skills registry though \`qa_guide\` revisions and effective playbooks already planned | **Reject duplication**; reuse/extend QA Standards & Playbooks, document any necessary difference between executable skills and policy/authoring guide. |
+| Auto agent invokes legacy \`update_testcase\`, bulk REST, MCP or Zyra save with only read/write token | **Denied** without specifically approved effective automatic policy; current source does not demonstrate that future restriction. |
+| Agent edits only a requirement link, file attachment, tag or custom-field value | Must appear in one truthful asset/relationship/artifact timeline; absence of testcase text difference is not “no change.” |
+| Publish REQ-X v4 while TC-A stays valid v2 and TC-B needs update | Keep independent per-asset versions, relationship-version validation, explicit unknowns and an unchanged legitimate neighbour; no blanket versions. |
+| Human edits a submitted proposal after reviewing it | Review must invalidate stale approval; protect exact change-set hash, dependencies and revision. |
+| Requirement mirrored from external Jira loses upstream version | Mark \`UNKNOWN/needs oracle\`, never claim Tesbo can approve changes to Jira source automatically. |
+| GAE historical runs use V119 backfilled snapshot | Mark \`reconstructed_later\`, not original vN-tested truth; no manufactured historic pass. |
+| Copilot shares a private draft in cached context after role/project/session switch | Fail authorization and clear/hide cached excerpts at use time; maintain own QA-session source boundaries. |
+| G0 “simulation” result is uploaded as if real OpenCode/browser evidence | Explicitly reject product PASS; original immutable report bytes, client and build proof required for G2. |
+| New spec is marked approved because documentation CI is green | **Reject**: original eight have not been amended/approved; reviewers/Graph/White and real tests remain outstanding. |
+
+This pass was performed by the same assistant reading recovered indexed sources. It is **not** an independently run second engineering agent, actual GitHub project-code execution, real client integration, or formal White freeze.
+
+### 18.5 Recommended owner-reviewed integration order
+
+1. Resolve **P-07 / FR-033** change request concerning scoped auto publication; define allowed/forbidden operations and human-only exceptions.
+2. Amend **the same eight canonical source files in place**, preserving existing IDs and content; update active revision/changelog and exact file/ZIP receipts. Original indexed sources are readable but were **not** available for authorized raw-byte replacement in this turn, so this PR must not claim that step completed.
+3. Reconcile against current Tesbo \`development\` code (later than original audit \`124f128\`) and all current mutation/read paths. Show REUSE/EXTEND/NEW with negative proof.
+4. Obtain a genuinely independent cold review, a full actor/source/route/lifecycle journey inventory, deterministic Graph checks and White gate. Prior role-lens desk passes do not substitute for those.
+5. After owner design approval, implement first bounded extension of **shared review/publishing and \`qa_guide\`** with real migrated PostgreSQL/auth/MCP/browser denial and history tests. Do not prematurely start the goal-led executor or invent a new test-management service.
+
+**Review status:** INTEGRATION READY FOR OWNER DISCUSSION; **NOT APPROVED, NOT FULLY ASSURED, NOT IMPLEMENTED**. No original eight-file source was overwritten, no target/project data was changed and no app migration/test/deploy was executed for this review.
 
 ## References and provenance
 
