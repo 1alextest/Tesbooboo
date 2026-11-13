@@ -510,7 +510,17 @@ test.describe("execution bulk operations, schedules and share links", () => {
     // The public routes are deliberately unauthenticated — that is what a share link is for.
     const publicRun = await anon.get(`/api/public/shared-runs/${body.shareToken}`, { failOnStatusCode: false });
     expect(publicRun.status(), `the public run answered ${publicRun.status()}`).toBe(200);
-    expect((await publicRun.json()).id).toBe(cycleId);
+    // D2/F8a owner-approved narrowing deliberately removes public Run id. Compare all eight
+    // published fields with the authoritative authenticated Run, not a weaker name-only check.
+    const ownerRun = await asOwner.get(`/api/cycles/${cycleId}`);
+    expect(ownerRun.status()).toBe(200);
+    const internal = await ownerRun.json();
+    expect(internal.id).toBe(cycleId);
+    expect(internal.shareToken).toBe(body.shareToken);
+    expect(await publicRun.json()).toEqual({
+      name: internal.name, status: internal.status, description: internal.description, environment: internal.environment,
+      buildVersion: internal.buildVersion, createdAt: internal.createdAt, startedAt: internal.startedAt, endedAt: internal.endedAt,
+    });
 
     const publicExecutions = await anon.get(`/api/public/shared-runs/${body.shareToken}/executions`, {
       failOnStatusCode: false,

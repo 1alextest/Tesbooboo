@@ -2804,7 +2804,19 @@ export async function toggleTestRunShare(cycleId: string, enabled: boolean): Pro
   return api<ShareState>(`/api/cycles/${cycleId}/share`, { method: "POST", body: { enabled } });
 }
 
-export async function getPublicSharedRun(token: string): Promise<TestRunDetail & { shareEnabled: boolean }> {
+/** Explicit anonymous projection, not the authenticated Run or its sharing settings. */
+export interface PublicSharedRun {
+  name: string;
+  status: string;
+  description: string | null;
+  environment: string | null;
+  buildVersion: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  endedAt: string | null;
+}
+
+export async function getPublicSharedRun(token: string): Promise<PublicSharedRun> {
   return api(`/api/public/shared-runs/${token}`);
 }
 
