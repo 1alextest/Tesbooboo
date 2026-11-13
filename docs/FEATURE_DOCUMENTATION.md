@@ -5157,3 +5157,41 @@ skips. Exact-head results and inspected captures belong in the implementation
 PR. No SDK publication, deployment, agent merge, independent human review, risk
 acceptance or Phase 1/2 exit is implied. Canonical specification/baseline recovery,
 owner F2/F3/F6–F8 dispositions and disclosed moderate/low findings remain open.
+
+### L. Review Board and API/MCP onboarding UI accuracy (2026-11-12, pending review)
+
+Two narrowly scoped presentation changes preserve existing routes, roles, token issuance,
+MCP contracts and Playwright reporting; neither is a new agent or repository subsystem.
+
+- Review Board (PR #45): a completed analysis that checks zero or one eligible test
+  case cannot establish pairwise distinctness. Empty findings distinguish zero,
+  one, unavailable analysis coverage, and two-or-more compared cases; category
+  filter emptiness retains its existing behavior. The UI uses the server's existing
+  analyzed-count field, rather than fabricating an eligible count.
+- API/MCP settings (PR #46): new tokens default to Read only; instructions explain
+  that reporters and write-capable agents need both scopes as appropriate. The
+  existing server enforces per-tool scopes/project access; changing a checkbox
+  default does not grant or revoke permissions on previously issued tokens.
+- The one-time token remains copyable in its reveal dialog but is removed from
+  component state on dismissal, never inserted into the persistent token-list
+  state, and not embedded in configuration examples. Existing token values cannot
+  be retrieved after creation. Config examples use placeholders or OpenCode's
+  environment-variable substitution.
+- OpenCode's documented remote MCP V2 configuration extends the existing
+  Claude/generic onboarding tab set. A manual connection diagnostic invokes
+  only JSON-RPC `tools/list` on the configured project-scoped URL using the
+  user-supplied temporary bearer token. A reported success establishes endpoint
+  reachability, project access, and tool discovery only, not write authorization,
+  reporter delivery, or an external deployment's whole-client compatibility.
+- `API_BASE` is the configured `NEXT_PUBLIC_API_URL` (or local fallback).
+  App and API hosts can coincide behind a reverse proxy, so the UI no longer
+  asserts they must differ. The project breadcrumb is derived from the
+  route-bound ProjectDataProvider, while the sidebar can display a workspace
+  selector; the DMIS/Nesberry screenshot alone is not proof of cross-project
+  leakage. No speculative routing mutation was made.
+
+The PRs must independently pass latest-head CI and review before merging.
+Browser CORS reachability, actual one-time secret exposure semantics and the
+new connection diagnostic's deployed behavior need verification on an authorized
+environment. No credential, deployment, schema, authorization policy or
+Phase 2 approval is introduced.
