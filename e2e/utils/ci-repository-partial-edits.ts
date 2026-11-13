@@ -159,24 +159,60 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
 
     await checked("UI-created API tokens support cookie-free MCP initialize/discovery/writes, read-only refusal and UI revocation", async () => {
       const tokenPage = `${web}/projects/${projectId}/settings/api-tokens`;
-      async function createToken(name: string, readOnly = false) {
+      async function createToken(name: string, scopes: "read" | "read-write") {
         await page.goto(tokenPage);
         await page.getByRole("button", { name: "Create token", exact: true }).click();
         const modal = page.getByRole("heading", { name: "Create API token", exact: true }).locator("..");
         await modal.getByPlaceholder("e.g. Claude Code — my laptop").fill(name);
-        if (readOnly) await modal.getByRole("checkbox", { name: /^Write/ }).uncheck();
+        await expect(modal).toContainText("Read is selected by default");
+        await expect(modal).toContainText("Automated Playwright reporting needs Read and Write");
+        await expect(modal.getByRole("checkbox", { name: /^Read/ })).toBeChecked();
+        await expect(modal.getByRole("checkbox", { name: /^Write/ })).not.toBeChecked();
+        if (scopes === "read-write") await modal.getByRole("checkbox", { name: /^Write/ }).check();
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => { release = resolve; });
+        // Hold the actual issuance response, not a synthetic token: Escape/backdrop must not
+        // strand a successful creation before its one-time reveal can be copied.
+        await page.route(`${base}/apikeys`, async (route) => {
+          if (route.request().method() !== "POST") return route.continue();
+          const response = await route.fetch();
+          await held; await route.fulfill({ response });
+        });
         const issued = page.waitForResponse((response) => response.url() === `${base}/apikeys` && response.request().method() === "POST");
-        await modal.getByRole("button", { name: "Create token", exact: true }).click();
+        try {
+          await modal.getByRole("button", { name: "Create token", exact: true }).click();
+          await expect(modal.getByRole("button", { name: "Creating…", exact: true })).toBeDisabled();
+          await page.keyboard.press("Escape");
+          await expect(modal).toBeVisible();
+          await modal.locator("..").click({ position: { x: 2, y: 2 } });
+          await expect(modal).toBeVisible();
+        } finally { release(); }
         const response = await issued;
+        await page.unroute(`${base}/apikeys`);
         expect(response.ok()).toBeTruthy();
+        expect(response.request().postDataJSON()).toEqual({ name, scopes: scopes === "read" ? ["read"] : ["read", "write"] });
         const data = await response.json(); tokens.push(data.id);
+        expect(data.scopes).toEqual(scopes === "read" ? ["read"] : ["read", "write"]);
         const reveal = page.getByRole("heading", { name: "Copy your new token", exact: true }).locator("..");
         await expect(reveal.locator("input[readonly]")).toHaveValue(data.token);
+        for (const snippet of await page.locator("pre").allTextContents()) expect(snippet).not.toContain(data.token);
+        await page.keyboard.press("Escape"); await expect(reveal).toBeVisible();
         await reveal.getByRole("button", { name: "Done", exact: true }).click();
-        await page.reload(); // Clear the just-created secret from ALL connection snippets before capture.
+        await expect(page.getByRole("row").filter({ hasText: name })).toBeVisible();
+        expect(await page.locator("body").innerText()).not.toContain(data.token);
+        await expect(page.locator("input[readonly]")).toHaveCount(0);
+        await page.reload();
         await expect(page.getByRole("row").filter({ hasText: name })).toBeVisible();
         expect(await page.locator("body").innerText()).not.toContain(data.token);
         return { id: data.id as string, secret: data.token as string, name };
+      }
+      const diagnostic = () => page.getByRole("heading", { name: "Check MCP connection", exact: true }).locator("../..");
+      async function checkConnection(secret: string, expected: RegExp) {
+        await diagnostic().getByLabel("API token", { exact: true }).fill(secret);
+        await diagnostic().getByRole("button", { name: "Check connection", exact: true }).click();
+        await expect(diagnostic().getByRole("status")).toContainText(expected);
+        await expect(diagnostic().getByLabel("API token", { exact: true })).toHaveValue("");
+        expect(await diagnostic().innerText()).not.toContain(secret);
       }
       let rpcId = 0;
       async function rpc(secret: string, method: string, params: Record<string, unknown> = {}, session?: string, alias = false) {
@@ -191,7 +227,7 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
         const body = await response.json(); expect(body.error).toBeUndefined(); expect(body.result.isError).toBe(false);
         return JSON.parse(body.result.content[0].text);
       }
-      const write = await createToken("CI MCP read-write");
+      const write = await createToken("CI MCP read-write", "read-write");
       const initialized = await rpc(write.secret, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "tesbo-ci", version: "1" } });
       expect(initialized.status()).toBe(201);
       expect((await initialized.json()).result).toMatchObject({ protocolVersion: "2025-06-18", serverInfo: { name: "tesbo-mcp" }, capabilities: { tools: { listChanged: false } } });
@@ -225,7 +261,7 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
       expect((await caseState(created.id)).row).toMatchObject({ suite_id: null, owner_id: ownerId });
       await call(write.secret, session, "update_testcase", { testcaseId: created.id, suiteId: second.id });
       expect((await caseState(created.id)).row).toMatchObject({ suite_id: second.id, owner_id: ownerId });
-      const read = await createToken("CI MCP read-only", true);
+      const read = await createToken("CI MCP read-only", "read");
       const readInit = await rpc(read.secret, "initialize", { protocolVersion: "2024-11-05" });
       expect(readInit.status()).toBe(201);
       const readSession = readInit.headers()["mcp-session-id"];
@@ -234,6 +270,66 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
       const denied = await rpc(read.secret, "tools/call", { name: "archive_testcase", arguments: { testcaseId: created.id } }, readSession);
       expect(denied.status()).toBe(201); expect((await denied.json()).error).toMatchObject({ code: -32002 });
       expectProjectUnchanged(beforeDenied, await projectState());
+      await test.step("configured endpoint/OpenCode guidance and read-only browser diagnostics are honest and secret-free", async () => {
+        await page.getByRole("button", { name: "OpenCode", exact: true }).click();
+        const config = page.locator("pre").filter({ hasText: '"$schema": "https://opencode.ai/config.json"' });
+        expect(JSON.parse((await config.textContent())!)).toEqual({
+          $schema: "https://opencode.ai/config.json", mcp: { servers: { tesbo: {
+            type: "remote", url: `${base}/mcp`, oauth: false, headers: { Authorization: "Bearer {env:TESBO_API_TOKEN}" },
+          } } },
+        });
+        await expect(page.getByText(api, { exact: true })).toBeVisible();
+        await expect(diagnostic()).toContainText(`${base}/mcp`);
+        const requests: Array<Promise<{ method: string; params?: unknown; cookie?: string }>> = [];
+        const collect = (request: import("@playwright/test").Request) => {
+          if (request.url() !== `${base}/mcp` || request.method() !== "POST") return;
+          const body = request.postDataJSON();
+          requests.push(request.allHeaders().then((headers) => ({ method: body.method, params: body.params, cookie: headers.cookie })));
+        };
+        page.on("request", collect);
+        try {
+          const before = await projectState();
+          for (const token of [read, write]) {
+            requests.length = 0;
+            await checkConnection(token.secret, /Read permission and project identity verified; 50 MCP tools advertised/);
+            expect(await Promise.all(requests)).toEqual([
+              { method: "tools/list", params: undefined, cookie: undefined },
+              { method: "tools/call", params: { name: "list_projects", arguments: {} }, cookie: undefined },
+            ]);
+            await expect(diagnostic()).toContainText("Write permissions and reporting were not tested");
+          }
+          expectProjectUnchanged(before, await projectState());
+          await capture("mcp-browser-read-check-and-opencode-config");
+          await checkConnection("tsbo_invalid_ci_credential", /Token was rejected/);
+          expectProjectUnchanged(before, await projectState());
+          const writeOnly = await post(`${base}/apikeys`, { name: "CI diagnostic write-only control", scopes: ["write"] });
+          try {
+            await checkConnection(writeOnly.token, /Read permission was not verified/);
+            expectProjectUnchanged(before, await projectState());
+          } finally {
+            const revoked = await page.request.delete(`${base}/apikeys/${writeOnly.id}`);
+            expect(revoked.ok()).toBeTruthy();
+          }
+          const other = await post(`${api}/api/projects`, { name: "CI MCP other project", key: "MCO" });
+          await page.goto(`${web}/projects/${other.id}/settings/api-tokens`);
+          await expect(diagnostic()).toContainText(`${api}/api/projects/${other.id}/mcp`);
+          await checkConnection(read.secret, /Token does not have access to this project/);
+          await page.goto(tokenPage);
+          await expect(diagnostic()).toContainText(`${base}/mcp`);
+          for (const kind of ["malformed", "rpc-error", "network"] as const) {
+            await page.route(`${base}/mcp`, (route) => kind === "network" ? route.abort("failed") : route.fulfill({
+              status: 201, contentType: "application/json", body: JSON.stringify(kind === "malformed" ? { result: { tools: [] } } : {
+                jsonrpc: "2.0", id: 1, error: { code: -32603, message: read.secret },
+              }),
+            }));
+            try { await checkConnection(read.secret, kind === "malformed" ? /unexpected MCP response/ : kind === "rpc-error" ? /MCP returned an error/ : /could not be verified from this browser/); }
+            finally { await page.unroute(`${base}/mcp`); }
+            expectProjectUnchanged(before, await projectState());
+          }
+          await diagnostic().scrollIntoViewIfNeeded();
+          await capture("mcp-browser-diagnostic-failure-with-token-cleared");
+        } finally { page.off("request", collect); }
+      });
       await capture("mcp-ui-issued-tokens-with-secret-cleared");
       for (const token of [read, write]) {
         const row = page.getByRole("row").filter({ hasText: token.name });
@@ -243,6 +339,7 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
         const refusal = await rpc(token.secret, "tools/call", { name: "archive_testcase", arguments: { testcaseId: created.id } }, token.id === read.id ? readSession : session);
         expect(refusal.status()).toBe(401); expectProjectUnchanged(beforeDenied, await projectState());
         expect((await db.query("SELECT id FROM api_tokens WHERE id = $1", [token.id])).rowCount).toBe(0);
+        await checkConnection(token.secret, /Token was rejected/);
       }
       await page.reload();
       await expect(page.getByText("No API tokens yet.", { exact: false })).toBeVisible();

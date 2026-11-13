@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useParams } from "@/lib/routeParams";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { IconKey } from "@tabler/icons-react";
 import {
   API_BASE,
@@ -18,8 +18,9 @@ import { PageHeader, StandardPageLayout, Breadcrumbs } from "@/components/workfl
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
 import { formatDate as formatDateShared } from "@/lib/date";
+import { checkMcpConnection } from "@/lib/mcpConnectionCheck";
 
-type ConnectTab = "claudeCode" | "claudeDesktop" | "other";
+type ConnectTab = "claudeCode" | "claudeDesktop" | "opencode" | "other";
 
 function normalizeRole(role: string): "owner" | "manager" | "qa_engineer" {
   const n = (role ?? "").trim().toLowerCase().replace(/-/g, "_").replace(/ /g, "_");
@@ -148,7 +149,7 @@ export default function ApiTokensPage() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [createStep, setCreateStep] = useState<"form" | "reveal">("form");
   const [newTokenName, setNewTokenName] = useState("");
-  const [newTokenScopes, setNewTokenScopes] = useState({ read: true, write: true });
+  const [newTokenScopes, setNewTokenScopes] = useState({ read: true, write: false });
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [revealedToken, setRevealedToken] = useState<ApiTokenWithSecret | null>(null);
@@ -184,14 +185,16 @@ export default function ApiTokensPage() {
 
   function openCreateModal() {
     setNewTokenName("");
-    setNewTokenScopes({ read: true, write: true });
+    setNewTokenScopes({ read: true, write: false });
     setCreateError(null);
+    setRevealedToken(null);
     setCreateStep("form");
     setCreateModalOpen(true);
   }
 
   async function handleCreateToken(e: FormEvent) {
     e.preventDefault();
+    if (creating) return;
     const name = newTokenName.trim();
     if (!name) {
       setCreateError("Name is required.");
@@ -208,7 +211,17 @@ export default function ApiTokensPage() {
     setCreateError(null);
     try {
       const result = await createApiKey(projectId, { name, scopes });
-      setTokens((prev) => [result, ...prev]);
+      // Store only the public metadata in the token list. The secret belongs exclusively
+      // to the short-lived one-time reveal and must not survive in list state.
+      const publicToken: ApiToken = {
+        id: result.id,
+        name: result.name,
+        scopes: result.scopes,
+        tokenPrefix: result.tokenPrefix,
+        lastUsedAt: result.lastUsedAt,
+        createdAt: result.createdAt,
+      };
+      setTokens((prev) => [publicToken, ...prev]);
       setRevealedToken(result);
       setCreateStep("reveal");
     } catch (err) {
@@ -223,6 +236,7 @@ export default function ApiTokensPage() {
     try {
       await revokeApiKey(projectId, tokenId);
       setTokens((prev) => prev.filter((t) => t.id !== tokenId));
+      setRevealedToken((prev) => (prev?.id === tokenId ? null : prev));
     } catch {
       setListError("Failed to revoke token.");
     } finally {
@@ -231,19 +245,22 @@ export default function ApiTokensPage() {
   }
 
   function closeCreateModal() {
-    if (createStep === "reveal") return;
+    if (creating || createStep === "reveal") return;
     setCreateModalOpen(false);
   }
 
   function finishReveal() {
+    // Do not retain an exposed one-time credential in the page after dismissal.
+    setRevealedToken(null);
     setCreateModalOpen(false);
     setCreateStep("form");
     setNewTokenName("");
-    setNewTokenScopes({ read: true, write: true });
+    setNewTokenScopes({ read: true, write: false });
   }
 
   const mcpUrl = getMcpUrl(projectId);
-  const tokenForSnippets = revealedToken?.token ?? "<YOUR_API_TOKEN>";
+  // Never embed a secret in copied shell/config snippets: it can outlive the one-time reveal.
+  const tokenForSnippets = "<YOUR_API_TOKEN>";
 
   /*
    * `--scope user`, not the CLI's default `local` scope. A local-scope server is stored in
@@ -276,6 +293,22 @@ export default function ApiTokensPage() {
   const powershellSnippet = `$headers = @{ Authorization = "Bearer ${tokenForSnippets}" }
 $body = '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 Invoke-RestMethod -Uri "${mcpUrl}" -Method Post -Headers $headers -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 10`;
+
+  // OpenCode V2 remote MCP config uses an environment reference, not a committed token.
+  // The endpoint is scoped to this project and the server performs authorization.
+  const opencodeConfig = `{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "tesbo": {
+        "type": "remote",
+        "url": "${mcpUrl}",
+        "oauth": false,
+        "headers": { "Authorization": "Bearer {env:TESBO_API_TOKEN}" }
+      }
+    }
+  }
+}`;
 
   const reporterInstall = `npm install --save-dev @tesbox/playwright-reporter
 npx @tesbox/playwright-reporter init`;
@@ -407,8 +440,8 @@ export default defineConfig({
           <h2 className="text-base font-semibold text-[var(--foreground)]">Connect an MCP client</h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
             {revealedToken
-              ? "Showing the token you just created — copy it into your config now."
-              : <>Replace <code className="font-mono text-xs">&lt;YOUR_API_TOKEN&gt;</code> below with a token from the list above.</>}
+              ? "Your new token was shown once. Keep it in a secret store; the examples use placeholders."
+              : <>Replace <code className="font-mono text-xs">&lt;YOUR_API_TOKEN&gt;</code> with a token saved securely when it was created. Existing tokens cannot be viewed again.</>}
           </p>
         </div>
 
@@ -433,6 +466,15 @@ export default defineConfig({
           </button>
           <button
             type="button"
+            onClick={() => setConnectTab("opencode")}
+            className={`flex-1 rounded-md px-3 py-1.5 font-medium transition-colors ${
+              connectTab === "opencode" ? "bg-[var(--surface)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted)]"
+            }`}
+          >
+            OpenCode
+          </button>
+          <button
+            type="button"
             onClick={() => setConnectTab("other")}
             className={`flex-1 rounded-md px-3 py-1.5 font-medium transition-colors ${
               connectTab === "other" ? "bg-[var(--surface)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted)]"
@@ -442,12 +484,14 @@ export default defineConfig({
           </button>
         </div>
 
+        {connectTab !== "opencode" && connectTab !== "other" && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           Registering a new MCP server doesn&apos;t reach a session that&apos;s already running — it&apos;s only
           picked up on startup. Start a new Claude Code session (or, in the VS Code / JetBrains extension, run{" "}
           <strong>Developer: Reload Window</strong>) before the new tools show up in{" "}
           <code className="font-mono">/mcp</code>.
         </div>
+        )}
 
         {connectTab === "claudeCode" && (
           <div className="space-y-3">
@@ -473,6 +517,22 @@ export default defineConfig({
               <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto whitespace-pre">{mcpJsonSnippet}</pre>
               <CopyButton value={mcpJsonSnippet} iconOnly className="absolute right-2 top-2" />
             </div>
+          </div>
+        )}
+
+        {connectTab === "opencode" && (
+          <div className="space-y-3">
+            <p className="text-sm text-[var(--muted)]">
+              Merge this server entry into <code className="font-mono">opencode.jsonc</code> in your project, preserving other settings.
+              Set <code className="font-mono">TESBO_API_TOKEN</code> in your local environment or secrets manager, not in source control.
+            </p>
+            <div className="relative">
+              <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto whitespace-pre">{opencodeConfig}</pre>
+              <CopyButton value={opencodeConfig} iconOnly className="absolute right-2 top-2" />
+            </div>
+            <p className="text-xs text-[var(--muted-soft)]">
+              Run <code className="font-mono">opencode mcp list</code> or open <code className="font-mono">/mcps</code> in OpenCode to check the connection. A new session may be required after updating your environment.
+            </p>
           </div>
         )}
 
@@ -519,6 +579,8 @@ export default defineConfig({
         )}
       </Card>
 
+      <McpConnectionCheck key={`${projectId}:${mcpUrl}`} mcpUrl={mcpUrl} projectId={projectId} projectName={projectName || projectId} />
+
       <Card className="p-4 space-y-4">
         <div>
           <h2 className="text-base font-semibold text-[var(--foreground)]">Connect your test framework</h2>
@@ -539,8 +601,8 @@ export default defineConfig({
                 <code className="font-mono text-xs text-[var(--foreground)]">TESBO_BASE_URL</code>
                 <p className="mt-0.5 break-all font-mono text-xs text-[var(--muted)]">{API_BASE}</p>
                 <p className="mt-0.5 text-xs text-[var(--muted-soft)]">
-                  This project&apos;s API host. Not the web app host — pointing at the app makes every call
-                  404 while your suite stays green.
+                  Configured API base URL. Some deployments serve the API and web app on the same host;
+                  use this URL and verify the endpoint before reporting test results.
                 </p>
               </div>
               <CopyButton value={API_BASE} iconOnly />
@@ -556,17 +618,12 @@ export default defineConfig({
             <div className="flex items-start gap-3 px-3 py-2">
               <div className="min-w-0 flex-1">
                 <code className="font-mono text-xs text-[var(--foreground)]">TESBO_API_TOKEN</code>
-                {revealedToken ? (
-                  <p className="mt-0.5 break-all font-mono text-xs text-[var(--muted)]">{revealedToken.token}</p>
-                ) : (
-                  <p className="mt-0.5 text-xs text-[var(--muted)]">
-                    Create a token above with <strong>Read</strong> and <strong>Write</strong>. It is shown only
-                    once, so keep it in your CI secrets — never in{" "}
-                    <code className="font-mono">playwright.config.ts</code>.
-                  </p>
-                )}
+                <p className="mt-0.5 text-xs text-[var(--muted)]">
+                  Create a token above with <strong>Read</strong> and <strong>Write</strong>. It is shown only
+                  once, so keep it in your CI secrets — never in{" "}
+                  <code className="font-mono">playwright.config.ts</code>.
+                </p>
               </div>
-              {revealedToken && <CopyButton value={revealedToken.token} iconOnly />}
             </div>
           </div>
         </div>
@@ -637,6 +694,11 @@ export default defineConfig({
                 autoFocus
               />
             </Field>
+            <p className="text-xs text-[var(--muted)]">
+              Project: <strong>{projectName || projectId}</strong>. Read is selected by default.
+              Enable Write only for agents or reporters that need to change data.
+              Automated Playwright reporting needs Read and Write.
+            </p>
             <div className="space-y-3">
               <label className="flex items-start gap-3 cursor-pointer">
                 <input
@@ -664,7 +726,7 @@ export default defineConfig({
                 <div>
                   <span className="text-sm font-medium text-[var(--foreground)]">Write</span>
                   <p className="text-xs text-[var(--muted)] mt-0.5">
-                    Create test cases, suites, cycles, execution results, and bugs.
+                    Create or modify test cases, suites, runs, execution results, and bugs. Write actions remain subject to server-side authorization.
                   </p>
                 </div>
               </label>
@@ -694,7 +756,7 @@ export default defineConfig({
               <CopyButton value={revealedToken.token} label="Copy" />
             </div>
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              This is the only time you&apos;ll see this token. Copy it now — for example, paste it directly into the connection instructions below.
+              This is the only time you&apos;ll see this token. Copy it now into your secrets manager or CI secrets, never into source control.
             </div>
             <div className="flex justify-end">
               <Button type="button" onClick={finishReveal}>
@@ -705,5 +767,74 @@ export default defineConfig({
         )}
       </Modal>
     </StandardPageLayout>
+  );
+}
+
+/**
+ * A read-only, user-triggered diagnostic. It never persists credentials, invokes a write
+ * tool, creates server tokens, or claims that downstream writes/reporting were tested.
+ */
+function McpConnectionCheck({ mcpUrl, projectId, projectName }: { mcpUrl: string; projectId: string; projectName: string }) {
+  const [token, setToken] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const activeCheck = useRef<AbortController | null>(null);
+
+  useEffect(() => () => {
+    activeCheck.current?.abort();
+    activeCheck.current = null;
+  }, []);
+
+  async function checkConnection() {
+    const candidate = token.trim();
+    if (!candidate || activeCheck.current) return;
+    const controller = new AbortController();
+    activeCheck.current = controller;
+    setToken("");
+    setChecking(true);
+    setResult(null);
+    try {
+      const toolCount = await checkMcpConnection(mcpUrl, projectId, candidate, controller.signal);
+      if (activeCheck.current !== controller) return;
+      setResult({
+        ok: true,
+        message: `Connected to ${projectName}: Read permission and project identity verified; ${toolCount} MCP tools advertised. Discovery includes write tools regardless of token scope. Write permissions and reporting were not tested.`,
+      });
+    } catch (error) {
+      if (activeCheck.current !== controller) return;
+      setResult({
+        ok: false,
+        message: error instanceof Error ? error.message : "Connection could not be verified.",
+      });
+    } finally {
+      if (activeCheck.current === controller) {
+        activeCheck.current = null;
+        setChecking(false);
+      }
+    }
+  }
+
+  return (
+    <Card className="p-4 space-y-3">
+      <div>
+        <h2 className="text-base font-semibold text-[var(--foreground)]">Check MCP connection</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Verify discovery and Read permission with a read-only project query. The submitted token is cleared from the input and not saved. The check stops after 10 seconds; it never tests writes or reporter delivery.
+        </p>
+      </div>
+      <p className="break-all font-mono text-xs text-[var(--muted)]">{mcpUrl}</p>
+      <form onSubmit={(event) => { event.preventDefault(); void checkConnection(); }} className="flex flex-wrap items-end gap-2">
+        <Field className="min-w-[220px] flex-1">
+          <FieldLabel htmlFor="tesbo-mcp-check-token">API token</FieldLabel>
+          <Input id="tesbo-mcp-check-token" type="password" autoComplete="off" value={token} onChange={(event) => { setToken(event.target.value); setResult(null); }} placeholder="Paste a token for this project" disabled={checking} />
+        </Field>
+        <Button type="submit" disabled={!token.trim() || checking}>{checking ? "Checking…" : "Check connection"}</Button>
+      </form>
+      {result && (
+        <p role="status" className={`text-sm ${result.ok ? "text-[var(--success-foreground)]" : "text-[var(--error-foreground)]"}`}>
+          {result.message}
+        </p>
+      )}
+    </Card>
   );
 }

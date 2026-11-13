@@ -5302,3 +5302,61 @@ skips. Exact-head results and inspected captures belong in the implementation
 PR. No SDK publication, deployment, agent merge, independent human review, risk
 acceptance or Phase 1/2 exit is implied. Canonical specification/baseline recovery,
 owner F2/F3/F6–F8 dispositions and disclosed moderate/low findings remain open.
+
+### M. Review Board and API/MCP onboarding UI accuracy (2026-11-12, pending review)
+
+Two narrowly scoped presentation changes preserve existing routes, roles, token issuance,
+MCP contracts and Playwright reporting; neither is a new agent or repository subsystem.
+
+- Review Board (PR #45): a completed analysis that checks zero or one eligible test
+  case cannot establish pairwise distinctness. Empty findings distinguish zero,
+  one, unavailable analysis coverage, and two-or-more compared cases; category
+  filter emptiness retains its existing behavior. The UI uses the server's existing
+  analyzed-count field, rather than fabricating an eligible count.
+- API/MCP settings (PR #46): new tokens default to Read only; instructions explain
+  that reporters and write-capable agents need both scopes as appropriate. The
+  existing server enforces per-tool scopes/project access; changing a checkbox
+  default does not grant or revoke permissions on previously issued tokens.
+- The one-time token remains copyable in its reveal dialog but is removed from
+  component state on dismissal, never inserted into the persistent token-list
+  state, and not embedded in configuration examples. Existing token values cannot
+  be retrieved after creation. Config examples use placeholders or OpenCode's
+  environment-variable substitution.
+- OpenCode's documented remote MCP V2 configuration extends the existing
+  Claude/generic onboarding tab set (`mcp.servers`, remote type, `oauth: false`,
+  environment-substituted bearer header). Official references:
+  https://opencode.ai/docs/mcp-servers and https://opencode.ai/docs/config.
+  This is documentation-verified syntax, not a live external-client certification.
+- The manual connection diagnostic uses only JSON-RPC `tools/list` and the
+  read-only `list_projects` query on the configured project-scoped URL. Success
+  requires a matching returned project ID and a successful Read-scoped query.
+  Discovery alone advertises all 50 tools regardless of token scopes and cannot
+  certify writes. No write permission or reporter delivery is tested. The
+  submitted token is cleared on either outcome; requests omit cookies, refuse
+  redirects and share a 10-second deadline. Unmount/project changes cancel the
+  check. HTTP, JSON-RPC, malformed-response and network failures fail closed
+  without displaying raw remote error text. Token last-used bookkeeping can
+  update; authored project records are not intentionally mutated.
+- `API_BASE` is the configured `NEXT_PUBLIC_API_URL` (or local fallback).
+  App and API hosts can coincide behind a reverse proxy, so the UI no longer
+  asserts they must differ. The project breadcrumb is derived from the
+  route-bound ProjectDataProvider, while the sidebar can display a workspace
+  selector; the DMIS/Nesberry screenshot alone is not proof of cross-project
+  leakage. No speculative routing mutation was made.
+
+Implementation owners are the existing ReviewBoard component/review-board API
+and worker (#45), token settings page/API token service/MCP controller and tool
+registry (#46); tests extend `ci-review-board-ui.ts`, the existing
+`ci-repository-partial-edits.ts` token journey, and the frontend Node regression
+step. No new test framework or integration subsystem is introduced. Existing
+reporter configuration and server scope defaults/contracts are unchanged; only
+new tokens created in this UI require deliberate Write opt-in. Pending creation
+cannot be dismissed by Escape/backdrop before its one-time reveal.
+
+The PRs must independently pass latest-head CI and review before merging.
+Browser tests cover isolated genuine issuance, read/write use, denial/revocation,
+diagnostic/config/credential clearing and unchanged domain records. Controlled
+malformed/network fixtures and unit timeout/cancellation checks are not real
+provider outages. Deployed CORS/routing and actual OpenCode/reporter-client
+compatibility still need authorized environment verification. No credential,
+deployment, schema, authorization policy or Phase 2 approval is introduced.
