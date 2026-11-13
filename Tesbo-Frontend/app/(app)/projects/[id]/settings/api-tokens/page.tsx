@@ -841,9 +841,9 @@ function McpConnectionCheck({ mcpUrl, projectName }: { mcpUrl: string; projectNa
       </div>
       <p className="break-all font-mono text-xs text-[var(--muted)]">{mcpUrl}</p>
       <form onSubmit={(event) => { event.preventDefault(); void checkConnection(); }} className="flex flex-wrap items-end gap-2">
-        <Field>
-          <FieldLabel>API token</FieldLabel>
-          <Input type="password" autoComplete="off" value={token} onChange={(event) => { setToken(event.target.value); setResult(null); }} placeholder="Paste a token for this project" disabled={checking} />
+        <Field className="min-w-[220px] flex-1">
+          <FieldLabel htmlFor="tesbo-mcp-check-token">API token</FieldLabel>
+          <Input id="tesbo-mcp-check-token" type="password" autoComplete="off" value={token} onChange={(event) => { setToken(event.target.value); setResult(null); }} placeholder="Paste a token for this project" disabled={checking} />
         </Field>
         <Button type="submit" disabled={!token.trim() || checking}>{checking ? "Checking…" : "Check connection"}</Button>
       </form>
