@@ -4411,34 +4411,45 @@ verified blockers, obtain an explicit Phase 1 exit/sign-off decision, then
 approve and implement the first Phase 2 slice via normal reviewed PRs.
 Do not keep Phase 1 open merely because a new moderate improvement is possible.
 
-### F.1 Current conditional-exit reconciliation — through owner-merged #43
+### F.1 Current conditional-exit reconciliation — through owner-merged #55
 
 **Decision status: `CONDITIONAL_EXIT_NOT_ESTABLISHED`.** This is the finite
 evidence/decision register requested by F.0, not a new specification, risk waiver,
 independent review, or another feature-hardening programme. The historical F
 assessment below remains an as-of-#35 receipt; use this section for current
-dispositions. No fresh production exploit, live-data inventory or shared-stack
-UAT was run for this reconciliation.
+dispositions. The owner selected **Phase 1 gate reconciliation** as the next
+bounded task, not another product repair, publication-policy amendment or exit
+approval. No fresh production exploit, live-data inventory or shared-stack UAT
+was run for this reconciliation; existing CI artifacts and selected source owners
+were re-read. No product, schema, workflow, retry or test selection is changed.
 
-**Reconciled source:** `development@95da2f6e56817164923d0cea11d693c451ab2975`.
-Owner-merged #42 is `72f5f57e3097dc6de5cc898821364ccac20d20cf`; #43 adds only
-the 42-line F.0 policy section relative to that merge, with no product change.
-#43 was merged at **2026-11-13 00:30:49 UTC / November 12, 19:30:49 Jamaica**.
-Thus a report ending at #41 omits both the bug-edit repair and the adopted exit
-framework. Owner merge is not independent security review or acceptance of risks.
+**Reconciled source:** `development@80cf4c220e752b2cd58d2ab76fb5e8f07b5a4661`,
+owner-merged #55 at **2026-11-13 16:13:57 UTC / 11:13:57 Jamaica**. Its product
+tree is identical to tested PR head `e51b39443b9825511b8764cc579fac8dc0c29a30`.
+This refresh supersedes #44's through-#43 register, not F.0's owner-selected
+framework or the historical F assessment below. Owner merge is not independent
+security review, a residual-risk disposition or Phase 1/2 sign-off.
 
 #### Verified progress, without combining different test populations
 
 The latest inspected **functional** receipt is
-[#42, head `6c90d741fac82603bbca5d51a5bfeb04c8225f7e`](https://github.com/1alextest/Tesbooboo/pull/42#issuecomment-6838320899):
-**23/23 checks**, **150 native PostgreSQL tests / zero skips** (126 existing + 24
-bug-edit cases), **1,699 backend passes / 248 DB-dependent skips**, **143 Linux
-SDK passes**, **11 toolchain passes**, **19 frontend security/queue passes** and
-**seven outer smoke passes** with zero retries/flaky/skipped tests. These are
-separate jobs, not a count of unique tests or full UAT. The report and 29 unique
-captures were inspected, with viewport/transition limitations disclosed in that
-receipt. Successful external embeddings, real tracker connectivity and deployed
-external-client acceptance were not established.
+[#55, head `e51b39443b9825511b8764cc579fac8dc0c29a30`](https://github.com/1alextest/Tesbooboo/pull/55#issuecomment-6856714088).
+It retains the earlier closure, bug-edit, document, REST/MCP and reporter
+contracts alongside the added repository/Plan/Suite journeys. Exact job counts,
+skips, separately dispatched authorization checks, inspected captures and failure
+trails stay in that PR receipt, not an evidence-only follow-up commit. Different
+job populations overlap and must not be summed as unique coverage.
+
+Merged-head `80cf4c2` also completed its triggered workflows successfully. The
+existing [native PostgreSQL/API/concurrency run](https://github.com/1alextest/Tesbooboo/actions/runs/43460624478),
+[core quality run](https://github.com/1alextest/Tesbooboo/actions/runs/43460624331)
+and [production browser run](https://github.com/1alextest/Tesbooboo/actions/runs/43460624116)
+were checked, and the actual embedded browser report was decoded. This is
+artifact review, not a new deployed execution or independent review. Native
+collaborator stubs, unexecuted DB-dependent selections in other jobs, viewport
+limits, external embeddings/tracker connectivity and an owner's actual external
+client remain distinct limitations. Documentation-head checks are a separate
+receipt and cannot retroactively supply deployment or reviewer approval.
 
 | Merged batch | Current accomplishment | What it does not establish |
 |---|---|---|
@@ -4448,6 +4459,13 @@ external-client acceptance were not established.
 | #41 | SQL-time testcase suite/owner and suite-parent omission preservation; real UI token → cookie-free MCP discovery/write/refusal/revoke | Deployment or certification of an owner's external client |
 | #42 | Bug null/empty/set versus omission semantics; deliberate UI clears; locked before/after attribution across shared REST/MCP writer | Atomic/durable audit delivery, broader finding classification or immutable correction model |
 | #43 | Owner-selected conditional-exit framework and finite escalation rule | Actual exit, acceptance of a particular residual finding or approval of a Phase 2 slice |
+| #44 | Existing F1–F9/D1–D6/E1–E7 reconciliation through #43 | Signed decisions or authority to keep adding moderate improvements indefinitely |
+| #45 | Review Board distinguishes insufficient/no-data/failed analyses and actual project/filter context | A new approval engine, validated external similarity quality or complete coverage |
+| #46–#47 | Safer existing token defaults; OpenCode setup; bounded read-only connection diagnostics, recovery and cleanup | Project/client consent policy, locked-project parity, deployed external-client acceptance or publication authority |
+| #48 | Same-project Plan/Run/Suite/Case lineage at shared writers and truthful empty-Run presentation | Cleanup of historical inconsistent rows or a version-pinned manifest system |
+| #50, #52–#54 | SQL-time testcase bulk project scope, access-before-parsing, project-isolated Suite subtree deletion/counts, and shared transactional active-Suite validation/deletion ordering | SDK command deduplication, historical cleanup, all hierarchy/cycle races or a new entitlement policy |
+| #55 | Existing repository dialogs/handlers catch refusals, retain input, retire confirmed submissions before refresh, reuse warning/reload and inline Retry, and give truthful subtree/history guidance | Server-side lost-COMMIT resolution, durable audit/effect delivery, shared-stack UAT or human approval |
+| #49, #51 | Eight-source GAE reconciliation retained under `docs/reviews/` as noncanonical review material | Approved raw eight-file replacement, a living baseline, automatic publication or a second Copilot/review system |
 
 #### Current F1–F9 register
 
@@ -4461,36 +4479,48 @@ have not been appointed**.
 | ID | Applicable contract and present evidence | Impact / likelihood basis | Current disposition and proposed accountable role |
 |---|---|---|---|
 | F1 | Automation seal remains `source === "automation" && closed_at != null`; native closure/retry/evidence races and reporter→DB→MCP→browser checks remain selected. Manual completed runs stay correctable. | High if sealed verdict/evidence changes; covered negative controls pass. Legacy attempt/shard delivery outside those controls remains unverified. | **COVERED_SCOPED**. Backend/SDK maintainer retains tests; no new attempt/shard coordinator authorized. |
-| F2 | Browser automatic mutation replay repaired in #34 and rerun through #42. `sdk/playwright-reporter/src/client.ts` still retries writes; keyed creates/indexed results have specific protection, not all uploads/unkeyed creates. | Moderate under transient response loss/retry; duplicate submissions/evidence possible. Conditional mechanism, not measured production prevalence. | Browser part **RESOLVED_SCOPED**; SDK **DEFER_PROPOSED**, subject to owner disposition. Proposed SDK maintainer owns a versioned reliability plan, not an unapproved transport-policy change. |
-| F3 | `DatabaseService.transaction` cannot roll back a successful COMMIT. Native closure-suite tests still demonstrate persisted bug/link creation plus explicit-resubmission duplicates after controlled postcommit/ACK faults. #42 fixes snapshots, not this uncertainty. `logProjectActivity` remains best-effort/postcommit. | Moderate, potentially high for consequential bulk/effect loss: committed data can accompany an error; audit/effect delivery can fail. Tests inject after actual COMMIT, not a real network-cut experiment. | **DECISION_REQUIRED**. Product owner + backend/release owner must define acceptable reconciliation/critical-audit guarantees before choosing repair versus a bounded follow-up; no exactly-once/outbox commitment is invented. |
+| F2 | Browser automatic mutation replay repaired in #34; unchanged transport controls reran through #55. #55 also removes the submitted bulk dialog/selection after confirmed success and uses existing read-only recovery. `sdk/playwright-reporter/src/client.ts` still retries writes, including evidence POSTs; keyed creates/indexed results have specific protection, not all uploads/unkeyed creates. | Moderate under transient response loss/retry; duplicate submissions/evidence possible. Conditional mechanism, not measured production prevalence. A successful-write/failed-read UI exercise is not a lost mutation-response experiment. | Browser part **RESOLVED_SCOPED**; SDK **DEFER_PROPOSED**, subject to owner disposition. Retain the existing client/reporter contract; no second retry/deduplication system or unapproved transport-policy change. |
+| F3 | `DatabaseService.transaction` cannot roll back a successful COMMIT. Retained native closure-suite tests demonstrate persisted bug/link creation plus explicit-resubmission duplicates after controlled postcommit/ACK faults. `logProjectActivity` still swallows logging failures. #42 fixes snapshots, #54 adds transactional Suite checks and #55 distinguishes confirmed writes from failed follow-up reads; none resolves general postcommit uncertainty/delivery. | Moderate, potentially high for consequential bulk/effect loss: committed data can accompany an error; audit/effect delivery can fail. Native faults occur after actual COMMIT, not a real network cut. #55's controlled post-write GET failure does not establish lost-ACK reconciliation. | **DECISION_REQUIRED**. Product + backend/release owner defines acceptable reconciliation and critical-audit guarantees, then chooses a named repair, bounded follow-up or further evidence. No implicit exactly-once/outbox commitment or acceptance. |
 | F4 | `LegacyService.writeBulkExecutions` now owns one transaction and parent lock for the entire REST selection. Native later-item failures require full rollback; real UI refusal/success controls run in smoke. | Historical committed-prefix defect was reproducible; the original characterization is superseded by #36's rollback oracle. Postcommit delivery still belongs to F3. | **RESOLVED_SCOPED** by #36. Do not schedule the same atomicity repair again or substitute MCP's different contract. Proposed backend/QA owners retain the regression. |
 | F5 | `bulk_record_execution_results` and `bulk_create_testcases` retain explicit indexed per-item outcomes through their shared authorized writers; connected mixed manual/sealed controls pass. | Low residual for the selected contract; an item failure intentionally does not roll back successful siblings. | **COVERED_SCOPED**, intentional semantics, not the F4 defect. Proposed MCP maintainer preserves scope/sealing and truthful outcomes. |
-| F6 | New/changed bug tuples are validated; foreign display-metadata joins are project-scoped; valid historical/deleted local associations remain. Native synthetic fixtures establish behavior, not live prevalence. | High if foreign metadata leaks; covered reader/writer controls pass. The number and meaning of existing invalid rows are unknown. | Isolation repair **COVERED_SCOPED**; historical-data **DECISION_REQUIRED**. Data owner approves an environment/snapshot and read-only inventory or explicitly dispositions the unknown; no deletion/reassociation is authorized. |
-| F7 | `deleteCycle` soft-deletes transactionally; testcase ID rename still rewrites `cycle_items.snapshot_external_id`; member removal still clears assignments on historical executions. Those are distinct from a sealed verdict correction. | Moderate source-confirmed administrative/history effects; no newly demonstrated unauthorized verdict mutation. Actual retention/correction obligations are unsettled. | **DECISION_REQUIRED**. Product/data owner selects historical identity, deletion visibility and assignment retention policy. Broader correction/attempt features remain unapproved, not mandatory infrastructure work. |
+| F6 | New/changed bug tuples and display joins remain project-scoped; exact existing deleted-local associations may be retained. #48–#54 add scoped Plan/Run lineage, bulk access/SQL scope and shared active-Suite validation/deletion isolation, with native and real REST/MCP/browser controls. These repair their named paths, not historical data. | High if foreign metadata leaks; retained scoped controls pass. Synthetic inconsistent fixtures establish isolation behavior, not prevalence or meaning of invalid live rows. No authorized live inventory/cleanup was performed. | Bug isolation **COVERED_SCOPED**; named #48/#50/#52–#54 repairs **RESOLVED_SCOPED**; historical-data **DECISION_REQUIRED**. Data owner names environment, read-only authority, snapshot and privacy limits before inventory or explicitly dispositions the unknown. Do not duplicate merged repairs or delete/reassociate data. |
+| F7 | `deleteCycle` still soft-deletes transactionally; testcase ID rename still rewrites `cycle_items.snapshot_external_id`; member removal still clears historical execution assignments without a finalized-run exclusion. #52/#55 preserve Suite-deletion history and correct UI guidance, not these administrative policies. | Moderate source-confirmed history effects; not a newly demonstrated unauthorized verdict mutation. Soft deletion/history retention is not physical erasure or a restore feature. Actual retention/correction obligations remain unsettled. | **DECISION_REQUIRED**. Product/data owner chooses historical identity, deletion visibility and assignment-retention policy. No historical rewrite/cleanup, restore system or correction/attempt infrastructure is authorized by this reconciliation. |
 | F8a | `publicCycle` still returns `SELECT * FROM cycles`; `publicCycleExecutions` already has a narrow six-column projection. Share tokens persist across disable/re-enable. | Potential high depending on exposed run fields and publication/revocation contract; broad projection/reuse is source-confirmed, not a fresh sensitive-data exploit. | **DECISION_REQUIRED before exit**, product + security owner: approve exact public fields/revocation semantics and classify exposure. No claim that the historical broad-execution leak remains live; no silent moderate-risk deferral. |
-| F8b | `ProjectWriteLockGuard` matches project-prefixed paths only. Legacy cycle URLs and `/api/mcp` still require explicit entitlement-contract classification; current membership/token scope checks do not by themselves establish plan writability. | Potential high if an approved restriction is bypassed; route-matcher limit is source-confirmed. A generic claim of unauthorized project access is not established by that fact. | **DECISION_REQUIRED before exit**, product/billing + security owner: state supported locked-project operations and required parity, then authorize a named reproducer/repair if violated. Do not rewrite billing/credentials by assumption. |
-| F9 | Latest inspected #42 artifacts: zero critical/high; backend all-tree **29 moderate/10 low**, production **14 moderate**; frontend Linux all-tree **16 moderate/1 low**, production **7 moderate/1 low**. Production E2E/SDK: zero reported. Frozen lint remains **9 backend/13 frontend known errors**, zero new. | Original critical/high advisory entries are remediated by #37–#38/#40. Remaining scanner entries are not distinct exploit counts; applicability/likelihood still needs review. | Original critical/high entries **RESOLVED_SCOPED**; moderate/low and lint follow-ups **DEFER_PROPOSED**, not accepted. Proposed dependency/security owner retains full reports, CDN/provenance review and enforcing gates. |
+| F8b | `ProjectWriteLockGuard` remains global but only matches `/api/projects/<uuid>...`; it allows safe methods and project DELETE, and consults plan writability for other matched requests. Legacy cycle URLs and `/api/mcp` do not match; the project-prefixed MCP form does. No additional `assertProjectWritable` call was found in the selected legacy/MCP services. Token/membership and #48–#54 isolation repairs do not decide entitlement parity. | Potential high if an approved restriction is bypassed; route coverage is source-confirmed, not a demonstrated unauthorized-project exploit or a live locked-project experiment. Read/discovery uses POST in MCP, so parity must distinguish read tools from writes rather than blindly extending a method guard. | **DECISION_REQUIRED before exit**, product/billing + security owner: specify allowed locked-project operations, including MCP discovery/read/write and project-archive escape behavior; classify required route/tool parity, then approve a named reproducer/repair if violated. Do not infer billing/credential changes. |
+| F9 | Merged #55 Linux artifacts/logs still report zero critical/high: backend all-tree **29 moderate/10 low**, production **14 moderate**; frontend all-tree **16 moderate/1 low**, production **7 moderate/1 low**; production E2E/SDK zero reported. Frozen lint remains backend **9 errors/2 warnings**, frontend **13 errors/10 warnings**, zero new errors. | Original critical/high findings repaired by #37–#38/#40. Unchanged lower-severity counts do not show acceptance or zero risk; scanner entries are not distinct exploits. A successful production-audit collection job alone is not a waiver or enforcing vulnerability gate. | Original high/critical entries **RESOLVED_SCOPED**; moderate/low, provenance and lint follow-ups **DEFER_PROPOSED**, not accepted. Dependency/security owner must separately record applicability, named maintainer, review date and escalation trigger; retain existing enforcing gates and raw reports. |
 
-Source owners re-read for this reconciliation:
+Selected source owners re-read for this reconciliation:
 [`legacy.service.ts`](../Tesbo-Backend-Nest/src/legacy/legacy.service.ts)
 (`publicCycle`, `writeBulkExecutions`, `removeProjectMember`, `deleteCycle`,
 testcase snapshot-ID update, `updateBug`, `logProjectActivity`),
 [`automation-closure.db.spec.ts`](../Tesbo-Backend-Nest/src/automation/automation-closure.db.spec.ts),
+[`database.service.ts`](../Tesbo-Backend-Nest/src/database/database.service.ts),
 [`mcp.tools.ts`](../Tesbo-Backend-Nest/src/mcp/mcp.tools.ts),
+[`mcp.controller.ts`](../Tesbo-Backend-Nest/src/mcp/mcp.controller.ts),
 [`project-write-lock.guard.ts`](../Tesbo-Backend-Nest/src/plan-limits/project-write-lock.guard.ts),
-and [`client.ts`](../sdk/playwright-reporter/src/client.ts). This named selection
-is not a fresh all-method security audit.
+[`client.ts`](../sdk/playwright-reporter/src/client.ts), the existing repository
+page/helpers and workflow selections. This is not a fresh all-method security
+audit. Existing records, shared writers, history/audit, Zyra review, KB, MCP and
+reporter remain the owners; no parallel governance, Copilot, approval or evidence
+system is created to fill an unsigned gate.
 
 #### Finite owner/reviewer action list and stopping rule
 
 | Decision | Required record, owner and proposed review trigger |
 |---|---|
 | D1 — confirm selection | Product/release owner confirms the bounded F scope, mandatory integration checks, supported environment and explicit non-goals. F.0's framework adoption is not an unsigned checklist silently becoming signed. |
-| D2 — F8 publication/entitlement | Product/security owners record actual contracts and classify F8a/F8b before exit. A verified unresolved high/critical violation blocks exit under F.0; uncertainty cannot be marked safe. Any required fix is one named bounded increment through existing owners. |
-| D3 — uncertainty and historical policy | Product/backend/data owners choose fix, explicitly scoped follow-up or further evidence for F3/F6/F7. For F6, name environment, read-only authority, privacy limits and snapshot first; collect aggregates before sensitive per-record receipts. No destructive cleanup. |
+| D2 — F8 publication/entitlement | Product/security owner records exact public Run fields and disable/re-enable token semantics; product/billing/security owner records locked-project route/tool operations and required parity (including MCP reads versus writes and project archive). Classify F8a/F8b before exit. A verified unresolved high/critical violation blocks exit; uncertainty is not safety. Approve any needed reproducer/repair as one named increment through existing owners. |
+| D3 — uncertainty and historical policy | Product/backend/data owners choose a named fix, explicitly scoped follow-up or bounded further evidence for F3/F6/F7: postcommit/delivery guarantees, historical identity/assignment/deletion policy and invalid-row inventory. For F6, name environment, read-only authority, privacy limits and snapshot first; start with aggregates. No destructive cleanup or invented retention/restore contract. |
 | D4 — proposed follow-ups | Owner separately dispositions F2/F9, appoints named maintainers and a review date. Proposed triggers: confirmed duplicate/effect-loss incident, expanded SDK/runtime contract, new high/critical advisory, relevant dependency upgrade, or before the next release using the affected path. Without names/date/decision these remain open, not accepted backlog items. |
-| D5 — independent review and exit | Appoint an independent human security/release reviewer and provide scope, source/evidence and unsupported scenarios. Record reviewer findings and a dated owner exit decision. Agent source review, CI and owner merge do not meet this gate. |
-| D6 — Phase 2 authority | Supply the matching approved package/baseline, reconcile requirement statuses, and approve one exact user-facing increment with acceptance tests, exclusions and existing-module owners. No feature implementation starts from strategic headings alone. |
+| D5 — independent review and exit | Name an independent human security/release reviewer, review scope and evidence; disposition their findings and record a dated owner exit decision with remaining supported/unsupported environments. No such signed receipt was provided to this reconciliation; out-of-band review is not presumed absent or complete. Agent source review, CI and owner merge do not satisfy it. |
+| D6 — Phase 2 authority | Supply the matching approved raw eight-file package and single living baseline; reconcile requirement statuses and approve one exact increment with acceptance, exclusions and existing-module owners. Resolve P-07/FR-033 before any automatic publication. Indexed review text and a general request to continue are not an approved amendment or feature scope. |
+
+**Required handoff is finite:** record the decisions above against their existing
+IDs with named accountable people, dates and evidence. D1/D2/D3/D4/D5/D6 are
+**still open** here; no box is checked on the owner's behalf. This document does
+not appoint reviewers, accept a risk, silently defer a finding or amend publication
+authority. If a decision needs more evidence, name its exact question, authorized
+environment and stopping condition rather than launching another open-ended audit.
 
 **No indefinite expansion:** this reconciliation selects no new general hardening
 project. Preserve the current mandatory regressions. Reopen implementation only
@@ -4503,34 +4533,45 @@ reason to extend Phase 1. No residual risk is accepted by this register.
 | Gate | Current status / remaining signature or evidence |
 |---|---|
 | E1 — finite baseline | **PARTIAL**: framework adopted in #43; D1's exact exit selection/criteria sign-off not recorded here. |
-| E2 — critical integrity | Named fixes evidenced; F4 and original high/critical F9 no longer open defects. **OPEN** pending F8 contracts/classification and independent security adjudication; no blanket whole-app PASS. |
+| E2 — critical integrity | F4, original high/critical F9 and the named #48–#54 lineage/isolation repairs are not scheduled again as unresolved defects. **OPEN** pending F8 contracts/classification and independent adjudication; no blanket whole-app PASS. |
 | E3 — transaction/duplicate outcomes | F4 repaired. **OPEN** for explicit F2/F3 dispositions; successful characterizations do not waive uncertainty. |
-| E4 — connected workflow | **TECHNICAL PASS at #42 head `6c90d74`** for the seven-test isolated selection. Not full shared-stack/deployed/browser-matrix UAT; this document's later CI is a separate receipt. |
+| E4 — connected workflow | **TECHNICAL PASS, SCOPED** at #55 head `e51b394` and identical merged product tree `80cf4c2`: existing REST/MCP/browser/reporter and migrated PostgreSQL selection retained. Not shared-stack/deployed/browser-matrix UAT or every external integration; a documentation-head run remains a separate receipt. |
 | E5 — historical data | Covered projections preserve isolation; live inventory prevalence **UNKNOWN**, authorization/disposition **OPEN** (D3). |
-| E6 — checks and independent review | #42 exact-head checks/evidence are retained. **INDEPENDENT_REVIEW_NOT_RUN / EXIT_NOT_SIGNED**; current documentation head requires its own applicable checks. |
-| E7 — next-phase authority | **BLOCKED_BY_CANONICAL_SOURCE**; complete approved package/baseline and a selected Phase 2 increment are not available/approved. |
+| E6 — checks and independent review | #55 exact-head receipt and merged-head checks reviewed. **INDEPENDENT_REVIEW_NOT_RECORDED / EXIT_NOT_SIGNED**; owner merges are not reviewer signatures. Current documentation head requires its own applicable checks. |
+| E7 — next-phase authority | **BLOCKED_BY_CANONICAL_SOURCE_AND_DECISIONS**: all eight indexed files were reconciled in #51, but the approved raw package/living baseline and one exact approved Phase 2 increment remain unavailable/unapproved. Automatic publication additionally requires an approved P-07/FR-033 amendment; the existing human-approval contract remains binding. |
 
 #### Canonical-source recovery receipt and minimum unblock
 
-Bounded recovery recheck found:
+Bounded recovery distinguishes Git imports, indexed content and approved raw
+authority; it does not repeat the superseded claim that only two sources exist:
 
 - Fetched repository refs/history contain two imported working files on
   `origin/docs/qa-specs-product-direction-20261028@d96f24e`: `00_README.md`
   (Git blob `9f2b919a3a689779048c0b3aebcfa6b789147080`) and
   `06_IMPLEMENTATION_AGENT_BRIEF.md`
-  (`48142bb976cb7138878b1d6ae8c8c0ac930f1743`). The six companions, including
-  the actual requirements/design/backlog matrices, are absent. The separate
-  session-distillation branch adds no `docs/qa-orchestration` files.
-- History retains the two import commits (`d96f24e`, `c689222`), not the missing
-  originals. GitHub Releases lists no archive; repository Issues are disabled.
-  Configured MCP discovery returns no resources/templates. Targeted filename
-  search under the approved local OpenCode workspace parent found no
-  `Tesbo_Existing_Application_Baseline_v1.0.md`. This is not an assertion about
-  inaccessible private chats, other disks, or all possible external sources.
+  (`48142bb976cb7138878b1d6ae8c8c0ac930f1743`). These remain the two **Git
+  imports on that branch**, not the complete known canonical-source inventory.
+  `development@80cf4c2` has no materialized `docs/qa-orchestration` package.
+- #51's [Section 18 crosswalk](reviews/governed-asset-evolution-reconciliation.md#18-crosswalk-against-recovered-tesbo-eight-spec-package-v1418-2026-10-28)
+  records reading **all eight indexed v1.4.18 files**, preserving their original
+  IDs. That review supersedes the earlier only-two-known-sources premise, but
+  explicitly did not materialize or authorize replacing the raw originals/ZIP.
+  Its proposals remain noncanonical review material, not a ninth spec or baseline.
+- Current configured MCP resource discovery returned no resources/templates;
+  the targeted baseline filename search under the approved workspace parent
+  again found no `Tesbo_Existing_Application_Baseline_v1.0.md`. Earlier release/
+  history recovery receipts did not recover a matching approved package. These
+  bounded checks do not establish absence from private chats, other disks or all
+  possible external sources; an accessible owner handoff can unblock recovery.
 - The README is a partial working text that starts inside a gate table. It
   references older Project 1.2 attachments, revised 1.4.19 direction and an earlier
   1.4.17 archive hash; a referenced hash is not a recovered/verified archive.
   These conflicts cannot be resolved by choosing the newest-looking label.
+- Indexed P-07/FR-033 still requires human approval of the exact revision and
+  separately selected apply. Requested bounded automatic publication is an
+  **unratified amendment** until the owning eight source sections are amended
+  together and approved. Token onboarding, a Write token, Zyra review or owner
+  merge does not substitute for that authority.
 
 **Minimum owner handoff:** attach the original eight matching `00`–`07` files
 (preserving their existing names), or an accessible repository/archive URL plus
@@ -4550,7 +4591,7 @@ being replaced by indefinite isolated infrastructure work.
 ### F. Historical bounded Phase 1 exit assessment — 2026-11-12 (as of #35)
 
 **Historical status below is preserved, not the current exit register.** F.0
-records the subsequently adopted framework; F.1 reconciles #36–#43. In particular,
+records the subsequently adopted framework; F.1 reconciles through #55. In particular,
 the old F4 committed-prefix and F9 critical/high counts are not current findings.
 
 **Outcome: Phase 1 exit is NOT YET ESTABLISHED; Phase 2 is not authorized.** This
