@@ -5576,13 +5576,80 @@ publication, canonical auto-publish policy change, independent-review substitute
 risk acceptance or Phase 1/2 exit. The merged #51 review's approval/source gates
 remain applicable to new governance features.
 
+### R. Shared testcase/Suite assignment boundary (2026-11-13, review pending)
+
+This returns to the remaining repository gate after owner-merged #53. The UI
+recovery investigation is separate and has no product changes in this increment.
+No new orchestration, approval or publication authority is inferred from a request
+to continue development.
+
+**Reproduced boundary:** test-only head `2c8c8ba` in PR #54 ran the existing nine
+migrated PostgreSQL suites. All 200 prior tests passed; all 16 added cases failed.
+Single create/update and REST bulk-create/update accepted foreign/deleted Suite
+references, while missing/malformed IDs reached database errors rather than a
+controlled refusal. Synthetic native fixtures establish these writer behaviors,
+not live prevalence, an authenticated production exploit or deployed acceptance.
+
+**Implementation ownership and contract:**
+
+| Existing owner/path | Bounded change; preserved behavior |
+| --- | --- |
+| `insertTestCaseWithClient`, REST/MCP create | Validate nonempty assignments against active Suites in the case's project inside the insertion transaction; preserve unassigned defaults and existing field/actor handling. |
+| `updateTestCase` / `updateTestCaseWithClient`, REST/MCP edits | Validate explicitly supplied Suite IDs; omitted relationships remain live-write omissions, explicit null still clears. Do not silently repair preexisting foreign/deleted relationships on unrelated edits. |
+| REST `bulkCreateTestCases` | Validate every supplied target before the set-based INSERT; one invalid target rejects the entire batch, with no valid prefix. Existing access-before-parsing and empty-response contracts remain. |
+| `bulkUpdateTestCases`, REST/MCP bulk move | Validate target and UPDATE in one transaction. Keep SQL-time source-row project filtering, actual `RETURNING` activity IDs, blank omission and `"none"` unassignment. MCP's existing mixed-ID per-item ownership contract remains distinct. |
+| `duplicateTestCase` | Reread the active source after acquiring the project mutex; validate its current Suite, allocate the new external ID inside the transaction, and retain custom-field/tag copy owners. Do not propagate an invalid historical association. |
+| `importTestCases` / `resolveImportSuites` | Refresh the active Suite-name map per chunk under the mutex. Revalidate the default inside existing savepoints; stale defaults retain row-numbered failures, and deleted named targets are resolved anew rather than reused from the old cache. Existing chunk and replay contracts remain. |
+| `zyraSaveAttempt`, sequential and set-based entries | Acquire the project mutex before review/case/ID locks. Preserve the existing invalid/stale new-Suite fallback to unassigned and its review receipt; do not replace it with the REST rejection contract. |
+| `applyZyraChatOperations` direct move | Revalidate the resolved destination and write under the same transaction/mutex; keep existing per-operation failure reporting, never silently assign a stale resolved Suite. |
+| `SetupService` demo insertion | Source-inspected separately: predetermined Suite IDs created with the new project in the same setup transaction, not a caller-supplied assignment path. No setup rewrite. |
+
+**Lock order:** reuse `deleteSuite`'s transaction-scoped `suite-tree:<project>`
+advisory lock, before any assignment transaction's review row, testcase row or
+external-ID lock. Hold through commit/rollback. Single creates, bulk creates,
+edits (including omitted-Suite edits), duplication, each import chunk and Zyra
+saves/moves obey that order. A Suite-row lock acquired after a case-row lock would
+invert deletion's case-then-Suite updates; no such lock is added. The project mutex
+serializes these writes within a project, including ordinary edits; this is a
+correctness/throughput tradeoff, not a performance improvement claim.
+
+**Verification owners:** existing `repository-partial-edits.db.spec.ts` covers
+invalid targets/no effects, valid and explicit-clear controls, historical omissions,
+duplicate rereads, real two-connection deletion orderings, stale import caches and
+both actual Zyra save transactions with late database rollback. Native auth,
+custom-field/tag, capability, activity-delivery and queue collaborators are declared
+stubs; their policies/external delivery are not proved by those tests. Existing
+Notion-link and bulk-scope unit tests retain their assertions and model the new
+reread/transaction boundary. `ci-testcase-bulk-scope.ts` extends the same isolated
+two-tenant journey with real session/Write-token/MCP refusals and a real stale-option
+bulk form: selection/input survive refusal, a valid replacement persists and is
+shown after reload. All ten outer smoke cases, authorization assertions and native
+selections remain. Final exact-head results/screenshots belong in PR metadata.
+
+**Still not certified:** arbitrary direct SQL, unsupported cross-project testcase
+reparenting, historical-data cleanup, Suite-parent/cycle validation and hierarchy
+creation/reparent races, all Suite display joins, concurrent membership revocation,
+postcommit audit/queue durability, lost acknowledgements, shared/deployed-stack
+acceptance or independent review. In particular, this closes testcase assignment
+versus `deleteSuite`, not the separate hierarchy-writer caveat documented in Q12.
+
+**Next gate, not another implied feature approval:** submit this focused boundary
+repair for human review. F.1/D1–D6 still requires named independent review, exact
+public-share/locked-project contracts, explicit uncertainty/history dispositions,
+and access to the approved eight-file package plus living baseline. Those decisions
+remain open until the responsible owner records them; no green test run supplies
+the missing signatures or ratifies bounded automatic publication. The indexed
+eight-source reconciliation in `docs/reviews/` remains noncanonical and does not
+authorize a ninth spec or a duplicate Copilot/review system.
+
 ### S. Existing repository UI deletion and recovery (2026-11-13, review pending)
 
 This is the finite UI/UX batch previously requested by the owner, kept separate
-from PR #54's shared Suite-reference repair and its tested head. Base is
-owner-merged #53. Waiting for #54's human review is not permission to merge it or
-declare Phase 1 complete. This increment changes no backend, schema, transport
-retry policy, publication authority, governance workflow or Copilot system.
+from PR #54's shared Suite-reference repair and its tested head. Initially based
+on #53; owner-merged #54 (`e578a27`) is now integrated, retaining Section R and
+both regression sets. Owner merge is not independent review or Phase 1 sign-off.
+This increment changes no backend, schema, transport retry policy, publication
+authority, governance workflow or Copilot system.
 
 **Reproduced before repair:** test-only PR #55 head `ede5f8e` extended the existing
 isolated two-tenant Suite journey with one controlled pre-delivery 403. The actual

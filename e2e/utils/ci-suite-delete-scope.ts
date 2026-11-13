@@ -147,6 +147,8 @@ export async function verifySuiteDeleteScope(ctx: {
     expect((await db.query("SELECT deleted_at FROM suites WHERE id=$1", [empty.id])).rows[0].deleted_at).toBeInstanceOf(Date);
     await testInfo.attach("confirmed-suite-delete-refresh-failure-not-a-retry", { body: await page.screenshot(), contentType: "image/png" });
     await page.getByRole("button", { name: "Reload repository", exact: true }).click();
+    await expect(page).toHaveURL(`${repositoryUrl}?suiteId=none`);
+    await expect(page.getByRole("button", { name: "CI moveToDefault local 0", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: empty.name, exact: true })).toHaveCount(0);
     await expect(page.getByRole("alert")).toHaveCount(0); expect(deleteRequests).toBe(1);
   });

@@ -66,6 +66,9 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
     const fields = jest.fn().mockResolvedValue(undefined), tags = jest.fn().mockResolvedValue(undefined);
     internals.customFields.setValuesForTestCase = fields;
     internals.customTags.setTagsForTestCase = tags;
+    internals.customFields.copyValues = jest.fn().mockResolvedValue(undefined);
+    internals.customTags.copyTags = jest.fn().mockResolvedValue(undefined);
+    internals.customFields.loadWriteContext = jest.fn().mockResolvedValue(null);
     jest.spyOn(internals.suitesCache, "get").mockResolvedValue(undefined);
     jest.spyOn(internals.suitesCache, "set").mockResolvedValue(undefined);
     const suitesInvalidation = jest.spyOn(internals.suitesCache, "invalidate").mockResolvedValue(undefined);
@@ -308,5 +311,236 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
     expect(await f.svc.bulkCreateTestCases(projectId, owner, { testcases: [] })).toEqual({ created: [], createdCount: 0 });
     expect(await state()).toEqual(before); expect(f.activity).not.toHaveBeenCalled(); expect(f.fields).not.toHaveBeenCalled();
     expect(f.suitesInvalidation).not.toHaveBeenCalled(); expect(f.casesInvalidation).not.toHaveBeenCalled();
+  });
+
+  describe.each(["create", "update", "bulk-create", "bulk-update"])("%s suite reference boundary", (writer) => {
+    it.each(["foreign", "deleted", "missing", "malformed"])("refuses a %s suite without changing records, history or effects", async (kind) => {
+      const target = kind === "foreign"
+        ? (await setup.query("INSERT INTO suites (project_id,name) VALUES ($1,'Private suite') RETURNING id", [otherProjectId])).rows[0].id
+        : kind === "deleted"
+          ? (await setup.query("INSERT INTO suites (project_id,name,deleted_at) VALUES ($1,'Deleted suite',now()) RETURNING id", [projectId])).rows[0].id
+          : kind === "missing" ? randomUUID() : "not-a-suite-id";
+      const snapshot = async () => ({
+        cases: (await setup.query("SELECT * FROM testcases WHERE project_id=ANY($1::uuid[]) ORDER BY id", [[projectId, otherProjectId]])).rows,
+        history: (await setup.query("SELECT v.* FROM testcase_versions v JOIN testcases t ON t.id=v.testcase_id WHERE t.project_id=ANY($1::uuid[]) ORDER BY v.testcase_id,v.version", [[projectId, otherProjectId]])).rows,
+        suites: (await setup.query("SELECT * FROM suites WHERE project_id=ANY($1::uuid[]) ORDER BY id", [[projectId, otherProjectId]])).rows,
+      });
+      const before = await snapshot(), f = service();
+      const body = { suiteId: target, title: "Must not write an invalid suite" };
+      const writing = writer === "create" ? f.svc.createTestCase(projectId, owner, body)
+        : writer === "update" ? f.svc.updateTestCase(testcaseId, owner, body)
+          : writer === "bulk-create" ? f.svc.bulkCreateTestCases(projectId, owner, { testcases: [{ title: "Valid prefix", suiteId: root }, body] })
+            : f.svc.bulkUpdateTestCases(projectId, owner, { testcaseIds: [testcaseId, control], suiteId: target, priority: "P0" });
+      await expect(writing).rejects.toMatchObject({ response: { error: "suiteId must reference an active suite in this project" }, status: 400 });
+      expect(await snapshot()).toEqual(before);
+      for (const effect of [f.fields, f.tags, f.activity, f.embedding, f.notice, f.suitesInvalidation, f.casesInvalidation]) expect(effect).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(["foreign", "deleted"])("does not duplicate an existing %s suite association into a new case", async (kind) => {
+    const target = (await setup.query("INSERT INTO suites (project_id,name,deleted_at) VALUES ($1,'Legacy invalid association',CASE WHEN $2 THEN now() ELSE NULL END) RETURNING id", [kind === "foreign" ? otherProjectId : projectId, kind === "deleted"])).rows[0].id;
+    await setup.query("UPDATE testcases SET suite_id=$2 WHERE id=$1", [testcaseId, target]);
+    const before = (await setup.query("SELECT * FROM testcases WHERE project_id=$1 ORDER BY id", [projectId])).rows, previous = await state(), f = service();
+    await expect(f.svc.duplicateTestCase(testcaseId, owner)).rejects.toMatchObject({ status: 400 });
+    expect((await setup.query("SELECT * FROM testcases WHERE project_id=$1 ORDER BY id", [projectId])).rows).toEqual(before);
+    expect(await state()).toEqual(previous); expect(f.activity).not.toHaveBeenCalled();
+  });
+
+  it("duplicates a valid local case without altering its source or historical snapshots", async () => {
+    const before = await state(), f = service(), copied = await f.svc.duplicateTestCase(testcaseId, owner);
+    expect(copied).toMatchObject({ suiteId: root, title: "Original case (copy)", createdBy: owner, updatedBy: owner });
+    expect(copied.id).not.toBe(testcaseId); expect(copied.externalId).not.toBe(before.row.external_id);
+    expect(await state()).toEqual(before);
+  });
+
+  it.each(["foreign", "deleted"])("preserves an omitted legacy %s Suite relationship rather than silently repairing history", async (kind) => {
+    const target = (await setup.query("INSERT INTO suites (project_id,name,deleted_at) VALUES ($1,'Legacy unchanged Suite',CASE WHEN $2 THEN now() ELSE NULL END) RETURNING id", [kind === "foreign" ? otherProjectId : projectId, kind === "deleted"])).rows[0].id;
+    await setup.query("UPDATE testcases SET suite_id=$2 WHERE id=$1", [testcaseId, target]);
+    const before = await state(); await service().svc.updateTestCase(testcaseId, owner, { priority: "P0" });
+    const after = await state(); expect(after.row).toMatchObject({ suite_id: target, priority: "P0" });
+    expect(after.versions.at(-1)).toMatchObject({ snapshot: expect.objectContaining({ suite_id: target, priority: before.row.priority }) });
+    unchangedOutsideCase(before, after);
+  });
+
+  it("deduplicates case-insensitive Suite IDs in a valid bulk-create without changing the stored relation", async () => {
+    const result = await service().svc.bulkCreateTestCases(projectId, owner, { testcases: [{ title: "Lowercase Suite", suiteId: root }, { title: "Uppercase Suite", suiteId: root.toUpperCase() }] });
+    expect(result.createdCount).toBe(2); for (const row of result.created) expect(row.suiteId).toBe(root);
+  });
+
+  const raceWriters = ["create", "update", "bulk-create", "bulk-update", "duplicate"] as const;
+  function writeToSuite(writer: typeof raceWriters[number], f: ReturnType<typeof service>, target: string) {
+    if (writer === "create") return f.svc.createTestCase(projectId, owner, { title: "Race create", suiteId: target });
+    if (writer === "update") return f.svc.updateTestCase(testcaseId, owner, { suiteId: target, title: "Race update" });
+    if (writer === "bulk-create") return f.svc.bulkCreateTestCases(projectId, owner, { testcases: [{ title: "Race bulk create", suiteId: target }] });
+    if (writer === "bulk-update") return f.svc.bulkUpdateTestCases(projectId, owner, { testcaseIds: [testcaseId], suiteId: target });
+    return f.svc.duplicateTestCase(testcaseId, owner);
+  }
+
+  describe.each(raceWriters)("%s Suite deletion ordering", (writer) => {
+    it("waits for an in-flight deletion and revalidates before any assignment", async () => {
+      const target = await suite("Deletion wins");
+      if (writer === "duplicate") await setup.query("UPDATE testcases SET suite_id=$2 WHERE id=$1", [testcaseId, target]);
+      let entered!: () => void, release!: () => void;
+      const locked = new Promise<void>((resolve) => { entered = resolve; }), gate = new Promise<void>((resolve) => { release = resolve; });
+      let pid = 0;
+      const observed = observedPool(async (sql, _result, raw) => {
+        if (/pg_advisory_xact_lock/.test(sql) && !pid) { pid = Number((await raw("SELECT pg_backend_pid() AS pid")).rows[0].pid); entered(); await gate; }
+      });
+      const deleting = service(observed).svc.deleteSuite(owner, target, "moveToDefault").then(() => null, (error: unknown) => error);
+      let writing: Promise<unknown> | undefined;
+      try {
+        await locked;
+        const f = service(); writing = writeToSuite(writer, f, target).then((value) => ({ value }), (error: unknown) => ({ error }));
+        await waitForBlocker(pid); release(); expect(await deleting).toBeNull();
+        const result = await writing as { error?: { status: number }; value?: unknown };
+        // A duplicate rereads its still-active source after deletion has unassigned it. Other
+        // callers explicitly requested the now-deleted target and must refuse it.
+        if (writer === "duplicate") expect(result.value).toMatchObject({ suiteId: null });
+        else { expect(result.error).toMatchObject({ status: 400 }); expect(f.activity).not.toHaveBeenCalled(); }
+        expect((await setup.query("SELECT id FROM testcases WHERE project_id=$1 AND suite_id=$2 AND deleted_at IS NULL", [projectId, target])).rows).toEqual([]);
+      } finally { release(); await deleting; await writing; await observed.end(); }
+    }, 15_000);
+
+    it.each(["moveToDefault", "deleteTestcases"])("a later %s deletion sees the completed assignment, without a row/advisory-lock inversion", async (mode) => {
+      const target = await suite("Assignment wins");
+      if (writer === "duplicate") await setup.query("UPDATE testcases SET suite_id=$2 WHERE id=$1", [testcaseId, target]);
+      let entered!: () => void, release!: () => void;
+      const assigned = new Promise<void>((resolve) => { entered = resolve; }), gate = new Promise<void>((resolve) => { release = resolve; });
+      let pid = 0;
+      const observed = observedPool(async (sql, _result, raw) => {
+        if (!pid && (/INSERT INTO testcases/.test(sql) || /UPDATE testcases SET/.test(sql))) {
+          pid = Number((await raw("SELECT pg_backend_pid() AS pid")).rows[0].pid); entered(); await gate;
+        }
+      });
+      const writing = writeToSuite(writer, service(observed), target).then(() => null, (error: unknown) => error);
+      let deleting: Promise<unknown> | undefined;
+      try {
+        await assigned; deleting = service().svc.deleteSuite(owner, target, mode).then(() => null, (error: unknown) => error);
+        await waitForBlocker(pid); release(); expect(await writing).toBeNull(); expect(await deleting).toBeNull();
+        expect((await setup.query("SELECT id FROM testcases WHERE project_id=$1 AND suite_id=$2 AND deleted_at IS NULL", [projectId, target])).rows).toEqual([]);
+      } finally { release(); await writing; await deleting; await observed.end(); }
+    }, 15_000);
+  });
+
+  it.each(["default", "named"])("import revalidates its stale %s suite snapshot while retaining per-row reporting", async (kind) => {
+    const target = await suite(`Import ${kind}`); let removed = false;
+    const observed = observedPool(async (sql) => {
+      if (!removed && sql === "SELECT id, parent_id, name FROM suites WHERE project_id = $1 AND deleted_at IS NULL") {
+        removed = true; await service().svc.deleteSuite(owner, target, "moveToDefault");
+      }
+    });
+    const f = service(observed);
+    try {
+      const result = await f.svc.importTestCases(owner, projectId, {
+        ...(kind === "default" ? { defaultSuiteId: target } : {}),
+        rows: [{ title: `Import revalidation ${kind}`, ...(kind === "named" ? { suite: `Import ${kind}` } : {}) }],
+      });
+      expect(removed).toBe(true);
+      if (kind === "default") expect(result).toMatchObject({ imported: 0, total: 1, errors: [{ row: 1, message: expect.any(String) }] });
+      else {
+        expect(result).toMatchObject({ imported: 1, errors: [] });
+        const row = (await setup.query("SELECT t.suite_id,s.deleted_at FROM testcases t JOIN suites s ON s.id=t.suite_id WHERE t.project_id=$1 AND t.title=$2", [projectId, `Import revalidation ${kind}`])).rows[0];
+        expect(row).toMatchObject({ deleted_at: null }); expect(row.suite_id).not.toBe(target);
+      }
+      expect((await setup.query("SELECT id FROM testcases WHERE project_id=$1 AND suite_id=$2 AND deleted_at IS NULL", [projectId, target])).rows).toEqual([]);
+    } finally { await observed.end(); }
+  });
+
+  // These drive the real save transaction and both entry implementations. Capabilities,
+  // custom fields/tags, queues and activity delivery are declared collaborators, not auth/AI proof.
+  function zyraFixture(f: ReturnType<typeof service>, batched: boolean) {
+    const internals = f.svc as unknown as {
+      config: { zyraSetBasedSaveEnabled: boolean };
+      zyraProjectCapabilities: (id: string) => Promise<{ testcaseStorage: boolean }>;
+      zyraSaveAttempt: (project: string, actor: string, task: string, body: Record<string, unknown>, selected: null) => Promise<{ savedCount: number; suiteId: string | null; testcases: Array<{ id: string; suiteId: string | null }> }>;
+    };
+    internals.config.zyraSetBasedSaveEnabled = batched;
+    jest.spyOn(internals, "zyraProjectCapabilities").mockResolvedValue({ testcaseStorage: true });
+    return internals;
+  }
+  async function reviewTask(target: string) {
+    return (await setup.query("INSERT INTO ai_generation_requests (project_id,requested_by,provider,user_story,generated_payload) VALUES ($1,$2,'ci','Native Suite save boundary',$3::jsonb) RETURNING id", [projectId, owner, JSON.stringify([{ draft: { title: "Native reviewed draft", suiteId: target } }])])).rows[0].id as string;
+  }
+
+  describe.each([false, true])("Zyra set-based save %s", (batched) => {
+    it.each(["valid", "foreign", "deleted", "missing", "malformed"])("preserves the existing %s Suite assignment/fallback contract", async (kind) => {
+      const target = kind === "valid" ? root : kind === "foreign"
+        ? (await setup.query("INSERT INTO suites (project_id,name) VALUES ($1,'Private review Suite') RETURNING id", [otherProjectId])).rows[0].id
+        : kind === "deleted" ? (await setup.query("INSERT INTO suites (project_id,name,deleted_at) VALUES ($1,'Deleted review Suite',now()) RETURNING id", [projectId])).rows[0].id
+          : kind === "missing" ? randomUUID() : "not-a-suite-id";
+      const task = await reviewTask(target), before = await state(), f = service();
+      const result = await zyraFixture(f, batched).zyraSaveAttempt(projectId, owner, task, { suiteId: target }, null);
+      expect(result).toMatchObject({ savedCount: 1, suiteId: kind === "valid" ? root : null });
+      const row = (await setup.query("SELECT * FROM testcases WHERE id=$1", [result.testcases[0].id])).rows[0];
+      expect(row).toMatchObject({ project_id: projectId, suite_id: kind === "valid" ? root : null, created_by: owner, updated_by: owner });
+      expect((await setup.query("SELECT task_status,saved_count,save_events FROM ai_generation_requests WHERE id=$1", [task])).rows[0]).toMatchObject({ task_status: "done", saved_count: 1, save_events: [expect.objectContaining({ testcaseIds: [row.id] })] });
+      expect(await state()).toEqual(before);
+    });
+
+    it("holds the deletion mutex from before review-row locks until the reviewed case commits", async () => {
+      const target = await suite("Reviewed assignment wins"), task = await reviewTask(target);
+      let entered!: () => void, release!: () => void;
+      const checked = new Promise<void>((resolve) => { entered = resolve; }), gate = new Promise<void>((resolve) => { release = resolve; });
+      let pid = 0;
+      const statements: string[] = [];
+      const observed = observedPool(async (sql, _result, raw) => {
+        statements.push(sql);
+        if (!pid && sql.startsWith("SELECT id FROM suites WHERE id = ANY")) {
+          pid = Number((await raw("SELECT pg_backend_pid() AS pid")).rows[0].pid); entered(); await gate;
+        }
+      });
+      const writing = zyraFixture(service(observed), batched).zyraSaveAttempt(projectId, owner, task, { suiteId: target }, null).then(() => null, (error: unknown) => error);
+      let deleting: Promise<unknown> | undefined;
+      try {
+        await checked; deleting = service().svc.deleteSuite(owner, target, "moveToDefault").then(() => null, (error: unknown) => error);
+        await waitForBlocker(pid); release(); expect(await writing).toBeNull(); expect(await deleting).toBeNull();
+        expect(statements.findIndex((sql) => sql.includes("pg_advisory_xact_lock"))).toBeLessThan(statements.findIndex((sql) => sql.includes("FROM ai_generation_requests") && sql.includes("FOR UPDATE")));
+        expect((await setup.query("SELECT id FROM testcases WHERE project_id=$1 AND suite_id=$2 AND deleted_at IS NULL", [projectId, target])).rows).toEqual([]);
+      } finally { release(); await writing; await deleting; await observed.end(); }
+    }, 15_000);
+
+    it("rolls back the case and review receipt on a late database fault", async () => {
+      const task = await reviewTask(root), before = (await setup.query("SELECT * FROM testcases WHERE project_id=$1 ORDER BY id", [projectId])).rows;
+      const reviewBefore = (await setup.query("SELECT * FROM ai_generation_requests WHERE id=$1", [task])).rows;
+      let failed = false;
+      const observed = observedPool(async (sql, result, raw) => {
+        if (!failed && /UPDATE ai_generation_requests/.test(sql)) { failed = true; expect(result.rowCount).toBe(1); await raw("SELECT 1 / 0"); }
+      });
+      try {
+        await expect(zyraFixture(service(observed), batched).zyraSaveAttempt(projectId, owner, task, { suiteId: root }, null)).rejects.toMatchObject({ code: "22012" });
+        expect(failed).toBe(true);
+        expect((await setup.query("SELECT * FROM testcases WHERE project_id=$1 ORDER BY id", [projectId])).rows).toEqual(before);
+        expect((await setup.query("SELECT * FROM ai_generation_requests WHERE id=$1", [task])).rows).toEqual(reviewBefore);
+      } finally { await observed.end(); }
+    });
+  });
+
+  it.each([false, true])("Zyra direct move revalidates its resolved target after concurrent deletion: %s", async (deleted) => {
+    const target = await suite("Direct chat move"), before = await state(); let resolved = false;
+    const observed = observedPool(async (sql) => {
+      if (!resolved && sql.startsWith("SELECT id, name FROM suites WHERE project_id = $1 AND id = $2::uuid")) {
+        resolved = true; if (deleted) await service().svc.deleteSuite(owner, target, "moveToDefault");
+      }
+    });
+    const f = service(observed);
+    const internals = f.svc as unknown as {
+      resolveZyraActor: (id: string) => Promise<string>;
+      zyraProjectCapabilities: (id: string) => Promise<{ suiteOperations: boolean }>;
+      applyZyraChatOperations: (...args: unknown[]) => Promise<{ activity: Array<{ title: string }>; moveBreakdown: Array<{ suiteId: string; count: number }> }>;
+    };
+    jest.spyOn(internals, "resolveZyraActor").mockResolvedValue(owner);
+    jest.spyOn(internals, "zyraProjectCapabilities").mockResolvedValue({ suiteOperations: true });
+    try {
+      const result = await internals.applyZyraChatOperations(projectId, owner, randomUUID(), [{ type: "move_to_suite", suiteId: target, testcaseIds: [testcaseId] }]);
+      expect(resolved).toBe(true);
+      if (deleted) {
+        expect(await state()).toEqual(before); expect(result.moveBreakdown).toEqual([]);
+        expect(result.activity).toContainEqual(expect.objectContaining({ title: "An operation failed unexpectedly" }));
+        expect(f.activity).not.toHaveBeenCalled();
+      } else {
+        expect((await state()).row).toMatchObject({ suite_id: target });
+        expect(result.moveBreakdown).toEqual([expect.objectContaining({ suiteId: target, count: 1 })]);
+      }
+    } finally { await observed.end(); }
   });
 });

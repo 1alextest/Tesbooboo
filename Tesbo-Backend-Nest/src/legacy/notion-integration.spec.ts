@@ -822,17 +822,19 @@ describe("test case writes carry the Notion link", () => {
 
   it("duplicate copies the link", async () => {
     const svc = serviceWithStubs();
-    const { client, statements } = capturingClient();
+    // Both the initial access read and the locked-transaction reread see this source.
+    const source = { id: "tc-1", project_id: PROJECT_ID, title: "t", notion_page_id: PAGE_ID, notion_url: "u", deleted_at: null };
+    const { client, statements } = capturingClient(source);
     jest.spyOn(svc, "nextExternalId").mockResolvedValue("TC-2");
     (svc.db as any).transaction = async (fn: (c: unknown) => unknown) => fn(client);
-    (svc.db as any).query = jest.fn().mockResolvedValue({ rows: [{ id: "tc-1", project_id: PROJECT_ID, title: "t", notion_page_id: PAGE_ID, notion_url: "u", deleted_at: null }] });
+    (svc.db as any).query = jest.fn().mockResolvedValue({ rows: [source] });
     jest.spyOn(svc, "logProjectActivity").mockResolvedValue(undefined);
     jest.spyOn(svc, "requireUser").mockReturnValue(CALLER_ID);
     jest.spyOn(svc, "requireProjectAccess").mockResolvedValue(undefined);
     jest.spyOn(svc.suitesCache, "invalidate").mockResolvedValue(undefined);
     jest.spyOn(svc.testcasesListCache, "invalidate").mockResolvedValue(undefined);
     svc.customFields.copyValues = jest.fn();
-    await svc.duplicateTestCase(CALLER_ID, "tc-1").catch(() => undefined);
+    await svc.duplicateTestCase("tc-1", CALLER_ID);
     const insert = statements.find((s) => s.sql.includes("INSERT INTO testcases"));
     expect(insert).toBeDefined();
     expect(maxPlaceholder(insert!.sql)).toBe(insert!.params.length);

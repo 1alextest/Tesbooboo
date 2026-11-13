@@ -218,6 +218,95 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       await testInfo.attach("bulk-create-authorized-session-and-token-readback", { body: await page.screenshot(), contentType: "image/png" });
     });
 
+    await test.step("shared Suite assignment checks reject invalid targets through genuine sessions, Write tokens and MCP", async () => {
+      const foreignSuiteResponse = await other.post(`${api}/api/projects/${foreignProject}/suites`, { data: { name: "CI PRIVATE assignment target" } });
+      expect(foreignSuiteResponse.ok(), await foreignSuiteResponse.text()).toBeTruthy();
+      const foreignSuite = (await foreignSuiteResponse.json()).id;
+      const removed = await post(`${base}/suites`, { name: "CI Deleted assignment target" });
+      expect((await page.request.delete(`${api}/api/suites/${removed.id}`)).ok()).toBeTruthy();
+      const deniedTitle = "CI Invalid Suite Must Not Persist";
+      const snapshot = async () => ({
+        selected: await state(),
+        created: (await db.query("SELECT * FROM testcases WHERE project_id=ANY($1::uuid[]) AND title=$2 ORDER BY id", [[projectId, foreignProject], deniedTitle])).rows,
+        audit: (await db.query("SELECT * FROM audit_logs WHERE project_id=ANY($1::uuid[]) ORDER BY id", [[projectId, foreignProject]])).rows,
+      });
+      for (const target of [foreignSuite, removed.id, randomUUID(), "not-a-suite-id"]) {
+        const before = await snapshot();
+        for (const bearer of [false, true]) {
+          const client = bearer ? machine : page.request;
+          const headers: Record<string, string> = bearer ? { Authorization: `Bearer ${tokenByScope.write}` } : {};
+          for (const writer of ["create", "update", "bulk-create", "bulk-update"] as const) {
+            const response = writer === "update"
+              ? await client.put(`${base}/testcases/${control.id}`, { headers, data: { suiteId: target, title: deniedTitle } })
+              : await client.post(writer === "create" ? `${base}/testcases` : `${base}/testcases/${writer}`, {
+                headers, data: writer === "bulk-create"
+                  ? { testcases: [{ title: deniedTitle, suiteId: suite.id }, { title: deniedTitle, suiteId: target }] }
+                  : writer === "bulk-update" ? { testcaseIds: [control.id, foreign.id], suiteId: target, priority: "P0" } : { title: deniedTitle, suiteId: target },
+              });
+            expect(response.status(), await response.text()).toBe(400);
+            expect(await response.json()).toMatchObject({ error: "suiteId must reference an active suite in this project" });
+            expect(await snapshot()).toEqual(before);
+          }
+        }
+        for (const name of ["create_testcase", "update_testcase", "bulk_update_testcases"]) {
+          const response = await machine.post(`${base}/mcp`, { headers: { Authorization: `Bearer ${tokenByScope.write}` }, data: {
+            jsonrpc: "2.0", id: 54, method: "tools/call", params: { name, arguments: { title: deniedTitle, testcaseId: control.id, testcaseIds: [control.id], suiteId: target } },
+          } });
+          expect(response.status()).toBe(201); const rpc = await response.json();
+          // Invalid shared field input refuses the operation through MCP's existing error envelope;
+          // the earlier mixed-ID test still proves its unchanged per-item ownership outcomes.
+          expect(rpc.error).toMatchObject({ message: "suiteId must reference an active suite in this project" });
+          expect(await snapshot()).toEqual(before);
+        }
+      }
+      await page.goto(`${web}/projects/${projectId}/testcases`); await page.reload();
+      await expect(page.getByRole("button", { name: control.title, exact: true })).toBeVisible();
+      await expect(page.locator("body")).not.toContainText(deniedTitle);
+      await expect(page.locator("body")).not.toContainText("CI PRIVATE");
+      await testInfo.attach("suite-assignment-refusals-preserve-authorized-repository", { body: await page.screenshot(), contentType: "image/png" });
+    });
+
+    await test.step("a real stale Suite choice preserves the existing bulk form and selection, then recovers to a valid target", async () => {
+      const projectResponse = await page.request.get(base); expect(projectResponse.ok()).toBeTruthy();
+      const project = await projectResponse.json(); expect(project).toMatchObject({ id: projectId, key: expect.any(String) });
+      // RouteParamsProvider canonicalizes UUID links to the project's readable key.
+      const repositoryUrl = `${web}/projects/${encodeURIComponent(project.key)}/testcases`;
+      const stale = await post(`${base}/suites`, { name: "CI Stale bulk destination" });
+      const valid = await post(`${base}/suites`, { name: "CI Recovered bulk destination" });
+      await page.goto(`${web}/projects/${projectId}/testcases`); await page.reload();
+      await page.getByRole("checkbox", { name: `Select ${control.title}`, exact: true }).check();
+      await page.getByRole("button", { name: "Bulk actions", exact: true }).click();
+      const modal = page.getByRole("heading", { name: "Bulk actions", exact: true }).locator("..");
+      await modal.locator("select").filter({ has: page.locator('option[value="move"]') }).selectOption("move");
+      const target = modal.locator("select").filter({ has: page.locator(`option[value="${stale.id}"]`) });
+      await target.selectOption(stale.id);
+      // Actual Suite deletion after the browser loaded its choices; no intercepted response here.
+      expect((await page.request.delete(`${api}/api/suites/${stale.id}`)).ok()).toBeTruthy();
+      const before = await state(), events = await activity();
+      const refused = page.waitForResponse((item) => item.url() === endpoint("update") && item.request().method() === "POST");
+      await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await refused).status()).toBe(400);
+      await expect(modal.getByText("suiteId must reference an active suite in this project", { exact: true })).toBeVisible();
+      await expect(target).toHaveValue(stale.id); await expect(modal).toContainText("1 test case selected");
+      expect(await state()).toEqual(before); expect(await activity()).toEqual(events);
+      await testInfo.attach("stale-suite-refusal-keeps-bulk-form-and-selection", { body: await page.screenshot(), contentType: "image/png" });
+      await target.selectOption(valid.id);
+      const saved = page.waitForResponse((item) => item.url() === endpoint("update") && item.request().method() === "POST");
+      await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await saved).ok()).toBeTruthy();
+      await expect(modal).toBeHidden(); const after = await state(); expectPreserved(before, after, [control.id]);
+      expect(after.cases.find((row) => row.id === control.id)).toMatchObject({ suite_id: valid.id, priority: "P2", description: "Preserve bulk body", owner_id: ownerId });
+      await page.reload();
+      // Suite is not a default table column. Prove membership through the actual tree/list UI.
+      await page.getByRole("button", { name: valid.name, exact: true }).click();
+      await expect(page).toHaveURL(`${repositoryUrl}?suiteId=${valid.id}`);
+      await expect(page.getByRole("button", { name: control.title, exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "CI Bulk Created Session", exact: true })).toHaveCount(0);
+      await testInfo.attach("stale-suite-recovered-move-after-reload", { body: await page.screenshot(), contentType: "image/png" });
+      await page.getByRole("button", { name: suite.name, exact: true }).click();
+      await expect(page).toHaveURL(`${repositoryUrl}?suiteId=${suite.id}`);
+      await expect(page.getByRole("button", { name: "CI Bulk Created Session", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: control.title, exact: true })).toHaveCount(0);
+    });
+
     await verifySuiteDeleteScope({ page, api, web, db, other, machine, projectId, foreignProject, ownerId, outsider, tokens: tokenByScope, testInfo });
   } finally {
     for (const id of tokens) expect((await page.request.delete(`${base}/apikeys/${id}`)).ok()).toBeTruthy();

@@ -4850,6 +4850,31 @@ export class LegacyService implements OnModuleInit {
     throw error as Error;
   }
 
+  /**
+   * Same per-project mutex as deleteSuite. Assignment transactions take it BEFORE any
+   * testcase row, review row or external-id lock and hold it through commit/rollback.
+   * A check outside that boundary races soft deletion (the ordinary FK still succeeds).
+   * Do not replace this with a Suite row lock acquired after a testcase row: deletion
+   * updates cases before suites, which would invert the lock order.
+   */
+  private async lockTestcaseSuiteWrites(client: PoolClient, projectId: string): Promise<void> {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`suite-tree:${projectId}`]);
+  }
+
+  /** Caller holds lockTestcaseSuiteWrites; null/undefined never assign a Suite. */
+  private async assertTestcaseSuites(client: PoolClient, projectId: string, candidates: unknown[]): Promise<void> {
+    const supplied = candidates.filter((id) => id !== undefined && id !== null);
+    if (!supplied.length) return;
+    const error = () => new BadRequestException({ error: "suiteId must reference an active suite in this project" });
+    if (supplied.some((id) => typeof id !== "string" || !isUuid(id))) throw error();
+    const ids = Array.from(new Set((supplied as string[]).map((id) => id.toLowerCase())));
+    const found = await client.query<{ id: string }>(
+      "SELECT id FROM suites WHERE project_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NULL",
+      [projectId, ids]
+    );
+    if (found.rows.length !== ids.length) throw error();
+  }
+
   async createTestCase(projectId: string, actorId: string | null | undefined, body: Body) {
     const uid = this.requireUser(actorId);
     this.assertTestcaseFieldLengths(body);
@@ -4881,6 +4906,8 @@ export class LegacyService implements OnModuleInit {
   // save, below) can run them all against one shared client/transaction instead of each opening its
   // own — insertTestCase itself just wraps this in a single-statement transaction as before.
   private async insertTestCaseWithClient(client: PoolClient, projectId: string, uid: string, body: Body) {
+    await this.lockTestcaseSuiteWrites(client, projectId);
+    await this.assertTestcaseSuites(client, projectId, [body.suiteId || null]);
     // Serialize id allocation per project. Reading MAX(n)+1 and inserting are two statements, so
     // without this every concurrent create in a project reads the same MAX and all but one lose to
     // idx_testcases_project_external. Retrying alone does not converge: the losers re-read the same
@@ -5013,6 +5040,8 @@ export class LegacyService implements OnModuleInit {
     }
 
     const created = await this.db.transaction(async (client) => {
+      await this.lockTestcaseSuiteWrites(client, projectId);
+      await this.assertTestcaseSuites(client, projectId, incoming.map((row) => row.suiteId || null));
       // Serialize external-id allocation per project: MAX()+1 alone lets two concurrent
       // imports claim the same block and lose one to the (project_id, external_id) unique
       // index. Advisory lock is transaction-scoped, so it releases on commit or rollback.
@@ -5219,6 +5248,14 @@ export class LegacyService implements OnModuleInit {
       if (!prepared.length) continue;
 
       await this.db.transaction(async (client) => {
+        await this.lockTestcaseSuiteWrites(client, projectId);
+        // The initial name cache can predate a deletion, including between chunks.
+        // Resolve against active suites while deletion is excluded, not that old cache.
+        const liveSuites = await client.query<{ id: string; parent_id: string | null; name: string }>(
+          "SELECT id, parent_id, name FROM suites WHERE project_id = $1 AND deleted_at IS NULL", [projectId]
+        );
+        ctx.suiteIdByKey.clear();
+        for (const row of liveSuites.rows) ctx.suiteIdByKey.set(importSuiteKey(row.name, row.parent_id), row.id);
         // The same lock createTestCase takes, held once for the chunk instead of once per row. It is
         // what actually serialises id allocation for a project.
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`testcase-external-id:${projectId}`]);
@@ -5415,6 +5452,8 @@ export class LegacyService implements OnModuleInit {
    * such lock, and already tolerates duplicate sibling names today; unchanged here.)
    */
   private async resolveImportSuites(client: PoolClient, ctx: ImportContext, prepared: PreparedImportRow[]): Promise<void> {
+    // Inside the existing savepoint: stale defaults retain per-row error reporting.
+    await this.assertTestcaseSuites(client, ctx.projectId, [ctx.defaultSuiteId]);
     const missingTop = new Map<string, string>();
     for (const row of prepared) {
       if (!row.suiteName) continue;
@@ -5668,6 +5707,7 @@ export class LegacyService implements OnModuleInit {
   // review-batch save run several updates atomically with each other (and with any creates in the
   // same batch) against one shared client, instead of one transaction per row.
   private async updateTestCaseWithClient(client: PoolClient, projectId: string, id: string, uid: string, body: Body, newExternalId: string | null = null) {
+    await this.assertTestcaseSuites(client, projectId, [body.suiteId]);
     /*
      * jiraIssueKey/jiraUrl and linearIssueKey/linearUrl were COALESCE-only, like every other field
      * here — but unlike the rest, there was genuinely no way to ever clear them: `body.jiraIssueKey
@@ -5797,6 +5837,7 @@ export class LegacyService implements OnModuleInit {
     if (!before.rows[0]) throw new NotFoundException({ error: "Test case not found" });
     const projectId = before.rows[0].project_id;
     const after = await this.db.transaction(async (client) => {
+      await this.lockTestcaseSuiteWrites(client, projectId);
       const newExternalId = await this.checkTestCaseExternalIdChange(client, projectId, id, before.rows[0].external_id, body.externalId);
       const row = await this.updateTestCaseWithClient(client, projectId, id, uid, body, newExternalId);
       if (newExternalId) await client.query("UPDATE cycle_items SET snapshot_external_id = $2 WHERE testcase_id = $1", [id, newExternalId]);
@@ -5856,9 +5897,16 @@ export class LegacyService implements OnModuleInit {
     const source = await this.db.query("SELECT * FROM testcases WHERE id = $1 AND deleted_at IS NULL", [id]);
     if (!source.rows[0]) throw new NotFoundException({ error: "Test case not found" });
     const src = source.rows[0];
-    const externalId = await this.nextExternalId(src.project_id);
 
     const duplicated = await this.db.transaction(async (client) => {
+      await this.lockTestcaseSuiteWrites(client, src.project_id);
+      // The source may have been moved, unassigned or deleted since the access read.
+      const fresh = await client.query("SELECT * FROM testcases WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL", [id, src.project_id]);
+      if (!fresh.rows[0]) throw new NotFoundException({ error: "Test case not found" });
+      const current = fresh.rows[0];
+      await this.assertTestcaseSuites(client, src.project_id, [current.suite_id]);
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`testcase-external-id:${src.project_id}`]);
+      const externalId = await this.nextExternalId(src.project_id, undefined, client);
       const res = await client.query(
         `INSERT INTO testcases
          (project_id, suite_id, external_id, title, description, preconditions, postconditions, steps, test_data,
@@ -5869,34 +5917,34 @@ export class LegacyService implements OnModuleInit {
          RETURNING *`,
         [
           src.project_id,
-          src.suite_id,
+          current.suite_id,
           externalId,
-          `${src.title} (copy)`,
-          src.description,
-          src.preconditions,
-          src.postconditions,
-          JSON.stringify(src.steps || []),
-          src.test_data,
-          src.priority,
-          src.severity,
-          src.type,
-          src.automation_status,
-          src.automation_repo,
-          src.automation_path,
-          src.automation_test_name,
-          src.automation_framework,
-          src.automation_tags,
-          src.owner_id,
-          src.component,
-          src.status,
-          src.jira_issue_key,
-          src.jira_url,
-          src.linear_issue_key,
-          src.linear_url,
-          src.attachments,
+          `${current.title} (copy)`,
+          current.description,
+          current.preconditions,
+          current.postconditions,
+          JSON.stringify(current.steps || []),
+          current.test_data,
+          current.priority,
+          current.severity,
+          current.type,
+          current.automation_status,
+          current.automation_repo,
+          current.automation_path,
+          current.automation_test_name,
+          current.automation_framework,
+          current.automation_tags,
+          current.owner_id,
+          current.component,
+          current.status,
+          current.jira_issue_key,
+          current.jira_url,
+          current.linear_issue_key,
+          current.linear_url,
+          current.attachments,
           uid,
-          src.notion_page_id,
-          src.notion_url
+          current.notion_page_id,
+          current.notion_url
         ]
       );
       const row = res.rows[0];
@@ -5951,27 +5999,31 @@ export class LegacyService implements OnModuleInit {
     const clearSuite = String(body.suiteId ?? "").toLowerCase() === "none";
     // Authorizing the URL project does not authorize arbitrary IDs in the body. Scope the
     // actual write too; foreign IDs behave like missing IDs, without changing the bulk API.
-    const updated = await this.db.query<{ id: string }>(
-      `UPDATE testcases SET priority=COALESCE($2,priority),
-       suite_id = CASE WHEN $8::boolean THEN NULL ELSE COALESCE($3::uuid, suite_id) END,
-       status=COALESCE($4,status), owner_id=COALESCE($5,owner_id), automation_status=COALESCE($6,automation_status),
-       severity=COALESCE($9,severity),
-       updated_by=$7, updated_at=now()
-       WHERE id = ANY($1::uuid[]) AND project_id = $10 AND deleted_at IS NULL
-       RETURNING id`,
-      [
-        ids,
-        body.priority || null,
-        clearSuite ? null : body.suiteId || null,
-        body.status || null,
-        body.ownerId || null,
-        body.automationStatus || null,
-        uid,
-        clearSuite,
-        body.severity || null,
-        projectId
-      ]
-    );
+    const updated = await this.db.transaction(async (client) => {
+      await this.lockTestcaseSuiteWrites(client, projectId);
+      await this.assertTestcaseSuites(client, projectId, [clearSuite ? null : body.suiteId || null]);
+      return client.query<{ id: string }>(
+        `UPDATE testcases SET priority=COALESCE($2,priority),
+         suite_id = CASE WHEN $8::boolean THEN NULL ELSE COALESCE($3::uuid, suite_id) END,
+         status=COALESCE($4,status), owner_id=COALESCE($5,owner_id), automation_status=COALESCE($6,automation_status),
+         severity=COALESCE($9,severity),
+         updated_by=$7, updated_at=now()
+         WHERE id = ANY($1::uuid[]) AND project_id = $10 AND deleted_at IS NULL
+         RETURNING id`,
+        [
+          ids,
+          body.priority || null,
+          clearSuite ? null : body.suiteId || null,
+          body.status || null,
+          body.ownerId || null,
+          body.automationStatus || null,
+          uid,
+          clearSuite,
+          body.severity || null,
+          projectId
+        ]
+      );
+    });
     await this.logProjectActivity(projectId, uid, "testcase_bulk_updated", "testcase", null, null, {
       testcaseIds: updated.rows.map((row) => row.id),
       requestedCount: ids.length,
@@ -16865,10 +16917,14 @@ export class LegacyService implements OnModuleInit {
           matchedAnything = true;
           const movedIds = targets.map((target) => target.id);
           for (const id of movedIds) moveTargetIds.add(id);
-          await this.db.query(
-            "UPDATE testcases SET suite_id = $2, updated_by = $4, updated_at = now() WHERE project_id = $1 AND id = ANY($3::uuid[]) AND deleted_at IS NULL",
-            [projectId, suite.id, movedIds, actorId]
-          );
+          await this.db.transaction(async (client) => {
+            await this.lockTestcaseSuiteWrites(client, projectId);
+            await this.assertTestcaseSuites(client, projectId, [suite.id]);
+            await client.query(
+              "UPDATE testcases SET suite_id = $2, updated_by = $4, updated_at = now() WHERE project_id = $1 AND id = ANY($3::uuid[]) AND deleted_at IS NULL",
+              [projectId, suite.id, movedIds, actorId]
+            );
+          });
           for (const target of targets.slice(0, 25)) {
             const row = await this.getTestCase(target.id);
             testcases.push(this.chatTestcaseRow(row, "moved", op.reason || `Moved to suite ${suite.name}`));
@@ -19808,9 +19864,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // retried instead, fresh, up to 5 times.
   //
   // Lock ordering, fixed across every call path (this method, zyraDeleteDraft, zyraEditDraft):
-  // ai_generation_requests row first, then target testcase rows (sorted by id ascending), then the
-  // per-project external-id advisory lock. Two calls that only ever acquire locks in this same
-  // order can wait on each other but can never deadlock.
+  // suite-tree project mutex first, then ai_generation_requests/target testcase rows and the
+  // external-id lock. Other assignment writers take that mutex before their own row/id locks;
+  // edit/delete-draft never request it. Never acquire it for the first time inside the entry loop.
   private async zyraSaveAttempt(projectId: string, uid: string, taskId: string, body: Body, selectedIndexes: number[] | null) {
     // Resolved before the transaction: createSuite runs its own insert/commit, and Task-board drafts
     // (no per-draft suiteId) need one shared target suite chosen once for the whole batch. A chat-
@@ -19823,6 +19879,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     }
 
     return this.db.transaction(async (client) => {
+      await this.lockTestcaseSuiteWrites(client, projectId);
       // Serializes this whole save against any concurrent save/edit/delete/close on the same
       // batch — the loser blocks here until the winner commits, then sees the post-commit status
       // below and reacts to it instead of racing the write.
