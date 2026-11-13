@@ -44,8 +44,8 @@ jobs:
         run: npm run migrate
       - name: Validate schema invariants and real audit triggers
         run: node scripts/ci/check-db-integrity.cjs
-      - name: Verify execution, document, repository and bug integrity on migrated PostgreSQL
-        run: npm test -- --runTestsByPath src/legacy/execution-attribution.db.spec.ts src/legacy/run-status-atomic.db.spec.ts src/automation/automation-retry-ordering.db.spec.ts src/automation/automation-closure.db.spec.ts src/legacy/knowledge-document-writes.db.spec.ts src/legacy/repository-partial-edits.db.spec.ts src/legacy/bug-metadata-writes.db.spec.ts
+      - name: Verify execution, document, repository, bug and Plan lineage on migrated PostgreSQL
+        run: npm test -- --runTestsByPath src/legacy/execution-attribution.db.spec.ts src/legacy/run-status-atomic.db.spec.ts src/automation/automation-retry-ordering.db.spec.ts src/automation/automation-closure.db.spec.ts src/legacy/knowledge-document-writes.db.spec.ts src/legacy/repository-partial-edits.db.spec.ts src/legacy/bug-metadata-writes.db.spec.ts src/legacy/plan-project-lineage.db.spec.ts
 
   api-mcp-contracts:
     name: api-mcp-contracts

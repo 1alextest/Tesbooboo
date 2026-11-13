@@ -5360,3 +5360,57 @@ malformed/network fixtures and unit timeout/cancellation checks are not real
 provider outages. Deployed CORS/routing and actual OpenCode/reporter-client
 compatibility still need authorized environment verification. No credential,
 deployment, schema, authorization policy or Phase 2 approval is introduced.
+
+### N. Plan/Run project-lineage repair and next-work reconciliation (2026-11-13, pending verification)
+
+The owner requested continuation across the documented work, not a selection of
+only one strategic area. Re-read the historical inventory, F.0/F.1 gates and the
+available working `qa-orchestration` README/agent brief before selecting this
+increment. Historical claims are not a current backlog: estimated-duration
+persistence, API-token UI, REST bearer scopes, bug-link behavior and other named
+repairs already exist. Do not rebuild them from the older inventory.
+
+**Confirmed current owner/path:** `LegacyService.addPlanItem` checked access to
+the Plan but inserted unchecked Suite/Test Case IDs. `createCycle` (all three
+REST create aliases and both MCP creation tools) and `updateCycle` also accepted
+unchecked Plan IDs. Foreign keys establish existence, not common project
+ownership. Five new focused service regressions failed before repair because
+the invalid commands resolved instead of rejecting. That is service-level
+failing-first evidence, not a reproduced production exploit.
+
+**Bounded repair:** extend these existing writers with project-scoped active
+reference checks and row locks held through their transaction. Reject invalid,
+missing, foreign or deleted references before inserting/updating. Check both
+Suite and Test Case when supplied; retain the existing both-local form and
+explicit `clearPlan` precedence. Omission remains preservation, and ordinary
+unassociated Run creation remains supported. No schema or new Plan/Run engine.
+
+Historical invalid records are not deleted or reassociated. Existing Plan item
+readers hide foreign display metadata while retaining original association IDs;
+local since-deleted Suite names retain their explicit historical marker. Run
+lists/progress/summary joins and MCP Plan enrichment require matching project
+identity, even when an issuer can access both projects. This is not a live-data
+inventory or a claim that every historical relationship has been corrected.
+
+**Test owners:** `plan-project-lineage.spec.ts` and existing `mcp.service.spec.ts`
+exercise actual service/adapter behavior. `plan-project-lineage.db.spec.ts`
+extends the existing migrated-PostgreSQL CI job for no-write refusals, valid and
+historical compatibility, and concurrent soft-delete controls. The existing
+isolated smoke gains `ci-plan-project-lineage.ts`: genuine session REST aliases,
+cookie-free bearer MCP paths, persisted state comparisons, and the unchanged
+Plan-page local Run-link/reload workflow. Access is explicitly stubbed only in
+the native relational unit fixture, not in the connected smoke. Local native
+execution is unavailable; exact-head executed results/captures belong in the PR.
+
+**Remaining product sequence, not blanket completion:** the working brief orders
+principal/capability/protected-writer boundaries, shared staged review/apply,
+external task/report/evidence exchange, then existing UI/client integration and
+the gated optimization/environment/multimodal/PR directions. This repair maps to
+the described existing Plan/Run identity family (FR-085/090 references); it does
+not certify those full missing matrices or authorize invented contracts. The
+available branch still contains only `00_README.md` and
+`06_IMPLEMENTATION_AGENT_BRIEF.md`. Six matching specifications (`01`–`05`,
+`07`) and `Tesbo_Existing_Application_Baseline_v1.0.md` remain unavailable.
+F.1/D6's canonical-source/one-exact-increment approval gate remains applicable
+to new orchestration capabilities. No replacement spec/baseline, destructive
+cleanup, new entitlement policy, agent merge, deployment or release sign-off.

@@ -843,7 +843,10 @@ export function buildMcpTools(): McpTool[] {
           // re-deriving plan shape by hand. "Where available" means this degrades to null on any
           // failure rather than failing the whole cycle lookup over an enrichment field.
           try {
-            plan = await ctx.legacy.getPlan(ctx.userId, cycle.planId);
+            const candidate = await ctx.legacy.getPlan(ctx.userId, cycle.planId);
+            // Legacy inconsistent references must not enrich a token-scoped Run with another
+            // project's Plan, even when its issuer happens to be a member of both projects.
+            if (candidate.projectId === ctx.projectId) plan = candidate;
           } catch {
             plan = null;
           }

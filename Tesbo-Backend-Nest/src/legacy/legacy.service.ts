@@ -6080,6 +6080,19 @@ export class LegacyService implements OnModuleInit {
     if (!res.rows[0]) throw new NotFoundException({ error: "Plan item not found" });
   }
 
+  /** Plan/Run references must belong to the parent project, even when the caller can access both.
+   * SHARE holds eligibility through the write (a concurrent soft-delete must not slip between reads).
+   * The table is a closed internal union; all caller-supplied values remain bound parameters.
+   */
+  private async lockPlanProjectReference(client: PoolClient, table: "plans" | "suites" | "testcases", projectId: string, id: unknown, label: string) {
+    if (!isUuid(id)) throw new NotFoundException({ error: `${label} not found` });
+    const res = await client.query(
+      `SELECT id FROM ${table} WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR SHARE`,
+      [id, projectId]
+    );
+    if (!res.rows[0]) throw new NotFoundException({ error: `${label} not found` });
+  }
+
   /**
    * The status buckets every "how far along is this run" counter in the product is built from.
    *
@@ -6178,7 +6191,7 @@ export class LegacyService implements OnModuleInit {
          FROM cycles c
          LEFT JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.deleted_at IS NULL
          LEFT JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
-         WHERE c.plan_id IS NOT NULL AND c.deleted_at IS NULL
+          WHERE c.project_id = $1 AND c.plan_id IS NOT NULL AND c.deleted_at IS NULL
          GROUP BY c.plan_id
        ) runs ON runs.plan_id = p.id
        WHERE p.project_id = $1 AND p.deleted_at IS NULL
@@ -6244,17 +6257,18 @@ export class LegacyService implements OnModuleInit {
               (CASE WHEN s.id IS NOT NULL AND s.deleted_at IS NOT NULL THEN s.name || ' (deleted)' ELSE s.name END) AS suite_name,
               lastex.status AS last_status
        FROM plan_items pi
-       LEFT JOIN testcases t ON t.id = pi.testcase_id
-       LEFT JOIN suites s ON s.id = pi.suite_id
+        JOIN plans p ON p.id = pi.plan_id
+        LEFT JOIN testcases t ON t.id = pi.testcase_id AND t.project_id = p.project_id
+        LEFT JOIN suites s ON s.id = pi.suite_id AND s.project_id = p.project_id
        LEFT JOIN LATERAL (
          SELECT e.status
          FROM cycles c
          JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.testcase_id = pi.testcase_id
          JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
-         WHERE c.plan_id = pi.plan_id
+          WHERE c.plan_id = pi.plan_id AND c.project_id = p.project_id
          ORDER BY e.executed_at DESC NULLS LAST, e.created_at DESC
          LIMIT 1
-       ) lastex ON pi.testcase_id IS NOT NULL
+        ) lastex ON t.id IS NOT NULL
        WHERE pi.plan_id = $1 AND pi.deleted_at IS NULL
        ORDER BY pi.position, pi.created_at`,
       [planId]
@@ -6263,12 +6277,19 @@ export class LegacyService implements OnModuleInit {
   }
 
   async addPlanItem(userId: string | null | undefined, planId: string, body: Body) {
-    await this.requirePlanAccess(userId, planId);
-    const res = await this.db.query(
-      "INSERT INTO plan_items (plan_id, suite_id, testcase_id, position) VALUES ($1,$2,$3,$4) RETURNING *",
-      [planId, body.suiteId || null, body.testcaseId || null, body.position || 0]
-    );
-    return toCamel(res.rows[0]);
+    const projectId = await this.requirePlanAccess(userId, planId);
+    const suiteId = body.suiteId || null, testcaseId = body.testcaseId || null;
+    if (!suiteId && !testcaseId) throw new BadRequestException({ error: "Select a suite or test case" });
+    return this.db.transaction(async (client) => {
+      await this.lockPlanProjectReference(client, "plans", projectId, planId, "Plan");
+      if (suiteId) await this.lockPlanProjectReference(client, "suites", projectId, suiteId, "Suite");
+      if (testcaseId) await this.lockPlanProjectReference(client, "testcases", projectId, testcaseId, "Test case");
+      const res = await client.query(
+        "INSERT INTO plan_items (plan_id, suite_id, testcase_id, position) VALUES ($1,$2,$3,$4) RETURNING *",
+        [planId, suiteId, testcaseId, body.position || 0]
+      );
+      return toCamel(res.rows[0]);
+    });
   }
 
   async deletePlanItem(userId: string | null | undefined, planId: string, itemId: string) {
@@ -6289,7 +6310,8 @@ export class LegacyService implements OnModuleInit {
       `SELECT c.*,
               ${LegacyService.EXECUTION_BUCKET_COUNTS}
        FROM cycles c
-       LEFT JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.deleted_at IS NULL
+        JOIN plans p ON p.id = c.plan_id AND p.project_id = c.project_id
+        LEFT JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.deleted_at IS NULL
        LEFT JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
        WHERE c.plan_id = $1 AND c.deleted_at IS NULL
        GROUP BY c.id
@@ -6319,7 +6341,8 @@ export class LegacyService implements OnModuleInit {
       `SELECT COUNT(DISTINCT c.id)::int AS run_count,
               ${LegacyService.EXECUTION_BUCKET_COUNTS}
        FROM cycles c
-       LEFT JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.deleted_at IS NULL
+        JOIN plans p ON p.id = c.plan_id AND p.project_id = c.project_id
+        LEFT JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.deleted_at IS NULL
        LEFT JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
        WHERE c.plan_id = $1 AND c.deleted_at IS NULL`,
       [planId]
@@ -6400,7 +6423,7 @@ export class LegacyService implements OnModuleInit {
     validateBoundedField(body.environment, "Environment", CYCLE_LABEL_MAX_LENGTH);
     validateBoundedField(body.buildVersion, "Build version", CYCLE_LABEL_MAX_LENGTH);
     validateBoundedField(body.releaseName, "Release name", CYCLE_LABEL_MAX_LENGTH);
-    const res = await this.db.query(
+    const insert = async (client: { query: (sql: string, values: unknown[]) => Promise<{ rows: QueryResultRow[] }> }) => client.query(
       `INSERT INTO cycles (project_id, plan_id, name, description, environment, build_version, release_name, owner_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
       [
@@ -6414,6 +6437,12 @@ export class LegacyService implements OnModuleInit {
         body.ownerId || null
       ]
     );
+    // All REST aliases and both MCP creation tools reach this writer. Do not depend on
+    // a particular adapter checking the Plan or copy a stale pre-transaction eligibility read.
+    const res = body.planId ? await this.db.transaction(async (client) => {
+      await this.lockPlanProjectReference(client, "plans", projectId, body.planId, "Plan");
+      return insert(client);
+    }) : await insert(this.db);
     return toCamel(res.rows[0]);
   }
 
@@ -6639,6 +6668,10 @@ export class LegacyService implements OnModuleInit {
     const beforeRun = await this.db.transaction(async (client) => {
       const before = await this.lockActiveCycle(client, cycleId);
       this.assertAutomatedRunWritable(before);
+      // clearPlan deliberately wins, as in the existing SQL contract. Omitted Plan keeps it.
+      if (body.clearPlan !== true && body.planId) {
+        await this.lockPlanProjectReference(client, "plans", projectId, body.planId, "Plan");
+      }
       // Automated runs cannot be marked Completed through the generic UI
       // endpoint: only closeRun seals closed_at together with stored counts.
       if (before.source === "automation" && status) {

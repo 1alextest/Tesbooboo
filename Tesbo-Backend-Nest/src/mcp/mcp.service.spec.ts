@@ -26,7 +26,7 @@ function makeLegacy(overrides: Partial<Record<string, jest.Mock>> = {}) {
       .mockResolvedValue([{ id: "cycle-1", name: "Cycle 1", planId: "plan-1", passed: 1, failed: 0, blocked: 0, skipped: 0, untested: 1 }]),
     createCycle: jest.fn().mockResolvedValue({ id: "cycle-new" }),
     addCycleTestCases: jest.fn().mockResolvedValue({ requested: 1, added: 1, skipped: 0 }),
-    getPlan: jest.fn().mockResolvedValue({ id: "plan-1", name: "Plan 1" }),
+    getPlan: jest.fn().mockResolvedValue({ id: "plan-1", projectId: "proj-1", name: "Plan 1" }),
     executions: jest
       .fn()
       .mockResolvedValue([{ id: "ex-1", status: "Untested", title: "Case 1", suiteId: "suite-1" }]),
@@ -2111,7 +2111,17 @@ describe("McpService", () => {
       const body = JSON.parse(res.result.content[0].text);
       expect(body.id).toBe("cycle-1");
       expect((legacy as any).getPlan).toHaveBeenCalledWith("user-7", "plan-1");
-      expect(body.plan).toEqual({ id: "plan-1", name: "Plan 1" });
+      expect(body.plan).toEqual({ id: "plan-1", projectId: "proj-1", name: "Plan 1" });
+    });
+
+    it("does not enrich a legacy inconsistent cycle with another project's Plan even if its issuer can read that Plan", async () => {
+      const { db } = makeDb({ cycleProject: "proj-1" });
+      const legacy = makeLegacy({ getPlan: jest.fn().mockResolvedValue({ id: "plan-1", projectId: "proj-OTHER", name: "Private foreign Plan" }) });
+      const svc = new McpService(legacy, db);
+      const res: any = await svc.handleRequest(rpc("tools/call", { name: "get_test_cycle", arguments: { cycleId: "cycle-1" } }), principal(), "proj-1");
+      expect(res.result.isError).toBe(false);
+      expect(JSON.parse(res.result.content[0].text).plan).toBeNull();
+      expect(JSON.stringify(res)).not.toContain("Private foreign Plan");
     });
 
     it("omits plan rather than failing get_test_cycle when getPlan rejects", async () => {
