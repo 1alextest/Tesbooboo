@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Client, Pool } from "pg";
+import { Client, Pool, type QueryResult } from "pg";
 import { DatabaseService } from "../database/database.service";
 import { makeLegacy } from "../legacy/test-helpers/legacy-service.fixture";
 import { compareComparableGraphCaptures } from "./graph-comparison-gate";
@@ -333,7 +333,12 @@ const url = process.env.DATABASE_URL ?? "";
         )
         .replace("FROM projects p\n", "FROM projects p CROSS JOIN capture_gate\n");
       expect(gatedSql).toContain("CROSS JOIN capture_gate");
-      let pending: ReturnType<typeof captured.query> | null = null;
+      type CapturedRow = {
+        authorized: boolean;
+        cases: Array<{ id: string; title: string }>;
+        jira_requirements: Array<{ rowId: string; summary: string }>;
+      };
+      let pending: Promise<QueryResult<CapturedRow>> | null = null;
       let committed = false;
       try {
         await writer.query("BEGIN");
@@ -344,7 +349,7 @@ const url = process.env.DATABASE_URL ?? "";
         await writer.query(
           "UPDATE jira_tickets SET summary='Concurrent updated requirement' WHERE id=$1", [ticketA]
         );
-        pending = captured.query(gatedSql, [projectA, org, user, advisoryKey]);
+        pending = captured.query<CapturedRow>(gatedSql, [projectA, org, user, advisoryKey]);
         // Require actual PostgreSQL lock contention, not a sleep-based timing guess.
         let observedBlock = false;
         for (let i = 0; i < 200; i++) {
