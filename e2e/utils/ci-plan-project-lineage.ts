@@ -1,5 +1,6 @@
 import { expect, request as newRequest, test, type Page, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
+import { verifyRestLockRecovery } from "./ci-rest-lock-recovery";
 
 /** Actual session/bearer HTTP, PostgreSQL and current Plan UI, only on the isolated smoke stack. */
 export async function verifyPlanProjectLineage(page: Page, api: string, web: string, projectId: string, otherId: string, testInfo: TestInfo) {
@@ -105,6 +106,7 @@ export async function verifyPlanProjectLineage(page: Page, api: string, web: str
       await expect(page.locator("body")).not.toContainText("CI PRIVATE");
       await testInfo.attach("plan-valid-ui-run-association-after-reload", { body: await page.screenshot(), contentType: "image/png" });
     });
+    await verifyRestLockRecovery(page, api, web, projectId, testInfo);
   } finally {
     if (tokenId) expect((await page.request.delete(`${base}/apikeys/${tokenId}`)).ok()).toBeTruthy();
     await machine.dispose(); await db.end(); // Retain fixture/history/audit records until disposable DB teardown.
