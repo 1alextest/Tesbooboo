@@ -4,7 +4,7 @@ import { DatabaseService } from "../database/database.service";
 import { makeLegacy } from "../legacy/test-helpers/legacy-service.fixture";
 import { compareComparableGraphCaptures } from "./graph-comparison-gate";
 import { diffGraphSnapshots } from "./graph-change-impact";
-import { CurrentCacheGraphReader } from "./current-cache-graph.reader";
+import { CURRENT_CACHE_CAPTURE_SQL, CurrentCacheGraphReader } from "./current-cache-graph.reader";
 
 const url = process.env.DATABASE_URL ?? "";
 
@@ -314,6 +314,71 @@ const url = process.env.DATABASE_URL ?? "";
         await admin.query("DELETE FROM integration_connections WHERE id=$1", [notionConnection]);
       }
     });
+
+    it("reads one coherent pre-commit cache state under a verified concurrent transaction barrier", async () => {
+      const before = await reader.captureForUser(user, projectA);
+      const writer = new Client({ connectionString: url });
+      const captured = new Client({ connectionString: url });
+      await writer.connect();
+      await captured.connect();
+      const writerPid = Number((await writer.query("SELECT pg_backend_pid() AS pid")).rows[0].pid);
+      const readerPid = Number((await captured.query("SELECT pg_backend_pid() AS pid")).rows[0].pid);
+      const advisoryKey = Number.parseInt(stamp.replace(/-/g, "").slice(0, 8), 16);
+      // The test adds an advisory lock inside the SAME production SELECT statement,
+      // creating a deterministic barrier without changing the shipping query.
+      const gatedSql = CURRENT_CACHE_CAPTURE_SQL
+        .replace(
+          "WITH allowed AS (",
+          "WITH capture_gate AS MATERIALIZED (SELECT pg_advisory_xact_lock($4::bigint)), allowed AS ("
+        )
+        .replace("FROM projects p\n", "FROM projects p CROSS JOIN capture_gate\n");
+      expect(gatedSql).toContain("CROSS JOIN capture_gate");
+      let pending: ReturnType<typeof captured.query> | null = null;
+      let committed = false;
+      try {
+        await writer.query("BEGIN");
+        await writer.query("SELECT pg_advisory_xact_lock($1::bigint)", [advisoryKey]);
+        await writer.query(
+          "UPDATE testcases SET title='Concurrent updated case' WHERE id=$1", [caseA]
+        );
+        await writer.query(
+          "UPDATE jira_tickets SET summary='Concurrent updated requirement' WHERE id=$1", [ticketA]
+        );
+        pending = captured.query(gatedSql, [projectA, org, user, advisoryKey]);
+        // Require actual PostgreSQL lock contention, not a sleep-based timing guess.
+        let observedBlock = false;
+        for (let i = 0; i < 200; i++) {
+          const state = await admin.query<{ blockers: number[] }>(
+            `SELECT pg_blocking_pids(pid) AS blockers FROM pg_stat_activity
+              WHERE pid=$1 AND wait_event_type='Lock'`, [readerPid]
+          );
+          observedBlock = state.rows.some((row) => row.blockers.includes(writerPid));
+          if (observedBlock) break;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(observedBlock).toBe(true);
+        await writer.query("COMMIT");
+        committed = true;
+        const response = await pending;
+        const row = response.rows[0];
+        expect(row.authorized).toBe(true);
+        expect(row.cases.find((item: { id: string }) => item.id === caseA)?.title)
+          .toBe("Project A scenario");
+        expect(row.jira_requirements.find((item: { rowId: string }) => item.rowId === ticketA)?.summary)
+          .toBe("First project only");
+        const after = await reader.captureForUser(user, projectA);
+        const delta = compareComparableGraphCaptures(before, after);
+        expect(delta.modifiedNodes).toHaveLength(2);
+        expect(delta.modifiedEdges).toEqual([]);
+      } finally {
+        if (!committed) await writer.query("ROLLBACK");
+        if (pending) await pending.catch(() => undefined);
+        await admin.query("UPDATE testcases SET title='Project A scenario' WHERE id=$1", [caseA]);
+        await admin.query("UPDATE jira_tickets SET summary='First project only' WHERE id=$1", [ticketA]);
+        await writer.end();
+        await captured.end();
+      }
+    }, 15000);
 
   }
 );
