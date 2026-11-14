@@ -69,7 +69,6 @@ function hasText(value: unknown): value is string {
 }
 
 function incomplete(
-  projectId: string,
   scopeFingerprint: string,
   diagnostics: readonly string[]
 ): GraphCaptureForComparison {
@@ -117,7 +116,7 @@ export function projectCurrentCacheGraph(rows: CurrentSourceProjection): GraphCa
 
   if (rows.inventoryStatus !== "complete" || diagnostics.length) {
     return {
-      ...incomplete(rows.projectId, sourceScopeFingerprint, diagnostics),
+      ...incomplete(sourceScopeFingerprint, diagnostics),
       inventoryStatus: rows.inventoryStatus === "complete" ? "incomplete" : "unknown"
     };
   }
@@ -208,7 +207,7 @@ export function projectCurrentCacheGraph(rows: CurrentSourceProjection): GraphCa
     });
   }
 
-  if (diagnostics.length) return incomplete(rows.projectId, sourceScopeFingerprint, diagnostics);
+  if (diagnostics.length) return incomplete(sourceScopeFingerprint, diagnostics);
   nodes.sort((a, b) => a.id.localeCompare(b.id));
   edges.sort((a, b) => a.id.localeCompare(b.id));
   const revision = digest([
