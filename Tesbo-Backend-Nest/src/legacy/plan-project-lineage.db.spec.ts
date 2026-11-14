@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { INestApplication } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
@@ -30,6 +33,8 @@ import { CustomFieldsService } from "../custom-fields/custom-fields.service";
 import { ZyraProgressService } from "./zyra-progress.service";
 import { WelcomeEmailService } from "../welcome-email/welcome-email.service";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
+import { HttpExceptionFilter } from "../common/http-exception.filter";
+import { StorageService } from "../storage/storage.service";
 
 const url = process.env.DATABASE_URL ?? "";
 (/\/tesbo_ci(?:\?|$)/.test(url) ? describe : describe.skip)("Plan/Run project lineage — migrated PostgreSQL", () => {
@@ -167,6 +172,7 @@ const url = process.env.DATABASE_URL ?? "";
   describe("MCP locked-project parity at the real HTTP and PostgreSQL boundary", () => {
     let app: INestApplication, base: string, locked: string, organization: string, token: string;
     let db: DatabaseService, limits: PlanLimitsService, mcp: McpService, tokens: ApiTokenService;
+    let legacy: LegacyService, storage: StorageService, put: jest.SpyInstance, productActivity: jest.SpyInstance;
     let readToken: string, writeToken: string, writableToken: string, session: string;
     let suiteId: string, caseId: string, planId: string, runId: string, executionId: string, bugId: string, folderId: string, documentId: string;
     let handlers: jest.SpyInstance[], quota: jest.SpyInstance, actor: jest.SpyInstance, tracking: jest.SpyInstance;
@@ -193,7 +199,13 @@ const url = process.env.DATABASE_URL ?? "";
       for (const id of [project, other, locked]) await setup.query("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'owner')", [id, owner]);
       await setup.query("UPDATE organizations SET plan='launch',plan_grace_ends_at=now()-interval '1 day' WHERE id=$1", [organization]);
       db = new DatabaseService(pool);
-      const legacy = makeLegacy(db), requestCache = new RequestCacheService(config);
+      const requestCache = new RequestCacheService(config);
+      const uploadDir = await mkdtemp(join(process.env.RUNNER_TEMP ?? join(tmpdir(), "opencode"), "tesbo-rest-lock-"));
+      storage = new StorageService({ storageDriver: "local", uploadDir } as AppConfigService);
+      put = jest.spyOn(storage, "put");
+      limits = new PlanLimitsService(db, config, email, requestCache, new EntitlementCacheService(redis, config));
+      legacy = makeLegacy(db, { config, storage, planLimits: limits, requestCache });
+      productActivity = jest.spyOn(legacy, "logProjectActivity");
       // This boundary test does not boot unrelated resumable Zyra plans from other retained fixtures.
       jest.spyOn(legacy, "onModuleInit").mockResolvedValue(undefined);
       tokens = new ApiTokenService(db);
@@ -219,7 +231,6 @@ const url = process.env.DATABASE_URL ?? "";
       await setup.query("INSERT INTO plan_items (plan_id,testcase_id) VALUES ($1,$2)", [planId, caseId]);
       await setup.query("INSERT INTO knowledge_document_versions (document_id,version_number,title,content_text,created_by) VALUES ($1,1,'Prior native document','Keep prior content',$2)", [documentId, owner]);
       await setup.query("INSERT INTO attachments (project_id,entity_type,entity_id,file_name,content_type,file_size,storage_path,uploaded_by) VALUES ($1,'execution',$2,'keep.txt','text/plain',4,'ci/mcp-lock/keep',$3)", [locked, executionId, owner]);
-      limits = new PlanLimitsService(db, config, email, requestCache, new EntitlementCacheService(redis, config));
       quota = jest.spyOn(limits, "assertProjectWritable");
       const module = await Test.createTestingModule({
         controllers: [McpController, LegacyController], providers: [McpService,
@@ -231,6 +242,7 @@ const url = process.env.DATABASE_URL ?? "";
         ]
       }).compile();
       app = module.createNestApplication();
+      app.useGlobalFilters(new HttpExceptionFilter());
       mcp = module.get(McpService);
       handlers = mcp.listTools().map((tool) => jest.spyOn(tool, "handler"));
       actor = jest.spyOn(mcp, "resolveMcpActorId");
@@ -563,6 +575,59 @@ const url = process.env.DATABASE_URL ?? "";
         const response = await rpc("dynamic", "tools/list");
         expect(response.body.error.code).toBe(-32001); expect(quota).not.toHaveBeenCalled(); noHandler();
       } finally { await setup.query("UPDATE projects SET archived_at=NULL WHERE id=$1", [locked]); }
+    });
+
+    describe("authenticated REST Plan/Run aliases", () => {
+      let restPlan: string, restItem: string, restRun: string, restCase: string, spareCase: string, restExecution: string;
+      beforeEach(async () => {
+        // Every red-case target is independent: an actually persisted deletion or edit must not
+        // make the next reproduction fail on a missing parent instead of its intended lock oracle.
+        restPlan = (await setup.query("INSERT INTO plans (project_id,name) VALUES ($1,'REST lock Plan') RETURNING id", [locked])).rows[0].id;
+        restCase = (await setup.query("INSERT INTO testcases (project_id,external_id,title) VALUES ($1,$2,'REST lock Case') RETURNING id", [locked, `REST-${randomUUID()}`])).rows[0].id;
+        spareCase = (await setup.query("INSERT INTO testcases (project_id,external_id,title) VALUES ($1,$2,'REST spare Case') RETURNING id", [locked, `REST-${randomUUID()}`])).rows[0].id;
+        restItem = (await setup.query("INSERT INTO plan_items (plan_id,testcase_id) VALUES ($1,$2) RETURNING id", [restPlan, restCase])).rows[0].id;
+        restRun = (await setup.query("INSERT INTO cycles (project_id,plan_id,name) VALUES ($1,$2,'REST lock Run') RETURNING id", [locked, restPlan])).rows[0].id;
+        const item = (await setup.query("INSERT INTO cycle_items (cycle_id,testcase_id,snapshot_title) VALUES ($1,$2,'REST retained snapshot') RETURNING id", [restRun, restCase])).rows[0].id;
+        restExecution = (await setup.query("INSERT INTO executions (cycle_item_id,status,actual_result,executed_by,history) VALUES ($1,'Passed','Retained REST result',$2,'[{\"status\":\"Blocked\"}]'::jsonb) RETURNING id", [item, owner])).rows[0].id;
+      });
+      const restWrites = {
+        "Plan edit": () => ({ method: "PATCH", path: `/api/plans/${restPlan}`, body: { name: "Must not persist" } }),
+        "Plan delete": () => ({ method: "DELETE", path: `/api/plans/${restPlan}` }),
+        "Plan item add": () => ({ method: "POST", path: `/api/plans/${restPlan}/items`, body: { testcaseId: spareCase } }),
+        "Plan item delete": () => ({ method: "DELETE", path: `/api/plans/${restPlan}/items/${restItem}` }),
+        "Run edit": () => ({ method: "PATCH", path: `/api/cycles/${restRun}`, body: { name: "Must not persist", status: "In Progress" } }),
+        "Run delete": () => ({ method: "DELETE", path: `/api/cycles/${restRun}` }),
+        "Run case add": () => ({ method: "POST", path: `/api/cycles/${restRun}/testcases`, body: { testcaseIds: [spareCase] } }),
+        "Run case delete": () => ({ method: "DELETE", path: `/api/cycles/${restRun}/testcases/${restCase}` }),
+        "Run cases delete": () => ({ method: "POST", path: `/api/cycles/${restRun}/testcases/bulk-delete`, body: { testcaseIds: [restCase] } }),
+        "Execution edit": () => ({ method: "PATCH", path: `/api/cycles/${restRun}/executions/${restExecution}`, body: { status: "Failed", actualResult: "Must not persist" } }),
+        "Evidence upload": () => ({ method: "POST", path: `/api/cycles/${restRun}/executions/${restExecution}/attachments`, upload: true }),
+        "Execution bulk assign": () => ({ method: "POST", path: `/api/cycles/${restRun}/executions/bulk-assign`, body: { executionIds: [restExecution], assigneeId: owner } }),
+        "Execution bulk status": () => ({ method: "POST", path: `/api/cycles/${restRun}/executions/bulk-status`, body: { executionIds: [restExecution], status: "Failed" } }),
+        "History import": () => ({ method: "POST", path: `/api/cycles/${restRun}/history-import`, body: { run: { status: "Completed" }, results: [{ testcaseId: restCase, status: "Failed", history: [{ status: "Passed" }] }] } }),
+        "Sharing enable": () => ({ method: "POST", path: `/api/cycles/${restRun}/share`, body: { enabled: true } })
+      } satisfies Record<string, () => { method: string; path: string; body?: unknown; upload?: boolean }>;
+      type RestInput = { method: string; path: string; body?: unknown; upload?: boolean };
+      async function rest(input: RestInput, headers: Record<string, string> = { Cookie: `${settings.sessionCookieName}=${session}` }) {
+        const form = new FormData();
+        if (input.upload) form.append("files", new Blob(["Real disposable evidence"], { type: "text/plain" }), "evidence.txt");
+        const response = await fetch(`${base}${input.path}`, { method: input.method,
+          headers: { ...headers, ...(!input.upload && input.body !== undefined ? { "content-type": "application/json" } : {}) },
+          ...(input.upload ? { body: form } : input.body !== undefined ? { body: JSON.stringify(input.body) } : {}) });
+        const text = await response.text();
+        await Promise.all(productActivity.mock.results.filter((result) => result.type === "return").map((result) => result.value));
+        return { status: response.status, body: text ? JSON.parse(text) as unknown : undefined };
+      }
+      it.each(Object.keys(restWrites) as Array<keyof typeof restWrites>)("refuses %s before business/history/file work", async (name) => {
+        const before = await businessState(), input = restWrites[name]();
+        const response = await rest(input);
+        // Compare wire AND actual committed state together: a red success cannot hide its write.
+        expect({ ...response, business: await businessState(), filesWritten: put.mock.calls.length }).toEqual({
+          status: 403, body: { error: expect.stringContaining("This project is read-only") }, business: before, filesWritten: 0
+        });
+        expect(quota).toHaveBeenCalledWith(organization, locked);
+        expect(productActivity).not.toHaveBeenCalled(); expect(tracking).not.toHaveBeenCalled();
+      });
     });
   });
 });
