@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
-import type { INestApplication } from "@nestjs/common";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type INestApplication, RequestMethod } from "@nestjs/common";
+import { METHOD_METADATA, PATH_METADATA } from "@nestjs/common/constants";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
 import { Client, Pool } from "pg";
@@ -30,6 +34,8 @@ import { CustomFieldsService } from "../custom-fields/custom-fields.service";
 import { ZyraProgressService } from "./zyra-progress.service";
 import { WelcomeEmailService } from "../welcome-email/welcome-email.service";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
+import { HttpExceptionFilter } from "../common/http-exception.filter";
+import { StorageService } from "../storage/storage.service";
 
 const url = process.env.DATABASE_URL ?? "";
 (/\/tesbo_ci(?:\?|$)/.test(url) ? describe : describe.skip)("Plan/Run project lineage — migrated PostgreSQL", () => {
@@ -167,6 +173,8 @@ const url = process.env.DATABASE_URL ?? "";
   describe("MCP locked-project parity at the real HTTP and PostgreSQL boundary", () => {
     let app: INestApplication, base: string, locked: string, organization: string, token: string;
     let db: DatabaseService, limits: PlanLimitsService, mcp: McpService, tokens: ApiTokenService;
+    let legacy: LegacyService, storage: StorageService, put: jest.SpyInstance, productActivity: jest.SpyInstance;
+    let restHandlers: jest.SpyInstance[], storageQuota: jest.SpyInstance, removeFile: jest.SpyInstance, notifications: jest.SpyInstance;
     let readToken: string, writeToken: string, writableToken: string, session: string;
     let suiteId: string, caseId: string, planId: string, runId: string, executionId: string, bugId: string, folderId: string, documentId: string;
     let handlers: jest.SpyInstance[], quota: jest.SpyInstance, actor: jest.SpyInstance, tracking: jest.SpyInstance;
@@ -193,7 +201,19 @@ const url = process.env.DATABASE_URL ?? "";
       for (const id of [project, other, locked]) await setup.query("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'owner')", [id, owner]);
       await setup.query("UPDATE organizations SET plan='launch',plan_grace_ends_at=now()-interval '1 day' WHERE id=$1", [organization]);
       db = new DatabaseService(pool);
-      const legacy = makeLegacy(db), requestCache = new RequestCacheService(config);
+      const requestCache = new RequestCacheService(config);
+      const uploadDir = await mkdtemp(join(process.env.RUNNER_TEMP ?? join(tmpdir(), "opencode"), "tesbo-rest-lock-"));
+      storage = new StorageService({ storageDriver: "local", uploadDir } as AppConfigService);
+      put = jest.spyOn(storage, "put");
+      removeFile = jest.spyOn(storage, "delete");
+      limits = new PlanLimitsService(db, config, email, requestCache, new EntitlementCacheService(redis, config));
+      storageQuota = jest.spyOn(limits, "assertStorageAvailable");
+      legacy = makeLegacy(db, { config, storage, planLimits: limits, requestCache });
+      productActivity = jest.spyOn(legacy, "logProjectActivity");
+      notifications = jest.spyOn(legacy, "notifyUsers");
+      restHandlers = (["updatePlan", "deletePlan", "addPlanItem", "deletePlanItem", "updateCycle", "deleteCycle", "addCycleTestCases",
+        "removeCycleTestCase", "removeCycleTestCases", "updateExecution", "uploadExecutionAttachments", "bulkAssignExecutions",
+        "bulkUpdateExecutionStatus", "importRunHistory", "shareCycle"] as const).map((method) => jest.spyOn(legacy, method));
       // This boundary test does not boot unrelated resumable Zyra plans from other retained fixtures.
       jest.spyOn(legacy, "onModuleInit").mockResolvedValue(undefined);
       tokens = new ApiTokenService(db);
@@ -219,7 +239,6 @@ const url = process.env.DATABASE_URL ?? "";
       await setup.query("INSERT INTO plan_items (plan_id,testcase_id) VALUES ($1,$2)", [planId, caseId]);
       await setup.query("INSERT INTO knowledge_document_versions (document_id,version_number,title,content_text,created_by) VALUES ($1,1,'Prior native document','Keep prior content',$2)", [documentId, owner]);
       await setup.query("INSERT INTO attachments (project_id,entity_type,entity_id,file_name,content_type,file_size,storage_path,uploaded_by) VALUES ($1,'execution',$2,'keep.txt','text/plain',4,'ci/mcp-lock/keep',$3)", [locked, executionId, owner]);
-      limits = new PlanLimitsService(db, config, email, requestCache, new EntitlementCacheService(redis, config));
       quota = jest.spyOn(limits, "assertProjectWritable");
       const module = await Test.createTestingModule({
         controllers: [McpController, LegacyController], providers: [McpService,
@@ -231,6 +250,7 @@ const url = process.env.DATABASE_URL ?? "";
         ]
       }).compile();
       app = module.createNestApplication();
+      app.useGlobalFilters(new HttpExceptionFilter());
       mcp = module.get(McpService);
       handlers = mcp.listTools().map((tool) => jest.spyOn(tool, "handler"));
       actor = jest.spyOn(mcp, "resolveMcpActorId");
@@ -563,6 +583,297 @@ const url = process.env.DATABASE_URL ?? "";
         const response = await rpc("dynamic", "tools/list");
         expect(response.body.error.code).toBe(-32001); expect(quota).not.toHaveBeenCalled(); noHandler();
       } finally { await setup.query("UPDATE projects SET archived_at=NULL WHERE id=$1", [locked]); }
+    });
+
+    describe("authenticated REST Plan/Run aliases", () => {
+      let restPlan: string, restItem: string, restRun: string, restCase: string, spareCase: string, restExecution: string, restAttachment: string;
+      const retainedTrace = Buffer.from("PK disposable retained trace bytes");
+      beforeEach(async () => {
+        // Every red-case target is independent: an actually persisted deletion or edit must not
+        // make the next reproduction fail on a missing parent instead of its intended lock oracle.
+        restPlan = (await setup.query("INSERT INTO plans (project_id,name) VALUES ($1,'REST lock Plan') RETURNING id", [locked])).rows[0].id;
+        restCase = (await setup.query("INSERT INTO testcases (project_id,external_id,title) VALUES ($1,$2,'REST lock Case') RETURNING id", [locked, `REST-${randomUUID().slice(0, 24)}`])).rows[0].id;
+        spareCase = (await setup.query("INSERT INTO testcases (project_id,external_id,title) VALUES ($1,$2,'REST spare Case') RETURNING id", [locked, `REST-${randomUUID().slice(0, 24)}`])).rows[0].id;
+        restItem = (await setup.query("INSERT INTO plan_items (plan_id,testcase_id) VALUES ($1,$2) RETURNING id", [restPlan, restCase])).rows[0].id;
+        restRun = (await setup.query("INSERT INTO cycles (project_id,plan_id,name) VALUES ($1,$2,'REST lock Run') RETURNING id", [locked, restPlan])).rows[0].id;
+        const item = (await setup.query("INSERT INTO cycle_items (cycle_id,testcase_id,snapshot_title) VALUES ($1,$2,'REST retained snapshot') RETURNING id", [restRun, restCase])).rows[0].id;
+        restExecution = (await setup.query("INSERT INTO executions (cycle_item_id,status,actual_result,executed_by,history) VALUES ($1,'Passed','Retained REST result',$2,'[{\"status\":\"Blocked\"}]'::jsonb) RETURNING id", [item, owner])).rows[0].id;
+        const key = `ci/rest-lock/${restExecution}/retained.zip`;
+        await storage.put(key, retainedTrace, "application/zip");
+        restAttachment = (await setup.query("INSERT INTO attachments (project_id,entity_type,entity_id,file_name,content_type,file_size,storage_path,uploaded_by) VALUES ($1,'execution',$2,'retained.zip','application/zip',$3,$4,$5) RETURNING id", [locked, restExecution, retainedTrace.length, key, owner])).rows[0].id;
+        put.mockClear(); // Seeded content exists on disk; only request-time puts count as side effects.
+      });
+      const restWrites = {
+        "Plan edit": () => ({ method: "PATCH", path: `/api/plans/${restPlan}`, body: { name: "Must not persist" } }),
+        "Plan delete": () => ({ method: "DELETE", path: `/api/plans/${restPlan}` }),
+        "Plan item add": () => ({ method: "POST", path: `/api/plans/${restPlan}/items`, body: { testcaseId: spareCase } }),
+        "Plan item delete": () => ({ method: "DELETE", path: `/api/plans/${restPlan}/items/${restItem}` }),
+        "Run edit": () => ({ method: "PATCH", path: `/api/cycles/${restRun}`, body: { name: "Must not persist", status: "In Progress" } }),
+        "Run delete": () => ({ method: "DELETE", path: `/api/cycles/${restRun}` }),
+        "Run case add": () => ({ method: "POST", path: `/api/cycles/${restRun}/testcases`, body: { testcaseIds: [spareCase] } }),
+        "Run case delete": () => ({ method: "DELETE", path: `/api/cycles/${restRun}/testcases/${restCase}` }),
+        "Run cases delete": () => ({ method: "POST", path: `/api/cycles/${restRun}/testcases/bulk-delete`, body: { testcaseIds: [restCase] } }),
+        "Execution edit": () => ({ method: "PATCH", path: `/api/cycles/${restRun}/executions/${restExecution}`, body: { status: "Failed", actualResult: "Must not persist" } }),
+        "Evidence upload": () => ({ method: "POST", path: `/api/cycles/${restRun}/executions/${restExecution}/attachments`, upload: true }),
+        "Execution bulk assign": () => ({ method: "POST", path: `/api/cycles/${restRun}/executions/bulk-assign`, body: { executionIds: [restExecution], assigneeId: owner } }),
+        "Execution bulk status": () => ({ method: "POST", path: `/api/cycles/${restRun}/executions/bulk-status`, body: { executionIds: [restExecution], status: "Failed" } }),
+        "History import": () => ({ method: "POST", path: `/api/cycles/${restRun}/history-import`, body: { run: { status: "Completed" }, results: [{ testcaseId: restCase, status: "Failed", history: [{ status: "Passed" }] }] } }),
+        "Sharing enable": () => ({ method: "POST", path: `/api/cycles/${restRun}/share`, body: { enabled: true } })
+      } satisfies Record<string, () => { method: string; path: string; body?: unknown; upload?: boolean }>;
+      type RestInput = { method: string; path: string; body?: unknown; upload?: boolean };
+      async function rest(input: RestInput, headers: Record<string, string> = { Cookie: `${settings.sessionCookieName}=${session}` }) {
+        const form = new FormData();
+        if (input.upload) form.append("files", new Blob(["Real disposable evidence"], { type: "text/plain" }), "evidence.txt");
+        const response = await fetch(`${base}${input.path}`, { method: input.method,
+          headers: { ...headers, ...(!input.upload && input.body !== undefined ? { "content-type": "application/json" } : {}) },
+          ...(input.upload ? { body: form } : input.body !== undefined ? { body: JSON.stringify(input.body) } : {}) });
+        const text = await response.text();
+        await Promise.all(productActivity.mock.results.filter((result) => result.type === "return").map((result) => result.value));
+        await Promise.all(tracking.mock.results.filter((result) => result.type === "return").map((result) => result.value));
+        return { status: response.status, body: text ? response.headers.get("content-type")?.includes("application/json") ? JSON.parse(text) as unknown : text : undefined };
+      }
+      it.each(Object.keys(restWrites) as Array<keyof typeof restWrites>)("refuses %s before business/history/file work", async (name) => {
+        const before = await businessState(), input = restWrites[name]();
+        const response = await rest(input);
+        // Compare wire AND actual committed state together: a red success cannot hide its write.
+        expect({ ...response, business: await businessState(), filesWritten: put.mock.calls.length }).toEqual({
+          status: 403, body: { error: expect.stringContaining("This project is read-only") }, business: before, filesWritten: 0
+        });
+        expect(quota).toHaveBeenCalledWith(organization, locked);
+        expect(productActivity).not.toHaveBeenCalled(); expect(tracking).not.toHaveBeenCalled();
+        for (const handler of restHandlers) expect(handler).not.toHaveBeenCalled();
+        expect(storageQuota).not.toHaveBeenCalled(); expect(removeFile).not.toHaveBeenCalled(); expect(notifications).not.toHaveBeenCalled();
+      });
+      it("accounts for every alias, without mistaking schedule stubs or missing frontend helpers for mutations", () => {
+        const aliases = Object.getOwnPropertyNames(LegacyController.prototype).flatMap((name) => {
+          const handler = Object.getOwnPropertyDescriptor(LegacyController.prototype, name)?.value;
+          if (typeof handler !== "function") return [];
+          const path = Reflect.getMetadata(PATH_METADATA, handler) as string | undefined;
+          const method = Reflect.getMetadata(METHOD_METADATA, handler) as RequestMethod;
+          return path && /^\/api\/(plans|cycles)\//.test(path) ? [{ path, method }] : [];
+        });
+        const mutations = aliases.filter(({ path, method }) => method !== RequestMethod.GET && !path.startsWith("/api/cycles/schedules/"));
+        const normalize = (input: RestInput) => `${input.method} ${input.path.replace(restPlan, ":planId").replace(restItem, ":itemId").replace(restRun, ":cycleId").replace(restExecution, ":executionId").replace(restCase, ":testcaseId")}`;
+        expect(mutations.map(({ path, method }) => `${RequestMethod[method]} ${path}`).sort()).toEqual(Object.values(restWrites).map((input) => normalize(input())).sort());
+        expect(aliases).toHaveLength(28);
+        expect(aliases.filter(({ method }) => method === RequestMethod.GET)).toHaveLength(11);
+        expect(aliases.filter(({ path }) => path.startsWith("/api/cycles/schedules/"))).toHaveLength(2);
+      });
+      it.each(Object.keys(restWrites) as Array<keyof typeof restWrites>)("persists an authorized unlocked %s through the same HTTP writer", async (name) => {
+        await setup.query("UPDATE organizations SET plan='pro' WHERE id=$1", [organization]);
+        await limits.invalidateEntitlementCache(organization);
+        const before = await businessState(), response = await rest(restWrites[name]());
+        expect(response.status).toBe(name === "Plan edit" || name === "Plan delete" || name === "Plan item delete" || name === "Run edit" || name === "Run delete" || name === "Run case delete" || name === "Execution edit" ? 200 : 201);
+        const after = await businessState();
+        expect(after).not.toEqual(before);
+        expect(quota).toHaveBeenCalledWith(organization, locked);
+        const savedPlan = (after.plans as Array<Record<string, unknown>>).find((row) => row.id === restPlan)!;
+        const savedRun = (after.cycles as Array<Record<string, unknown>>).find((row) => row.id === restRun)!;
+        const savedExecution = (after.results as Array<Record<string, unknown>>).find((row) => row.id === restExecution)!;
+        const savedItem = (after.planItems as Array<Record<string, unknown>>).find((row) => row.id === restItem)!;
+        if (name === "Plan edit") expect(savedPlan.name).toBe("Must not persist");
+        if (name === "Plan delete") { expect(savedPlan.deleted_at).not.toBeNull(); expect(savedItem.deleted_at).not.toBeNull(); expect(savedRun.deleted_at).toBeNull(); }
+        if (name === "Plan item add") expect(after.planItems).toEqual(expect.arrayContaining([expect.objectContaining({ plan_id: restPlan, testcase_id: spareCase, deleted_at: null })]));
+        if (name === "Plan item delete") expect(savedItem.deleted_at).not.toBeNull();
+        if (name === "Run edit") { expect(savedRun).toMatchObject({ name: "Must not persist", status: "In Progress" }); expect(savedRun.started_at).not.toBeNull(); }
+        if (name === "Run delete") { expect(savedRun.deleted_at).not.toBeNull(); expect(savedExecution.deleted_at).not.toBeNull(); }
+        if (name === "Run case add") {
+          const added = (after.runItems as Array<Record<string, unknown>>).find((row) => row.cycle_id === restRun && row.testcase_id === spareCase)!;
+          expect(added).toMatchObject({ deleted_at: null, snapshot_title: "REST spare Case" });
+          expect(after.results).toEqual(expect.arrayContaining([expect.objectContaining({ cycle_item_id: added.id, status: "Untested", deleted_at: null })]));
+        }
+        if (name === "Run case delete" || name === "Run cases delete") expect(savedExecution.deleted_at).not.toBeNull();
+        if (name === "Execution edit") expect(savedExecution).toMatchObject({ status: "Failed", actual_result: "Must not persist", executed_by: owner, history: [{ status: "Blocked" }] });
+        if (name === "Execution bulk assign") expect(savedExecution).toMatchObject({ assignee_id: owner, executed_by: owner, status: "Passed", history: [{ status: "Blocked" }] });
+        if (name === "Execution bulk status") expect(savedExecution).toMatchObject({ status: "Failed", executed_by: owner, history: [{ status: "Blocked" }] });
+        if (name === "History import") { expect(savedRun.status).toBe("Completed"); expect(savedExecution).toMatchObject({ status: "Failed", executed_by: owner, history: [{ status: "Passed" }] }); }
+        if (name === "Sharing enable") expect(savedRun).toMatchObject({ share_enabled: true, share_token: expect.any(String) });
+        if (name === "Evidence upload") {
+          expect(put).toHaveBeenCalledTimes(1);
+          const saved = (await setup.query("SELECT storage_path FROM attachments WHERE entity_id=$1 AND id<>$2", [restExecution, restAttachment])).rows;
+          expect(saved).toHaveLength(1);
+          expect(await storage.getBuffer(saved[0].storage_path)).toEqual(Buffer.from("Real disposable evidence"));
+        } else expect(put).not.toHaveBeenCalled();
+      });
+      const restReads = {
+        "Plan detail": () => ({ path: `/api/plans/${restPlan}`, expected: expect.objectContaining({ id: restPlan }) }),
+        "Plan items": () => ({ path: `/api/plans/${restPlan}/items`, expected: expect.arrayContaining([expect.objectContaining({ id: restItem })]) }),
+        "Plan runs": () => ({ path: `/api/plans/${restPlan}/runs`, expected: expect.arrayContaining([expect.objectContaining({ id: restRun })]) }),
+        "Plan progress": () => ({ path: `/api/plans/${restPlan}/progress`, expected: expect.objectContaining({ runCount: 1, totalCases: 1 }) }),
+        "Run detail": () => ({ path: `/api/cycles/${restRun}`, expected: expect.objectContaining({ id: restRun }) }),
+        "Executions": () => ({ path: `/api/cycles/${restRun}/executions`, expected: expect.arrayContaining([expect.objectContaining({ id: restExecution, status: "Passed", history: [{ status: "Blocked" }] })]) }),
+        "Evidence list": () => ({ path: `/api/cycles/${restRun}/executions/${restExecution}/attachments`, expected: expect.objectContaining({ total: 1, list: [expect.objectContaining({ id: restAttachment })] }) }),
+        "Evidence download": () => ({ path: `/api/cycles/${restRun}/executions/${restExecution}/attachments/${restAttachment}/download`, expected: retainedTrace.toString() }),
+        "Trace link": () => ({ path: `/api/cycles/${restRun}/executions/${restExecution}/attachments/${restAttachment}/trace-link`, expected: expect.objectContaining({ token: expect.any(String), expiresAt: expect.any(String) }) }),
+        "CSV export": () => ({ path: `/api/cycles/${restRun}/export/csv`, expected: expect.stringContaining("Retained REST result") }),
+        "Summary stub": () => ({ path: `/api/cycles/${restRun}/report/summary`, expected: { total: 0, passed: 0, failed: 0, blocked: 0, skipped: 0, untested: 0 } })
+      };
+      it.each(Object.keys(restReads) as Array<keyof typeof restReads>)("retains the locked %s read and all stored history", async (name) => {
+        const before = await businessState(), input = restReads[name](), response = await rest({ method: "GET", path: input.path });
+        expect(response).toEqual({ status: 200, body: input.expected });
+        expect(quota).not.toHaveBeenCalled(); expect(put).not.toHaveBeenCalled();
+        expect(await businessState()).toEqual(before);
+        if (name === "Trace link") {
+          const { token, expiresAt } = response.body as { token: string; expiresAt: string };
+          expect(Date.parse(expiresAt) - Date.now()).toBeGreaterThan(3_590_000);
+          expect(Date.parse(expiresAt) - Date.now()).toBeLessThanOrEqual(3_600_000);
+          expect(await rest({ method: "GET", path: `/api/public/trace/${token}` }, {})).toEqual({ status: 200, body: retainedTrace.toString() });
+          expect((await rest({ method: "GET", path: `/api/public/trace/${token}tampered` }, {})).status).toBe(404);
+        }
+      });
+      it.each(Object.keys(restWrites) as Array<keyof typeof restWrites>)("retains bearer-token exclusion for %s before entitlement work", async (name) => {
+        const before = await businessState();
+        const response = await rest(restWrites[name](), { Cookie: `${settings.sessionCookieName}=${session}`, Authorization: `Bearer ${token}` });
+        expect(response).toEqual({ status: 403, body: { error: "API token is not authorized for this REST project route" } });
+        expect(quota).not.toHaveBeenCalled(); expect(put).not.toHaveBeenCalled(); expect(productActivity).not.toHaveBeenCalled();
+        expect(await businessState()).toEqual(before);
+      });
+      it("preserves missing/invalid credentials and membership/URL ownership before entitlement or input validation", async () => {
+        const before = await businessState(), input = { ...restWrites["Plan edit"](), body: { name: "x".repeat(10_000) } };
+        expect(await rest(input, {})).toEqual({ status: 400, body: { error: "Authentication required" } });
+        expect(await rest(input, { Cookie: `${settings.sessionCookieName}=${session}`, Authorization: "Bearer tsbo_invalid" })).toEqual({ status: 400, body: { error: "Authentication required" } });
+        await setup.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [locked, owner]);
+        try { expect((await rest(input)).status).toBe(404); }
+        finally { await setup.query("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'owner')", [locked, owner]); }
+        for (const path of [`/api/plans/${randomUUID()}`, "/api/plans/malformed", `/api/cycles/${randomUUID()}`, "/api/cycles/malformed",
+          `/api/plans/${planId}/items/${restItem}`, `/api/cycles/${runId}/executions/${restExecution}`,
+          `/api/cycles/${runId}/executions/${restExecution}/attachments`]) {
+          expect((await rest({ method: path.endsWith("/attachments") ? "POST" : path.includes("/items/") ? "DELETE" : "PATCH", path, body: {} })).status).toBe(404);
+        }
+        expect(quota).not.toHaveBeenCalled(); expect(put).not.toHaveBeenCalled(); expect(productActivity).not.toHaveBeenCalled();
+        expect(await businessState()).toEqual(before);
+      });
+      it("retains the history-import role denial before billing and malformed import validation", async () => {
+        await setup.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2", [locked, owner]);
+        try {
+          expect(await rest({ ...restWrites["History import"](), body: { run: null } })).toEqual({ status: 403, body: { error: "QA Engineers cannot import run history" } });
+          expect(quota).not.toHaveBeenCalled(); expect(productActivity).not.toHaveBeenCalled();
+        } finally { await setup.query("UPDATE project_members SET role='owner' WHERE project_id=$1 AND user_id=$2", [locked, owner]); }
+      });
+      it.each(["Plan", "Run", "Plan item", "Execution", "Run item"])("refuses a deleted %s URL target before entitlement work", async (kind) => {
+        let input: RestInput;
+        if (kind === "Plan") { await setup.query("UPDATE plans SET deleted_at=now() WHERE id=$1", [restPlan]); input = restWrites["Plan edit"](); }
+        else if (kind === "Plan item") { await setup.query("UPDATE plan_items SET deleted_at=now() WHERE id=$1", [restItem]); input = restWrites["Plan item delete"](); }
+        else {
+          if (kind === "Run") await setup.query("UPDATE cycles SET deleted_at=now() WHERE id=$1", [restRun]);
+          if (kind === "Execution") await setup.query("UPDATE executions SET deleted_at=now() WHERE id=$1", [restExecution]);
+          if (kind === "Run item") await setup.query("UPDATE cycle_items SET deleted_at=now() WHERE cycle_id=$1", [restRun]);
+          input = kind === "Run" ? restWrites["Run edit"]() : restWrites["Evidence upload"]();
+        }
+        const before = await businessState(); expect((await rest(input)).status).toBe(404);
+        expect(quota).not.toHaveBeenCalled(); expect(put).not.toHaveBeenCalled(); expect(await businessState()).toEqual(before);
+      });
+      it("refuses write-shaped no-ops and invalid inputs before validators, parent locks or multipart parsing", async () => {
+        const before = await businessState();
+        for (const input of [
+          { ...restWrites["Run edit"](), body: { status: "invalid" } },
+          { ...restWrites["Plan item add"](), body: {} },
+          { ...restWrites["Run case add"](), body: { testcaseIds: [] } },
+          { ...restWrites["Run cases delete"](), body: { testcaseIds: [] } },
+          { ...restWrites["History import"](), body: { run: null } },
+          { ...restWrites["Run case delete"](), path: `/api/cycles/${restRun}/testcases/${randomUUID()}` },
+          { ...restWrites["Evidence upload"](), upload: false } // No files would normally be 400.
+        ]) expect(await rest(input)).toEqual({ status: 403, body: { error: expect.stringContaining("This project is read-only") } });
+        const malformed = await fetch(`${base}/api/cycles/${restRun}/executions/${restExecution}/attachments`, { method: "POST", headers: {
+          Cookie: `${settings.sessionCookieName}=${session}`, "content-type": "multipart/form-data; boundary=missing"
+        }, body: "not a multipart form" });
+        expect(malformed.status).toBe(403); // A check in the handler would let Multer fail first.
+        expect(put).not.toHaveBeenCalled(); expect(productActivity).not.toHaveBeenCalled(); expect(await businessState()).toEqual(before);
+      });
+      it("uses the actual owning project instead of body-supplied project and organization ids", async () => {
+        const before = await businessState();
+        expect(await rest({ ...restWrites["Run edit"](), body: { name: "Spoofed", projectId: project, organizationId: randomUUID() } }))
+          .toEqual({ status: 403, body: { error: expect.stringContaining("This project is read-only") } });
+        expect(quota).toHaveBeenCalledWith(organization, locked); expect(await businessState()).toEqual(before);
+      });
+      it.each([undefined, true, "false", 0, null, {}, []])("does not treat enabled=%j as sharing disable", async (enabled) => {
+        const before = await businessState();
+        expect(await rest({ ...restWrites["Sharing enable"](), body: { enabled } })).toEqual({ status: 403, body: { error: expect.stringContaining("This project is read-only") } });
+        expect(await businessState()).toEqual(before);
+      });
+      it.each(["existing", "absent"])("allows exact-false disable with an %s token, preserving the existing token lifecycle", async (kind) => {
+        const existingToken = kind === "existing" ? randomUUID() : null;
+        await setup.query("UPDATE cycles SET share_enabled=$2,share_token=$3 WHERE id=$1", [restRun, kind === "existing", existingToken]);
+        const before = await businessState();
+        const disabled = await rest({ ...restWrites["Sharing enable"](), body: { enabled: false } });
+        expect(disabled.status).toBe(201);
+        const sharing = disabled.body as { shareEnabled: boolean; shareToken: string };
+        expect(sharing.shareEnabled).toBe(false); expect(sharing.shareToken).toEqual(existingToken ?? expect.any(String));
+        const repeated = await rest({ ...restWrites["Sharing enable"](), body: { enabled: false } });
+        expect(repeated).toEqual(disabled); expect(quota).not.toHaveBeenCalled();
+        expect((await rest({ method: "GET", path: `/api/public/shared-runs/${sharing.shareToken}` }, {})).status).toBe(404);
+        const after = await businessState(); expect({ ...after, cycles: before.cycles }).toEqual(before);
+        const stored = (await setup.query("SELECT share_enabled,share_token FROM cycles WHERE id=$1", [restRun])).rows[0];
+        expect(stored).toEqual({ share_enabled: false, share_token: sharing.shareToken });
+      });
+      it.each(["PATCH", "DELETE"])("retains the authenticated schedule %s stub", async (method) => {
+        expect(await rest({ method, path: `/api/cycles/schedules/${randomUUID()}` })).toEqual({ status: 501, body: { error: "Scheduled runs are not available yet" } });
+        expect(quota).not.toHaveBeenCalled();
+      });
+      it("retains enabled public reads while locked and reuses the same token after disable and unlocked re-enable", async () => {
+        const shareToken = randomUUID();
+        await setup.query("UPDATE cycles SET share_enabled=true,share_token=$2 WHERE id=$1", [restRun, shareToken]);
+        const publicInput = { method: "GET", path: `/api/public/shared-runs/${shareToken}` };
+        const visible = await rest(publicInput, {}); expect(visible.status).toBe(200);
+        expect(Object.keys(visible.body as object).sort()).toEqual(["name", "status", "description", "environment", "buildVersion", "createdAt", "startedAt", "endedAt"].sort());
+        expect((await rest(restWrites["Sharing enable"]())).status).toBe(403);
+        expect(await rest(publicInput, {})).toEqual(visible);
+        expect((await rest({ ...restWrites["Sharing enable"](), body: { enabled: false } })).body).toEqual({ shareEnabled: false, shareToken });
+        expect((await rest(publicInput, {})).status).toBe(404);
+        await setup.query("UPDATE organizations SET plan='pro' WHERE id=$1", [organization]); await limits.invalidateEntitlementCache(organization);
+        expect((await rest(restWrites["Sharing enable"]())).body).toEqual({ shareEnabled: true, shareToken });
+        expect(await rest(publicInput, {})).toEqual(visible);
+      });
+      it.each(["Pro", "grace", "billing disabled", "within allowance", "archive escape"])("persists an ordinary REST write for %s", async (mode) => {
+        if (mode === "Pro") await setup.query("UPDATE organizations SET plan='pro' WHERE id=$1", [organization]);
+        if (mode === "grace") await setup.query("UPDATE organizations SET plan_grace_ends_at=now()+interval '1 day' WHERE id=$1", [organization]);
+        if (mode === "billing disabled") settings.isStripeBillingEnabled = false;
+        const id = mode === "within allowance" ? plan : restPlan;
+        if (mode === "archive escape") expect((await rest({ method: "DELETE", path: `/api/projects/${other}` })).status).toBe(200);
+        try {
+          await limits.invalidateEntitlementCache(organization);
+          const name = `REST allowed ${mode}`;
+          expect((await rest({ method: "PATCH", path: `/api/plans/${id}`, body: { name } })).status).toBe(200);
+          expect((await setup.query("SELECT name FROM plans WHERE id=$1", [id])).rows[0].name).toBe(name);
+        } finally { if (mode === "archive escape") await setup.query("UPDATE projects SET archived_at=NULL WHERE id=$1", [other]); }
+      });
+      it("retains finalization and input/nesting/no-op behavior once the project is writable", async () => {
+        await setup.query("UPDATE cycles SET source='automation',closed_at=now() WHERE id=$1", [restRun]);
+        expect((await rest(restWrites["Execution edit"]())).status).toBe(403);
+        await setup.query("UPDATE organizations SET plan='pro' WHERE id=$1", [organization]); await limits.invalidateEntitlementCache(organization);
+        expect((await rest(restWrites["Execution edit"]())).status).toBe(409);
+        expect((await rest({ ...restWrites["Run edit"](), body: { status: "invalid" } })).status).toBe(400);
+        expect((await rest({ ...restWrites["Execution edit"](), path: `/api/cycles/${runId}/executions/${restExecution}` })).status).toBe(404);
+        await setup.query("UPDATE cycles SET source='manual',closed_at=NULL WHERE id=$1", [restRun]);
+        expect((await rest({ ...restWrites["Run case delete"](), path: `/api/cycles/${restRun}/testcases/${randomUUID()}` })).status).toBe(200);
+      });
+      it("preserves Redis fallback and returns a real 500 for database failure, not a false plan denial", async () => {
+        const before = await businessState();
+        (redis.get as jest.Mock).mockRejectedValueOnce(new Error("REST controlled Redis outage"));
+        expect((await rest(restWrites["Plan edit"]())).status).toBe(403);
+        quota.mockImplementationOnce(async () => { await db.query("SELECT 1 / 0"); });
+        const logging = jest.spyOn(console, "error").mockImplementation(() => undefined);
+        try { expect(await rest(restWrites["Plan edit"]())).toEqual({ status: 500, body: { error: "Internal server error" } }); }
+        finally { logging.mockRestore(); }
+        expect(productActivity).not.toHaveBeenCalled(); expect(put).not.toHaveBeenCalled(); expect(await businessState()).toEqual(before);
+      });
+      it("reuses cached entitlement and canonical invalidation, without changing cache TTL or promising zero staleness", async () => {
+        await setup.query("UPDATE organizations SET plan='pro' WHERE id=$1", [organization]); await limits.invalidateEntitlementCache(organization);
+        expect((await rest(restWrites["Plan edit"]())).status).toBe(200);
+        expect(redis.set).toHaveBeenCalledWith(`entitlement:${organization}`, expect.any(String), "EX", 45);
+        await setup.query("UPDATE organizations SET plan='launch' WHERE id=$1", [organization]);
+        expect((await rest({ ...restWrites["Plan edit"](), body: { name: "Existing cached entitlement" } })).status).toBe(200);
+        await limits.invalidateEntitlementCache(organization);
+        const before = await businessState(); expect((await rest(restWrites["Plan edit"]())).status).toBe(403);
+        expect(await businessState()).toEqual(before);
+      });
+      it("does not pretend deleting a Run frees a project slot", async () => {
+        await setup.query("UPDATE organizations SET plan='pro' WHERE id=$1", [organization]); await limits.invalidateEntitlementCache(organization);
+        expect((await rest(restWrites["Run delete"]())).status).toBe(200);
+        await setup.query("UPDATE organizations SET plan='launch' WHERE id=$1", [organization]); await limits.invalidateEntitlementCache(organization);
+        expect((await rest(restWrites["Plan edit"]())).status).toBe(403);
+        expect((await setup.query("SELECT archived_at FROM projects WHERE id=$1", [locked])).rows[0].archived_at).toBeNull();
+      });
     });
   });
 });

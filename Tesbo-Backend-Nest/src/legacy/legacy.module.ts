@@ -13,6 +13,7 @@ import { SignupController } from "./signup.controller";
 import { SignupService } from "./signup.service";
 import { ZyraProgressService } from "./zyra-progress.service";
 import { KbExtractionRunnerService } from "./kb-extraction-runner.service";
+import { PlanRunWriteLockGuard } from "./plan-run-write-lock.guard";
 
 @Module({
   imports: [
@@ -26,7 +27,7 @@ import { KbExtractionRunnerService } from "./kb-extraction-runner.service";
     forwardRef(() => CustomTagsModule)
   ],
   controllers: [LegacyController, SignupController],
-  providers: [LegacyService, SignupService, ZyraProgressService, KbExtractionRunnerService],
+  providers: [LegacyService, SignupService, ZyraProgressService, KbExtractionRunnerService, PlanRunWriteLockGuard],
   exports: [LegacyService]
 })
 export class LegacyModule {}

@@ -62,6 +62,7 @@ import { runWithZyraDraftSink, runWithoutZyraDraftSink, runWithZyraLiveBatch, zy
 import { Subject } from "rxjs";
 
 type Body = Record<string, any>;
+export type PlanRunWriteTarget = "plan" | "planItem" | "cycle" | "execution" | "historyImport" | "sharing";
 
 /** Everything processZyraSaveEntriesSequential/Batched need that isn't `selected` or `client` itself. */
 type TicketProvider = "jira" | "linear" | "notion";
@@ -6136,10 +6137,42 @@ export class LegacyService implements OnModuleInit {
    * authorized for their own plan could delete an item out of someone else's.
    */
   private async requirePlanItemAccess(userId: string | null | undefined, planId: string, itemId: string) {
-    await this.requirePlanAccess(userId, planId);
+    const projectId = await this.requirePlanAccess(userId, planId);
     if (!isUuid(itemId)) throw new NotFoundException({ error: "Plan item not found" });
     const res = await this.db.query("SELECT id FROM plan_items WHERE id = $1 AND plan_id = $2 AND deleted_at IS NULL", [itemId, planId]);
     if (!res.rows[0]) throw new NotFoundException({ error: "Plan item not found" });
+    return projectId;
+  }
+
+  /**
+   * The selected REST aliases have no project in their URL. Resolve their actual authorized
+   * owner before consulting the existing billing policy; do not put a write lock in the access
+   * helpers (also used by reads), or in shared MCP writers (whose dispatcher already owns it).
+   * The route guard calls this before validators, transactions and multipart file processing.
+   */
+  async assertPlanRunRestWritable(
+    userId: string | null | undefined, target: PlanRunWriteTarget,
+    params: { planId?: string; itemId?: string; cycleId?: string; executionId?: string }, body: Body = {}
+  ): Promise<void> {
+    const uid = this.requireUser(userId);
+    let projectId: string;
+    switch (target) {
+      case "plan": projectId = await this.requirePlanAccess(uid, params.planId ?? ""); break;
+      case "planItem": projectId = await this.requirePlanItemAccess(uid, params.planId ?? "", params.itemId ?? ""); break;
+      case "historyImport": projectId = await this.requireRunHistoryAccess(uid, params.cycleId ?? ""); break;
+      case "execution":
+        projectId = await this.requireCycleAccess(uid, params.cycleId ?? "");
+        await this.executionOwner(params.cycleId ?? "", params.executionId ?? "", true);
+        break;
+      case "cycle":
+      case "sharing": projectId = await this.requireCycleAccess(uid, params.cycleId ?? ""); break;
+      default: throw new Error("Missing Plan/Run REST write target");
+    }
+    // Disabling an existing publication must remain possible while locked. Deliberately exact:
+    // shareCycle enables for every other value. Preserve its existing token mint/reuse behavior.
+    if (target === "sharing" && body?.enabled === false) return;
+    const project = await this.requireProjectAccess(uid, projectId);
+    await this.planLimits.assertProjectWritable(String(project.organization_id), projectId);
   }
 
   /** Plan/Run references must belong to the parent project, even when the caller can access both.
@@ -7526,13 +7559,19 @@ export class LegacyService implements OnModuleInit {
     });
   }
 
-  async importRunHistory(userId: string | null | undefined, cycleId: string, body: Body) {
+  private async requireRunHistoryAccess(userId: string | null | undefined, cycleId: string): Promise<string> {
     const uid = this.requireUser(userId);
     const projectId = await this.requireCycleAccess(uid, cycleId);
     const project = await this.requireProjectAccess(uid, projectId);
     if (this.normalizeRole(project.caller_role) === "qa_engineer") {
       throw new ForbiddenException({ error: "QA Engineers cannot import run history" });
     }
+    return projectId;
+  }
+
+  async importRunHistory(userId: string | null | undefined, cycleId: string, body: Body) {
+    const uid = this.requireUser(userId);
+    const projectId = await this.requireRunHistoryAccess(uid, cycleId);
 
     if (body.run !== undefined && (body.run === null || typeof body.run !== "object" || Array.isArray(body.run))) {
       throw new BadRequestException({ error: "run must be an object" });
@@ -9078,14 +9117,15 @@ export class LegacyService implements OnModuleInit {
   // attachment routes authorize against — neither carries a projectId in its path. A malformed
   // id is answered the same way as a well-formed one that doesn't exist, rather than being handed
   // to Postgres to fail the uuid cast and turn a typo into a 500.
-  private async executionOwner(cycleId: string, executionId: string): Promise<Body> {
+  private async executionOwner(cycleId: string, executionId: string, activeWriteTarget = false): Promise<Body> {
     if (!isUuid(cycleId) || !isUuid(executionId)) throw new NotFoundException({ error: "Execution not found" });
     const res = await this.db.query(
       `SELECT e.id, c.project_id, p.organization_id FROM executions e
        JOIN cycle_items ci ON ci.id = e.cycle_item_id
        JOIN cycles c ON c.id = ci.cycle_id
        JOIN projects p ON p.id = c.project_id
-       WHERE e.id = $1 AND c.id = $2 AND e.deleted_at IS NULL`,
+        WHERE e.id = $1 AND c.id = $2 AND e.deleted_at IS NULL
+          ${activeWriteTarget ? "AND ci.deleted_at IS NULL AND c.deleted_at IS NULL" : ""}`,
       [executionId, cycleId]
     );
     if (!res.rows[0]) throw new NotFoundException({ error: "Execution not found" });
