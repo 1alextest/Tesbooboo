@@ -2543,6 +2543,29 @@ reviewScript() {
 
 ---
 
+### Zyra capability reconciliation — Tesbo assurance finding (2026-11-14)
+
+**Status:** source-inspected Tesbo-specific review receipt, **not** a ninth canonical specification, implementation approval, independent assurance-team pass or deployed acceptance. This entry records Tesbo's own product finding in its existing feature/QA roadmap. The reusable cross-application *review method* is separately being proposed in [Nesberry assurance-method PR #4462](https://github.com/NesberryEnterprise/Nesberry/pull/4462); that external PR does not implement a Tesbo feature or confer Tesbo release authority.
+
+**Observed current owners:**
+- `Tesbo-Frontend/app/(app)/projects/[id]/agents/zyra/page.tsx` already hosts project-scoped Zyra chat sessions and imports the existing `ZyraChatReviewPanel`, citations and shared application APIs.
+- `Tesbo-Frontend/app/(app)/projects/[id]/agents/zyra/settings/page.tsx` already has provider/model-connection testing, `ZyraCapabilities`, and testcase-generation range choices. A visible/enabled switch is **not** proof of all downstream action-level permissions or effective execution.
+- `Tesbo-Backend-Nest/migrations/V89_zyra_chat_review.sql` links chat messages/sessions to the existing `ai_generation_requests` staging and review owner. It is not a justification for a second Copilot, second proposal store or a new test-case approval authority.
+- Existing Requirements, Test Cases, Suites, Runs/Results, Bugs, Knowledge Base, Activity, Notifications and Zyra remain the product owners for their present records/workflows. Source links and AI assertions do not automatically establish validated requirement coverage, executed testing or approved publication.
+
+**Recorded failure of the earlier review process:** a broader/new native "Copilot" was discussed without a per-user-job comparison to the reachable, configured Zyra UI/API paths and observable persistence/review effects. Existing reuse principles were mentioned, but no complete capability-equivalence evidence receipt was applied. This is a review-execution and evidence gap; it is **not** proof that independently invoked Blue/Red/Green/White reviewers ran and failed. Reuse/extend Zyra; first prove the smallest genuinely missing behavior such as durable cross-client project Sessions, external execution handoff, versioned review or requirements/coverage impact, as separately approved.
+
+**Test candidates / unanswered product questions (NOT RUN by this documentation update):**
+1. Under real project roles/capability settings, distinguish chat suite operations that write immediately from test-case drafts awaiting selected human approval. Test direct API and UI paths, historical writes and denied publication; do not infer parity from V89 alone.
+2. Check whether a purely informational/no-op Zyra answer incorrectly displays a "Nothing was saved" warning; classify it as a potential UX defect only after an actual reproduction.
+3. Demonstrate that "All/Exhaustive" is a generation quantity/strategy setting, **not** evidence of complete requirements, journey or negative-path coverage. Test missing-oracle and zero-linked-case conditions.
+4. Independently verify model/agent configuration versus effective authorized tools, correct scoped source retrieval, real save/undo/retry, and persisted results. An enabled toggle or model narrative is not a verdict.
+5. Before adding graph-driven QA notifications, reuse the existing `integration-sync.processor.ts` requirement-change recipient lookup and `legacy/notification-writer.ts` delivery policy. Their deduplicated messages are not a versioned change ledger, and swallowed notification failures are not guaranteed delivery.
+
+**Gates and ownership:** record exact repository SHA, user job, configuration/role, original source paths, actual execution/captured evidence tier, missing behavior, alternatives and a reuse/extend/new/unknown disposition in this existing review/feature context. Keep the existing F1–F9 / D1–D6 / E1–E7 register authoritative for cross-cutting unresolved security, audit and release gates. The approved eight-file v1.4.21 ZIP and contents must be independently verified and reconciled before accepting any requirement, authority, approval-policy or graph-scope change. A single assistant applying multiple named lenses is a desk review, not independent specialist-team certification.
+
+---
+
 ## Section G: Knowledge Base Module
 
 Scope: project-scoped Knowledge Base v2 (folders, documents, files, search, versioning, AI-memory
