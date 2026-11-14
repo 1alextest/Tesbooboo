@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { LegacyModule } from "../legacy/legacy.module";
+import { PlanLimitsModule } from "../plan-limits/plan-limits.module";
 import { McpController } from "./mcp.controller";
 import { McpService } from "./mcp.service";
 
@@ -10,7 +11,7 @@ import { McpService } from "./mcp.service";
  * for bearer-token resolution.
  */
 @Module({
-  imports: [LegacyModule, AuthModule],
+  imports: [LegacyModule, AuthModule, PlanLimitsModule],
   controllers: [McpController],
   providers: [McpService]
 })
