@@ -255,7 +255,8 @@ const EN = {
   "review.err.saveEdit": "Failed to save the edit.",
   "review.savedMsg": (p) => `${p.n} test case${s(p.n)} saved to the repository.`,
   "review.err.save": "Failed to save the selected test cases.",
-  "review.closedMsg": "Batch closed — nothing was saved to the repository.",
+  // Closing can follow a partial save (including one by another reviewer); describe only this action.
+  "review.closedMsg": "Batch closed — no additional test cases were saved to the repository.",
   "review.err.close": "Failed to close the batch.",
   "review.selected": (p) => `${p.selected} of ${p.total} selected — pending review`,
   "review.unselectAll": "Unselect all",
@@ -660,7 +661,7 @@ const RU: Record<ZyraTextKey, Entry> = {
   "review.err.saveEdit": "Не удалось сохранить изменения.",
   "review.savedMsg": (p) => `Сохранено в репозиторий: ${p.n} ${tc(p.n)}.`,
   "review.err.save": "Не удалось сохранить выбранные тест-кейсы.",
-  "review.closedMsg": "Пакет закрыт — в репозиторий ничего не сохранено.",
+  "review.closedMsg": "Пакет закрыт — дополнительные тест-кейсы в репозиторий не сохранены.",
   "review.err.close": "Не удалось закрыть пакет.",
   "review.selected": (p) => `Выбрано ${p.selected} из ${p.total} — ожидает проверки`,
   "review.unselectAll": "Снять выбор",

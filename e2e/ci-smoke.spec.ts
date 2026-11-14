@@ -11,6 +11,7 @@ import { verifyBugMetadataWrites } from "./utils/ci-bug-metadata-writes";
 import { verifyReviewBoardUi } from "./utils/ci-review-board-ui";
 import { verifyPlanProjectLineage } from "./utils/ci-plan-project-lineage";
 import { verifyTestcaseBulkScope } from "./utils/ci-testcase-bulk-scope";
+import { verifyCiZyraReviewFeedback } from "./utils/ci-zyra-review-feedback";
 
 async function verifyBugCreateAccess(request: APIRequestContext, api: string, projectId: string, ownerId: string, organizationId: string) {
   // Called only after the test's explicit loopback/disposable-database safety checks.
@@ -813,6 +814,23 @@ test("testcase bulk writers and Suite removal preserve project isolation through
   expect(project.ok(), await project.text()).toBeTruthy();
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   await verifyTestcaseBulkScope(page, api, web, (await project.json()).id, owner, testInfo);
+  expect(errors).toEqual([]);
+});
+
+test("Zyra review close feedback preserves prior saves and distinguishes refused closes", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy();
+  const ownerId = (await login.json()).userId as string;
+  const created = await page.request.post(`${api}/api/projects`, { data: { name: "CI Zyra Review Feedback", key: "ZRF" } });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const other = await page.request.post(`${api}/api/projects`, { data: { name: "CI Zyra Other Project", key: "ZRO" } });
+  expect(other.ok(), await other.text()).toBeTruthy();
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyCiZyraReviewFeedback(page, api, web, (await created.json()).id, (await other.json()).id, ownerId, testInfo);
   expect(errors).toEqual([]);
 });
 

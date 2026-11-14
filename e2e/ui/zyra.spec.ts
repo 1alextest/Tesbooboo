@@ -8,6 +8,8 @@ import {
   type RbacTenant,
 } from "../utils/rbac-tenant";
 import { startFakeAiServer, type FakeAiServer } from "../utils/fake-ai-server";
+import { verifyZyraReviewCloseFeedback } from "../utils/zyra-review-feedback";
+import { env } from "../utils/env";
 
 /*
  * The Agents screens: the agent picker, Zyra's chat, Zyra's settings, the task board, and the task
@@ -3611,6 +3613,32 @@ test.describe("zyra / agents (UI)", () => {
       .poll(() => scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`))
       .toBe("in_review");
   });
+
+  for (const language of ["en", "ru"] as const) {
+    for (const saveFirst of [true, false]) {
+      test(`Zyra close feedback ${language}: ${saveFirst ? "partial save stays saved" : "closing saves no drafts"}`, async ({ browser }) => {
+        const { taskId, sessionId } = seedChatReviewBatch();
+        exec(`UPDATE zyra_chat_sessions SET language=${literal(language)} WHERE id=${literal(sessionId)};`);
+        exec(`UPDATE ai_generation_requests SET language=${literal(language)} WHERE id=${literal(taskId)};`);
+        const page = await open(browser, "/agents/zyra");
+        const requestBase = new URL(`/api/projects/${tenant!.mainProjectId}`, env.apiBaseUrl).toString();
+        await verifyZyraReviewCloseFeedback({
+          page, request: api, taskUrl: `${requestBase}/agents/zyra/tasks/${taskId}`, language, saveFirst,
+          settleSavedCases: async (ids) => {
+            await expect.poll(() => Number(scalar(`SELECT COUNT(*) FROM testcases t
+              WHERE t.id=ANY(ARRAY[${ids.map(literal).join(",")}]::uuid[]) AND t.embedding_status='pending' AND EXISTS
+                (SELECT 1 FROM testcase_versions v WHERE v.testcase_id=t.id AND v.snapshot->>'embedding_status'='queued');`)),
+            { message: "keyless save embedding bookkeeping must finish before the close baseline" }).toBe(ids.length);
+          },
+          repositorySnapshot: async () => scalar(`SELECT jsonb_build_object(
+            'cases',COALESCE((SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM testcases t WHERE t.project_id=${literal(tenant!.mainProjectId)}),'[]'::jsonb),
+            'history',COALESCE((SELECT jsonb_agg(to_jsonb(v) ORDER BY v.testcase_id,v.version) FROM testcase_versions v JOIN testcases t ON t.id=v.testcase_id
+              WHERE t.project_id=${literal(tenant!.mainProjectId)}),'[]'::jsonb))::text;`),
+        });
+        expect(Number(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)};`))).toBe(saveFirst ? 1 : 0);
+      });
+    }
+  }
 
   /*
    * Regression test for the Test Case Repository not reflecting a Zyra save until a manual reload.
