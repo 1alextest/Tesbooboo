@@ -16,6 +16,8 @@ export interface CurrentSourceScope {
   /** Current remote site/workspace, not an attested historical origin. */
   namespace: string;
   remoteProjectId: string;
+  /** True for the existing integration_connections.disconnected_at state. */
+  disconnected: boolean;
 }
 
 export interface CachedRequirementRow {
@@ -54,7 +56,7 @@ export interface CurrentSourceProjection {
   cases: readonly CurrentCaseRow[];
 }
 
-export const CURRENT_CACHE_PROJECTION_CONTRACT = "tesbo-current-cached-requirement-links-v1";
+export const CURRENT_CACHE_PROJECTION_CONTRACT = "tesbo-current-cached-requirement-links-v2";
 
 /** Explicit disclaimers that must survive even an otherwise comparable capture. */
 export interface CurrentCacheGraphCapture extends GraphCaptureForComparison {
@@ -120,14 +122,17 @@ export function projectCurrentCacheGraph(rows: CurrentSourceProjection): Current
   for (const scope of rows.sourceScopes) {
     if (!scope || !["jira", "linear", "notion"].includes(scope.provider) ||
         !hasText(scope.mappingId) || !hasText(scope.connectionId) ||
-        !hasText(scope.namespace) || !hasText(scope.remoteProjectId)) {
+        !hasText(scope.namespace) || !hasText(scope.remoteProjectId) ||
+        typeof scope.disconnected !== "boolean") {
       diagnostics.push("invalid current source scope");
       continue;
     }
     const key = scope.provider;
     if (scopeKeys.has(key)) diagnostics.push(`ambiguous ${key} source mapping`);
     scopeKeys.add(key);
-    scopes.push([scope.provider, scope.mappingId, scope.connectionId, scope.namespace, scope.remoteProjectId]);
+    if (scope.disconnected) diagnostics.push(`${key} source connection is disconnected`);
+    scopes.push([scope.provider, scope.mappingId, scope.connectionId, scope.namespace, scope.remoteProjectId,
+      scope.disconnected ? "disconnected" : "connected"]);
   }
   scopes.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
   const sourceScopeFingerprint = digest([CURRENT_CACHE_PROJECTION_CONTRACT, rows.projectId, scopes]);
