@@ -37,6 +37,10 @@ describe("current cached requirement projection", () => {
     expect(first).toEqual(reordered);
     expect(JSON.stringify(baseline)).toBe(before);
     expect(first.contractId).toBe(CURRENT_CACHE_PROJECTION_CONTRACT);
+    expect(first.cacheOnly).toBe(true);
+    expect(first.originAttestation).toBe("not_recorded");
+    expect(first.upstreamFreshness).toBe("unverified");
+    expect(first.coverageAssertion).toBe("none");
     expect(first.snapshot?.nodes).toHaveLength(2);
     expect(first.snapshot?.edges[0].type).toBe("references_cached_requirement");
   });
