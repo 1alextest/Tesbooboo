@@ -24388,7 +24388,12 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
      * The correction goes FIRST, before the model's prose, so the two are read in the right order.
      */
     if (decision.actionType === "answer") {
-      const banner = !applied.testcases.length && !applied.liveSavedCount ? this.zyraFalseCompletionBanner(decision.reply, decision.__salvaged) : "";
+      // In "view/find saved test cases", saved modifies an existing-case reference, not a write.
+      // Mask only that token for claim detection, keeping the guard's bounded text windows intact.
+      // Other claims in the same answer are still checked; the persisted prose stays untouched.
+      const claimText = decision.reply.replace(/(\b(?:view|find)\s+)(saved)(?=\s+test\s?cases?\b)/gi,
+        (_match: string, prefix: string, adjective: string) => prefix + " ".repeat(adjective.length));
+      const banner = !applied.testcases.length && !applied.liveSavedCount ? this.zyraFalseCompletionBanner(claimText, decision.__salvaged) : "";
       return banner ? [banner, "", decision.reply].join("\n") + moveSuffix : decision.reply + moveSuffix;
     }
     // Creating an empty suite touches no testcases and is still a complete success — but the reply

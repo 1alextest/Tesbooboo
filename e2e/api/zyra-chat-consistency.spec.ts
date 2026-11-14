@@ -3,6 +3,7 @@ import { startFakeAiServer, type FakeAiServer } from "../utils/fake-ai-server";
 import { exec, literal, scalar } from "../utils/psql";
 import { env } from "../utils/env";
 import { verifyZyraSuiteTurn, withSuiteInsertFailure, type SuiteFeedbackState } from "../utils/zyra-suite-feedback";
+import { ANSWER_MODES, answerRepositorySnapshotSql, seedAnswerRepository, verifyZyraAnswerTurn, type AnswerRepositoryState } from "../utils/zyra-answer-feedback";
 import {
   loginAs,
   provisionRbacTenant,
@@ -578,6 +579,17 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
         } else await run();
       });
     }
+  }
+
+  for (const language of ["en", "ru"] as const) for (const mode of ANSWER_MODES) {
+    test(`Zyra answer reconciliation ${language}: ${mode}`, async () => {
+      const base = `${env.apiBaseUrl}/api/projects/${tenant!.mainProjectId}`;
+      const sql = answerRepositorySnapshotSql.replace(/\$1\b/g, literal(tenant!.mainProjectId));
+      const state = async () => JSON.parse(scalar(`SELECT row_to_json(snapshot)::text FROM (${sql}) snapshot;`)) as AnswerRepositoryState;
+      await seedAnswerRepository(asOwner, base, state);
+      await allocateFakeAiKey();
+      await verifyZyraAnswerTurn({ request: asOwner, ai, base, language, mode, state });
+    });
   }
 
   const GAP_OFFER_REPLY =
