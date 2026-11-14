@@ -46,7 +46,12 @@ export async function verifyBugMetadataWrites(page: Page, api: string, web: stri
     const pending = page.waitForResponse((response) => response.url() === `${api}/api/bugs/${id}` && response.request().method() === "PATCH");
     await page.getByRole("button", { name: "Save Changes", exact: true }).click();
     const response = await pending; expect(response.ok(), await response.text()).toBeTruthy();
-    await expect(form()).toHaveCount(0); return response.request().postDataJSON() as Record<string, unknown>;
+    await expect(form()).toHaveCount(0);
+    // Closing the form precedes Next's async removal of ?edit=1. Reload only after that
+    // navigation commits, otherwise the saved bug correctly reopens in edit mode.
+    await expect(page).toHaveURL((url) => !url.searchParams.has("edit"));
+    await expect(page.getByRole("region", { name: "Bug details", exact: true })).toBeVisible();
+    return response.request().postDataJSON() as Record<string, unknown>;
   }
   await db.connect();
   try {
@@ -118,8 +123,13 @@ export async function verifyBugMetadataWrites(page: Page, api: string, web: stri
       await open(bug.id); await expect(description()).toHaveValue("");
       await form().getByRole("button", { name: "BetterBugs Link", exact: true }).click();
       await expect(betterbugs()).toHaveValue("");
-      await betterbugs().fill("https://example.invalid/replacement-session"); await save(bug.id);
-      await page.reload(); await expect(page.getByRole("link", { name: "https://example.invalid/replacement-session", exact: true })).toBeVisible();
+      const replacement = "https://example.invalid/replacement-session";
+      await betterbugs().fill(replacement);
+      expect(await save(bug.id)).toMatchObject({ betterbugsUrl: replacement });
+      const replaced = await state(bug.id); preserved(after, replaced);
+      expect(replaced.bug).toEqual({ ...after.bug, betterbugs_url: replacement, updated_at: expect.any(Date) });
+      expect(replaced.audit.slice(after.audit.length)).toEqual([expect.objectContaining({ action: "bug_updated", diff: { fields: ["betterbugsUrl"] } })]);
+      await page.reload(); await expect(page.getByRole("link", { name: replacement, exact: true })).toBeVisible();
       expect((await state(bug.id)).attachments).toEqual(before.attachments);
       await capture("bug-edit-cleared-tracker-and-replaced-session");
     });
