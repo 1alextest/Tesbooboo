@@ -3624,7 +3624,16 @@ test.describe("zyra / agents (UI)", () => {
         const requestBase = new URL(`/api/projects/${tenant!.mainProjectId}`, env.apiBaseUrl).toString();
         await verifyZyraReviewCloseFeedback({
           page, request: api, taskUrl: `${requestBase}/agents/zyra/tasks/${taskId}`, language, saveFirst,
-          repositorySnapshot: async () => scalar(`SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id),'[]'::jsonb)::text FROM testcases t WHERE project_id=${literal(tenant!.mainProjectId)};`),
+          settleSavedCases: async (ids) => {
+            await expect.poll(() => Number(scalar(`SELECT COUNT(*) FROM testcases t
+              WHERE t.id=ANY(ARRAY[${ids.map(literal).join(",")}]::uuid[]) AND t.embedding_status='pending' AND EXISTS
+                (SELECT 1 FROM testcase_versions v WHERE v.testcase_id=t.id AND v.snapshot->>'embedding_status'='queued');`)),
+            { message: "keyless save embedding bookkeeping must finish before the close baseline" }).toBe(ids.length);
+          },
+          repositorySnapshot: async () => scalar(`SELECT jsonb_build_object(
+            'cases',COALESCE((SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM testcases t WHERE t.project_id=${literal(tenant!.mainProjectId)}),'[]'::jsonb),
+            'history',COALESCE((SELECT jsonb_agg(to_jsonb(v) ORDER BY v.testcase_id,v.version) FROM testcase_versions v JOIN testcases t ON t.id=v.testcase_id
+              WHERE t.project_id=${literal(tenant!.mainProjectId)}),'[]'::jsonb))::text;`),
         });
         expect(Number(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)};`))).toBe(saveFirst ? 1 : 0);
       });

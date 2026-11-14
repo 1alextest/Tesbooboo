@@ -19,10 +19,11 @@ const COPY = {
 /** Real review UI/HTTP actions on an already-staged fixture; never calls an AI provider. */
 export async function verifyZyraReviewCloseFeedback(input: {
   page: Page; request: APIRequestContext; taskUrl: string; language: "en" | "ru"; saveFirst: boolean;
+  settleSavedCases: (ids: string[]) => Promise<void>;
   repositorySnapshot: () => Promise<unknown>;
   capture?: (stage: string) => Promise<void>;
 }) {
-  const { page, request, taskUrl, language, saveFirst, repositorySnapshot, capture } = input;
+  const { page, request, taskUrl, language, saveFirst, settleSavedCases, repositorySnapshot, capture } = input;
   const copy = COPY[language];
   const task = async () => {
     const response = await request.get(taskUrl);
@@ -39,8 +40,14 @@ export async function verifyZyraReviewCloseFeedback(input: {
     const response = await pending;
     expect(response.ok(), await response.text()).toBeTruthy();
     expect(response.request().postDataJSON()).toEqual({ selectedDraftIndexes: [0] });
-    expect(await response.json()).toMatchObject({ savedCount: 1, remaining: 1 });
+    const result = await response.json();
+    expect(result).toMatchObject({ savedCount: 1, remaining: 1 });
+    expect(result.testcases).toHaveLength(1);
     await expect(page.getByText(copy.saved, { exact: true })).toBeVisible();
+    // Save's post-COMMIT embedding enqueue is fire-and-forget. Wait for this keyless fixture's
+    // queued -> pending worker transition BEFORE the strict close-no-write baseline, not by
+    // dropping timestamps/history from the comparison or sleeping after close.
+    await settleSavedCases(result.testcases.map((row: { id: string }) => row.id));
   }
   const before = await task();
   expect(before).toMatchObject({ taskStatus: "in_review", savedCount: saveFirst ? 1 : 0 });

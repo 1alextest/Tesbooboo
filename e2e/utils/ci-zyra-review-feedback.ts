@@ -9,10 +9,11 @@ export async function verifyCiZyraReviewFeedback(page: Page, api: string, web: s
   const base = `${api}/api/projects/${projectId}`;
   const failures: unknown[] = [];
   await db.connect();
-  const repositorySnapshot = async () => ({
-    cases: (await db.query("SELECT * FROM testcases WHERE project_id=$1 ORDER BY id", [projectId])).rows,
-    history: (await db.query("SELECT v.* FROM testcase_versions v JOIN testcases t ON t.id=v.testcase_id WHERE t.project_id=$1 ORDER BY v.testcase_id,v.version", [projectId])).rows,
-  });
+  // One PostgreSQL statement: cases and history must share a snapshot, not straddle a worker commit.
+  const repositorySnapshot = async () => (await db.query(`SELECT
+    COALESCE((SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM testcases t WHERE t.project_id=$1),'[]'::jsonb) AS cases,
+    COALESCE((SELECT jsonb_agg(to_jsonb(v) ORDER BY v.testcase_id,v.version) FROM testcase_versions v
+      JOIN testcases t ON t.id=v.testcase_id WHERE t.project_id=$1),'[]'::jsonb) AS history`, [projectId])).rows[0] as { cases: Record<string, unknown>[]; history: unknown[] };
   try {
     for (const language of ["en", "ru"] as const) {
       for (const saveFirst of [true, false]) {
@@ -48,10 +49,16 @@ export async function verifyCiZyraReviewFeedback(page: Page, api: string, web: s
             await expect(page.getByText(titles[1], { exact: true })).toBeVisible();
             await verifyZyraReviewCloseFeedback({
               page, request: page.request, taskUrl, language, saveFirst, repositorySnapshot,
+              settleSavedCases: async (ids) => {
+                await expect.poll(async () => (await db.query(`SELECT COUNT(*)::int AS settled FROM testcases t
+                  WHERE t.id=ANY($1::uuid[]) AND t.embedding_status='pending' AND EXISTS
+                    (SELECT 1 FROM testcase_versions v WHERE v.testcase_id=t.id AND v.snapshot->>'embedding_status'='queued')`, [ids])).rows[0].settled,
+                { message: "keyless save embedding bookkeeping must finish before the close baseline" }).toBe(ids.length);
+              },
               capture: async (stage) => { await testInfo.attach(`zyra-${label}-${stage}`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" }); },
             });
             const stored = await repositorySnapshot();
-            const saved = stored.cases.filter((row) => titles.includes(row.title));
+            const saved = stored.cases.filter((row) => titles.includes(String(row.title)));
             expect(saved.map((row) => row.title)).toEqual(saveFirst ? [titles[0]] : []);
             if (saveFirst) expect(saved[0]).toMatchObject({ status: "Draft", description: "Keep review meaning", test_data: "fixture: staged" });
             const task = (await db.query("SELECT * FROM ai_generation_requests WHERE id=$1", [taskId])).rows[0];
