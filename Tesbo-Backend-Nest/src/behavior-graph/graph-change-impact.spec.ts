@@ -64,6 +64,71 @@ describe("diffGraphSnapshots", () => {
     expect(impact.directlyAffectedNodeIds).toEqual(["case", "new-case", "requirement", "unrelated"]);
   });
 
+  it("recognizes a node type change even when its version string is unchanged", () => {
+    const after: GraphSnapshot = {
+      ...baseline,
+      nodes: baseline.nodes.map((node) =>
+        node.id === "requirement" ? { ...node, type: "behavior" } : node
+      )
+    };
+    const impact = diffGraphSnapshots(baseline, after);
+    expect(impact.modifiedNodes).toEqual(["requirement"]);
+    expect(impact.directlyAffectedNodeIds).toEqual(["requirement"]);
+  });
+
+  it("recognizes an edge version-only change without moving its endpoints", () => {
+    const after: GraphSnapshot = {
+      ...baseline,
+      edges: baseline.edges.map((edge) => ({ ...edge, version: "v2" }))
+    };
+    const impact = diffGraphSnapshots(baseline, after);
+    expect(impact.modifiedEdges).toEqual(["covers"]);
+    expect(impact.directlyAffectedNodeIds).toEqual(["case", "requirement"]);
+  });
+
+  it("recognizes an edge type-only change with unchanged version and endpoints", () => {
+    const after: GraphSnapshot = {
+      ...baseline,
+      edges: baseline.edges.map((edge) => ({ ...edge, type: "references" }))
+    };
+    expect(diffGraphSnapshots(baseline, after).modifiedEdges).toEqual(["covers"]);
+  });
+
+  it("recognizes a from-endpoint-only change with unchanged type and version", () => {
+    const after: GraphSnapshot = {
+      ...baseline,
+      edges: baseline.edges.map((edge) => ({ ...edge, from: "unrelated" }))
+    };
+    const impact = diffGraphSnapshots(baseline, after);
+    expect(impact.modifiedEdges).toEqual(["covers"]);
+    expect(impact.directlyAffectedNodeIds).toEqual(["case", "requirement", "unrelated"]);
+  });
+
+  it("recognizes a to-endpoint-only change with unchanged type and version", () => {
+    const after: GraphSnapshot = {
+      ...baseline,
+      edges: baseline.edges.map((edge) => ({ ...edge, to: "unrelated" }))
+    };
+    const impact = diffGraphSnapshots(baseline, after);
+    expect(impact.modifiedEdges).toEqual(["covers"]);
+    expect(impact.directlyAffectedNodeIds).toEqual(["case", "requirement", "unrelated"]);
+  });
+
+  it("returns a stable alphabetical order when multiple nodes are added out of order", () => {
+    const after: GraphSnapshot = {
+      ...baseline,
+      nodes: [
+        ...baseline.nodes,
+        { id: "z-last", type: "behavior", version: "v1" },
+        { id: "a-first", type: "behavior", version: "v1" },
+        { id: "m-middle", type: "behavior", version: "v1" }
+      ]
+    };
+    const impact = diffGraphSnapshots(baseline, after);
+    expect(impact.addedNodes).toEqual(["a-first", "m-middle", "z-last"]);
+    expect(impact.directlyAffectedNodeIds).toEqual(["a-first", "m-middle", "z-last"]);
+  });
+
   it("rejects project crossing even when node identifiers happen to match", () => {
     expect(() => diffGraphSnapshots(baseline, { ...baseline, projectId: "project-b" }))
       .toThrow("different projects");
