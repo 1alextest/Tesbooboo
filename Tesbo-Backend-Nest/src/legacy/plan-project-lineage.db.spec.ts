@@ -171,7 +171,7 @@ const url = process.env.DATABASE_URL ?? "";
     let suiteId: string, caseId: string, planId: string, runId: string, executionId: string, bugId: string, folderId: string, documentId: string;
     let handlers: jest.SpyInstance[], quota: jest.SpyInstance, actor: jest.SpyInstance, tracking: jest.SpyInstance;
     const settings = { isStripeBillingEnabled: true, entitlementCacheEnabled: true, enableRequestScopedCache: true,
-      frontendUrl: "http://127.0.0.1:3000", sessionCookieName: "mcp-native-session" };
+      frontendUrl: "http://127.0.0.1:3000", sessionCookieName: "mcp-native-session", sessionDays: 1 };
     const config = settings as unknown as AppConfigService;
     const cache = new Map<string, string>();
     // Explicit Redis/email collaborators only: real entitlement service, middleware, guards,
@@ -201,8 +201,9 @@ const url = process.env.DATABASE_URL ?? "";
       readToken = (await tokens.issueToken(owner, locked, "Native MCP read", ["read"])).token;
       writeToken = (await tokens.issueToken(owner, locked, "Native MCP write", ["write"])).token;
       writableToken = (await tokens.issueToken(owner, project, "Native writable control", ["read", "write"])).token;
-      session = randomUUID();
-      await setup.query("INSERT INTO sessions (user_id,token_hash,expires_at) VALUES ($1,$2,now()+interval '1 day')", [owner, tokens.hashToken(session)]);
+      const otp = new OtpService(db, config, email, new SessionCacheService(redis, config), {} as WelcomeEmailService);
+      session = await otp.createSession(owner);
+      expect(await otp.resolveSession(session)).toBe(owner);
       suiteId = (await setup.query("INSERT INTO suites (project_id,name) VALUES ($1,'Native locked Suite') RETURNING id", [locked])).rows[0].id;
       caseId = (await setup.query("INSERT INTO testcases (project_id,suite_id,external_id,title,owner_id) VALUES ($1,$2,'LNC-TC-1','Native locked Case',$3) RETURNING id", [locked, suiteId, owner])).rows[0].id;
       planId = (await setup.query("INSERT INTO plans (project_id,name) VALUES ($1,'Native locked Plan') RETURNING id", [locked])).rows[0].id;
@@ -233,7 +234,7 @@ const url = process.env.DATABASE_URL ?? "";
       mcp = module.get(McpService);
       handlers = mcp.listTools().map((tool) => jest.spyOn(tool, "handler"));
       actor = jest.spyOn(mcp, "resolveMcpActorId");
-      const auth = new AuthMiddleware(config, new OtpService(db, config, email, new SessionCacheService(redis, config), {} as WelcomeEmailService), tokens);
+      const auth = new AuthMiddleware(config, otp, tokens);
       const activity = new UserActivityService(db, redis), activityMiddleware = new ActivityMiddleware(activity);
       tracking = jest.spyOn(activity, "recordMutation");
       app.use(cookieParser());
@@ -244,6 +245,13 @@ const url = process.env.DATABASE_URL ?? "";
       app.use(activityMiddleware.use.bind(activityMiddleware));
       await app.listen(0, "127.0.0.1");
       base = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`;
+      // Prove the real cookie is authenticated before using it for MCP session-only
+      // refusals and the human archive escape; do not substitute API-token hashing.
+      const browserRead = await fetch(`${base}/api/projects/${locked}`, {
+        headers: { Cookie: `${settings.sessionCookieName}=${session}` }
+      });
+      expect(browserRead.status).toBe(200);
+      expect((await browserRead.json()).id).toBe(locked);
     });
     beforeEach(async () => {
       settings.isStripeBillingEnabled = true;
