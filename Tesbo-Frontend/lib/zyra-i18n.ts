@@ -158,7 +158,8 @@ const EN = {
   "sum.nothingToStage": "nothing to stage",
   "sum.saved": (p) => `${p.n} saved`,
   "sum.proposed": (p) => `${p.n} proposed for review`,
-  "sum.nothingChanged": "nothing changed",
+  // This summary counts testcases only; suite writes can have happened independently.
+  "sum.nothingChanged": "no test case changes",
   "sum.contextItems": (p) => `${p.n} context items`,
   "sum.attempts": (p) => `${p.n} attempts`,
   "sum.drafted": (p) => `${p.n} drafted`,
@@ -571,7 +572,7 @@ const RU: Record<ZyraTextKey, Entry> = {
   "sum.nothingToStage": "нечего подготавливать",
   "sum.saved": (p) => `сохранено: ${p.n}`,
   "sum.proposed": (p) => `на проверку: ${p.n}`,
-  "sum.nothingChanged": "ничего не изменилось",
+  "sum.nothingChanged": "нет изменений тест-кейсов",
   "sum.contextItems": (p) => `элементов контекста: ${p.n}`,
   "sum.attempts": (p) => `попыток: ${p.n}`,
   "sum.drafted": (p) => `подготовлено: ${p.n}`,
