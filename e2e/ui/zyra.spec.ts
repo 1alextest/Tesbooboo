@@ -8,6 +8,8 @@ import {
   type RbacTenant,
 } from "../utils/rbac-tenant";
 import { startFakeAiServer, type FakeAiServer } from "../utils/fake-ai-server";
+import { verifyZyraReviewCloseFeedback } from "../utils/zyra-review-feedback";
+import { env } from "../utils/env";
 
 /*
  * The Agents screens: the agent picker, Zyra's chat, Zyra's settings, the task board, and the task
@@ -3611,6 +3613,23 @@ test.describe("zyra / agents (UI)", () => {
       .poll(() => scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`))
       .toBe("in_review");
   });
+
+  for (const language of ["en", "ru"] as const) {
+    for (const saveFirst of [true, false]) {
+      test(`Zyra close feedback ${language}: ${saveFirst ? "partial save stays saved" : "closing saves no drafts"}`, async ({ browser }) => {
+        const { taskId, sessionId } = seedChatReviewBatch();
+        exec(`UPDATE zyra_chat_sessions SET language=${literal(language)} WHERE id=${literal(sessionId)};`);
+        exec(`UPDATE ai_generation_requests SET language=${literal(language)} WHERE id=${literal(taskId)};`);
+        const page = await open(browser, "/agents/zyra");
+        const requestBase = new URL(`/api/projects/${tenant!.mainProjectId}`, env.apiBaseUrl).toString();
+        await verifyZyraReviewCloseFeedback({
+          page, request: api, taskUrl: `${requestBase}/agents/zyra/tasks/${taskId}`, language, saveFirst,
+          repositorySnapshot: async () => scalar(`SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id),'[]'::jsonb)::text FROM testcases t WHERE project_id=${literal(tenant!.mainProjectId)};`),
+        });
+        expect(Number(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)};`))).toBe(saveFirst ? 1 : 0);
+      });
+    }
+  }
 
   /*
    * Regression test for the Test Case Repository not reflecting a Zyra save until a manual reload.
