@@ -88,6 +88,16 @@ export async function verifyZyraSuiteTurn(input: {
     const expected = failed ? `${SUITE_OPERATION_ERROR[language]}\n\n${reply}` : reply;
     // Soft only to finish the independent SQL/browser controls on the red baseline; still fails CI.
     expect.soft(message.content).toBe(expected);
+    const users = messages.filter((entry) => entry.role === "user");
+    expect(users).toHaveLength(1);
+    const trace = users[0].trace as { version: number; outcome: string; steps: Array<{ stage: string; status: string; meta?: Record<string, unknown> }> };
+    expect(trace.version).toBe(1);
+    expect(trace.steps.filter((step) => step.stage === "staging")).toHaveLength(1);
+    expect(trace.steps.find((step) => step.stage === "finalizing")?.meta).toMatchObject({ savedCount: 0, proposedCount: 0 });
+    expect(JSON.stringify(trace)).not.toContain("E2E private injected suite failure");
+    // Keep persistence and browser controls running on the failing-first baseline; these still fail CI.
+    expect.soft(trace.outcome).toBe(failed ? "completed_with_errors" : "completed");
+    expect.soft(trace.steps.find((step) => step.stage === "staging")?.status).toBe(failed ? "failed" : "ok");
     await afterReply?.(sessionId, reply, failed ? SUITE_OPERATION_ERROR[language] : null);
   } finally {
     if (sessionId) {

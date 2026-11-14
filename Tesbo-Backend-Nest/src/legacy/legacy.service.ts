@@ -15374,6 +15374,13 @@ export class LegacyService implements OnModuleInit {
       // A confirmed archive is applied now rather than staged — but only when THIS message really is
       // the user's confirmation (zyraIsArchiveConfirmation), never on the model's word alone.
       const applied = await this.applyZyraChatOperations(projectId, uid, sessionId, decision.operations, { archiveConfirmed: this.zyraIsArchiveConfirmation(message), live: decision.liveStaged });
+      // The suite-only path can return normally after a recorded operation error. Report that on
+      // the existing step so the recorder does not label the turn completed without errors. This
+      // neither infers rollback/suite counts nor changes how any operation is applied.
+      if (decision.operations.length && decision.operations.every((op) => op.type === "create_suite") &&
+          applied.activity.some((entry) => entry.title === "An operation failed unexpectedly")) {
+        onStage?.("staging", { status: "failed" }, "update");
+      }
       const activity = [
         { actor: "user", title: "Asked Zyra", detail: message.slice(0, 320), createdAt: new Date().toISOString() },
         ...applied.activity

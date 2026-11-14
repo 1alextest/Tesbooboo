@@ -19,6 +19,7 @@ import type { TestcasesListCacheService } from "../cache/testcases-list-cache.se
 import type { ProjectOverviewCacheService } from "../cache/project-overview-cache.service";
 import { runInZyraLanguage } from "./zyra-language-context";
 import * as aiTrace from "../observability/ai-trace";
+import { ZyraTurnTraceRecorder } from "./zyra-turn-trace";
 
 process.env.SECRETS_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
 
@@ -135,6 +136,35 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
     const failure = applied.activity.find((entry) => entry.title === "An operation failed unexpectedly");
     expect(failure?.detail).toContain("create suite");
     expect(failure?.detail).not.toContain("connection reset");
+  });
+
+  it.each(["failed", "partial", "created", "reused"] as const)("suite trace: %s reflects actual operation errors, not zero testcase counts", async (mode) => {
+    const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
+    const operations = [{ type: "create_suite", suiteName: "First Suite" }];
+    if (mode === "partial") operations.push({ type: "create_suite", suiteName: "Second Suite" });
+    const resolve = jest.spyOn(svc as unknown as { resolveOrCreateSuiteByName: (...a: unknown[]) => Promise<unknown> }, "resolveOrCreateSuiteByName");
+    if (mode === "failed") resolve.mockRejectedValue(new Error("private suite failure"));
+    else {
+      resolve.mockResolvedValueOnce({ id: "suite-1", name: "First Suite", created: mode !== "reused" });
+      if (mode === "partial") resolve.mockRejectedValueOnce(new Error("private suite failure"));
+    }
+    // Script the decision and message/session I/O; compose the real pipeline, operation application
+    // and recorder. This is service-collaborator evidence, not HTTP/PostgreSQL/stream delivery proof.
+    jest.spyOn(svc as unknown as { buildZyraChatDecision: (...a: unknown[]) => Promise<unknown> }, "buildZyraChatDecision")
+      .mockResolvedValue({ reply: "Suite routing fixture", actionType: "suite", operations, testcases: [] });
+    jest.spyOn(svc as unknown as { insertZyraAssistantMessage: (...a: unknown[]) => Promise<unknown> }, "insertZyraAssistantMessage")
+      .mockResolvedValue({ id: "assistant-1", status: "completed" });
+    jest.spyOn(svc, "zyraChatSession").mockResolvedValue({ messages: [] });
+    const recorder = new ZyraTurnTraceRecorder();
+    await (svc as unknown as { executeZyraChatTurn: (...a: unknown[]) => Promise<unknown> }).executeZyraChatTurn({
+      projectId: "project-1", userId: "user-1", uid: "user-1", sessionId: "session-1",
+      message: "Create the requested suites", userMessageId: "turn-1", sessionRow: {}
+    }, recorder.onStage);
+    const trace = recorder.finish(), failed = mode === "failed" || mode === "partial";
+    expect(trace.steps.find((step) => step.stage === "finalizing")?.meta).toEqual({ savedCount: 0, proposedCount: 0 });
+    expect(JSON.stringify(trace)).not.toContain("private suite failure");
+    expect({ stagingStatus: trace.steps.find((step) => step.stage === "staging")?.status, outcome: trace.outcome })
+      .toEqual({ stagingStatus: failed ? "failed" : "ok", outcome: failed ? "completed_with_errors" : "completed" });
   });
 
   for (const language of ["en", "ru"] as const) {

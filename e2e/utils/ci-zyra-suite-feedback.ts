@@ -40,13 +40,38 @@ export async function verifyCiZyraSuiteFeedback(page: Page, api: string, web: st
             }
             const run = () => verifyZyraSuiteTurn({
               request: page.request, ai, base, language, mode, names, state, ownerId,
-              afterReply: async (_sessionId, reply, warning) => {
+              afterReply: async (sessionId, reply, warning) => {
+                const read = await page.request.get(`${base}/agents/zyra/chat/sessions/${sessionId}`);
+                expect(read.ok(), await read.text()).toBeTruthy();
+                const session = await read.json();
+                await testInfo.attach(`suite-${label}-stored-trace`, {
+                  body: JSON.stringify({ language: session.language, messages: session.messages.map((message: Record<string, unknown>) => ({
+                    role: message.role, content: message.content, trace: message.trace, activity: message.activity,
+                  })) }, null, 2), contentType: "application/json",
+                });
+                const noCaseChanges = language === "en" ? "no test case changes" : "нет изменений тест-кейсов";
+                const trace = page.locator("[data-zyra-trace]");
+                const verifyTrace = async () => {
+                  await expect(trace).toBeVisible();
+                  // The settled trace and message render together. Snapshot known-final values so
+                  // expected red mismatches do not spend a timeout per assertion or skip controls.
+                  expect.soft(await trace.getAttribute("data-zyra-trace")).toBe(warning ? "completed_with_errors" : "completed");
+                  const summary = await trace.locator("summary").innerText();
+                  expect.soft(summary).toContain(warning ? "[DONE · WITH ERRORS]" : "[DONE]");
+                  expect.soft(summary).toContain(noCaseChanges);
+                };
                 await page.goto(`${web}/projects/${projectId}/agents/zyra`);
                 await expect(page.getByText(reply, { exact: true })).toBeVisible();
                 if (warning) await expect.soft(page.getByText(warning, { exact: true })).toBeVisible();
+                await verifyTrace();
                 await page.reload();
                 await expect(page.getByText(reply, { exact: true })).toBeVisible();
+                await verifyTrace();
                 await testInfo.attach(`suite-${label}`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+                await trace.locator("summary").click();
+                expect.soft(await trace.locator('[data-zyra-step="staging"]').getAttribute("data-zyra-step-status")).toBe(warning ? "failed" : "ok");
+                expect.soft(await trace.locator('[data-zyra-step="finalizing"]').innerText()).toContain(noCaseChanges);
+                await testInfo.attach(`suite-${label}-expanded`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
               },
             });
             if (mode === "failed" || mode === "partial") {
