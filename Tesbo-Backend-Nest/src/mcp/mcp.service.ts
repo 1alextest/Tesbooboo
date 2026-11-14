@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
+import { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import type { ApiTokenContext } from "../common/request.types";
 import { buildMcpTools } from "./mcp.tools";
 import {
@@ -25,10 +26,11 @@ import {
  * Tesbo MCP — protocol engine.
  *
  * Handles a single JSON-RPC 2.0 request against the MCP surface (initialize / tools/list /
- * tools/call / ping) for a project-scoped API token. Two guarantees enforced here, before any
+ * tools/call / ping) for a project-scoped API token. Three guarantees enforced here, before any
  * tool handler runs, close the gaps left open by the auth foundation (88a2505):
  *   1. Project scope — the token's project must match the project on the request URL.
  *   2. Tool scope    — a write tool requires the token to carry the "write" scope.
+ *   3. Writability   — write tools obey the existing project plan lock; reads/discovery do not.
  *
  * Writes are attributed to a dedicated "tesbo-mcp" agent actor (seeded in V65) so machine
  * activity is distinguishable from human and Zyra activity in audit history.
@@ -61,7 +63,8 @@ export class McpService {
 
   constructor(
     private readonly legacy: LegacyService,
-    private readonly db: DatabaseService
+    private readonly db: DatabaseService,
+    private readonly planLimits: PlanLimitsService
   ) {}
 
   /** Actor id for the well-known "tesbo-mcp" agent (V65), used to attribute token-authed writes. */
@@ -137,8 +140,10 @@ export class McpService {
         throw new McpError(RpcCode.ProjectScopeDenied, "API token has no current project member");
       }
       // Project membership and active workspace may have changed since token issuance.
+      let organizationId: string;
       try {
-        await this.legacy.requireProjectAccess(principal.userId, principal.projectId);
+        const project = await this.legacy.requireProjectAccess(principal.userId, principal.projectId);
+        organizationId = project.organization_id;
       } catch (err) {
         if (err instanceof NotFoundException || err instanceof ForbiddenException || err instanceof UnauthorizedException) {
           throw new McpError(RpcCode.ProjectScopeDenied, "API token issuer no longer has access to this project");
@@ -147,7 +152,7 @@ export class McpService {
       }
 
       const params = (req.params ?? {}) as Record<string, unknown>;
-      const result = await this.dispatch(req.method, params, principal);
+      const result = await this.dispatch(req.method, params, principal, organizationId);
       return { jsonrpc: "2.0", id, result };
     } catch (err) {
       return this.toErrorResponse(id, err);
@@ -157,7 +162,8 @@ export class McpService {
   private async dispatch(
     method: string,
     params: Record<string, unknown>,
-    principal: ApiTokenContext
+    principal: ApiTokenContext,
+    organizationId: string
   ): Promise<unknown> {
     switch (method) {
       case "initialize": {
@@ -183,14 +189,14 @@ export class McpService {
         return { tools: this.listToolsPayload() };
 
       case "tools/call":
-        return this.callTool(params, principal);
+        return this.callTool(params, principal, organizationId);
 
       default:
         throw new McpError(RpcCode.MethodNotFound, `Unknown method: ${method}`);
     }
   }
 
-  private async callTool(params: Record<string, unknown>, principal: ApiTokenContext): Promise<unknown> {
+  private async callTool(params: Record<string, unknown>, principal: ApiTokenContext, organizationId: string): Promise<unknown> {
     const name = typeof params.name === "string" ? params.name : "";
     const tool = this.toolsByName.get(name);
     if (!tool) {
@@ -203,6 +209,20 @@ export class McpService {
         RpcCode.ScopeDenied,
         `Tool "${name}" requires "${tool.requiredScope}" scope; token has [${scopes.join(", ") || "none"}]`
       );
+    }
+
+    // Both transports reach this same boundary after project membership and token scope.
+    // Check once before actor resolution or any handler (including partial batches/clones).
+    if (tool.requiredScope === "write") {
+      try {
+        await this.planLimits.assertProjectWritable(organizationId, principal.projectId as string);
+      } catch (err) {
+        if (err instanceof ForbiddenException) {
+          throw new McpError(RpcCode.ToolExecutionError, this.extractMessage(err));
+        }
+        // An entitlement lookup failure is not a plan denial or a successful tool call.
+        throw err;
+      }
     }
 
     const rawArgs = params.arguments;

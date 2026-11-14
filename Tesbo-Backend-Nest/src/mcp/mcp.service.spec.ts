@@ -1,6 +1,7 @@
 import { McpService } from "./mcp.service";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
+import type { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import type { ApiTokenContext } from "../common/request.types";
 import { MCP_PROTOCOL_VERSION, MCP_SERVER_INSTRUCTIONS, MCP_SERVER_NAME, RpcCode } from "./mcp.types";
 
@@ -8,7 +9,7 @@ import { MCP_PROTOCOL_VERSION, MCP_SERVER_INSTRUCTIONS, MCP_SERVER_NAME, RpcCode
 function makeLegacy(overrides: Partial<Record<string, jest.Mock>> = {}) {
   return {
     getProject: jest.fn().mockResolvedValue({ id: "proj-1", name: "Demo" }),
-    requireProjectAccess: jest.fn().mockResolvedValue({ id: "proj-1" }),
+    requireProjectAccess: jest.fn().mockResolvedValue({ id: "proj-1", organization_id: "org-1" }),
     listTestCases: jest.fn().mockResolvedValue({ rows: [{ id: "tc-1" }], total: 1 }),
     createTestCase: jest.fn().mockResolvedValue({ id: "tc-new" }),
     updateTestCase: jest.fn().mockResolvedValue(undefined),
@@ -126,6 +127,10 @@ function makeDb(
   return { db: { query } as unknown as DatabaseService, query };
 }
 
+// Existing contract cases use an explicitly writable entitlement collaborator. Billing-enabled
+// route/registry/state coverage lives in the selected migrated-PostgreSQL suite, not this double.
+const writableLimits = { assertProjectWritable: jest.fn().mockResolvedValue(undefined) } as unknown as PlanLimitsService;
+
 function principal(over: Partial<ApiTokenContext> = {}): ApiTokenContext {
   return { tokenId: "tok-1", userId: "user-1", projectId: "proj-1", scopes: ["read", "write"], ...over };
 }
@@ -141,7 +146,7 @@ describe("McpService", () => {
   describe("protocol handshake & discovery", () => {
     it("initialize advertises protocol version, capabilities and server info", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("initialize"), principal(), "proj-1");
       expect(res.result.protocolVersion).toBe(MCP_PROTOCOL_VERSION);
       expect(res.result.serverInfo.name).toBe(MCP_SERVER_NAME);
@@ -152,7 +157,7 @@ describe("McpService", () => {
 
     it("initialize echoes a supported client protocol version and falls back to the default otherwise", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const version = async (protocolVersion?: string) =>
         ((await svc.handleRequest(rpc("initialize", protocolVersion ? { protocolVersion } : {}), principal(), "proj-1")) as any).result.protocolVersion;
       expect(await version("2025-06-18")).toBe("2025-06-18");
@@ -165,7 +170,7 @@ describe("McpService", () => {
 
     it("serverInfo.version carries the deploy and a fingerprint of the tool set", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("initialize"), principal(), "proj-1");
       expect(res.result.serverInfo.version).toBe(svc.serverVersion);
       expect(svc.serverVersion).toMatch(/^0\.1\.0\+[^.]+\.[0-9a-f]{16}$/);
@@ -173,14 +178,14 @@ describe("McpService", () => {
 
     it("a session id is current only for the tool set it was issued against", () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const id = svc.newSessionId();
       expect(svc.isCurrentSession(id)).toBe(true);
       // Each initialize gets its own id.
       expect(svc.newSessionId()).not.toBe(id);
       // Another process built from the same code (the other blue/green color, a replica) must
       // accept it — the fingerprint is derived from the tools, not from the process.
-      expect(new McpService(makeLegacy(), db).isCurrentSession(id)).toBe(true);
+      expect(new McpService(makeLegacy(), db, writableLimits).isCurrentSession(id)).toBe(true);
       // Issued by a build whose tools differed: stale, so the client is told to re-initialize.
       expect(svc.isCurrentSession(`0000000000000000.${id.split(".")[1]}`)).toBe(false);
       expect(svc.isCurrentSession("not-a-tesbo-session")).toBe(false);
@@ -197,14 +202,14 @@ describe("McpService", () => {
 
     it("ping returns an empty result", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("ping"), principal(), "proj-1");
       expect(res.result).toEqual({});
     });
 
     it("tools/list returns every registered tool with a name, description and inputSchema", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
       const names = res.result.tools.map((t: any) => t.name);
       expect(names).toEqual(
@@ -271,21 +276,21 @@ describe("McpService", () => {
   describe("request validation", () => {
     it("rejects a non-2.0 payload with InvalidRequest", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest({ method: "ping" }, principal(), "proj-1");
       expect(res.error.code).toBe(RpcCode.InvalidRequest);
     });
 
     it("returns MethodNotFound for an unknown method", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("resources/list"), principal(), "proj-1");
       expect(res.error.code).toBe(RpcCode.MethodNotFound);
     });
 
     it("echoes back the request id on errors", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("nope", {}, 99), principal(), "proj-1");
       expect(res.id).toBe(99);
     });
@@ -294,14 +299,14 @@ describe("McpService", () => {
   describe("project scope enforcement", () => {
     it("denies when the token's project differs from the URL project", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/list"), principal({ projectId: "proj-1" }), "proj-2");
       expect(res.error.code).toBe(RpcCode.ProjectScopeDenied);
     });
 
     it("denies when the token carries no project scope", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/list"), principal({ projectId: null }), "proj-1");
       expect(res.error.code).toBe(RpcCode.ProjectScopeDenied);
     });
@@ -311,7 +316,7 @@ describe("McpService", () => {
     it("checks project membership for MCP discovery", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
       expect(legacy.requireProjectAccess).toHaveBeenCalledWith("user-1", "proj-1");
     });
@@ -321,7 +326,7 @@ describe("McpService", () => {
       const legacy = makeLegacy({
         requireProjectAccess: jest.fn().mockRejectedValue(new (require("@nestjs/common").NotFoundException)("revoked"))
       });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "list_testcases", arguments: {} }),
         principal(),
@@ -336,7 +341,7 @@ describe("McpService", () => {
     it("blocks a write tool when the token only has read scope", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "create_suite", arguments: { name: "S" } }),
         principal({ scopes: ["read"] }),
@@ -348,7 +353,7 @@ describe("McpService", () => {
 
     it("allows a read tool for a read-only token", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "list_testcases", arguments: {} }),
         principal({ scopes: ["read"] }),
@@ -361,7 +366,7 @@ describe("McpService", () => {
   describe("tools/call dispatch & result shape", () => {
     it("returns MethodNotFound for an unknown tool name", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/call", { name: "delete_everything" }), principal(), "proj-1");
       expect(res.error.code).toBe(RpcCode.MethodNotFound);
     });
@@ -369,7 +374,7 @@ describe("McpService", () => {
     it("wraps a read result as an MCP text content part", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/call", { name: "list_projects" }), principal(), "proj-1");
       expect((legacy as any).getProject).toHaveBeenCalledWith("proj-1");
       expect(res.result.isError).toBe(false);
@@ -380,7 +385,7 @@ describe("McpService", () => {
     it("passes the token's project (not a client-supplied one) into list_testcases", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(
         rpc("tools/call", { name: "list_testcases", arguments: { status: "Active" } }),
         principal(),
@@ -392,7 +397,7 @@ describe("McpService", () => {
     it("passes the token's project and user into search_knowledge_base", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(
         rpc("tools/call", { name: "search_knowledge_base", arguments: { q: "login" } }),
         principal({ userId: "user-7" }),
@@ -410,7 +415,7 @@ describe("McpService", () => {
       // module doc comment, since those columns reference users(id) rather than actors(id).
       const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(
         rpc("tools/call", { name: "create_knowledge_document", arguments: { title: "Runbook", folderId: "folder-1" } }),
         principal({ userId: "user-7" }),
@@ -424,7 +429,7 @@ describe("McpService", () => {
 
     it("rejects create_knowledge_document without folderId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "create_knowledge_document", arguments: { title: "Runbook" } }),
         principal(),
@@ -437,7 +442,7 @@ describe("McpService", () => {
     it("passes documentId and args through to update_knowledge_document", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(
         rpc("tools/call", { name: "update_knowledge_document", arguments: { documentId: "doc-1", title: "New title" } }),
         principal({ userId: "user-7" }),
@@ -451,7 +456,7 @@ describe("McpService", () => {
 
     it("rejects update_knowledge_document without documentId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "update_knowledge_document", arguments: { title: "New title" } }),
         principal(),
@@ -468,7 +473,7 @@ describe("McpService", () => {
           getResponse: () => ({ error: "synced from Jira and its body can't be edited" })
         })
       });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "update_knowledge_document", arguments: { documentId: "doc-1", title: "x" } }),
         principal(),
@@ -481,7 +486,7 @@ describe("McpService", () => {
     it("passes documentId and folderId through to move_knowledge_document", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(
         rpc("tools/call", { name: "move_knowledge_document", arguments: { documentId: "doc-1", folderId: "folder-2" } }),
         principal({ userId: "user-7" }),
@@ -495,7 +500,7 @@ describe("McpService", () => {
 
     it("rejects move_knowledge_document without folderId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "move_knowledge_document", arguments: { documentId: "doc-1" } }),
         principal(),
@@ -508,7 +513,7 @@ describe("McpService", () => {
     it("passes the token's user through to create_knowledge_folder", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(
         rpc("tools/call", { name: "create_knowledge_folder", arguments: { name: "Release Notes 2" } }),
         principal({ userId: "user-7" }),
@@ -521,7 +526,7 @@ describe("McpService", () => {
 
     it("rejects create_knowledge_folder without name", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "create_knowledge_folder", arguments: {} }),
         principal(),
@@ -534,7 +539,7 @@ describe("McpService", () => {
     it("passes folderId and args through to update_knowledge_folder", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(
         rpc("tools/call", { name: "update_knowledge_folder", arguments: { folderId: "folder-1", name: "Renamed" } }),
         principal({ userId: "user-7" }),
@@ -548,7 +553,7 @@ describe("McpService", () => {
 
     it("rejects update_knowledge_folder without folderId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "update_knowledge_folder", arguments: { name: "Renamed" } }),
         principal(),
@@ -561,7 +566,7 @@ describe("McpService", () => {
     it("passes folderId and parentFolderId through to move_knowledge_folder", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(
         rpc("tools/call", { name: "move_knowledge_folder", arguments: { folderId: "folder-1", parentFolderId: "folder-2" } }),
         principal({ userId: "user-7" }),
@@ -575,7 +580,7 @@ describe("McpService", () => {
 
     it("rejects move_knowledge_folder without parentFolderId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "move_knowledge_folder", arguments: { folderId: "folder-1" } }),
         principal(),
@@ -592,7 +597,7 @@ describe("McpService", () => {
           getResponse: () => ({ error: "You can only modify items you created" })
         })
       });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "move_knowledge_folder", arguments: { folderId: "folder-1", parentFolderId: "folder-2" } }),
         principal(),
@@ -607,7 +612,7 @@ describe("McpService", () => {
     it("lists and gets a Knowledge Base document, passing the token's project and user through", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
 
       const listRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "list_knowledge_documents", arguments: { documentType: "general" } }),
@@ -628,7 +633,7 @@ describe("McpService", () => {
 
     it("rejects get_knowledge_document without documentId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_knowledge_document", arguments: {} }),
         principal(),
@@ -643,7 +648,7 @@ describe("McpService", () => {
       const legacy = makeLegacy({
         getKnowledgeDocument: jest.fn().mockRejectedValue({ getResponse: () => ({ error: "Document not found" }) })
       });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_knowledge_document", arguments: { documentId: "ghost" } }),
         principal(),
@@ -663,7 +668,7 @@ describe("McpService", () => {
         getKnowledgeDocument: jest.fn().mockRejectedValue({ getResponse: () => ({ error: "Document not found" }) }),
         getKnowledgeFolder: jest.fn().mockRejectedValue({ getResponse: () => ({ error: "Folder not found" }) })
       });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const docRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_knowledge_document", arguments: { documentId: "foreign-doc" } }),
         principal(),
@@ -684,7 +689,7 @@ describe("McpService", () => {
     it("lists the folder tree and gets one folder, passing the token's project and user through", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
 
       const treeRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "list_knowledge_folders", arguments: {} }),
@@ -706,7 +711,7 @@ describe("McpService", () => {
 
     it("rejects get_knowledge_folder without folderId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_knowledge_folder", arguments: {} }),
         principal(),
@@ -719,7 +724,7 @@ describe("McpService", () => {
     it("archives a Knowledge Base document, passing the token's project and user through", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "archive_knowledge_document", arguments: { documentId: "kb-doc-1" } }),
         principal({ userId: "user-7" }),
@@ -731,7 +736,7 @@ describe("McpService", () => {
 
     it("rejects archive_knowledge_document without documentId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "archive_knowledge_document", arguments: {} }),
         principal(),
@@ -749,7 +754,7 @@ describe("McpService", () => {
       const legacy = makeLegacy({
         deleteKnowledgeDocument: jest.fn().mockRejectedValue({ getResponse: () => ({ error: "Document not found" }) })
       });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "archive_knowledge_document", arguments: { documentId: "kb-doc-1" } }),
         principal(),
@@ -766,7 +771,7 @@ describe("McpService", () => {
           getResponse: () => ({ error: '"Zyra AI Memory" is managed by Zyra and can\'t be deleted' })
         })
       });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "archive_knowledge_document", arguments: { documentId: "kb-doc-1" } }),
         principal(),
@@ -779,7 +784,7 @@ describe("McpService", () => {
     it("restores a Knowledge Base document, passing the token's project and user through", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "restore_knowledge_document", arguments: { documentId: "kb-doc-1" } }),
         principal({ userId: "user-7" }),
@@ -791,7 +796,7 @@ describe("McpService", () => {
 
     it("rejects restore_knowledge_document without documentId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "restore_knowledge_document", arguments: {} }),
         principal(),
@@ -806,7 +811,7 @@ describe("McpService", () => {
       const legacy = makeLegacy({
         restoreKnowledgeDocument: jest.fn().mockResolvedValue({ id: "kb-doc-1", title: "Doc 1", isDeleted: false, deletedAt: null })
       });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "restore_knowledge_document", arguments: { documentId: "kb-doc-1" } }),
         principal(),
@@ -823,7 +828,7 @@ describe("McpService", () => {
           getResponse: () => ({ error: "Only owners and managers can perform this action" })
         })
       });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "restore_knowledge_document", arguments: { documentId: "kb-doc-1" } }),
         principal(),
@@ -836,7 +841,7 @@ describe("McpService", () => {
     it("blocks archive_knowledge_document/restore_knowledge_document for a read-scoped token", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const archiveRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "archive_knowledge_document", arguments: { documentId: "kb-doc-1" } }),
         principal({ scopes: ["read"] }),
@@ -859,7 +864,7 @@ describe("McpService", () => {
     it("attributes create_testcase writes to the resolved MCP agent actor", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(
         rpc("tools/call", { name: "create_testcase", arguments: { title: "Login works" } }),
         principal(),
@@ -870,7 +875,7 @@ describe("McpService", () => {
 
     it("does not resolve an actor for read tools", async () => {
       const { db, query } = makeDb({ mcpActorId: "mcp-actor-1" });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       await svc.handleRequest(rpc("tools/call", { name: "get_requirement_matrix" }), principal(), "proj-1");
       const actorLookups = query.mock.calls.filter((c) => String(c[0]).includes("FROM actors a JOIN agents g"));
       expect(actorLookups).toHaveLength(0);
@@ -878,7 +883,7 @@ describe("McpService", () => {
 
     it("caches the MCP actor lookup across calls", async () => {
       const { db, query } = makeDb({ mcpActorId: "mcp-actor-1" });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       await svc.handleRequest(rpc("tools/call", { name: "create_suite", arguments: { name: "A" } }), principal(), "proj-1");
       await svc.handleRequest(rpc("tools/call", { name: "create_suite", arguments: { name: "B" } }), principal(), "proj-1");
       const actorLookups = query.mock.calls.filter((c) => String(c[0]).includes("FROM actors a JOIN agents g"));
@@ -888,7 +893,7 @@ describe("McpService", () => {
     it("reports bugs under the token's user, not the agent actor", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(
         rpc("tools/call", { name: "create_bug", arguments: { title: "Broken" } }),
         principal({ userId: "user-7" }),
@@ -902,7 +907,7 @@ describe("McpService", () => {
     it("records a result when the execution belongs to the token's project", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", executionProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "record_execution_result", arguments: { executionId: "ex-1", status: "Passed" } }),
         principal(),
@@ -922,7 +927,7 @@ describe("McpService", () => {
     it("denies recording a result for an execution in another project", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", executionProject: "proj-OTHER" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "record_execution_result", arguments: { executionId: "ex-1", status: "Passed" } }),
         principal(),
@@ -934,7 +939,7 @@ describe("McpService", () => {
 
     it("returns a tool error when the execution does not exist", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", executionProject: undefined });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "record_execution_result", arguments: { executionId: "ghost", status: "Passed" } }),
         principal(),
@@ -949,7 +954,7 @@ describe("McpService", () => {
     it("returns a test case when it belongs to the token's project", async () => {
       const { db } = makeDb({ testcaseProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_testcase", arguments: { testcaseId: "tc-1" } }),
         principal(),
@@ -962,7 +967,7 @@ describe("McpService", () => {
     it("denies reading a test case that belongs to another project", async () => {
       const { db } = makeDb({ testcaseProject: "proj-OTHER" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_testcase", arguments: { testcaseId: "tc-1" } }),
         principal(),
@@ -974,7 +979,7 @@ describe("McpService", () => {
 
     it("returns a tool error when the test case does not exist", async () => {
       const { db } = makeDb({ testcaseProject: undefined });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_testcase", arguments: { testcaseId: "ghost" } }),
         principal(),
@@ -986,7 +991,7 @@ describe("McpService", () => {
 
     it("rejects get_testcase without testcaseId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/call", { name: "get_testcase", arguments: {} }), principal(), "proj-1");
       expect(res.error.code).toBe(RpcCode.ToolExecutionError);
       expect(res.error.message).toMatch(/"testcaseId"/i);
@@ -997,7 +1002,7 @@ describe("McpService", () => {
     it("updates a test case when it belongs to the token's project, attributed to the agent actor", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "update_testcase", arguments: { testcaseId: "tc-1", title: "New title" } }),
         principal({ userId: "user-1" }),
@@ -1017,7 +1022,7 @@ describe("McpService", () => {
     it("denies updating a test case that belongs to another project", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-OTHER" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "update_testcase", arguments: { testcaseId: "tc-1", title: "New title" } }),
         principal(),
@@ -1029,7 +1034,7 @@ describe("McpService", () => {
 
     it("returns a tool error when updating a test case that does not exist", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: undefined });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "update_testcase", arguments: { testcaseId: "ghost", title: "x" } }),
         principal(),
@@ -1041,7 +1046,7 @@ describe("McpService", () => {
 
     it("rejects update_testcase without testcaseId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "update_testcase", arguments: { title: "x" } }),
         principal(),
@@ -1057,7 +1062,7 @@ describe("McpService", () => {
     it("archives a test case by setting status to Archived, attributed to the agent actor", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "archive_testcase", arguments: { testcaseId: "tc-1" } }),
         principal(),
@@ -1075,7 +1080,7 @@ describe("McpService", () => {
     it("restores a test case by setting status to Draft, attributed to the agent actor", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "restore_testcase", arguments: { testcaseId: "tc-1" } }),
         principal(),
@@ -1091,7 +1096,7 @@ describe("McpService", () => {
     it("does not fetch or override suiteId/ownerId when the caller already supplied both", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(
         rpc("tools/call", {
           name: "update_testcase",
@@ -1113,7 +1118,7 @@ describe("McpService", () => {
     it("respects an explicit null suiteId (unassign from suite) instead of preserving the current one", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(
         rpc("tools/call", { name: "update_testcase", arguments: { testcaseId: "tc-1", suiteId: null, ownerId: null } }),
         principal(),
@@ -1125,7 +1130,7 @@ describe("McpService", () => {
     it("denies archiving and restoring a test case that belongs to another project", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-OTHER" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
 
       const archiveRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "archive_testcase", arguments: { testcaseId: "tc-1" } }),
@@ -1145,7 +1150,7 @@ describe("McpService", () => {
 
     it("returns a tool error for archive_testcase/restore_testcase on a test case that does not exist", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: undefined });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const archiveRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "archive_testcase", arguments: { testcaseId: "ghost" } }),
         principal(),
@@ -1165,7 +1170,7 @@ describe("McpService", () => {
 
     it("rejects archive_testcase and restore_testcase without testcaseId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       expect(
         (await svc.handleRequest(rpc("tools/call", { name: "archive_testcase", arguments: {} }), principal(), "proj-1") as any).error
           .message
@@ -1181,7 +1186,7 @@ describe("McpService", () => {
     it("duplicates a test case, attributed to the agent actor, without altering the original", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "duplicate_testcase", arguments: { testcaseId: "tc-1" } }),
         principal(),
@@ -1198,7 +1203,7 @@ describe("McpService", () => {
     it("denies duplicate_testcase for a test case belonging to another project", async () => {
       const { db } = makeDb({ testcaseProject: "proj-OTHER" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "duplicate_testcase", arguments: { testcaseId: "tc-1" } }),
         principal(),
@@ -1210,7 +1215,7 @@ describe("McpService", () => {
 
     it("returns a tool error when duplicating a test case that does not exist, and rejects a missing testcaseId", async () => {
       const { db } = makeDb({ testcaseProject: undefined });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "duplicate_testcase", arguments: { testcaseId: "ghost" } }),
         principal(),
@@ -1234,7 +1239,7 @@ describe("McpService", () => {
           .mockRejectedValueOnce({ getResponse: () => ({ error: "Title must be 512 characters or fewer" }) })
           .mockResolvedValueOnce({ id: "tc-c" })
       });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", {
           name: "bulk_create_testcases",
@@ -1260,7 +1265,7 @@ describe("McpService", () => {
     it("reports a per-item failure for a missing title without needing the legacy call to reject", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "bulk_create_testcases", arguments: { testcases: [{ title: "Fine" }, {}] } }),
         principal(),
@@ -1276,7 +1281,7 @@ describe("McpService", () => {
 
     it("rejects an empty or over-limit testcases array", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const empty: any = await svc.handleRequest(
         rpc("tools/call", { name: "bulk_create_testcases", arguments: { testcases: [] } }),
         principal(),
@@ -1296,7 +1301,7 @@ describe("McpService", () => {
     it("accepts a large batch at the limit, creating every item", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
       const legacy = makeLegacy({ createTestCase: jest.fn().mockResolvedValue({ id: "tc-x" }) });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const atLimit = Array.from({ length: 500 }, (_, i) => ({ title: `T${i}` }));
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "bulk_create_testcases", arguments: { testcases: atLimit } }),
@@ -1312,7 +1317,7 @@ describe("McpService", () => {
     it("rejects bulk_create_testcases for a read-scoped token", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "bulk_create_testcases", arguments: { testcases: [{ title: "X" }] } }),
         principal({ scopes: ["read"] }),
@@ -1327,7 +1332,7 @@ describe("McpService", () => {
     it("applies one update to every valid id and reports invalid ids as per-item failures", async () => {
       const { db } = makeDb({ ownedTestcaseIds: ["tc-1", "tc-2"] });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", {
           name: "bulk_update_testcases",
@@ -1360,7 +1365,7 @@ describe("McpService", () => {
     it("deduplicates repeated ids in the input before applying and reporting", async () => {
       const { db } = makeDb({ ownedTestcaseIds: ["tc-1"] });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "bulk_update_testcases", arguments: { testcaseIds: ["tc-1", "tc-1", "tc-1"], priority: "Low" } }),
         principal(),
@@ -1375,7 +1380,7 @@ describe("McpService", () => {
     it("never calls bulkUpdateTestCases at all when every id is invalid (no unintended update)", async () => {
       const { db } = makeDb({ ownedTestcaseIds: [] });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "bulk_update_testcases", arguments: { testcaseIds: ["tc-ghost-1", "tc-ghost-2"], priority: "High" } }),
         principal(),
@@ -1390,7 +1395,7 @@ describe("McpService", () => {
     it("bulk-archives valid ids by setting status to Archived, leaving invalid ids untouched", async () => {
       const { db } = makeDb({ ownedTestcaseIds: ["tc-1", "tc-2"] });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "bulk_archive_testcases", arguments: { testcaseIds: ["tc-1", "tc-2", "tc-ghost"] } }),
         principal({ userId: "user-7" }),
@@ -1408,7 +1413,7 @@ describe("McpService", () => {
 
     it("rejects an empty or over-limit testcaseIds array for both tools", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       for (const name of ["bulk_update_testcases", "bulk_archive_testcases"]) {
         const empty: any = await svc.handleRequest(rpc("tools/call", { name, arguments: { testcaseIds: [] } }), principal(), "proj-1");
         expect(empty.error.message).toMatch(/non-empty array/i);
@@ -1425,7 +1430,7 @@ describe("McpService", () => {
     it("rejects bulk_update_testcases and bulk_archive_testcases for a read-scoped token", async () => {
       const { db } = makeDb({ ownedTestcaseIds: ["tc-1"] });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const updateRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "bulk_update_testcases", arguments: { testcaseIds: ["tc-1"], priority: "High" } }),
         principal({ scopes: ["read"] }),
@@ -1446,7 +1451,7 @@ describe("McpService", () => {
     it("lists bugs and executions for a test case that belongs to the token's project", async () => {
       const { db } = makeDb({ testcaseProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
 
       const bugsRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_testcase_bugs", arguments: { testcaseId: "tc-1" } }),
@@ -1470,7 +1475,7 @@ describe("McpService", () => {
     it("denies get_testcase_bugs/get_testcase_executions for a test case belonging to another project", async () => {
       const { db } = makeDb({ testcaseProject: "proj-OTHER" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
 
       const bugsRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_testcase_bugs", arguments: { testcaseId: "tc-1" } }),
@@ -1491,7 +1496,7 @@ describe("McpService", () => {
 
     it("returns a tool error for get_testcase_bugs/get_testcase_executions when the test case does not exist", async () => {
       const { db } = makeDb({ testcaseProject: undefined });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const bugsRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_testcase_bugs", arguments: { testcaseId: "ghost" } }),
         principal(),
@@ -1503,7 +1508,7 @@ describe("McpService", () => {
 
     it("rejects get_testcase_bugs and get_testcase_executions without testcaseId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       expect(
         (await svc.handleRequest(rpc("tools/call", { name: "get_testcase_bugs", arguments: {} }), principal(), "proj-1") as any).error
           .message
@@ -1520,7 +1525,7 @@ describe("McpService", () => {
     it("links a test case to a Jira requirement, attributed to the agent actor", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "link_requirement_to_testcase", arguments: { testcaseId: "tc-1", jiraIssueKey: "PROJ-1" } }),
         principal(),
@@ -1538,7 +1543,7 @@ describe("McpService", () => {
     it("unlinks a test case's Jira requirement by clearing jiraIssueKey/jiraUrl", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "unlink_requirement_from_testcase", arguments: { testcaseId: "tc-1", provider: "jira" } }),
         principal(),
@@ -1555,7 +1560,7 @@ describe("McpService", () => {
     it("links a test case to a Notion page by page id and unlinks it", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const link: any = await svc.handleRequest(
         rpc("tools/call", {
           name: "link_requirement_to_testcase",
@@ -1584,7 +1589,7 @@ describe("McpService", () => {
 
     it("rejects a link that names a Notion page together with another provider's key", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "link_requirement_to_testcase", arguments: { testcaseId: "tc-1", jiraIssueKey: "PROJ-1", notionPageId: "p" } }),
         principal(),
@@ -1595,7 +1600,7 @@ describe("McpService", () => {
 
     it("rejects link_requirement_to_testcase with neither or both of jiraIssueKey/linearIssueKey", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const neither: any = await svc.handleRequest(
         rpc("tools/call", { name: "link_requirement_to_testcase", arguments: { testcaseId: "tc-1" } }),
         principal(),
@@ -1616,7 +1621,7 @@ describe("McpService", () => {
 
     it("rejects unlink_requirement_from_testcase with an invalid provider", async () => {
       const { db } = makeDb({ testcaseProject: "proj-1" });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "unlink_requirement_from_testcase", arguments: { testcaseId: "tc-1", provider: "github" } }),
         principal(),
@@ -1629,7 +1634,7 @@ describe("McpService", () => {
     it("denies link/unlink_requirement for a test case belonging to another project", async () => {
       const { db } = makeDb({ testcaseProject: "proj-OTHER" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const linkRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "link_requirement_to_testcase", arguments: { testcaseId: "tc-1", jiraIssueKey: "PROJ-1" } }),
         principal(),
@@ -1650,7 +1655,7 @@ describe("McpService", () => {
     it("lists suites scoped to the token's project", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/call", { name: "list_suites", arguments: {} }), principal(), "proj-1");
       expect(res.result.isError).toBe(false);
       expect((legacy as any).listSuites).toHaveBeenCalledWith("proj-1");
@@ -1660,7 +1665,7 @@ describe("McpService", () => {
     it("returns a suite by id when it belongs to the token's project", async () => {
       const { db } = makeDb({ suiteProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_suite", arguments: { suiteId: "suite-1" } }),
         principal(),
@@ -1673,7 +1678,7 @@ describe("McpService", () => {
     it("denies get_suite/update_suite for a suite belonging to another project", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", suiteProject: "proj-OTHER" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
 
       const getRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_suite", arguments: { suiteId: "suite-1" } }),
@@ -1693,7 +1698,7 @@ describe("McpService", () => {
 
     it("returns a tool error for get_suite/update_suite when the suite does not exist", async () => {
       const { db } = makeDb({ suiteProject: undefined });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const getRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_suite", arguments: { suiteId: "ghost" } }),
         principal(),
@@ -1705,7 +1710,7 @@ describe("McpService", () => {
 
     it("rejects get_suite and update_suite without suiteId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       expect(
         (await svc.handleRequest(rpc("tools/call", { name: "get_suite", arguments: {} }), principal(), "proj-1") as any).error.message
       ).toMatch(/"suiteId"/i);
@@ -1718,7 +1723,7 @@ describe("McpService", () => {
     it("renames a suite without reading and re-sending its parent, attributed to the token's user", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", suiteProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "update_suite", arguments: { suiteId: "suite-1", name: "Renamed" } }),
         principal({ userId: "user-7" }),
@@ -1737,7 +1742,7 @@ describe("McpService", () => {
     it("reparents a suite to the root when parentId is explicitly null", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", suiteProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(
         rpc("tools/call", { name: "update_suite", arguments: { suiteId: "suite-1", parentId: null } }),
         principal({ userId: "user-7" }),
@@ -1782,7 +1787,7 @@ describe("McpService", () => {
     it("clones a suite and its subtree's test cases, leaving the originals untouched", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", suiteProject: "proj-1" });
       const legacy = makeCloneLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "clone_test_suite", arguments: { suiteId: "suite-1" } }),
         principal(),
@@ -1817,7 +1822,7 @@ describe("McpService", () => {
     it("denies clone_test_suite for a suite belonging to another project", async () => {
       const { db } = makeDb({ suiteProject: "proj-OTHER" });
       const legacy = makeCloneLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "clone_test_suite", arguments: { suiteId: "suite-1" } }),
         principal(),
@@ -1836,7 +1841,7 @@ describe("McpService", () => {
         position: i
       }));
       const legacy = makeLegacy({ listSuites: jest.fn().mockResolvedValue(bigTree) });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "clone_test_suite", arguments: { suiteId: "suite-1" } }),
         principal(),
@@ -1849,7 +1854,7 @@ describe("McpService", () => {
 
     it("returns a tool error when the source suite does not exist, and rejects a missing suiteId", async () => {
       const { db } = makeDb({ suiteProject: undefined });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "clone_test_suite", arguments: { suiteId: "ghost" } }),
         principal(),
@@ -1865,7 +1870,7 @@ describe("McpService", () => {
     it("rejects clone_test_suite for a read-scoped token", async () => {
       const { db } = makeDb({ suiteProject: "proj-1" });
       const legacy = makeCloneLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "clone_test_suite", arguments: { suiteId: "suite-1" } }),
         principal({ scopes: ["read"] }),
@@ -1879,7 +1884,7 @@ describe("McpService", () => {
   describe("list_bugs / get_bug / update_bug project scoping", () => {
     it.each([null, ""])("forwards explicit metadata clears (%j) without adding omitted fields or reading a stale bug", async (value) => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", bugProject: "proj-1" });
-      const legacy = makeLegacy(), svc = new McpService(legacy, db);
+      const legacy = makeLegacy(), svc = new McpService(legacy, db, writableLimits);
       const body = { description: value, externalUrl: value, integrationProvider: value, integrationIssueKey: value, betterbugsUrl: value };
       const response: any = await svc.handleRequest(rpc("tools/call", { name: "update_bug", arguments: { bugId: "bug-1", ...body } }), principal({ userId: "user-7" }), "proj-1");
       expect(response.result.isError).toBe(false);
@@ -1889,7 +1894,7 @@ describe("McpService", () => {
     it("lists bugs scoped to the token's project with filters forwarded", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "list_bugs", arguments: { status: "Open" } }),
         principal(),
@@ -1903,7 +1908,7 @@ describe("McpService", () => {
     it("returns a bug by id when it belongs to the token's project", async () => {
       const { db } = makeDb({ bugProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/call", { name: "get_bug", arguments: { bugId: "bug-1" } }), principal(), "proj-1");
       expect(res.result.isError).toBe(false);
       expect((legacy as any).getBug).toHaveBeenCalledWith("bug-1");
@@ -1912,7 +1917,7 @@ describe("McpService", () => {
     it("denies get_bug/update_bug for a bug belonging to another project", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", bugProject: "proj-OTHER" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
 
       const getRes: any = await svc.handleRequest(rpc("tools/call", { name: "get_bug", arguments: { bugId: "bug-1" } }), principal(), "proj-1");
       expect(getRes.error.code).toBe(RpcCode.ProjectScopeDenied);
@@ -1928,7 +1933,7 @@ describe("McpService", () => {
 
     it("returns a tool error for get_bug/update_bug when the bug does not exist", async () => {
       const { db } = makeDb({ bugProject: undefined });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/call", { name: "get_bug", arguments: { bugId: "ghost" } }), principal(), "proj-1");
       expect(res.error.code).toBe(RpcCode.ToolExecutionError);
       expect(res.error.message).toMatch(/not found/i);
@@ -1936,7 +1941,7 @@ describe("McpService", () => {
 
     it("rejects get_bug and update_bug without bugId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       expect(
         (await svc.handleRequest(rpc("tools/call", { name: "get_bug", arguments: {} }), principal(), "proj-1") as any).error.message
       ).toMatch(/"bugId"/i);
@@ -1948,7 +1953,7 @@ describe("McpService", () => {
     it("updates a bug, attributed to the token's user (not the agent actor)", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", bugProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "update_bug", arguments: { bugId: "bug-1", status: "Closed", severity: "High" } }),
         principal({ userId: "user-7" }),
@@ -1963,7 +1968,7 @@ describe("McpService", () => {
     it("links a test case to a bug, attributed to the token's user", async () => {
       const { db } = makeDb({ bugProject: "proj-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "link_testcase_to_bug", arguments: { bugId: "bug-1", testcaseId: "tc-1" } }),
         principal({ userId: "user-7" }),
@@ -1980,7 +1985,7 @@ describe("McpService", () => {
     it("is idempotent: linking the same test case to the same bug twice does not error", async () => {
       const { db } = makeDb({ bugProject: "proj-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const call = () =>
         svc.handleRequest(
           rpc("tools/call", { name: "link_testcase_to_bug", arguments: { bugId: "bug-1", testcaseId: "tc-1" } }),
@@ -1999,7 +2004,7 @@ describe("McpService", () => {
       const legacy = makeLegacy({
         getBug: jest.fn().mockResolvedValue({ id: "bug-1", links: [{ id: "link-1", testcaseId: "tc-1", cycleId: null }] })
       });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "unlink_testcase_from_bug", arguments: { bugId: "bug-1", testcaseId: "tc-1" } }),
         principal({ userId: "user-7" }),
@@ -2013,7 +2018,7 @@ describe("McpService", () => {
     it("unlinking a test case that isn't linked to the bug is a graceful no-op, not an error", async () => {
       const { db } = makeDb({ bugProject: "proj-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy({ getBug: jest.fn().mockResolvedValue({ id: "bug-1", links: [] }) });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "unlink_testcase_from_bug", arguments: { bugId: "bug-1", testcaseId: "tc-1" } }),
         principal(),
@@ -2027,7 +2032,7 @@ describe("McpService", () => {
     it("denies link_testcase_to_bug/unlink_testcase_from_bug when the test case belongs to another project", async () => {
       const { db } = makeDb({ bugProject: "proj-1", testcaseProject: "proj-OTHER" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const linkRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "link_testcase_to_bug", arguments: { bugId: "bug-1", testcaseId: "tc-1" } }),
         principal(),
@@ -2047,7 +2052,7 @@ describe("McpService", () => {
     it("denies link_testcase_to_bug/unlink_testcase_from_bug when the bug belongs to another project", async () => {
       const { db } = makeDb({ bugProject: "proj-OTHER", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const linkRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "link_testcase_to_bug", arguments: { bugId: "bug-1", testcaseId: "tc-1" } }),
         principal(),
@@ -2059,7 +2064,7 @@ describe("McpService", () => {
 
     it("rejects link_testcase_to_bug/unlink_testcase_from_bug on ids that do not exist, and without required arguments", async () => {
       const { db } = makeDb({ bugProject: undefined, testcaseProject: undefined });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const notFound: any = await svc.handleRequest(
         rpc("tools/call", { name: "link_testcase_to_bug", arguments: { bugId: "ghost", testcaseId: "tc-1" } }),
         principal(),
@@ -2091,7 +2096,7 @@ describe("McpService", () => {
     it("lists cycles scoped to the token's project", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/call", { name: "list_test_cycles", arguments: {} }), principal(), "proj-1");
       expect(res.result.isError).toBe(false);
       expect((legacy as any).listCycles).toHaveBeenCalledWith("proj-1");
@@ -2101,7 +2106,7 @@ describe("McpService", () => {
     it("returns a cycle by id with its linked plan attached", async () => {
       const { db } = makeDb({ cycleProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_test_cycle", arguments: { cycleId: "cycle-1" } }),
         principal({ userId: "user-7" }),
@@ -2117,7 +2122,7 @@ describe("McpService", () => {
     it("does not enrich a legacy inconsistent cycle with another project's Plan even if its issuer can read that Plan", async () => {
       const { db } = makeDb({ cycleProject: "proj-1" });
       const legacy = makeLegacy({ getPlan: jest.fn().mockResolvedValue({ id: "plan-1", projectId: "proj-OTHER", name: "Private foreign Plan" }) });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/call", { name: "get_test_cycle", arguments: { cycleId: "cycle-1" } }), principal(), "proj-1");
       expect(res.result.isError).toBe(false);
       expect(JSON.parse(res.result.content[0].text).plan).toBeNull();
@@ -2127,7 +2132,7 @@ describe("McpService", () => {
     it("omits plan rather than failing get_test_cycle when getPlan rejects", async () => {
       const { db } = makeDb({ cycleProject: "proj-1" });
       const legacy = makeLegacy({ getPlan: jest.fn().mockRejectedValue(new Error("Plan not found")) });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_test_cycle", arguments: { cycleId: "cycle-1" } }),
         principal(),
@@ -2140,7 +2145,7 @@ describe("McpService", () => {
     it("denies get_test_cycle for a cycle belonging to another project", async () => {
       const { db } = makeDb({ cycleProject: "proj-OTHER" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_test_cycle", arguments: { cycleId: "cycle-1" } }),
         principal(),
@@ -2151,7 +2156,7 @@ describe("McpService", () => {
 
     it("returns a tool error for get_test_cycle when the cycle does not exist", async () => {
       const { db } = makeDb({ cycleProject: undefined });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_test_cycle", arguments: { cycleId: "ghost" } }),
         principal(),
@@ -2163,7 +2168,7 @@ describe("McpService", () => {
 
     it("rejects get_test_cycle without cycleId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/call", { name: "get_test_cycle", arguments: {} }), principal(), "proj-1");
       expect(res.error.code).toBe(RpcCode.ToolExecutionError);
       expect(res.error.message).toMatch(/"cycleId"/i);
@@ -2177,7 +2182,7 @@ describe("McpService", () => {
         createCycle: jest.fn().mockResolvedValue({ id: "cycle-new", name: "Sprint 12 Run" }),
         addCycleTestCases: jest.fn().mockResolvedValue({ requested: 2, added: 2, skipped: 0 })
       });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", {
           name: "create_cycle_from_testcases",
@@ -2203,7 +2208,7 @@ describe("McpService", () => {
     it("deduplicates repeated testcaseIds before adding", async () => {
       const { db } = makeDb({ ownedTestcaseIds: ["tc-1"] });
       const legacy = makeLegacy({ addCycleTestCases: jest.fn().mockResolvedValue({ requested: 1, added: 1, skipped: 0 }) });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(
         rpc("tools/call", { name: "create_cycle_from_testcases", arguments: { name: "Run", testcaseIds: ["tc-1", "tc-1"] } }),
         principal(),
@@ -2215,7 +2220,7 @@ describe("McpService", () => {
     it("creates the cycle but skips addCycleTestCases entirely when every id is invalid", async () => {
       const { db } = makeDb({ ownedTestcaseIds: [] });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "create_cycle_from_testcases", arguments: { name: "Run", testcaseIds: ["tc-ghost"] } }),
         principal(),
@@ -2231,7 +2236,7 @@ describe("McpService", () => {
     it("denies create_cycle_from_testcases when planId belongs to another project", async () => {
       const { db } = makeDb({ planProject: "proj-OTHER", ownedTestcaseIds: ["tc-1"] });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "create_cycle_from_testcases", arguments: { name: "Run", testcaseIds: ["tc-1"], planId: "plan-x" } }),
         principal(),
@@ -2243,7 +2248,7 @@ describe("McpService", () => {
 
     it("rejects create_cycle_from_testcases missing name or testcaseIds, and for a read-scoped token", async () => {
       const { db } = makeDb({ ownedTestcaseIds: ["tc-1"] });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const missingName: any = await svc.handleRequest(
         rpc("tools/call", { name: "create_cycle_from_testcases", arguments: { testcaseIds: ["tc-1"] } }),
         principal(),
@@ -2271,7 +2276,7 @@ describe("McpService", () => {
     it("lists executions for a cycle that belongs to the token's project", async () => {
       const { db } = makeDb({ cycleProject: "proj-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "list_executions", arguments: { cycleId: "cycle-1" } }),
         principal(),
@@ -2285,7 +2290,7 @@ describe("McpService", () => {
     it("denies list_executions for a cycle belonging to another project", async () => {
       const { db } = makeDb({ cycleProject: "proj-OTHER" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "list_executions", arguments: { cycleId: "cycle-1" } }),
         principal(),
@@ -2297,7 +2302,7 @@ describe("McpService", () => {
 
     it("rejects list_executions without cycleId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/call", { name: "list_executions", arguments: {} }), principal(), "proj-1");
       expect(res.error.code).toBe(RpcCode.ToolExecutionError);
       expect(res.error.message).toMatch(/"cycleId"/i);
@@ -2306,7 +2311,7 @@ describe("McpService", () => {
     it("returns an execution by id when it belongs to the token's project", async () => {
       const { db } = makeDb({ executionProject: "proj-1", executionCycleId: "cycle-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_execution", arguments: { executionId: "ex-1" } }),
         principal(),
@@ -2320,7 +2325,7 @@ describe("McpService", () => {
     it("denies get_execution/update_execution_result for an execution belonging to another project", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", executionProject: "proj-OTHER" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
 
       const getRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_execution", arguments: { executionId: "ex-1" } }),
@@ -2340,7 +2345,7 @@ describe("McpService", () => {
 
     it("returns a tool error for get_execution/update_execution_result when the execution does not exist", async () => {
       const { db } = makeDb({ executionProject: undefined });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const getRes: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_execution", arguments: { executionId: "ghost" } }),
         principal(),
@@ -2352,7 +2357,7 @@ describe("McpService", () => {
 
     it("rejects get_execution and update_execution_result without executionId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       expect(
         (await svc.handleRequest(rpc("tools/call", { name: "get_execution", arguments: {} }), principal(), "proj-1") as any).error.message
       ).toMatch(/"executionId"/i);
@@ -2365,7 +2370,7 @@ describe("McpService", () => {
     it("updates an execution's result, attributed to the token's user (not the agent actor)", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", executionProject: "proj-1", executionCycleId: "cycle-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "update_execution_result", arguments: { executionId: "ex-1", status: "Passed", assigneeId: null } }),
         principal({ userId: "user-7" }),
@@ -2379,7 +2384,7 @@ describe("McpService", () => {
     it("rejects update_execution_result for a read-scoped token", async () => {
       const { db } = makeDb({ executionProject: "proj-1", executionCycleId: "cycle-1" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "update_execution_result", arguments: { executionId: "ex-1", status: "Passed" } }),
         principal({ scopes: ["read"] }),
@@ -2406,7 +2411,7 @@ describe("McpService", () => {
         return Promise.resolve({ rows: [] });
       });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", {
           name: "bulk_record_execution_results",
@@ -2444,7 +2449,7 @@ describe("McpService", () => {
         return Promise.resolve({ rows: [] });
       });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", {
           name: "bulk_record_execution_results",
@@ -2467,7 +2472,7 @@ describe("McpService", () => {
 
     it("rejects an empty results array, an over-limit batch, and items missing executionId", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const empty: any = await svc.handleRequest(
         rpc("tools/call", { name: "bulk_record_execution_results", arguments: { results: [] } }),
         principal(),
@@ -2498,7 +2503,7 @@ describe("McpService", () => {
     it("rejects bulk_record_execution_results for a read-scoped token", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "bulk_record_execution_results", arguments: { results: [{ executionId: "ex-1", status: "Passed" }] } }),
         principal({ scopes: ["read"] }),
@@ -2519,7 +2524,7 @@ describe("McpService", () => {
           rows: [{ groupId: "cycle-1", groupName: "Cycle 1", Passed: 3, Failed: 1, Blocked: 0, Skipped: 0, Untested: 2, Retest: 0, total: 6 }]
         })
       });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_test_execution_summary", arguments: { cycleId: "cycle-1" } }),
         principal(),
@@ -2535,7 +2540,7 @@ describe("McpService", () => {
     it("returns all zeros for a cycle with no executions yet, rather than erroring", async () => {
       const { db } = makeDb({ cycleProject: "proj-1" });
       const legacy = makeLegacy({ executionReport: jest.fn().mockResolvedValue({ filterBy: "run", filterValue: "cycle-1", rows: [] }) });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_test_execution_summary", arguments: { cycleId: "cycle-1" } }),
         principal(),
@@ -2557,7 +2562,7 @@ describe("McpService", () => {
           ]
         })
       });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/call", { name: "get_test_execution_summary", arguments: {} }), principal(), "proj-1");
       expect((legacy as any).executionReport).toHaveBeenCalledWith("proj-1", { filterBy: "overall" });
       const body = JSON.parse(res.result.content[0].text);
@@ -2569,7 +2574,7 @@ describe("McpService", () => {
     it("denies get_test_execution_summary for a cycle belonging to another project, and rejects one that does not exist", async () => {
       const { db } = makeDb({ cycleProject: "proj-OTHER" });
       const legacy = makeLegacy();
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "get_test_execution_summary", arguments: { cycleId: "cycle-1" } }),
         principal(),
@@ -2583,7 +2588,7 @@ describe("McpService", () => {
   describe("argument validation & error mapping", () => {
     it("rejects create_testcase without a title", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "create_testcase", arguments: {} }),
         principal(),
@@ -2595,7 +2600,7 @@ describe("McpService", () => {
 
     it("rejects search_knowledge_base without q", async () => {
       const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db);
+      const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "search_knowledge_base", arguments: {} }),
         principal(),
@@ -2612,7 +2617,7 @@ describe("McpService", () => {
           getResponse: () => ({ error: "name is required" })
         })
       });
-      const svc = new McpService(legacy, db);
+      const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "create_suite", arguments: { name: "x" } }),
         principal(),
