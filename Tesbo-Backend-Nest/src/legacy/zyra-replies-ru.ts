@@ -198,6 +198,8 @@ export const ZYRA_RU = {
     `Изучены доступные материалы базы знаний, недавний контекст чата и ближайшие тест-кейсы (${n(count)}). В фокусе — пробелы в покрытии, отсутствие дублей, граничные случаи и значения, права доступа, целостность данных, переходы состояний и аудит.`,
 
   // reconcileZyraReply and friends
+  suiteOperationError:
+    "⚠️ При выполнении операций с наборами возникла ошибка. Ответ ниже не подтверждает, что все операции завершились. Уже применённые изменения сохранены; перед повтором проверьте журнал действий.",
   falseClaimBanner:
     "⚠️ **Извините! Ничего не сохранено.** Всё, что ниже описано как созданное, сохранённое или архивированное, не было выполнено — я это только описал(а).\n\nПопросите меня продолжить, и я внесу изменение и покажу затронутые тест-кейсы.",
   nothingSavedMissing: "Тест-кейсов, о которых шла речь, в этом проекте нет, поэтому менять было нечего.",
@@ -329,6 +331,15 @@ const RU_NOT_A_CLAIM = "(?<!(?:не|будут|будет|будем|будет�
 export const ZYRA_RU_COMPLETION_CLAIM = new RegExp(
   `${L}${RU_NOT_A_CLAIM}${RU_CLAIM_VERB}${R}[^.!?\\n]{0,80}${L}${RU_CLAIM_NOUN}` +
     `|${L}${RU_CLAIM_NOUN}[^.!?\\n,;]{0,40}${L}${RU_NOT_A_CLAIM}${RU_CLAIM_VERB}${R}`,
+  "iu"
+);
+
+// Same claim vocabulary/tense rules, but not "набор": successful suite-only writes are real, while
+// an unrelated testcase/repository claim in that reply still needs the existing false-save warning.
+const RU_TESTCASE_ONLY_CLAIM_NOUN = "(тест-кейс|кейс|репозитори)\\p{L}*";
+export const ZYRA_RU_TESTCASE_ONLY_COMPLETION_CLAIM = new RegExp(
+  `${L}${RU_NOT_A_CLAIM}${RU_CLAIM_VERB}${R}[^.!?\\n]{0,80}${L}${RU_TESTCASE_ONLY_CLAIM_NOUN}` +
+    `|${L}${RU_TESTCASE_ONLY_CLAIM_NOUN}[^.!?\\n,;]{0,40}${L}${RU_NOT_A_CLAIM}${RU_CLAIM_VERB}${R}`,
   "iu"
 );
 

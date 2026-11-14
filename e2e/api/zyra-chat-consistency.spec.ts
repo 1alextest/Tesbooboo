@@ -1,6 +1,8 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { startFakeAiServer, type FakeAiServer } from "../utils/fake-ai-server";
 import { exec, literal, scalar } from "../utils/psql";
+import { env } from "../utils/env";
+import { verifyZyraSuiteTurn, withSuiteInsertFailure, type SuiteFeedbackState } from "../utils/zyra-suite-feedback";
 import {
   loginAs,
   provisionRbacTenant,
@@ -549,6 +551,33 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
     if (!row) return null;
     const [taskStatus, generatedCount, payloadLength] = row.split("|");
     return { taskStatus, generatedCount: Number(generatedCount), payloadLength: Number(payloadLength) };
+  }
+
+  for (const language of ["en", "ru"] as const) {
+    for (const mode of ["failed", "partial", "created", "reused"] as const) {
+      test(`Zyra suite reconciliation ${language}: ${mode}`, async () => {
+        await allocateFakeAiKey();
+        const base = `${env.apiBaseUrl}/api/projects/${tenant!.mainProjectId}`;
+        const label = `E2E ${language} ${mode} ${Date.now()}`;
+        const faultName = `${label} failed suite`;
+        const names = mode === "failed" ? [faultName] : mode === "partial" ? [`${label} kept suite`, faultName] : [`${label} suite`];
+        if (mode === "reused") {
+          const seeded = await asOwner.post(`${base}/suites`, { data: { name: names[0] } });
+          expect(seeded.status(), await seeded.text()).toBe(201);
+        }
+        const project = literal(tenant!.mainProjectId);
+        const state = async () => JSON.parse(scalar(`SELECT jsonb_build_object(
+          'suites',COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM suites s WHERE s.project_id=${project}),'[]'::jsonb),
+          'cases',COALESCE((SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM testcases t WHERE t.project_id=${project}),'[]'::jsonb),
+          'reviews',COALESCE((SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id) FROM ai_generation_requests r WHERE r.project_id=${project}),'[]'::jsonb),
+          'audit',COALESCE((SELECT jsonb_agg(to_jsonb(a) ORDER BY a.created_at,a.id) FROM audit_logs a
+            WHERE a.project_id=${project} AND a.action='zyra_suite_created'),'[]'::jsonb))::text;`)) as SuiteFeedbackState;
+        const run = () => verifyZyraSuiteTurn({ request: asOwner, ai, base, language, mode, names, state, ownerId: tenant!.owner.userId });
+        if (mode === "failed" || mode === "partial") {
+          await withSuiteInsertFailure(tenant!.mainProjectId, faultName, async (sql) => { exec(sql); }, run);
+        } else await run();
+      });
+    }
   }
 
   const GAP_OFFER_REPLY =
