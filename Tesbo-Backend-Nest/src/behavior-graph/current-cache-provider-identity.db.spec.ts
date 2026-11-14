@@ -222,6 +222,59 @@ const url = process.env.DATABASE_URL ?? "";
         await admin.query("UPDATE jira_tickets SET summary='First project only' WHERE id=$1", [ticketA]);
       }
     });
+    it("retains linked-case review evidence without promoting a changed requirement to verified coverage", async () => {
+      const before = await reader.captureForUser(user, projectA);
+      await admin.query(
+        "UPDATE jira_tickets SET description='Changed acceptance expectation' WHERE id=$1",
+        [ticketA]
+      );
+      try {
+        const after = await reader.captureForUser(user, projectA);
+        const change = compareComparableGraphCaptures(before, after);
+        const requirementId = JSON.stringify(["cached_requirement", projectA, "jira", ticketA]);
+        const caseNodeId = JSON.stringify(["test_case", projectA, caseA]);
+        // Direct impact is not a transitive review set.
+        expect(change.modifiedNodes).toEqual([requirementId]);
+        expect(change.directlyAffectedNodeIds).toEqual([requirementId]);
+        expect(change.modifiedEdges).toEqual([]);
+
+        // Existing native link slots can supply *candidate* QA review targets.
+        // This is a test-only traversal, not an approved production policy.
+        const candidates = after.snapshot!.edges
+          .filter((edge) =>
+            edge.type === "references_cached_requirement" &&
+            change.modifiedNodes.includes(edge.to)
+          )
+          .map((edge) => edge.from);
+        expect(candidates).toEqual([caseNodeId]);
+        expect(after.coverageAssertion).toBe("none");
+        expect(after.originAttestation).toBe("not_recorded");
+        expect(after.upstreamFreshness).toBe("unverified");
+      } finally {
+        await admin.query("UPDATE jira_tickets SET description='Same upstream key' WHERE id=$1", [ticketA]);
+      }
+    });
+
+    it("detects an unlinked case change without fabricating a requirement or a safe QA verdict", async () => {
+      const before = await reader.captureForUser(user, projectA);
+      const newId = (await admin.query(
+        "INSERT INTO testcases (project_id,external_id,title) VALUES ($1,$2,'Unplanned case') RETURNING id",
+        [projectA, `GPA-UNPLANNED-${randomUUID().slice(0, 8)}`]
+      )).rows[0].id as string;
+      try {
+        const after = await reader.captureForUser(user, projectA);
+        const diff = compareComparableGraphCaptures(before, after);
+        const caseNodeId = JSON.stringify(["test_case", projectA, newId]);
+        expect(diff.addedNodes).toEqual([caseNodeId]);
+        expect(diff.directlyAffectedNodeIds).toContain(caseNodeId);
+        expect(after.snapshot?.edges.some((edge) => edge.from === caseNodeId)).toBe(false);
+        expect(after.coverageAssertion).toBe("none");
+        expect(after.upstreamFreshness).toBe("unverified");
+      } finally {
+        await admin.query("DELETE FROM testcases WHERE id=$1", [newId]);
+      }
+    });
+
     it("distinguishes identical Jira and Linear keys and refuses a Team-to-Project remap", async () => {
       const linearConnection = (await admin.query(
         `INSERT INTO integration_connections
