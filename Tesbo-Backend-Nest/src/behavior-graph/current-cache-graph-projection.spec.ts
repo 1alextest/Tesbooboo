@@ -11,7 +11,7 @@ const baseline: CurrentSourceProjection = {
   diagnostics: [],
   sourceScopes: [{
     provider: "jira", mappingId: "map-1", connectionId: "connection-1",
-    namespace: "https://example.atlassian.net", remoteProjectId: "JR"
+    namespace: "https://example.atlassian.net", remoteProjectId: "JR", disconnected: false
   }],
   requirements: [{
     projectId: "project-1", provider: "jira", rowId: "cached-row-1",
@@ -126,6 +126,30 @@ describe("current cached requirement projection", () => {
     });
     expect(() => compareComparableGraphCaptures(projectCurrentCacheGraph(baseline), remapped))
       .toThrow("source scopes differ");
+  });
+
+  it("refuses disconnected sources and versions connection state instead of claiming no impact", () => {
+    const before = projectCurrentCacheGraph(baseline);
+    const disconnected = projectCurrentCacheGraph({
+      ...baseline, sourceScopes: [{ ...baseline.sourceScopes[0], disconnected: true }]
+    });
+    expect(disconnected.inventoryStatus).toBe("incomplete");
+    expect(disconnected.snapshot).toBeNull();
+    expect(disconnected.unresolvedDiagnostics.join(" ")).toContain("disconnected");
+    expect(disconnected.sourceScopeFingerprint).not.toBe(before.sourceScopeFingerprint);
+    expect(() => compareComparableGraphCaptures(before, disconnected))
+      .toThrow("source inventory is not complete");
+  });
+
+  it("rejects a source scope whose disconnect state was never supplied", () => {
+    const invalid = projectCurrentCacheGraph({
+      ...baseline,
+      sourceScopes: [{
+        ...baseline.sourceScopes[0], disconnected: undefined as unknown as boolean
+      }]
+    });
+    expect(invalid.snapshot).toBeNull();
+    expect(invalid.unresolvedDiagnostics.join(" ")).toContain("invalid current source scope");
   });
 
   it("does not invent differences for case status, owner or timestamps absent from contract", () => {
