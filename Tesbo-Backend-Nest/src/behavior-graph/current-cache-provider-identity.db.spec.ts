@@ -160,6 +160,53 @@ const url = process.env.DATABASE_URL ?? "";
       }
     });
 
+    it("rejects disconnected sources rather than silently treating stale cache as a valid comparison", async () => {
+      const before = await reader.captureForUser(user, projectA);
+      await admin.query(
+        "UPDATE integration_connections SET disconnected_at=now() WHERE id=$1", [connection]
+      );
+      try {
+        const after = await reader.captureForUser(user, projectA);
+        expect(after.snapshot).toBeNull();
+        expect(after.inventoryStatus).toBe("incomplete");
+        expect(after.unresolvedDiagnostics.join(" ")).toContain("disconnected");
+        expect(after.sourceScopeFingerprint).not.toBe(before.sourceScopeFingerprint);
+        expect(() => compareComparableGraphCaptures(before, after))
+          .toThrow("source inventory is not complete");
+      } finally {
+        await admin.query("UPDATE integration_connections SET disconnected_at=NULL WHERE id=$1", [connection]);
+      }
+    });
+
+    it("rejects a project mapping redirected to a different organization's connection", async () => {
+      const foreignOrg = (await admin.query(
+        "INSERT INTO organizations (name,slug) VALUES ('Foreign graph provider',$1) RETURNING id",
+        [`other-provider-${stamp}`]
+      )).rows[0].id;
+      const foreignConnection = (await admin.query(
+        `INSERT INTO integration_connections
+           (organization_id,provider,external_id,site_url,access_token,token_expires_at)
+         VALUES ($1,'jira','other-workspace','https://other.atlassian.net',
+                 'TEST_FIXTURE_NEVER_VALID',now() + interval '1 day') RETURNING id`,
+        [foreignOrg]
+      )).rows[0].id;
+      await admin.query(
+        "UPDATE jira_project_mappings SET jira_connection_id=$2 WHERE project_id=$1",
+        [projectA, foreignConnection]
+      );
+      try {
+        const capture = await reader.captureForUser(user, projectA);
+        expect(capture.snapshot).toBeNull();
+        expect(capture.inventoryStatus).toBe("incomplete");
+        expect(capture.unresolvedDiagnostics.join(" ")).toContain("invalid current source scope");
+      } finally {
+        await admin.query(
+          "UPDATE jira_project_mappings SET jira_connection_id=$2 WHERE project_id=$1",
+          [projectA, connection]
+        );
+      }
+    });
+
     it("detects a cached source content change without manufacturing a coverage verdict", async () => {
       const before = await reader.captureForUser(user, projectA);
       await admin.query("UPDATE jira_tickets SET summary='Changed content' WHERE id=$1", [ticketA]);
