@@ -56,6 +56,24 @@ export interface CurrentSourceProjection {
 
 export const CURRENT_CACHE_PROJECTION_CONTRACT = "tesbo-current-cached-requirement-links-v1";
 
+/** Explicit disclaimers that must survive even an otherwise comparable capture. */
+export interface CurrentCacheGraphCapture extends GraphCaptureForComparison {
+  cacheOnly: true;
+  upstreamFreshness: "unverified";
+  originAttestation: "not_recorded";
+  coverageAssertion: "none";
+}
+
+function annotate(capture: GraphCaptureForComparison): CurrentCacheGraphCapture {
+  return {
+    ...capture,
+    cacheOnly: true,
+    upstreamFreshness: "unverified",
+    originAttestation: "not_recorded",
+    coverageAssertion: "none"
+  };
+}
+
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 }
@@ -71,14 +89,14 @@ function hasText(value: unknown): value is string {
 function incomplete(
   scopeFingerprint: string,
   diagnostics: readonly string[]
-): GraphCaptureForComparison {
-  return {
+): CurrentCacheGraphCapture {
+  return annotate({
     contractId: CURRENT_CACHE_PROJECTION_CONTRACT,
     sourceScopeFingerprint: scopeFingerprint,
     inventoryStatus: "incomplete",
     unresolvedDiagnostics: [...diagnostics],
     snapshot: null
-  };
+  });
 }
 
 /**
@@ -88,7 +106,7 @@ function incomplete(
  * This is a projection helper, not an authenticated source reader; it must
  * never be wired directly to REST/MCP, third-party inputs, or a public queue.
  */
-export function projectCurrentCacheGraph(rows: CurrentSourceProjection): GraphCaptureForComparison {
+export function projectCurrentCacheGraph(rows: CurrentSourceProjection): CurrentCacheGraphCapture {
   if (!rows || !hasText(rows.projectId)) throw new Error("Graph projection requires a project");
   if (!Array.isArray(rows.sourceScopes) || !Array.isArray(rows.requirements) ||
       !Array.isArray(rows.cases) || !Array.isArray(rows.diagnostics)) {
@@ -115,10 +133,10 @@ export function projectCurrentCacheGraph(rows: CurrentSourceProjection): GraphCa
   const sourceScopeFingerprint = digest([CURRENT_CACHE_PROJECTION_CONTRACT, rows.projectId, scopes]);
 
   if (rows.inventoryStatus !== "complete" || diagnostics.length) {
-    return {
+    return annotate({
       ...incomplete(sourceScopeFingerprint, diagnostics),
       inventoryStatus: rows.inventoryStatus === "complete" ? "incomplete" : "unknown"
-    };
+    });
   }
 
   const nodes: GraphNode[] = [];
@@ -216,11 +234,11 @@ export function projectCurrentCacheGraph(rows: CurrentSourceProjection): GraphCa
     edges.map((e) => [e.id, e.type, e.from, e.to, e.version])
   ]);
   const snapshot: GraphSnapshot = { projectId: rows.projectId, revision, nodes, edges };
-  return {
+  return annotate({
     contractId: CURRENT_CACHE_PROJECTION_CONTRACT,
     sourceScopeFingerprint,
     inventoryStatus: "complete",
     unresolvedDiagnostics: [],
     snapshot
-  };
+  });
 }
