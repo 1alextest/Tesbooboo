@@ -45,6 +45,77 @@ describe("current cached requirement projection", () => {
     expect(first.snapshot?.edges[0].type).toBe("references_cached_requirement");
   });
 
+  it("versions case description changes independently from the title and link", () => {
+    const original = projectCurrentCacheGraph(baseline);
+    const edited = projectCurrentCacheGraph({
+      ...baseline,
+      cases: [{ ...baseline.cases[0], description: "A newly specified negative case" }]
+    });
+    const impact = compareComparableGraphCaptures(original, edited);
+    expect(impact.modifiedNodes).toEqual(['["test_case","project-1","case-1"]']);
+    expect(impact.modifiedEdges).toEqual([]);
+  });
+
+  it("versions requirement description changes without changing its reference edge", () => {
+    const original = projectCurrentCacheGraph(baseline);
+    const edited = projectCurrentCacheGraph({
+      ...baseline,
+      requirements: [{ ...baseline.requirements[0], description: "New expected behavior" }]
+    });
+    const impact = compareComparableGraphCaptures(original, edited);
+    expect(impact.modifiedNodes).toEqual(['["cached_requirement","project-1","jira","cached-row-1"]']);
+    expect(impact.modifiedEdges).toEqual([]);
+    expect(impact.directlyAffectedNodeIds).toEqual(impact.modifiedNodes);
+  });
+
+  it("normalizes genuine multirow and multi-provider input ordering", () => {
+    const populated: CurrentSourceProjection = {
+      ...baseline,
+      sourceScopes: [
+        ...baseline.sourceScopes,
+        { provider: "linear", mappingId: "linear-map", connectionId: "linear-conn",
+          namespace: "linear-workspace", remoteProjectId: "team:engineering", disconnected: false }
+      ],
+      requirements: [
+        ...baseline.requirements,
+        { ...baseline.requirements[0], rowId: "cached-row-2", key: "JR-456",
+          remoteId: "remote-456", summary: "Second Jira", description: null },
+        { ...baseline.requirements[0], provider: "linear", rowId: "cached-row-3",
+          key: "LN-7", remoteId: "linear-7", summary: "Linear requirement" }
+      ],
+      cases: [
+        ...baseline.cases,
+        { ...baseline.cases[0], id: "case-2", title: "Second scenario",
+          jiraIssueKey: "JR-456", linearIssueKey: "LN-7" }
+      ]
+    };
+    const first = projectCurrentCacheGraph(populated);
+    const reordered = projectCurrentCacheGraph({
+      ...populated,
+      sourceScopes: [...populated.sourceScopes].reverse(),
+      requirements: [...populated.requirements].reverse(),
+      cases: [...populated.cases].reverse()
+    });
+    expect(first.inventoryStatus).toBe("complete");
+    expect(first.snapshot?.nodes).toHaveLength(5);
+    expect(first.snapshot?.edges).toHaveLength(3);
+    expect(first.sourceScopeFingerprint).toBe(reordered.sourceScopeFingerprint);
+    expect(first.snapshot?.revision).toBe(reordered.snapshot?.revision);
+    expect(first.snapshot?.nodes).toEqual(reordered.snapshot?.nodes);
+    expect(first.snapshot?.edges).toEqual(reordered.snapshot?.edges);
+  });
+
+  it("changes source scope identity when only the mapping ID changes", () => {
+    const original = projectCurrentCacheGraph(baseline);
+    const mappedElsewhere = projectCurrentCacheGraph({
+      ...baseline, sourceScopes: [{ ...baseline.sourceScopes[0], mappingId: "another-mapping" }]
+    });
+    expect(original.snapshot?.nodes).toEqual(mappedElsewhere.snapshot?.nodes);
+    expect(original.sourceScopeFingerprint).not.toBe(mappedElsewhere.sourceScopeFingerprint);
+    expect(() => compareComparableGraphCaptures(original, mappedElsewhere))
+      .toThrow("source scopes differ");
+  });
+
   it("detects source content updates without promoting reference to coverage", () => {
     const changed = projectCurrentCacheGraph({
       ...baseline, requirements: baseline.requirements.map((r) => ({ ...r, summary: "Revised" }))
