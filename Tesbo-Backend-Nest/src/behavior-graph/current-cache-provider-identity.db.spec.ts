@@ -3,6 +3,7 @@ import { Client, Pool } from "pg";
 import { DatabaseService } from "../database/database.service";
 import { makeLegacy } from "../legacy/test-helpers/legacy-service.fixture";
 import { compareComparableGraphCaptures } from "./graph-comparison-gate";
+import { diffGraphSnapshots } from "./graph-change-impact";
 import { CurrentCacheGraphReader } from "./current-cache-graph.reader";
 
 const url = process.env.DATABASE_URL ?? "";
@@ -63,10 +64,10 @@ const url = process.env.DATABASE_URL ?? "";
         [org]
       )).rows[0].id;
       await admin.query(
-        `INSERT INTO jira_project_mappings (project_id,jira_project_id,jira_project_key,jira_project_name,enabled)
-         VALUES ($1,'remote-project-1','GRA','Graph Remote',true),
-                ($2,'remote-project-1','GRA','Graph Remote',true)`,
-        [projectA, projectB]
+        `INSERT INTO jira_project_mappings (project_id,jira_connection_id,jira_project_id,jira_project_key,jira_project_name,enabled)
+         VALUES ($1,$3,'remote-project-1','GRA','Graph Remote',true),
+                ($2,$3,'remote-project-1','GRA','Graph Remote',true)`,
+        [projectA, projectB, connection]
       );
       ticketA = (await admin.query(
         `INSERT INTO jira_tickets (project_id,jira_connection_id,jira_issue_id,jira_issue_key,
@@ -115,7 +116,8 @@ const url = process.env.DATABASE_URL ?? "";
       expect(JSON.stringify(a)).not.toContain(caseB);
       expect(JSON.stringify(a)).not.toContain("Project B private scenario");
       expect(JSON.stringify(b)).toContain(caseB);
-      expect(() => compareComparableGraphCaptures(a, b)).toThrow("different projects");
+      expect(() => compareComparableGraphCaptures(a, b)).toThrow("source scopes differ");
+      expect(() => diffGraphSnapshots(a.snapshot!, b.snapshot!)).toThrow("different projects");
     });
 
     it("refuses comparison after connection is repointed without changing the connection UUID", async () => {
