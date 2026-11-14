@@ -174,6 +174,7 @@ const url = process.env.DATABASE_URL ?? "";
     let app: INestApplication, base: string, locked: string, organization: string, token: string;
     let db: DatabaseService, limits: PlanLimitsService, mcp: McpService, tokens: ApiTokenService;
     let legacy: LegacyService, storage: StorageService, put: jest.SpyInstance, productActivity: jest.SpyInstance;
+    let restHandlers: jest.SpyInstance[], storageQuota: jest.SpyInstance, removeFile: jest.SpyInstance, notifications: jest.SpyInstance;
     let readToken: string, writeToken: string, writableToken: string, session: string;
     let suiteId: string, caseId: string, planId: string, runId: string, executionId: string, bugId: string, folderId: string, documentId: string;
     let handlers: jest.SpyInstance[], quota: jest.SpyInstance, actor: jest.SpyInstance, tracking: jest.SpyInstance;
@@ -204,9 +205,15 @@ const url = process.env.DATABASE_URL ?? "";
       const uploadDir = await mkdtemp(join(process.env.RUNNER_TEMP ?? join(tmpdir(), "opencode"), "tesbo-rest-lock-"));
       storage = new StorageService({ storageDriver: "local", uploadDir } as AppConfigService);
       put = jest.spyOn(storage, "put");
+      removeFile = jest.spyOn(storage, "delete");
       limits = new PlanLimitsService(db, config, email, requestCache, new EntitlementCacheService(redis, config));
+      storageQuota = jest.spyOn(limits, "assertStorageAvailable");
       legacy = makeLegacy(db, { config, storage, planLimits: limits, requestCache });
       productActivity = jest.spyOn(legacy, "logProjectActivity");
+      notifications = jest.spyOn(legacy, "notifyUsers");
+      restHandlers = (["updatePlan", "deletePlan", "addPlanItem", "deletePlanItem", "updateCycle", "deleteCycle", "addCycleTestCases",
+        "removeCycleTestCase", "removeCycleTestCases", "updateExecution", "uploadExecutionAttachments", "bulkAssignExecutions",
+        "bulkUpdateExecutionStatus", "importRunHistory", "shareCycle"] as const).map((method) => jest.spyOn(legacy, method));
       // This boundary test does not boot unrelated resumable Zyra plans from other retained fixtures.
       jest.spyOn(legacy, "onModuleInit").mockResolvedValue(undefined);
       tokens = new ApiTokenService(db);
@@ -634,6 +641,8 @@ const url = process.env.DATABASE_URL ?? "";
         });
         expect(quota).toHaveBeenCalledWith(organization, locked);
         expect(productActivity).not.toHaveBeenCalled(); expect(tracking).not.toHaveBeenCalled();
+        for (const handler of restHandlers) expect(handler).not.toHaveBeenCalled();
+        expect(storageQuota).not.toHaveBeenCalled(); expect(removeFile).not.toHaveBeenCalled(); expect(notifications).not.toHaveBeenCalled();
       });
       it("accounts for every alias, without mistaking schedule stubs or missing frontend helpers for mutations", () => {
         const aliases = Object.getOwnPropertyNames(LegacyController.prototype).flatMap((name) => {
@@ -741,6 +750,19 @@ const url = process.env.DATABASE_URL ?? "";
           expect(quota).not.toHaveBeenCalled(); expect(productActivity).not.toHaveBeenCalled();
         } finally { await setup.query("UPDATE project_members SET role='owner' WHERE project_id=$1 AND user_id=$2", [locked, owner]); }
       });
+      it.each(["Plan", "Run", "Plan item", "Execution", "Run item"])("refuses a deleted %s URL target before entitlement work", async (kind) => {
+        let input: RestInput;
+        if (kind === "Plan") { await setup.query("UPDATE plans SET deleted_at=now() WHERE id=$1", [restPlan]); input = restWrites["Plan edit"](); }
+        else if (kind === "Plan item") { await setup.query("UPDATE plan_items SET deleted_at=now() WHERE id=$1", [restItem]); input = restWrites["Plan item delete"](); }
+        else {
+          if (kind === "Run") await setup.query("UPDATE cycles SET deleted_at=now() WHERE id=$1", [restRun]);
+          if (kind === "Execution") await setup.query("UPDATE executions SET deleted_at=now() WHERE id=$1", [restExecution]);
+          if (kind === "Run item") await setup.query("UPDATE cycle_items SET deleted_at=now() WHERE cycle_id=$1", [restRun]);
+          input = kind === "Run" ? restWrites["Run edit"]() : restWrites["Evidence upload"]();
+        }
+        const before = await businessState(); expect((await rest(input)).status).toBe(404);
+        expect(quota).not.toHaveBeenCalled(); expect(put).not.toHaveBeenCalled(); expect(await businessState()).toEqual(before);
+      });
       it("refuses write-shaped no-ops and invalid inputs before validators, parent locks or multipart parsing", async () => {
         const before = await businessState();
         for (const input of [
@@ -788,6 +810,20 @@ const url = process.env.DATABASE_URL ?? "";
         expect(await rest({ method, path: `/api/cycles/schedules/${randomUUID()}` })).toEqual({ status: 501, body: { error: "Scheduled runs are not available yet" } });
         expect(quota).not.toHaveBeenCalled();
       });
+      it("retains enabled public reads while locked and reuses the same token after disable and unlocked re-enable", async () => {
+        const shareToken = randomUUID();
+        await setup.query("UPDATE cycles SET share_enabled=true,share_token=$2 WHERE id=$1", [restRun, shareToken]);
+        const publicInput = { method: "GET", path: `/api/public/shared-runs/${shareToken}` };
+        const visible = await rest(publicInput, {}); expect(visible.status).toBe(200);
+        expect(Object.keys(visible.body as object).sort()).toEqual(["name", "status", "description", "environment", "buildVersion", "createdAt", "startedAt", "endedAt"].sort());
+        expect((await rest(restWrites["Sharing enable"]())).status).toBe(403);
+        expect(await rest(publicInput, {})).toEqual(visible);
+        expect((await rest({ ...restWrites["Sharing enable"](), body: { enabled: false } })).body).toEqual({ shareEnabled: false, shareToken });
+        expect((await rest(publicInput, {})).status).toBe(404);
+        await setup.query("UPDATE organizations SET plan='pro' WHERE id=$1", [organization]); await limits.invalidateEntitlementCache(organization);
+        expect((await rest(restWrites["Sharing enable"]())).body).toEqual({ shareEnabled: true, shareToken });
+        expect(await rest(publicInput, {})).toEqual(visible);
+      });
       it.each(["Pro", "grace", "billing disabled", "within allowance", "archive escape"])("persists an ordinary REST write for %s", async (mode) => {
         if (mode === "Pro") await setup.query("UPDATE organizations SET plan='pro' WHERE id=$1", [organization]);
         if (mode === "grace") await setup.query("UPDATE organizations SET plan_grace_ends_at=now()+interval '1 day' WHERE id=$1", [organization]);
@@ -820,6 +856,23 @@ const url = process.env.DATABASE_URL ?? "";
         try { expect(await rest(restWrites["Plan edit"]())).toEqual({ status: 500, body: { error: "Internal server error" } }); }
         finally { logging.mockRestore(); }
         expect(productActivity).not.toHaveBeenCalled(); expect(put).not.toHaveBeenCalled(); expect(await businessState()).toEqual(before);
+      });
+      it("reuses cached entitlement and canonical invalidation, without changing cache TTL or promising zero staleness", async () => {
+        await setup.query("UPDATE organizations SET plan='pro' WHERE id=$1", [organization]); await limits.invalidateEntitlementCache(organization);
+        expect((await rest(restWrites["Plan edit"]())).status).toBe(200);
+        expect(redis.set).toHaveBeenCalledWith(`entitlement:${organization}`, expect.any(String), "EX", 45);
+        await setup.query("UPDATE organizations SET plan='launch' WHERE id=$1", [organization]);
+        expect((await rest({ ...restWrites["Plan edit"](), body: { name: "Existing cached entitlement" } })).status).toBe(200);
+        await limits.invalidateEntitlementCache(organization);
+        const before = await businessState(); expect((await rest(restWrites["Plan edit"]())).status).toBe(403);
+        expect(await businessState()).toEqual(before);
+      });
+      it("does not pretend deleting a Run frees a project slot", async () => {
+        await setup.query("UPDATE organizations SET plan='pro' WHERE id=$1", [organization]); await limits.invalidateEntitlementCache(organization);
+        expect((await rest(restWrites["Run delete"]())).status).toBe(200);
+        await setup.query("UPDATE organizations SET plan='launch' WHERE id=$1", [organization]); await limits.invalidateEntitlementCache(organization);
+        expect((await rest(restWrites["Plan edit"]())).status).toBe(403);
+        expect((await setup.query("SELECT archived_at FROM projects WHERE id=$1", [locked])).rows[0].archived_at).toBeNull();
       });
     });
   });

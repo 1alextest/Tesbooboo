@@ -4540,6 +4540,34 @@ delivery proof. #58's comments/metadata own exact-head execution receipts.
 Legacy REST parity, telemetry redesign, billing-rule changes, deployment and
 overall F8/Phase 1 approval are explicitly excluded.
 
+**Authorized D2/F8b REST increment after #58:** following the selected review of
+all 28 Plan/Run aliases, the owner asked to continue development under the proposed
+bounded contract in #60. It selects 15 implemented mutations, retains 11 GETs and
+leaves the two authenticated schedule mutation stubs at 501. Existing resource/
+workspace/membership checks and history-import role permission precede entitlement;
+authorized locked writes return ordinary HTTP 403 `{ error }` before action
+validation, transactions or multipart processing. Infrastructure faults are not
+relabeled as plan refusals. This deliberately makes lock refusal precede malformed
+action bodies and finalized-Run conflicts, not the earlier general body parser.
+
+Only exact boolean `enabled: false` may disable Run sharing while locked. Every
+other value is write-gated; existing token mint/reuse and public projections stay
+unchanged. Reuse `PlanLimitsService`, its rank/grace/admin-expiry/cache behavior,
+the existing native fixture and shared writers; do not gate read-access helpers or
+add a second policy system. Project archive remains the capacity escape; Run
+deletion does not free a project slot. Business/history/file refusal invariants do
+not prohibit existing billing/authentication metadata effects, and REST 403s retain
+their existing non-activity semantics.
+
+The only selected UI repair is error presentation and draft/state recovery on the
+existing Plan list/detail, Run lifecycle and full-page execution surfaces. Browser
+injected refusals establish UI behavior, not native entitlement proof. Native
+HTTP/PostgreSQL execution, persisted snapshots and storage non-invocation own that
+proof. #60 comments/metadata own failing-first and final exact-head receipts, not
+evidence-only commits. Broader aliases, sharing-policy redesign, reporter/MCP
+contracts, telemetry, retention, deployment, independent review and overall F8 or
+Phase 1 exit remain outside this increment and open where already recorded.
+
 #### Finite owner/reviewer action list and stopping rule
 
 | Decision | Required record, owner and proposed review trigger |

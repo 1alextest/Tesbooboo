@@ -475,6 +475,7 @@ export default function TestRunDetailPage() {
   const [shareToken, setShareToken] = useState<string | null>(null);
   const [shareToggling, setShareToggling] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
+  const [runStatusError, setRunStatusError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const load = useCallback(() => {
@@ -912,11 +913,12 @@ export default function TestRunDetailPage() {
   async function handleRunStatusChange(newStatus: string) {
     if (!run) return;
     if (newStatus !== "Planning" && executions.length === 0) return;
+    setRunStatusError(null);
     try {
       await updateTestRun(cycleId, { status: newStatus });
       setRun({ ...run, status: newStatus });
-    } catch {
-      // ignore
+    } catch (error) {
+      setRunStatusError(error instanceof Error ? error.message : "Failed to update test run status.");
     }
   }
 
@@ -1156,6 +1158,11 @@ export default function TestRunDetailPage() {
           )}
 
         {/* Page header: title + status + owner + description + meta */}
+        {runStatusError && (
+          <p role="alert" className="mb-3 shrink-0 rounded-lg border border-[var(--error)]/20 bg-[var(--error-soft)] p-3 text-sm text-[var(--error-foreground)]">
+            {runStatusError}
+          </p>
+        )}
         <div className="mb-3 shrink-0">
           <div className="flex flex-wrap items-center gap-2.5">
             <RunAvatar name={run.name} size={28} />

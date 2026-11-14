@@ -139,6 +139,7 @@ export default function PlansPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [newRelease, setNewRelease] = useState("");
@@ -208,12 +209,14 @@ export default function PlansPage() {
 
   async function handleDelete(plan: PlanListItem) {
     if (!confirm(`Delete "${plan.name}"? Associated runs will not be deleted but will be unlinked.`)) return;
+    setDeleteError(null);
     const previous = plans;
     setPlans((list) => list.filter((p) => p.id !== plan.id));
     try {
       await deletePlan(plan.id);
-    } catch {
+    } catch (error) {
       setPlans(previous);
+      setDeleteError(error instanceof Error ? error.message : "Failed to delete test plan.");
     }
   }
 
@@ -295,6 +298,11 @@ export default function PlansPage() {
       }
     >
       {/* Create form */}
+      {deleteError && (
+        <p role="alert" className="mb-3 rounded-lg border border-[var(--error)]/20 bg-[var(--error-soft)] p-3 text-sm text-[var(--error-foreground)]">
+          {deleteError}
+        </p>
+      )}
       {showCreate && (
         <Card className="p-5">
           <form onSubmit={handleCreate}>

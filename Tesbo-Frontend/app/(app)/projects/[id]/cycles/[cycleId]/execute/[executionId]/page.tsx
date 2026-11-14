@@ -73,6 +73,7 @@ export default function ExecutionDetailPage() {
   const [actualResult, setActualResult] = useState("");
   const [assigneeId, setAssigneeId] = useState("");
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [bugRefreshError, setBugRefreshError] = useState<string | null>(null);
   const [finalizedAutomation, setFinalizedAutomation] = useState(false);
   /* Bug Key / Bug Title shown for a linked execution — read from the real bug(s) filed via "Log
@@ -176,6 +177,7 @@ export default function ExecutionDetailPage() {
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
+    setSaveError(null);
     try {
       await updateExecution(cycleId, executionId, {
         status,
@@ -184,6 +186,8 @@ export default function ExecutionDetailPage() {
       });
       router.push(`/projects/${projectId}/cycles/${cycleId}`);
       router.refresh();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Failed to save execution.");
     } finally {
       setSaving(false);
     }
@@ -261,6 +265,11 @@ export default function ExecutionDetailPage() {
         </section>
 
         <form onSubmit={handleSave} className="space-y-5">
+          {saveError && (
+            <p role="alert" className="rounded-lg border border-[var(--error)]/20 bg-[var(--error-soft)] p-3 text-sm text-[var(--error-foreground)]">
+              {saveError}
+            </p>
+          )}
           {/* Status buttons */}
           <div>
             <label className="block text-sm font-medium text-[var(--muted)] mb-2">

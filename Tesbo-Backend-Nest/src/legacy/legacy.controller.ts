@@ -23,6 +23,7 @@ import ExcelJS from "exceljs";
 import { filter, interval, map, merge, Observable, of } from "rxjs";
 import { AuthenticatedRequest } from "../common/request.types";
 import { LegacyService } from "./legacy.service";
+import { PlanRunWrite } from "./plan-run-write-lock.guard";
 import { CustomFieldsService } from "../custom-fields/custom-fields.service";
 import { CustomFieldDefinitionDto, normalizeTestcaseHeader, RESERVED_TESTCASE_HEADERS } from "../custom-fields/custom-fields.types";
 import { ZyraProgressService } from "./zyra-progress.service";
@@ -628,11 +629,13 @@ export class LegacyController {
   }
 
   @Patch("/api/plans/:planId")
+  @PlanRunWrite("plan")
   updatePlan(@Req() req: AuthenticatedRequest, @Param("planId") planId: string, @Body() body: Record<string, any>) {
     return this.legacy.updatePlan(req.userId, planId, body);
   }
 
   @Delete("/api/plans/:planId")
+  @PlanRunWrite("plan")
   deletePlan(@Req() req: AuthenticatedRequest, @Param("planId") planId: string) {
     return this.legacy.deletePlan(req.userId, planId);
   }
@@ -643,11 +646,13 @@ export class LegacyController {
   }
 
   @Post("/api/plans/:planId/items")
+  @PlanRunWrite("plan")
   addPlanItem(@Req() req: AuthenticatedRequest, @Param("planId") planId: string, @Body() body: Record<string, any>) {
     return this.legacy.addPlanItem(req.userId, planId, body);
   }
 
   @Delete("/api/plans/:planId/items/:itemId")
+  @PlanRunWrite("planItem")
   removePlanItem(
     @Req() req: AuthenticatedRequest,
     @Param("planId") planId: string,
@@ -692,16 +697,19 @@ export class LegacyController {
   }
 
   @Patch("/api/cycles/:cycleId")
+  @PlanRunWrite("cycle")
   updateCycle(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.updateCycle(cycleId, req.userId, body);
   }
 
   @Delete("/api/cycles/:cycleId")
+  @PlanRunWrite("cycle")
   deleteCycle(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string) {
     return this.legacy.deleteCycle(cycleId, req.userId);
   }
 
   @Post("/api/cycles/:cycleId/testcases")
+  @PlanRunWrite("cycle")
   addCycleCases(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.addCycleTestCases(cycleId, req.userId, body);
   }
@@ -709,11 +717,13 @@ export class LegacyController {
   // Mirrors /api/projects/:projectId/testcases/bulk-delete: POST (not DELETE) so the id list
   // travels in a body, which no proxy strips the way it can from a DELETE.
   @Post("/api/cycles/:cycleId/testcases/bulk-delete")
+  @PlanRunWrite("cycle")
   removeCycleCases(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.removeCycleTestCases(cycleId, req.userId, body);
   }
 
   @Delete("/api/cycles/:cycleId/testcases/:testcaseId")
+  @PlanRunWrite("cycle")
   removeCycleCase(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Param("testcaseId") testcaseId: string) {
     return this.legacy.removeCycleTestCase(cycleId, req.userId, testcaseId);
   }
@@ -724,6 +734,7 @@ export class LegacyController {
   }
 
   @Patch("/api/cycles/:cycleId/executions/:executionId")
+  @PlanRunWrite("execution")
   updateExecution(
     @Req() req: AuthenticatedRequest,
     @Param("executionId") executionId: string,
@@ -734,6 +745,7 @@ export class LegacyController {
   }
 
   @Post("/api/cycles/:cycleId/executions/:executionId/attachments")
+  @PlanRunWrite("execution")
   @UseInterceptors(FilesInterceptor("files", 10, { limits: { fileSize: LegacyService.KB_MAX_UPLOAD_SIZE } }))
   uploadExecutionAttachments(
     @Req() req: AuthenticatedRequest,
@@ -830,22 +842,26 @@ export class LegacyController {
   }
 
   @Post("/api/cycles/:cycleId/executions/bulk-assign")
+  @PlanRunWrite("cycle")
   bulkAssign(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.bulkAssignExecutions(cycleId, req.userId, body);
   }
 
   @Post("/api/cycles/:cycleId/executions/bulk-status")
+  @PlanRunWrite("cycle")
   bulkStatus(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.bulkUpdateExecutionStatus(cycleId, req.userId, body);
   }
 
   /** Owner-or-manager: applies a run's and its results' past state from another tool onto this run. See importRunHistory. */
   @Post("/api/cycles/:cycleId/history-import")
+  @PlanRunWrite("historyImport")
   importRunHistory(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.importRunHistory(req.userId, cycleId, body);
   }
 
   @Post("/api/cycles/:cycleId/share")
+  @PlanRunWrite("sharing")
   shareCycle(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.shareCycle(cycleId, req.userId, body);
   }

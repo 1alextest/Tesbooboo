@@ -11,6 +11,7 @@ import type { DatabaseService } from "../database/database.service";
 import { CustomFieldsService } from "../custom-fields/custom-fields.service";
 import { ZyraProgressService } from "../legacy/zyra-progress.service";
 import { WelcomeEmailService } from "../welcome-email/welcome-email.service";
+import type { PlanLimitsService } from "../plan-limits/plan-limits.service";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
 @Controller("api/projects/:projectId/testcases")
@@ -193,8 +194,12 @@ describe("execution run context through the actual controller/service HTTP bound
   const runId = "55555555-5555-4555-8555-555555555555";
   const executionId = "66666666-6666-4666-8666-666666666666";
   const otherRun = "77777777-7777-4777-8777-777777777777";
+  const organizationId = "88888888-8888-4888-8888-888888888888";
+  const writable = jest.fn().mockResolvedValue(undefined);
   const query = jest.fn(async (sql: string, values?: unknown[]) => {
+    if (sql.includes("SELECT project_id FROM cycles")) return { rows: values?.[0] === runId || values?.[0] === otherRun ? [{ project_id: PROJECT }] : [] };
     if (sql.includes("FROM executions e") && sql.includes("WHERE e.id = $1")) {
+      if (sql.includes("c.id = $2") && values?.[1] !== runId) return { rows: [] };
       return { rows: [{ id: executionId, project_id: PROJECT, cycle_id: runId, status: "Passed", executed_by: memberId, assignee_id: null }] };
     }
     if (sql.includes("FROM cycles") && sql.includes("FOR UPDATE")) return { rows: [{ source: "manual", closed_at: null }] };
@@ -208,10 +213,14 @@ describe("execution run context through the actual controller/service HTTP bound
   let notify: jest.SpyInstance;
 
   beforeAll(async () => {
-    const service = makeLegacy({ query, transaction } as unknown as DatabaseService);
+    // This existing transport unit fixture models SQL and an unlocked entitlement explicitly;
+    // the selected native fixture owns real billing/authentication/PostgreSQL proof.
+    const service = makeLegacy({ query, transaction } as unknown as DatabaseService, {
+      planLimits: { assertProjectWritable: writable } as unknown as PlanLimitsService
+    });
     jest.spyOn(service, "requireProjectAccess").mockImplementation(async (actor) => {
       if (actor !== memberId) throw new NotFoundException({ error: "Project not found" });
-      return {} as never;
+      return { organization_id: organizationId } as never;
     });
     activity = jest.spyOn(service, "logProjectActivity").mockResolvedValue(undefined);
     notify = jest.spyOn(service as unknown as { notifyExecutionChange: () => Promise<void> }, "notifyExecutionChange").mockResolvedValue(undefined);
@@ -236,7 +245,7 @@ describe("execution run context through the actual controller/service HTTP bound
     baseUrl = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`;
   });
   afterAll(async () => { await app?.close(); });
-  beforeEach(() => { query.mockClear(); transaction.mockClear(); activity.mockClear(); notify.mockClear(); });
+  beforeEach(() => { query.mockClear(); transaction.mockClear(); activity.mockClear(); notify.mockClear(); writable.mockClear(); });
 
   async function patchRun(cycleId: string, actor: string | null = memberId, token = false) {
     return fetch(`${baseUrl}/api/cycles/${cycleId}/executions/${executionId}`, {
@@ -258,6 +267,7 @@ describe("execution run context through the actual controller/service HTTP bound
     expect((await patchRun(runId)).status).toBe(200);
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(query.mock.calls.some(([sql]) => sql.includes("UPDATE executions SET"))).toBe(true);
+    expect(writable).toHaveBeenCalledWith(organizationId, PROJECT);
   });
 
   it("retains anonymous, inaccessible-project and flat token-route refusals", async () => {
