@@ -255,6 +255,29 @@ const url = process.env.DATABASE_URL ?? "";
       }
     });
 
+    it("preserves a changed but unlinked requirement as an unknown-coverage QA gap", async () => {
+      await admin.query("UPDATE testcases SET jira_issue_key=NULL WHERE id=$1", [caseA]);
+      try {
+        const before = await reader.captureForUser(user, projectA);
+        await admin.query(
+          "UPDATE jira_tickets SET summary='Unlinked changed requirement' WHERE id=$1",
+          [ticketA]
+        );
+        const after = await reader.captureForUser(user, projectA);
+        const diff = compareComparableGraphCaptures(before, after);
+        const requirementId = JSON.stringify(["cached_requirement", projectA, "jira", ticketA]);
+        expect(diff.modifiedNodes).toEqual([requirementId]);
+        expect(diff.directlyAffectedNodeIds).toEqual([requirementId]);
+        expect(after.snapshot!.edges.filter((edge) => edge.to === requirementId)).toEqual([]);
+        // Zero currently recorded links is NOT an oracle that no tests need QA review.
+        expect(after.coverageAssertion).toBe("none");
+        expect(after.upstreamFreshness).toBe("unverified");
+      } finally {
+        await admin.query("UPDATE jira_tickets SET summary='First project only' WHERE id=$1", [ticketA]);
+        await admin.query("UPDATE testcases SET jira_issue_key='GRA-42' WHERE id=$1", [caseA]);
+      }
+    });
+
     it("detects an unlinked case change without fabricating a requirement or a safe QA verdict", async () => {
       const before = await reader.captureForUser(user, projectA);
       const newId = (await admin.query(
