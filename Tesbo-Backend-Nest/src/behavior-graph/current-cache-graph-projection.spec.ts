@@ -240,3 +240,91 @@ describe("current cached requirement projection", () => {
     expect(capture.snapshot?.edges).toHaveLength(0);
   });
 });
+
+/**
+ * Bounded, synthetic six-case pilot for a combined behavior/traceability review.
+ * These IDs and titles are fixtures, NOT the six live NES-TC records. This test
+ * never updates Tesbo data, approves a draft or asserts runtime coverage.
+ */
+describe("six-case joint behavior and traceability pilot (synthetic only)", () => {
+  const cases = Array.from({ length: 6 }, (_, index) => ({
+    ...baseline.cases[0],
+    id: `fixture-draft-${index + 1}`,
+    title: `Unapproved scenario ${index + 1}`,
+    description: `Original intent ${index + 1}`,
+    jiraIssueKey: index < 3 ? "JR-123" : null
+  }));
+  const source: CurrentSourceProjection = { ...baseline, cases };
+
+  it("keeps six distinct draft-case identities, three reference edges and zero coverage claims", () => {
+    const capture = projectCurrentCacheGraph(source);
+    expect(capture.inventoryStatus).toBe("complete");
+    expect(capture.snapshot?.nodes.filter((node) => node.type === "test_case")).toHaveLength(6);
+    expect(capture.snapshot?.edges).toHaveLength(3);
+    expect(capture.snapshot?.edges.every((edge) => edge.type === "references_cached_requirement")).toBe(true);
+    expect(capture.coverageAssertion).toBe("none");
+    expect(capture.upstreamFreshness).toBe("unverified");
+    expect(capture.snapshot?.nodes.map((node) => node.id)).toEqual(
+      expect.arrayContaining(cases.map((testcase) => JSON.stringify(["test_case", source.projectId, testcase.id])))
+    );
+  });
+
+  it("previews three wording refinements without changing IDs or inventing new relationships", () => {
+    const original = projectCurrentCacheGraph(source);
+    const proposed = projectCurrentCacheGraph({
+      ...source,
+      cases: cases.map((testcase, index) =>
+        [2, 3, 4].includes(index)
+          ? { ...testcase, description: `Clearer proposed setup and expected result ${index + 1}` }
+          : testcase
+      )
+    });
+    const impact = compareComparableGraphCaptures(original, proposed);
+    expect(impact.addedNodes).toEqual([]);
+    expect(impact.removedNodes).toEqual([]);
+    expect(impact.modifiedNodes).toEqual([3, 4, 5].map((id) =>
+      JSON.stringify(["test_case", source.projectId, `fixture-draft-${id}`])
+    ));
+    expect(impact.addedEdges).toEqual([]);
+    expect(impact.removedEdges).toEqual([]);
+    expect(impact.modifiedEdges).toEqual([]);
+    expect(original.snapshot?.edges).toEqual(proposed.snapshot?.edges);
+    expect(cases[2].description).toBe("Original intent 3");
+  });
+
+  it("surfaces linked cases as review candidates, not verified tests, when a cached requirement changes", () => {
+    const original = projectCurrentCacheGraph(source);
+    const changed = projectCurrentCacheGraph({
+      ...source, requirements: source.requirements.map((requirement) => ({
+        ...requirement, description: "Changed source requirement, needs QA review"
+      }))
+    });
+    const impact = compareComparableGraphCaptures(original, changed);
+    expect(impact.modifiedNodes).toEqual([
+      JSON.stringify(["cached_requirement", source.projectId, "jira", "cached-row-1"])
+    ]);
+    expect(impact.modifiedEdges).toEqual([]);
+    const changedRequirement = impact.modifiedNodes[0];
+    const candidates = changed.snapshot!.edges
+      .filter((edge) => edge.type === "references_cached_requirement" && edge.to === changedRequirement)
+      .map((edge) => edge.from).sort();
+    expect(candidates).toEqual([1, 2, 3].map((id) =>
+      JSON.stringify(["test_case", source.projectId, `fixture-draft-${id}`])
+    ));
+    expect(changed.coverageAssertion).toBe("none");
+    expect(impact.directlyAffectedNodeIds).toEqual([changedRequirement]);
+    // The remaining unlinked drafts still exist; no edge is fabricated for them.
+    expect(changed.snapshot?.nodes.filter((node) => node.type === "test_case")).toHaveLength(6);
+  });
+
+  it("fails closed when the pilot has an unsynced requirement link", () => {
+    const invalid = projectCurrentCacheGraph({
+      ...source, cases: cases.map((testcase, index) =>
+        index === 5 ? { ...testcase, jiraIssueKey: "JR-NOT-CACHED" } : testcase)
+    });
+    expect(invalid.snapshot).toBeNull();
+    expect(invalid.unresolvedDiagnostics.join(" ")).toContain("unresolved");
+    expect(() => compareComparableGraphCaptures(projectCurrentCacheGraph(source), invalid))
+      .toThrow("source inventory is not complete");
+  });
+});
