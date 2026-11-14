@@ -34,26 +34,32 @@ WITH allowed AS (
 jira_map AS (
   SELECT m.project_id, m.id AS mapping_id, m.jira_project_id AS remote_id,
          c.id AS connection_id,
+         (c.id IS NULL OR c.disconnected_at IS NOT NULL) AS disconnected,
          CASE WHEN NULLIF(c.external_id,'') IS NULL AND NULLIF(c.site_url,'') IS NULL\n              THEN NULL ELSE jsonb_build_array(c.external_id,c.site_url)::text END AS namespace
     FROM jira_project_mappings m JOIN allowed a ON a.id = m.project_id
-    LEFT JOIN integration_connections c ON c.organization_id = a.organization_id AND c.provider = 'jira'
+    LEFT JOIN integration_connections c ON c.id = m.jira_connection_id
+      AND c.organization_id = a.organization_id AND c.provider = 'jira'
    WHERE m.enabled = true
 ),
 linear_map AS (
   SELECT m.project_id, m.id AS mapping_id, m.linear_team_id AS remote_id,
          concat(m.entity_type,':',m.linear_team_id)::text AS entity_scope,
          c.id AS connection_id,
+         (c.id IS NULL OR c.disconnected_at IS NOT NULL) AS disconnected,
          CASE WHEN NULLIF(c.external_id,'') IS NULL AND NULLIF(c.site_url,'') IS NULL\n              THEN NULL ELSE jsonb_build_array(c.external_id,c.site_url)::text END AS namespace
     FROM linear_project_mappings m JOIN allowed a ON a.id = m.project_id
-    LEFT JOIN integration_connections c ON c.organization_id = a.organization_id AND c.provider = 'linear'
+    LEFT JOIN integration_connections c ON c.id = m.integration_connection_id
+      AND c.organization_id = a.organization_id AND c.provider = 'linear'
    WHERE m.enabled = true
 ),
 notion_map AS (
   SELECT m.project_id, m.id AS mapping_id, m.notion_database_id AS remote_id,
          c.id AS connection_id,
+         (c.id IS NULL OR c.disconnected_at IS NOT NULL) AS disconnected,
          CASE WHEN NULLIF(c.external_id,'') IS NULL AND NULLIF(c.site_url,'') IS NULL\n              THEN NULL ELSE jsonb_build_array(c.external_id,c.site_url)::text END AS namespace
     FROM notion_project_mappings m JOIN allowed a ON a.id = m.project_id
-    LEFT JOIN integration_connections c ON c.organization_id = a.organization_id AND c.provider = 'notion'
+    LEFT JOIN integration_connections c ON c.id = m.integration_connection_id
+      AND c.organization_id = a.organization_id AND c.provider = 'notion'
    WHERE m.enabled = true
 )
 SELECT EXISTS(SELECT 1 FROM allowed) AS authorized,
@@ -69,15 +75,15 @@ SELECT EXISTS(SELECT 1 FROM allowed) AS authorized,
     WHERE t.deleted_at IS NULL) AS cases,
   (SELECT COALESCE(jsonb_agg(jsonb_build_object(
        'provider','jira','mappingId',m.mapping_id::text,'connectionId',m.connection_id::text,
-       'namespace',m.namespace,'remoteProjectId',m.remote_id::text
+       'namespace',m.namespace,'disconnected',m.disconnected,'remoteProjectId',m.remote_id::text
      ) ORDER BY m.mapping_id), '[]'::jsonb) FROM jira_map m) AS jira_scopes,
   (SELECT COALESCE(jsonb_agg(jsonb_build_object(
        'provider','linear','mappingId',m.mapping_id::text,'connectionId',m.connection_id::text,
-       'namespace',m.namespace,'remoteProjectId',m.entity_scope
+       'namespace',m.namespace,'disconnected',m.disconnected,'remoteProjectId',m.entity_scope
      ) ORDER BY m.mapping_id), '[]'::jsonb) FROM linear_map m) AS linear_scopes,
   (SELECT COALESCE(jsonb_agg(jsonb_build_object(
        'provider','notion','mappingId',m.mapping_id::text,'connectionId',m.connection_id::text,
-       'namespace',m.namespace,'remoteProjectId',m.remote_id::text
+       'namespace',m.namespace,'disconnected',m.disconnected,'remoteProjectId',m.remote_id::text
      ) ORDER BY m.mapping_id), '[]'::jsonb) FROM notion_map m) AS notion_scopes,
   (SELECT COALESCE(jsonb_agg(jsonb_build_object(
        'projectId',t.project_id::text,'provider','jira','rowId',t.id::text,
