@@ -17,6 +17,8 @@ import type { KbExtractionRunnerService } from "./kb-extraction-runner.service";
 import type { SuitesCacheService } from "../cache/suites-cache.service";
 import type { TestcasesListCacheService } from "../cache/testcases-list-cache.service";
 import type { ProjectOverviewCacheService } from "../cache/project-overview-cache.service";
+import { runInZyraLanguage } from "./zyra-language-context";
+import * as aiTrace from "../observability/ai-trace";
 
 process.env.SECRETS_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
 
@@ -78,6 +80,17 @@ function applyOps(svc: LegacyService, operations: Body[]): Promise<AppliedShape>
   );
 }
 
+const SUITE_ERROR = {
+  en: "⚠️ Suite operations reported an error. Do not treat the response below as confirmation that every operation completed. Any changes already applied were kept; check the activity log before retrying.",
+  ru: "⚠️ При выполнении операций с наборами возникла ошибка. Ответ ниже не подтверждает, что все операции завершились. Уже применённые изменения сохранены; перед повтором проверьте журнал действий."
+};
+
+function finalReply(svc: LegacyService, operations: Body[], applied: AppliedShape, reply: string): string {
+  return (svc as unknown as { finalizeZyraChatReply: (...args: unknown[]) => string }).finalizeZyraChatReply(
+    { reply, actionType: "suite", operations }, applied, applied.testcases
+  );
+}
+
 describe("applyZyraChatOperations — one operation's failure does not lose the rest of the turn", () => {
   afterEach(() => jest.restoreAllMocks());
 
@@ -123,4 +136,90 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
     expect(failure?.detail).toContain("create suite");
     expect(failure?.detail).not.toContain("connection reset");
   });
+
+  for (const language of ["en", "ru"] as const) {
+    const reply = language === "en" ? "Created the requested suites." : "Запрошенные наборы созданы.";
+
+    it(`${language}: corrects the final reply when every create-suite operation fails`, async () => {
+      const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
+      const operations = [{ type: "create_suite", suiteName: "Only Suite" }];
+      jest.spyOn(svc as unknown as { resolveOrCreateSuiteByName: (...a: unknown[]) => Promise<unknown> }, "resolveOrCreateSuiteByName")
+        .mockRejectedValue(new Error("private database detail"));
+      const applied = await applyOps(svc, operations);
+      const out = runInZyraLanguage(language, () => finalReply(svc, operations, applied, reply));
+      expect(out).toBe(`${SUITE_ERROR[language]}\n\n${reply}`);
+      expect(out).not.toContain("private database detail");
+    });
+
+    it(`${language}: corrects partial suite success without denying the earlier write`, async () => {
+      const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
+      const operations = [{ type: "create_suite", suiteName: "First Suite" }, { type: "create_suite", suiteName: "Second Suite" }];
+      jest.spyOn(svc as unknown as { resolveOrCreateSuiteByName: (...a: unknown[]) => Promise<unknown> }, "resolveOrCreateSuiteByName")
+        .mockResolvedValueOnce({ id: "suite-1", name: "First Suite", created: true })
+        .mockRejectedValueOnce(new Error("private database detail"));
+      const applied = await applyOps(svc, operations);
+      expect(applied.activity.filter((entry) => entry.title === "Created suite")).toHaveLength(1);
+      const out = runInZyraLanguage(language, () => finalReply(svc, operations, applied, reply));
+      expect(out).toBe(`${SUITE_ERROR[language]}\n\n${reply}`);
+      expect(out).not.toContain("Nothing was saved");
+      expect(out).not.toContain("Ничего не сохранено");
+    });
+
+    it(`${language}: keeps feedback conservative after an injected post-write collaborator exception`, async () => {
+      const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
+      const operations = [{ type: "create_suite", suiteName: "Written Suite" }];
+      jest.spyOn(svc as unknown as { resolveOrCreateSuiteByName: (...a: unknown[]) => Promise<unknown> }, "resolveOrCreateSuiteByName")
+        .mockResolvedValue({ id: "suite-1", name: "Written Suite", created: true });
+      // A synthetic boundary shape, not native audit-delivery evidence: logProjectActivity normally
+      // swallows DB errors. The formatter must not infer rollback from a failure after a success event.
+      jest.spyOn(svc as unknown as { logProjectActivity: (...a: unknown[]) => Promise<unknown> }, "logProjectActivity")
+        .mockRejectedValue(new Error("private audit detail"));
+      const applied = await applyOps(svc, operations);
+      expect(applied.activity.map((entry) => entry.title)).toEqual(["Created suite", "An operation failed unexpectedly"]);
+      const out = runInZyraLanguage(language, () => finalReply(svc, operations, applied, reply));
+      expect(out).toBe(`${SUITE_ERROR[language]}\n\n${reply}`);
+      expect(out).not.toContain("private audit detail");
+    });
+
+    it.each([true, false])(`${language}: leaves a successful create/reuse alone (created=%s)`, async (created) => {
+      const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
+      const operations = [{ type: "create_suite", suiteName: "Existing Suite" }];
+      jest.spyOn(svc as unknown as { resolveOrCreateSuiteByName: (...a: unknown[]) => Promise<unknown> }, "resolveOrCreateSuiteByName")
+        .mockResolvedValue({ id: "suite-1", name: "Existing Suite", created });
+      const applied = await applyOps(svc, operations);
+      const successfulReply = created ? reply : language === "en" ? "The requested suite already exists." : "Запрошенный набор уже существует.";
+      expect(runInZyraLanguage(language, () => finalReply(svc, operations, applied, successfulReply))).toBe(successfulReply);
+    });
+
+    it(`${language}: still corrects an invented testcase mutation beside a genuine suite success`, async () => {
+      const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
+      const operations = [{ type: "create_suite", suiteName: "Regression" }];
+      jest.spyOn(svc as unknown as { resolveOrCreateSuiteByName: (...a: unknown[]) => Promise<unknown> }, "resolveOrCreateSuiteByName")
+        .mockResolvedValue({ id: "suite-1", name: "Regression", created: true });
+      const applied = await applyOps(svc, operations);
+      const falseClaim = language === "en"
+        ? "Created the Regression suite and added 5 test cases to it."
+        : "Создан набор Regression. Добавлены 5 тест-кейсов.";
+      const out = runInZyraLanguage(language, () => finalReply(svc, operations, applied, falseClaim));
+      expect(out).toContain(language === "en" ? "Sorry! Nothing was saved" : "Извините! Ничего не сохранено");
+      expect(out).toContain(falseClaim);
+    });
+
+    it(`${language}: records the new warning in the existing reconciliation diagnostic`, async () => {
+      const svc = makeLegacy();
+      const record = jest.spyOn(aiTrace, "recordReconciliation").mockResolvedValue(undefined);
+      (svc as unknown as { db: { query: jest.Mock } }).db.query.mockResolvedValue({ rows: [{ id: "assistant-1", testcases: [], activity: [] }] });
+      const operations = [{ type: "create_suite", suiteName: "Only Suite" }];
+      const applied = { testcases: [], activity: [{ title: "An operation failed unexpectedly" }], reviewRequestId: null };
+      await runInZyraLanguage(language, () => (svc as unknown as { insertZyraAssistantMessage: (...args: unknown[]) => Promise<unknown> }).insertZyraAssistantMessage({
+        projectId: "project-1", sessionId: "session-1", uid: "user-1", traceMessageId: "turn-1",
+        decision: { reply, actionType: "suite", operations }, applied, testcases: [], activity: applied.activity
+      }));
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({ messageId: "turn-1" }), expect.objectContaining({
+        bannerFired: "suite-operation-error",
+        reply: `${SUITE_ERROR[language]}\n\n${reply}`,
+        reason: "suite-operation-error — an operation reported an error; any completed changes were kept"
+      }));
+    });
+  }
 });
