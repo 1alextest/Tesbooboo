@@ -30,7 +30,8 @@ import {
   ZYRA_RU_COMPLETION_CLAIM,
   ZYRA_RU_OFFER,
   ZYRA_RU_RESUME,
-  ZYRA_RU_STAGED_AWAITING
+  ZYRA_RU_STAGED_AWAITING,
+  ZYRA_RU_TESTCASE_ONLY_COMPLETION_CLAIM
 } from "./zyra-replies-ru";
 import { ApiTokenService } from "../auth/api-token.service";
 import { RagIngestionService } from "../rag/rag-ingestion.service";
@@ -15441,14 +15442,17 @@ export class LegacyService implements OnModuleInit {
       const proposedCount = applied.testcases.filter((tc) => typeof tc.action === "string" && tc.action.startsWith("proposed-")).length;
       let bannerFired: string | null = null;
       // Recognises the Russian banners too, so a Russian turn's trace records the same outcome.
-      if (finalReply.includes("Sorry! Nothing was saved") || finalReply.includes(ZYRA_RU.falseClaimBanner.split("\n")[0])) bannerFired = "false-completion-claim";
+      if (finalReply.startsWith("⚠️ Suite operations reported an error.") || finalReply.startsWith(ZYRA_RU.suiteOperationError)) bannerFired = "suite-operation-error";
+      else if (finalReply.includes("Sorry! Nothing was saved") || finalReply.includes(ZYRA_RU.falseClaimBanner.split("\n")[0])) bannerFired = "false-completion-claim";
       else if (finalReply.includes("⚠️ Nothing was saved.") || finalReply.startsWith("⚠️ Ничего не сохранено.")) bannerFired = "zero-applied";
       else if (/were drafted for review\.?$/m.test(finalReply.split("\n")[0] || "") || (finalReply.split("\n")[0] || "").includes("Подготовлено для проверки операций с тест-кейсами")) bannerFired = "partial-application";
       await recordReconciliation(
         { messageId: traceMessageId, sessionId, projectId, userId: uid },
         {
           bannerFired,
-          reason: bannerFired ? `${bannerFired} — ${appliedCount} of ${requested} applied, ${proposedCount} proposed` : "reply passed through unmodified",
+          reason: bannerFired === "suite-operation-error"
+            ? "suite-operation-error — an operation reported an error; any completed changes were kept"
+            : bannerFired ? `${bannerFired} — ${appliedCount} of ${requested} applied, ${proposedCount} proposed` : "reply passed through unmodified",
           requested,
           appliedCount,
           proposedCount,
@@ -24334,7 +24338,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
    */
   private zyraFalseCompletionBannerRu(reply: string, salvaged: boolean, englishPattern: RegExp): string {
     const folded = foldRu(reply);
-    if (!englishPattern.test(reply) && !ZYRA_RU_COMPLETION_CLAIM.test(folded)) return "";
+    const russianPattern = englishPattern === LegacyService.ZYRA_TESTCASE_ONLY_COMPLETION_CLAIM
+      ? ZYRA_RU_TESTCASE_ONLY_COMPLETION_CLAIM : ZYRA_RU_COMPLETION_CLAIM;
+    if (!englishPattern.test(reply) && !russianPattern.test(folded)) return "";
     if (!salvaged && (LegacyService.ZYRA_ALREADY_DISCLOSED.test(reply) || ZYRA_RU_ALREADY_DISCLOSED.test(folded))) return "";
     return ZYRA_RU.falseClaimBanner;
   }
@@ -24384,6 +24390,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     // (see ZYRA_TESTCASE_ONLY_COMPLETION_CLAIM's own comment for why the full completion-claim
     // regex can't be used directly here).
     if (decision.operations.length && decision.operations.every((op) => op.type === "create_suite")) {
+      // Suite writes are independent: an error can follow a committed write. Testcase counts cannot
+      // establish suite success or rollback, so warn on the recorded error without inventing either.
+      if (applied.activity.some((entry) => entry.title === "An operation failed unexpectedly")) {
+        const warning = zyraReplyLanguage() === "ru" ? ZYRA_RU.suiteOperationError
+          : "⚠️ Suite operations reported an error. Do not treat the response below as confirmation that every operation completed. Any changes already applied were kept; check the activity log before retrying.";
+        return warning + "\n\n" + decision.reply + moveSuffix;
+      }
       const banner = this.zyraFalseCompletionBanner(decision.reply, decision.__salvaged, LegacyService.ZYRA_TESTCASE_ONLY_COMPLETION_CLAIM);
       return (banner ? banner + "\n\n" : "") + decision.reply + moveSuffix;
     }
