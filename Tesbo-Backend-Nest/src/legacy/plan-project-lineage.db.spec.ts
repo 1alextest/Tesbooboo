@@ -1,7 +1,26 @@
 import { randomUUID } from "node:crypto";
+import type { AddressInfo } from "node:net";
+import type { INestApplication } from "@nestjs/common";
+import { APP_GUARD } from "@nestjs/core";
+import { Test } from "@nestjs/testing";
 import { Client, Pool } from "pg";
+import type Redis from "ioredis";
 import { DatabaseService } from "../database/database.service";
+import { LegacyService } from "./legacy.service";
 import { buildMcpTools } from "../mcp/mcp.tools";
+import { McpController } from "../mcp/mcp.controller";
+import { McpService } from "../mcp/mcp.service";
+import { AuthMiddleware } from "../auth/auth.middleware";
+import { ApiTokenService } from "../auth/api-token.service";
+import { ApiTokenRestGuard } from "../auth/api-token-rest.guard";
+import type { OtpService } from "../auth/otp.service";
+import type { EmailService } from "../auth/email.service";
+import type { AppConfigService } from "../config/app-config.service";
+import { EntitlementCacheService } from "../cache/entitlement-cache.service";
+import { RequestCacheService } from "../request-cache/request-cache.service";
+import { ProjectLookupService } from "../request-cache/project-lookup.service";
+import { PlanLimitsService } from "../plan-limits/plan-limits.service";
+import { ProjectWriteLockGuard } from "../plan-limits/project-write-lock.guard";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
 
 const url = process.env.DATABASE_URL ?? "";
@@ -136,4 +155,74 @@ const url = process.env.DATABASE_URL ?? "";
       if (table !== "plans") await setup.query(`UPDATE ${table} SET deleted_at=NULL WHERE id=$1`, [id]);
     }
   }, 15_000);
+
+  describe("MCP locked-project parity at the real HTTP and PostgreSQL boundary", () => {
+    let app: INestApplication, base: string, locked: string, organization: string, token: string;
+    const config = { isStripeBillingEnabled: true, entitlementCacheEnabled: true, enableRequestScopedCache: true,
+      frontendUrl: "http://127.0.0.1:3000", sessionCookieName: "mcp-native-session" } as unknown as AppConfigService;
+    const cache = new Map<string, string>();
+    // Explicit Redis/email collaborators only: real entitlement service, middleware, guards,
+    // MCP controller/engine, token hashing/membership and business SQL. No Stripe API is called.
+    const redis = {
+      get: jest.fn(async (key: string) => cache.get(key) ?? null),
+      set: jest.fn(async (key: string, value: string) => { cache.set(key, value); return "OK"; }),
+      del: jest.fn(async (key: string) => Number(cache.delete(key)))
+    } as unknown as Redis;
+    const email = { sendGraceEnded: jest.fn().mockResolvedValue(undefined) } as unknown as EmailService;
+    beforeAll(async () => {
+      organization = (await setup.query("SELECT organization_id FROM projects WHERE id=$1", [project])).rows[0].organization_id;
+      await setup.query("INSERT INTO organization_members (organization_id,user_id,role) VALUES ($1,$2,'owner')", [organization, owner]);
+      await setup.query("UPDATE users SET active_organization_id=$1 WHERE id=$2", [organization, owner]);
+      locked = (await setup.query("INSERT INTO projects (organization_id,key,name) VALUES ($1,'LNC','Locked MCP project') RETURNING id", [organization])).rows[0].id;
+      await setup.query("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'owner')", [locked, owner]);
+      await setup.query("UPDATE organizations SET plan='launch',plan_grace_ends_at=now()-interval '1 day' WHERE id=$1", [organization]);
+      const db = new DatabaseService(pool), legacy = makeLegacy(db), requestCache = new RequestCacheService(config);
+      // This boundary test does not boot unrelated resumable Zyra plans from other retained fixtures.
+      jest.spyOn(legacy, "onModuleInit").mockResolvedValue(undefined);
+      const tokens = new ApiTokenService(db);
+      token = (await tokens.issueToken(owner, locked, "Native MCP parity", ["read", "write"])).token;
+      const limits = new PlanLimitsService(db, config, email, requestCache, new EntitlementCacheService(redis, config));
+      const module = await Test.createTestingModule({
+        controllers: [McpController], providers: [McpService,
+          { provide: DatabaseService, useValue: db }, { provide: LegacyService, useValue: legacy },
+          { provide: PlanLimitsService, useValue: limits },
+          { provide: ProjectLookupService, useValue: new ProjectLookupService(db, requestCache) },
+          { provide: APP_GUARD, useClass: ApiTokenRestGuard }, { provide: APP_GUARD, useClass: ProjectWriteLockGuard }
+        ]
+      }).compile();
+      app = module.createNestApplication();
+      const auth = new AuthMiddleware(config, { resolveSession: async () => null } as unknown as OtpService, tokens);
+      app.use((_req: unknown, _res: unknown, next: () => void) => requestCache.run(next));
+      app.use((req: Parameters<AuthMiddleware["use"]>[0], res: Parameters<AuthMiddleware["use"]>[1], next: Parameters<AuthMiddleware["use"]>[2]) => {
+        void auth.use(req, res, next).catch(next);
+      });
+      await app.listen(0, "127.0.0.1");
+      base = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`;
+    });
+    afterAll(async () => { await app?.close(); });
+    const routes = ["dynamic", "project-prefixed"] as const;
+    const business = async () => (await setup.query("SELECT * FROM suites WHERE project_id=$1 ORDER BY id", [locked])).rows;
+    async function rpc(route: typeof routes[number], method: string, params?: Record<string, unknown>) {
+      const response = await fetch(`${base}${route === "dynamic" ? "/api/mcp" : `/api/projects/${locked}/mcp`}`, {
+        method: "POST", headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 7, method, params })
+      });
+      return { status: response.status, body: await response.json() as Record<string, any> };
+    }
+    it.each(routes)("keeps discovery available on a locked project through %s", async (route) => {
+      const before = await business(), response = await rpc(route, "tools/list");
+      expect(await business()).toEqual(before);
+      expect(response.status).toBe(201);
+      expect(response.body.error).toBeUndefined();
+      expect(response.body.result.tools.map((tool: { name: string }) => tool.name)).toContain("create_suite");
+    });
+    it.each(routes)("refuses a valid write through %s before any persisted business change", async (route) => {
+      const before = await business(), response = await rpc(route, "tools/call", { name: "create_suite", arguments: { name: "Must never be created while locked" } });
+      // One comparison exposes both the wire contract and any actually persisted write in red CI.
+      expect({ ...response, business: await business() }).toEqual({
+        status: 201, body: { jsonrpc: "2.0", id: 7, error: { code: -32003,
+          message: expect.stringContaining("This project is read-only") } }, business: before
+      });
+    });
+  });
 });
