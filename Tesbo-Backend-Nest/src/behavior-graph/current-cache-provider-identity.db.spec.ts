@@ -58,8 +58,8 @@ const url = process.env.DATABASE_URL ?? "";
       );
 
       connection = (await admin.query(
-        `INSERT INTO integration_connections (organization_id,provider,external_id,site_url,access_token)
-         VALUES ($1,'jira','workspace-one','https://workspace-one.atlassian.net','TEST_FIXTURE_NEVER_VALID') RETURNING id`,
+        `INSERT INTO integration_connections (organization_id,provider,external_id,site_url,access_token,token_expires_at)
+         VALUES ($1,'jira','workspace-one','https://workspace-one.atlassian.net','TEST_FIXTURE_NEVER_VALID',now() + interval '1 day') RETURNING id`,
         [org]
       )).rows[0].id;
       await admin.query(
