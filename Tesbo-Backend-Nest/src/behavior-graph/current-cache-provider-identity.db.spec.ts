@@ -222,5 +222,98 @@ const url = process.env.DATABASE_URL ?? "";
         await admin.query("UPDATE jira_tickets SET summary='First project only' WHERE id=$1", [ticketA]);
       }
     });
+    it("distinguishes identical Jira and Linear keys and refuses a Team-to-Project remap", async () => {
+      const linearConnection = (await admin.query(
+        `INSERT INTO integration_connections
+          (organization_id,provider,external_id,site_url,access_token,token_expires_at)
+         VALUES ($1,'linear','linear-workspace','https://linear.app',
+                 'TEST_FIXTURE_NEVER_VALID',now() + interval '1 day') RETURNING id`,
+        [org]
+      )).rows[0].id;
+      await admin.query(
+        `INSERT INTO linear_project_mappings
+          (integration_connection_id,project_id,linear_team_id,linear_team_key,linear_team_name,enabled)
+         VALUES ($1,$2,'remote-team-1','TEAM','Graph Linear Team',true)`,
+        [linearConnection,projectA]
+      );
+      await admin.query(
+        `INSERT INTO linear_tickets
+           (project_id,integration_connection_id,linear_issue_id,linear_issue_key,
+            mapped_remote_id,summary,description)
+         VALUES ($1,$2,'linear-issue-42','GRA-42','remote-team-1',
+                 'Linear issue with colliding display key','Source-specific Linear text')`,
+        [projectA,linearConnection]
+      );
+      await admin.query("UPDATE testcases SET linear_issue_key='GRA-42' WHERE id=$1", [caseA]);
+      try {
+        const before = await reader.captureForUser(user, projectA);
+        expect(before.inventoryStatus).toBe("complete");
+        expect(before.snapshot?.nodes).toHaveLength(3);
+        expect(before.snapshot?.edges).toHaveLength(2);
+        expect(new Set(before.snapshot!.edges.map((edge) => edge.to)).size).toBe(2);
+        expect(before.snapshot!.edges.every((edge) => edge.type === "references_cached_requirement")).toBe(true);
+
+        await admin.query(
+          "UPDATE linear_project_mappings SET entity_type='project' WHERE project_id=$1",
+          [projectA]
+        );
+        const after = await reader.captureForUser(user, projectA);
+        expect(after.sourceScopeFingerprint).not.toBe(before.sourceScopeFingerprint);
+        expect(() => compareComparableGraphCaptures(before,after)).toThrow("source scopes differ");
+      } finally {
+        await admin.query("UPDATE testcases SET linear_issue_key=NULL WHERE id=$1", [caseA]);
+        await admin.query("DELETE FROM integration_connections WHERE id=$1", [linearConnection]);
+      }
+    });
+
+    it("links Notion only by full page ID and refuses archived or short-key references", async () => {
+      const notionConnection = (await admin.query(
+        `INSERT INTO integration_connections
+          (organization_id,provider,external_id,site_url,access_token,token_expires_at)
+         VALUES ($1,'notion','notion-workspace','https://www.notion.so',
+                 'TEST_FIXTURE_NEVER_VALID',now() + interval '1 day') RETURNING id`,
+        [org]
+      )).rows[0].id;
+      const pageId = randomUUID();
+      const shortKey = `notion:${pageId.replace(/-/g, "").slice(0, 8)}`;
+      await admin.query(
+        `INSERT INTO notion_project_mappings
+           (integration_connection_id,project_id,notion_database_id,notion_database_name,enabled)
+         VALUES ($1,$2,'remote-database-1','Graph Notion Database',true)`,
+        [notionConnection,projectA]
+      );
+      await admin.query(
+        `INSERT INTO notion_pages
+           (project_id,integration_connection_id,notion_page_id,notion_page_key,
+            mapped_remote_id,summary,description,properties_json)
+         VALUES ($1,$2,$3,$4,'remote-database-1',
+                 'Notion full page reference','Source property text',$5::jsonb)`,
+        [projectA,notionConnection,pageId,shortKey,JSON.stringify({kind:"requirement"})]
+      );
+      await admin.query("UPDATE testcases SET notion_page_id=$2 WHERE id=$1", [caseA,pageId]);
+      try {
+        const original = await reader.captureForUser(user,projectA);
+        expect(original.snapshot?.nodes).toHaveLength(3);
+        expect(original.snapshot?.edges).toHaveLength(2);
+        expect(original.snapshot?.nodes.some((node) => node.id.includes(pageId))).toBe(false);
+        // Canonical graph uses the local cache row ID, not the remote page/display key.
+        expect(original.snapshot?.edges.some((edge) => edge.type === "references_cached_requirement")).toBe(true);
+
+        await admin.query("UPDATE notion_pages SET archived=true WHERE notion_page_id=$1", [pageId]);
+        const archived = await reader.captureForUser(user,projectA);
+        expect(archived.snapshot).toBeNull();
+        expect(archived.unresolvedDiagnostics.join(" ")).toContain("unresolved");
+        await admin.query("UPDATE notion_pages SET archived=false WHERE notion_page_id=$1", [pageId]);
+
+        await admin.query("UPDATE testcases SET notion_page_id=$2 WHERE id=$1", [caseA,shortKey]);
+        const short = await reader.captureForUser(user,projectA);
+        expect(short.snapshot).toBeNull();
+        expect(short.unresolvedDiagnostics.join(" ")).toContain("unresolved");
+      } finally {
+        await admin.query("UPDATE testcases SET notion_page_id=NULL WHERE id=$1", [caseA]);
+        await admin.query("DELETE FROM integration_connections WHERE id=$1", [notionConnection]);
+      }
+    });
+
   }
 );
