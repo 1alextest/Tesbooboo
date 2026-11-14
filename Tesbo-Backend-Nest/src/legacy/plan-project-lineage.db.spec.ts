@@ -209,10 +209,15 @@ const url = process.env.DATABASE_URL ?? "";
       runId = (await setup.query("INSERT INTO cycles (project_id,plan_id,name) VALUES ($1,$2,'Native locked Run') RETURNING id", [locked, planId])).rows[0].id;
       const item = (await setup.query("INSERT INTO cycle_items (cycle_id,testcase_id,snapshot_title,snapshot_external_id) VALUES ($1,$2,'Native locked Case','LNC-TC-1') RETURNING id", [runId, caseId])).rows[0].id;
       executionId = (await setup.query("INSERT INTO executions (cycle_item_id,status,actual_result,history) VALUES ($1,'Passed','Preserve native result','[{\"status\":\"Blocked\"}]'::jsonb) RETURNING id", [item])).rows[0].id;
-      bugId = (await setup.query("INSERT INTO bugs (project_id,title,testcase_id,cycle_id,execution_id,reported_by) VALUES ($1,'Native locked Bug',$2,$3,$4,$5) RETURNING id", [locked, caseId, runId, executionId, owner])).rows[0].id;
+      bugId = (await setup.query("INSERT INTO bugs (project_id,external_id,title,testcase_id,cycle_id,execution_id,reported_by) VALUES ($1,'LNC-BUG-1','Native locked Bug',$2,$3,$4,$5) RETURNING id", [locked, caseId, runId, executionId, owner])).rows[0].id;
       await setup.query("INSERT INTO bug_links (bug_id,testcase_id,cycle_id,execution_id) VALUES ($1,$2,$3,$4)", [bugId, caseId, runId, executionId]);
       folderId = (await setup.query("INSERT INTO knowledge_folders (organization_id,project_id,name,is_root,created_by,updated_by) VALUES ($1,$2,'Native locked root',true,$3,$3) RETURNING id", [organization, locked, owner])).rows[0].id;
       documentId = (await setup.query("INSERT INTO knowledge_documents (organization_id,project_id,folder_id,title,content_text,created_by,updated_by) VALUES ($1,$2,$3,'Native locked document','Preserve locked content',$4,$4) RETURNING id", [organization, locked, folderId, owner])).rows[0].id;
+      // Retained versions/evidence are populated, not just empty-table equality checks.
+      await setup.query("INSERT INTO testcase_versions (testcase_id,version,snapshot) VALUES ($1,1,'{\"title\":\"Prior native Case\"}'::jsonb)", [caseId]);
+      await setup.query("INSERT INTO plan_items (plan_id,testcase_id) VALUES ($1,$2)", [planId, caseId]);
+      await setup.query("INSERT INTO knowledge_document_versions (document_id,version_number,title,content_text,created_by) VALUES ($1,1,'Prior native document','Keep prior content',$2)", [documentId, owner]);
+      await setup.query("INSERT INTO attachments (project_id,entity_type,entity_id,file_name,content_type,file_size,storage_path,uploaded_by) VALUES ($1,'execution',$2,'keep.txt','text/plain',4,'ci/mcp-lock/keep',$3)", [locked, executionId, owner]);
       limits = new PlanLimitsService(db, config, email, requestCache, new EntitlementCacheService(redis, config));
       quota = jest.spyOn(limits, "assertProjectWritable");
       const module = await Test.createTestingModule({
@@ -245,7 +250,10 @@ const url = process.env.DATABASE_URL ?? "";
       await setup.query("UPDATE organizations SET plan='launch',plan_source='stripe',plan_override_expires_at=NULL,plan_grace_ends_at=now()-interval '1 day' WHERE id=$1", [organization]);
       await limits.invalidateEntitlementCache(organization);
     });
-    afterEach(async () => { await Promise.all(tracking.mock.results.filter((result) => result.type === "return").map((result) => result.value)); });
+    afterEach(async () => {
+      // Keep the original setup error visible if setup failed before the activity spy existed.
+      if (tracking) await Promise.all(tracking.mock.results.filter((result) => result.type === "return").map((result) => result.value));
+    });
     afterAll(async () => { await app?.close(); });
     const routes = ["dynamic", "project-prefixed"] as const;
     const business = async () => (await setup.query("SELECT * FROM suites WHERE project_id=$1 ORDER BY id", [locked])).rows;
@@ -493,13 +501,16 @@ const url = process.env.DATABASE_URL ?? "";
       denied(await rpc("dynamic", "tools/call", input));
     });
     it("retains expired-admin-override retirement and the one-time billing notice without changing business rows", async () => {
-      await setup.query("UPDATE organizations SET plan='pro',plan_source='admin',plan_override_expires_at=now()-interval '1 day',grace_locked_notified_at=NULL WHERE id=$1", [organization]);
+      // A comp expiry opens no grace. Start without a previous downgrade deadline so the
+      // later, separate grace-ended scenario owns the one-time notice assertion.
+      await setup.query("UPDATE organizations SET plan='pro',plan_source='admin',plan_override_expires_at=now()-interval '1 day',plan_grace_ends_at=NULL,grace_locked_notified_at=NULL WHERE id=$1", [organization]);
       await limits.invalidateEntitlementCache(organization);
       const before = await businessState();
       denied(await rpc("dynamic", "tools/call", { name: "create_suite", arguments: { name: "Expired grant" } }));
       expect((await setup.query("SELECT plan,plan_source,plan_grace_ends_at,plan_override_expires_at FROM organizations WHERE id=$1", [organization])).rows[0])
         .toEqual({ plan: "launch", plan_source: "stripe", plan_grace_ends_at: null, plan_override_expires_at: null });
       expect((await setup.query("SELECT count(*)::int AS count FROM audit_logs WHERE organization_id=$1 AND action='billing_downgraded'", [organization])).rows[0].count).toBe(1);
+      expect(email.sendGraceEnded).not.toHaveBeenCalled();
       await setup.query("UPDATE organizations SET plan_grace_ends_at=now()-interval '1 day' WHERE id=$1", [organization]);
       await limits.invalidateEntitlementCache(organization);
       const notices = (await setup.query("SELECT count(*)::int AS count FROM audit_logs WHERE organization_id=$1 AND action='billing_limits_enforced'", [organization])).rows[0].count;
