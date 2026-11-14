@@ -34,7 +34,7 @@ WITH allowed AS (
 jira_map AS (
   SELECT m.project_id, m.id AS mapping_id, m.jira_project_id AS remote_id,
          c.id AS connection_id,
-         jsonb_build_array(c.external_id,c.site_url)::text AS namespace
+         CASE WHEN NULLIF(c.external_id,'') IS NULL AND NULLIF(c.site_url,'') IS NULL\n              THEN NULL ELSE jsonb_build_array(c.external_id,c.site_url)::text END AS namespace
     FROM jira_project_mappings m JOIN allowed a ON a.id = m.project_id
     LEFT JOIN integration_connections c ON c.organization_id = a.organization_id AND c.provider = 'jira'
    WHERE m.enabled = true
@@ -43,7 +43,7 @@ linear_map AS (
   SELECT m.project_id, m.id AS mapping_id, m.linear_team_id AS remote_id,
          concat(m.entity_type,':',m.linear_team_id)::text AS entity_scope,
          c.id AS connection_id,
-         jsonb_build_array(c.external_id,c.site_url)::text AS namespace
+         CASE WHEN NULLIF(c.external_id,'') IS NULL AND NULLIF(c.site_url,'') IS NULL\n              THEN NULL ELSE jsonb_build_array(c.external_id,c.site_url)::text END AS namespace
     FROM linear_project_mappings m JOIN allowed a ON a.id = m.project_id
     LEFT JOIN integration_connections c ON c.organization_id = a.organization_id AND c.provider = 'linear'
    WHERE m.enabled = true
@@ -51,7 +51,7 @@ linear_map AS (
 notion_map AS (
   SELECT m.project_id, m.id AS mapping_id, m.notion_database_id AS remote_id,
          c.id AS connection_id,
-         jsonb_build_array(c.external_id,c.site_url)::text AS namespace
+         CASE WHEN NULLIF(c.external_id,'') IS NULL AND NULLIF(c.site_url,'') IS NULL\n              THEN NULL ELSE jsonb_build_array(c.external_id,c.site_url)::text END AS namespace
     FROM notion_project_mappings m JOIN allowed a ON a.id = m.project_id
     LEFT JOIN integration_connections c ON c.organization_id = a.organization_id AND c.provider = 'notion'
    WHERE m.enabled = true
