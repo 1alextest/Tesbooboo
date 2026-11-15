@@ -1,7 +1,6 @@
 import { BullModule, InjectQueue } from "@nestjs/bullmq";
-import { Logger, OnModuleInit } from "@nestjs/common";
 import type { Queue } from "bullmq";
-import { Module } from "@nestjs/common";
+import { Logger, Module, OnModuleInit } from "@nestjs/common";
 import { AppConfigService } from "../config/app-config.service";
 import { LegacyModule } from "../legacy/legacy.module";
 import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
