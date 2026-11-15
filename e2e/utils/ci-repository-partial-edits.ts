@@ -3,7 +3,7 @@ import { Client } from "pg";
 import { isDeepStrictEqual } from "node:util";
 import { verifyMcpDiagnosticLifecycle } from "./ci-mcp-diagnostic-lifecycle";
 
-const advertisedTools = `list_projects list_testcases get_testcase create_testcase update_testcase archive_testcase restore_testcase duplicate_testcase bulk_create_testcases bulk_update_testcases bulk_archive_testcases get_testcase_bugs get_testcase_executions link_requirement_to_testcase unlink_requirement_from_testcase list_suites get_suite create_suite update_suite clone_test_suite list_test_cycles get_test_cycle create_cycle_from_plan create_cycle_from_testcases record_execution_result list_executions get_execution update_execution_result bulk_record_execution_results get_test_execution_summary list_bugs get_bug create_bug update_bug link_testcase_to_bug unlink_testcase_from_bug get_requirement_matrix search_knowledge_base list_knowledge_documents get_knowledge_document create_knowledge_document update_knowledge_document move_knowledge_document archive_knowledge_document restore_knowledge_document list_knowledge_folders get_knowledge_folder create_knowledge_folder update_knowledge_folder move_knowledge_folder`.split(" ");
+const advertisedTools = `list_projects list_testcases get_testcase create_testcase update_testcase archive_testcase restore_testcase duplicate_testcase bulk_create_testcases bulk_update_testcases bulk_archive_testcases get_testcase_bugs get_testcase_executions link_requirement_to_testcase unlink_requirement_from_testcase list_suites get_suite create_suite update_suite clone_test_suite list_test_cycles get_test_cycle create_cycle_from_plan create_cycle_from_testcases record_execution_result list_executions get_execution update_execution_result bulk_record_execution_results get_test_execution_summary list_bugs get_bug create_bug update_bug link_testcase_to_bug unlink_testcase_from_bug get_requirement_matrix search_knowledge_base list_knowledge_documents get_knowledge_document create_knowledge_document update_knowledge_document move_knowledge_document archive_knowledge_document restore_knowledge_document list_knowledge_folders get_knowledge_folder create_knowledge_folder update_knowledge_folder move_knowledge_folder list_qa_graph_changes capture_qa_graph_change`.split(" ");
 
 /** Only called after the smoke's explicit loopback/tesbo_ci checks and genuine login. */
 export async function verifyRepositoryPartialEdits(page: Page, api: string, web: string, projectId: string, ownerId: string, testInfo: TestInfo) {
@@ -292,7 +292,7 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
           const before = await projectState();
           for (const token of [read, write]) {
             requests.length = 0;
-            await checkConnection(token.secret, /Read permission and project identity verified; 50 MCP tools advertised/);
+            await checkConnection(token.secret, /Read permission and project identity verified; 52 MCP tools advertised/);
             expect(await Promise.all(requests)).toEqual([
               { method: "tools/list", params: undefined, cookie: undefined },
               { method: "tools/call", params: { name: "list_projects", arguments: {} }, cookie: undefined },

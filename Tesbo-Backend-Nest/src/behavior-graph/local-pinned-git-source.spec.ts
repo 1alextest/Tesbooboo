@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LocalPinnedGitSourceReader } from "./local-pinned-git-source";
@@ -76,10 +76,15 @@ describe("real local pinned Git source reader", () => {
   });
 
   it("fails closed on symlinks in the pinned tree", async () => {
-    symlinkSync("login.ts", join(root, "alias.ts"));
-    git("add", "alias.ts");
+    // The reader inspects committed Git objects, not filesystem links. Create
+    // a real symlink tree entry without requiring Windows symlink privileges.
+    const target = execFileSync("git", ["-C", root, "hash-object", "-w", "--stdin"], {
+      input: "login.ts", encoding: "utf8"
+    }).trim();
+    git("update-index", "--add", "--cacheinfo", `120000,${target},alias.ts`);
     git("commit", "-m", "symlink");
     const latest = git("rev-parse", "HEAD");
+    expect(git("ls-tree", latest, "--", "alias.ts")).toBe(`120000 blob ${target}\talias.ts`);
     await expect(reader.listFilesAtCommit(latest)).rejects.toThrow("Unsupported Git object");
   });
 });

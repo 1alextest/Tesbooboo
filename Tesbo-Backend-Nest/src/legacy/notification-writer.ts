@@ -21,7 +21,7 @@ export interface NotifyOptions {
   /** Never notified, whoever else is: the person who performed the action. */
   actorId?: string | null;
   /** Recipients who are not (any longer, or yet) members of this scope get nothing. */
-  memberOf?: { organizationId?: string; projectId?: string };
+  memberOf?: { organizationId?: string; projectId?: string; projectRoles?: readonly string[] };
 }
 
 const logger = new Logger("Notifications");
@@ -44,14 +44,23 @@ export async function writeNotifications(
       opts.link?.linkEntityId ?? null,
       opts.dedupeKey ?? null
     ];
+    // Role restrictions without a project scope must never silently broaden delivery.
+    if (opts.memberOf?.projectRoles && !opts.memberOf.projectId) return 0;
     let scope = "";
     if (opts.memberOf?.organizationId) {
       params.push(opts.memberOf.organizationId);
-      scope += ` AND EXISTS (SELECT 1 FROM organization_members om WHERE om.user_id = u.id AND om.organization_id = $${params.length}::uuid)`;
+      scope += ` AND EXISTS (SELECT 1 FROM organization_members om WHERE om.user_id = u.id AND om.organization_id = $${params.length}::uuid AND (to_jsonb(om)->>'deleted_at') IS NULL)`;
     }
     if (opts.memberOf?.projectId) {
       params.push(opts.memberOf.projectId);
-      scope += ` AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.user_id = u.id AND pm.project_id = $${params.length}::uuid)`;
+      const projectParam = params.length;
+      let roleScope = "";
+      if (opts.memberOf.projectRoles) {
+        if (!opts.memberOf.projectRoles.length) return 0;
+        params.push([...opts.memberOf.projectRoles]);
+        roleScope = ` AND pm.role::text = ANY($${params.length}::text[])`;
+      }
+      scope += ` AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.user_id = u.id AND pm.project_id = $${projectParam}::uuid AND (to_jsonb(pm)->>'deleted_at') IS NULL${roleScope})`;
     }
     const res = await db.query(
       `INSERT INTO notifications (user_id, type, title, link_entity_type, link_entity_id, dedupe_key)

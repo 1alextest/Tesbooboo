@@ -65,6 +65,8 @@ function resolveNotificationHref(n: AppNotification): string | null {
       return `/projects/${id}/requirements`;
     case "zyra_chat":
       return `/projects/${id}/agents/zyra`;
+    case "zyra_change_review":
+      return `/projects/${id}/agents/zyra/changes`;
     case "zyra_task":
       return projectId && entityId ? `/projects/${projectId}/agents/tasks/${entityId}` : null;
     case "knowledge_document":

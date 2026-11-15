@@ -8,7 +8,12 @@ import { DatabaseService } from "../database/database.service";
 import { makeLegacy } from "../legacy/test-helpers/legacy-service.fixture";
 import { CurrentCacheGraphReader } from "./current-cache-graph.reader";
 import { CurrentCacheGraphHistory } from "./current-cache-graph.history";
+import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
+import { GraphChangeReviewRecovery } from "./graph-change-review.recovery";
+import { GraphReviewRunLinks } from "./graph-review-run-links";
+import { writeNotifications } from "../legacy/notification-writer";
 import { ProjectSourceBindingReader } from "./project-source-binding";
+import { ProjectSourceBindingManagement } from "./project-source-binding.management";
 import { ProjectSourceGraphCoordinator } from "./project-source-graph.coordinator";
 
 const url = process.env.DATABASE_URL ?? "";
@@ -265,6 +270,296 @@ const url = process.env.DATABASE_URL ?? "";
       } finally {
         await admin.query("DELETE FROM project_source_bindings WHERE project_id=$1", [project]);
         rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("refuses restricted QA notification delivery after role exclusion or project membership revocation", async () => {
+      const db = new DatabaseService(pool);
+      const key = `qa_change_review:role-bound:${stamp}`;
+      const options = {
+        type: "qa_change_review" as const, title: "QA graph impact review",
+        dedupeKey: key, memberOf: {
+          organizationId: org, projectId: project, projectRoles: ["owner"]
+        }
+      };
+      // An otherwise valid QA member is not an owner; the role filter is enforced
+      // in PostgreSQL at INSERT time, not only in the earlier recipient lookup.
+      expect(await writeNotifications(db, [user], options)).toBe(0);
+      await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [project, user]);
+      try {
+        expect(await writeNotifications(db, [user], {
+          ...options, memberOf: { ...options.memberOf, projectRoles: ["qa_engineer", "manager", "owner"] }
+        })).toBe(0);
+        expect((await admin.query(
+          "SELECT COUNT(*)::int AS count FROM notifications WHERE dedupe_key=$1", [key]
+        )).rows[0].count).toBe(0);
+      } finally {
+        await admin.query(
+          "INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",
+          [project, user]
+        );
+        await admin.query("DELETE FROM notifications WHERE dedupe_key=$1", [key]);
+      }
+    });
+
+    it("persists only approved owner source settings and denies revoked role without mutation", async () => {
+      const database = new DatabaseService(pool);
+      const reader = new ProjectSourceBindingReader(database, {
+        trusted: { repositoryId: "org/repo", root: "/srv/checkout/approved" }
+      });
+      const management = new ProjectSourceBindingManagement(database, reader);
+      const settings = {
+        repositoryId: "org/repo", checkoutKey: "trusted", refName: "development",
+        selectionPrefixes: ["src"], enabled: true
+      };
+      await admin.query("UPDATE project_members SET role='owner' WHERE project_id=$1 AND user_id=$2", [project, user]);
+      try {
+        expect(await management.getForOwner(user, project)).toEqual({ configured: false, binding: null });
+        expect(await management.setForOwner(user, project, settings))
+          .toEqual({ configured: true, binding: settings });
+        expect(await management.getForOwner(user, project))
+          .toEqual({ configured: true, binding: settings });
+        expect(JSON.stringify(await management.getForOwner(user, project)))
+          .not.toContain("/srv/checkout/approved");
+
+        await admin.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2", [project, user]);
+        await expect(management.getForOwner(user, project)).rejects.toMatchObject({ status: 403 });
+        await expect(management.setForOwner(user, project, { ...settings, enabled: false }))
+          .rejects.toMatchObject({ status: 403 });
+        expect((await admin.query(
+          "SELECT enabled, repository_id FROM project_source_bindings WHERE project_id=$1", [project]
+        )).rows[0]).toEqual({ enabled: true, repository_id: "org/repo" });
+
+        await admin.query("UPDATE project_members SET role='owner' WHERE project_id=$1 AND user_id=$2", [project, user]);
+        await expect(management.setForOwner(user, project, { ...settings, checkoutKey: "untrusted" }))
+          .rejects.toMatchObject({ status: 400 });
+        expect(await management.setForOwner(user, project, { ...settings, enabled: false }))
+          .toMatchObject({ binding: { enabled: false } });
+        expect((await admin.query(
+          "SELECT enabled FROM project_source_bindings WHERE project_id=$1", [project]
+        )).rows[0].enabled).toBe(false);
+      } finally {
+        await admin.query("DELETE FROM project_source_bindings WHERE project_id=$1", [project]);
+        await admin.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2", [project, user]);
+      }
+    });
+
+    it("persists real graph→canonical run/case QA handoff without fabricating execution or cross-project links", async () => {
+      // Native run picker permits only approved cases. Do not allow this new
+      // graph handoff route to bypass that policy for a Draft candidate.
+      await admin.query("UPDATE testcases SET status='Approved' WHERE id=$1", [caseId]);
+      const nodeId = JSON.stringify(["test_case", project, caseId]);
+      const receipt = {
+        id: "db-graph-handoff-" + stamp, projectId: project, status: "needs_qa_triage",
+        candidates: [{ caseNodeId: nodeId, reasons: ["case_changed"], requirementNodeIds: [] }],
+        evidence: {
+          basis: "cached_source_reference_only", coverageAssertion: "none",
+          executionAssertion: "none", verification: "not_performed"
+        }
+      };
+      const receiptId = (await admin.query<{ id: string }>(
+        `INSERT INTO graph_capture_history
+          (project_id, contract_id, source_scope_fingerprint, revision, capture_json, review_receipt_json)
+         VALUES ($1, 'db-graph-link-v1', 'db-project-only', $2, '{}'::jsonb, $3::jsonb)
+         RETURNING id::text`,
+        [project, "db-link-" + stamp, JSON.stringify(receipt)]
+      )).rows[0].id;
+      const cycleId = (await admin.query<{ id: string }>(
+        "INSERT INTO cycles(project_id,name,environment) VALUES ($1,'Graph impact QA run','CI') RETURNING id",
+        [project]
+      )).rows[0].id;
+      await admin.query(
+        "INSERT INTO cycle_items(cycle_id,testcase_id,snapshot_title) VALUES ($1,$2,'Original')",
+        [cycleId, caseId]
+      );
+      const db = new DatabaseService(pool);
+      const links = new GraphReviewRunLinks(db, makeLegacy(db));
+      try {
+        const created = await links.linkForUser(user, project, receiptId, cycleId, { testcaseIds: [caseId] });
+        expect(created).toEqual({
+          historyId: receiptId, runId: cycleId, selected: 1, newlyLinked: 1
+        });
+        expect(await links.linkForUser(user, project, receiptId, cycleId, { testcaseIds: [caseId] }))
+          .toEqual({ historyId: receiptId, runId: cycleId, selected: 1, newlyLinked: 0 });
+        const read = await links.listForUser(user, project, receiptId);
+        expect(read.links).toHaveLength(1);
+        expect(read.links[0]).toMatchObject({
+          runId: cycleId, caseId, runName: "Graph impact QA run",
+          caseStillInRun: true, execution: null
+        });
+        // Graph-to-run handoff alone did not execute or fail the test.
+        const completedCount = async () => (await admin.query<{ n: number }>(
+          "SELECT COUNT(*)::int AS n FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id WHERE ci.cycle_id=$1 AND e.status IN ('Passed','Failed','Blocked')",
+          [cycleId]
+        )).rows[0].n;
+        expect(await completedCount()).toBe(0);
+        // This is native execution history, not a status invented by the graph.
+        // Metadata alone does not attest that the blob remains retrievable.
+        const itemId = (await admin.query<{ id: string }>(
+          "SELECT id FROM cycle_items WHERE cycle_id=$1 AND testcase_id=$2 AND deleted_at IS NULL",
+          [cycleId, caseId]
+        )).rows[0].id;
+        const executionId = (await admin.query<{ id: string }>(
+          `INSERT INTO executions(cycle_item_id,status,actual_result,defect_key,executed_at)
+             VALUES ($1,'Failed','QA found a mismatch','BUG-17', now()) RETURNING id`,
+          [itemId]
+        )).rows[0].id;
+        const evidenceId = (await admin.query<{ id: string }>(
+          `INSERT INTO attachments(project_id,entity_type,entity_id,file_name,storage_path)
+             VALUES ($1,'execution',$2,'fixture-evidence.txt','fixture://not-a-real-file') RETURNING id`,
+          [project, executionId]
+        )).rows[0].id;
+        const observed = await links.listForUser(user, project, receiptId);
+        expect(observed.links[0]).toMatchObject({
+          caseStillInRun: true,
+          execution: {
+            id: executionId, status: "Failed", actualResultRecorded: true,
+            executedAfterHandoff: true, defectKey: "BUG-17",
+            evidenceFileCount: 1, evidenceAddedAfterHandoffCount: 1
+          }
+        });
+        expect(observed.links[0].execution?.executedAt).toBeTruthy();
+        // An older native result may remain Failed but cannot be presented as
+        // verification of this later human handoff. File metadata can also predate it.
+        await admin.query(
+          "UPDATE executions SET executed_at=now() - interval '1 day' WHERE id=$1", [executionId]
+        );
+        await admin.query(
+          "UPDATE attachments SET created_at=now() - interval '1 day' WHERE id=$1", [evidenceId]
+        );
+        const historical = await links.listForUser(user, project, receiptId);
+        expect(historical.links[0].execution).toMatchObject({
+          status: "Failed", executedAfterHandoff: false,
+          evidenceFileCount: 1, evidenceAddedAfterHandoffCount: 0
+        });
+        await admin.query("UPDATE attachments SET deleted_at=now() WHERE id=$1", [evidenceId]);
+        const afterMetadataDelete = await links.listForUser(user, project, receiptId);
+        expect(afterMetadataDelete.links[0].execution).toMatchObject({
+          evidenceFileCount: 0, evidenceAddedAfterHandoffCount: 0
+        });
+        // Historical handoff survives soft removal from the active run but
+        // does not masquerade as a currently executable case.
+        await admin.query("UPDATE cycle_items SET deleted_at=now() WHERE id=$1", [itemId]);
+        const removed = await links.listForUser(user, project, receiptId);
+        expect(removed.links[0]).toMatchObject({ caseStillInRun: false, execution: null });
+        await admin.query("UPDATE cycle_items SET deleted_at=NULL WHERE id=$1", [itemId]);
+        const persisted = await admin.query(
+          "SELECT project_id, history_id::text, cycle_id, testcase_id, linked_by_user_id FROM graph_review_run_case_links WHERE history_id=$1",
+          [receiptId]
+        );
+        expect(persisted.rows).toEqual([{
+          project_id: project, history_id: receiptId,
+          cycle_id: cycleId, testcase_id: caseId, linked_by_user_id: user
+        }]);
+        // This later Failed status belongs to the explicitly seeded native
+        // execution; it must not be mistaken for an outcome created by linking.
+        expect(await completedCount()).toBe(1);
+        const notCandidate = randomUUID();
+        await expect(links.linkForUser(user, project, receiptId, cycleId,
+          { testcaseIds: [caseId, notCandidate] })).rejects.toMatchObject({ status: 409 });
+        expect((await admin.query(
+          "SELECT COUNT(*)::int AS n FROM graph_review_run_case_links WHERE history_id=$1",
+          [receiptId]
+        )).rows[0].n).toBe(1); // The mixed selection never partially committed.
+        await expect(links.linkForUser(user, randomUUID(), receiptId, cycleId,
+          { testcaseIds: [caseId] })).rejects.toMatchObject({ status: 404 });
+        await expect(links.linkForUser(user, project, receiptId, randomUUID(),
+          { testcaseIds: [caseId] })).rejects.toMatchObject({ status: 409 });
+        await expect(links.linkForUser(user, project, receiptId, cycleId,
+          { testcaseIds: [caseId], executionStatus: "Passed" }))
+          .rejects.toMatchObject({ status: 400 });
+        await admin.query("UPDATE testcases SET status='Draft' WHERE id=$1", [caseId]);
+        await expect(links.linkForUser(user, project, receiptId, cycleId,
+          { testcaseIds: [caseId] })).rejects.toMatchObject({ status: 409 });
+        await admin.query("UPDATE testcases SET status='Approved' WHERE id=$1", [caseId]);
+        await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [project, user]);
+        try {
+          await expect(links.listForUser(user, project, receiptId))
+            .rejects.toMatchObject({ status: 404 });
+          await expect(links.linkForUser(user, project, receiptId, cycleId,
+            { testcaseIds: [caseId] })).rejects.toMatchObject({ status: 404 });
+        } finally {
+          await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')", [project,user]);
+        }
+      } finally {
+        await admin.query("DELETE FROM graph_review_run_case_links WHERE history_id=$1", [receiptId]);
+        await admin.query("DELETE FROM attachments WHERE project_id=$1 AND entity_type='execution' AND entity_id IN (SELECT e.id FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id WHERE ci.cycle_id=$2)", [project, cycleId]);
+        await admin.query("DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id=$1)", [cycleId]);
+        await admin.query("DELETE FROM cycle_items WHERE cycle_id=$1", [cycleId]);
+        await admin.query("DELETE FROM cycles WHERE id=$1", [cycleId]);
+        await admin.query("DELETE FROM graph_capture_history WHERE id=$1", [receiptId]);
+        await admin.query("UPDATE testcases SET status='Draft' WHERE id=$1", [caseId]);
+      }
+    });
+
+    it("delivers a committed change review through native per-user notifications exactly once", async () => {
+      const latest = await admin.query(
+        `SELECT id::text FROM graph_capture_history
+          WHERE project_id=$1 AND review_receipt_json IS NOT NULL
+          ORDER BY id DESC LIMIT 1`, [project]
+      );
+      expect(latest.rows).toHaveLength(1);
+      const historyId = latest.rows[0].id as string;
+      const dedupeKey = `qa_change_review:${project}:${historyId}`;
+      const svc = new GraphChangeReviewDelivery(new DatabaseService(pool), makeLegacy(new DatabaseService(pool)));
+      try {
+        const first = await svc.deliverForUser(user, project, historyId);
+        expect(first).toEqual({ status: "delivered", recipientCount: 1, pendingCount: 0 });
+        const second = await svc.deliverForUser(user, project, historyId);
+        expect(second).toEqual(first);
+        const persisted = await admin.query(
+          `SELECT type, link_entity_type, link_entity_id, dedupe_key
+             FROM notifications WHERE dedupe_key=$1 AND user_id=$2`,
+          [dedupeKey, user]
+        );
+        expect(persisted.rows).toEqual([{
+          type: "qa_change_review",
+          link_entity_type: "zyra_change_review",
+          link_entity_id: project,
+          dedupe_key: dedupeKey
+        }]);
+        // A missing notification after a committed receipt is recovered
+        // without a human identity or duplicate durable rows.
+        await admin.query("DELETE FROM notifications WHERE dedupe_key=$1", [dedupeKey]);
+        const recovery = new GraphChangeReviewRecovery(new DatabaseService(pool), svc);
+        // The recovery service normally scans ALL projects. This suite shares a
+        // migrated database with other parallel suites, so isolate the real
+        // worker query to its own synthetic project rather than notifying
+        // unrelated fixtures or assuming the global backlog has exactly one row.
+        const backlog = await admin.query<{ count: number }>(
+          `SELECT COUNT(*)::int AS count FROM graph_capture_history h
+            WHERE h.project_id=$1::uuid
+              AND h.review_receipt_json IS NOT NULL
+              AND h.captured_at >= now() - interval '48 hours'
+              AND NOT EXISTS (
+                SELECT 1 FROM notifications n WHERE n.user_id=$2::uuid
+                  AND n.type='qa_change_review'
+                  AND n.dedupe_key=('qa_change_review:' || h.project_id::text || ':' || h.id::text)
+              )`, [project, user]
+        );
+        const expected = backlog.rows[0].count;
+        expect(expected).toBeGreaterThanOrEqual(1); // Includes the deleted target.
+        const recovered = await recovery.runOnce(project);
+        expect(recovered).toMatchObject({ eligible: expected, delivered: expected, pending: 0, failed: 0 });
+        const repeated = await recovery.runOnce(project);
+        expect(repeated).toMatchObject({ eligible: 0, delivered: 0, pending: 0, failed: 0 });
+        expect(await svc.recoverCommittedForSystem(project, historyId)).toEqual(first);
+        expect((await admin.query(
+          "SELECT COUNT(*)::int AS count FROM notifications WHERE dedupe_key=$1 AND user_id=$2",
+          [dedupeKey, user]
+        )).rows[0].count).toBe(1);
+
+        await expect(svc.deliverForUser(user, project, "0 OR TRUE"))
+          .rejects.toMatchObject({ status: 404 });
+        await expect(svc.deliverForUser(user, project, "999999999999999999999"))
+          .rejects.toMatchObject({ status: 404 });
+        await expect(svc.deliverForUser(user, randomUUID(), historyId))
+          .rejects.toMatchObject({ status: 404 });
+      } finally {
+        await admin.query(
+          "DELETE FROM notifications WHERE type='qa_change_review' AND link_entity_type='zyra_change_review' AND link_entity_id=$1",
+          [project]
+        );
       }
     });
 
