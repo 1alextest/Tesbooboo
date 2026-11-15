@@ -75,6 +75,7 @@ const url = process.env.DATABASE_URL ?? "";
       expect(full).toHaveLength(2);
       expect(BigInt(full[0].id)).toBeGreaterThan(BigInt(full[1].id));
       expect(full[0].reviewReceipt?.evidence.coverageAssertion).toBe("none");
+      expect(full.map((item) => item.changeState)).toEqual(["changed", "baseline"]);
       expect(full[0]).not.toHaveProperty("capture_json");
       expect(full[0]).not.toHaveProperty("captureJson");
       const page = await store.listForUser(user, project, 1);
@@ -110,5 +111,27 @@ const url = process.env.DATABASE_URL ?? "";
         await admin.query("UPDATE testcases SET jira_issue_key=NULL WHERE id=$1", [caseId]);
       }
     });
+    it("marks a provider mapping or contract discontinuity as unknown, including across pages", async () => {
+      // Disposable DB fixture: simulate a distinct, committed source-scope
+      // observation without manufacturing any requirement-to-case coverage.
+      const inserted = await admin.query(
+        `INSERT INTO graph_capture_history
+           (project_id, captured_by_user_id, contract_id, source_scope_fingerprint,
+            revision, capture_json, review_receipt_json)
+         SELECT project_id, captured_by_user_id, contract_id, 'different-provider-scope',
+                'discontinuity-fixture', capture_json, NULL
+           FROM graph_capture_history WHERE project_id=$1
+           ORDER BY id DESC LIMIT 1 RETURNING id::text`,
+        [project]
+      );
+      expect(inserted.rows).toHaveLength(1);
+      const newest = await store.listForUser(user, project, 1);
+      expect(newest[0].id).toBe(inserted.rows[0].id);
+      expect(newest[0].reviewReceipt).toBeNull();
+      expect(newest[0].changeState).toBe("source_scope_changed");
+      const older = await store.listForUser(user, project, 1, newest[0].id);
+      expect(older[0].changeState).toBe("changed");
+    });
+
   }
 );
