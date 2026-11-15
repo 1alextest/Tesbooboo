@@ -44,6 +44,8 @@ export async function writeNotifications(
       opts.link?.linkEntityId ?? null,
       opts.dedupeKey ?? null
     ];
+    // Role restrictions without a project scope must never silently broaden delivery.
+    if (opts.memberOf?.projectRoles && !opts.memberOf.projectId) return 0;
     let scope = "";
     if (opts.memberOf?.organizationId) {
       params.push(opts.memberOf.organizationId);
@@ -56,7 +58,7 @@ export async function writeNotifications(
       if (opts.memberOf.projectRoles) {
         if (!opts.memberOf.projectRoles.length) return 0;
         params.push([...opts.memberOf.projectRoles]);
-        roleScope = ` AND pm.role = ANY($${params.length}::text[])`;
+        roleScope = ` AND pm.role::text = ANY(${params.length}::text[])`;
       }
       scope += ` AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.user_id = u.id AND pm.project_id = $${projectParam}::uuid AND (to_jsonb(pm)->>'deleted_at') IS NULL${roleScope})`;
     }
