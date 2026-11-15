@@ -301,8 +301,13 @@ export class AutomationService {
     }
 
     let runId: string;
+    let attached: { attached: number; unknown: string[] };
     try {
-      const res = await this.db.query<{ id: string }>(
+      // Run creation and case attachment are one transaction. If an existing
+      // case is Draft/In Review, or is demoted while a CI shard is attaching
+      // it, reject the entire attempt rather than leaving an orphan run.
+      const created = await this.db.transaction(async (client) => {
+        const res = await client.query<{ id: string }>(
         `INSERT INTO cycles (
            project_id, name, description, environment, build_version, release_name, owner_id,
            status, started_at, source, triggered_by, commit_sha, branch_name, build_url, external_id
@@ -325,7 +330,11 @@ export class AutomationService {
           externalId
         ]
       );
-      runId = res.rows[0].id;
+        const attached = await this.attachCases(res.rows[0].id, projectId, caseIds, client);
+        return { runId: res.rows[0].id, attached };
+      });
+      runId = created.runId;
+      attached = created.attached;
     } catch (err) {
       // Two shards racing on the same externalId: the loser's insert violates the partial unique
       // index. Resolve to the winner's run instead of failing the shard's whole session.
@@ -357,7 +366,6 @@ export class AutomationService {
       throw err;
     }
 
-    const attached = await this.attachCases(runId, projectId, caseIds);
     await this.legacy.logProjectActivity(projectId, actorId, "automation_run_created", "cycle", runId, name, {
       triggeredBy: triggeredByRaw ?? null,
       branch: this.boundedString(body?.branch, "branch", MAX_BRANCH_LENGTH),
