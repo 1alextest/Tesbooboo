@@ -168,6 +168,74 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
   });
 
   for (const language of ["en", "ru"] as const) {
+    it.each(["failed", "partial", "moved", "no-match"] as const)(`${language}: move feedback and trace reflect %s without inferring missing rows or rollback`, async (mode) => {
+      const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
+      const failed = mode === "failed" || mode === "partial";
+      const moved = mode === "partial" || mode === "moved";
+      const operations: Body[] = [];
+      if (mode === "partial") operations.push({ type: "create_suite", suiteName: "Kept Suite" });
+      if (moved) operations.push({ type: "move_to_suite", suiteId: "suite-1", testcaseIds: ["case-1"] });
+      if (failed || mode === "no-match") operations.push({ type: "move_to_suite", suiteId: "suite-1", testcaseIds: ["case-2"] });
+      jest.spyOn(svc as unknown as { getProjectSuite: (...a: unknown[]) => Promise<unknown> }, "getProjectSuite")
+        .mockResolvedValue({ id: "suite-1", name: "Destination" });
+      jest.spyOn(svc as unknown as { resolveOrCreateSuiteByName: (...a: unknown[]) => Promise<unknown> }, "resolveOrCreateSuiteByName")
+        .mockResolvedValue({ id: "suite-kept", name: "Kept Suite", created: true });
+      jest.spyOn(svc as unknown as { resolveZyraMoveTargets: (...a: unknown[]) => Promise<unknown> }, "resolveZyraMoveTargets")
+        .mockImplementation(async (_project, _session, op) => ({ targets: mode === "no-match" ? [] : [{ id: (op as Body).testcaseIds[0] }], requestedCount: 1 }));
+      const transaction = jest.fn();
+      if (moved) transaction.mockResolvedValueOnce(undefined);
+      if (failed) transaction.mockRejectedValueOnce(new Error("private move failure"));
+      (svc as unknown as { db: { transaction: jest.Mock } }).db.transaction = transaction;
+      (svc as unknown as { suitesCache: { invalidate: jest.Mock } }).suitesCache.invalidate = jest.fn().mockResolvedValue(undefined);
+      (svc as unknown as { testcasesListCache: { invalidate: jest.Mock } }).testcasesListCache.invalidate = jest.fn().mockResolvedValue(undefined);
+      jest.spyOn(svc, "getTestCase").mockResolvedValue({ id: "case-1", externalId: "PRO-TC-1", title: "Existing case", suiteId: "suite-1" });
+      jest.spyOn(svc as unknown as { zyraMoveBreakdown: (...a: unknown[]) => Promise<unknown> }, "zyraMoveBreakdown")
+        .mockResolvedValue(moved || mode === "no-match" ? [{ suiteId: "suite-1", suiteName: "Destination", created: false, count: moved ? 1 : 0 }] : []);
+      const reply = language === "en" ? "Moved the requested test cases." : "Запрошенные тест-кейсы перемещены.";
+      jest.spyOn(svc as unknown as { buildZyraChatDecision: (...a: unknown[]) => Promise<unknown> }, "buildZyraChatDecision")
+        .mockResolvedValue({ reply, actionType: "suite", operations, testcases: [] });
+      let content = "", applied: AppliedShape | undefined;
+      jest.spyOn(svc as unknown as { insertZyraAssistantMessage: (...a: unknown[]) => Promise<unknown> }, "insertZyraAssistantMessage")
+        .mockImplementation(async (input) => {
+          applied = (input as Body).applied;
+          content = finalReply(svc, operations, applied!, reply);
+          return { id: "assistant-1", status: "completed", content };
+        });
+      jest.spyOn(svc, "zyraChatSession").mockResolvedValue({ messages: [] });
+      const recorder = new ZyraTurnTraceRecorder();
+      await runInZyraLanguage(language, () => (svc as unknown as { executeZyraChatTurn: (...a: unknown[]) => Promise<unknown> }).executeZyraChatTurn({
+        projectId: "project-1", userId: "user-1", uid: "user-1", sessionId: "session-1",
+        message: "Move the requested test cases", userMessageId: "turn-1", sessionRow: {}
+      }, recorder.onStage));
+      const trace = recorder.finish();
+      expect(transaction).toHaveBeenCalledTimes(mode === "partial" ? 2 : mode === "no-match" ? 0 : 1);
+      expect(applied!.testcases).toHaveLength(moved ? 1 : 0);
+      expect(applied!.activity.filter((entry) => entry.title === "An operation failed unexpectedly")).toHaveLength(failed ? 1 : 0);
+      if (mode === "partial") expect(applied!.activity.some((entry) => entry.title === "Created suite")).toBe(true);
+      if (moved) expect(content).toContain(language === "en" ? "1 test case(s) total" : "всего тест-кейсов: 1");
+      if (mode === "no-match") expect(content).toContain(language === "en" ? "Nothing was saved" : "Ничего не сохранено");
+      expect(content + JSON.stringify(trace)).not.toContain("private move failure");
+      expect({
+        warning: content.startsWith(SUITE_ERROR[language]),
+        falselySaysMissing: failed && /do not exist in this project|в этом проекте нет/.test(content),
+        outcome: trace.outcome, stagingStatus: trace.steps.find((step) => step.stage === "staging")?.status
+      }).toEqual({ warning: failed, falselySaysMissing: false,
+        outcome: failed ? "completed_with_errors" : "completed", stagingStatus: failed ? "failed" : "ok" });
+    });
+
+    it(`${language}: retains pending-draft review guidance beside a move error`, () => {
+      const svc = makeLegacy();
+      const operations = [{ type: "move_to_suite", suiteId: "suite-1", fromLastPlan: true }];
+      const applied = { testcases: [{ action: "proposed-create", draftIndex: 0, reviewRequestId: "review-1" }],
+        activity: [{ title: "An operation failed unexpectedly" }], reviewRequestId: null };
+      const reply = language === "en" ? "Assigning the requested drafts." : "Назначаю набор для указанных черновиков.";
+      const out = runInZyraLanguage(language, () => finalReply(svc, operations, applied, reply));
+      expect(out).toContain(language === "en" ? "staged for your review" : "Ожидают вашей проверки");
+      expect(out.startsWith(SUITE_ERROR[language])).toBe(true);
+    });
+  }
+
+  for (const language of ["en", "ru"] as const) {
     const reply = language === "en" ? "Created the requested suites." : "Запрошенные наборы созданы.";
 
     it(`${language}: corrects the final reply when every create-suite operation fails`, async () => {
