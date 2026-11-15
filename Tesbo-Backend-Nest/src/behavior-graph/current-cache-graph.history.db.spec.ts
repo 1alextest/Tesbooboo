@@ -73,7 +73,10 @@ const url = process.env.DATABASE_URL ?? "";
     it("refuses incomplete local source cache rather than persisting false completeness", async () => {
       await admin.query("UPDATE testcases SET jira_issue_key='UNSYNCED-1' WHERE id=$1", [caseId]);
       try {
-        await expect(store.captureForUser(user, project)).rejects.toThrow("not comparable");
+        await expect(store.captureForUser(user, project)).rejects.toMatchObject({
+          status: 409,
+          response: { error: "Graph capture not comparable: cached source inventory incomplete or ambiguous" }
+        });
         expect((await admin.query("SELECT COUNT(*)::int AS count FROM graph_capture_history WHERE project_id=$1", [project])).rows[0].count).toBe(2);
       } finally {
         await admin.query("UPDATE testcases SET jira_issue_key=NULL WHERE id=$1", [caseId]);
