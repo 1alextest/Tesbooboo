@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Client } from "pg";
+import { REPORTER_CALLBACKS_READY, withReporterStartupGate } from "./ci-reporter-startup";
 
 /** Extends ci-smoke's safety-checked, disposable bootstrap; never targets a shared tenant. */
 export async function verifyProductionReporter(page: Page, api: string, web: string, projectId: string, ownerId: string, testInfo: TestInfo) {
@@ -38,7 +39,10 @@ export async function verifyProductionReporter(page: Page, api: string, web: str
     const dir = testInfo.outputPath("reporter-fixture");
     await mkdir(dir, { recursive: true });
     const config = path.join(dir, "playwright.config.cjs");
-    await writeFile(config, `module.exports = { testDir: __dirname, testMatch: 'reporter.spec.cjs', workers: 1, retries: 0, outputDir: ${JSON.stringify(path.join(dir, "results"))}, reporter: [['list'], [${JSON.stringify(artifact)}, { runName: ${JSON.stringify(name)}, requireConfig: true, strict: true, retries: 0, timeoutMs: 10000 }]] };`);
+    const observer = path.join(dir, "startup-observer.cjs");
+    // An independent observer runs AFTER the unmodified production reporter's onTestEnd callbacks.
+    await writeFile(observer, `module.exports = class { count = 0; onTestEnd() { if (++this.count === 3) console.log(${JSON.stringify(REPORTER_CALLBACKS_READY)}); } };`);
+    await writeFile(config, `module.exports = { testDir: __dirname, testMatch: 'reporter.spec.cjs', workers: 1, retries: 0, outputDir: ${JSON.stringify(path.join(dir, "results"))}, reporter: [['list'], [${JSON.stringify(artifact)}, { runName: ${JSON.stringify(name)}, requireConfig: true, strict: true, retries: 0, timeoutMs: 10000 }], [${JSON.stringify(observer)}]] };`);
     await writeFile(path.join(dir, "reporter.spec.cjs"), `
 const { test, expect } = require(${JSON.stringify(require.resolve("@playwright/test"))});
 const fs = require('node:fs/promises');
@@ -52,16 +56,34 @@ test('intentional reporter failure', { tag: '@tesbo.testId("${cases[1].externalI
 test.skip('skipped reporter control', { tag: '@tesbo.testId("${cases[2].externalId}")' }, () => {});
 `);
     // One invocation uses the real CI identity. Do not invent a provider/run id or touch global env.
-    const child = await new Promise<{ code: number; output: string }>((resolve, reject) => {
-      execFile(process.execPath, [require.resolve("@playwright/test/cli"), "test", "--config", config], {
-        cwd: dir, timeout: 60_000, maxBuffer: 1_048_576,
-        env: { ...process.env, FORCE_COLOR: "0", TESBO_BASE_URL: api, TESBO_PROJECT_ID: projectId, TESBO_API_TOKEN: tokens[0].token }
-      }, (error, stdout, stderr) => {
-        if (error && (error.killed || typeof error.code !== "number")) { reject(new Error("Reporter child failed to execute or timed out")); return; }
-        resolve({ code: error?.code as number ?? 0, output: `${stdout}\n${stderr}`.split(tokens[0].token).join("[redacted]") });
+    let callbacksObserved = false;
+    const child = await withReporterStartupGate(db, projectId, name, async (release) => {
+      let releaseOnCallbacks: Promise<void> | undefined, releaseError: unknown;
+      const result = await new Promise<{ code: number; output: string }>((resolve, reject) => {
+        const childProcess = execFile(process.execPath, [require.resolve("@playwright/test/cli"), "test", "--config", config], {
+          cwd: dir, timeout: 60_000, maxBuffer: 1_048_576,
+          env: { ...process.env, FORCE_COLOR: "0", TESBO_BASE_URL: api, TESBO_PROJECT_ID: projectId, TESBO_API_TOKEN: tokens[0].token }
+        }, (error, stdout, stderr) => {
+          if (error && (error.killed || typeof error.code !== "number")) { reject(new Error("Reporter child failed to execute or timed out")); return; }
+          resolve({ code: error?.code as number ?? 0, output: `${stdout}\n${stderr}`.split(tokens[0].token).join("[redacted]") });
+        });
+        let output = "";
+        childProcess.stdout?.on("data", (chunk: Buffer) => {
+          output += chunk.toString();
+          if (!callbacksObserved && output.includes(REPORTER_CALLBACKS_READY)) {
+            callbacksObserved = true;
+            releaseOnCallbacks = release().catch((error) => { releaseError = error; childProcess.kill(); });
+          }
+        });
       });
+      await releaseOnCallbacks;
+      if (releaseError) throw releaseError;
+      return result;
     });
     await testInfo.attach("production-reporter-child", { body: child.output, contentType: "text/plain" });
+    await testInfo.attach("production-reporter-startup-gate", { body: JSON.stringify({ callbacksObserved, projectId,
+      boundary: "run INSERT gated until all three real result callbacks reached the production reporter", gateRemoved: true }, null, 2), contentType: "application/json" });
+    expect(callbacksObserved).toBe(true);
     expect(child.code, child.output).toBe(1); // The deliberate test failure, never an ingest/config failure.
     expect(child.output).toContain("Intentional CI reporter failure");
     expect(child.output).toMatch(/closed \(completed\): 1 passed, 1 failed, 1 skipped/);
