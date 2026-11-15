@@ -64,7 +64,7 @@ describe("Zyra graph change-review native contract", () => {
       setForOwner: jest.fn().mockRejectedValue({ status: 403 })
     };
     const controller = new GraphChangeReviewController(
-      {} as never, {} as never, {} as never, sourceManagement as never
+      {} as never, {} as never, {} as never, sourceManagement as never, {} as never
     );
     await expect(controller.getSourceBinding({ userId: null } as never, PROJECT))
       .rejects.toMatchObject({ status: 403 });
