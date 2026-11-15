@@ -282,7 +282,7 @@ test.describe("zyra / agents (UI)", () => {
       await uncertain.getByRole("button", { name: "Add selected cases to run" }).click();
       await expect(uncertain.getByRole("status")).toContainText(/1 newly added; 0 skipped/);
       expect(Number(scalar("SELECT COUNT(*)::int FROM cycle_items WHERE cycle_id=" +
-        literal(uncertainRunId) + " AND testcase_id=" + literal(caseId) + ";"))).toBe(1);
+        literal(uncertainRunId!) + " AND testcase_id=" + literal(caseId) + ";"))).toBe(1);
       expect(countRun()).toBe(1);
       await page.getByRole("link", { name: "Open existing test case" }).click();
       await expect(page).toHaveURL(new RegExp("/projects/" + projectId + "/testcases/" + caseId + "$"));
