@@ -62,7 +62,7 @@ async function seedCases(api: APIRequestContext, count: number, label: string): 
   const cases: SeededCase[] = [];
   for (let index = 0; index < count; index += 1) {
     const res = await api.post(`/api/projects/${ctxA.projectId}/testcases`, {
-      data: { title: `E2E Automation ${label} ${index} ${Date.now()}` },
+      data: { title: `E2E Automation ${label} ${index} ${Date.now()}`, status: "Approved" },
     });
     expect(res.ok(), `seeding test case ${index} for ${label}`).toBeTruthy();
     const body = await res.json();
