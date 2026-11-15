@@ -19,6 +19,7 @@ import { verifyCiZyraSingleMove } from "./utils/ci-zyra-single-move";
 import { verifyCiZyraAliasMove } from "./utils/ci-zyra-alias-move";
 import { verifyCiZyraMissingSuite } from "./utils/ci-zyra-missing-suite";
 import { verifyCiZyraMoveTraceCount } from "./utils/ci-zyra-move-trace-count";
+import { verifyCiZyraOverlappingMoveTrace } from "./utils/ci-zyra-overlapping-move-trace";
 
 async function verifyBugCreateAccess(request: APIRequestContext, api: string, projectId: string, ownerId: string, organizationId: string) {
   // Called only after the test's explicit loopback/disposable-database safety checks.
@@ -951,6 +952,21 @@ test("Zyra move trace counts persisted cases beyond the 25-card preview without 
   }
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   await verifyCiZyraMoveTraceCount(page, api, web, ids[0], ids[1], ownerId, testInfo); expect(errors).toEqual([]);
+});
+
+test("Zyra overlapping suite moves count distinct saved cases while retaining both writes and capped previews", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy(); const ownerId = (await login.json()).userId as string;
+  const ids: string[] = [];
+  for (const [name, key] of [["CI Zyra Overlapping Moves", "ZOM"], ["CI Zyra Overlapping Other", "ZON"]]) {
+    const created = await page.request.post(`${api}/api/projects`, { data: { name, key } }); expect(created.ok(), await created.text()).toBeTruthy(); ids.push((await created.json()).id);
+  }
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyCiZyraOverlappingMoveTrace(page, api, web, ids[0], ids[1], ownerId, testInfo); expect(errors).toEqual([]);
 });
 
 test("browser API transport never replays ambiguous mutations and retains bounded read retries", async () => {
