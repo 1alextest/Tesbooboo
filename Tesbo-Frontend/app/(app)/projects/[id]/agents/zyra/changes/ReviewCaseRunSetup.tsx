@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRef, useState } from "react";
 import {
-  addTestCasesToRun, createTestRun, listTestRuns, listZyraGraphReviewRunLinks,
+  addTestCasesToRun, createTestRun, getTestCase, listTestRuns, listZyraGraphReviewRunLinks,
   linkZyraGraphReviewRunCases, type GraphReviewRunCaseLink, type TestRunListItem
 } from "@/lib/api";
 
@@ -88,10 +88,25 @@ export function ReviewCaseRunSetup({
     setComplete(null);
     setWorking(true);
     let runId = mode === "new" ? pendingRunId : existingId;
+    let attemptedCreate = false;
     try {
+      // The normal Tesbo run picker only permits Approved test cases. Reuse
+      // its canonical case records before any non-idempotent CREATE/attachment;
+      // review nominations alone must not bypass this policy.
+      for (let offset = 0; offset < selected.length; offset += 8) {
+        const current = await Promise.all(selected.slice(offset, offset + 8).map(async (caseId) => ({
+          caseId, record: await getTestCase(projectId, caseId)
+        })));
+        const ineligible = current.filter(({ record }) => record.status !== "Approved");
+        if (ineligible.length) {
+          throw new Error("Only Approved test cases can be added to a test run. Review: " +
+            ineligible.map(({ caseId }) => caseId).join(", "));
+        }
+      }
       if (mode === "new" && !runId) {
         // The native run is created once. If the following attachment request
         // fails or its response is lost, retry attaches to THIS same run.
+        attemptedCreate = true;
         const run = await createTestRun(projectId, {
           name: runName.trim(),
           environment: environment.trim(),
@@ -115,7 +130,7 @@ export function ReviewCaseRunSetup({
       });
       await loadRecordedLinks();
     } catch (cause) {
-      if (mode === "new" && !runId) {
+      if (mode === "new" && !runId && attemptedCreate) {
         // A lost response to createTestRun could follow a successful DB commit.
         // Never retry this non-idempotent CREATE automatically or blindly.
         setCreationUnconfirmed(true);

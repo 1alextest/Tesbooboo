@@ -345,6 +345,9 @@ const url = process.env.DATABASE_URL ?? "";
     });
 
     it("persists real graph→canonical run/case QA handoff without fabricating execution or cross-project links", async () => {
+      // Native run picker permits only approved cases. Do not allow this new
+      // graph handoff route to bypass that policy for a Draft candidate.
+      await admin.query("UPDATE testcases SET status='Approved' WHERE id=$1", [caseId]);
       const nodeId = JSON.stringify(["test_case", project, caseId]);
       const receipt = {
         id: "db-graph-handoff-" + stamp, projectId: project, status: "needs_qa_triage",
@@ -465,6 +468,10 @@ const url = process.env.DATABASE_URL ?? "";
         await expect(links.linkForUser(user, project, receiptId, cycleId,
           { testcaseIds: [caseId], executionStatus: "Passed" }))
           .rejects.toMatchObject({ status: 400 });
+        await admin.query("UPDATE testcases SET status='Draft' WHERE id=$1", [caseId]);
+        await expect(links.linkForUser(user, project, receiptId, cycleId,
+          { testcaseIds: [caseId] })).rejects.toMatchObject({ status: 409 });
+        await admin.query("UPDATE testcases SET status='Approved' WHERE id=$1", [caseId]);
         await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [project, user]);
         try {
           await expect(links.listForUser(user, project, receiptId))
@@ -481,6 +488,7 @@ const url = process.env.DATABASE_URL ?? "";
         await admin.query("DELETE FROM cycle_items WHERE cycle_id=$1", [cycleId]);
         await admin.query("DELETE FROM cycles WHERE id=$1", [cycleId]);
         await admin.query("DELETE FROM graph_capture_history WHERE id=$1", [receiptId]);
+        await admin.query("UPDATE testcases SET status='Draft' WHERE id=$1", [caseId]);
       }
     });
 

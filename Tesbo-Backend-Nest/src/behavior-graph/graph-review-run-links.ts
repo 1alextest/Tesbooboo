@@ -162,7 +162,7 @@ export class GraphReviewRunLinks {
              JOIN cycle_items ci ON ci.cycle_id=c.id AND ci.deleted_at IS NULL
                   AND ci.testcase_id=ANY($5::uuid[])
              JOIN testcases tc ON tc.id=ci.testcase_id AND tc.project_id=a.id
-                  AND tc.deleted_at IS NULL
+                  AND tc.deleted_at IS NULL AND tc.status='Approved'
             WHERE EXISTS (
               SELECT 1
                 FROM jsonb_array_elements(COALESCE(h.review_receipt_json->'candidates', '[]'::jsonb)) candidate
@@ -184,7 +184,7 @@ export class GraphReviewRunLinks {
       const counts = result.rows[0];
       if (!counts || counts.eligible_count !== ids.length) {
         throw new ConflictException({
-          error: "One or more selected cases are not active nominated cases in this project's test run"
+          error: "Every selected case must be Approved, active, nominated and present in this project's test run"
         });
       }
       return counts.newly_linked;

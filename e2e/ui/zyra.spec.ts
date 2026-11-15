@@ -138,8 +138,8 @@ test.describe("zyra / agents (UI)", () => {
     let createdRunId: string | undefined;
     let uncertainRunId: string | undefined;
     try {
-      caseId = scalar(`INSERT INTO testcases(project_id,external_id,title)
-        VALUES (${literal(projectId)},${literal("ZYU-GR-TC")},${literal("E2E linked graph review")})
+      caseId = scalar(`INSERT INTO testcases(project_id,external_id,title,status)
+        VALUES (${literal(projectId)},${literal("ZYU-GR-TC")},${literal("E2E linked graph review")},'Approved')
         RETURNING id;`);
       const nodeId = JSON.stringify(["test_case", projectId, caseId]);
       const capture = (revision: string) => JSON.stringify({

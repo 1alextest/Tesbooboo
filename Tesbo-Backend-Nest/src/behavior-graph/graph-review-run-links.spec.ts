@@ -29,7 +29,8 @@ describe("committed graph review → native run/case relationships", () => {
     for (const condition of [
       "pm.role IN", "organization_members", "FOR SHARE OF p, pm, om",
       "h.review_receipt_json IS NOT NULL", "c.deleted_at IS NULL",
-      "ci.deleted_at IS NULL", "tc.deleted_at IS NULL", "jsonb_build_array",
+      "ci.deleted_at IS NULL", "tc.deleted_at IS NULL AND tc.status='Approved'",
+      "jsonb_build_array",
       "ON CONFLICT (project_id, history_id, cycle_id, testcase_id) DO NOTHING"
     ]) expect(sql).toContain(condition);
     expect(params).toEqual([PROJECT, USER, HISTORY, RUN, [CASE]]);
