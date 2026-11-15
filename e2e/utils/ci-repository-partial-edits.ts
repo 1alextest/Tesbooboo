@@ -369,7 +369,7 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
           const before = await projectState();
           for (const token of [read, write]) {
             requests.length = 0;
-            await checkConnection(token.secret, /Read permission and project identity verified; 52 MCP tools advertised/);
+            await checkConnection(token.secret, /Read permission and project identity verified; 53 MCP tools advertised/);
             expect(await Promise.all(requests)).toEqual([
               { method: "tools/list", params: undefined, cookie: undefined },
               { method: "tools/call", params: { name: "list_projects", arguments: {} }, cookie: undefined },

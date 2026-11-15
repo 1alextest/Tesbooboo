@@ -151,6 +151,158 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       WHERE project_id=${literal(projectId)};`))).toBe(0);
   });
 
+  // Stateless M1 preview lives under the existing project gateway. Synthetic
+  // caller text must never publish a model, mint an ID or mutate QA outcomes.
+  function modelPreviewDraft() {
+    return { schemaVersion: "tesbo-fsm-draft/1", semantics: "SEQUENTIAL_FSM", initialStateId: "draft",
+      states: [{ id: "draft", label: "Draft" }, { id: "approved", label: "Approved" }],
+      transitions: [{ id: "approve", from: "draft", to: "approved", action: "Approve", expectedObservation: "Approval recorded" }] };
+  }
+
+  function previewQaState(projectId: string): string {
+    return scalar(`SELECT json_build_object(
+      'cases', (SELECT COUNT(*) FROM testcases WHERE project_id=${literal(projectId)}),
+      'runs', (SELECT COUNT(*) FROM cycles WHERE project_id=${literal(projectId)}),
+      'executions', (SELECT COUNT(*) FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id
+        JOIN cycles c ON c.id=ci.cycle_id WHERE c.project_id=${literal(projectId)}),
+      'bugs', (SELECT COUNT(*) FROM bugs WHERE project_id=${literal(projectId)}),
+      'graph', (SELECT COUNT(*) FROM graph_capture_history WHERE project_id=${literal(projectId)}),
+      'links', (SELECT COUNT(*) FROM graph_review_run_case_links WHERE project_id=${literal(projectId)})
+    )::text;`);
+  }
+
+  test("model draft preview validates structure without publishing or generating paths", async () => {
+    const projectId = tenant!.mainProjectId, endpoint = `/api/projects/${projectId}/agents/zyra/changes/model-preview`;
+    const before = previewQaState(projectId);
+    const first = await asQa.post(endpoint, { data: modelPreviewDraft() });
+    expect(first.status(), await first.text()).toBe(200);
+    const body = await first.json();
+    expect(body).toMatchObject({ status: "DRAFT_PREVIEW", validation: "STRUCTURALLY_VALID", approval: "NOT_APPROVED",
+      sourceAuthority: "UNVERIFIED", runtimeEvidence: "NONE", modelId: null, modelRevisionId: null });
+    expect(body.capabilities).toEqual({ persistence: false, publication: false, activation: false, pathGeneration: false, targetExecution: false });
+    expect(body).not.toHaveProperty("coverage"); expect(body).not.toHaveProperty("paths");
+    expect(body.candidateDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(body.states.every((state: { reachable: boolean }) => state.reachable)).toBe(true);
+    const reordered = modelPreviewDraft(); reordered.states.reverse();
+    const replay = await asOwner.post(endpoint, { data: reordered });
+    expect(replay.status()).toBe(200); expect(await replay.json()).toEqual(body);
+    const unreachable = modelPreviewDraft(); unreachable.states.push({ id: "isolated", label: "Isolated" });
+    const diagnostic = await asManager.post(endpoint, { data: unreachable });
+    expect(diagnostic.status()).toBe(200);
+    expect((await diagnostic.json()).diagnostics).toContainEqual({ code: "UNREACHABLE_STATE", elementId: "isolated" });
+    expect(previewQaState(projectId)).toBe(before);
+  });
+
+  test("model draft preview refuses malformed, executable and unsupported candidate data", async () => {
+    const projectId = tenant!.mainProjectId, endpoint = `/api/projects/${projectId}/agents/zyra/changes/model-preview`;
+    const before = previewQaState(projectId);
+    for (const data of [
+      {}, [], { ...modelPreviewDraft(), approved: true }, { ...modelPreviewDraft(), modelId: "forged" },
+      { ...modelPreviewDraft(), states: [] }, { ...modelPreviewDraft(), initialStateId: "missing" },
+      { ...modelPreviewDraft(), variables: [] },
+      { ...modelPreviewDraft(), states: [...modelPreviewDraft().states, modelPreviewDraft().states[0]] },
+      { ...modelPreviewDraft(), transitions: [{ ...modelPreviewDraft().transitions[0], to: "missing" }] },
+      { ...modelPreviewDraft(), transitions: [{ ...modelPreviewDraft().transitions[0], expectedObservation: " " }] },
+      { ...modelPreviewDraft(), transitions: [{ ...modelPreviewDraft().transitions[0], guard: "process.exit()" }] },
+      { ...modelPreviewDraft(), states: Array.from({ length: 33 }, (_, i) => ({ id: `s${i}`, label: "State" })) },
+      { ...modelPreviewDraft(), transitions: Array.from({ length: 65 }, (_, i) => ({ ...modelPreviewDraft().transitions[0], id: `t${i}` })) }
+    ]) {
+      const rejected = await asQa.post(endpoint, { data });
+      expect(rejected.status(), await rejected.text()).toBe(400);
+      expect((await rejected.json()).code).toBe("INVALID_MODEL");
+    }
+    for (const semantics of ["EFSM", "CONCURRENT", "TEMPORAL", "EVENTUAL"]) {
+      const rejected = await asQa.post(endpoint, { data: { ...modelPreviewDraft(), semantics } });
+      expect(rejected.status(), await rejected.text()).toBe(422);
+      expect((await rejected.json()).code).toBe("UNSUPPORTED_SEMANTICS");
+    }
+    expect(previewQaState(projectId)).toBe(before);
+  });
+
+  test("model draft preview retains project, token-scope and revoked-member boundaries", async () => {
+    const projectId = tenant!.mainProjectId, endpoint = `/api/projects/${projectId}/agents/zyra/changes/model-preview`;
+    const data = modelPreviewDraft(), before = previewQaState(projectId);
+    for (const client of [anon, asGuest]) {
+      const denied = await client.post(endpoint, { data }); expect([401, 403, 404]).toContain(denied.status());
+    }
+    const foreign = await asQa.post(`/api/projects/${tenant!.secondProjectId}/agents/zyra/changes/model-preview`, { data });
+    expect([403, 404]).toContain(foreign.status());
+    const issued: Array<{ id: string; token: string }> = [];
+    try {
+      for (const scopes of [["read"], ["read", "write"]]) {
+        const create = await asOwner.post(`/api/projects/${projectId}/apikeys`, { data: { name: `E2E preview ${Date.now()}`, scopes } });
+        expect(create.ok()).toBe(true); const key = await create.json(); issued.push(key);
+        const response = await anon.post(endpoint, { data, headers: { Authorization: `Bearer ${key.token}` } });
+        expect(response.status()).toBe(scopes.includes("write") ? 200 : 403);
+        if (response.ok()) expect((await response.json()).approval).toBe("NOT_APPROVED");
+        const cross = await anon.post(`/api/projects/${tenant!.secondProjectId}/agents/zyra/changes/model-preview`, {
+          data, headers: { Authorization: `Bearer ${key.token}` }
+        });
+        expect([403, 404]).toContain(cross.status());
+      }
+      const removed = await asOwner.delete(`/api/projects/${projectId}/members/${tenant!.qa.userId}`);
+      expect(removed.ok()).toBe(true);
+      const denied = await asQa.post(endpoint, { data }); expect([403, 404]).toContain(denied.status());
+    } finally {
+      try {
+        const restored = await asOwner.post(`/api/projects/${projectId}/members`, { data: { userId: tenant!.qa.userId, role: "qa_engineer" }, failOnStatusCode: false });
+        expect(restored.ok()).toBe(true);
+      } finally {
+        for (const key of issued) await asOwner.delete(`/api/projects/${projectId}/apikeys/${key.id}`, { failOnStatusCode: false });
+      }
+    }
+    expect(previewQaState(projectId)).toBe(before);
+  });
+
+  test("model draft preview through MCP preserves native output, scopes and records", async () => {
+    const projectId = tenant!.mainProjectId;
+    const keys: Array<{ id: string; token: string }> = [];
+    const before = previewQaState(projectId);
+    async function rpc(token: string, method: string, params?: Record<string, unknown>, endpoint = "/api/mcp") {
+      const response = await anon.post(endpoint, { headers: { Authorization: `Bearer ${token}` },
+        data: { jsonrpc: "2.0", id: 1, method, params } });
+      expect(response.ok(), await response.text()).toBe(true);
+      return response.json();
+    }
+    try {
+      for (const scopes of [["read"], ["read", "write"]]) {
+        const created = await asOwner.post(`/api/projects/${projectId}/apikeys`, {
+          data: { name: `E2E native MCP preview ${Date.now()}`, scopes } });
+        expect(created.ok()).toBe(true); keys.push(await created.json());
+      }
+      const [read, write] = keys;
+      const listed = await rpc(read.token, "tools/list");
+      expect(listed.result.tools).toHaveLength(53);
+      expect(listed.result.tools.find((tool: { name: string }) => tool.name === "preview_behavior_model_draft").inputSchema.additionalProperties).toBe(false);
+      const params = { name: "preview_behavior_model_draft", arguments: { model: modelPreviewDraft() } };
+      expect((await rpc(read.token, "tools/call", params)).error.code).toBe(-32002);
+      const rest = await asQa.post(`/api/projects/${projectId}/agents/zyra/changes/model-preview`, { data: modelPreviewDraft() });
+      expect(rest.ok()).toBe(true); const expected = await rest.json();
+      for (const endpoint of ["/api/mcp", `/api/projects/${projectId}/mcp`]) {
+        const result = await rpc(write.token, "tools/call", params, endpoint);
+        expect(result.error).toBeUndefined();
+        expect(JSON.parse(result.result.content[0].text)).toEqual(expected);
+      }
+      for (const args of [{ model: modelPreviewDraft(), projectId: "forged" }, { model: { ...modelPreviewDraft(), approved: true } }]) {
+        const invalid = await rpc(write.token, "tools/call", { ...params, arguments: args });
+        expect(invalid.error.data).toEqual({ code: "INVALID_MODEL", httpStatus: 400 });
+      }
+      const unsupported = await rpc(write.token, "tools/call", { ...params,
+        arguments: { model: { ...modelPreviewDraft(), semantics: "CONCURRENT" } } });
+      expect(unsupported.error.data).toEqual({ code: "UNSUPPORTED_SEMANTICS", httpStatus: 422 });
+      const foreign = await rpc(write.token, "tools/call", params, `/api/projects/${tenant!.secondProjectId}/mcp`);
+      expect(foreign.error.code).toBe(-32001);
+      const revoked = await asOwner.delete(`/api/projects/${projectId}/apikeys/${write.id}`);
+      expect(revoked.ok()).toBe(true);
+      const denied = await anon.post("/api/mcp", { headers: { Authorization: `Bearer ${write.token}` },
+        data: { jsonrpc: "2.0", id: 1, method: "tools/call", params } });
+      expect([401, 403]).toContain(denied.status());
+      expect(previewQaState(projectId)).toBe(before);
+    } finally {
+      for (const key of keys) await asOwner.delete(`/api/projects/${projectId}/apikeys/${key.id}`, { failOnStatusCode: false });
+    }
+  });
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
   function url(suffix: string, projectId?: string): string {

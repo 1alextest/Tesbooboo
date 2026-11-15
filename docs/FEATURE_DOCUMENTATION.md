@@ -6652,4 +6652,75 @@ Closure fixture: one family f, approved active r1; author r2 through prepared en
 The 40-journey independent review inventory remains the review baseline; these six criteria close its specific cross-contract ambiguities without claiming a new inventory or executed product coverage. The preceding 40 MBT criteria retain IDs and remain NOT RUN as native product tests. Offline fixture checks exercise only their explicitly named symbolic subset.
 
 
+## Revision 1.4.24 — opt-in native M1 candidate preview
+
+MBT-C-13 in `04_MCP_API_CONTRACTS.md` owns the exact ephemeral structural preview contract. This adds no expected-model identity, publication, active pointer or second data store; FR-117/C-12 remain authoritative for future persisted models. Intake and authorization are explicit; default OFF. Source implementation is proposed for merge in Tesbo PR95, parent92abc860/native implementation23b5a7ec; no deployed or target-runtime proof is claimed by this spec checkpoint. Existing historical source/test/review claims remain at their original pins.
+
+### MBT-C-13 — Native M1 ephemeral structural candidate preview
+
+POST `/api/projects/{projectId}/agents/zyra/changes/model-preview` extends the existing graph change-review module. Its sole job is bounded structural inspection of caller-authored sequential FSM candidate data. It does not resolve/persist an FR-117 family, issue canonical model/revision IDs, accept rule authority, approve/activate a model, generate paths, prepare a run, access a provider or act on a target. C-12 remains the only expected-family/revision authority for future persisted models. This route's candidate digest is not a canonical model version.
+
+The route is OFF unless server configuration `TESBO_MODEL_PREVIEW_ENABLED=1` explicitly enables it. A caller must pass existing native authentication/current project/workspace access; the POST retains existing project write-lock and machine-token WRITE-scope enforcement. This revision adds no special role/entitlement bypass. The later MBT-C-14 adapter exposes this same native preview through the existing MCP gateway; it does not add a second validator or authority. Native access is checked before feature/body diagnostics, and project/organization membership/archive/deletion is rechecked before returning the computed candidate preview. Missing/changed access fails with native non-enumerating refusal; disabled feature returns503 MODEL_PREVIEW_DISABLED to an otherwise authorized caller. Preview's no-write boundary concerns model/case/run/execution/Bug/graph/link state; existing authentication/token/workspace bookkeeping remains its native owner's behavior.
+
+Request schema is intentionally limited to the explicit preview format, not a final executable EFSM/import contract:
+
+```json
+{
+  "schemaVersion": "tesbo-fsm-draft/1",
+  "semantics": "SEQUENTIAL_FSM",
+  "initialStateId": "draft",
+  "states": [{"id":"draft","label":"Draft"},{"id":"approved","label":"Approved"}],
+  "transitions": [{"id":"approve","from":"draft","to":"approved","action":"Approve","expectedObservation":"Approval recorded"}]
+}
+```
+
+Only those fields are accepted. IDs use `[A-Za-z][A-Za-z0-9_-]{0,63}` and are unique across states and transitions. Require1–32 states,0–64 transitions, a valid initial state and existing transition endpoints. Nonblank label/action/expected-observation text has respective limits120/500/1000 characters and no NUL. These fixed parser/transport safeguards are not ratified production generation quotas. No caller budget can expand them. Variables/guards/effects, code-bearing fields, canonical IDs, project/principal overrides, approval/VERIFIED/result claims and any unknown field fail400 INVALID_MODEL. Semantics other than SEQUENTIAL_FSM fail422 UNSUPPORTED_SEMANTICS. All action/observation strings remain inert untrusted data; nonempty observation text is not a justified/approved oracle.
+
+Normalize by stable ASCII element-ID order and hash the explicit normalized definition using SHA-256. Visit each reachable state once and its outgoing edges once, so finite cycles cannot create an unbounded job. Return states/transitions with structural reachable annotations and retained UNREACHABLE_STATE/UNREACHABLE_TRANSITION/TERMINAL_STATE diagnostics. A terminal state can be legitimate; an unreachable diagnostic is not automatically an approved exclusion. This is neither path enumeration nor an execution-coverage calculation and supplies no percentage.
+
+Response always states schemaVersion tesbo-fsm-preview/1, status DRAFT_PREVIEW, validation STRUCTURALLY_VALID, approval NOT_APPROVED, sourceAuthority UNVERIFIED and runtimeEvidence NONE. modelId/modelRevisionId are null; candidateDigest describes caller bytes only. capabilities persistence/publication/activation/pathGeneration/targetExecution are all false. No paths, canonical records, execution result, source approval or coverage claim are returned. Actual service HTTP execution is distinct from the absence of real target-behavior evidence.
+
+Implementation slice: native core/service/controller in the existing backend behavior-graph owner, no database migration or frontend change; opt-in isolated CI only. The earlier offline finite-EFSM pilot remains an experiment and is not imported as a production generation/authority engine. Native model storage/publication, quotas/generation, adapters, exact case/attempt/evidence, UI/AT and real target conformance retain their separate gates.
+
+
+### MBT-001-J4 — Native preview acceptance additions
+
+| Scenario | Expected outcome | Proof level |
+|---|---|---|
+| MBT-AC-47 | Authorized owner/manager/QA sequential candidate returns deterministic normalized DRAFT_PREVIEW, reachability/diagnostics, null canonical IDs and no approval/runtime/coverage/path-generation authority. | Native core + actual project API/DB integration |
+| MBT-AC-48 | Invalid/empty/oversized/duplicate/dangling/authority-bearing/guard-bearing requests fail400 INVALID_MODEL; EFSM/concurrent/temporal/eventual requests fail422 UNSUPPORTED_SEMANTICS. Finite cycles terminate within state/edge intake bounds. | Native core + actual API validation |
+| MBT-AC-49 | Default-off feature is503 after current access; anonymous/guest/foreign/revoked callers refused. Read-scoped token cannot POST; project-bound write token may preview but gains no approval/target authority. Member/archive change at final access fence refuses result. | Native service/guard + actual API membership/token checks; full plan-transition matrix separate |
+| MBT-AC-50 | Repeated valid/invalid previews leave native cases, cycles, executions, Bugs, graph history and run-case links unchanged. Existing source-binding/change-review/handoff neighbors still work. Disposable membership/token fixtures restore/revoke in finally. | Actual migrated disposable DB + API/browser neighboring regressions |
+
+These criteria may receive only their executed-slice evidence after exact-head results; they do not turn unexecuted native authoring/model publication, UI or target-app criteria into PASS. Earlier unit/source-planned and historical review statuses retain their original pins. Default-off service behavior and mid-validation revocation have native unit oracles; a complete independent entitlement/plan-transition and live deployment audit is still required separately.
+
+
+## Revision 1.4.25 — native MCP draft-preview integration
+
+MBT-C-14 extends the existing MCP gateway with the MBT-C-13 stateless validator. This adapter creates no model authority or native QA record. Review gates remain NOT FROZEN; persisted models, activation, generation, target execution and native UI require their own completed work/evidence. The earlier native REST code at778e3658 has exact-head CI evidence; this MCP delta requires its own final-head receipt in PR95. Historical review and implementation statements remain pinned to their original revisions.
+
+### MBT-C-14 — Native MCP structural draft preview adapter
+
+`preview_behavior_model_draft` extends Tesbo's existing in-process MCP registry, not a second MCP server or model authority. Arguments are exactly `{ "model": <MBT-C-13 native candidate> }`, with no project/principal/approval override. The native `ModelStudioPreview.previewForUser` remains the sole validator for REST and MCP. The shared discovery schema advertises the same 1–32 states,0–64 transitions, required fields, ID pattern, text limits and unknown-field rejection; runtime cross-reference, duplicate-ID, blank/NUL text and semantics checks remain the native parser's responsibility.
+
+Require a valid project-scoped token, current issuer membership, `write` scope and existing project write entitlement before handler execution. This matches the REST POST boundary even though the preview creates no domain records. The existing native membership/archive/deletion completion fence is retained. No read-token escalation, new approval role, paid provider, remote tool, actor creation, database migration, family pointer or publication path is added. Existing token authentication/usage bookkeeping remains with its current owner.
+
+The static MCP catalog contains53 tools and advertises the feature prerequisite/default-off boundary. Discovery alone does not mean a deployment enables preview. The existing tool fingerprint/session-expiry behavior forces stale session clients to rediscover the changed schema. No new server stream or listChanged claim is introduced.
+
+MCP uses existing JSON-RPC result/error envelopes. Successful preview content is exactly the C-13 native result, including DRAFT_PREVIEW/NOT_APPROVED/UNVERIFIED/NONE, null model/revision IDs and all authority/execution capabilities false. Native parsing errors map to JSON-RPC ToolExecutionError -32003 with `data.code` and `data.httpStatus`: INVALID_MODEL/400, UNSUPPORTED_SEMANTICS/422 and MODEL_PREVIEW_DISABLED/503. Missing native service fails MODEL_PREVIEW_UNAVAILABLE/503. These status values are diagnostic metadata, not the actual transport status: native MCP's HTTP201 JSON-RPC error envelope is preserved. Existing scope/project/auth/write-lock errors retain their established categories and non-enumerating behavior. Unknown infrastructure errors are not promoted to validation success.
+
+Both `/api/mcp` and `/api/projects/{projectId}/mcp` use this same handler; URL project still must equal the token project. Repeated accepted/refused previews must not change native cases, cycles, executions, Bugs, graph history or run-case links. No generated path, runtime coverage, target execution or canonical model version can be inferred from a successful tool response. All existing model persistence/publication/activation/dispatch/target/UI and independent review gates remain open as recorded.
+
+
+### MBT-001-J5 — Native MCP preview acceptance additions
+
+| Scenario | Expected outcome | Proof level |
+|---|---|---|
+| MBT-AC-51 | Native discovery exposes53 unique tools including the exact bounded model wrapper; current clients rediscover on schema fingerprint change. Feature prerequisite is explicit and discovery does not imply enablement. | Native MCP registry/service plus existing session regressions and actual HTTP discovery |
+| MBT-AC-52 | Both native MCP transports return precisely the REST preview result for the same candidate; no canonical identity, approval, runtime evidence or persisted QA/graph record is created. | Actual disposable migrated DB/HTTP comparison plus real shared-validator unit tests |
+| MBT-AC-53 | Invalid wrapper/model, authority fields, unsupported semantics, default-off feature and absent service fail with explicit typed codes. Diagnostic httpStatus is distinguished from JSON-RPC transport status. | Native MCP/service plus actual enabled HTTP malformed/unsupported refusal; disabled/missing injection tested in service |
+| MBT-AC-54 | Read-scope, cross-project, revoked issuer/token and locked project cannot invoke a successful preview; membership removal at completion refuses the computed result. Catalog/diagnostic neighbors and all prior preview/source/QA-handoff scenarios continue working. | Native service boundary scenarios plus actual token/project HTTP journeys and existing regression jobs; full entitlement-transition matrix remains separate |
+
+The new HTTP scenario extends the existing isolated Zyra suite; with its prior eight preview/graph/source/handoff neighbors it should list/run9 targeted scenarios. Native tests also exercise all32 admitted states and64 edges under an explicit constant traversal bound following the earlier CodeQL loop-bound alert. Source preparation and locally stripped core checks do not count as actual native HTTP/DB execution. Read final exact-head CI evidence in PR95; earlier green heads do not verify this adapter. No independent assurance closeout is inferred.
+
 **Compatibility follow-up (2026-11-15):** The positive cases in the *existing* native Cycles, Automation, Executions and Attachment API suites now explicitly create `Approved` case fixtures before adding them to runs (9 isolated fixture changes). These are not artificial waivers: the workflows genuinely expect an executable case. Deliberately Draft/In Review/Deprecated negative fixtures and the earlier approval-boundary tests remain unchanged. The CI smoke pipeline now runs six representative pre-existing positive API tests in addition to the dedicated REST/MCP/automation negative/positive approval suite, so a policy fix must preserve historical retry, run execution and evidence behavior in actual HTTP tests.

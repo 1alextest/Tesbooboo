@@ -17,6 +17,8 @@ import {
 import { ProjectSourceGraphCoordinator } from "./project-source-graph.coordinator";
 import { ProjectSourceBindingManagement } from "./project-source-binding.management";
 import { GraphChangeReviewController } from "./graph-change-review.controller";
+import { ModelStudioPreview } from "./model-studio-preview";
+import { ModelStudioPreviewController } from "./model-studio-preview.controller";
 
 /** Server-admin configuration only. No filesystem root comes from REST/MCP. */
 export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistry {
@@ -46,9 +48,10 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
 
 @Module({
   imports: [LegacyModule, BullModule.registerQueue({ name: GRAPH_QA_RECOVERY_QUEUE })],
-  controllers: [GraphChangeReviewController],
+  controllers: [GraphChangeReviewController, ModelStudioPreviewController],
   providers: [
     CurrentCacheGraphReader,
+    ModelStudioPreview,
     CurrentCacheGraphHistory,
     GraphChangeReviewDelivery,
     GraphReviewRunLinks,
@@ -68,7 +71,7 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
         new ProjectSourceGraphCoordinator(bindings, history)
     }
   ],
-  exports: [ProjectSourceGraphCoordinator, GraphChangeReviewDelivery]
+  exports: [ProjectSourceGraphCoordinator, GraphChangeReviewDelivery, ModelStudioPreview]
 })
 export class GraphChangeReviewModule implements OnModuleInit {
   private readonly logger = new Logger(GraphChangeReviewModule.name);
