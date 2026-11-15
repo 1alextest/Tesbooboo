@@ -273,6 +273,29 @@ for (const outcome of ["denied", "unavailable", "disconnect", "timeout", "lost-a
   });
 }
 
+for (const endBeforeReady of [false, true]) {
+  test(`results delivered during asynchronous startup are retained before closure (earlyEnd=${endBeforeReady})`, async () => {
+    await withIngest("accepted", async (baseUrl, calls) => {
+      const reporter = new TesboReporter({ baseUrl, projectId: PROJECT, token: TOKEN, retries: 0, timeoutMs: 1_000, attachEvidence: "never" });
+      const tagged = linkedTest(), suite = { allTests: () => [tagged] } as unknown as Suite;
+      const logs = await captureLogs(async () => {
+        // Playwright does not await onBegin. A fast test can finish while resolve/create is pending.
+        const beginning = reporter.onBegin(fakeConfig, suite);
+        reporter.onTestEnd(tagged, { status: "passed", duration: 1, retry: 0, attachments: [] } as unknown as TestResult);
+        if (endBeforeReady) await Promise.all([beginning, reporter.onEnd({ status: "passed" } as FullResult)]);
+        else { await beginning; await reporter.onEnd({ status: "passed" } as FullResult); }
+      });
+      assert.deepEqual(calls.map((call) => `${call.method} ${call.url.split("/automation")[1]}`), [
+        "POST /cases/resolve", "POST /runs", `POST /runs/${RUN}/results`, `PATCH /runs/${RUN}/close`
+      ]);
+      assert.deepEqual(calls[calls.length - 1].body, { status: "completed", summary: { total: 1, passed: 1, failed: 0, skipped: 0 } });
+      assert.match(logs, /run .* closed \(completed\): 1 passed, 0 failed, 0 skipped/);
+      assert.doesNotMatch(logs, /closure unconfirmed|request\(s\) to Tesbo failed/);
+      assert.equal(logs.includes(TOKEN), false);
+    });
+  });
+}
+
 test("confirmed close retains success logging and drains results before sending the summary", async () => {
   await withIngest("accepted", async (baseUrl, calls) => {
     const logs = await runLifecycle(baseUrl);

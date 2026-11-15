@@ -139,6 +139,8 @@ export default class TesboReporter implements Reporter {
   private enabled: boolean;
   private readonly options: TesboReporterOptions;
   private readonly source = detectRunSource();
+  private initialization: Promise<void> | null = null;
+  private readonly pendingResults: Array<{ test: TestCase; result: TestResult }> = [];
   private readonly inFlight: Promise<unknown>[] = [];
   private readonly counters: Counters = {
     passed: 0,
@@ -169,9 +171,15 @@ export default class TesboReporter implements Reporter {
    * Collection-time validation is card §3: "the tag/decorator must be parsed at test-collection
    * time (before execution), so unlinked tests can be flagged upfront rather than discovered as a
    * missing result later", and "a typo in the ID fails fast locally instead of silently not
-   * reporting". Both are only possible here, before the first test runs.
+   * reporting". The scan belongs here, but Playwright does not await asynchronous initialization;
+   * result callbacks are held until startup finishes.
    */
-  async onBegin(config: FullConfig, suite: Suite): Promise<void> {
+  onBegin(config: FullConfig, suite: Suite): Promise<void> {
+    this.initialization = this.initialize(config, suite);
+    return this.initialization;
+  }
+
+  private async initialize(config: FullConfig, suite: Suite): Promise<void> {
     if (!this.enabled) return;
 
     /*
@@ -256,6 +264,9 @@ export default class TesboReporter implements Reporter {
     const shardNote = config.shard ? ` (shard ${config.shard.current}/${config.shard.total})` : "";
     const reusedNote = run.data.reused ? " (existing)" : "";
     console.log(`[tesbo] reporting ${caseIds.length} linked test(s) to run ${run.data.runId}${reusedNote}${shardNote}`);
+    // Playwright does not await onBegin: fast tests may have finished before the run was ready.
+    // Replay only those local callbacks into the existing submission queue, never HTTP requests.
+    for (const { test, result } of this.pendingResults.splice(0)) this.onTestEnd(test, result);
   }
 
   /**
@@ -289,7 +300,11 @@ export default class TesboReporter implements Reporter {
    * from inflating the count.
    */
   onTestEnd(test: TestCase, result: TestResult): void {
-    if (!this.enabled || !this.client || !this.runId) return;
+    if (!this.enabled) return;
+    if (!this.client || !this.runId) {
+      if (this.initialization) this.pendingResults.push({ test, result });
+      return;
+    }
 
     const { caseId, malformed } = extractCaseId(test.tags ?? [], test.annotations ?? []);
     if (!caseId) {
@@ -392,6 +407,7 @@ export default class TesboReporter implements Reporter {
    * outright that results are missing instead of looking like a clean pass over fewer tests.
    */
   async onEnd(result: FullResult): Promise<void> {
+    await this.initialization;
     if (!this.enabled || !this.client || !this.runId) {
       if (this.disabledReason) console.warn(`[tesbo] ${this.disabledReason}`);
       this.printUnlinked();
@@ -458,6 +474,7 @@ export default class TesboReporter implements Reporter {
 
   private disable(reason: string): void {
     this.enabled = false;
+    this.pendingResults.length = 0;
     this.disabledReason = reason;
   }
 
