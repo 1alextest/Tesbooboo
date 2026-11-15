@@ -1,4 +1,5 @@
 import { BUG_SEVERITIES, LegacyService } from "../legacy/legacy.service";
+import { expectedTestcaseRevision } from "../legacy/testcase-edit-revision";
 import { CurrentCacheGraphReader } from "../behavior-graph/current-cache-graph.reader";
 import { CurrentCacheGraphHistory } from "../behavior-graph/current-cache-graph.history";
 import { McpError, RpcCode, type McpTool, type McpToolContext } from "./mcp.types";
@@ -252,7 +253,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "get_testcase",
       description:
-        "Get one test case by id in the token's project, with its full detail: description, preconditions, postconditions, steps, test data, priority, severity, type, automation fields, component, status, estimated duration, Notes (attachments plain text), sourceRefs citations, and Jira/Linear links. Required: testcaseId.",
+        "Get one test case by id in the token's project, with its full detail: description, preconditions, postconditions, steps, test data, priority, severity, type, automation fields, component, status, estimated duration, Notes (attachments plain text), sourceRefs citations, Jira/Linear links, and editRevision. Pass editRevision as expectedRevision on update_testcase to refuse a stale row edit. Required: testcaseId.",
       requiredScope: "read",
       inputSchema: {
         type: "object",
@@ -324,13 +325,14 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "update_testcase",
       description:
-        "Update a test case in the token's project. Required: testcaseId. Optional: externalId (the case's ID such as NAP-TC-12; must stay unique in the project, no spaces, up to 32 characters; past runs show the new ID), suiteId, title, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult}), testData, attachments (plain-text Notes; omit to preserve, string to replace, empty string to clear; null is invalid), priority, severity, type, automationStatus, component, status, estimatedDuration, customFieldValues. Only fields you pass are changed; omitted fields keep their current value. To archive or restore a test case, prefer archive_testcase/restore_testcase over setting status here directly. The write is attributed to the Tesbo MCP agent actor.",
+        "Update a test case in the token's project. Required: testcaseId. Optional: expectedRevision (editRevision from get_testcase; recommended to refuse stale row edits), externalId (the case's ID such as NAP-TC-12; must stay unique in the project, no spaces, up to 32 characters; past runs show the new ID), suiteId, title, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult}), testData, attachments (plain-text Notes; omit to preserve, string to replace, empty string to clear; null is invalid), priority, severity, type, automationStatus, component, status, estimatedDuration, customFieldValues. A revision conflict writes nothing; reread and review before trying again, never automatically overwrite. Omitting expectedRevision retains unconditional legacy edits. Only fields you pass are changed; omitted fields keep their current value. To archive or restore a test case, prefer archive_testcase/restore_testcase over setting status here directly. The write is attributed to the Tesbo MCP agent actor.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
         properties: {
           testcaseId: { type: "string" },
           externalId: { type: "string" },
+          expectedRevision: { type: "string", pattern: "^[a-f0-9]{64}$", description: "Opaque editRevision from get_testcase. Guards the stored case row, not independently stored custom fields/tags. Reread and review on conflict; do not silently omit it to overwrite newer content." },
           suiteId: { type: "string" },
           title: { type: "string" },
           description: { type: "string" },
@@ -364,6 +366,7 @@ export function buildMcpTools(): McpTool[] {
       handler: async (args, ctx) => {
         const testcaseId = requireString(args, "testcaseId");
         validateTestcaseNotes(args);
+        expectedTestcaseRevision(args.expectedRevision);
         // updateTestCase() takes no project argument of its own — it derives the project from the
         // row it finds by id — so the tool must check project ownership itself before calling it.
         await requireProjectOwnedRow(ctx, "testcases", testcaseId, "Test case");

@@ -105,7 +105,7 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
       await panel().getByRole("button", { name: "Archive", exact: true }).click();
       const archived = await archivedResponse;
       expect(archived.ok(), await archived.text()).toBeTruthy();
-      expect(archived.request().postDataJSON()).toEqual({ status: "Archived" });
+      expect(archived.request().postDataJSON()).toEqual({ status: "Archived", expectedRevision: expect.stringMatching(/^[a-f0-9]{64}$/) });
       await expect(panel().getByRole("button", { name: "Unarchive", exact: true })).toBeEnabled();
       await expect(suiteField()).toHaveValue(first.id);
       const middle = await caseState(selected.id);
@@ -116,7 +116,7 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
       await panel().getByRole("button", { name: "Unarchive", exact: true }).click();
       const restored = await restoredResponse;
       expect(restored.ok(), await restored.text()).toBeTruthy();
-      expect(restored.request().postDataJSON()).toEqual({ status: "Draft" });
+      expect(restored.request().postDataJSON()).toEqual({ status: "Draft", expectedRevision: expect.stringMatching(/^[a-f0-9]{64}$/) });
       await expect(panel().getByRole("button", { name: "Archive", exact: true })).toBeEnabled();
       await openCase(selected.title, first.name);
       await expect(suiteField()).toHaveValue(first.id);
@@ -158,6 +158,60 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
       await expect(page.getByTestId("suite-details")).toContainText("Edited description");
       expect(await associations()).toEqual(associationsBefore); expectCaseUnchanged(controlBefore, await caseState(control.id));
       await capture("repository-renamed-suite-under-concurrent-parent");
+    });
+
+    await checked("stale case edits refuse overwrite, retain local Notes, and require explicit reload/review", async () => {
+      await openCase(selected.title, first.name);
+      const notes = panel().getByPlaceholder("Add notes, links to screenshots, logs, or reference docs");
+      await notes.fill("Unsaved browser Notes");
+      const external = await page.request.put(`${base}/testcases/${selected.id}`, { data: { attachments: "Newer reviewer Notes" } });
+      expect(external.ok(), await external.text()).toBeTruthy();
+      const committed = await caseState(selected.id);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = page.waitForResponse((response) => response.url() === `${base}/testcases/${selected.id}` && response.request().method() === "PUT");
+        await panel().getByRole("button", { name: "Save changes", exact: true }).click();
+        const refused = await response;
+        expect(refused.status(), await refused.text()).toBe(409);
+        expect(refused.request().postDataJSON().expectedRevision).toMatch(/^[a-f0-9]{64}$/);
+        await expect(panel().getByRole("alert")).toContainText("Your changes were not saved");
+        await expect(notes).toHaveValue("Unsaved browser Notes");
+        expectCaseUnchanged(committed, await caseState(selected.id));
+      }
+      await capture("repository-stale-edit-retains-unsaved-notes");
+      page.once("dialog", (dialog) => dialog.dismiss());
+      await panel().getByRole("button", { name: "Reload latest case" }).click();
+      await expect(notes).toHaveValue("Unsaved browser Notes");
+      page.once("dialog", (dialog) => dialog.accept());
+      await panel().getByRole("button", { name: "Reload latest case" }).click();
+      await expect(notes).toHaveValue("Newer reviewer Notes");
+      await notes.fill("Newer reviewer Notes; reviewed browser addition");
+      await panel().getByRole("button", { name: "Save changes", exact: true }).click();
+      await expect(panel().getByText("Test case updated successfully.")).toBeVisible();
+      const saved = await caseState(selected.id);
+      expect(saved.row).toMatchObject({ attachments: "Newer reviewer Notes; reviewed browser addition", suite_id: first.id, owner_id: ownerId });
+      expectHistory(committed, saved, 1, ownerId);
+      expect(await associations()).toEqual(associationsBefore);
+      expectCaseUnchanged(controlBefore, await caseState(control.id));
+      // A stale backend/cache response must never silently turn the editor into
+      // an unconditional writer when its revision metadata is missing.
+      await expect(panel().getByRole("button", { name: "Save changes", exact: true })).toBeEnabled();
+      const caseUrl = `${base}/testcases/${selected.id}`;
+      await page.route(caseUrl, async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+        delete body.editRevision;
+        await route.fulfill({ response, json: body });
+      }, { times: 1 });
+      try {
+        await page.goto(repo);
+        await page.getByRole("button", { name: first.name, exact: true }).click();
+        await page.getByRole("button", { name: selected.title, exact: true }).click();
+        await expect(panel().getByRole("alert")).toContainText("Case edit revision is unavailable");
+        await expect(panel().getByRole("button", { name: "Save changes", exact: true })).toBeDisabled();
+      } finally { await page.unroute(caseUrl); }
+      page.once("dialog", (dialog) => dialog.accept());
+      await panel().getByRole("button", { name: "Reload latest case" }).click();
+      await expect(panel().getByRole("button", { name: "Save changes", exact: true })).toBeEnabled();
     });
 
     await checked("UI-created API tokens support cookie-free MCP initialize/discovery/writes, read-only refusal and UI revocation", async () => {
@@ -260,6 +314,27 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
         expect(after.row).toMatchObject({ suite_id: first.id, owner_id: ownerId, description: "MCP body", updated_by: mcpActor, ...expected });
         expectHistory(before, after, 1, mcpActor);
       }
+      const readCase = await call(write.secret, session, "get_testcase", { testcaseId: created.id });
+      expect(readCase.editRevision).toMatch(/^[a-f0-9]{64}$/);
+      const humanEdit = await page.request.put(`${base}/testcases/${created.id}`, { data: { attachments: "Human Notes before MCP" } });
+      expect(humanEdit.ok(), await humanEdit.text()).toBeTruthy();
+      const committed = await caseState(created.id);
+      for (const expectedRevision of [readCase.editRevision, null, "", 3, true, [], {}]) {
+        const response = await rpc(write.secret, "tools/call", { name: "update_testcase", arguments: {
+          testcaseId: created.id, expectedRevision, attachments: "Must not replace human Notes"
+        } }, session);
+        expect(response.ok()).toBeTruthy();
+        const body = await response.json();
+        expect(body.error.message).toMatch(expectedRevision === readCase.editRevision ? /changed since it was loaded/ : /expectedRevision/);
+        expectCaseUnchanged(committed, await caseState(created.id));
+      }
+      const current = await call(write.secret, session, "get_testcase", { testcaseId: created.id });
+      await call(write.secret, session, "update_testcase", {
+        testcaseId: created.id, expectedRevision: current.editRevision, attachments: "Human Notes; reviewed MCP addition"
+      });
+      const guarded = await caseState(created.id);
+      expect(guarded.row.attachments).toBe("Human Notes; reviewed MCP addition");
+      expectHistory(committed, guarded, 1, mcpActor);
       await call(write.secret, session, "update_testcase", { testcaseId: created.id, suiteId: null });
       expect((await caseState(created.id)).row).toMatchObject({ suite_id: null, owner_id: ownerId });
       await call(write.secret, session, "update_testcase", { testcaseId: created.id, suiteId: second.id });

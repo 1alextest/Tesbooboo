@@ -424,6 +424,7 @@ export default function TestCasesPage() {
   // via openViewPanel), so it always reflects the latest known-persisted values.
   const [panelOriginalStatus, setPanelOriginalStatus] = useState<string | null>(null);
   const [panelOriginalSuiteId, setPanelOriginalSuiteId] = useState<string | null>(null);
+  const [panelEditRevision, setPanelEditRevision] = useState<string | null>(null);
 
   // Bugs filed against this test case (edit mode only — a case being created has none yet).
   const [panelBugs, setPanelBugs] = useState<BugItem[]>([]);
@@ -947,6 +948,9 @@ export default function TestCasesPage() {
   }
 
   function fillFormFromTestCase(data: Record<string, unknown>) {
+    const revision = typeof data.editRevision === "string" && /^[a-f0-9]{64}$/.test(data.editRevision) ? data.editRevision : null;
+    setPanelEditRevision(revision);
+    if (!revision) setPanelError("Case edit revision is unavailable. Reload the latest case before saving changes.");
     setTitle((data.title as string) ?? "");
     setDescription((data.description as string) ?? "");
     setPreconditions((data.preconditions as string) ?? "");
@@ -978,6 +982,7 @@ export default function TestCasesPage() {
   }
 
   function resetForm(defaultSuiteId?: string | null) {
+    setPanelEditRevision(null);
     setTitle("");
     setDescription("");
     setPreconditions("");
@@ -1040,6 +1045,7 @@ export default function TestCasesPage() {
     // suites/repoSummary patch would be based on stale data, and falls back to a real refetch instead.
     setPanelOriginalStatus(null);
     setPanelOriginalSuiteId(null);
+    setPanelEditRevision(null);
     setCustomFieldErrors({});
     setSelectedSourceRef(null);
     try {
@@ -1065,6 +1071,7 @@ export default function TestCasesPage() {
     setPanelMode("closed");
     setPanelTestcaseId(null);
     setPanelError(null);
+    setPanelEditRevision(null);
     setSelectedSourceRef(null);
   }
 
@@ -1445,6 +1452,10 @@ export default function TestCasesPage() {
 
   async function handleArchivePanelTestCase() {
     if (!panelTestcaseId || panelSaving) return;
+    if (!panelEditRevision) {
+      setPanelError("Reload the latest case before saving changes.");
+      return;
+    }
     const ok = window.confirm("Archive this test case?");
     if (!ok) return;
     setPanelSaving(true);
@@ -1453,7 +1464,7 @@ export default function TestCasesPage() {
       // Server-confirmed prior status (not the edit form's own status state, which could reflect an
       // unsaved dropdown change) — same reasoning as handleDeletePanelTestCase.
       const priorStatus = suiteCases.find((tc) => tc.id === panelTestcaseId)?.status;
-      await updateTestCase(projectId, panelTestcaseId, { status: "Archived" });
+      await updateTestCase(projectId, panelTestcaseId, { status: "Archived", expectedRevision: panelEditRevision });
       // No suite/bySuite/total change: archiving neither removes the case (deleted_at is untouched)
       // nor moves it to a different suite — only its status column changes (verified against the
       // backend's suite-count and repository-summary queries; see applyStatusChange's own comment).
@@ -1470,11 +1481,15 @@ export default function TestCasesPage() {
 
   async function handleUnarchivePanelTestCase() {
     if (!panelTestcaseId || panelSaving) return;
+    if (!panelEditRevision) {
+      setPanelError("Reload the latest case before saving changes.");
+      return;
+    }
     setPanelSaving(true);
     setPanelError(null);
     try {
       const priorStatus = suiteCases.find((tc) => tc.id === panelTestcaseId)?.status;
-      await updateTestCase(projectId, panelTestcaseId, { status: "Draft" });
+      await updateTestCase(projectId, panelTestcaseId, { status: "Draft", expectedRevision: panelEditRevision });
       if (priorStatus) applyTestCasesPatch({ repoSummary: applyStatusChange(repoSummary, priorStatus, "Draft") });
       await loadSelectedSuiteCases();
       await openViewPanel(panelTestcaseId);
@@ -1489,6 +1504,11 @@ export default function TestCasesPage() {
   async function handlePanelSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (panelMode !== "create" && panelMode !== "edit") return;
+    if (panelSaving || panelLoading) return;
+    if (panelMode === "edit" && !panelEditRevision) {
+      setPanelError("Reload the latest case before saving changes.");
+      return;
+    }
 
     // Required custom fields must be filled before the test case can be saved. Checked
     // client-side against whichever list is currently in scope — the edit-mode tab is
@@ -1556,6 +1576,7 @@ export default function TestCasesPage() {
         }
       } else if (panelMode === "edit" && panelTestcaseId) {
         await updateTestCase(projectId, panelTestcaseId, {
+          expectedRevision: panelEditRevision,
           suiteId: suiteId || undefined,
           title,
           description,
@@ -2497,9 +2518,19 @@ export default function TestCasesPage() {
             {(panelError || panelSuccess) && (
               <div className="shrink-0 px-6 pt-3">
                 {panelError && (
-                  <p className="rounded-lg border border-[var(--error)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--error-foreground)]">
-                    {panelError}
-                  </p>
+                  <div role="alert" className="rounded-lg border border-[var(--error)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--error-foreground)]">
+                    <p>{panelError}</p>
+                    {panelMode === "edit" && panelTestcaseId && (
+                      <button type="button" className="mt-2 underline" disabled={panelSaving || panelLoading}
+                        onClick={() => {
+                          if (window.confirm("Reload the latest test case? This discards your unsaved changes.")) {
+                            void openViewPanel(panelTestcaseId);
+                          }
+                        }}>
+                        Reload latest case
+                      </button>
+                    )}
+                  </div>
                 )}
                 {panelSuccess && (
                   <p className="rounded-lg border border-[var(--success)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--success-foreground)]">
@@ -2900,7 +2931,7 @@ export default function TestCasesPage() {
               <div className="shrink-0 border-t border-[var(--border)] bg-[var(--surface)] px-6 py-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
-                    <Button type="submit" form="panel-form-global" variant="primary" onClick={() => setSubmitAction("create")} disabled={panelSaving}>
+                    <Button type="submit" form="panel-form-global" variant="primary" onClick={() => setSubmitAction("create")} disabled={panelSaving || panelLoading || (panelMode === "edit" && !panelEditRevision)}>
                       {panelSaving ? "Saving..." : panelMode === "create" ? "Create" : "Save changes"}
                     </Button>
                     {panelMode === "create" && (

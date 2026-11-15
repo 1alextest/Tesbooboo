@@ -816,7 +816,7 @@ describe("test case writes carry the Notion link", () => {
       expect(update.sql).toContain("notion_url=CASE WHEN $33::boolean THEN NULL ELSE COALESCE($32,notion_url) END");
       expect(update.params.slice(30, 33)).toEqual([...link, clears]);
       expect(update.params[33]).toBeNull(); // $34: no external-id rename requested.
-      expect(update.params.slice(34)).toEqual([false, false]); // Suite/owner omitted, not cleared.
+      expect(update.params.slice(34)).toEqual([false, false, null]); // Suite/owner omitted; no edit-revision guard requested.
     }
   });
 

@@ -5933,6 +5933,85 @@ outside this UI repair. No broader Phase 1/2 sign-off is implied.
 
 ---
 
+### Shared case-edit content preconditions — implementation checkpoint (2026-11-15)
+
+**Separate scope:** this slice addresses the founder's conflict-aware human/MCP
+case-edit feedback, independently of the graph work in PR #88. It extends the
+existing case detail reader, single-case writer/transaction and editor. No new
+case/history/review store, migration, workspace authority, graph feature or
+automatic merge is introduced.
+
+**Wire contract:** authorized case-detail reads (REST UUID/readable reference and
+MCP `get_testcase`) return `editRevision`. It is an opaque lowercase SHA-256
+content fingerprint calculated in the same PostgreSQL SELECT as the native row.
+Single updates may send it as `expectedRevision`; malformed supplied values
+are refused, and a mismatching row returns HTTP 409 / `TESTCASE_EDIT_CONFLICT`
+(an ordinary tool error through MCP). The comparison is part of the actual
+UPDATE, not a separate read-then-check, so a concurrent committed row update
+must be rechecked after lock waiting. Refusal precedes custom-field/tag writes
+and postcommit activity/cache/embedding/notification effects. Existing
+project/token/role/plan guards and actor attribution remain authoritative.
+
+**Content, not a new revision history:** hash the actual native row except
+`embedding_status`, `embedding_content_hash` and `updated_at`. Existing indexing
+workers legitimately update those fields; they must not manufacture an authored
+edit conflict. Identity, ownership, hierarchy, Notes/body/steps, source citations,
+status and other native content still participate. Timestamp-only differences
+and a return to identical content do not represent a different fingerprint.
+V63's native historical snapshots remain unchanged. No JavaScript timestamp
+rounding, client hash computation, persisted token or extra database round trip
+is needed.
+
+**Editor behavior:** fetched revision metadata is retained with the loaded case
+and sent on Save/Archive/Unarchive. Missing metadata fails closed with a visible
+reload instruction, rather than silently dropping the guard. A rejected save
+retains unsaved form text and the old precondition; pressing Save again cannot
+quietly overwrite newer content. “Reload latest case” explicitly confirms that
+unsaved edits will be discarded. The user then reviews the current case and
+chooses what to save. Mutations are not automatically retried.
+
+**Compatibility and limits:** omission retains unconditional legacy single-edit
+behavior for existing clients/internal callers. MCP advertises the precondition
+and tells clients not to omit it as automatic conflict recovery. This is an
+opt-in row-content guard, not universal stale-write prevention, a permission
+token, a batch/review-set approval or a revision contract for independently
+stored custom-field values, tags and other relationships. Those metadata-only
+paths, delete/bulk/import/review semantics and mandatory preconditions for every
+client require separate reconciliation; do not claim they are solved here.
+
+**Verification:** identical final unit assertions against `cbc408b` reproduced
+**21 failed / 169 passed / 190 total**, zero skipped. The changed tree passed
+**1,286/1,286 tests in 49 suites** before integration; after retaining merged
+`development@7fdd4ba`, the same selection passed **1,296/1,296, zero skipped**,
+covering existing non-DB legacy cases, MCP and token guards. Two surrounding fixture assumptions were updated without removing
+their assertions: the Notion SQL binding oracle now includes the optional null
+guard, and the Zyra read double recognizes the new row-plus-revision SELECT.
+All three non-incremental typechecks and backend build emission passed.
+Changed-file lint has no new findings; the existing nine backend findings
+(five in the legacy service, four in MCP tools) remain, not silently waived.
+
+**Authored native/integration coverage:** the existing migrated PostgreSQL
+repository spec now covers stale refusal with unchanged history/effects,
+actual row-lock interleaving, sub-millisecond content changes, embedding-only
+updates, missing rows and rollback after a late custom-tag failure. Existing
+case API/MCP/editor specs cover the transport and explicit review/reload flow.
+The existing isolated CI repository journey also checks browser retained Notes,
+confirmation dismissal, missing revision metadata, actual persisted history,
+MCP malformed/stale refusal and unchanged run/execution associations.
+
+**Unfinished gates:** collection succeeded for the existing isolated CI smoke
+selection (**19 of 19 journeys**, including the extended repository journey).
+The merged workflow's existing five selected Zyra scenarios also collected
+successfully; their implementation is unchanged by this slice.
+That is collection, not execution. Local configured DB/API/browser runs remain
+unrun: this checkout has no root environment or authenticated A/B contexts, and
+no credentials were copied or replacement/shared database started. Exact-head
+CI needs publication/run approval; deployed impacted case/MCP/editor acceptance
+and independent review are separate gates. Nothing here authorizes edits to the
+twelve live Nesberry cases, production deployment or SDK publication.
+
+---
+
 ### T-455 native Zyra change review, committed-receipt notifications (2026-11-15)
 
 **Consolidated successor:** PR #88 builds on merged T-455 PR #86 and reuses the same graph ledger, case/requisite links and Zyra entry point. It registers an authenticated project-scoped `/agents/zyra/changes` REST API and a change-review view **inside Zyra**. The view distinguishes initial baselines, source-scope discontinuities and comparable changes; displays exact affected node identities and explicitly linked test-case review candidates, and states that references are not coverage and source changes are not failed executions. The capture action accepts **no client source manifest**: only approved server checkout configuration, the project source binding and native auth/plan write guards can initiate it. Unconfigured projects fail closed.
@@ -6128,3 +6207,446 @@ not infrastructure planning or a duplicate graph implementation.
 **Assurance and regression evidence.** Unit tests verify every non-Approved status, project/active-case selection, previously attached exclusion and row locking. Migrated-PostgreSQL tests verify mixed-batch rollback, Approved success, foreign/malformed skip, replay after demotion, MCP atomic cycle creation, concurrent demotion, and automated run creation without orphan rows. A dedicated disposable Playwright tenant exercises direct REST, MCP, automation and anonymous access. Positive fixtures in existing smoke/execution suites were updated to create Approved cases; negative cases deliberately remain Draft/In Review. The exact latest-head GitHub CI verdict must be inspected before declaring this release-accepted.
 
 **Remaining distinct work.** Whether `POST /api/projects/:projectId/cycles/from-cases` should truly seed run membership is a separate pre-existing route-behavior question: historically its controller delegates to plain `createCycleForUser` and does **not** add case IDs. This PR does not silently change that contract. Source-code semantic evidence, real deployed build-to-execution provenance, independent assurance-team certification and human sign-off remain outside this write-policy correction.
+
+### MBT-001 — Model Studio: governed model-based and graph-based testing (proposal revision 0.3, 2026-11-15)
+
+**Document status:** PROPOSED SPECIFICATION AMENDMENT, NOT SHIPPED AND NOT CANONICAL-FROZEN. The original v1.4.21 archive has been obtained and its same eight documents extended as proposed package v1.4.23, preserving historical content and identifiers. This living-document section is a synchronized reference, not a ninth implementation authority. Structural reconciliation does not establish owner ratification, independent delta sign-off or runtime acceptance.
+
+**Product proposition:** A project-scoped Model Studio for explicit, versioned expected behavior; precise graph-to-canonical-test-case associations; bounded, reproducible generation of test-path **proposals**; human approval; optional governed execution through Tesbo's existing run/attempt/evidence/defect infrastructure; and separate, honest model, case, run and verified coverage views. Existing tests with no meaningful behavioral path remain graph-visible without invented transitions. Prepared models and spontaneous coding both work; neither requires the other as a prerequisite.
+
+**Verified integration baseline as of 2026-11-15:** Tesbo PR #88 was merged into `development` at `2026-11-15T10:29:37Z`; merge commit `7fdd4ba1c81914767f8b98dcd3f589011b5cb08b`, final PR head `19d326702d27d7e6eac483617a44805f14419e5c`. The **final PR head** has nine successful GitHub workflow groups, distinct from the older 9/9 run cited earlier. Repository source inspection confirms graph diff/history, project-scoped native case/run handoff, a read-only native execution/attachment metadata join, and Zyra warnings that older/undated results do not verify a newer graph change. This is **source-observed implementation**, not an exhaustive independent code audit, verified deployed build, actual target semantics, or human approval. Model Studio shall reuse those facilities from merged Tesbo, extending expected-model authority, case-to-path mapping, model validation and bounded generation; it is a **separate incremental feature**, not part of #88.
+
+#### MBT-001-A — Reuse and authority boundary
+
+| Existing authority / capability | Reuse decision | MBT addition, not duplication |
+|---|---|---|
+| Projects, organizations, current membership and project-policy guards | Reuse unchanged, always recheck at writes and sensitive reads | Model-scoped permissions only if justified by existing policy gaps |
+| Existing graph node/edge identities, graph capture history, source observation and receipt | Extend with typed, explicit **expected-model** nodes/edges and provenance, without overwriting source observations | Versioned normative behavioral model with transitions/guards/invariants; model and source versions independently addressable |
+| Requirements, canonical cases, native versions/drafts and protected publication | Reuse native case/version authority and native policy substrate; duplicate Review Board is not generic model approval | Exact initial/current case version and protected model/mapping decision extensions in MBT-C-05/06; no second case or approval platform |
+| Native test runs, cycle items, executions, evidence and bugs | Reuse canonical authorities, extend exact provenance rather than duplicate stores | Immutable selection/attempt/step-occurrence manifest and corrections under native owners (MBT-C-05); no inferred pass/fail |
+| Zyra project Copilot and durable project sessions; Tesbo MCP | Extend the single assistant/tool catalog | Propose/inspect/critique models and test candidates, with explicit scoped consent and human confirmation |
+| Current source declaration graph | Read as **observed implementation** only | Candidate mismatches requiring independent checks; never auto-promote observed code into expected truth |
+| Existing test-case repository, suite tree, source-linked tests | Reuse cases and suites | Model Studio visualization/filter; any meaningful case can link many model elements and vice versa |
+| Existing PostgreSQL, lifecycle and CI | Extend/reuse | No Neo4j/second graph database, no parallel task/runs store or another agent |
+
+**Binding invariant:** Expected behavior, observed code declarations, candidate paths, approved case definitions, dispatched execution and observed results are different artifact types. Neither a graph edge nor an AI assertion confers verification, permission, or release sign-off. **Authoritative model storage** must be versioned relational model/revision records using Tesbo's current PostgreSQL project and review policy. Existing GraphSnapshot node/edge shapes become a **derived read-side projection** for viewing/comparison; immutable graph_capture_history remains a source observation/history authority and MUST NOT be silently reused as the mutable expected-model database. This distinction prevents a second authoritative graph and prevents the observed implementation from defining its own expected oracle.
+
+#### MBT-001-B — Actors, consent and publication
+
+- **Owner/authorized maintainer:** manages model scope and model-level policy within project authorization; can request review and enable bounded generation. Approval requires Tesbo's currently effective project permission policy and exact immutable revision. Do **not** introduce hardcoded owner/QA/admin roles by analogy with duplicate Review Board. Apply the explicit proposed action bindings and independent-review default in C-06; actual native policy mapping and ratification are required before activation.
+- **Tester/QA:** may create drafts, map existing cases, critique generated paths, request runs and inspect coverage; cannot silently publish a case/model or bypass native protected publication and the exact model-action policy.
+- **BA/product owner:** may supply authoritative expected business rules/acceptance conditions, but model assertions are not automatically authoritative just because a role typed them.
+- **Zyra/authorized external assistant:** drafts and explains candidate model edits, mapping hypotheses, paths and gaps in the existing Copilot/session pipeline. Server validates all writes. No autonomous model publishing, test approval, production execution or external-data exfiltration.
+- **Execution agent:** uses existing assigned task/attempt/adapter with explicit target/environment/permissions/budget. The agent cannot grant itself a new target, credentials or model authority.
+- **Viewer/executive:** may view permitted model/coverage status and provenance, cannot see cross-project models or confidential test data merely via a graph endpoint.
+
+#### MBT-001-C — Typed domain contracts and lifecycles
+
+**Model identity:** project ID + immutable model ID + immutable model revision ID. A model identity must also carry a project-scoped tenant boundary in relational foreign keys and test-case/model links; changing a display name or suite location cannot transplant identity or inherited permissions. Every revision records author, timestamp, parent revision, content digest, model type, scope boundaries, requirements/decisions cited, assumptions, validation result, policy, authorizing reviewer and status. Never use a title, slug, array index or mutable branch alias as the identity. M1 supports finite state machines and directed sequential journeys; bounded EFSM and finite compiled decision/permission capability is conditional in M2 under MBT-C-01. Temporal/asynchronous/concurrency generation is explicitly UNSUPPORTED until separately specified. Composition is explicit; no implicit graph join across arbitrary projects/models.
+
+**Model revision lifecycle:** MBT-C-02 defines the complete status × active-pointer × action/mode matrix. Approval of r2 never changes active r1; SUPERSEDED is a derived historical label, retirement explicit. Only active approved revisions support CURRENT generation/dispatch; inactive approved revisions require explicit HISTORICAL mode, and retired revisions cannot generate or dispatch. Activation/rollback/deactivation are exact pointer CAS actions with independent human authority. Attempts retain original revision and scope. Draft previews never populate official coverage.
+
+**Core model schema (conceptual, not a second database):**
+
+| Element | Required properties / invariant |
+|---|---|
+| Model | projectId, modelId, modelRevisionId, modelType, startingStateIds, scope, provenance, status |
+| State | stable element ID, human name, observable predicate/oracle, entry/exit invariants where applicable |
+| Transition | stable ID, from/to state IDs, action/event, explicit guard, preconditions, postconditions, expected observation, risk/weight |
+| Guard/data | typed finite or bounded variable domains; pure, deterministic declarative expressions; parameter sources and constraints |
+| Prohibited behavior | explicit rejection/invariant assertion, rather than a fabricated successful transition |
+| Journey | version-bound sequence/branch of explicit transitions with actor/permissions/context and recovery conditions |
+| Case association | project, model revision/element/path, existing canonical case ID and exact case revision/step, relation type, author, provenance/status |
+| Generated proposal | model digest, algorithm, algorithm version, deterministic seed, replay path, data/fixture reference, selected transitions, rationale, bounds, permissions |
+| Execution mapping | selected approved case/path revision → existing native run/attempt/step, real observation, original evidence IDs, timestamps and outcome |
+| Evaluation | covered/uncovered/excluded/unknown with denominator, revision, execution environment/build and evidence confidence; never a single misleading “covered” boolean |
+
+**Status truth matrix:** MODELLED means declared in a validated model; LINKED means an accepted relationship to a real case revision; SELECTED means case/path was put into a run; EXECUTED means an actual native attempt has observations; VERIFIED means a supported assertion against the expected oracle with suitable evidence; APPROVED means human-governed decision on an exact revision. A count in one column MUST NOT populate another.
+
+**Source-of-truth precedence:** Independently justified and human-approved normative requirements/rules and versioned accepted business decisions inform **expected** behavior; source-declared implementation feeds **observed** declarations; actual execution evidence supports reality. If the three disagree, report a contradiction requiring triage with distinct provenance, never auto-conform the expected model to defective code. No inferred or “AI-generated” edge is trusted until accepted under policy.
+
+#### MBT-001-D — Test-case-centric use and workflow
+
+1. **Open any canonical case → View in Model.** Show linked models, exact model revisions/elements, mapped steps, unlinked/uncertain status and path highlights. If a case is exploratory, accessibility, security, performance or otherwise not state-based, show it in the broader traceability graph; never force an invented finite-state path. Many-to-many links are supported and can be proposed, reviewed, rejected, removed and versioned.
+2. **Open model → inspect test inventory.** Accessible list and graph show elements, linked cases, live case revision, approvals, actual native run attempts/evidence, model revision comparison and explicit unknowns. A model can exist without any cases; a case can exist without any model.
+3. **Create or import model.** Manual UI and typed versioned JSON import produce a draft. An assistant may propose a draft using requirements/cases/source observations, marking every supported source and unresolved assumption. Import cannot execute arbitrary scripts, reference foreign projects, auto-activate a model, grant roles or include secrets.
+4. **Validate and review model.** Apply fatal schema/type/security/authority/unsupported errors separately from reachability, infeasible-guard and dead-end diagnostics (MBT-C-03). Unresolved semantic diagnostics block complete normative approval until corrected or explicitly reviewed/excluded with rationale. Finite cycles are bounded traversal inputs, not inherently invalid. Never hide unresolved/excluded elements.
+5. **Approve immutable revision.** Native protected-publication policy and explicit model action bindings in MBT-C-06 apply, not the duplicate Review Board entitlement by analogy. Approval pins model bytes, historical rule versions/accepted snapshots and validation receipt. Material edit creates a new revision. Activation is separate; mappings require separate accepted decisions.
+6. **Generate bounded paths.** User chooses model revision, objective (state, transition, transition-pair, targeted risk, negative rule/invariant), actor/role, environment and deterministic budget. Generator returns previewed proposed paths with rationale, reproducibility/coverage forecast, dead-end/unreachable diagnostics and what remains unknown. It does not create approved cases or dispatch agents by itself.
+7. **Map/reuse first.** Match generated paths against existing canonical cases by accepted mappings and signatures. Default is to reuse/refine cases, not flood the repository with duplicates. New case text remains a draft, including preconditions/fixtures, steps, expected results, negative assertions and side findings separated by scope.
+8. **Prepare native run explicitly.** Human selects approved case revisions and/or approved runnable path adapters, chooses run/environment/data/permissions, sets budget and dispatch consent. Existing attempts, attachments and defects remain authoritative. Report genuine step observations, blockers and discrepancies; preserve raw reports.
+9. **Assess coverage & change.** Compare approved model revisions and independently observed source graph; impact existing mapped cases, paths and actual runs. A code-only change, an unknown implementation declaration or changed expected model creates review candidates, never a failed case or automatic approval.
+
+#### MBT-001-E — Generator and validator contract
+
+**MVP deterministic engine:** A bounded traversal proposes shortest feasible paths, edge and edge-pair coverage for a small approved model under MBT-C-01/02/04. CURRENT requires the active pointer; HISTORICAL is explicit. EFSM feasibility cannot be claimed before the finite interpreter gate. Evaluate a proven library adapter before custom traversal; adapter implementation MUST be replaceable without changing model/run/case authorities. A result includes generator ID/version, seed, path/replay marker, start state, chosen transitions, guard/data bindings, partial coverage, unreachable nodes, stop reason and any unresolved constraints.
+
+**Guard and oracle safety:** Only an independently sourced, approved and falsifiable expected observation can become an oracle; if no oracle is available, generated paths remain proposals and execution coverage stays UNKNOWN. Guards must not turn source code into a self-validating oracle. Use a pure declarative, allowlisted expression AST for booleans, bounded finite sets, integers, strings/enums and equality/comparison; no eval, Function, shell, filesystem, network, SQL, browser scripting, arbitrary JavaScript, reflection, secrets or untrusted model-controlled adapter calls. All guard evaluations deterministic and subject to operation/time/memory limits. External test-step executors are separately authorized adapters, not executable guard language.
+
+**Budgets and termination:** Per-project policy caps graph size, path count/depth, generated input combinations, memory, CPU time, third-party tokens and tool actions. A safe platform-level hard ceiling applies even if a project omits or inflates its limits; actual bootstrap defaults and p95 targets MUST be selected from a measured two-domain prototype, not invented in this spec. Each job has QUEUED/RUNNING/PARTIAL/FAILED/CANCELLED/COMPLETED states, a project-scoped owner, lease, fencing token, cancellation checkpoint, replay key, expiration and audit. A quota failure may not silently schedule an unbounded follow-up. Return partial/incomplete/blocked with diagnostics when budget is reached. Report scoped eligible percentages and whole-model completeness separately under MBT-C-03. A fully known slice may read 100% without claiming whole-model verification; unresolved inventory is UNKNOWN and reviewed exclusions remain visible. Cycles, guard contradictions, combinatorial explosion and lack of a runnable adapter are nonfatal bounded results, not infinite retry.
+
+**Determinism:** Equal canonical model/interpreter/generator/seed/bindings/scope and logical limits produce equal logical ordered output only without emergency interruption (MBT-C-04). Wall-time/memory cutoff returns explicit nondeterministic PARTIAL, not equal-completion promise. For stochastic/property-based extensions persist seed and shrink/replay identifiers; stochastic sampling must not imply exhaustive coverage. Pairwise and concurrency schedule coverage are separately defined dimensions, never equated to edge coverage.
+
+**Engine candidates:** Evaluate GraphWalker (path generators, guards, stop conditions and replay) and fast-check (stateful commands, asynchronous model runs, shrinking/scheduled race exploration) under current license, maintenance, bundle/runtime boundary and cost constraints. Adopt only after small model benchmark against native Tesbo adapters; no new dependency, paid service or remote runner is mandated by the specification.
+Reference: https://graphwalker.github.io/graphwalker-rs/ ; https://fast-check.dev/docs/advanced/model-based-testing/ ; https://fast-check.dev/docs/advanced/race-conditions/
+
+#### MBT-001-F — Coverage and reporting semantics
+
+- **Structural model coverage** uses the explicit E/X/U/O partition and separate mapped/selected/observed/verified numerators in MBT-C-03. Unknown inventory prevents overall percentage; null empty denominator is N/A only if fully resolved. A known eligible subset ratio cannot imply whole-model completeness.
+- **Case-link coverage** shows which accepted model elements are linked to published case revisions, including multiple roles/datasets; it does NOT establish that cases have run.
+- **Run path coverage** maps observed native step/transition results against one pinned approved model revision, accepted case-step mapping and environment/build identity; a projected declaration change or AI assertion is not enough to claim behavior was traversed. A case with multiple datasets/actors has independently scoped observations; one actor's passing result does not verify every role or guard. a successful navigation without oracle evidence is OBSERVED/UNKNOWN, not VERIFIED. Historical evidence remains attributed to the model and build used at the time.
+- **Requirement/negative coverage** distinguishes expected successful transitions, forbidden transitions, invariant enforcement and requirement associations. “Rejected with expected error” can verify a negative test only with real observed evidence.
+- **Risk view** weights elements only when a project policy defines and approves weights; no feedback loop may lower risk simply because an execution agent returned PASS without independent evidence. Nonfunctional/properties that do not map to finite transitions (performance, accessibility, data integrity) retain separate requirements/metrics; no unlabeled ranking based on graph degree alone. Show denominator, filter, version, confidence and evidence freshness in every aggregate; executive dashboards must not hide UNKNOWN.
+- **Staleness rules:** changed model revision, changed test-case revision, environment/role/fixture change, changed source or build, invalidated oracle or ambiguous mapping marks previous assertion STALE or REVALIDATION_REQUIRED without rewriting historical results. Previously executed/approved work is retained with its historical provenance, not silently moved onto the new model.
+
+#### MBT-001-G — Model Studio UX and interoperability
+
+**Placement:** A dedicated “Model Studio” view under existing project Test Management/QA navigation, using native project routing and one Zyra Copilot. The graph is a visualization/projection of authorized backend data, not client-held authority. Case detail adds “View in Model”; model detail shows states/transitions and their linked cases. Existing test-case creation, cascade/minimize forms, native protected publication and evidence views are reused with explicit model-policy extensions; duplicate Review Board remains duplicate review. Large graphs get filtering, search, hierarchy/clustered overview and accessible list/table alternative. Keyboard, screen reader, focus/zoom/reset, high-contrast and mobile/responsive navigation must be tested. Never require a diagram to complete a test.
+
+**Interaction contract:** The current UI baseline, route ownership, authentication behavior and accessibility must first be observed from source and then in a real browser; no visual pixel/focus sign-off is claimed from this proposal. Click node/transition → inspect expected predicate, risk, requirement, known cases, gaps and last native execution; click case → highlight precise accepted model paths and list versioned links; click changed element → version diff and impact; click generated path → preview steps and existing-case reuse suggestions. Native deep links remain stable on reload and no unsaved edits disappear on panel collapse. Unapproved drafts are owner/author-policy scoped and not publicly presented as accepted product truth.
+
+**Import/export:** start with schema-versioned JSON and a rendered read-only diagram; diagram/image import or automatic ML extraction is proposal-only and separately reviewed. Exports redact sensitive data based on project role; must preserve IDs, revision hashes, evidence references and explicit unknown/excluded states. Cross-project imports clone semantic proposals with NEW IDs and require human revalidation, rather than preserving foreign-project permissions or evidence bindings.
+
+#### MBT-001-H — Service/API/MCP contract shape (proposed, not implemented)
+
+- Model drafts: project-scoped GET/POST/PATCH with explicit expected revision token; immutable approve/reject and version-diff actions; writes require current roles, project policy and audit. Server-generated IDs only.
+- Model validation: bounded POST validate on a draft revision; returns diagnostics and coverage feasibility without executing user code or changing published models.
+- Case links: GET and policy-gated POST/DELETE with modelRevisionId + caseId + caseRevisionId + optional step/path and provenance; validate both artifact ownership and active publication; version link decisions.
+- Generation: bounded POST generate with explicit CURRENT/HISTORICAL mode, pointer token, strategy, seed, logical budget, actor/fixture and scope; eligible states per MBT-C-02, resource/determinism per C-04. Store through native task/draft owners only.
+- Execution preparation: POST propose-case/run mapping through existing Tesbo agents/tasks/runs; explicit human authorization and cancellation. New executor adapters are capability-checked and sandboxed; no browser/network actions by the graph engine.
+- Coverage: GET parameterized by model revision, environment/build and evidence mode, with paginated model paths/cases and confidence categories. Unauthorized or ambiguous requests fail closed rather than silently returning an empty but apparently complete graph.
+- Observability: native audit/change and task/attempt events record actor, project, model revision, generation manifest, policy decision, outcome, retry dedupe and errors. Diagnostic data must not contain secrets. Read permissions must be rechecked on every downstream dereference.
+- MCP: extend the existing Tesbo tool catalog, typed input schemas, budgets and user/project consent; external agent cannot submit self-attested runtime “passed” or approve the model by writing JSON.
+
+**Backend rule:** Versioned model/revision/element/relationship records use project-composite foreign keys, immutable approved snapshots and restricted delete semantics. Referenced provenance uses targeted RESTRICT at native parent deletion owners while reliance/holds exist, with archival and authorized privacy-erasure handling under MBT-C-05. This is a proposed explicit policy needing native-owner ratification and migration proof, not a claim existing cascade FKs are safe. All writes check authorization within their database transaction; immutable revisions use optimistic concurrency plus project/organization FK constraints and idempotency keys. A stale revision, foreign case, revoked member, duplicated approval, mixed valid/invalid batch, conflict or lost network response cannot partially publish or cross-link unrelated records. Side-finding proposals remain separate from the selected path.
+
+#### MBT-001-I — Nonfunctional and assurance requirements
+
+| ID | MUST requirement and evidence gate |
+|---|---|
+| MBT-NFR-01 | Tenant/project isolation on every model, revision, link, path, preview, export, generation job and native run read/write; negative IDOR/MCP tests |
+| MBT-NFR-02 | No untrusted code evaluation from model text/guards/imports; input caps, parser security, resource/timeouts, path-traversal rejection |
+| MBT-NFR-03 | Deterministic logical work/output under C-04, emergency resource cutoffs explicitly partial; native aggregate admission, fencing, cancellation and measured safety caps |
+| MBT-NFR-04 | Immutable versioned models; optimistic concurrency/idempotency and atomic review/publish linkage; error replay and dual-review races |
+| MBT-NFR-05 | Evidence/provenance truth: executed/verified/approved are independently established; NEVER infer pass/fail from a modeled path |
+| MBT-NFR-06 | Accessibility parity: keyboard-only journey, screen reader list fallback and non-color-only statuses on dense graph |
+| MBT-NFR-07 | Platform-agnostic model schema and adapter: web, API, mobile and non-browser contexts without mandatory Chromium/OpenCode |
+| MBT-NFR-08 | Model source and version changes invalidate only affected claims; stale/unknown remain visible; old execution history preserved |
+| MBT-NFR-09 | Security-sensitive roles, invalid data and destructive transitions require explicit policy authorization and safe fixture/cleanup plan |
+| MBT-NFR-10 | Reuse/extension proof and dependency/license review before committing an external graph-generation runtime; no paid required service |
+| MBT-NFR-11 | Model deletion, retention, restoration, migration and export policy honors canonical records and hard-delete/soft-delete behavior |
+| MBT-NFR-12 | UI graph performance: paginated/bounded loads, progressive search, no uncontrolled full project graph fetch; measured p95 targets to be established before phase sign-off |
+
+#### MBT-001-J — Acceptance scenarios and falsification suite (all NOT RUN)
+
+| Scenario | Expected result |
+|---|---|
+| MBT-AC-01 | Existing manual case with no model remains visible and actionable; no fake model path |
+| MBT-AC-02 | One case links to multiple transitions/roles; one transition links to multiple cases without duplicate case entities |
+| MBT-AC-03 | Draft model can be previewed by authorized author but cannot affect official coverage |
+| MBT-AC-04 | CURRENT uses exact active approved revision; HISTORICAL requires explicit mode/consent; retired cannot dispatch; approve without activation and rollback preserve pointer/history semantics in C-02 |
+| MBT-AC-05 | Changed guard/source requirement produces proposed impact/stale relationship, not automatic Failed case |
+| MBT-AC-06 | Generator on finite cyclic graph terminates at budget and returns partial outcome, never falsely 100% |
+| MBT-AC-07 | Dead-end, unreachable state, contradictory guards and missing oracle are reported with explicit denominator |
+| MBT-AC-08 | Same full deterministic inputs/logical limits produce identical logical manifest without emergency interruption; differing operational envelopes allowed; emergency cutoff is explicit PARTIAL under C-04 |
+| MBT-AC-09 | Negative transition/denied role test requires observed refusal and evidence, not mere model prohibition |
+| MBT-AC-10 | Competing decisions on the same revision/version have one effective decision; independent revisions may both approve without activation. Competing same-pointer activations have one winner; stale submission conflicts |
+| MBT-AC-11 | Revoked reviewer/foreign project fails read, write, export, generation and linked case/run dereference |
+| MBT-AC-12 | Imported malicious expression/code, hostile path, oversize file and secret-bearing data are rejected/redacted |
+| MBT-AC-13 | AI-generated case draft never becomes published without exact human approval; duplicate existing case preferred |
+| MBT-AC-14 | Receipt-backed model/link writes replay once with same key/body and conflict on changed body. Unknown native run/case creation stops blind retry and requires explicit reconciliation across reload (C-07); link dedupe never claims create idempotency |
+| MBT-AC-15 | Cancelled execution stops Tesbo-side authorized further actions; no false reversal of in-flight external effects |
+| MBT-AC-16 | An “observed source route” contradictory to an approved expected workflow is displayed as disputed, not self-validating |
+| MBT-AC-17 | Soft-delete/archive retains historical references; referenced hard delete is refused; authorized erasure/restore preserves permitted receipt and UNKNOWN where bytes unavailable, never automatic current verification (C-05) |
+| MBT-AC-18 | Model revision change preserves old execution and labels current coverage STALE until reverified |
+| MBT-AC-19 | Graph-only case navigation works with keyboard/list fallback and does not lose unsaved edits on minimization |
+| MBT-AC-20 | Second non-DMIS project, distinct technology and actor roles pass equivalent schema/auth/runner scenarios |
+| MBT-AC-21 | Bulk mapping of 199 valid and 1 foreign case rejects atomically with no leaked project metadata |
+| MBT-AC-22 | Model import of unexpected nested/recursive schema fails deterministically within budget, not process crash |
+| MBT-AC-23 | Source history incomplete or unapproved cannot be used as complete model/coverage denominator |
+| MBT-AC-24 | Real target execution through supported adapter records original evidence and separate actual vs expected outcomes; unsupported adapter returns BLOCKED |
+| MBT-AC-25 | Target operation permission is revoked between preview and dispatch; dispatch is refused, no in-flight privilege escalation |
+| MBT-AC-26 | Concurrent model run/role-change/graph-version updates cannot attach evidence to another tenant or rewrite approved version |
+
+Each acceptance scenario needs an owner, setup/fixture, actionable steps, expected result, test level and proof link in existing QA plan. These scenario IDs are provisional extension IDs, NOT new canonical QA counts and never “passed” merely by appearing here.
+
+#### MBT-001-K — Implementation increments and stop/go criteria
+
+**M1: Requirements-to-model feasibility pilot (read-only + governed drafts).** One small lifecycle (e.g. authentication or approval, generalized beyond DMIS) and a second unrelated sample app. Establish authoritative expected-state source and approval; pin case/model versions; implement model validation + native list/graph viewer + cross-linked existing case detail. No automated target execution. Prove no duplicate data domains and all MBT-AC-01–05, 07, 10–12, 17, 19–21.
+
+**M2: Reproducible traversal and candidate reuse.** Benchmark native small-graph traversal versus GraphWalker and fast-check adapters against identical fixture + outcome schema. Select maintainable engine(s), implement capped deterministic path/negative/invariant proposals and native Zyra/staged-case proposals and protected case publication; duplicate Review Board only supplies reuse suggestions. Demonstrate deterministic manifest, budget exhaustion, adversarial guards and zero implicit publication. Block if model semantics remain unverified.
+
+**M3: Authorized execution and evidence.** Map selected approved paths/cases to existing native Tesbo runs and supported Chrome/Playwright/Appium/API execution tools, with immutable attempt manifest, evidence, cleanup, cancellation, eventual retry and human approval. Not all adapters must ship together; missing adapter → BLOCKED. Verify actual target result independently from model and source declarations.
+
+**M4: Change-aware graph assurance and operations.** Connect approved model changes and verified source graph observations to affected cases/paths and native run evidence; measured regression prioritization, freshness/unknown metrics, multi-tenant load/security, long-run resource costs, retention and operator playbook. Run independent assurance lenses and live journeys before launch.
+
+**Exit gates:** model schema, role/authorization, canonical reuse map, no second graph/test/approval authority, protected publication, algorithm reproducibility, bound on runtime/side effects, proof of actual outcome semantics, accessible UI, and two different target domains. Add an explicit **counterexample-quality gate**: inject a known mismatch where observed code permits a forbidden operation while the approved expected model denies it; the engine MUST find/report the contradiction, not learn it as expected. Repeat the symbolic target fixture with sequential actor switches and a stale model revision. Requested target concurrency/temporal generation MUST return UNSUPPORTED_SEMANTICS in M1/M2. Separately prove native Tesbo activation/job/revocation races through real authorized integration tests; those are not target-model race coverage. Any later target concurrency adapter/engine needs its own versioned semantics and consent before coverage claims. For high-impact target writes (destructive, paid, personal data or production), require separate per-attempt execution authorization with target-level enforcement and preapproved cleanup; model approval alone is insufficient. White must retain BLOCKED while substantive gaps or independent proof are outstanding. Human owner approves merge/release, not the model generator.
+
+#### MBT-001-L — Required distribution into canonical eight specifications
+
+The following is a **change map**, NOT a claim these files were edited or validated. The original Tesbo_Specifications_v1.4.21.zip bytes were obtained in this correction pass; proposed v1.4.22 extends the same eight documents in place with structural/diff validation. The table below assigns normative ownership of the distributed contracts; the living appendix is a reference. Preserve all current IDs and contents, add only reconciled extension identifiers, and run structural/coverage validation plus old/new diff.
+
+| Existing canonical file | MBT-001 insertions |
+|---|---|
+| 00_README.md | Scope, normative/observed/evidence distinction, reuse matrix, versioning/assurance gates and no ninth source |
+| 01_PRODUCT_REQUIREMENTS.md | Functional MBT requirements, permissions, expected-vs-observed truth model, acceptance criteria |
+| 02_WORKFLOW_AND_UX_SPEC.md | Case→model→path→run flows, manual/non-model cases, review states, negative/recovery journeys |
+| 03_TECHNICAL_DESIGN.md | Model/revision/transition/guard/link schemas, data provenance, transaction/security/graph boundaries |
+| 04_MCP_API_CONTRACTS.md | Typed read/write/generation/execution APIs, consent, version conflicts, error/IDOR/budget contracts |
+| 05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md | M1–M4 tasks, MBT-AC-01–40 planned scenarios, 24-journey/branch crosswalk and evidence regression matrices |
+| 06_IMPLEMENTATION_AGENT_BRIEF.md | Reuse-first migration/implementation instructions, adapter experiment, proof-before-claim, no extra assistant |
+| 07_UI_DESIGN_TASKS.md | Source-grounded baseline, Model Studio/Cases graph interaction, keyboard/reader fallback, approval and empty states |
+
+**Review provenance:** independent agents reviewed revision0.1; original receipts and White NOT FROZEN/Graph NOT CLEAN remain unchanged. Revision0.2 addresses their written findings; it has not received independent delta sign-off. No code, database migration, UI or model generator is implemented by this specification. Do not treat as frozen normative requirements until owner-policy ratification and independent revised-artifact closeout; runtime claims require executed evidence.
+
+
+#### MBT-001-M — Open design decisions and verification requirements
+
+These are proposed written policy choices and remaining ratification/acceptance evidence. The status table distinguishes document reconciliation from owner decisions and executed proof. They are not a team verdict, a substitute for external review, or directions to a reviewer about what to find.
+
+| ID | Disposition | Required closure before model spec freeze |
+|---|---|---|
+| MBT-GATE-01 | DOCUMENT RECONCILED; FREEZE PENDING | Original v1.4.21 bytes obtained and same eight documents extended as v1.4.22, with old content/IDs preserved except explicit revision metadata. Structural evidence is separate from human approval and independent delta assurance; living appendix is reference only |
+| MBT-GATE-02 | OWNER RATIFICATION / IMPLEMENTATION PROOF OPEN | C-06 defines action-capability binding, deny-unset, independent-review proposal and human grants. Ground actual native writer/entitlement bindings and ratify policy; duplicate Review Board is not model approval |
+| MBT-GATE-03 | BLOCKING | Prove expected-model authority is independent of observed implementation and that the injected forbidden-operation counterexample is detected |
+| MBT-GATE-04 | WRITTEN CHOICE RESOLVED; RATIFICATION / PROOF OPEN | C-05 chooses targeted RESTRICT while provenance is referenced, native archival and authorized privacy erasure/UNKNOWN. Ratify data schedule/holds and prove migration/delete/restore/evidence behavior |
+| MBT-GATE-05 | BLOCKING | Execute model UI source-baseline and real keyboard/screen-reader journey; screenshots or mock graph views alone cannot certify design truth |
+| MBT-GATE-06 | BLOCKING | Complete two target-domain prototype: reachable/denominator calculations, bounded cyclic and infeasible guards, seed/replay, full error/cancel/recovery paths, actor-dependent semantics and actual adapter cost measurements |
+| MBT-GATE-07 | REVISION0.1 REVIEW COMPLETE; DELTA REVIEW OPEN | Original independent multi-agent receipts retained; NOT FROZEN/NOT CLEAN remain. Review revised v1.4.22 and revision0.2 at a new pin using unchanged charters; do not self-issue closeout |
+| MBT-GATE-08 | BLOCKING | Human-approved target-execution scope, PII/destructive controls, real adapter evidence and audit; no modeled path can self-authorize production effects |
+| MBT-GATE-09 | BLOCKING | Complete existing-run / native-execution evidence linking with exact case/model/build revision, model stale-state recovery and a read-only executive truth table with UNKNOWN explicitly visible |
+
+**Review scope:** MBT-001 is a proposed capability, not implemented behavior. Use the existing canonical review-team charters and their orchestration unchanged to review this specification. Reviewers must receive the pinned specification, applicable project policy and source context, without any previous answer, suggested findings, issue list or reviewer verdict. A full team-run receipt is required before claiming those teams signed off. PR #88's separately evidenced merge and CI do not validate MBT behavior.
+
+## Model Studio revision 0.3 — assurance corrections (15 November 2026)
+
+**Status: proposed design, NOT FROZEN, NOT IMPLEMENTED.** These contracts resolve the written ambiguities identified in the independent review of Tesbo `a24e47ad8a5a850fd6696aec7ba1f09905322b02`. They extend existing canonical owners. Product-policy ratification, source/writer census, implementation, independent delta review and runtime proof are separate gates. The original team reports and charters are unchanged. The eight canonical files remain the implementation specification; the living feature document is a synchronized reference.
+
+### MBT-C-01 — Finite state semantics and supported capability boundary
+
+M1 supports ordinary finite state machines and directed journeys with fixed, explicit actor/fixture bindings. M2 may enable bounded EFSMs only after the interpreter passes the fixtures below. Permission/decision models compile to the same finite semantic representation; no separate decision runtime is promised. Every model and adapter declares a versioned capability set. Unsupported constructs fail validation with `UNSUPPORTED_SEMANTICS`; they cannot silently degrade into an ordinary edge traversal.
+
+An EFSM configuration is `(stateId, sharedValuation, actorValuations, immutableBindings)`. Each variable has a unique stable ID, explicit SHARED or ACTOR scope, type, finite domain and initial value for every bound actor. Integers have inclusive finite bounds; enums/strings have enumerated finite domains. Secret values are credential references, never model variables. Actor IDs and role-policy revision are pinned input, not inferred from the authenticated Tesbo principal. No implicit actor change is allowed within a transition.
+
+One sequential model step has this exact order: evaluate source invariant and precondition against the pre-state; evaluate the guard; calculate all declared assignments from that same pre-state; apply assignments simultaneously to a candidate valuation; validate types/domain, destination invariant and declared postcondition; then admit the symbolic transition. An unassigned variable retains its value. Duplicate assignments to the same scoped variable, undefined symbols, unbounded domains, impure expressions or out-of-domain results are invalid. Guard FALSE means infeasible for that configuration; evaluation error means INVALID, never FALSE or PASS. Postconditions assert the candidate state; they never solve missing assignments. Branches are separate stable transition IDs, not unspecified nondeterministic effects. State equality includes all valuations and actor bindings; a generator cannot merge distinct valuations because their state labels match.
+
+Symbolic effects describe the expected model only. A separately authorized adapter performs target actions, records pre/post observations and evaluates the independently approved oracle; a symbolic assignment does not prove a target change. Actual observations cannot silently mutate the expected valuation to make an assertion pass. Disagreement is a recorded mismatch or UNKNOWN when required observation is unavailable.
+
+Each independent generated path starts from its declared initial valuation and fixture revision. Before target replay, the adapter must establish/verify the fixture baseline through an authorized reset or prove the declared precondition from observations. Reset is a separate recorded operation, cannot delete prior evidence, and failure blocks the path. Sequential multi-actor paths may use explicit actor switches between transitions while sharing SHARED variables; they do not establish concurrent safety.
+
+M1/M2 do not support virtual time, asynchronous event scheduling, eventual-consistency windows, interleaving exploration or race-coverage claims. Such requests return `UNSUPPORTED_SEMANTICS`. A future capability must specify clock/event ordering, bounded observation windows, schedule/reset identity and replay semantics before enabling them. Independent concurrency testing of Tesbo's own authorization/activation/job mechanisms remains required; this scope limit does not waive those tests.
+
+Hand-calculated fixtures: (a) `remaining=1`, reserve guard `remaining>0`, effect `remaining:=remaining-1`: first reserve yields 0, a second reserve is infeasible; (b) two actors share remaining: sequential A reserve prevents B reserve; actor-local counters do not change each other; (c) reset restores remaining=1 for the next independent path; (d) `x=0`, increment then guard `x=1` admits the second step; (e) duplicate assignments, overflow and undefined actor are invalid; (f) a requested concurrent reserve race is UNSUPPORTED, not “covered.” These fixtures discriminate feasible-path correctness from simple edge visitation.
+
+### MBT-C-02 — Revision, activation and historical eligibility
+
+Approval lifecycle and activation are independent axes. Lifecycle is DRAFT → PROPOSED → IN_REVIEW → APPROVED or REJECTED. Changes to submitted content invalidate the review receipt and produce a new draft revision; approved content is immutable. APPROVED → RETIRED is an explicit action, never an automatic effect of approving another revision. SUPERSEDED is a derived display label for an approved revision formerly active and now inactive; it is not loss of approval or deletion. Rejected/retired bytes and decision history remain retained.
+
+One active pointer exists per `(projectId, modelId, declaredScopeId)`. Model and revision identities and this pointer are the SAME FR-117 family-owned authority under C-12; each M1/M2 family has one immutable scope. Scope identifies the model's normative applicability, not arbitrary UI filters. Overlapping model scopes require an explicit composition/conflict decision; the platform must not select an oracle by last write. Activation atomically compares `expectedActiveRevisionId` (including null) and `expectedPointerVersion`, validates approval/current policy, writes the pointer and activation event, and increments its version. Approving r2 leaves active r1 unchanged. Concurrent activation against the same pointer version has one winner; the loser receives `409 ACTIVE_REVISION_CONFLICT`. Rollback is activation of a previous still-approved revision with a new event; it never rewrites an attempt or previous activation event. Retiring the active revision is rejected with `409 ACTIVE_REVISION_IN_USE`; explicitly deactivate it or activate a replacement first. Retirement cannot be undone implicitly; re-adoption creates a new approved revision preserving its origin.
+
+| Revision state / selection | Preview and compare | Normative generation | Run preparation / dispatch | Coverage interpretation |
+|---|---|---|---|---|
+| Draft/proposed/in-review/rejected | Authorized draft inspection only | No; draft-only exploratory preview clearly labeled | No normative dispatch | No official denominator |
+| Approved and active in declared scope | Yes | CURRENT mode | Current target consent and exact binding required | Current claims only for matching build/actor/fixture/oracle scope |
+| Approved, inactive, never active | Yes | HISTORICAL/INACTIVE mode explicitly selected | Historical-labeled replay only with exact consent | Separate revision-specific view; never current |
+| Approved, formerly active (derived superseded) | Yes | HISTORICAL mode explicitly selected | Historical-labeled replay only with exact consent | Original history retained; no current promotion |
+| Retired | Authorized historical inspection | No new generation | No new preparation/dispatch | Retained historical observations only |
+
+CURRENT requests include the expected active pointer version. Recheck it at admission, protected commit and immediately before dispatch. If it changes, return `409 MODEL_SCOPE_CHANGED`; preserve selections and require a refreshed preview/consent, or a new explicit HISTORICAL request. Do not silently convert modes. An already dispatched attempt stays pinned and is marked historical relative to the new pointer; late results cannot attach to the newly active revision. Activation, mapping acceptance, case publication and target execution each require their own action authorization.
+
+### MBT-C-03 — Validator classes and exact coverage arithmetic
+
+FATAL errors block approval/generation: invalid schema/IDs, dangling endpoints, missing required initial configuration, invalid domains/assignments, unsafe AST, unauthorized cross-project reference, unsupported semantics, missing normative oracle or unresolved authority for a claimed normative assertion. Diagnostics include stable code, element/configuration identity and reason; input/security failures persist no partial imported model.
+
+An unreachable element, guard unsatisfiable in a reachable configuration, disconnected component or dead end is a semantic diagnostic, not automatically a fatal syntax error. It remains unresolved until corrected or explicitly accepted as an intentional exclusion on the exact revision by the authorized reviewer with reason and source. Unresolved diagnostics block approval of a model claiming complete normative scope. A prohibited operation is a negative assertion with an expected refusal/invariant, not a successful traversable edge. Negative assertions have their own denominator and observed refusal oracle.
+
+For a requested finite revision/scope and dimension, partition all elements into disjoint known eligible E, approved excluded X, unresolved eligibility U, and outside-request O. Unknown inventory cardinality is separately flagged. The eligible set is computed from approved semantics/bindings, not from which cases happen to exist or which paths the generator visited. Independently compute mapped M, selected S, observed T and verified V subsets of E; no stage implies another. Report counts and `|M|/|E|`, `|S|/|E|`, `|T|/|E|`, `|V|/|E|` separately. If E is empty, percentage is null and label NOT_APPLICABLE only when eligibility is fully resolved; otherwise UNKNOWN. Unknown total inventory suppresses an overall percentage. Known subset percentages may appear only as “known eligible subset,” with unknown count prominently visible.
+
+Scoped 100% is permitted for a fully known eligible slice, labeled with revision, mode, dimension and filters. It never implies whole-model verification. Whole-model VERIFIED_COMPLETE requires a complete inventory, all required eligible assertions verified for the declared execution scope, no unresolved unknowns, no required element outside the request, and no unverified negative/non-state obligations. Approved exclusions yield COMPLETE_WITH_EXCLUSIONS rather than unqualified whole-model complete. A generation forecast is not measured execution coverage.
+
+
+
+**Coverage unit version MBT-COVERAGE/1:** STATE and TRANSITION dimensions key E by `(projectId, familyId, modelRevisionId, dimension, elementId)` within pinned scope; repeated actor/data observations never multiply a structural element. ACTOR_ASSERTION keys E by that structural key plus exact oracle/assertion ID/version, actor/role-policy revision, declared finite valuation/configuration binding, fixture/dataset revision and environment/build scope. These are separate requested dimensions, not one mixed denominator. Ordinary transition coverage does not require exhaustive valuations; whole-model verification also requires all approved required assertion obligations. Eligible keys come from approved declared semantics/applicability, not from observed executions. Repeated occurrences and correction events support the same obligation rather than increment E or V. Unsupported or incomplete eligibility is U/UNKNOWN; unbounded cross-products are not implicitly enumerated. Fixture: one transition, two required actor assertions; actor A verified once or twice yields structural1/1 and actor-assertion1/2, never2/2; changing a model/oracle/actor-policy/fixture/build binding requires a new scoped claim.
+
+Required display fixture: two reachable observed/verified edges, one reviewed exclusion, one unresolved element, no outside filter: `verified 2/2 known eligible (100%); excluded 1; unresolved 1; whole model UNKNOWN`. Remove the unresolved element with a justified resolution: the scope may read `2/2 (100%); excluded 1; COMPLETE_WITH_EXCLUSIONS`. Empty E with unresolved U reads `—; UNKNOWN`, never 0% or 100%. Failed projection/data fetch reads UNAVAILABLE and retains the last result as stale; it cannot become an empty successful denominator.
+
+### MBT-C-04 — Deterministic traversal and bounded native jobs
+
+Deterministic inputs are canonical model bytes/digest, semantic schema/interpreter version, generator/version, seed, ordered strategy parameters, actor/role-policy and fixture revisions, initial configuration, objective, scope and logical limits. Canonical serialization defines stable ID ordering (UTF-8 byte order), adjacency/queue tie-breaking, seeded PRNG/version and finite value enumeration. The engine counts each candidate transition guard/effect evaluation as one work unit, including infeasible candidates; stops before exceeding maxWorkUnits, maxPathDepth, maxPaths or maxInputCombinations; and records units consumed and the exact deterministic stop reason. Limits are part of the input digest. Each engine version must specify its strategy ordering; libraries with nondeterministic output cannot claim deterministic support.
+
+Equal deterministic inputs with no emergency interruption produce byte-equivalent ordered path/configuration/valuation output and deterministic stop fields. Operational envelope fields (job IDs, timestamps, host, duration, telemetry) are outside that equivalence and outside the logical manifest digest. Execution observations are never included in this deterministic-output promise. Wall-time, memory, CPU or provider interruption is an emergency protection: return PARTIAL with `EMERGENCY_RESOURCE_CUTOFF`, observed prefix and diagnostics, never a deterministic-completion claim. Delayed evaluation with adequate emergency allowance must produce identical logical output; a forced timeout may differ and must be visibly partial. M2 promises replay from the beginning, not opaque resume; resumability requires a later versioned frontier/counter/PRNG checkpoint contract.
+
+Reuse Tesbo's native task/job, BullMQ, project-limit and audit owners. Before admitting any generation/retry, reserve bounded capacity atomically against BOTH project and platform active-work/rate/spend quotas. Charge actual work/tool/provider consumption cumulatively across attempts, without double charging duplicate command receipts or refunding consumed work after cancellation. Admission failure returns `429 RESOURCE_LIMIT` plus retry guidance and causes no automatic follow-up. Unknown or unset safety caps disable generation with `503 RESOURCE_POLICY_UNCONFIGURED`; there is no uncapped default. Numeric defaults, fairness and p95 objectives must be measured and ratified for the two-domain pilot before M2 activation; no measurements are claimed here.
+
+Native jobs follow QUEUED → RUNNING → COMPLETED/PARTIAL/FAILED/CANCELLED. Cancellation first records CANCEL_REQUESTED (nonterminal), prevents new claims/actions, then reaches CANCELLED after fenced ownership reconciliation. Lease expiry ends the old attempt and fences its writes; retry creates a new attempt under the same logical request with a new generation, subject to cumulative budget and retry cap. Terminal states are immutable. Every heartbeat/result/attachment publication checks project, attempt and lease generation transactionally. A late worker cannot publish, release another worker's reservation or consume fresh credentials. Release unused reservation exactly once at terminal reconciliation; shared active slots are not freed merely because an old process missed a heartbeat while its effects are uncertain. Admission counts unresolved in-flight effects until reconciled. The native job owner is responsible for orphan lease accounting, backlog/age/stop-reason telemetry and bounded operator recovery; no second scheduler/job store is introduced.
+
+### MBT-C-05 — Native versions, rule provenance, evidence and retention
+
+Accepted normative reliance pins source kind/provider, native source ID, exact revision where available, retained canonical content digest/snapshot, approval/acceptance event and actor/time, applicability scope and retrieval provenance. A mutable latest URL, provider cache row, source graph node or title is not historical authority. When the provider lacks immutable revisions, retain the authorized approved snapshot under native retention and its digest; absent lawful retained content/authority, the assertion is EXPECTATION_UNKNOWN. Provider update/delete/reconnect creates impact candidates and read restrictions; it does not replace accepted history or silently change an oracle.
+
+The native case owner must expose an immutable content version for BOTH initial and current case content. Reuse trustworthy existing version/snapshot records; extend the native version contract if current content lacks an address. On new selection, atomically capture/resolve the exact approved case revision and stable step/condition IDs, content digest, capture origin/time and approval event. This snapshot is a native version artifact, not a second editable case. A historical OLD-row trigger alone does not prove an unedited initial/current version. Legacy links gain no fabricated contemporaneous version: annotate UNKNOWN or RECONSTRUCTED_UNVERIFIED with reconstruction limits; never promote them to VERIFIED from today's case text.
+
+An accepted mapping event pins model revision/element/path, exact case revision/step/condition and actor/data scope, proposer, acceptor, source and status. Add/reject/supersede/remove are versioned decisions. Removing a mapping is a versioned no-new-dispatch boundary. Preparation records a frozen selection but does not freeze permission to rely on the mapping later. Before preparation and again at claim/dispatch under the canonical native owner, require the exact accepted mapping event still eligible and not removed/superseded. A change before dispatch returns `409 MAPPING_CHANGED`/BLOCKED, preserves the selection and requires fresh accepted mapping plus refreshed consent under a new operation before retry. This applies equally to CURRENT and HISTORICAL work. Once an occurrence has actually dispatched, its original mapping/consent is retained as historical reliance; later removal alone neither rewrites nor cancels it. Explicit cancellation or target/membership revocation remains the separate authority to fence further actions. The remove-versus-dispatch transaction must have one serialization point: if removal commits first, no new dispatch; if dispatch commits first, that exact occurrence retains its prior reliance. Preparation and a queued task are not proof of dispatch. Mixed-validity batches are atomic, with no foreign-object metadata in errors. Suite/name moves preserve identity; material edits create new versions and revalidation candidates.
+
+Before dispatch, the native run/attempt owner retains an immutable selection manifest referencing model and case versions, mapping acceptance event, ordered path/configurations, generated manifest digest, native run/cycle item, attempt ID, step OCCURRENCE ID (including repeated visits), actor/role-policy, dataset/fixture, target environment/build or explicit unknown, adapter/version, independently sourced oracle/evaluator version and exact consent. A run/case pair is insufficient to distinguish reruns, roles, datasets or repeated transitions. The existing picker must gain an opt-in occurrence-aware Model Studio view without silently changing other consumers. Reuse native execution/evidence panels and APIs; extend references/provenance instead of storing copied mutable results in the model domain.
+
+Native observations retain original received report, timestamps/source, expected-vs-actual value, original evidence IDs/digests and admission state. Evidence supports VERIFIED only when bytes, ownership, exact occurrence and oracle adequacy are established under policy. Attachment count, temporal ordering, HTTP 200, navigation or agent PASS alone is not proof. Missing/quarantined/quota-skipped/inaccessible bytes give UNKNOWN/PARTIAL; they do not fabricate evidence or erase the actual action. Corrections append authenticated correction events pointing to the original and reason; the effective result is a native projection. Manual UI, automation reporter, API/MCP, jobs, imports and late callbacks must share this occurrence/correction owner. Findings link the exact occurrence, with direct-failure and side-discovery distinguished.
+
+**Chosen proposed deletion behavior: RESTRICT referenced provenance.** While a model decision, accepted mapping, selected/queued plan, attempt/assertion, retained review or preservation hold relies on a record, hard deletion of that record or its owning project/case/run/model is rejected with `409 PROVENANCE_IN_USE` under the native deletion owner. Existing soft-delete/archive remains available according to policy and removes current eligibility without erasing retained IDs/content. Apply targeted constraints to the relevant native delete paths; do not assume V147 cascade FKs already implement this. Evidence bytes with retained reliance require a preservation hold; deliberate lawful erasure follows a separately authorized native retention process that keeps a minimal access-controlled erasure receipt/digest where permitted and downgrades unavailable proof to UNKNOWN. No fabricated snapshot may stand in for erased bytes. Product privacy/retention owner must ratify the schedule and legally permitted metadata before real sensitive data is admitted. Default referenced provenance has no automatic expiry; this is a proposed integrity rule, not a universal legal retention period.
+
+Restoration preserves original identity and audit, rechecks current access, and restores historical visibility only. It never reactivates a model, reaccepts a removed mapping, restores revoked consent or makes evidence current VERIFIED. Native deletion/migration/restore transactions must be exercised with historical and legacy fixtures before this contract can be called implemented.
+
+### MBT-C-06 — One server action policy and exact human decisions
+
+Reuse native project membership, writability, entitlement, protected publication, audit and target permission owners. The duplicate Review Board remains the duplicate-recommendation feature; its Pro owner/manager gates are not the Model Studio approval policy. Reuse its transaction/locking/audit/UI patterns where appropriate, not its recommendation rows or commercial entitlement by name. No new pricing tier or bypass of current plan/storage/read-only restrictions is authorized. Existing approved protected-publication policy takes precedence; the additive Model Studio binding below must be explicitly ratified and mapped to actual native capabilities before activation. Unset bindings DENY the action and give the owner a configuration explanation; they do not infer permission from a role string.
+
+| Action | Required effective native capability/binding | Additional exact checks |
+|---|---|---|
+| Read/list/history/dereference | Project read + artifact visibility | Current access at each hop; draft confidentiality |
+| Draft/edit/import/submit | Project write + case/model authoring binding | Expected draft version; imports draft-only |
+| Accept/remove case mapping | Project write + mapping-review binding | Both exact artifact versions; no inherited acceptance from model approval |
+| Approve/reject model | Protected-publication/model-review binding | Human authenticated decision, exact digest/validation/source receipt; independent reviewer default |
+| Activate/deactivate/rollback/retire | Model-maintenance binding + approved revision | Separate human action, scope pointer CAS; no implicit approval |
+| Generate | Generation binding + admitted budget | Eligible revision/mode and current pointer; draft preview separate |
+| Prepare case/run | Native case/run prepare binding | Exact accepted selections; no dispatch implied |
+| Dispatch/cancel | Native task/execution binding + target permission | Exact attempt/environment/action/budget consent; cancel never needs renewed permission to prevent further actions |
+| Export | Artifact read + native export/data policy | Current reauthorization/redaction; no foreign evidence |
+| Restore/purge/retention exception | Native storage/privacy maintenance binding | Provenance restrictions, independent audit; restore gives no approval/activation |
+
+Proposed independent-review default: author cannot approve their own revision or accept their own proposed normative mapping; no self-review override is exposed in M1. Where an existing ratified native policy differs, resolve that binding explicitly before implementation; do not silently change existing case publication rules. A project with only one eligible reviewer remains draft-only until the actual owner resolves its publication policy. Neither nominal QA title nor org ownership alone is a grant. Changed entitlement can preserve permitted historical reads while blocking mutations; no paid AI allocation is consumed by external MCP work unless separately requested through existing hosted-model policy.
+
+The owner service applies the same action rule across REST, MCP, UI, assistant, importer and jobs, with actual resource ownership and transaction-bound membership/policy version checks. A machine API token's eligible issuer userId is not evidence of a human decision. Human-only model approval/activation/dispatch requires either a currently authenticated interactive human action or a previously recorded human grant bound to exact action, revision/digest, scope, target/attempt, allowed effects, policy version, expiry and operation key. The server issues/verifies grants; external tools cannot supply a boolean `approved=true`. Revoked/expired/mismatched grants are refused. Same-key replay returns the prior action receipt, not fresh authority. Audit records principal kind, actual human authorizer and machine executor separately. A grant never expands the token's own scope or target credentials.
+
+Preview, queue admission, dispatch and every subsequent credential/action boundary recheck current authority. Cancellation/revocation fences further actions; already-issued external effects remain recorded as known/uncertain and are not represented as reversed. Cleanup requires its own preauthorized scope. High-impact target operations remain off until explicit per-attempt authorization and target-side enforcement are proved.
+
+### MBT-C-07 — Command recovery without fictional native idempotency
+
+All new model/approval/activation/mapping/accepted-materialization operations require a project-scoped operation key, canonical payload digest, action/principal binding and server receipt. Scope is `(projectId, action, operationKey)`; payload includes all native target IDs, immutable revisions, mode, selection, expected versions and consent identity. Same key/same payload returns the prior outcome after current read authorization; same key/different payload returns `409 OPERATION_KEY_CONFLICT` with no mutation. Persist request identity and selections across reload under the authenticated project session; never store credentials in URL/local state. A server operation receipt lookup is authoritative; a browser timeout is not FAILED or proof of rollback.
+
+**M1–M3 initial run-create decision: retain explicit manual reconciliation.** Current native run creation is not assumed idempotent. Prepare against an existing run where possible. For a new run, a lost response enters OUTCOME_UNKNOWN and disables automatic create/retry. Preserve exact requested name/selection/time/context and offer “Inspect existing runs,” then explicit attachment to the identified canonical run. Finding a similar title is only a candidate, not proof. If no authoritative outcome can be established, remain BLOCKED; a human must acknowledge possible duplication before starting a distinct new intent/key. Existing case-attachment/link deduplication cannot certify preceding run creation. AC-14 expressly tests this behavior rather than claiming automatic no-duplicate native creates. The same fallback applies to any native case materialization/adapter write whose owner lacks a verified receipt contract.
+
+Idempotent relationship attachment records a separate receipt and cannot partially publish a mixed batch. Workflow stages (prepare intent → native create/choose → attach cases → accepted model link → dispatch) retain native IDs and stage outcomes; this is orchestration metadata on existing native task/run owners, not a distributed transaction or second run store. Failure after commit leaves its committed truth visible and subsequent projection/evidence state PARTIAL. Never compensate by deleting an unrelated run or conceal a performed external action.
+
+For new receipt-backed model operations, retain key/digest/result identity while any provenance relies on it. If full payload is expired under policy, a minimal key/digest/outcome tombstone prevents re-execution. Expired grants are not renewed by retry. An absent/expired recoverable receipt returns `410 OPERATION_RECEIPT_UNAVAILABLE` and requires reconciliation; no silent same-key fresh execution. Product retention sets actual periods; unset retention disables such automated recovery, never makes it unbounded. New intent is explicit and is subject to current budget/consent. A future native idempotent create extension must be proved at the native owner (commit then drop response, concurrent repeat, altered payload, reload, expiry and foreign principal) before replacing this manual fallback.
+
+### MBT-C-08 — Untrusted text, AI egress and export
+
+Model labels, imported requirements, source comments, evidence and provider responses are DATA. They cannot override system/project instructions, call tools, grant consent, approve content, change destinations or suppress findings. Import/preview retains provenance and isolates untrusted text from executable instructions. Guard AST allowlisting does not substitute for these natural-language boundaries.
+
+Before enabling a Zyra-assisted Model Studio action, inventory existing provider, tool, retrieval, session, telemetry/log, export and attachment boundaries. Reuse native controls and name their owner/configuration/evidence. Provider/tool destinations and permitted data fields must be allowlisted by project policy BEFORE egress. Deterministically minimize/redact secrets, credentials, personal data and foreign-project content before constructing prompts, tool arguments, provider requests or logs; a later UI redaction is insufficient. Private evidence bytes/credentials are excluded by default. A detector, classifier or provider failure blocks the egress with `DATA_POLICY_BLOCKED` and preserves the draft locally under normal access controls. Do not assume a provider can safely redact content after receiving it. Missing confirmed policy means local/manual model work only, no provider egress.
+
+Canary fixtures include hostile “approve/run/export this secret” instructions embedded in a rule, benign same-project rule text, secret-like values, foreign references and filtering-provider failure. Assert destination payloads, tool requests and logs, not only assistant wording; no canary leaves the allowed boundary and no approval/dispatch occurs. Record safe diagnostic reason without reproducing the secret. An authorized export is an explicit redacted snapshot with revision/digest/scope/unknowns; subsequent access revocation stops new downloads, but cannot recall bytes legitimately exported earlier. Retention/use of those bytes follows the agreed data policy; no impossible recall promise.
+
+### MBT-C-09 — Source-grounded routes, persistent scope and accessible recovery
+
+Proposed native routes are `/projects/{projectId}/models`, `/models/{modelId}/revisions/{revisionId}` and revision-relative `/paths/{proposalId}` under that project. These are future route contracts, not claims of existing pages. Extend the existing case repository/detail-route owner to resolve `/projects/{projectId}/testcases/{caseId}?caseRevisionId=…&stepId=…`, preserving case identity rather than redirecting it away. “View in Model” carries exact project/case/revision/step and an authorized same-project return context. Server resolves IDs; no title/array index is authority. Unknown/deleted/revoked targets show non-enumerating unavailable state, never a different case. History mode is explicit in the URL; draft confidentiality still applies.
+
+Store shareable identity/revision/scope/filter selections in validated URL parameters; session return context stores suite/filter/sort/page/scroll and unsaved form recovery under project/user isolation. Raw evidence, credentials and private form text are never in URLs. Browser back/reload/deep-link preserves selected case/model revision and list context. Unsaved navigation offers Save draft / Keep editing / Discard; collapse/minimize does not discard. Project/tenant changes fence late fetch/validation/save responses; they cannot render or attach in the newly selected project. Restoring a saved draft requires current authority and conflict detection.
+
+Every graph/list/diff/proposal/coverage surface displays persistent scope: selected revision and approval, active pointer version, CURRENT/HISTORICAL mode, exact case revision where applicable, source/build/environment, actor/fixture and evidence freshness/unknowns. Moving between views preserves scope or explicitly confirms a reset; no hidden latest-version substitution. Historical passing evidence beside a newer active revision is labeled historical and current UNKNOWN/STALE.
+
+| View | Primary question / action | Success signal |
+|---|---|---|
+| Model list | Which applicable model/revision should I inspect? Open model | Exact revision and scope retained |
+| Detail/list/graph | Which behavior and canonical cases apply? Inspect element/case | Same identity/relationships in graph and list |
+| Draft editor | What expected rule changes? Save/submit exact draft | Preserved input and new version/receipt |
+| Review/diff | Is this revision justified? Approve/reject | Exact human decision receipt, no activation implied |
+| Path preview | Which bounded proposals reuse existing cases? Select/reuse | Explicit selections, forecast distinct from verification |
+| Run preparation | Where will selected work execute? Choose/prepare native run | Native run ID or visible uncertainty, no dispatch implied |
+| Coverage | What is actually verified in this scope? Inspect supporting observation | Counts, exclusions/unknowns and evidence provenance visible |
+
+| UI state | Required presentation and recovery |
+|---|---|
+| Complete empty/no model | Explain no model/links; offer authorized create/link action; no fake path |
+| Loading/pending | Keep context/input; announce progress; prevent duplicate intent |
+| Fetch/provider unavailable | “Unavailable,” retained stale data if safe, explicit retry; never empty-success |
+| Forbidden/revoked | Non-enumerating access-unavailable message; no stale private data or retry-write loop |
+| Conflict/stale revision/link | Preserve draft/selection; compare/refresh/review, no blind overwrite |
+| Partial/truncated | Show stop reason, logical work/unknowns; no complete forecast |
+| Commit outcome unknown | Reconcile original request/receipt/native records; disable blind create |
+| Cancel requested | Show pending acknowledgement and known/uncertain effects; no false terminal success |
+| Cancelled/failed/budget blocked | Show terminal cause and authorized explicit new attempt; preserve evidence |
+
+Every graph action has an equivalent permission-identical list/table action: select states/transitions, inspect predicate, map/unmap case steps, compare revisions, inspect evidence, preview/select paths and review/activate. Use stable accessible names, textual statuses, roving/standard keyboard order, focus return to the invoking element after drawers/modals, validation/status announcements, zoom/reset controls and bounded pagination with selection retained. Changing graph/list layout does not reset scope or dirty input. No graph-only drag gesture is required.
+
+Before implementing UI changes, inspect actual repository routes, picker, evidence panel, forms/shared consumers, and render the authorized current build at agreed fixture/role/viewport/theme. Capture After against the same baseline, including full keyboard/screen-reader author→review→mapping→preview and back/reload/collapse, responsive/zoom and permission/error/empty states. Existing screenshots/mockups/source-derived drawings cannot certify visual parity. No runtime/UI sign-off is recorded by this document.
+
+### MBT-C-10 — API errors, enforcement owners and dependency direction
+
+Add explicit project/model actions activate, deactivate, retire and historical generation mode alongside existing draft/review/links APIs. Every mutation carries expected artifact/pointer versions and operation key; do not put these in optional UI-only state. Typed outcomes include `400 INVALID_MODEL`, `422 UNSUPPORTED_SEMANTICS`, non-enumerating `403/404`, `409 REVISION_CONFLICT/ACTIVE_REVISION_CONFLICT/MODEL_SCOPE_CHANGED/OPERATION_KEY_CONFLICT/PROVENANCE_IN_USE`, `410 OPERATION_RECEIPT_UNAVAILABLE`, `429 RESOURCE_LIMIT`, `503 RESOURCE_POLICY_UNCONFIGURED/DATA_POLICY_BLOCKED`. Native request transports may map these to existing envelope conventions but must preserve machine-readable distinctions. No API exposes a writable `verified` boolean.
+
+| Authoritative fact | Owner / required extension | Downstream projection; forbidden reverse authority |
+|---|---|---|
+| Approved normative rule | Native requirement/decision owner + retained accepted version | Justifies model revision; current source/cache cannot approve rule |
+| Model bytes/approval/active pointer | Expected-model aggregate under native policy/audit | GraphSnapshot/diff/highlight; projection cannot mutate approval |
+| Case content/approval/step version | Native case version/publication owner | Accepted model mapping; model cannot copy/publish a second case |
+| Mapping decisions | Typed native trace relationship owner | Case/model highlighting; removing a link cannot erase past reliance |
+| Generation intent/work | Native task/job/quota owners | Proposal manifest; no separate job authority |
+| Run/attempt/occurrence/report/correction | Native run/execution owner | Coverage evaluation; model cannot edit a native observation |
+| Bytes and retention | Native attachment/storage/privacy owner | Evidence drilldown; count is not byte proof |
+| Human/target authority | Native authorization + exact consent owner | Dispatch permission; token issuer is not human consent |
+| Coverage/evaluation | Derived from exact references + versioned evaluator | Recomputable read view; no independent mutable VERIFIED store |
+
+Implementation archaeology must census all affected writers/readers, including manual native result editing, reporter/automation, MCP, UI, import, jobs, deletion/restore, exports and shared picker/evidence consumers at the actual implementation head. Resolve resource ownership for non-project URL paths rather than trusting a submitted projectId. Each writer enters the same owner-level policy/version/fencing path; a UI or controller-only check is insufficient. Record source path, operation, existing guard, new extension and impacted existing tests. No new universal artifact/review platform, graph DB, assistant, case/run/evidence store or scheduler is earned by these requirements.
+
+### MBT-C-11 — Closure evidence and rollout discipline
+
+Addressing a written ambiguity does not pass its implementation gate. The independent report remains the original review result; only a later review can supersede White NOT FROZEN or Graph NOT CLEAN. Owner-policy bindings above are explicit proposed choices, not signed human ratifications. Models with unset policy, budgets, unsupported semantics or missing normative authority remain blocked rather than shipped behind optimistic labels.
+
+M1 implements finite drafts/validated list+graph mapping only after native authority/version/policy grounding. M2 enables bounded EFSM/path proposals only after hand-calculated semantics, logical-budget reproducibility, resource admission and duplicate-reuse proof. M3 enables separately authorized adapters and native immutable occurrence/retention references after commit-loss/cancel/revoke/evidence tests. M4 covers affected-only stale projections, operational recovery and measured scale. Additional engines, temporal schedulers, imports from images and automatic native run creation recovery remain explicitly deferred until earned.
+
+Canonical archive reconciliation is a document evidence gate: retain all eight names, preserve all preceding bytes/IDs except explicit package revision metadata, add these extension clauses to the appropriate existing owners, validate old/new differences and cross-document IDs. This does not retroactively validate historical source claims or reconcile every older task against merged implementation. Current repository source baseline and historical archive baseline are separately named. Runtime acceptance requires authorized actual build/schema, disposable fixtures and real observations; no new test/model/generator/adapter result is claimed by spec validation.
+
+### MBT-001-J2 — Additional acceptance scenarios for revision 0.2 (all NOT RUN)
+
+The original MBT-AC-01–26 remain, with corrected oracles in J. These additional IDs extend that namespace, not the historical QA-001–490 inventory. Each row names a discriminating setup/sequence, expected persisted/user-visible outcome, accountable implementation owner and test level. Existing e2e suites must be extended at the actual owner; no parallel test project. Proof links are UNAVAILABLE until implementation and execution. No row below is a test result.
+
+| Scenario | Fixture / sequence and expected oracle | Owner / level |
+|---|---|---|
+| MBT-AC-27 | EFSM remaining=1: reserve → reserve again → reset; first yields 0, second infeasible, reset restores 1. Actor A/B share remaining but keep local counters separate; x=0 increment permits x=1 guard. Duplicate assignment/overflow/undefined actor invalid; concurrent/temporal request UNSUPPORTED. Source-permitted forbidden target action still disagrees with independent oracle. | Model interpreter + QA; unit/contract, two-domain API/adapter proof where supported |
+| MBT-AC-28 | Active approved r1; approve r2 without activation; r1 remains active. Concurrent r2/r3 activate with same pointer token: one winner/one 409. Replay same activation key returns same event. Retire active fails; rollback to approved r1 records new activation and preserves old attempt. Retired revision cannot dispatch. | Model/policy owner; transactional DB + API |
+| MBT-AC-29 | Generate CURRENT r1 plan then activate r2 before dispatch: refuse stale pointer, preserve plan, require refreshed consent or explicit HISTORICAL new intent. Results of a previously dispatched r1 attempt remain r1 history; r2 gets no verified credit. | Model/native execution; API + browser + DB |
+| MBT-AC-30 | Two verified eligible edges + one reviewed excluded + one unresolved: show 2/2 known eligible, excluded 1, unresolved 1, whole UNKNOWN. Resolve unknown: COMPLETE_WITH_EXCLUSIONS. Empty eligible with unknown gives null/UNKNOWN; fully empty resolved gives N/A. Fetch failure is UNAVAILABLE. Negative refusal and non-state obligations have separate denominators. | Validator/coverage/frontend; unit/API + browser |
+| MBT-AC-31 | Same canonical model/engine/seed/logical limits on fast and artificially delayed evaluators: equal ordered logical output/digest. Force emergency cutoff: PARTIAL/EMERGENCY_RESOURCE_CUTOFF, no completion or equal-manifest promise. Operational IDs/timestamps may differ. | Generator; unit/worker integration |
+| MBT-AC-32 | Admit parallel/retried jobs under project and platform quotas; neither cap may be multiplied. Cancel consumes already-used work; release unused reservation once. Lease A expires, B retries, late A publish/release rejected. Duplicate request not double-charged. Uncertain external effect retains its reservation until reconciled; unset caps disable admission. | Native job/quota owner; multi-worker DB/queue integration |
+| MBT-AC-33 | Accept exact provider rule revision; update/delete/reconnect provider and revoke source read. Old accepted snapshot/digest unchanged under policy; proposed impact/current UNKNOWN visible. Mutable latest cache cannot become accepted historical truth. | Requirement/model/trace owner; API + DB |
+| MBT-AC-34 | Select an initially unedited case, edit it, repeat execution with new role/dataset and repeated transition; manifests preserve original case/step revision and distinct attempt/occurrence IDs. Correct result twice: original and both authorized events retained. Missing legacy version stays UNKNOWN/RECONSTRUCTED_UNVERIFIED. | Native case/run/evidence; migration + API + DB |
+| MBT-AC-35 | Accepted mapping/attempt relies on model/case/run/evidence/project; hard-delete each parent refused PROVENANCE_IN_USE without cascade loss. Soft-delete excludes current eligibility but retains history. Authorized erasure removes permitted bytes, leaves permitted receipt and UNKNOWN proof. Restore gives historical visibility without activation, consent or current VERIFIED. | Native storage/privacy/deletion; migration/API/attachment integration |
+| MBT-AC-36 | Apply each action-policy row through all actual UI/REST/MCP/assistant/import/job writers, with allowed identity, author self-review, missing binding, read-only project, changed entitlement and revoked membership. Same owner-level allow/deny; no foreign mutation/leak. Machine token with eligible issuer cannot approve/activate/dispatch without exact server-recorded human authority; wrong revision/expired/revoked grant refused. | Authorization/protected publication/security; API/MCP + DB races |
+| MBT-AC-37 | Native create commits then response is dropped: UI OUTCOME_UNKNOWN, no automatic second create, input/key preserved across reload, explicit inspection/choice of canonical run. Receipt-backed model write repeats with same key/body once; altered body conflicts; expired receipt cannot reexecute; expired grant cannot renew. Failure between attach and model link leaves committed stage visible/PARTIAL. | Native run/trace command owners; fault-injected API + browser/DB |
+| MBT-AC-38 | Import hostile rule text and safe canary secrets; request model draft via Zyra. Inspect provider/tool/log destinations: only authorized minimized fields leave, no canary secret or foreign content. Hostile text cannot approve/dispatch. Filter/provider failure blocks egress. Benign allowed rule remains usable. Already exported legitimate snapshot is not falsely recalled after revocation. | Zyra/security/export owners; integration + API |
+| MBT-AC-39 | Edited case → exact-revision model → diff/path → back/reload/collapse/list switch: case/suite/filter/sort/page/scroll, dirty input and scope preserved or explicit Save/Keep/Discard. Project switch with late response cannot attach/render old private data. Error/unavailable/revoked/empty/partial/cancel-requested/outcome-unknown are distinct with correct recovery. | Native routing/repository/frontend; browser + API |
+| MBT-AC-40 | Full author → review → mapping → preview → evidence journey using only keyboard and screen reader/list. Every graph action has equivalent names/permissions/results; modal close restores focus, async status announced, text statuses survive high contrast/zoom/reflow. Before/After and shared picker/form/evidence consumers checked at identical build/role/fixture/viewport/theme. | Frontend/accessibility + QA; authentic browser/manual assistive-technology evidence |
+
+All 24 original Grey journeys remain in scope, not replaced by these additional IDs: J01–02 case access → AC01–02/34/39; J03–04 draft/import → AC03/12/22/33/36/38; J05 validation → AC07/27/30; J06–07 review/activation → AC04/10/28–29/36; J08 mapping → AC02/21/34/36; J09–10 generation/recovery → AC06/08/27/31–32; J11 reuse → AC13/37; J12–15 dispatch/retry/cancel/oracle → AC09/14–16/24–26/29/34/36–37; J16–18 coverage/change/retention → AC05/17–18/23/30/33–35; J19–20 export/revoke → AC11–12/25–26/36/38; J21 resume/accessibility → AC19/39–40; J22 second technology → AC20/24/27; J23 degradation → AC15/24/31–32/35/37–39; J24 publication → canonical structural validation and GATE01. QA branches for stale callbacks, corrected results, key conflicts/expiry, active-versus-approved states and exported-byte retention are explicit in these rows. Analytical mapping does not execute any of them.
+
+
+
+
+**Canonical identity:** MBT-C-12 in `03_TECHNICAL_DESIGN.md` binds Model Studio to the same FR-117 behavior family/revision owner; model IDs are aliases, and current-published is the active pointer, never a second latest-approved authority. This v1.4.23 clarification governs operative FR-117/MBT identity and selection wording in earlier proposal sections; historical source evidence retains its original pin.
+
+### MBT-C-12 — Canonical behavior/model identity, publication and applicability
+
+Model Studio is the authoring/generation/view capability of the existing **proposed** FR-117 behavior-definition authority. It does not create a second expected-model registry. `modelId` is the API/UI alias of `quality_journey_families.id`; `modelRevisionId` is the alias of `quality_journey_revisions.id`. They are the same project-bound identities, never separately minted IDs joined later by a best-effort link. Typed model content, source justification and C-01 semantics extend that revision's immutable `model_json`. Observed implementation GraphSnapshot/capture history remains a separate observational authority and cannot publish expected truth. Physical schema names remain implementation choices; the logical owner is singular.
+
+M1/M2 give each family one immutable `declaredScopeId` and one active-revision pointer with a version token. The tuple `(projectId, modelId, declaredScopeId)` therefore addresses that same family-owned selection, not a second applicability registry. Changing the scope requires an explicit new family and reviewed relationship/impact, never silently reinterpreting old attempts. The earlier term **current published revision** means the active approved revision under C-02; it is a compatibility/read alias, not a separately writable pointer or “latest approved” selector. Latest approved is a derived historical query and cannot authorize CURRENT work. Approving/publishing revision r2 stores its exact approval event but leaves active r1 unchanged. Activating/rolling back/deactivating changes the one family-owned pointer through C-02 CAS and a distinct human action.
+
+Prepared requirements/model entry WF-21 and spontaneous coding entry WF-20 resolve this same family/revision/selection owner. An unplanned source observation without an accepted family remains an UNKNOWN impact or candidate proposal; it cannot create a second normative model. All UI/REST/MCP/jobs use this resolver. Missing or inconsistent legacy identity yields BLOCKED/UNKNOWN rather than selecting whichever pointer or record was most recently written. If an existing deployment has duplicate candidate records, migration must establish explicit same-project correspondence from retained content/provenance and owner-reviewed resolution; matching titles alone cannot merge them. Ambiguous candidates stay quarantined from CURRENT selection. No new migration is claimed here.
+
+For M1/M2, incompatible overlapping normative families are blocked with `409 MODEL_SCOPE_CONFLICT`; no last-write-wins or implicit OR/AND of their oracles. An authorized resolution must select the governing family with explicit scope/provenance before CURRENT generation or dispatch. General cross-model composition and multi-scope families are deferred until their conflict/approval/replay semantics are specified. This restriction preserves reusable cases across different non-conflicting models and historical views.
+
+Closure fixture: one family f, approved active r1; author r2 through prepared entry and inspect through spontaneous entry → same f/r2 identities. Approve r2 → both entrances still resolve CURRENT r1 and pointer version v. Competing activation r2/r3 with v → exactly one pointer update/event; both entrances observe that winner. HISTORICAL r1 remains pinned and never becomes current credit for r2. An input containing unequal familyId/modelId or revision aliases fails before persistence. Two conflicting families with no approved resolution return MODEL_SCOPE_CONFLICT; source capture cannot choose a normative winner. These are planned native DB/API/entry-parity tests; the offline finite-semantics pilot does not implement or prove this authority.
+
+
+### MBT-001-J3 — Revision 0.3 acceptance additions (all NOT RUN in Tesbo)
+
+| Scenario | Discriminating fixture and required outcome | Owner / level |
+|---|---|---|
+| MBT-AC-41 | Prepared and spontaneous entrances address the same family/model and revision aliases; approve r2 leaves r1 active, one CAS winner visible through both entrances; conflicting aliases/overlapping unresolved scopes refused; historical r1 remains pinned. | Behavior/model policy owner; native DB/API/MCP integration |
+| MBT-AC-42 | Request target race/eventual/time semantics from M1/M2 → UNSUPPORTED_SEMANTICS; sequential A→B reservation fixture remains sequential. Separately execute native Tesbo activation/job/revoke races. No sequential path is advertised as concurrent coverage. | Model/QA; finite pilot plus separately authorized native concurrency tests |
+| MBT-AC-43 | Remove mapping before preparation, after preparation while queued, or immediately before dispatch → new dispatch BLOCKED MAPPING_CHANGED with preserved selection; fresh acceptance and refreshed consent/new operation required. Already-dispatched occurrence keeps old acceptance evidence; removal itself neither rewrites nor cancels it. Explicit cancel/target revoke separately fences subsequent actions. Both CURRENT/HISTORICAL modes follow the same rule. | Trace/native attempt/policy owners; DB/API race + UI recovery |
+| MBT-AC-44 | One structural transition observed/verified for actor A only: structural transition1/1 can hold while actor-conditioned assertions show1/2; repeated observations and corrections do not increment either eligible denominator. Change valuation/actor/fixture/model revision → new scoped obligation; unknown eligibility stays UNKNOWN. | Coverage/native evidence owners; unit/API/query fixtures |
+| MBT-AC-45 | Generated case text enters existing Zyra/native staged-case and protected publication path; duplicate Review Board may suggest reuse but cannot confer model/case approval or import its entitlement. Direct native publication without exact authority refused. | Case/publication owner; API/MCP/UI integration |
+| MBT-AC-46 | Implementation manifest pins exact source parent/head, spec archive digest, dependency versions and actual affected owners before code/DB/UI integration. Older source/review pins remain historical; missing or changed implementation-head reconciliation blocks acceptance. | Engineering/QA owner; document/CI contract plus actual implementation proof |
+
+The 40-journey independent review inventory remains the review baseline; these six criteria close its specific cross-contract ambiguities without claiming a new inventory or executed product coverage. The preceding 40 MBT criteria retain IDs and remain NOT RUN as native product tests. Offline fixture checks exercise only their explicitly named symbolic subset.

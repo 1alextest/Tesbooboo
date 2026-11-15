@@ -111,6 +111,71 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
     expect(after.child).toEqual(before.child); expect(after.control).toEqual(before.control); expect(after.controlHistory).toEqual(before.controlHistory);
   }
 
+  it("rejects a stale row revision without changing native content, history or postcommit effects", async () => {
+    const f = service(), initial = await f.svc.getTestCase(testcaseId);
+    expect(initial.editRevision).toMatch(/^[a-f0-9]{64}$/);
+    expect((await f.svc.getTestCase(testcaseId)).editRevision).toBe(initial.editRevision);
+    await f.svc.updateTestCase(testcaseId, owner, { expectedRevision: initial.editRevision, attachments: "First reviewer Notes" });
+    const committed = await state(), latest = await f.svc.getTestCase(testcaseId);
+    expect(latest.editRevision).not.toBe(initial.editRevision);
+    for (const effect of [f.fields, f.tags, f.activity, f.embedding, f.notice, f.suitesInvalidation, f.casesInvalidation]) effect.mockClear();
+    await expect(f.svc.updateTestCase(testcaseId, owner, {
+      expectedRevision: initial.editRevision, title: "Must not replace", attachments: "Stale Notes", customTagIds: []
+    })).rejects.toMatchObject({ status: 409, response: { code: "TESTCASE_EDIT_CONFLICT" } });
+    expect(await state()).toEqual(committed);
+    for (const effect of [f.fields, f.tags, f.activity, f.embedding, f.notice, f.suitesInvalidation, f.casesInvalidation]) expect(effect).not.toHaveBeenCalled();
+    await f.svc.updateTestCase(testcaseId, owner, { expectedRevision: latest.editRevision, title: "Reviewed again" });
+    const saved = await state();
+    expect(saved.row).toMatchObject({ title: "Reviewed again", attachments: "First reviewer Notes", suite_id: root, owner_id: owner });
+    expect(saved.versions).toHaveLength(committed.versions.length + 1);
+    unchangedOutsideCase(committed, saved);
+  });
+
+  it("rechecks the revision after waiting behind an actual PostgreSQL row update", async () => {
+    const f = service(), initial = await f.svc.getTestCase(testcaseId);
+    const blocker = new Client({ connectionString: url }); await blocker.connect(); await blocker.query("BEGIN");
+    await blocker.query("UPDATE testcases SET attachments=$2, updated_at=now() WHERE id=$1", [testcaseId, "Concurrent native Notes"]);
+    const pid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+    const writing = f.svc.updateTestCase(testcaseId, owner, {
+      expectedRevision: initial.editRevision, attachments: "Must not win"
+    }).then(() => null, (error: unknown) => error);
+    try {
+      await waitForBlocker(pid);
+      await blocker.query("COMMIT");
+      expect(await writing).toMatchObject({ status: 409 });
+      const after = await state();
+      expect(after.row.attachments).toBe("Concurrent native Notes");
+      expect(after.versions).toHaveLength(1);
+      for (const effect of [f.fields, f.tags, f.activity, f.embedding, f.notice, f.suitesInvalidation, f.casesInvalidation]) expect(effect).not.toHaveBeenCalled();
+    } finally { await blocker.query("ROLLBACK"); await writing; await blocker.end(); }
+  }, 15_000);
+
+  it("detects content edits below JavaScript timestamp precision and leaves a missing row untouched", async () => {
+    const f = service();
+    await setup.query("UPDATE testcases SET updated_at='2026-11-15T12:00:00.000001Z' WHERE id=$1", [testcaseId]);
+    const initial = await f.svc.getTestCase(testcaseId);
+    await setup.query("UPDATE testcases SET title='Concurrent precise edit', updated_at='2026-11-15T12:00:00.000002Z' WHERE id=$1", [testcaseId]);
+    const updated = await f.svc.getTestCase(testcaseId);
+    expect(updated.updatedAt).toEqual(initial.updatedAt);
+    expect(updated.editRevision).not.toBe(initial.editRevision);
+    const before = await state();
+    await expect(f.svc.updateTestCase(testcaseId, owner, { expectedRevision: initial.editRevision, title: "Too stale" }))
+      .rejects.toMatchObject({ status: 409 });
+    expect(await state()).toEqual(before);
+    await setup.query("UPDATE testcases SET deleted_at=now() WHERE id=$1", [testcaseId]);
+    const deleted = await state();
+    await expect(f.svc.updateTestCase(testcaseId, owner, { expectedRevision: updated.editRevision, title: "Must not restore" }))
+      .rejects.toMatchObject({ status: 404 });
+    expect(await state()).toEqual(deleted);
+  });
+
+  it("does not reject an unchanged authored row because of embedding bookkeeping or timestamp updates", async () => {
+    const f = service(), initial = await f.svc.getTestCase(testcaseId);
+    await setup.query("UPDATE testcases SET embedding_status='ready', embedding_content_hash='worker-only', updated_at=now() WHERE id=$1", [testcaseId]);
+    expect((await f.svc.getTestCase(testcaseId)).editRevision).toBe(initial.editRevision);
+    await f.svc.updateTestCase(testcaseId, owner, { expectedRevision: initial.editRevision, attachments: "Actual authored Notes" });
+    expect((await state()).row).toMatchObject({ attachments: "Actual authored Notes", embedding_status: "ready", embedding_content_hash: "worker-only" });
+  });
   it.each(["Archived", "Draft"])("preserves omitted suite/owner on a %s status-only edit and records the real prior snapshot", async (status) => {
     if (status === "Draft") await setup.query("UPDATE testcases SET status = 'Archived' WHERE id = $1", [testcaseId]);
     const f = service(), before = await state();
@@ -195,10 +260,12 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
 
   it("rolls back the row and trigger snapshot when the explicit custom-tag collaborator fails late", async () => {
     const f = service(), before = await state();
+    const initial = await f.svc.getTestCase(testcaseId);
     f.tags.mockRejectedValueOnce(new Error("Controlled custom-tag collaborator failure"));
-    await expect(f.svc.updateTestCase(testcaseId, owner, { status: "Archived", customTagIds: [] })).rejects.toThrow("Controlled custom-tag");
+    await expect(f.svc.updateTestCase(testcaseId, owner, { expectedRevision: initial.editRevision, status: "Archived", customTagIds: [] })).rejects.toThrow("Controlled custom-tag");
     expect(f.fields).toHaveBeenCalledTimes(1); expect(f.tags).toHaveBeenCalledTimes(1);
     expect(await state()).toEqual(before); expect(f.activity).not.toHaveBeenCalled(); expect(f.embedding).not.toHaveBeenCalled();
+    expect((await f.svc.getTestCase(testcaseId)).editRevision).toBe(initial.editRevision);
   });
 
   describe.each(["update", "delete"])("bulk %s SQL project scope", (kind) => {
