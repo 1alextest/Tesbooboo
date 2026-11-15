@@ -70,17 +70,24 @@ export class GraphChangeReviewDelivery {
     });
     // The native writer intentionally catches/logs failures; verify durable
     // per-recipient notifications and surface partial delivery honestly.
-    const confirmation = await this.db.query<{ user_id: string }>(
-      `SELECT user_id::text FROM notifications
-        WHERE user_id=ANY($1::uuid[]) AND type='qa_change_review' AND dedupe_key=$2`,
-      [recipients, dedupeKey]
-    );
-    const delivered = new Set(confirmation.rows.map((item) => item.user_id));
-    const pendingCount = recipients.filter((id) => !delivered.has(id)).length;
-    return {
-      status: pendingCount === 0 ? "delivered" : "pending",
-      recipientCount: recipients.length,
-      pendingCount
-    };
+    try {
+      const confirmation = await this.db.query<{ user_id: string }>(
+        `SELECT user_id::text FROM notifications
+          WHERE user_id=ANY($1::uuid[]) AND type='qa_change_review' AND dedupe_key=$2`,
+        [recipients, dedupeKey]
+      );
+      const delivered = new Set(confirmation.rows.map((item) => item.user_id));
+      const pendingCount = recipients.filter((id) => !delivered.has(id)).length;
+      return {
+        status: pendingCount === 0 ? "delivered" : "pending",
+        recipientCount: recipients.length,
+        pendingCount
+      };
+    } catch {
+      // The capture was already committed. Failure to confirm notification
+      // rows cannot safely be converted into a failed source-capture verdict.
+      // A repeated attempt is safe through the native per-user dedupe key.
+      return { status: "pending", recipientCount: recipients.length, pendingCount: recipients.length };
+    }
   }
 }
