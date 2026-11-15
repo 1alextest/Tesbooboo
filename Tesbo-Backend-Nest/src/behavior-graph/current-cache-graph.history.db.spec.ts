@@ -12,6 +12,7 @@ import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
 import { GraphChangeReviewRecovery } from "./graph-change-review.recovery";
 import { writeNotifications } from "../legacy/notification-writer";
 import { ProjectSourceBindingReader } from "./project-source-binding";
+import { ProjectSourceBindingManagement } from "./project-source-binding.management";
 import { ProjectSourceGraphCoordinator } from "./project-source-graph.coordinator";
 
 const url = process.env.DATABASE_URL ?? "";
@@ -297,6 +298,48 @@ const url = process.env.DATABASE_URL ?? "";
           [project, user]
         );
         await admin.query("DELETE FROM notifications WHERE dedupe_key=$1", [key]);
+      }
+    });
+
+    it("persists only approved owner source settings and denies revoked role without mutation", async () => {
+      const database = new DatabaseService(pool);
+      const reader = new ProjectSourceBindingReader(database, {
+        trusted: { repositoryId: "org/repo", root: "/srv/checkout/approved" }
+      });
+      const management = new ProjectSourceBindingManagement(database, reader);
+      const settings = {
+        repositoryId: "org/repo", checkoutKey: "trusted", refName: "development",
+        selectionPrefixes: ["src"], enabled: true
+      };
+      await admin.query("UPDATE project_members SET role='owner' WHERE project_id=$1 AND user_id=$2", [project, user]);
+      try {
+        expect(await management.getForOwner(user, project)).toEqual({ configured: false, binding: null });
+        expect(await management.setForOwner(user, project, settings))
+          .toEqual({ configured: true, binding: settings });
+        expect(await management.getForOwner(user, project))
+          .toEqual({ configured: true, binding: settings });
+        expect(JSON.stringify(await management.getForOwner(user, project)))
+          .not.toContain("/srv/checkout/approved");
+
+        await admin.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2", [project, user]);
+        await expect(management.getForOwner(user, project)).rejects.toMatchObject({ status: 403 });
+        await expect(management.setForOwner(user, project, { ...settings, enabled: false }))
+          .rejects.toMatchObject({ status: 403 });
+        expect((await admin.query(
+          "SELECT enabled, repository_id FROM project_source_bindings WHERE project_id=$1", [project]
+        )).rows[0]).toEqual({ enabled: true, repository_id: "org/repo" });
+
+        await admin.query("UPDATE project_members SET role='owner' WHERE project_id=$1 AND user_id=$2", [project, user]);
+        await expect(management.setForOwner(user, project, { ...settings, checkoutKey: "untrusted" }))
+          .rejects.toMatchObject({ status: 400 });
+        expect(await management.setForOwner(user, project, { ...settings, enabled: false }))
+          .toMatchObject({ binding: { enabled: false } });
+        expect((await admin.query(
+          "SELECT enabled FROM project_source_bindings WHERE project_id=$1", [project]
+        )).rows[0].enabled).toBe(false);
+      } finally {
+        await admin.query("DELETE FROM project_source_bindings WHERE project_id=$1", [project]);
+        await admin.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2", [project, user]);
       }
     });
 
