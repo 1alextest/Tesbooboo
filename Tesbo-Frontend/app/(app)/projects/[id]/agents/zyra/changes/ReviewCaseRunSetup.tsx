@@ -218,8 +218,8 @@ export function ReviewCaseRunSetup({
       {complete && (
         <p role="status" className="mt-2">
           {complete.selected} case(s) requested; {complete.added} newly added; {complete.skipped}
-          skipped (already present or no longer eligible). Open the run to verify assignments,
-          record actual execution evidence, and obtain human review.
+          {" skipped (already present or no longer eligible). Open the run to verify assignments,"}
+          {" record actual execution evidence, and obtain human review."}
         </p>
       )}
     </details>

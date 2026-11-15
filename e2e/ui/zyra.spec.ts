@@ -117,7 +117,10 @@ test.describe("zyra / agents (UI)", () => {
     // fabricate one or claim capture success.
     await expect(page.getByText("No committed graph observations are available for this project.")).toBeVisible();
     await page.getByRole("link", { name: "Back to Zyra" }).click();
-    await expect(page).toHaveURL(new RegExp(`/projects/${tenant!.mainProjectId}/agents/zyra`));
+    // The route-params provider intentionally canonicalizes UUID paths to
+    // readable project keys. Assert destination, not address-bar UUID spelling.
+    await expect(page).toHaveURL(/\/projects\/[^/]+\/agents\/zyra\/?$/);
+    await expect(page.getByRole("link", { name: "Change review" })).toBeVisible();
   });
 
   test("graph review links an explicitly nominated case to its existing canonical record", async ({ browser }) => {
