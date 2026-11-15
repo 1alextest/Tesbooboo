@@ -1147,12 +1147,13 @@ describe("McpService", () => {
 
     it("passes project and current member identity to the existing scoped history query", async () => {
       const { db, query } = makeDb();
-      query.mockImplementation((sql: string) => sql.includes("authorized_history AS MATERIALIZED")
-        ? Promise.resolve({ rows: [{ authorized: true, entries: [{
-            id: "18", revision: "rev", capturedAt: "2026-11-15T00:00:00Z",
-            reviewReceipt: null, changeState: "source_scope_changed"
-          }] }] })
-        : Promise.resolve({ rows: [] }));
+      (query as jest.Mock).mockImplementation((sql: string, _params: unknown[]) =>
+        sql.includes("authorized_history AS MATERIALIZED")
+          ? Promise.resolve({ rows: [{ authorized: true, entries: [{
+              id: "18", revision: "rev", capturedAt: "2026-11-15T00:00:00Z",
+              reviewReceipt: null, changeState: "source_scope_changed"
+            }] }] })
+          : Promise.resolve({ rows: [] }));
       const legacy = makeLegacy();
       const svc = new McpService(legacy, db, writableLimits);
       const reply: any = await svc.handleRequest(rpc("tools/call", {
@@ -1163,7 +1164,8 @@ describe("McpService", () => {
       expect(content.entries).toHaveLength(1);
       expect(content.entries[0].changeState).toBe("source_scope_changed");
       expect(content.nextBeforeId).toBe("18");
-      const call = query.mock.calls.find((item) => item[0].includes("authorized_history AS MATERIALIZED"));
+      const call = (query.mock.calls as unknown as Array<[string, unknown[]]>)
+        .find((item) => item[0].includes("authorized_history AS MATERIALIZED"));
       expect(call?.[1]).toEqual(["proj-1", "user-1", null, 1]);
       expect(legacy.createTestCase).not.toHaveBeenCalled();
       expect(legacy.updateTestCase).not.toHaveBeenCalled();
