@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, request as pwRequest, test, type Locator, type Page } from "@playwright/test";
 import { env } from "../utils/env";
+import { testcaseEditState } from "../utils/testcase-edit-state";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 const STATE_PATH = path.join(__dirname, "../.auth/state.json");
@@ -12,6 +13,49 @@ function fieldControl(page: Page, label: string): Locator {
     `xpath=//label[normalize-space(text())="${label}"]/following-sibling::*[self::input or self::select or self::textarea]`,
   );
 }
+
+test("stale editor save retains unsaved Notes until an explicit reload and review", async ({ page, request }) => {
+  const title = `E2E conflicting Notes ${Date.now()}`;
+  const createdResponse = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+    data: { title, attachments: "Original Notes" }
+  });
+  expect(createdResponse.ok()).toBeTruthy();
+  const created = await createdResponse.json();
+  const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
+  try {
+    await page.goto(`/projects/${ctx.projectId}/testcases`);
+    await page.getByRole("button", { name: title, exact: true }).click();
+    const panel = page.locator("aside");
+    const notes = panel.getByPlaceholder("Add notes, links to screenshots, logs, or reference docs");
+    await expect(notes).toHaveValue("Original Notes");
+    await notes.fill("Unsaved local Notes");
+    const external = await request.put(url, { data: { attachments: "Newer reviewer Notes" } });
+    expect(external.ok()).toBeTruthy();
+    const committed = await (await request.get(url)).json();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const refused = page.waitForResponse((response) => response.url().endsWith(url) && response.request().method() === "PUT");
+      await panel.getByRole("button", { name: "Save changes", exact: true }).click();
+      expect((await refused).status()).toBe(409);
+      await expect(panel.getByRole("alert")).toContainText("Your changes were not saved");
+      await expect(notes).toHaveValue("Unsaved local Notes");
+      expect(testcaseEditState(await (await request.get(url)).json())).toEqual(testcaseEditState(committed));
+    }
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await panel.getByRole("button", { name: "Reload latest case" }).click();
+    await expect(notes).toHaveValue("Unsaved local Notes");
+    page.once("dialog", (dialog) => dialog.accept());
+    await panel.getByRole("button", { name: "Reload latest case" }).click();
+    await expect(notes).toHaveValue("Newer reviewer Notes");
+    await notes.fill("Newer reviewer Notes; local addition reviewed");
+    await panel.getByRole("button", { name: "Save changes", exact: true }).click();
+    await expect(panel.getByText("Test case updated successfully.")).toBeVisible();
+    const saved = await (await request.get(url)).json();
+    expect(saved.attachments).toBe("Newer reviewer Notes; local addition reviewed");
+    expect(saved.id).toBe(created.id);
+  } finally {
+    await request.delete(url, { failOnStatusCode: false });
+  }
+});
 
 /** Verify the existing editor's Notes textarea after an authorized MCP write,
  * then ensure the MCP omission path does not overwrite a subsequent human edit.

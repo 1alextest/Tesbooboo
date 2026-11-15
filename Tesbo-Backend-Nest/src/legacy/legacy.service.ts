@@ -19,6 +19,7 @@ import { validatePersonName } from "../common/person-name.util";
 import { canonicalizeImportValue, EXPORT_LOCALES, ExportLocale } from "../common/export-i18n";
 import { detectScriptLanguage } from "../common/script-language";
 import { writeNotifications } from "./notification-writer";
+import { expectedTestcaseRevision, TESTCASE_EDIT_REVISION_SQL } from "./testcase-edit-revision";
 import { isCoverageAnalysisRequest, notificationLinks, notificationMessages, runLabel, type NotificationLink, type NotificationType } from "./notification-events";
 import { runInZyraLanguage, zyraReplyLanguage } from "./zyra-language-context";
 import { localizeZyraTaskEntry } from "./zyra-task-activity-ru";
@@ -4680,8 +4681,8 @@ export class LegacyService implements OnModuleInit {
   async getTestCaseForUser(userId: string | null | undefined, projectId: string, testcaseId: string) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     const res = isUuid(testcaseId)
-      ? await this.db.query("SELECT * FROM testcases WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL", [testcaseId, projectId])
-      : await this.db.query("SELECT * FROM testcases WHERE external_id = $1 AND project_id = $2 AND deleted_at IS NULL", [testcaseId, projectId]);
+      ? await this.db.query(`SELECT *, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision FROM testcases WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL`, [testcaseId, projectId])
+      : await this.db.query(`SELECT *, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision FROM testcases WHERE external_id = $1 AND project_id = $2 AND deleted_at IS NULL`, [testcaseId, projectId]);
     if (!res.rows[0]) throw new NotFoundException({ error: "Test case not found" });
     return toCamel(res.rows[0]);
   }
@@ -4693,7 +4694,7 @@ export class LegacyService implements OnModuleInit {
    * already-authorized path. Route traffic goes through getTestCaseForUser.
    */
   async getTestCase(id: string) {
-    const res = await this.db.query("SELECT * FROM testcases WHERE id = $1 AND deleted_at IS NULL", [id]);
+    const res = await this.db.query(`SELECT *, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision FROM testcases WHERE id = $1 AND deleted_at IS NULL`, [id]);
     if (!res.rows[0]) throw new NotFoundException({ error: "Test case not found" });
     return toCamel(res.rows[0]);
   }
@@ -5709,6 +5710,7 @@ export class LegacyService implements OnModuleInit {
   // review-batch save run several updates atomically with each other (and with any creates in the
   // same batch) against one shared client, instead of one transaction per row.
   private async updateTestCaseWithClient(client: PoolClient, projectId: string, id: string, uid: string, body: Body, newExternalId: string | null = null) {
+    const expectedRevision = expectedTestcaseRevision(body.expectedRevision);
     await this.assertTestcaseSuites(client, projectId, [body.suiteId]);
     /*
      * jiraIssueKey/jiraUrl and linearIssueKey/linearUrl were COALESCE-only, like every other field
@@ -5747,6 +5749,7 @@ export class LegacyService implements OnModuleInit {
        estimated_duration=COALESCE($27,estimated_duration),
        source_refs=COALESCE($28::jsonb,source_refs), external_id=COALESCE($34,external_id), updated_at=now()
        WHERE id=$1 AND deleted_at IS NULL
+         AND ($37::text IS NULL OR ${TESTCASE_EDIT_REVISION_SQL} = $37::text)
        RETURNING *`,
       [
         id,
@@ -5788,10 +5791,20 @@ export class LegacyService implements OnModuleInit {
         clearsNotion,
         newExternalId,
         body.suiteId !== undefined,
-        body.ownerId !== undefined
+        body.ownerId !== undefined,
+        expectedRevision
       ]
     );
     const row = res.rows[0];
+    if (!row) {
+      if (expectedRevision !== null) {
+        throw new ConflictException({
+          code: "TESTCASE_EDIT_CONFLICT",
+          error: "Test case changed since it was loaded. Your changes were not saved. Reload the latest case and review your edits before saving again."
+        });
+      }
+      throw new NotFoundException({ error: "Test case not found" });
+    }
     // Always called (even with an empty body.customFieldValues) so required-field
     // enforcement re-checks against currently-active-required fields using existing
     // stored values — correct for "field made required after the fact".
@@ -5833,6 +5846,7 @@ export class LegacyService implements OnModuleInit {
 
   async updateTestCase(id: string, actorId: string | null | undefined, body: Body) {
     const uid = this.requireUser(actorId);
+    expectedTestcaseRevision(body.expectedRevision);
     // Same guard as create: an over-long value here hit the bounded column and answered 500.
     this.assertTestcaseFieldLengths(body);
     const before = await this.db.query("SELECT * FROM testcases WHERE id = $1 AND deleted_at IS NULL", [id]);
