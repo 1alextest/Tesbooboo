@@ -29,7 +29,7 @@ export interface QaChangeReviewReceipt {
   candidates: QaReviewCandidate[];
   unlinkedCaseNodeIds: string[];
   evidence: {
-    basis: "cached_source_reference_only";
+    basis: "cached_source_reference_only" | "verified_source_bytes_unverified_semantics";
     upstreamFreshness: "unverified";
     coverageAssertion: "none";
     executionAssertion: "none";
@@ -84,7 +84,9 @@ export function prepareQaChangeReviewReceipt(
     candidates: impact.candidates,
     unlinkedCaseNodeIds: impact.unlinkedCaseNodeIds,
     evidence: {
-      basis: "cached_source_reference_only",
+      basis: after.contractId === "tesbo-implementation-declarations-v1"
+        ? "verified_source_bytes_unverified_semantics"
+        : "cached_source_reference_only",
       upstreamFreshness: "unverified",
       coverageAssertion: "none",
       executionAssertion: "none",

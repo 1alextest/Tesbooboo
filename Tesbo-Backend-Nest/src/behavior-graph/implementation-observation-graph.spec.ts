@@ -85,6 +85,16 @@ describe("internal implementation source observation projection", () => {
     expect(prepareQaChangeReviewReceipt(before, after)).toBeNull();
   });
 
+  it("versions the explicitly selected source scope and rejects unselected files", () => {
+    const before = project({ ...source, selectionPrefixes: ["src"] });
+    const after = project({ ...source, selectionPrefixes: ["src/routes"] ,
+      files: [source.files[0]], concepts: [source.concepts[0]] });
+    expect(() => compareComparableGraphCaptures(before, after)).toThrow("source scopes differ");
+    expect(() => project({
+      ...source, selectionPrefixes: ["src/routes"]
+    })).toThrow("file outside source selection");
+  });
+
   it("treats branch/repository selection changes as incomparable scope instead of a clean delta", () => {
     const before = project();
     expect(() => compareComparableGraphCaptures(before, project({ ...source, refName: "main" })))

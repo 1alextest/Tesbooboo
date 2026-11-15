@@ -36,6 +36,8 @@ export interface TrustedSourceObservation {
   inventoryStatus: "complete" | "incomplete" | "unknown";
   files: readonly SourceFileObservation[];
   concepts: readonly SourceConceptObservation[];
+  /** Explicit source slice; completeness applies ONLY to this selection. */
+  selectionPrefixes?: readonly string[];
 }
 
 export interface ImplementationGraphCapture extends GraphCaptureForComparison {
@@ -84,6 +86,14 @@ export function projectImplementationObservations(
     return reject("missing complete versioned source inventory");
   }
   if (existing.snapshot.projectId !== source.projectId) reject("project mismatch");
+  const prefixes = source.selectionPrefixes ?? [];
+  if (!Array.isArray(prefixes) || prefixes.some((prefix) => !validPath(prefix)) ||
+      new Set(prefixes).size !== prefixes.length) reject("invalid source selection");
+  const selection = [...prefixes].sort();
+  if (selection.length && source.files.some((file) =>
+      !selection.some((prefix) => file.path === prefix || file.path.startsWith(prefix + "/")))) {
+    reject("file outside source selection");
+  }
   const nodes: GraphNode[] = [...existing.snapshot.nodes];
   const edges: GraphEdge[] = [...existing.snapshot.edges];
   const ids = new Set(nodes.map((node) => node.id));
@@ -128,7 +138,7 @@ export function projectImplementationObservations(
   edges.sort((a, b) => a.id.localeCompare(b.id));
   const scope = digest([
     IMPLEMENTATION_PROJECTION_CONTRACT, existing.contractId,
-    existing.sourceScopeFingerprint, source.projectId, source.repositoryId, source.refName
+    existing.sourceScopeFingerprint, source.projectId, source.repositoryId, source.refName, selection
   ]);
   const revision = digest([
     IMPLEMENTATION_PROJECTION_CONTRACT, existing.snapshot.revision,

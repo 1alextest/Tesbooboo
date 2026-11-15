@@ -93,6 +93,22 @@ describe("pinned source evidence validation before graph projection", () => {
     }))).rejects.toThrow("nonblank source evidence");
   });
 
+  it("scopes a complete observation to server-selected files and excludes unrelated source", async () => {
+    const r = reader({
+      listFilesAtCommit: jest.fn().mockResolvedValue(["src/other.ts", file]),
+      readFileAtCommit: jest.fn(async (_sha: string, path: string) =>
+        path === file ? bytes : Buffer.from("unrelated"))
+    });
+    const observed = await captureVerifiedSourceDeclarations(r, request({ selectionPrefixes: ["src/login.ts"] }));
+    expect(observed.selectionPrefixes).toEqual(["src/login.ts"]);
+    expect(observed.files.map((entry) => entry.path)).toEqual([file]);
+    expect(r.readFileAtCommit).toHaveBeenCalledTimes(1);
+    await expect(captureVerifiedSourceDeclarations(r, request({ selectionPrefixes: ["missing"] })))
+      .rejects.toThrow("selected source scope is empty");
+    await expect(captureVerifiedSourceDeclarations(r, request({ selectionPrefixes: ["../outside"] })))
+      .rejects.toThrow("invalid source selection");
+  });
+
   it("rejects malformed and duplicate proposed concepts", async () => {
     const original = request().proposedConcepts[0];
     await expect(captureVerifiedSourceDeclarations(reader(), request({

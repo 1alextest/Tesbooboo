@@ -21,6 +21,8 @@ export interface SourceVerificationRequest {
   expectedCommitSha: string;
   /** Untrusted proposed declarations; locations and hashes must be read back. */
   proposedConcepts: readonly SourceConceptObservation[];
+  /** Server-approved, complete selection. Empty/omitted means entire repository. */
+  selectionPrefixes?: readonly string[];
 }
 
 const GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -61,6 +63,11 @@ export async function captureVerifiedSourceDeclarations(
   if (!GIT_SHA.test(resolvedSha) || resolvedSha !== request.expectedCommitSha) {
     fail("ref moved or resolved commit does not match requested commit");
   }
+  const prefixes = request.selectionPrefixes ?? [];
+  if (!Array.isArray(prefixes) || prefixes.length > 32 ||
+      prefixes.some((prefix) => !goodPath(prefix)) ||
+      new Set(prefixes).size !== prefixes.length) fail("invalid source selection");
+  const canonicalPrefixes = [...prefixes].sort();
   const paths = await reader.listFilesAtCommit(resolvedSha);
   if (!Array.isArray(paths) || paths.length > MAX_FILES) fail("source inventory missing or exceeds limit");
   const seen = new Set<string>();
@@ -68,10 +75,14 @@ export async function captureVerifiedSourceDeclarations(
     if (!goodPath(path) || seen.has(path)) fail("invalid or duplicate source tree path");
     seen.add(path);
   }
+  const selected = canonicalPrefixes.length
+    ? paths.filter((path) => canonicalPrefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/")))
+    : paths;
+  if (!selected.length) fail("selected source scope is empty");
   const files: Array<{ path: string; contentSha256: string }> = [];
   const lines = new Map<string, string[]>();
   let totalBytes = 0;
-  for (const path of paths) {
+  for (const path of selected) {
     // The internal integration must reject symlink/submodule entries and return
     // the bytes of a regular blob at this exact commit. Do not follow disk links.
     const bytes = await reader.readFileAtCommit(resolvedSha, path);
@@ -113,6 +124,7 @@ export async function captureVerifiedSourceDeclarations(
     refName: request.refName,
     commitSha: resolvedSha,
     inventoryStatus: "complete",
+    selectionPrefixes: canonicalPrefixes,
     files,
     concepts
   };

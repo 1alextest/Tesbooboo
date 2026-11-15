@@ -2,7 +2,9 @@ import { ConflictException, ForbiddenException, Injectable } from "@nestjs/commo
 import { DatabaseService } from "../database/database.service";
 import { CurrentCacheGraphReader } from "./current-cache-graph.reader";
 import { prepareQaChangeReviewReceipt, type QaChangeReviewReceipt } from "./qa-change-review-receipt";
-import type { CurrentCacheGraphCapture } from "./current-cache-graph-projection";
+import type { GraphCaptureForComparison } from "./graph-comparison-gate";
+import { projectImplementationObservations, type TrustedSourceObservation } from "./implementation-observation-graph";
+import type { ProjectSourceBinding } from "./project-source-binding";
 
 /** Internal history entry. This does not signal delivery or user acceptance. */
 export interface PersistedGraphObservation {
@@ -104,14 +106,58 @@ export class CurrentCacheGraphHistory {
     return result.rows[0].entries;
   }
 
+  /** Only invoked by the server-owned binding+Git verifier coordinator. */
+  async captureVerifiedImplementationForUser(
+    userId: string | null | undefined,
+    projectId: string,
+    verified: { binding: ProjectSourceBinding; observation: TrustedSourceObservation }
+  ): Promise<PersistedGraphObservation> {
+    if (!verified || verified.binding.projectId !== projectId ||
+        verified.observation.projectId !== projectId ||
+        verified.binding.repositoryId !== verified.observation.repositoryId ||
+        verified.binding.refName !== verified.observation.refName ||
+        JSON.stringify([...verified.binding.selectionPrefixes].sort()) !==
+          JSON.stringify([...(verified.observation.selectionPrefixes ?? [])].sort())) {
+      throw new ConflictException({ error: "Source observation does not match authorized binding" });
+    }
+    return this.recordForUser(userId, projectId, verified);
+  }
+
   async captureForUser(userId: string | null | undefined, projectId: string): Promise<PersistedGraphObservation> {
+    return this.recordForUser(userId, projectId);
+  }
+
+  private async recordForUser(
+    userId: string | null | undefined,
+    projectId: string,
+    verified?: { binding: ProjectSourceBinding; observation: TrustedSourceObservation }
+  ): Promise<PersistedGraphObservation> {
     if (!userId) throw new ForbiddenException({ error: "Authenticated project membership required" });
     return this.db.transaction(async (client) => {
       // Serialize all history writers for one project. The source is captured
       // after the lock on this same transaction client, not on a separate pool
       // connection where another commit could reorder our observations.
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))", [projectId]);
-      const capture = await this.reader.captureForUserInTransaction(userId, projectId, client);
+      if (verified) {
+        // Hold the configured binding stable until COMMIT; a retired/changed
+        // binding must never authorize a historical source assertion.
+        const scoped = await client.query<{ project_id: string }>(
+          `SELECT b.project_id FROM project_source_bindings b
+             WHERE b.project_id=$1::uuid AND b.enabled=true
+               AND b.repository_id=$2 AND b.checkout_key=$3 AND b.ref_name=$4
+               AND b.selection_prefixes=$5::text[]
+             FOR SHARE OF b`,
+          [projectId, verified.binding.repositoryId, verified.binding.checkoutKey,
+            verified.binding.refName, verified.binding.selectionPrefixes]
+        );
+        if (scoped.rows.length !== 1) {
+          throw new ConflictException({ error: "Source binding changed before graph history commit" });
+        }
+      }
+      const native = await this.reader.captureForUserInTransaction(userId, projectId, client);
+      const capture: GraphCaptureForComparison = verified
+        ? projectImplementationObservations(native, verified.observation)
+        : native;
       if (capture.inventoryStatus !== "complete" || !capture.snapshot ||
           capture.unresolvedDiagnostics.length !== 0) {
         throw new ConflictException({
@@ -120,7 +166,7 @@ export class CurrentCacheGraphHistory {
         });
       }
 
-      const previous = await client.query<{ id: string; capture_json: CurrentCacheGraphCapture }>(
+      const previous = await client.query<{ id: string; capture_json: GraphCaptureForComparison }>(
         `SELECT id::text, capture_json
            FROM graph_capture_history
           WHERE project_id = $1::uuid ORDER BY id DESC LIMIT 1`,
