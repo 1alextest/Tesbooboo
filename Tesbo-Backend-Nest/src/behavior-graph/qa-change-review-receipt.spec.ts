@@ -39,6 +39,9 @@ describe("QA graph change-review receipt", () => {
     expect(receipt.id).toMatch(/^[0-9a-f]{64}$/);
     expect(receipt).toEqual(prepareQaChangeReviewReceipt(before, after));
     expect(receipt.status).toBe("needs_qa_triage");
+    expect(receipt.changed.modifiedNodeIds).toEqual([JSON.stringify(["cached_requirement", "project-a", "jira", "req-1"])]);
+    expect(receipt.changed.addedNodeIds).toEqual([]);
+    expect(receipt.changed.modifiedEdgeIds).toEqual([]);
     expect(receipt.candidates).toEqual([{
       caseNodeId: JSON.stringify(["test_case", "project-a", "case-1"]),
       reasons: ["requirement_reference"],
@@ -68,6 +71,7 @@ describe("QA graph change-review receipt", () => {
     const receipt = prepareQaChangeReviewReceipt(before, after)!;
     expect(receipt).not.toBeNull();
     expect(receipt.candidates).toEqual([]);
+    expect(receipt.changed.modifiedNodeIds).toEqual([JSON.stringify(["cached_requirement", "project-a", "jira", "req-1"])]);
     expect(receipt.unlinkedCaseNodeIds).toHaveLength(2);
   });
 

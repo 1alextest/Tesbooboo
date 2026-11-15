@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { GraphCaptureForComparison } from "./graph-comparison-gate";
+import { compareComparableGraphCaptures, type GraphCaptureForComparison } from "./graph-comparison-gate";
 import { deriveQaReviewCandidates, type QaReviewCandidate } from "./qa-review-candidates";
 
 /**
@@ -17,6 +17,15 @@ export interface QaChangeReviewReceipt {
     toRevision: string;
   };
   status: "needs_qa_triage";
+  /** Exact source delta, including changes with no explicitly linked test case. */
+  changed: {
+    addedNodeIds: string[];
+    modifiedNodeIds: string[];
+    removedNodeIds: string[];
+    addedEdgeIds: string[];
+    modifiedEdgeIds: string[];
+    removedEdgeIds: string[];
+  };
   candidates: QaReviewCandidate[];
   unlinkedCaseNodeIds: string[];
   evidence: {
@@ -39,6 +48,7 @@ export function prepareQaChangeReviewReceipt(
   after: GraphCaptureForComparison
 ): QaChangeReviewReceipt | null {
   const impact = deriveQaReviewCandidates(before, after);
+  const delta = compareComparableGraphCaptures(before, after);
   // No change, no notification; an existing unlinked case is NOT itself
   // proof of a new gap and must not generate endless repeat notifications.
   if (before.snapshot!.revision === after.snapshot!.revision) return null;
@@ -63,6 +73,14 @@ export function prepareQaChangeReviewReceipt(
       toRevision: impact.toRevision
     },
     status: "needs_qa_triage",
+    changed: {
+      addedNodeIds: delta.addedNodes,
+      modifiedNodeIds: delta.modifiedNodes,
+      removedNodeIds: delta.removedNodes,
+      addedEdgeIds: delta.addedEdges,
+      modifiedEdgeIds: delta.modifiedEdges,
+      removedEdgeIds: delta.removedEdges
+    },
     candidates: impact.candidates,
     unlinkedCaseNodeIds: impact.unlinkedCaseNodeIds,
     evidence: {
