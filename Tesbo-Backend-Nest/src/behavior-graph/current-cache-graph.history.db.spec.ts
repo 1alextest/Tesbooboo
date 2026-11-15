@@ -1,9 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client, Pool } from "pg";
 import { DatabaseService } from "../database/database.service";
 import { makeLegacy } from "../legacy/test-helpers/legacy-service.fixture";
 import { CurrentCacheGraphReader } from "./current-cache-graph.reader";
 import { CurrentCacheGraphHistory } from "./current-cache-graph.history";
+import { ProjectSourceBindingReader } from "./project-source-binding";
+import { ProjectSourceGraphCoordinator } from "./project-source-graph.coordinator";
 
 const url = process.env.DATABASE_URL ?? "";
 (/\/tesbo_ci(?:\?|$)/.test(url) ? describe : describe.skip)(
@@ -131,6 +137,135 @@ const url = process.env.DATABASE_URL ?? "";
       expect(newest[0].changeState).toBe("source_scope_changed");
       const older = await store.listForUser(user, project, 1, newest[0].id);
       expect(older[0].changeState).toBe("changed");
+    });
+
+    it("uses the approved project Git binding to persist real source bytes in the existing graph ledger", async () => {
+      const root = mkdtempSync(join(tmpdir(), "tesbo-bound-source-"));
+      const git = (...args: string[]) =>
+        execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+      try {
+        execFileSync("git", ["init", "-b", "development", root], { stdio: "pipe" });
+        git("config", "user.name", "Tesbo graph CI");
+        git("config", "user.email", "tesbo-graph@invalid.test");
+        mkdirSync(join(root, "src"));
+        const content = "export const ready = true;\n";
+        writeFileSync(join(root, "src", "feature.ts"), content);
+        git("add", "src/feature.ts");
+        git("commit", "-m", "initial source");
+        await admin.query(
+          `INSERT INTO project_source_bindings
+             (project_id, repository_id, checkout_key, ref_name, selection_prefixes, enabled)
+           VALUES ($1, 'fixture/repository', 'fixture-approved', 'development', ARRAY['src'], true)`,
+          [project]
+        );
+        const db = new DatabaseService(pool);
+        const bindings = new ProjectSourceBindingReader(db, {
+          "fixture-approved": { repositoryId: "fixture/repository", root }
+        });
+        const coordinator = new ProjectSourceGraphCoordinator(bindings, store);
+        const first = await coordinator.captureForUser(user, project);
+        expect(first.stored).toBe(true);
+        expect(first.reviewReceipt).toBeNull(); // Native-only -> source scope discontinuity.
+        const captured = (await admin.query(
+          "SELECT capture_json, review_receipt_json FROM graph_capture_history WHERE id=$1",
+          [first.id]
+        )).rows[0];
+        expect(captured.capture_json.observedCommitSha).toBe(git("rev-parse", "HEAD"));
+        expect(captured.capture_json.snapshot.nodes.some((node: { type: string }) =>
+          node.type === "implementation_file")).toBe(true);
+        expect(captured.capture_json.conceptInventoryStatus).toBe("unverified");
+        expect(captured.review_receipt_json).toBeNull();
+        const count = (await admin.query(
+          "SELECT COUNT(*)::int AS count FROM graph_capture_history WHERE project_id=$1",
+          [project]
+        )).rows[0].count;
+        const retry = await coordinator.captureForUser(user, project);
+        expect(retry.stored).toBe(false);
+        expect(retry.id).toBe(first.id);
+        expect((await admin.query(
+          "SELECT COUNT(*)::int AS count FROM graph_capture_history WHERE project_id=$1",
+          [project]
+        )).rows[0].count).toBe(count);
+
+        writeFileSync(join(root, "src", "feature.ts"), "export const ready = false;\n");
+        git("add", "src/feature.ts");
+        git("commit", "-m", "changed implementation");
+        const next = await coordinator.captureForUser(user, project);
+        expect(next.stored).toBe(true);
+        expect(next.reviewReceipt?.candidates).toEqual([]);
+        expect(next.reviewReceipt?.changed.modifiedNodeIds.some((id) =>
+          id.includes("implementation_file"))).toBe(true);
+        expect(next.reviewReceipt?.evidence.basis)
+          .toBe("verified_source_bytes_unverified_semantics");
+        expect(next.reviewReceipt?.evidence.executionAssertion).toBe("none");
+        const saved = (await admin.query(
+          "SELECT capture_json, review_receipt_json FROM graph_capture_history WHERE id=$1",
+          [next.id]
+        )).rows[0];
+        expect(saved.review_receipt_json.id).toBe(next.reviewReceipt?.id);
+        expect(saved.capture_json.observedCommitSha).toBe(git("rev-parse", "HEAD"));
+
+        const row = await bindings.verifyForUser(user, project);
+        await expect(store.captureVerifiedImplementationForUser(user, project, {
+          ...row, observation: { ...row.observation.value } as never
+        })).rejects.toMatchObject({ status: 409 });
+        // Ref movement after byte verification and before the DB lock must
+        // not write a stale observation over a newer commit.
+        writeFileSync(join(root, "src", "feature.ts"), "export const ready = 'newest';\n");
+        git("add", "src/feature.ts");
+        git("commit", "-m", "advanced while scanner was running");
+        const beforeStale = (await admin.query(
+          "SELECT COUNT(*)::int AS count FROM graph_capture_history WHERE project_id=$1", [project]
+        )).rows[0].count;
+        await expect(store.captureVerifiedImplementationForUser(user, project, row))
+          .rejects.toMatchObject({ status: 409 });
+        expect((await admin.query(
+          "SELECT COUNT(*)::int AS count FROM graph_capture_history WHERE project_id=$1", [project]
+        )).rows[0].count).toBe(beforeStale);
+        await admin.query(
+          "UPDATE project_source_bindings SET ref_name='main' WHERE project_id=$1",
+          [project]
+        );
+        await expect(store.captureVerifiedImplementationForUser(user, project, row))
+          .rejects.toMatchObject({ status: 409 });
+        await admin.query("UPDATE project_source_bindings SET ref_name='development' WHERE project_id=$1", [project]);
+
+        // A new selected source scope is a discontinuity, never an empty change.
+        await admin.query(
+          "UPDATE project_source_bindings SET selection_prefixes=ARRAY['src/feature.ts'] WHERE project_id=$1",
+          [project]
+        );
+        const repointed = await coordinator.captureForUser(user, project);
+        expect(repointed.stored).toBe(true);
+        expect(repointed.reviewReceipt).toBeNull();
+        const latest = await store.listForUser(user, project, 1);
+        expect(latest[0].changeState).toBe("source_scope_changed");
+
+        // Membership revoked after scanning must not authorize persistence.
+        const stale = await bindings.verifyForUser(user, project);
+        const beforeRevocation = (await admin.query(
+          "SELECT COUNT(*)::int AS count FROM graph_capture_history WHERE project_id=$1", [project]
+        )).rows[0].count;
+        await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [project, user]);
+        try {
+          // Native requireProjectAccess conceals inaccessible projects as 404.
+          await expect(store.captureVerifiedImplementationForUser(user, project, stale))
+            .rejects.toMatchObject({ status: 404 });
+          expect((await admin.query(
+            "SELECT COUNT(*)::int AS count FROM graph_capture_history WHERE project_id=$1", [project]
+          )).rows[0].count).toBe(beforeRevocation);
+        } finally {
+          await admin.query(
+            "INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",
+            [project, user]
+          );
+        }
+        await expect(coordinator.captureForUser(randomUUID(), project))
+          .rejects.toMatchObject({ status: 403 });
+      } finally {
+        await admin.query("DELETE FROM project_source_bindings WHERE project_id=$1", [project]);
+        rmSync(root, { recursive: true, force: true });
+      }
     });
 
   }
