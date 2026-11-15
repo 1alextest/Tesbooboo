@@ -7,6 +7,7 @@ import { ANSWER_MODES, answerRepositorySnapshotSql, seedAnswerRepository, verify
 import { MOVE_MODES, seedMoveRepository, settleMoveFixtures, verifyZyraMoveTurn, withMoveUpdateFailure } from "../utils/zyra-move-feedback";
 import { SINGLE_MOVE_SELECTORS, verifyZyraSingleMove } from "../utils/zyra-single-move";
 import { ALIAS_MOVE_MODES, verifyZyraAliasMove } from "../utils/zyra-alias-move";
+import { MISSING_SUITE_MODES, seedMissingSuiteRepository, verifyZyraMissingSuite } from "../utils/zyra-missing-suite";
 import {
   loginAs,
   provisionRbacTenant,
@@ -628,6 +629,20 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
       const fixture = await seedMoveRepository(asOwner, base, `${language}-${mode}`);
       await settleMoveFixtures([fixture], state); await allocateFakeAiKey();
       await verifyZyraAliasMove({ request: asOwner, ai, base, ownerId: tenant!.owner.userId, language, mode, fixture, state });
+    });
+  }
+
+  for (const language of ["en", "ru"] as const) for (const mode of MISSING_SUITE_MODES) {
+    test(`Zyra unavailable destination ${language}: ${mode}`, async () => {
+      const base = `${env.apiBaseUrl}/api/projects/${tenant!.mainProjectId}`;
+      const sql = answerRepositorySnapshotSql.replace(/\$1\b/g, literal(tenant!.mainProjectId));
+      const state = async () => JSON.parse(scalar(`SELECT row_to_json(snapshot)::text FROM (${sql}) snapshot;`)) as AnswerRepositoryState;
+      const fixture = await seedMissingSuiteRepository(asOwner, base, `${language}-${mode}`);
+      if (mode === "deleted") {
+        const deleted = await asOwner.delete(`/api/suites/${fixture.destinationId}`); expect(deleted.ok(), await deleted.text()).toBeTruthy();
+      }
+      await settleMoveFixtures([fixture, { ...fixture, firstId: fixture.blockedId }], state); await allocateFakeAiKey();
+      await verifyZyraMissingSuite({ request: asOwner, ai, base, ownerId: tenant!.owner.userId, language, mode, fixture, state });
     });
   }
 
