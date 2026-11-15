@@ -56,6 +56,18 @@ describe("real local pinned Git source reader", () => {
     })).rejects.toThrow("ref moved");
   });
 
+  it("ignores inherited Git environment overrides that could redirect the approved repository", async () => {
+    const previous = process.env.GIT_DIR;
+    process.env.GIT_DIR = "/definitely/not/the/configured/git/dir";
+    try {
+      expect(await reader.resolveRef("development")).toBe(commit);
+      expect((await reader.readFileAtCommit(commit, "login.ts")).toString()).toBe(source);
+    } finally {
+      if (previous === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = previous;
+    }
+  });
+
   it("rejects invalid ref names and unavailable paths rather than running Git arguments", async () => {
     await expect(reader.resolveRef("--upload-pack=/bin/sh")).rejects.toThrow("Invalid");
     await expect(reader.resolveRef("../main")).rejects.toThrow("Invalid");

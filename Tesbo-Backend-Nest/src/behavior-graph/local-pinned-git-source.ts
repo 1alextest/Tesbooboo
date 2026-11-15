@@ -9,6 +9,13 @@ const REF = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 const MAX_TREE_BYTES = 2 * 1024 * 1024;
 const MAX_BLOB_BYTES = 2 * 1024 * 1024;
 
+/** Inherited Git overrides could redirect -C to a different object database. */
+function cleanGitEnvironment(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith("GIT_")) delete env[key];
+  return env;
+}
+
 /**
  * Read-only Git object adapter over a server-CONFIGURED local checkout.
  *
@@ -30,7 +37,7 @@ export class LocalPinnedGitSourceReader implements PinnedSourceReader {
     const root = await realpath(configuredRoot);
     // Resolve one repo, not a caller-controlled -C path or Git environment.
     const { stdout } = await exec("git", ["-C", root, "rev-parse", "--show-toplevel"], {
-      encoding: "utf8", maxBuffer: 4096, timeout: 10000
+      encoding: "utf8", maxBuffer: 4096, timeout: 10000, env: cleanGitEnvironment()
     });
     if (await realpath(stdout.trim()) !== root) {
       throw new Error("Configured Git root must be the repository top level");
@@ -40,7 +47,7 @@ export class LocalPinnedGitSourceReader implements PinnedSourceReader {
 
   private async git(args: readonly string[], maxBuffer = MAX_TREE_BYTES): Promise<Buffer> {
     const { stdout } = await exec("git", ["-C", this.root, ...args], {
-      encoding: "buffer", maxBuffer, timeout: 10000
+      encoding: "buffer", maxBuffer, timeout: 10000, env: cleanGitEnvironment()
     });
     if (!Buffer.isBuffer(stdout)) throw new Error("Git command did not return raw bytes");
     return stdout;
