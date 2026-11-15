@@ -40,6 +40,40 @@ describe("Zyra graph change-review native contract", () => {
     expect(coordinator.captureForUser).toHaveBeenCalledWith(USER, PROJECT);
   });
 
+  it("routes source configuration through current human identity and owner management", async () => {
+    const binding = { repositoryId: "org/repo", checkoutKey: "trusted", refName: "development",
+      selectionPrefixes: ["src"], enabled: true };
+    const sourceManagement = {
+      getForOwner: jest.fn().mockResolvedValue({ configured: false, binding: null }),
+      setForOwner: jest.fn().mockResolvedValue({ configured: true, binding })
+    };
+    const controller = new GraphChangeReviewController(
+      {} as never, {} as never, {} as never, sourceManagement as never
+    );
+    expect(await controller.getSourceBinding({ userId: USER } as never, PROJECT))
+      .toEqual({ configured: false, binding: null });
+    expect(sourceManagement.getForOwner).toHaveBeenCalledWith(USER, PROJECT);
+    expect(await controller.setSourceBinding({ userId: USER } as never, PROJECT, binding))
+      .toEqual({ configured: true, binding });
+    expect(sourceManagement.setForOwner).toHaveBeenCalledWith(USER, PROJECT, binding);
+  });
+
+  it("does not substitute an agent identity for denied source administration", async () => {
+    const sourceManagement = {
+      getForOwner: jest.fn().mockRejectedValue({ status: 403 }),
+      setForOwner: jest.fn().mockRejectedValue({ status: 403 })
+    };
+    const controller = new GraphChangeReviewController(
+      {} as never, {} as never, {} as never, sourceManagement as never
+    );
+    await expect(controller.getSourceBinding({ userId: null } as never, PROJECT))
+      .rejects.toMatchObject({ status: 403 });
+    await expect(controller.setSourceBinding({ userId: null } as never, PROJECT,
+      { repositoryRoot: "/tmp/untrusted" })).rejects.toMatchObject({ status: 403 });
+    expect(sourceManagement.setForOwner).toHaveBeenCalledWith(null, PROJECT,
+      { repositoryRoot: "/tmp/untrusted" });
+  });
+
   it("retries only by calling the native committed notification service", async () => {
     const history = { listForUser: jest.fn() };
     const delivery = { deliverForUser: jest.fn().mockResolvedValue({
