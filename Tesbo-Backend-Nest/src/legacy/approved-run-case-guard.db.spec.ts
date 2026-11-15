@@ -123,7 +123,7 @@ const url = process.env.DATABASE_URL ?? "";
       expect(await count()).toBe(0);
     });
 
-    it("preserves skipped counts for foreign, deleted, duplicate and malformed case ids", async () => {
+    it("preserves skipped counts for unknown, duplicate and malformed case ids", async () => {
       const unknown = randomUUID();
       expect(await add([approved, approved, unknown, "bad-id"])).toEqual({
         requested: 4, added: 1, skipped: 3

@@ -120,6 +120,8 @@ test.describe("Approved-only cases at native run write boundary", () => {
     const review = createCase("In Review");
     const deprecated = createCase("Deprecated");
     const foreign = createCase("Approved", tenant!.secondProjectId);
+    const deleted = createCase("Approved");
+    exec("UPDATE testcases SET deleted_at=now() WHERE id=" + literal(deleted.id) + ";");
     const endpoint = `/api/cycles/${runId}/testcases`;
 
     for (const id of [review.id, deprecated.id]) {
@@ -130,11 +132,11 @@ test.describe("Approved-only cases at native run write boundary", () => {
       expect(items(runId)).toBe(0);
     }
     const selection = await owner.post(endpoint, {
-      data: { testcaseIds: [approved.id, approved.id, foreign.id, "not-a-uuid"] },
+      data: { testcaseIds: [approved.id, approved.id, foreign.id, deleted.id, "not-a-uuid"] },
       failOnStatusCode: false
     });
     expect(selection.ok(), await selection.text()).toBeTruthy();
-    expect(await selection.json()).toMatchObject({ requested: 4, added: 1, skipped: 3 });
+    expect(await selection.json()).toMatchObject({ requested: 5, added: 1, skipped: 4 });
     expect(items(runId)).toBe(1);
 
     const unauthorized = await guest.post(endpoint, {
