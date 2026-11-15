@@ -177,8 +177,8 @@ test.describe("Approved-only native run attachments", () => {
     expect(accepted.status(),await accepted.text()).toBeLessThan(300);
     const body = await accepted.json();
     expect(body.casesAttached).toBe(1);
-    expect(countItems(body.id)).toBe(1);
-    expect(countExecutions(body.id)).toBe(1);
+    expect(countItems(body.runId)).toBe(1);
+    expect(countExecutions(body.runId)).toBe(1);
   });
 
   test("anonymous cannot use native cycle-add for an otherwise Approved case",async()=>{

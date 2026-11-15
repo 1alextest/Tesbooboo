@@ -163,8 +163,8 @@ const url = process.env.DATABASE_URL ?? "";
       )).rows[0].n).toBe(0);
       const run = await svc.createRun(user,project,{ name,caseIds:[approvedExternal] });
       expect(run.casesAttached).toBe(1);
-      expect((await cases(run.id)).rows.map(r=>r.testcase_id)).toEqual([approved]);
-      expect((await executions(run.id)).rows).toHaveLength(1);
+      expect((await cases(run.runId)).rows.map(r=>r.testcase_id)).toEqual([approved]);
+      expect((await executions(run.runId)).rows).toHaveLength(1);
     });
   }
 );
