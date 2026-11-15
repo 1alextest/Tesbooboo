@@ -4,6 +4,7 @@ import { Logger, Module, OnModuleInit } from "@nestjs/common";
 import { AppConfigService } from "../config/app-config.service";
 import { LegacyModule } from "../legacy/legacy.module";
 import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
+import { GraphReviewRunLinks } from "./graph-review-run-links";
 import { GraphChangeReviewRecovery } from "./graph-change-review.recovery";
 import { GraphReviewRecoveryProcessor, GRAPH_QA_RECOVERY_QUEUE, GRAPH_QA_RECOVERY_JOB, GRAPH_QA_RECOVERY_SCHEDULER } from "./graph-change-review.recovery.processor";
 import { DatabaseService } from "../database/database.service";
@@ -50,6 +51,7 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
     CurrentCacheGraphReader,
     CurrentCacheGraphHistory,
     GraphChangeReviewDelivery,
+    GraphReviewRunLinks,
     GraphChangeReviewRecovery,
     GraphReviewRecoveryProcessor,
     ProjectSourceBindingManagement,

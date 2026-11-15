@@ -10,6 +10,7 @@ import { CurrentCacheGraphReader } from "./current-cache-graph.reader";
 import { CurrentCacheGraphHistory } from "./current-cache-graph.history";
 import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
 import { GraphChangeReviewRecovery } from "./graph-change-review.recovery";
+import { GraphReviewRunLinks } from "./graph-review-run-links";
 import { writeNotifications } from "../legacy/notification-writer";
 import { ProjectSourceBindingReader } from "./project-source-binding";
 import { ProjectSourceBindingManagement } from "./project-source-binding.management";
@@ -340,6 +341,89 @@ const url = process.env.DATABASE_URL ?? "";
       } finally {
         await admin.query("DELETE FROM project_source_bindings WHERE project_id=$1", [project]);
         await admin.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2", [project, user]);
+      }
+    });
+
+    it("persists real graph→canonical run/case QA handoff without fabricating execution or cross-project links", async () => {
+      const nodeId = JSON.stringify(["test_case", project, caseId]);
+      const receipt = {
+        id: "db-graph-handoff-" + stamp, projectId: project, status: "needs_qa_triage",
+        candidates: [{ caseNodeId: nodeId, reasons: ["case_changed"], requirementNodeIds: [] }],
+        evidence: {
+          basis: "cached_source_reference_only", coverageAssertion: "none",
+          executionAssertion: "none", verification: "not_performed"
+        }
+      };
+      const receiptId = (await admin.query<{ id: string }>(
+        `INSERT INTO graph_capture_history
+          (project_id, contract_id, source_scope_fingerprint, revision, capture_json, review_receipt_json)
+         VALUES ($1, 'db-graph-link-v1', 'db-project-only', $2, '{}'::jsonb, $3::jsonb)
+         RETURNING id::text`,
+        [project, "db-link-" + stamp, JSON.stringify(receipt)]
+      )).rows[0].id;
+      const cycleId = (await admin.query<{ id: string }>(
+        "INSERT INTO cycles(project_id,name,environment) VALUES ($1,'Graph impact QA run','CI') RETURNING id",
+        [project]
+      )).rows[0].id;
+      await admin.query(
+        "INSERT INTO cycle_items(cycle_id,testcase_id,snapshot_title) VALUES ($1,$2,'Original')",
+        [cycleId, caseId]
+      );
+      const db = new DatabaseService(pool);
+      const links = new GraphReviewRunLinks(db, makeLegacy(db));
+      try {
+        const created = await links.linkForUser(user, project, receiptId, cycleId, { testcaseIds: [caseId] });
+        expect(created).toEqual({
+          historyId: receiptId, runId: cycleId, selected: 1, newlyLinked: 1
+        });
+        expect(await links.linkForUser(user, project, receiptId, cycleId, { testcaseIds: [caseId] }))
+          .toEqual({ historyId: receiptId, runId: cycleId, selected: 1, newlyLinked: 0 });
+        const read = await links.listForUser(user, project, receiptId);
+        expect(read.links).toHaveLength(1);
+        expect(read.links[0]).toMatchObject({
+          runId: cycleId, caseId, runName: "Graph impact QA run"
+        });
+        const persisted = await admin.query(
+          "SELECT project_id, history_id::text, cycle_id, testcase_id, linked_by_user_id FROM graph_review_run_case_links WHERE history_id=$1",
+          [receiptId]
+        );
+        expect(persisted.rows).toEqual([{
+          project_id: project, history_id: receiptId,
+          cycle_id: cycleId, testcase_id: caseId, linked_by_user_id: user
+        }]);
+        expect((await admin.query(
+          "SELECT COUNT(*)::int AS n FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id WHERE ci.cycle_id=$1 AND e.status IN ('Passed','Failed','Blocked')",
+          [cycleId]
+        )).rows[0].n).toBe(0);
+        const notCandidate = randomUUID();
+        await expect(links.linkForUser(user, project, receiptId, cycleId,
+          { testcaseIds: [caseId, notCandidate] })).rejects.toMatchObject({ status: 409 });
+        expect((await admin.query(
+          "SELECT COUNT(*)::int AS n FROM graph_review_run_case_links WHERE history_id=$1",
+          [receiptId]
+        )).rows[0].n).toBe(1); // The mixed selection never partially committed.
+        await expect(links.linkForUser(user, randomUUID(), receiptId, cycleId,
+          { testcaseIds: [caseId] })).rejects.toMatchObject({ status: 404 });
+        await expect(links.linkForUser(user, project, receiptId, randomUUID(),
+          { testcaseIds: [caseId] })).rejects.toMatchObject({ status: 409 });
+        await expect(links.linkForUser(user, project, receiptId, cycleId,
+          { testcaseIds: [caseId], executionStatus: "Passed" }))
+          .rejects.toMatchObject({ status: 400 });
+        await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [project, user]);
+        try {
+          await expect(links.listForUser(user, project, receiptId))
+            .rejects.toMatchObject({ status: 404 });
+          await expect(links.linkForUser(user, project, receiptId, cycleId,
+            { testcaseIds: [caseId] })).rejects.toMatchObject({ status: 404 });
+        } finally {
+          await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')", [project,user]);
+        }
+      } finally {
+        await admin.query("DELETE FROM graph_review_run_case_links WHERE history_id=$1", [receiptId]);
+        await admin.query("DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id=$1)", [cycleId]);
+        await admin.query("DELETE FROM cycle_items WHERE cycle_id=$1", [cycleId]);
+        await admin.query("DELETE FROM cycles WHERE id=$1", [cycleId]);
+        await admin.query("DELETE FROM graph_capture_history WHERE id=$1", [receiptId]);
       }
     });
 

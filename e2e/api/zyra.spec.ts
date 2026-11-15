@@ -101,6 +101,15 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(forged.status()).toBe(400);
     const denied = await asQa.post(url + "/capture", { data: {} });
     expect(denied.status()).toBe(409);
+    const links = await asQa.get(url + "/999999999/runs");
+    expect([403, 404]).toContain(links.status());
+    const forgedStatus = await asQa.post(url + "/999999999/runs/" +
+      "00000000-0000-4000-8000-000000000003/link", {
+      data: { testcaseIds: ["00000000-0000-4000-8000-000000000004"], executionStatus: "Passed" }
+    });
+    expect(forgedStatus.status()).toBe(400);
+    const foreignHistory = await asGuest.get(url + "/999999999/runs");
+    expect([403, 404]).toContain(foreignHistory.status());
     const after = await asQa.get(url);
     expect((await after.json()).entries).toEqual(body.entries);
   });

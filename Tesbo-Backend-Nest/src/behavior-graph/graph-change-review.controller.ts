@@ -4,6 +4,7 @@ import { CurrentCacheGraphHistory } from "./current-cache-graph.history";
 import { ProjectSourceGraphCoordinator } from "./project-source-graph.coordinator";
 import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
 import { ProjectSourceBindingManagement } from "./project-source-binding.management";
+import { GraphReviewRunLinks } from "./graph-review-run-links";
 
 /**
  * Native Zyra project review surface over the existing graph_history ledger.
@@ -16,7 +17,8 @@ export class GraphChangeReviewController {
     private readonly history: CurrentCacheGraphHistory,
     private readonly coordinator: ProjectSourceGraphCoordinator,
     private readonly delivery: GraphChangeReviewDelivery,
-    private readonly sourceManagement: ProjectSourceBindingManagement
+    private readonly sourceManagement: ProjectSourceBindingManagement,
+    private readonly runLinks: GraphReviewRunLinks
   ) {}
 
   @Get("source-binding")
@@ -43,6 +45,27 @@ export class GraphChangeReviewController {
     // Query parsers can return arrays/objects. Keep malformed limits invalid
     // without coercing them, and retain the history service's auth-first guard.
     return { entries: await this.history.listForUser(request.userId, projectId, limit, beforeId) };
+  }
+
+  @Get(":historyId/runs")
+  listLinkedRuns(
+    @Req() request: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("historyId") historyId: string
+  ) {
+    return this.runLinks.listForUser(request.userId, projectId, historyId);
+  }
+
+  @Post(":historyId/runs/:cycleId/link")
+  @HttpCode(200)
+  linkRunCases(
+    @Req() request: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("historyId") historyId: string,
+    @Param("cycleId") cycleId: string,
+    @Body() body: unknown
+  ) {
+    return this.runLinks.linkForUser(request.userId, projectId, historyId, cycleId, body);
   }
 
   @Post(":historyId/notify")
