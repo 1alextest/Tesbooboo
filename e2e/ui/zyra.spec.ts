@@ -240,7 +240,9 @@ test.describe("zyra / agents (UI)", () => {
       ));
       expect(linkedCount(createdRunId!)).toBe(1);
       await expect(prepare.getByRole("region", { name: "Persisted QA handoffs" }))
-        .toContainText("execution and approval require separate evidence");
+        .toContainText(/native status:|no active execution record/);
+      await expect(prepare.getByRole("region", { name: "Persisted QA handoffs" }))
+        .toContainText(/not verification or approval|no result inferred/);
       expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items
         WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
       expect(Number(scalar(`SELECT COUNT(*)::int FROM executions e
@@ -261,6 +263,33 @@ test.describe("zyra / agents (UI)", () => {
       expect(linkedCount(createdRunId!)).toBe(1); // Re-add does not duplicate durable provenance.
       await expect(reopened.getByRole("region", { name: "Persisted QA handoffs" }))
         .toContainText("selected case");
+
+      // Progress the canonical execution independently of the graph. The
+      // persisted handoff must reflect the actual native result and attachment
+      // metadata after a manual refresh, never manufacture either value.
+      const item = scalar("SELECT id FROM cycle_items WHERE cycle_id=" +
+        literal(createdRunId!) + " AND testcase_id=" + literal(caseId!) + ";");
+      let progressedExecutionId = scalar("SELECT id FROM executions WHERE cycle_item_id=" +
+        literal(item) + " AND deleted_at IS NULL;");
+      if (!progressedExecutionId) {
+        progressedExecutionId = scalar("INSERT INTO executions(cycle_item_id,status) VALUES (" +
+          literal(item) + ", 'Untested') RETURNING id;");
+      }
+      exec("UPDATE executions SET status='Failed', executed_at=now(), actual_result=" +
+        literal("Observed mismatch in disposable QA run") +
+        ", defect_key='BUG-17' WHERE id=" + literal(progressedExecutionId) + ";");
+      exec("INSERT INTO attachments(project_id,entity_type,entity_id,file_name,storage_path) VALUES (" +
+        literal(projectId) + ", 'execution', " + literal(progressedExecutionId) +
+        ", 'fixture-observation.txt', 'fixture://metadata-only');");
+      await reopened.getByRole("button", { name: "Refresh recorded handoffs" }).click();
+      const handoffs = reopened.getByRole("region", { name: "Persisted QA handoffs" });
+      await expect(handoffs).toContainText("native status: Failed");
+      await expect(handoffs).toContainText("active evidence metadata: 1");
+      await expect(handoffs).toContainText("defect reference: BUG-17");
+      await expect(handoffs.getByRole("link", { name: "Open native execution" }))
+        .toHaveAttribute("href",
+          "/projects/" + projectId + "/cycles/" + createdRunId +
+          "/execute/" + progressedExecutionId);
       expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items
         WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
 
@@ -319,6 +348,12 @@ test.describe("zyra / agents (UI)", () => {
       await expect(page).toHaveURL((url) => url.pathname ===
         `/projects/${encodeURIComponent(resolved.projectKey)}/testcases/${encodeURIComponent(resolved.testcaseRef)}`);
     } finally {
+      for (const runId of [createdRunId, uncertainRunId]) {
+        if (!runId) continue;
+        exec("DELETE FROM attachments WHERE project_id=" + literal(projectId) +
+          " AND entity_type='execution' AND entity_id IN (SELECT e.id FROM executions e" +
+          " JOIN cycle_items ci ON ci.id=e.cycle_item_id WHERE ci.cycle_id=" + literal(runId) + ");");
+      }
       exec("DELETE FROM graph_review_run_case_links WHERE project_id=" + literal(projectId) +
         " AND history_id IN (SELECT id FROM graph_capture_history WHERE project_id=" +
         literal(projectId) + " AND revision=" + literal(reviewRevision) + ");");

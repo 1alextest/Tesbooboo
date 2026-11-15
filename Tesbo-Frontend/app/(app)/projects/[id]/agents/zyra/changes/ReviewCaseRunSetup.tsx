@@ -153,7 +153,14 @@ export function ReviewCaseRunSetup({
         </p>
       )}
       <section aria-label="Persisted QA handoffs" className="mt-3">
-        <h3 className="font-medium">Recorded QA run handoffs</h3>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-medium">Recorded QA run handoffs</h3>
+          <button type="button" disabled={loadingLinks}
+            onClick={() => void loadRecordedLinks()}
+            className="underline disabled:opacity-60">
+            Refresh recorded handoffs
+          </button>
+        </div>
         <p className="text-xs text-[var(--muted)]">
           A persisted handoff is evidence of human test selection, not passed tests,
           verified coverage, or approval.
