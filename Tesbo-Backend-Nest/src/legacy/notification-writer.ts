@@ -47,7 +47,7 @@ export async function writeNotifications(
     let scope = "";
     if (opts.memberOf?.organizationId) {
       params.push(opts.memberOf.organizationId);
-      scope += ` AND EXISTS (SELECT 1 FROM organization_members om WHERE om.user_id = u.id AND om.organization_id = ${params.length}::uuid AND (to_jsonb(om)->>'deleted_at') IS NULL)`;
+      scope += ` AND EXISTS (SELECT 1 FROM organization_members om WHERE om.user_id = u.id AND om.organization_id = $${params.length}::uuid AND (to_jsonb(om)->>'deleted_at') IS NULL)`;
     }
     if (opts.memberOf?.projectId) {
       params.push(opts.memberOf.projectId);
