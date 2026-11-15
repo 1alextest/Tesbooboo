@@ -57,6 +57,8 @@ type Internals = {
   normalizeZyraChatDecision: (raw: Record<string, unknown>, message: string, existing: unknown[], intent: "suite") => {
     actionType: string; operations: Array<Record<string, unknown>>;
   };
+  resolveZyraMoveTargets: (projectId: string, sessionId: string, operation: Record<string, unknown>, suiteId: string | null) =>
+    Promise<{ targets: Array<{ id: string }>; requestedCount: number | null }>;
   reconcileZyraReply: (
     decision: { reply: string; actionType: string; operations: { type: string }[]; __salvaged?: boolean },
     applied: { testcases: unknown[]; activity: { title?: string; detail?: string }[] }
@@ -98,6 +100,59 @@ describe("Zyra model-response parsing", () => {
       { testcaseId }, { externalId: "PRO-TC-1" }
     ])("still rejects a missing destination or empty selector: %j", (operation) => {
       expect(normalize(svc, operation).operations).toEqual([]);
+    });
+  });
+
+  describe("move-target identity accounting", () => {
+    const first = { id: "00000000-0000-4000-8000-00000000abcd", external_id: "PRO-TC-1" };
+    const second = { id: "00000000-0000-4000-8000-00000000bcde", external_id: "PRO-TC-2" };
+    const missing = "00000000-0000-4000-8000-00000000cdef";
+
+    it.each([
+      ["scalar aliases", { testcaseId: first.id, externalId: first.external_id }, [first], 1],
+      ["repeated list aliases", { testcaseIds: [first.id, first.id], externalIds: [first.external_id, first.external_id] }, [first], 1],
+      ["aliases plus a genuinely missing case", { testcaseId: first.id, externalIds: [first.external_id, "PRO-TC-MISSING"] }, [first], 2],
+      ["two distinct matched cases", { testcaseId: first.id, externalId: second.external_id }, [first, second], 2],
+      ["repeated external selector", { externalIds: [first.external_id, first.external_id] }, [first], 1],
+      ["uppercase UUID alias", { testcaseId: first.id.toUpperCase(), externalId: first.external_id }, [first], 1],
+      ["duplicate UUID spellings for one missing target", { testcaseIds: [missing, missing.toUpperCase()] }, [], 1],
+      ["two distinct missing selectors", { testcaseId: missing, externalId: "PRO-TC-MISSING" }, [], 2]
+    ] as const)("counts actual identities and unique unresolved selectors: %s", async (_label, operation, rows, requestedCount) => {
+      const query = (svc as unknown as { db: { query: jest.Mock } }).db.query;
+      query.mockResolvedValueOnce({ rows: [...rows] });
+      const result = await internals(svc).resolveZyraMoveTargets("project-1", "session-1", { type: "move_to_suite", ...operation }, "suite-1");
+      expect(result.targets).toEqual(rows.map((row) => ({ id: row.id })));
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(query.mock.calls[0][0]).toContain("project_id = $1");
+      expect(query.mock.calls[0][1][0]).toBe("project-1");
+      expect(result.requestedCount).toBe(requestedCount);
+    });
+
+    it("keeps the shared named-archive lookup's alias count consistent without changing its target set", async () => {
+      (svc as unknown as { db: { query: jest.Mock } }).db.query.mockResolvedValueOnce({ rows: [first] });
+      expect(await internals(svc).resolveZyraMoveTargets("project-1", "session-1", {
+        type: "archive", testcaseIds: [first.id], externalIds: [first.external_id]
+      }, null)).toEqual({ targets: [{ id: first.id }], requestedCount: 1 });
+    });
+
+    it("keeps a set-wide request's count unknown rather than inferring a named-target count", async () => {
+      (svc as unknown as { db: { query: jest.Mock } }).db.query.mockResolvedValueOnce({ rows: [first, second] });
+      expect(await internals(svc).resolveZyraMoveTargets("project-1", "session-1", { allExisting: true }, "suite-1"))
+        .toEqual({ targets: [{ id: first.id }, { id: second.id }], requestedCount: null });
+    });
+
+    it("keeps a prior-plan request's count unknown", async () => {
+      const query = (svc as unknown as { db: { query: jest.Mock } }).db.query;
+      query.mockResolvedValueOnce({ rows: [{ last_completed_plan: { testcaseIds: [first.id] } }] });
+      query.mockResolvedValueOnce({ rows: [first] });
+      expect(await internals(svc).resolveZyraMoveTargets("project-1", "session-1", { fromLastPlan: true }, "suite-1"))
+        .toEqual({ targets: [{ id: first.id }], requestedCount: null });
+    });
+
+    it("does not query or invent targets for a malformed scalar UUID", async () => {
+      expect(await internals(svc).resolveZyraMoveTargets("project-1", "session-1", { testcaseId: "not-a-uuid" }, "suite-1"))
+        .toEqual({ targets: [], requestedCount: null });
+      expect((svc as unknown as { db: { query: jest.Mock } }).db.query).not.toHaveBeenCalled();
     });
   });
 
