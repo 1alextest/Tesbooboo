@@ -75,6 +75,48 @@ const url = process.env.DATABASE_URL ?? "";
     result.items = (await setup.query("SELECT pi.* FROM plan_items pi JOIN plans p ON p.id=pi.plan_id WHERE p.project_id=ANY($1::uuid[]) ORDER BY pi.id", [[project, other]])).rows;
     return result;
   };
+  it("MCP creates run and Approved cases atomically, rolling back a rejected Draft selection", async () => {
+    const f = fixture();
+    const name = `Approved MCP atomic ${stamp}`;
+    const count = async () => (await setup.query<{ n: number }>(
+      "SELECT COUNT(*)::int AS n FROM cycles WHERE project_id=$1 AND name=$2",
+      [project, name]
+    )).rows[0].n;
+    const before = await count();
+    // A Draft nominee must not leave even an empty Run as a side-effect.
+    await expect(f.tool("create_cycle_from_testcases", {
+      name, testcaseIds: [localCase]
+    })).rejects.toMatchObject({ status: 409 });
+    expect(await count()).toBe(before);
+
+    await setup.query("UPDATE testcases SET status='Approved' WHERE id=$1", [localCase]);
+    let runId: string | undefined;
+    try {
+      const created = await f.tool("create_cycle_from_testcases", {
+        name, testcaseIds: [localCase, foreignCase]
+      }) as { cycle: { id: string }; testcasesAdded: number; invalidTestcaseIds: string[] };
+      runId = created.cycle.id;
+      expect(created.testcasesAdded).toBe(1);
+      expect(created.invalidTestcaseIds).toEqual([foreignCase]);
+      expect(await count()).toBe(before + 1);
+      const read = await setup.query<{ items: number; results: number }>(
+        `SELECT (SELECT COUNT(*)::int FROM cycle_items WHERE cycle_id=$1) AS items,
+                (SELECT COUNT(*)::int FROM executions e
+                   JOIN cycle_items ci ON ci.id=e.cycle_item_id
+                  WHERE ci.cycle_id=$1) AS results`,
+        [runId]
+      );
+      expect(read.rows[0]).toEqual({ items: 1, results: 1 });
+    } finally {
+      if (runId) {
+        await setup.query("DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id=$1)", [runId]);
+        await setup.query("DELETE FROM cycle_items WHERE cycle_id=$1", [runId]);
+        await setup.query("DELETE FROM cycles WHERE id=$1", [runId]);
+      }
+      await setup.query("UPDATE testcases SET status='Draft' WHERE id=$1", [localCase]);
+    }
+  });
+
   it.each(["foreign", "missing", "malformed", "deleted"])("rejects %s Suite/Case references without a committed prefix or unrelated mutation", async (kind) => {
     const f = fixture();
     for (const field of ["suiteId", "testcaseId"] as const) {
