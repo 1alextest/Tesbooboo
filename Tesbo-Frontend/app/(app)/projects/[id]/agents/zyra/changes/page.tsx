@@ -101,6 +101,19 @@ export default function ZyraChangeReviewPage() {
         </button>
       </div>
       <SourceBindingSettings projectId={projectId} />
+      <section aria-label="Manual QA verification actions" className="rounded-lg border border-[var(--border)] p-4 text-sm">
+        <h2 className="font-semibold">Continue verification in existing Tesbo records</h2>
+        <p className="mt-1 text-[var(--muted)]">
+          Inspect the affected requirement and case, select or create a test run, execute and attach actual
+          evidence, log any verified defect, then complete human review. A graph link is not a test result.
+        </p>
+        <nav aria-label="Native QA workflow" className="mt-3 flex flex-wrap gap-4">
+          <Link className="underline" href={`/projects/${projectId}/requirements`}>Requirements</Link>
+          <Link className="underline" href={`/projects/${projectId}/testcases`}>Test cases</Link>
+          <Link className="underline" href={`/projects/${projectId}/cycles`}>Test runs and execution</Link>
+          <Link className="underline" href={`/projects/${projectId}/bugs`}>Defects</Link>
+        </nav>
+      </section>
       <p className="text-sm text-[var(--muted)]">
         Captures require an administrator-approved project source binding. A reference does not prove
         coverage; no case is failed, executed or approved from this page.
