@@ -45,6 +45,8 @@ jobs:
       E2E_AUTO_PROVISION: "true"
       E2E_DB_TRANSPORT: direct
       TESBO_REPORTER_ENABLED: "0"
+      # Only the isolated disposable CI stack opts in to ephemeral M1 preview.
+      TESBO_MODEL_PREVIEW_ENABLED: "1"
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -92,16 +94,19 @@ jobs:
           curl -fsS http://127.0.0.1:7000/health
           curl -fsS http://127.0.0.1:3000/login >/dev/null
           npx playwright test -c playwright.ci-smoke.config.ts
-      - name: Verify graph change-review, source setup and human QA handoff E2E
+      - name: Verify model draft preview and existing graph/source/QA handoff E2E
         working-directory: e2e
         run: |
           # Only impacted Zyra tests, with dedicated disposable RBAC tenants.
           # A lost mutation response must never produce a duplicate run/case.
           # No live customer tenant or paid external AI provider is involved.
-          npx playwright test -c playwright.config.ts \
-            api/zyra.spec.ts ui/zyra.spec.ts api/run-approval.spec.ts \
-            --workers=1 \
-            -g "graph change history is project scoped|source binding setup is owner-only|Zyra opens native change review|owner can inspect root-free source setup|graph review links an explicitly nominated case|Approved-only native run attachments"
+          selection='graph change history is project scoped|source binding setup is owner-only|model draft preview|Zyra opens native change review|owner can inspect root-free source setup|graph review links an explicitly nominated case'
+          npx playwright test -c playwright.config.ts api/zyra.spec.ts ui/zyra.spec.ts --workers=10 -g "$selection" --list
+          npx playwright test -c playwright.config.ts api/zyra.spec.ts ui/zyra.spec.ts --workers=10 -g "$selection"
+      - name: Verify Approved-only native run attachments
+        working-directory: e2e
+        run: |
+          npx playwright test -c playwright.config.ts api/run-approval.spec.ts --workers=1 -g "Approved-only native run attachments"
       - name: Verify existing native Run, execution, automation and evidence journeys
         working-directory: e2e
         run: |

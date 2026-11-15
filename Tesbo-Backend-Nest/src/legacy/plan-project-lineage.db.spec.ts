@@ -316,6 +316,8 @@ const url = process.env.DATABASE_URL ?? "";
     });
 
     const writes: Record<string, () => Record<string, unknown>> = {
+      preview_behavior_model_draft: () => ({ model: { schemaVersion: "tesbo-fsm-draft/1", semantics: "SEQUENTIAL_FSM",
+        initialStateId: "start", states: [{ id: "start", label: "Start" }], transitions: [] } }),
       capture_qa_graph_change: () => ({}),
       create_testcase: () => ({ title: "Blocked creation", suiteId }),
       update_testcase: () => ({ testcaseId: caseId, title: "Blocked edit" }),
@@ -390,7 +392,7 @@ const url = process.env.DATABASE_URL ?? "";
       for (const [scope, cases] of [["write", writes], ["read", reads]] as const) {
         expect(Object.keys(cases).sort()).toEqual(mcp.listTools().filter((tool) => tool.requiredScope === scope).map((tool) => tool.name).sort());
       }
-      expect(Object.keys(writes)).toHaveLength(31); expect(Object.keys(reads)).toHaveLength(21);
+      expect(Object.keys(writes)).toHaveLength(32); expect(Object.keys(reads)).toHaveLength(21);
     });
     describe.each(routes)("%s full registry", (route) => {
       it.each(Object.keys(writes))("blocks %s before its handler, including prefix/no-op/clone work", async (name) => {
@@ -413,7 +415,7 @@ const url = process.env.DATABASE_URL ?? "";
     describe.each(routes)("%s authorization and transport controls", (route) => {
       it("preserves scope denials, unknown-tool/method errors and real issuer membership before entitlement checks", async () => {
         const before = await businessState();
-        expect((await rpc(route, "tools/list", {}, { token: writeToken })).body.result.tools).toHaveLength(52);
+        expect((await rpc(route, "tools/list", {}, { token: writeToken })).body.result.tools).toHaveLength(53);
         for (const [method, params, credential, code] of [
           ["tools/call", { name: "create_suite", arguments: { name: "No permission" } }, readToken, -32002],
           ["tools/call", { name: "list_testcases", arguments: {} }, writeToken, -32002],
@@ -451,11 +453,11 @@ const url = process.env.DATABASE_URL ?? "";
         const current = initialized.headers.get("mcp-session-id")!;
         expect(current).toMatch(/^[a-f0-9]{16}\.[a-f0-9-]{36}$/);
         expect(await rpc(route, "ping", {}, { session: current })).toEqual({ status: 201, body: { jsonrpc: "2.0", id: 7, result: {} } });
-        expect((await rpc(route, "tools/list", {}, { session: current })).body.result.tools).toHaveLength(52);
+        expect((await rpc(route, "tools/list", {}, { session: current })).body.result.tools).toHaveLength(53);
         const trailing = await fetch(`${endpoint(route)}/?native=1`, { method: "POST", headers: {
           Authorization: `Bearer ${readToken}`, "content-type": "application/json"
         }, body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/list" }) });
-        expect(trailing.status).toBe(201); expect((await trailing.json()).result.tools).toHaveLength(52);
+        expect(trailing.status).toBe(201); expect((await trailing.json()).result.tools).toHaveLength(53);
         const stale = "0000000000000000.11111111-2222-4333-8444-555555555555";
         const refused = await rpc(route, "tools/call", { name: "create_suite", arguments: { name: "Stale call" } }, { session: stale });
         expect(refused.status).toBe(404); expect(refused.body.error.code).toBe(-32004);

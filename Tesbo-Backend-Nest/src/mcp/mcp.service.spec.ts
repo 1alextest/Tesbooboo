@@ -1,3 +1,6 @@
+import { ForbiddenException } from "@nestjs/common";
+import { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
+import { previewDraftModel } from "../behavior-graph/model-studio-preview.core";
 import { McpService } from "./mcp.service";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
@@ -217,6 +220,9 @@ describe("McpService", () => {
       const names = res.result.tools.map((t: any) => t.name);
       expect(names).toEqual(
         expect.arrayContaining([
+          "preview_behavior_model_draft",
+          "list_qa_graph_changes",
+          "capture_qa_graph_change",
           "list_projects",
           "list_testcases",
           "get_testcase",
@@ -2951,5 +2957,82 @@ describe("McpService", () => {
       expect(res.error.code).toBe(RpcCode.ToolExecutionError);
       expect(res.error.message).toBe("name is required");
     });
+  });
+});
+
+
+describe("MCP native model draft preview", () => {
+  const savedFlag = process.env.TESBO_MODEL_PREVIEW_ENABLED;
+  const draft = () => ({ schemaVersion: "tesbo-fsm-draft/1", semantics: "SEQUENTIAL_FSM", initialStateId: "draft",
+    states: [{ id: "draft", label: "Draft" }, { id: "approved", label: "Approved" }],
+    transitions: [{ id: "approve", from: "draft", to: "approved", action: "Approve", expectedObservation: "Approval recorded" }] });
+  const call = (args: unknown = { model: draft() }) => rpc("tools/call", { name: "preview_behavior_model_draft", arguments: args });
+  function setup(limits: PlanLimitsService = writableLimits) {
+    const legacy = makeLegacy();
+    const query = jest.fn().mockResolvedValue({ rows: [{ allowed: true }] });
+    const db = { query } as unknown as DatabaseService;
+    const preview = new ModelStudioPreview(db, legacy as unknown as LegacyService);
+    const invoked = jest.spyOn(preview, "previewForUser");
+    const svc = new McpService(legacy, db, limits, undefined, undefined, preview);
+    return { legacy, query, invoked, svc };
+  }
+  beforeEach(() => { process.env.TESBO_MODEL_PREVIEW_ENABLED = "1"; });
+  afterEach(() => {
+    if (savedFlag === undefined) delete process.env.TESBO_MODEL_PREVIEW_ENABLED;
+    else process.env.TESBO_MODEL_PREVIEW_ENABLED = savedFlag;
+  });
+  it("advertises a bounded exact schema and returns the shared native result without writes", async () => {
+    const { svc, query } = setup();
+    const list: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
+    expect(list.result.tools).toHaveLength(53);
+    expect(new Set(list.result.tools.map((tool: any) => tool.name)).size).toBe(53);
+    const tool = list.result.tools.find((t: any) => t.name === "preview_behavior_model_draft");
+    expect(tool.inputSchema).toMatchObject({ additionalProperties: false, required: ["model"],
+      properties: { model: { additionalProperties: false, properties: { states: { maxItems: 32 }, transitions: { maxItems: 64 } } } } });
+    const result: any = await svc.handleRequest(call(), principal(), "proj-1");
+    expect(result.error).toBeUndefined();
+    expect(JSON.parse(result.result.content[0].text)).toEqual(previewDraftModel(draft()));
+    expect(query.mock.calls.every(([sql]) => /^SELECT\b/i.test(String(sql).trim()))).toBe(true);
+  });
+  it.each([{}, [], null, { model: draft(), projectId: "foreign" }, { model: { ...draft(), approved: true } }])("refuses invalid arguments %#", async args => {
+    const { svc } = setup();
+    const result: any = await svc.handleRequest(call(args), principal(), "proj-1");
+    expect(result.error).toMatchObject({ code: RpcCode.ToolExecutionError, data: { code: "INVALID_MODEL", httpStatus: 400 } });
+  });
+  it("preserves explicit unsupported and disabled codes", async () => {
+    const { svc } = setup();
+    const unsupported: any = await svc.handleRequest(call({ model: { ...draft(), semantics: "CONCURRENT" } }), principal(), "proj-1");
+    expect(unsupported.error.data).toEqual({ code: "UNSUPPORTED_SEMANTICS", httpStatus: 422 });
+    delete process.env.TESBO_MODEL_PREVIEW_ENABLED;
+    const disabled: any = await svc.handleRequest(call(), principal(), "proj-1");
+    expect(disabled.error.data).toEqual({ code: "MODEL_PREVIEW_DISABLED", httpStatus: 503 });
+  });
+  it("fails closed if the native service is missing", async () => {
+    const { db } = makeDb();
+    const svc = new McpService(makeLegacy(), db, writableLimits);
+    const result: any = await svc.handleRequest(call(), principal(), "proj-1");
+    expect(result.error.data).toEqual({ code: "MODEL_PREVIEW_UNAVAILABLE", httpStatus: 503 });
+  });
+  it("blocks read scope, cross-project and a write lock before the native validator", async () => {
+    const limits = { assertProjectWritable: jest.fn().mockRejectedValue(new ForbiddenException({ error: "Project locked" })) } as unknown as PlanLimitsService;
+    const { svc, invoked } = setup(limits);
+    const read: any = await svc.handleRequest(call(), principal({ scopes: ["read"] }), "proj-1");
+    expect(read.error.code).toBe(RpcCode.ScopeDenied);
+    const foreign: any = await svc.handleRequest(call(), principal(), "foreign");
+    expect(foreign.error.code).toBe(RpcCode.ProjectScopeDenied);
+    const locked: any = await svc.handleRequest(call(), principal(), "proj-1");
+    expect(locked.error.message).toBe("Project locked");
+    expect(invoked).not.toHaveBeenCalled();
+  });
+  it("blocks revoked membership at dispatch and at the native completion fence", async () => {
+    const { svc, legacy, invoked, query } = setup();
+    jest.spyOn(legacy, "requireProjectAccess").mockRejectedValueOnce(new ForbiddenException("Removed"));
+    const revoked: any = await svc.handleRequest(call(), principal(), "proj-1");
+    expect(revoked.error.code).toBe(RpcCode.ProjectScopeDenied);
+    expect(invoked).not.toHaveBeenCalled();
+    query.mockImplementation(async (sql: string) => ({ rows: sql.includes("AS allowed") ? [{ allowed: false }] : [] }));
+    const raced: any = await svc.handleRequest(call(), principal(), "proj-1");
+    expect(raced.error.message).toContain("Project access changed");
+    expect(raced.result).toBeUndefined();
   });
 });

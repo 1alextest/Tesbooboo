@@ -61,7 +61,7 @@ export async function verifyMcpDiagnosticLifecycle(source: Page, api: string, we
         await capture("mcp-browser-project-read-timeout-with-cleared-input");
       } finally { held.release(); await page.unroute(endpoint, held.handler); }
       await start();
-      await expect(card().getByRole("status")).toContainText("Read permission and project identity verified; 52 MCP tools advertised");
+      await expect(card().getByRole("status")).toContainText("Read permission and project identity verified; 53 MCP tools advertised");
       await expect(input()).toHaveValue("");
       await expect(card()).toContainText("Write permissions and reporting were not tested");
       // Capture the whole actual success card, not an unrelated viewport above its status.

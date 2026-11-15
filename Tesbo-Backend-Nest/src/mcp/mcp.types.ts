@@ -1,3 +1,4 @@
+import type { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
 import type { DatabaseService } from "../database/database.service";
 import type { LegacyService } from "../legacy/legacy.service";
 import type { ProjectSourceGraphCoordinator } from "../behavior-graph/project-source-graph.coordinator";
@@ -143,6 +144,8 @@ export interface McpToolContext {
   /** Existing project-bound capture and native notification services. */
   graphCapture?: ProjectSourceGraphCoordinator;
   graphNotificationDelivery?: GraphChangeReviewDelivery;
+  /** Same native opt-in, stateless validator as the REST preview. */
+  modelPreview?: ModelStudioPreview;
 }
 
 export interface McpTool {

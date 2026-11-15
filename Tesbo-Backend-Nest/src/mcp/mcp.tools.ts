@@ -1,3 +1,5 @@
+import { HttpException } from "@nestjs/common";
+import { DRAFT_MODEL_PREVIEW_INPUT_SCHEMA } from "../behavior-graph/model-studio-preview.core";
 import { BUG_SEVERITIES, LegacyService } from "../legacy/legacy.service";
 import { expectedTestcaseRevision } from "../legacy/testcase-edit-revision";
 import { CurrentCacheGraphReader } from "../behavior-graph/current-cache-graph.reader";
@@ -161,6 +163,32 @@ function describeError(err: unknown): string {
 
 export function buildMcpTools(): McpTool[] {
   return [
+    {
+      name: "preview_behavior_model_draft",
+      description: "Validate a bounded sequential FSM candidate through Tesbo's native Model Studio draft preview. Requires write scope, project write entitlement and TESBO_MODEL_PREVIEW_ENABLED=1 (default off). Returns unapproved structure and reachability diagnostics only; creates no model revision, test case, run, path, coverage, runtime evidence or approval. Supply only model; project and user come from the token. Unsupported semantics and invalid fields fail explicitly.",
+      requiredScope: "write",
+      inputSchema: { type: "object", additionalProperties: false, required: ["model"],
+        properties: { model: DRAFT_MODEL_PREVIEW_INPUT_SCHEMA } },
+      handler: async (args, ctx) => {
+        if (!Object.prototype.hasOwnProperty.call(args, "model") || Object.keys(args).some(key => key !== "model")) {
+          throw new McpError(RpcCode.ToolExecutionError, "Supply only the model candidate", { code: "INVALID_MODEL", httpStatus: 400 });
+        }
+        if (!ctx.modelPreview) {
+          throw new McpError(RpcCode.ToolExecutionError, "Native model preview service is unavailable", { code: "MODEL_PREVIEW_UNAVAILABLE", httpStatus: 503 });
+        }
+        try { return await ctx.modelPreview.previewForUser(ctx.userId, ctx.projectId, args.model); }
+        catch (error: unknown) {
+          if (error instanceof HttpException) {
+            const body = error.getResponse();
+            if (body && typeof body === "object" && "code" in body &&
+                ["INVALID_MODEL", "UNSUPPORTED_SEMANTICS", "MODEL_PREVIEW_DISABLED"].includes(String(body.code))) {
+              throw new McpError(RpcCode.ToolExecutionError, describeError(error), { code: body.code, httpStatus: error.getStatus() });
+            }
+          }
+          throw error;
+        }
+      }
+    },
     {
       name: "list_qa_graph_changes",
       description:
