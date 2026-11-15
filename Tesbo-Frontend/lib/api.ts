@@ -4612,3 +4612,26 @@ export async function setZyraGraphSourceBinding(
     method: "POST", body: binding
   });
 }
+
+/** Persisted, human-selected graph review → native test-run/case handoff.
+ * These are references only, never execution/coverage/approval verdicts.
+ */
+export type GraphReviewRunCaseLink = {
+  runId: string;
+  caseId: string;
+  linkedAt: string;
+  runName: string;
+  runStatus: string;
+};
+export async function listZyraGraphReviewRunLinks(
+  projectId: string, historyId: string
+): Promise<{ links: GraphReviewRunCaseLink[] }> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/${historyId}/runs`);
+}
+export async function linkZyraGraphReviewRunCases(
+  projectId: string, historyId: string, runId: string, testcaseIds: string[]
+): Promise<{ historyId: string; runId: string; selected: number; newlyLinked: number }> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/${historyId}/runs/${runId}/link`, {
+    method: "POST", body: { testcaseIds }
+  });
+}

@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useRef, useState } from "react";
 import {
-  addTestCasesToRun, createTestRun, listTestRuns, type TestRunListItem
+  addTestCasesToRun, createTestRun, listTestRuns, listZyraGraphReviewRunLinks,
+  linkZyraGraphReviewRunCases, type GraphReviewRunCaseLink, type TestRunListItem
 } from "@/lib/api";
 
 /**
@@ -23,8 +24,10 @@ export function ReviewCaseRunSetup({
   const [environment, setEnvironment] = useState("");
   const [existingId, setExistingId] = useState("");
   const [openRuns, setOpenRuns] = useState<TestRunListItem[]>([]);
+  const [recordedLinks, setRecordedLinks] = useState<GraphReviewRunCaseLink[]>([]);
   const [runsLoaded, setRunsLoaded] = useState(false);
   const [loadingRuns, setLoadingRuns] = useState(false);
+  const [loadingLinks, setLoadingLinks] = useState(false);
   const [working, setWorking] = useState(false);
   // React state disables the button on render; this synchronous ref also
   // rejects a second event in the same render/commit window.
@@ -33,7 +36,7 @@ export function ReviewCaseRunSetup({
   const [creationUnconfirmed, setCreationUnconfirmed] = useState(false);
   const [checkedForDuplicate, setCheckedForDuplicate] = useState(false);
   const [complete, setComplete] = useState<{
-    runId: string; selected: number; added: number; skipped: number;
+    runId: string; selected: number; added: number; skipped: number; linked: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,6 +56,18 @@ export function ReviewCaseRunSetup({
       setError(cause instanceof Error ? cause.message : "Could not load existing test runs.");
     } finally {
       setLoadingRuns(false);
+    }
+  }
+
+  async function loadRecordedLinks() {
+    setLoadingLinks(true);
+    try {
+      const { links } = await listZyraGraphReviewRunLinks(projectId, receiptId);
+      setRecordedLinks(links);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not load recorded QA handoffs.");
+    } finally {
+      setLoadingLinks(false);
     }
   }
 
@@ -90,9 +105,15 @@ export function ReviewCaseRunSetup({
       }
       if (!runId) throw new Error("Select a test run first.");
       const result = await addTestCasesToRun(runId, selected);
+      // Persist one relationship per actually selected canonical case AFTER
+      // native case attachment. A failed link does not undo or falsify a run.
+      // Re-attachment and repeated link insertion are both idempotent.
+      const linked = await linkZyraGraphReviewRunCases(projectId, receiptId, runId, selected);
       setComplete({
-        runId, selected: selected.length, added: result.added, skipped: result.skipped
+        runId, selected: selected.length, added: result.added, skipped: result.skipped,
+        linked: linked.selected
       });
+      await loadRecordedLinks();
     } catch (cause) {
       if (mode === "new" && !runId) {
         // A lost response to createTestRun could follow a successful DB commit.
@@ -115,7 +136,12 @@ export function ReviewCaseRunSetup({
   return (
     <details data-testid={"graph-review-run-" + receiptId}
       className="rounded border border-[var(--border)] p-3 text-sm"
-      onToggle={(event) => { if (event.currentTarget.open) void loadRuns(); }}>
+      onToggle={(event) => {
+        if (event.currentTarget.open) {
+          void loadRuns();
+          void loadRecordedLinks();
+        }
+      }}>
       <summary className="cursor-pointer font-semibold">Prepare a test run from linked candidates</summary>
       <p className="mt-2 text-xs text-[var(--muted)]">
         Choose applicable cases explicitly. This adds them to an existing Tesbo test run or creates a
@@ -126,6 +152,29 @@ export function ReviewCaseRunSetup({
           Only the first 200 distinct linked cases are shown here. Review the remainder in Test Cases.
         </p>
       )}
+      <section aria-label="Persisted QA handoffs" className="mt-3">
+        <h3 className="font-medium">Recorded QA run handoffs</h3>
+        <p className="text-xs text-[var(--muted)]">
+          A persisted handoff is evidence of human test selection, not passed tests,
+          verified coverage, or approval.
+        </p>
+        {loadingLinks && <p className="text-xs">Loading recorded handoffs…</p>}
+        {!loadingLinks && !recordedLinks.length &&
+          <p className="text-xs">No run/case handoffs have been recorded yet.</p>}
+        {recordedLinks.length > 0 && (
+          <ul className="mt-2 space-y-1 text-xs">
+            {recordedLinks.map((link) => (
+              <li key={link.runId + ":" + link.caseId}>
+                <Link className="underline" href={"/projects/" + projectId + "/cycles/" + link.runId}>
+                  {link.runName || "Open native run"}
+                </Link>
+                {" — selected case "}<code>{link.caseId}</code>
+                {"; execution and approval require separate evidence"}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
       <fieldset className="mt-3 space-y-2">
         <legend className="font-medium">Select cases to verify ({selected.length} selected)</legend>
         {cases.map((id, index) => (
@@ -219,7 +268,7 @@ export function ReviewCaseRunSetup({
         <p role="status" className="mt-2">
           {complete.selected} case(s) requested; {complete.added} newly added; {complete.skipped}
           {" skipped (already present or no longer eligible). Open the run to verify assignments,"}
-          {" record actual execution evidence, and obtain human review."}
+          {" Recorded "}{complete.linked}{" durable QA handoff reference(s). Actual execution and approval still require evidence."}
         </p>
       )}
     </details>
