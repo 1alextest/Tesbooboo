@@ -131,6 +131,9 @@ test.describe("zyra / agents (UI)", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     const collapse = page.getByRole("button", { name: "Collapse sidebar", exact: true });
     if (await collapse.isVisible()) await collapse.click();
+    // Sidebar's existing width transition takes 200ms; measure the chosen
+    // collapsed layout, not an intermediate animated width. Keep overflow strict.
+    await expect(page.getByRole("complementary")).toHaveCSS("width", "60px");
     await expect(editor).toBeVisible();
     expect(await panel.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
     const scrollRegion = result.getByRole("region", { name: "Draft states and transitions" });
@@ -151,7 +154,12 @@ test.describe("zyra / agents (UI)", () => {
     await editor.fill("   "); await expect(submit).toBeDisabled();
     await editor.fill("{broken"); await submit.click();
     await expect(panel.getByRole("alert")).toContainText("Enter valid JSON"); expect(posts).toBe(0);
-    for (const candidate of [null, {}, { ...modelUiDraft(), semantics: "CONCURRENT" },
+    for (const candidate of [null, [], true, 42, "not a model"]) {
+      await editor.fill(JSON.stringify(candidate)); await submit.click();
+      await expect(panel.getByRole("alert")).toContainText("Enter a JSON model object");
+      expect(posts).toBe(0); await expect(editor).toHaveValue(JSON.stringify(candidate));
+    }
+    for (const candidate of [{}, { ...modelUiDraft(), semantics: "CONCURRENT" },
       { ...modelUiDraft(), states: Array.from({ length: 33 }, (_, i) => ({ id: `s${i}`, label: "State" })) }]) {
       const value = JSON.stringify(candidate); await editor.fill(value);
       const pending = page.waitForResponse(response => response.url().endsWith("/changes/model-preview") && response.request().method() === "POST");

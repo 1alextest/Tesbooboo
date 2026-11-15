@@ -60,6 +60,12 @@ export function ModelDraftPreview({ projectId }: { projectId: string }) {
     let candidate: unknown;
     try { candidate = JSON.parse(text); }
     catch { setError("Enter valid JSON before previewing this draft."); return; }
+    // The transport accepts a JSON object. Semantic fields still belong to
+    // the native validator; do not send primitive frames to the JSON parser.
+    if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+      setError("Enter a JSON model object, not null, an array or a primitive.");
+      return;
+    }
     const current = ++lifecycle.current.generation, controller = new AbortController();
     lifecycle.current.operation = controller;
     setBusy(true);
