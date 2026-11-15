@@ -16,12 +16,11 @@ export class GraphChangeReviewController {
     private readonly history: CurrentCacheGraphHistory,
     private readonly coordinator: ProjectSourceGraphCoordinator,
     private readonly delivery: GraphChangeReviewDelivery,
-    private readonly sourceManagement?: ProjectSourceBindingManagement
+    private readonly sourceManagement: ProjectSourceBindingManagement
   ) {}
 
   @Get("source-binding")
   getSourceBinding(@Req() request: AuthenticatedRequest, @Param("projectId") projectId: string) {
-    if (!this.sourceManagement) throw new Error("Source binding management not configured");
     return this.sourceManagement.getForOwner(request.userId, projectId);
   }
 
@@ -30,7 +29,6 @@ export class GraphChangeReviewController {
   setSourceBinding(
     @Req() request: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: unknown
   ) {
-    if (!this.sourceManagement) throw new Error("Source binding management not configured");
     return this.sourceManagement.setForOwner(request.userId, projectId, body);
   }
 
