@@ -39,6 +39,7 @@ export class CurrentCacheGraphHistory {
     revision: string;
     capturedAt: string;
     reviewReceipt: QaChangeReviewReceipt | null;
+    changeState: "baseline" | "source_scope_changed" | "changed";
   }>> {
     if (!userId) throw new ForbiddenException({ error: "Authenticated project membership required" });
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
@@ -51,7 +52,8 @@ export class CurrentCacheGraphHistory {
     const result = await this.db.query<{
       authorized: boolean;
       entries: Array<{
-        id: string; revision: string; capturedAt: string; reviewReceipt: QaChangeReviewReceipt | null
+        id: string; revision: string; capturedAt: string; reviewReceipt: QaChangeReviewReceipt | null;
+        changeState: "baseline" | "source_scope_changed" | "changed"
       }>;
     }>(
       `WITH allowed AS MATERIALIZED (
@@ -65,15 +67,30 @@ export class CurrentCacheGraphHistory {
             AND (to_jsonb(pm)->>'deleted_at') IS NULL
             AND (to_jsonb(om)->>'deleted_at') IS NULL
        )
+       , authorized_history AS MATERIALIZED (
+         SELECT h.id, h.revision, h.captured_at, h.review_receipt_json,
+                h.contract_id, h.source_scope_fingerprint
+           FROM graph_capture_history h JOIN allowed a ON a.id=h.project_id
+       ), sequenced AS (
+         SELECT h.*,
+           LAG(h.contract_id) OVER (ORDER BY h.id) AS prior_contract,
+           LAG(h.source_scope_fingerprint) OVER (ORDER BY h.id) AS prior_scope
+           FROM authorized_history h
+       )
        SELECT EXISTS(SELECT 1 FROM allowed) AS authorized,
               COALESCE(
                 (SELECT jsonb_agg(jsonb_build_object(
                    'id', x.id::text, 'revision', x.revision,
-                   'capturedAt', x.captured_at, 'reviewReceipt', x.review_receipt_json
+                   'capturedAt', x.captured_at, 'reviewReceipt', x.review_receipt_json,
+                   'changeState', CASE
+                     WHEN x.prior_contract IS NULL THEN 'baseline'
+                     WHEN x.prior_contract IS DISTINCT FROM x.contract_id
+                       OR x.prior_scope IS DISTINCT FROM x.source_scope_fingerprint
+                       THEN 'source_scope_changed'
+                     ELSE 'changed' END
                  ) ORDER BY x.id DESC)
                    FROM (
-                     SELECT h.id, h.revision, h.captured_at, h.review_receipt_json
-                       FROM graph_capture_history h JOIN allowed a ON a.id=h.project_id
+                     SELECT h.* FROM sequenced h
                       WHERE ($3::bigint IS NULL OR h.id < $3::bigint)
                       ORDER BY h.id DESC LIMIT $4
                    ) x),
