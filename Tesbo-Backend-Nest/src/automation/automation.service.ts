@@ -274,19 +274,6 @@ export class AutomationService {
       });
     }
     const caseIds = this.normalizeCaseIds(body?.caseIds);
-    // Reject known Draft/In Review/Deprecated cases before opening a new
-    // automation run. The attach writer repeats this check with row locks
-    // inside the write transaction to close a concurrent status-change race.
-    if (caseIds.length) {
-      const { found } = await this.resolveCases(projectId, caseIds);
-      const ineligible = [...found.values()].filter((row) => row.status !== "Approved");
-      if (ineligible.length) {
-        throw new ConflictException({
-          error: "Only Approved test cases can be added to a test run",
-          ineligibleTestcaseIds: ineligible.map((row) => row.id)
-        });
-      }
-    }
 
     // Idempotency check before the insert so a re-run gets its existing run back with the same
     // shape as a fresh create, rather than a 409 it would have to special-case.
@@ -310,6 +297,21 @@ export class AutomationService {
           casesAttached: attached.attached,
           unknownCaseIds: attached.unknown
         };
+      }
+    }
+
+    // Only *fresh* automation runs need this preflight. A reused native
+    // run may have an Approved-at-attachment case that was later demoted;
+    // recording results against that historical snapshot must remain valid.
+    // attachCases still performs a locked status check for genuinely NEW rows.
+    if (caseIds.length) {
+      const { found } = await this.resolveCases(projectId, caseIds);
+      const ineligible = [...found.values()].filter((row) => row.status !== "Approved");
+      if (ineligible.length) {
+        throw new ConflictException({
+          error: "Only Approved test cases can be added to a test run",
+          ineligibleTestcaseIds: ineligible.map((row) => row.id)
+        });
       }
     }
 
@@ -415,7 +417,18 @@ export class AutomationService {
     // Above, the DatabaseService branch has returned by starting a native
     // transaction. The remaining runner is the existing PoolClient.
     const client = runner as PoolClient;
-    await assertApprovedRunCases(client, projectId, selectedIds);
+    // An already-attached, historically Approved case is still part of this
+    // run's immutable snapshot even if the live case is now Draft. Allow
+    // reporting its execution without authorizing any NEW Draft attachment.
+    // Lock active cycle items until commit so removal cannot race this check.
+    const existing = await client.query<{ testcase_id: string }>(
+      `SELECT testcase_id::text FROM cycle_items
+        WHERE cycle_id=$1 AND testcase_id=ANY($2::uuid[]) AND deleted_at IS NULL
+        FOR SHARE`, [runId, selectedIds]
+    );
+    const alreadyAttached = new Set(existing.rows.map((row) => row.testcase_id.toLowerCase()));
+    const toAttach = selectedIds.filter((id) => !alreadyAttached.has(id.toLowerCase()));
+    await assertApprovedRunCases(client, projectId, toAttach);
 
     const res = await client.query<{ id: string }>(
       `WITH input AS (
