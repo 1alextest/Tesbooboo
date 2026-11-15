@@ -6112,3 +6112,250 @@ not infrastructure planning or a duplicate graph implementation.
 **Current graph handoff containment:** Before performing either non-idempotent run CREATE or case attachment, the Zyra graph handoff reads each explicitly selected canonical case through Tesbo's own `getTestCase` API (bounded groups of eight) and refuses any status other than `Approved`. A preflight denial is **not** reported as uncertain CREATE and leaves no new run. The persistent graph-run-case linkage endpoint independently enforces `tc.status='Approved'` in the atomic SQL eligibility gate. Both blocks preserve the human approval rule for this new path; client-server interleavings and the old native add endpoint remain separate risks.
 
 **Regression matrix:** unit SQL contracts assert the server Approved predicate; migrated PostgreSQL checks an Approved candidate links and its subsequent Draft status makes an additional link request conflict without mutation. The disposable Zyra browser journey creates an Approved canonical test case, exercises actual handoff/progression, then demotes it to Draft and asserts the preflight refuses another run CREATE, with no mutation and no misleading ambiguous-outcome banner. This guard prevents this feature from introducing a second known bypass but does not replace server-wide enforcement in the shared native run-add service.
+
+### MBT-001 — Model Studio: governed model-based and graph-based testing (proposal revision 0.1, 2026-11-15)
+
+**Document status:** PROPOSED SPECIFICATION AMENDMENT, NOT SHIPPED AND NOT CANONICAL-FROZEN. This section lives in the existing source-grounded Tesbo feature document while the canonical v1.4.21 eight-file specification archive is unavailable for byte-preserving updates in this workspace. It must be reconciled into those **same eight canonical documents**, retaining their existing FR/AC/task/QA IDs and names, before White sign-off. Do not create a ninth authoritative spec or represent a review by one analyst as independent ten-team certification.
+
+**Product proposition:** A project-scoped Model Studio for explicit, versioned expected behavior; precise graph-to-canonical-test-case associations; bounded, reproducible generation of test-path **proposals**; human approval; optional governed execution through Tesbo's existing run/attempt/evidence/defect infrastructure; and separate, honest model, case, run and verified coverage views. Existing tests with no meaningful behavioral path remain graph-visible without invented transitions. Prepared models and spontaneous coding both work; neither requires the other as a prerequisite.
+
+**Verified integration baseline as of 2026-11-15:** Tesbo PR #88 was merged into `development` at `2026-11-15T10:29:37Z`; merge commit `7fdd4ba1c81914767f8b98dcd3f589011b5cb08b`, final PR head `19d326702d27d7e6eac483617a44805f14419e5c`. The **final PR head** has nine successful GitHub workflow groups, distinct from the older 9/9 run cited earlier. Repository source inspection confirms graph diff/history, project-scoped native case/run handoff, a read-only native execution/attachment metadata join, and Zyra warnings that older/undated results do not verify a newer graph change. This is **source-observed implementation**, not an exhaustive independent code audit, verified deployed build, actual target semantics, or human approval. Model Studio shall reuse those facilities from merged Tesbo, extending expected-model authority, case-to-path mapping, model validation and bounded generation; it is a **separate incremental feature**, not part of #88.
+
+#### MBT-001-A — Reuse and authority boundary
+
+| Existing authority / capability | Reuse decision | MBT addition, not duplication |
+|---|---|---|
+| Projects, organizations, current membership and project-policy guards | Reuse unchanged, always recheck at writes and sensitive reads | Model-scoped permissions only if justified by existing policy gaps |
+| Existing graph node/edge identities, graph capture history, source observation and receipt | Extend with typed, explicit **expected-model** nodes/edges and provenance, without overwriting source observations | Versioned normative behavioral model with transitions/guards/invariants; model and source versions independently addressable |
+| Requirements and canonical test cases, test-case revisions, drafts and Review Board | Reuse existing approval and version authority | Model-to-case/step/path relationships with evidence and review status, not a second test-case entity |
+| Native test runs, cycle items, execution attempts, attached evidence and bugs | Reuse unchanged | Generated-path plan reference and observed transition evidence linked to actual attempts, no inferred pass/fail |
+| Zyra project Copilot and durable project sessions; Tesbo MCP | Extend the single assistant/tool catalog | Propose/inspect/critique models and test candidates, with explicit scoped consent and human confirmation |
+| Current source declaration graph | Read as **observed implementation** only | Candidate mismatches requiring independent checks; never auto-promote observed code into expected truth |
+| Existing test-case repository, suite tree, source-linked tests | Reuse cases and suites | Model Studio visualization/filter; any meaningful case can link many model elements and vice versa |
+| Existing PostgreSQL, lifecycle and CI | Extend/reuse | No Neo4j/second graph database, no parallel task/runs store or another agent |
+
+**Binding invariant:** Expected behavior, observed code declarations, candidate paths, approved case definitions, dispatched execution and observed results are different artifact types. Neither a graph edge nor an AI assertion confers verification, permission, or release sign-off. **Authoritative model storage** must be versioned relational model/revision records using Tesbo's current PostgreSQL project and review policy. Existing GraphSnapshot node/edge shapes become a **derived read-side projection** for viewing/comparison; immutable graph_capture_history remains a source observation/history authority and MUST NOT be silently reused as the mutable expected-model database. This distinction prevents a second authoritative graph and prevents the observed implementation from defining its own expected oracle.
+
+#### MBT-001-B — Actors, consent and publication
+
+- **Owner/authorized maintainer:** manages model scope and model-level policy within project authorization; can request review and enable bounded generation. Approval requires Tesbo's currently effective project permission policy and exact immutable revision. Do **not** introduce new hardcoded owner/QA/admin roles before checking the actual native RBAC and Review Board policy. If a project demands independent approval, author and approver must be different actual identities and cannot self-declare an override.
+- **Tester/QA:** may create drafts, map existing cases, critique generated paths, request runs and inspect coverage; cannot silently publish a case/model or bypass the existing Review Board.
+- **BA/product owner:** may supply authoritative expected business rules/acceptance conditions, but model assertions are not automatically authoritative just because a role typed them.
+- **Zyra/authorized external assistant:** drafts and explains candidate model edits, mapping hypotheses, paths and gaps in the existing Copilot/session pipeline. Server validates all writes. No autonomous model publishing, test approval, production execution or external-data exfiltration.
+- **Execution agent:** uses existing assigned task/attempt/adapter with explicit target/environment/permissions/budget. The agent cannot grant itself a new target, credentials or model authority.
+- **Viewer/executive:** may view permitted model/coverage status and provenance, cannot see cross-project models or confidential test data merely via a graph endpoint.
+
+#### MBT-001-C — Typed domain contracts and lifecycles
+
+**Model identity:** project ID + immutable model ID + immutable model revision ID. A model identity must also carry a project-scoped tenant boundary in relational foreign keys and test-case/model links; changing a display name or suite location cannot transplant identity or inherited permissions. Every revision records author, timestamp, parent revision, content digest, model type, scope boundaries, requirements/decisions cited, assumptions, validation result, policy, authorizing reviewer and status. Never use a title, slug, array index or mutable branch alias as the identity. Model types in MVP: finite state machine, bounded extended state machine with typed variables, directed user journey, and decision/permission model. Composition is explicit; no implicit graph join across arbitrary projects/models.
+
+**Model revision lifecycle:** DRAFT → PROPOSED → IN_REVIEW → APPROVED; rejected drafts become REJECTED; approved revisions remain immutable and may be SUPERSEDED/RETIRED by a later approval. Model activation is an explicit exact-revision CAS operation: an APPROVED-but-not-activated revision is not automatically the active normative model. Historical test mappings/attempts stay pinned to their original revision, regardless of later activation. Only approved revisions drive normative coverage or generated execution plans. Draft and proposed revisions can be previewed, compared and critiqued without touching canonical cases. Model rollback means activating a previous immutable revision via a new governed action, not rewriting its history. Rejected or retired revisions remain traceable for evidence retention; remove access through project/policy rules, not mutable silent deletion.
+
+**Core model schema (conceptual, not a second database):**
+
+| Element | Required properties / invariant |
+|---|---|
+| Model | projectId, modelId, modelRevisionId, modelType, startingStateIds, scope, provenance, status |
+| State | stable element ID, human name, observable predicate/oracle, entry/exit invariants where applicable |
+| Transition | stable ID, from/to state IDs, action/event, explicit guard, preconditions, postconditions, expected observation, risk/weight |
+| Guard/data | typed finite or bounded variable domains; pure, deterministic declarative expressions; parameter sources and constraints |
+| Prohibited behavior | explicit rejection/invariant assertion, rather than a fabricated successful transition |
+| Journey | version-bound sequence/branch of explicit transitions with actor/permissions/context and recovery conditions |
+| Case association | project, model revision/element/path, existing canonical case ID and exact case revision/step, relation type, author, provenance/status |
+| Generated proposal | model digest, algorithm, algorithm version, deterministic seed, replay path, data/fixture reference, selected transitions, rationale, bounds, permissions |
+| Execution mapping | selected approved case/path revision → existing native run/attempt/step, real observation, original evidence IDs, timestamps and outcome |
+| Evaluation | covered/uncovered/excluded/unknown with denominator, revision, execution environment/build and evidence confidence; never a single misleading “covered” boolean |
+
+**Status truth matrix:** MODELLED means declared in a validated model; LINKED means an accepted relationship to a real case revision; SELECTED means case/path was put into a run; EXECUTED means an actual native attempt has observations; VERIFIED means a supported assertion against the expected oracle with suitable evidence; APPROVED means human-governed decision on an exact revision. A count in one column MUST NOT populate another.
+
+**Source-of-truth precedence:** Independently justified and human-approved normative requirements/rules and versioned accepted business decisions inform **expected** behavior; source-declared implementation feeds **observed** declarations; actual execution evidence supports reality. If the three disagree, report a contradiction requiring triage with distinct provenance, never auto-conform the expected model to defective code. No inferred or “AI-generated” edge is trusted until accepted under policy.
+
+#### MBT-001-D — Test-case-centric use and workflow
+
+1. **Open any canonical case → View in Model.** Show linked models, exact model revisions/elements, mapped steps, unlinked/uncertain status and path highlights. If a case is exploratory, accessibility, security, performance or otherwise not state-based, show it in the broader traceability graph; never force an invented finite-state path. Many-to-many links are supported and can be proposed, reviewed, rejected, removed and versioned.
+2. **Open model → inspect test inventory.** Accessible list and graph show elements, linked cases, live case revision, approvals, actual native run attempts/evidence, model revision comparison and explicit unknowns. A model can exist without any cases; a case can exist without any model.
+3. **Create or import model.** Manual UI and typed versioned JSON import produce a draft. An assistant may propose a draft using requirements/cases/source observations, marking every supported source and unresolved assumption. Import cannot execute arbitrary scripts, reference foreign projects, auto-activate a model, grant roles or include secrets.
+4. **Validate and review model.** Reject dangling edges, duplicate IDs, missing initial states, impossible guards, invalid expected predicates, unsupported variable domains, runaway cycles/recursion, unauthorized cross-model links and disconnected/unreachable components. Some unreachable states may be intentionally defined; report them as excluded with reviewed justification, not secretly delete from denominator.
+5. **Approve immutable revision.** Existing human review/publish policy applies. Approval pins model bytes, source rule references and validation receipt. Material edit → new revision; existing link statuses re-evaluated against the new revision.
+6. **Generate bounded paths.** User chooses model revision, objective (state, transition, transition-pair, targeted risk, negative rule/invariant), actor/role, environment and deterministic budget. Generator returns previewed proposed paths with rationale, reproducibility/coverage forecast, dead-end/unreachable diagnostics and what remains unknown. It does not create approved cases or dispatch agents by itself.
+7. **Map/reuse first.** Match generated paths against existing canonical cases by accepted mappings and signatures. Default is to reuse/refine cases, not flood the repository with duplicates. New case text remains a draft, including preconditions/fixtures, steps, expected results, negative assertions and side findings separated by scope.
+8. **Prepare native run explicitly.** Human selects approved case revisions and/or approved runnable path adapters, chooses run/environment/data/permissions, sets budget and dispatch consent. Existing attempts, attachments and defects remain authoritative. Report genuine step observations, blockers and discrepancies; preserve raw reports.
+9. **Assess coverage & change.** Compare approved model revisions and independently observed source graph; impact existing mapped cases, paths and actual runs. A code-only change, an unknown implementation declaration or changed expected model creates review candidates, never a failed case or automatic approval.
+
+#### MBT-001-E — Generator and validator contract
+
+**MVP deterministic engine:** A bounded in-process graph traversal can generate shortest feasible paths to states/edges, edge coverage and edge-pair coverage for a small, approved model. Evaluate a proven library adapter before custom traversal; adapter implementation MUST be replaceable without changing model/run/case authorities. A result includes generator ID/version, seed, path/replay marker, start state, chosen transitions, guard/data bindings, partial coverage, unreachable nodes, stop reason and any unresolved constraints.
+
+**Guard and oracle safety:** Only an independently sourced, approved and falsifiable expected observation can become an oracle; if no oracle is available, generated paths remain proposals and execution coverage stays UNKNOWN. Guards must not turn source code into a self-validating oracle. Use a pure declarative, allowlisted expression AST for booleans, bounded finite sets, integers, strings/enums and equality/comparison; no eval, Function, shell, filesystem, network, SQL, browser scripting, arbitrary JavaScript, reflection, secrets or untrusted model-controlled adapter calls. All guard evaluations deterministic and subject to operation/time/memory limits. External test-step executors are separately authorized adapters, not executable guard language.
+
+**Budgets and termination:** Per-project policy caps graph size, path count/depth, generated input combinations, memory, CPU time, third-party tokens and tool actions. A safe platform-level hard ceiling applies even if a project omits or inflates its limits; actual bootstrap defaults and p95 targets MUST be selected from a measured two-domain prototype, not invented in this spec. Each job has QUEUED/RUNNING/PARTIAL/FAILED/CANCELLED/COMPLETED states, a project-scoped owner, lease, fencing token, cancellation checkpoint, replay key, expiration and audit. A quota failure may not silently schedule an unbounded follow-up. Return partial/incomplete/blocked with diagnostics when budget is reached. Never report 100% coverage if portions of the approved graph are unreachable, unknown, excluded or out of the allowed slice. Cycles, guard contradictions, combinatorial explosion and lack of a runnable adapter are nonfatal bounded results, not infinite retry.
+
+**Determinism:** Equal approved revision + generator version + seed + parameters + model scope should produce equal ordered paths for deterministic generation. For stochastic/property-based extensions persist seed and shrink/replay identifiers; stochastic sampling must not imply exhaustive coverage. Pairwise and concurrency schedule coverage are separately defined dimensions, never equated to edge coverage.
+
+**Engine candidates:** Evaluate GraphWalker (path generators, guards, stop conditions and replay) and fast-check (stateful commands, asynchronous model runs, shrinking/scheduled race exploration) under current license, maintenance, bundle/runtime boundary and cost constraints. Adopt only after small model benchmark against native Tesbo adapters; no new dependency, paid service or remote runner is mandated by the specification.
+Reference: https://graphwalker.github.io/graphwalker-rs/ ; https://fast-check.dev/docs/advanced/model-based-testing/ ; https://fast-check.dev/docs/advanced/race-conditions/
+
+#### MBT-001-F — Coverage and reporting semantics
+
+- **Structural model coverage** has approved reachable states/transitions as its denominator; counts track modeled, mapped, selected, actually traversed and verified separately. Report excluded elements and accepted exclusions alongside the denominator; incomplete inventories produce UNKNOWN instead of zero or 100%.
+- **Case-link coverage** shows which accepted model elements are linked to published case revisions, including multiple roles/datasets; it does NOT establish that cases have run.
+- **Run path coverage** maps observed native step/transition results against one pinned approved model revision, accepted case-step mapping and environment/build identity; a projected declaration change or AI assertion is not enough to claim behavior was traversed. A case with multiple datasets/actors has independently scoped observations; one actor's passing result does not verify every role or guard. a successful navigation without oracle evidence is OBSERVED/UNKNOWN, not VERIFIED. Historical evidence remains attributed to the model and build used at the time.
+- **Requirement/negative coverage** distinguishes expected successful transitions, forbidden transitions, invariant enforcement and requirement associations. “Rejected with expected error” can verify a negative test only with real observed evidence.
+- **Risk view** weights elements only when a project policy defines and approves weights; no feedback loop may lower risk simply because an execution agent returned PASS without independent evidence. Nonfunctional/properties that do not map to finite transitions (performance, accessibility, data integrity) retain separate requirements/metrics; no unlabeled ranking based on graph degree alone. Show denominator, filter, version, confidence and evidence freshness in every aggregate; executive dashboards must not hide UNKNOWN.
+- **Staleness rules:** changed model revision, changed test-case revision, environment/role/fixture change, changed source or build, invalidated oracle or ambiguous mapping marks previous assertion STALE or REVALIDATION_REQUIRED without rewriting historical results. Previously executed/approved work is retained with its historical provenance, not silently moved onto the new model.
+
+#### MBT-001-G — Model Studio UX and interoperability
+
+**Placement:** A dedicated “Model Studio” view under existing project Test Management/QA navigation, using native project routing and one Zyra Copilot. The graph is a visualization/projection of authorized backend data, not client-held authority. Case detail adds “View in Model”; model detail shows states/transitions and their linked cases. Existing test-case creation, cascade/minimize form and Review Board approval flows are reused, not duplicated. Large graphs get filtering, search, hierarchy/clustered overview and accessible list/table alternative. Keyboard, screen reader, focus/zoom/reset, high-contrast and mobile/responsive navigation must be tested. Never require a diagram to complete a test.
+
+**Interaction contract:** The current UI baseline, route ownership, authentication behavior and accessibility must first be observed from source and then in a real browser; no visual pixel/focus sign-off is claimed from this proposal. Click node/transition → inspect expected predicate, risk, requirement, known cases, gaps and last native execution; click case → highlight precise accepted model paths and list versioned links; click changed element → version diff and impact; click generated path → preview steps and existing-case reuse suggestions. Native deep links remain stable on reload and no unsaved edits disappear on panel collapse. Unapproved drafts are owner/author-policy scoped and not publicly presented as accepted product truth.
+
+**Import/export:** start with schema-versioned JSON and a rendered read-only diagram; diagram/image import or automatic ML extraction is proposal-only and separately reviewed. Exports redact sensitive data based on project role; must preserve IDs, revision hashes, evidence references and explicit unknown/excluded states. Cross-project imports clone semantic proposals with NEW IDs and require human revalidation, rather than preserving foreign-project permissions or evidence bindings.
+
+#### MBT-001-H — Service/API/MCP contract shape (proposed, not implemented)
+
+- Model drafts: project-scoped GET/POST/PATCH with explicit expected revision token; immutable approve/reject and version-diff actions; writes require current roles, project policy and audit. Server-generated IDs only.
+- Model validation: bounded POST validate on a draft revision; returns diagnostics and coverage feasibility without executing user code or changing published models.
+- Case links: GET and policy-gated POST/DELETE with modelRevisionId + caseId + caseRevisionId + optional step/path and provenance; validate both artifact ownership and active publication; version link decisions.
+- Generation: bounded POST generate on an approved model revision with strategy, seed, budget and scope; returns candidate paths and diagnostics with deterministic generation manifest; stored proposal only through existing governed draft machinery.
+- Execution preparation: POST propose-case/run mapping through existing Tesbo agents/tasks/runs; explicit human authorization and cancellation. New executor adapters are capability-checked and sandboxed; no browser/network actions by the graph engine.
+- Coverage: GET parameterized by model revision, environment/build and evidence mode, with paginated model paths/cases and confidence categories. Unauthorized or ambiguous requests fail closed rather than silently returning an empty but apparently complete graph.
+- Observability: native audit/change and task/attempt events record actor, project, model revision, generation manifest, policy decision, outcome, retry dedupe and errors. Diagnostic data must not contain secrets. Read permissions must be rechecked on every downstream dereference.
+- MCP: extend the existing Tesbo tool catalog, typed input schemas, budgets and user/project consent; external agent cannot submit self-attested runtime “passed” or approve the model by writing JSON.
+
+**Backend rule:** Versioned model/revision/element/relationship records use project-composite foreign keys, immutable approved snapshots and restricted delete semantics. Hard deletion must not silently erase historical assertion provenance; either RESTRICT parent deletion while evidence is retained or preserve an authorized tombstone/snapshot with original IDs. Choose one after validating Tesbo's current hard-delete policy. All writes check authorization within their database transaction; immutable revisions use optimistic concurrency plus project/organization FK constraints and idempotency keys. A stale revision, foreign case, revoked member, duplicated approval, mixed valid/invalid batch, conflict or lost network response cannot partially publish or cross-link unrelated records. Side-finding proposals remain separate from the selected path.
+
+#### MBT-001-I — Nonfunctional and assurance requirements
+
+| ID | MUST requirement and evidence gate |
+|---|---|
+| MBT-NFR-01 | Tenant/project isolation on every model, revision, link, path, preview, export, generation job and native run read/write; negative IDOR/MCP tests |
+| MBT-NFR-02 | No untrusted code evaluation from model text/guards/imports; input caps, parser security, resource/timeouts, path-traversal rejection |
+| MBT-NFR-03 | Deterministic generation with bounded worst-case time and cancellable job; telemetry for failure, truncation and resource budget |
+| MBT-NFR-04 | Immutable versioned models; optimistic concurrency/idempotency and atomic review/publish linkage; error replay and dual-review races |
+| MBT-NFR-05 | Evidence/provenance truth: executed/verified/approved are independently established; NEVER infer pass/fail from a modeled path |
+| MBT-NFR-06 | Accessibility parity: keyboard-only journey, screen reader list fallback and non-color-only statuses on dense graph |
+| MBT-NFR-07 | Platform-agnostic model schema and adapter: web, API, mobile and non-browser contexts without mandatory Chromium/OpenCode |
+| MBT-NFR-08 | Model source and version changes invalidate only affected claims; stale/unknown remain visible; old execution history preserved |
+| MBT-NFR-09 | Security-sensitive roles, invalid data and destructive transitions require explicit policy authorization and safe fixture/cleanup plan |
+| MBT-NFR-10 | Reuse/extension proof and dependency/license review before committing an external graph-generation runtime; no paid required service |
+| MBT-NFR-11 | Model deletion, retention, restoration, migration and export policy honors canonical records and hard-delete/soft-delete behavior |
+| MBT-NFR-12 | UI graph performance: paginated/bounded loads, progressive search, no uncontrolled full project graph fetch; measured p95 targets to be established before phase sign-off |
+
+#### MBT-001-J — Acceptance scenarios and falsification suite (all NOT RUN)
+
+| Scenario | Expected result |
+|---|---|
+| MBT-AC-01 | Existing manual case with no model remains visible and actionable; no fake model path |
+| MBT-AC-02 | One case links to multiple transitions/roles; one transition links to multiple cases without duplicate case entities |
+| MBT-AC-03 | Draft model can be previewed by authorized author but cannot affect official coverage |
+| MBT-AC-04 | Only approved immutable revision drives normative generator and linked coverage; rollback preserves history |
+| MBT-AC-05 | Changed guard/source requirement produces proposed impact/stale relationship, not automatic Failed case |
+| MBT-AC-06 | Generator on finite cyclic graph terminates at budget and returns partial outcome, never falsely 100% |
+| MBT-AC-07 | Dead-end, unreachable state, contradictory guards and missing oracle are reported with explicit denominator |
+| MBT-AC-08 | Same revision/seed/engine/budget produces identical deterministic path/replay manifest |
+| MBT-AC-09 | Negative transition/denied role test requires observed refusal and evidence, not mere model prohibition |
+| MBT-AC-10 | Concurrent model approvals allow only one exact-revision publication; stale submission conflicts cleanly |
+| MBT-AC-11 | Revoked reviewer/foreign project fails read, write, export, generation and linked case/run dereference |
+| MBT-AC-12 | Imported malicious expression/code, hostile path, oversize file and secret-bearing data are rejected/redacted |
+| MBT-AC-13 | AI-generated case draft never becomes published without exact human approval; duplicate existing case preferred |
+| MBT-AC-14 | Lost response after new case/path/run selection is recoverable with native idempotency/no duplicate writes |
+| MBT-AC-15 | Cancelled execution stops Tesbo-side authorized further actions; no false reversal of in-flight external effects |
+| MBT-AC-16 | An “observed source route” contradictory to an approved expected workflow is displayed as disputed, not self-validating |
+| MBT-AC-17 | Soft-deleted/retired case retains historical evidence/link status; active coverage re-evaluates separately |
+| MBT-AC-18 | Model revision change preserves old execution and labels current coverage STALE until reverified |
+| MBT-AC-19 | Graph-only case navigation works with keyboard/list fallback and does not lose unsaved edits on minimization |
+| MBT-AC-20 | Second non-DMIS project, distinct technology and actor roles pass equivalent schema/auth/runner scenarios |
+| MBT-AC-21 | Bulk mapping of 199 valid and 1 foreign case rejects atomically with no leaked project metadata |
+| MBT-AC-22 | Model import of unexpected nested/recursive schema fails deterministically within budget, not process crash |
+| MBT-AC-23 | Source history incomplete or unapproved cannot be used as complete model/coverage denominator |
+| MBT-AC-24 | Real target execution through supported adapter records original evidence and separate actual vs expected outcomes; unsupported adapter returns BLOCKED |
+| MBT-AC-25 | Target operation permission is revoked between preview and dispatch; dispatch is refused, no in-flight privilege escalation |
+| MBT-AC-26 | Concurrent model run/role-change/graph-version updates cannot attach evidence to another tenant or rewrite approved version |
+
+Each acceptance scenario needs an owner, setup/fixture, actionable steps, expected result, test level and proof link in existing QA plan. These scenario IDs are provisional extension IDs, NOT new canonical QA counts and never “passed” merely by appearing here.
+
+#### MBT-001-K — Implementation increments and stop/go criteria
+
+**M1: Requirements-to-model feasibility pilot (read-only + governed drafts).** One small lifecycle (e.g. authentication or approval, generalized beyond DMIS) and a second unrelated sample app. Establish authoritative expected-state source and approval; pin case/model versions; implement model validation + native list/graph viewer + cross-linked existing case detail. No automated target execution. Prove no duplicate data domains and all MBT-AC-01–05, 07, 10–12, 17, 19–21.
+
+**M2: Reproducible traversal and candidate reuse.** Benchmark native small-graph traversal versus GraphWalker and fast-check adapters against identical fixture + outcome schema. Select maintainable engine(s), implement capped deterministic path/negative/invariant proposals and Review Board case draft/reuse. Demonstrate deterministic manifest, budget exhaustion, adversarial guards and zero implicit publication. Block if model semantics remain unverified.
+
+**M3: Authorized execution and evidence.** Map selected approved paths/cases to existing native Tesbo runs and supported Chrome/Playwright/Appium/API execution tools, with immutable attempt manifest, evidence, cleanup, cancellation, eventual retry and human approval. Not all adapters must ship together; missing adapter → BLOCKED. Verify actual target result independently from model and source declarations.
+
+**M4: Change-aware graph assurance and operations.** Connect approved model changes and verified source graph observations to affected cases/paths and native run evidence; measured regression prioritization, freshness/unknown metrics, multi-tenant load/security, long-run resource costs, retention and operator playbook. Run independent assurance lenses and live journeys before launch.
+
+**Exit gates:** model schema, role/authorization, canonical reuse map, no second graph/test/approval authority, protected publication, algorithm reproducibility, bound on runtime/side effects, proof of actual outcome semantics, accessible UI, and two different target domains. Add an explicit **counterexample-quality gate**: inject a known mismatch where observed code permits a forbidden operation while the approved expected model denies it; the engine MUST find/report the contradiction, not learn it as expected. Repeat with two concurrent actors and a stale model revision. For high-impact target writes (destructive, paid, personal data or production), require separate per-attempt execution authorization with target-level enforcement and preapproved cleanup; model approval alone is insufficient. White must retain BLOCKED while substantive gaps or independent proof are outstanding. Human owner approves merge/release, not the model generator.
+
+#### MBT-001-L — Required distribution into canonical eight specifications
+
+The following is a **change map**, NOT a claim these files were edited or validated. Canonical archive currently known as Tesbo_Specifications_v1.4.21.zip; the original eight files and validation manifest must be read back and updated IN PLACE before publishing the next revision. Preserve all current IDs and contents, add only reconciled extension identifiers, and run structural/coverage validation plus old/new diff.
+
+| Existing canonical file | MBT-001 insertions |
+|---|---|
+| 00_README.md | Scope, normative/observed/evidence distinction, reuse matrix, versioning/assurance gates and no ninth source |
+| 01_PRODUCT_REQUIREMENTS.md | Functional MBT requirements, permissions, expected-vs-observed truth model, acceptance criteria |
+| 02_WORKFLOW_AND_UX_SPEC.md | Case→model→path→run flows, manual/non-model cases, review states, negative/recovery journeys |
+| 03_TECHNICAL_DESIGN.md | Model/revision/transition/guard/link schemas, data provenance, transaction/security/graph boundaries |
+| 04_MCP_API_CONTRACTS.md | Typed read/write/generation/execution APIs, consent, version conflicts, error/IDOR/budget contracts |
+| 05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md | M1–M4 tasks, MBT-AC-01–26 executable scenarios and evidence/assurance regression matrices |
+| 06_IMPLEMENTATION_AGENT_BRIEF.md | Reuse-first migration/implementation instructions, adapter experiment, proof-before-claim, no extra assistant |
+| 07_UI_DESIGN_TASKS.md | Source-grounded baseline, Model Studio/Cases graph interaction, keyboard/reader fallback, approval and empty states |
+
+**Review provenance:** an analytical full-role lens challenge and scenario table may accompany this proposal in docs/reviews, but this alone is not an independently executed team run. No code, database migration, UI or model generator is implemented by this specification. Do not merge as normative requirements until the canonical eight-file archive, existing owner policy and independent team receipts are reconciled.
+
+
+#### MBT-001-M — Assurance-amended unresolved decisions and proof obligations
+
+This paragraph records a single-analyst role-lens challenge (2026-11-15), not a claim that independent canonical team agents were executed. The companion review record has lens-specific findings and verdict. These are **gates**, not permissions to invent defaults.
+
+| ID | Disposition | Required closure before model spec freeze |
+|---|---|---|
+| MBT-GATE-01 | BLOCKING | Obtain writable, full canonical v1.4.21 ZIP bytes, preserve all eight original documents, reconcile into those files in place, validate complete old/new IDs and archive equality for unchanged sections; do not label this living-doc appendix the ninth authoritative spec |
+| MBT-GATE-02 | BLOCKING | Confirm existing RBAC/Review Board policy by source and real owner/reviewer journey; write explicit action-level role matrix and self-review constraints from actual policy |
+| MBT-GATE-03 | BLOCKING | Prove expected-model authority is independent of observed implementation and that the injected forbidden-operation counterexample is detected |
+| MBT-GATE-04 | BLOCKING | Choose durable parent deletion/tombstone policy for model/links/attempts from existing case and graph storage lifecycle; no uncontrolled provenance loss |
+| MBT-GATE-05 | BLOCKING | Execute model UI source-baseline and real keyboard/screen-reader journey; screenshots or mock graph views alone cannot certify design truth |
+| MBT-GATE-06 | BLOCKING | Complete two target-domain prototype: reachable/denominator calculations, bounded cyclic and infeasible guards, seed/replay, full error/cancel/recovery paths, actor-dependent semantics and actual adapter cost measurements |
+| MBT-GATE-07 | BLOCKING | Run independently isolated full assurance team agents against pinned revised canonical specs and repository source; archive original reviews before reconciliation, challenge false positives, obtain White/Graph final verdict |
+| MBT-GATE-08 | BLOCKING | Human-approved target-execution scope, PII/destructive controls, real adapter evidence and audit; no modeled path can self-authorize production effects |
+| MBT-GATE-09 | BLOCKING | Complete existing-run / native-execution evidence linking with exact case/model/build revision, model stale-state recovery and a read-only executive truth table with UNKNOWN explicitly visible |
+
+**Assurance classification:** Blue/Green reuse and design composition look plausible from source. Red/Security/QA/Graph/Operability find material proof gaps. Purple and Grey are bounded to static or reasoned journeys; true live usability remains unknown. White outcome: NOT FROZEN, NO BUILD AUTHORIZATION for normative MBT engine until the gates are closed or explicitly dispositioned by human governance. This does not unwind PR #88's final-head 9/9 isolated CI evidence or its completed merge into `development`; MBT remains a separate proposed increment. Deployment, independent acceptance and model-based behavior remain unproven.
+
+
+#### MBT-001-N — Permanent application-agnostic assurance lens protocol (amended after PR #88 evidence correction)
+
+**Scope of reuse:** This review contract applies to any future Tesbo feature, any model/graph extension, and any other application under the assurance framework. Examples may illustrate a rule; the rule MUST name the general invariant, applicable domains and falsifying counterexample, not embed application-specific tables, project titles, URL slugs or tool vendors as its logic. Preserve and extend existing team charters; do not rename, merge or bypass teams to manufacture certification.
+
+**Artifact/evidence ladder — mandatory per material claim:**
+
+| Grade | Admissible assertion | Required evidence | Claims forbidden without next grade |
+|---|---|---|---|
+| C0 AUTHOR-REPORTED | PR body, issue, model-generated summary or design says feature exists | Literal claim, author, date, source ref | Cannot assert source implementation, behavior or deploy |
+| C1 CODE-VERIFIED | Pinned SHA code path contains stated control/flow | Exact commit, file/function, relevant unit/contract and negative code trace; conflict/competing path check | Cannot assert executed user journey or deployed behavior |
+| C2 CI-EXECUTED | Named checks ran on an exact pinned head/SHA | Workflow name/run IDs, completion/result and what was exercised; failures/skip and coverage boundaries | Passing OLD head never certifies NEW head or merge |
+| C3 DEPLOYED-OBSERVED | Deployed target actually ran a named journey on verified SHA/migrations | Deployment identity, authorized account/role, steps, observed UI/API/raw evidence, environment, timing | Cannot infer unrelated journeys, unseen states or source correctness |
+| C4 INDEPENDENT-ASSURED | Isolated reviewer with blind controls and human adjudication reproduced relevant risk probes | Original independent reviewer traces, seeded defect detection, benign control acceptance, false-positive analysis, withheld-key adjudication | Team names, shared-context reasoning and mock traces do not qualify |
+
+**Freshness and status rule:** Begin every review with exact repository, branch, HEAD, base, mergeability/merged_at, checked date, deployed build if known, and CI run SHA. When a PR moves from open to merged during review, update the status and dependency order; do not continue saying “open,” and do not equate merge with deploy. An earlier 9/9 CI may have been stale even when correct for its own SHA. Record C0/C1/C2/C3/C4 independently, never upgrade evidence on narrative confidence.
+
+**Reusable full-chain invariant for every lens:** Identify reachable authorized producers and prerequisites → authoritative versions/provenance/freshness/context → all material transformations and seams → exact write/commit/ack/retry/idempotency boundaries → positive and forbidden downstream effects → observable failure/block/cancel/recovery paths → human approval/role separation → retention and operational shutdown → both cold-start and second-domain proof. If a chain is absent, report UNKNOWN or BLOCKED, never quietly narrow away the missing journey.
+
+**Standing lens-specific requirements:**
+
+- **Blue (archaeology/reuse):** current product roles → module → context map first; enumerate native data owners and all equivalent implementation paths; explain why reuse unchanged, extension or proven library is insufficient before inventing a new store/agent/UI.
+- **Red (premise attack):** falsify the principal claim, construct a counterexample where observed code is defective but model says PASS, test drift/denominator tricks and old CI described as latest. Challenge “all tests graph-modeled” by bringing a legitimate non-state-based case.
+- **Green (seams/opportunity):** show a minimal integration preserving native run/case/review ownership, a competing library alternative with cost/license/maintenance evidence, and the incremental change that adds unique value.
+- **White (completeness gate):** do not certify until artifact integrity, versioned source evidence, all material journeys, independent cold role runs, negative controls and full-chain evidence are present. Missing canonical eight-spec bytes = NOT FROZEN, not a workaround.
+- **Security:** attempt foreign-project model/link retrieval, role revocation between preview/commit, model guard injection, unauthenticated execution, secret/PII egress and sandbox escape; require server-level enforcement in actual writes.
+- **Purple (design truth):** inspect existing source UI and authorized runtime baseline before styling; graph view must equal accessible table/list in capability, drafts must not appear approved, and collapse/edit/reconnect retains data.
+- **QA lifecycle/concurrency:** test model activation CAS, approver independence, two writers, retry after lost response, stale revision, case deletion, cancel/restart and exact native evidence-to-model attribution.
+- **Grey / end-user simulation:** exercise full actor journeys for novice QA, expert QA, BA, model author, reviewer, external executor, operator and executive; label each scripted simulation G0 versus actual observed G3. Do not replace browser/run evidence with a narrated scenario.
+- **Graph Assurance:** verify every expected-vs-observed dependency, case-to-path-to-attempt relation, version ID and semantic edge; unlinked/stale/infeasible/unreachable remain visible. An edge cannot self-attest verification, and an approved model cannot self-authorize target execution.
+- **Elephant-Goldfish (fresh eyes):** run a cold-context challenge of omitted actors, alternate entry paths, apparent reuse, invalid generalization, new dependencies, unsupported platforms, non-state-based cases and false-positive suppression; no access to prior team's conclusion until its own output is frozen.
+- **Observability/Operability:** prove bounded generation, queue/lease/fencing, cancellation, alerts, at-rest provenance, retention, schema rollback and on-call diagnosis. CI health alone is not a production runbook.
+
+**Qualification of the teams themselves:** Each independent lens must receive a pinned artifact pack and a separate fresh context (distinct context is not by itself independent reasoning). Score seeded important omissions and injected defects, known-good controls, false positives, uncertain cases and source citations. Record original unedited findings before seeing the expected answers, then reconcile and rerun a new seeded corpus. White signs only if consequential blind misses and unsupported high-confidence assertions are eliminated and live evidence gates are met; number of “team runs” alone is not a pass. If no independently isolated executor is available, label the review “one-analyst lens application” and leave C4 NOT RUN.
+
+**Current Tesbo check at proposal drafting:** PR #88 source integration can be referenced as C1, and final PR-head nine workflows as C2 **only for the particular CI cases they actually ran**. C3 deployed MBT and C4 independent MBT assurance remain NOT RUN. Focus genuinely new M1/M2 scope on approved expected models, typed transitions/guards/invariants, precise case-step mappings, bounded deterministic generation and proper coverage status; do not implement a second QA run/evidence store.
