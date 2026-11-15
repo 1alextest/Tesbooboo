@@ -2521,7 +2521,11 @@ describe("McpService", () => {
 
     it("uses the atomic path with no selected rows when every id is unknown", async () => {
       const { db } = makeDb({ ownedTestcaseIds: [] });
-      const legacy = makeLegacy();
+      const legacy = makeLegacy({
+        createCycleWithApprovedTestCases: jest.fn().mockResolvedValue({
+          cycle: { id: "cycle-new" }, requested: 0, added: 0, skipped: 0
+        })
+      });
       const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "create_cycle_from_testcases", arguments: { name: "Run", testcaseIds: ["tc-ghost"] } }),
@@ -2529,6 +2533,9 @@ describe("McpService", () => {
         "proj-1"
       );
       expect(res.result.isError).toBe(false);
+      expect((legacy as any).createCycleWithApprovedTestCases).toHaveBeenCalledWith(
+        "proj-1", "user-1", expect.objectContaining({ name: "Run" }), []
+      );
       expect((legacy as any).addCycleTestCases).not.toHaveBeenCalled();
       const body = JSON.parse(res.result.content[0].text);
       expect(body.testcasesAdded).toBe(0);
