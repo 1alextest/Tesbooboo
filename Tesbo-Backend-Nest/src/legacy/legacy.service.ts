@@ -15374,10 +15374,10 @@ export class LegacyService implements OnModuleInit {
       // A confirmed archive is applied now rather than staged — but only when THIS message really is
       // the user's confirmation (zyraIsArchiveConfirmation), never on the model's word alone.
       const applied = await this.applyZyraChatOperations(projectId, uid, sessionId, decision.operations, { archiveConfirmed: this.zyraIsArchiveConfirmation(message), live: decision.liveStaged });
-      // The suite-only path can return normally after a recorded operation error. Report that on
+      // Suite creation/assignment can return normally after a recorded operation error. Report that on
       // the existing step so the recorder does not label the turn completed without errors. This
       // neither infers rollback/suite counts nor changes how any operation is applied.
-      if (decision.operations.length && decision.operations.every((op) => op.type === "create_suite") &&
+      if (decision.operations.length && decision.operations.every((op) => op.type === "create_suite" || op.type === "move_to_suite") &&
           applied.activity.some((entry) => entry.title === "An operation failed unexpectedly")) {
         onStage?.("staging", { status: "failed" }, "update");
       }
@@ -24374,6 +24374,23 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         ? `\n\n⚠️ ${String(archiveFailure.detail)}`
         : "";
     const moveSuffix = this.zyraMoveBreakdownSuffix(applied.moveBreakdown) + archivedSuffix;
+    const ru = zyraReplyLanguage() === "ru";
+    // Pending proposals, including drafts assigned to a suite before a later operation fails,
+    // still need the same review guidance; a completed move alone must not receive it.
+    const proposedCount = applied.testcases.filter((tc) => typeof tc.action === "string" && tc.action.startsWith("proposed-")).length;
+    const reviewHint = proposedCount > 0 && ru
+      ? ZYRA_RU.reviewHint(proposedCount)
+      : proposedCount > 0
+      ? `\n\n📝 ${proposedCount} of them ${proposedCount === 1 ? "is" : "are"} staged for your review — open the review panel to select, edit, or discard, then Save to add ${proposedCount === 1 ? "it" : "them"} to the repository. Nothing has been written to the repository yet.`
+      : "";
+    // Suite assignment also writes independently; a caught error is neither a missing target nor
+    // proof of rollback. Keep completed moves and any still-pending review guidance alongside it.
+    if (decision.operations.length && decision.operations.every((op) => op.type === "create_suite" || op.type === "move_to_suite") &&
+        applied.activity.some((entry) => entry.title === "An operation failed unexpectedly")) {
+      const warning = ru ? ZYRA_RU.suiteOperationError
+        : "⚠️ Suite operations reported an error. Do not treat the response below as confirmation that every operation completed. Any changes already applied were kept; check the activity log before retrying.";
+      return warning + "\n\n" + decision.reply + reviewHint + moveSuffix;
+    }
     /*
      * An `answer` turn used to return its reply unchecked, on the reasoning that an answer changes
      * nothing so there is nothing to reconcile. That is exactly backwards: an answer changes nothing,
@@ -24402,13 +24419,6 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     // (see ZYRA_TESTCASE_ONLY_COMPLETION_CLAIM's own comment for why the full completion-claim
     // regex can't be used directly here).
     if (decision.operations.length && decision.operations.every((op) => op.type === "create_suite")) {
-      // Suite writes are independent: an error can follow a committed write. Testcase counts cannot
-      // establish suite success or rollback, so warn on the recorded error without inventing either.
-      if (applied.activity.some((entry) => entry.title === "An operation failed unexpectedly")) {
-        const warning = zyraReplyLanguage() === "ru" ? ZYRA_RU.suiteOperationError
-          : "⚠️ Suite operations reported an error. Do not treat the response below as confirmation that every operation completed. Any changes already applied were kept; check the activity log before retrying.";
-        return warning + "\n\n" + decision.reply + moveSuffix;
-      }
       const banner = this.zyraFalseCompletionBanner(decision.reply, decision.__salvaged, LegacyService.ZYRA_TESTCASE_ONLY_COMPLETION_CLAIM);
       return (banner ? banner + "\n\n" : "") + decision.reply + moveSuffix;
     }
@@ -24417,7 +24427,6 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const requested = decision.operations.filter((op) => op.type !== "create_suite").length;
     const appliedCount = applied.testcases.length + (applied.liveSavedCount ?? 0);
 
-    const ru = zyraReplyLanguage() === "ru";
     // Every update named an existing test case but none of them would change anything (see
     // applyZyraChatOperations) — a different situation from "those test cases don't exist", so it
     // gets its own wording rather than the not-found one below.
@@ -24448,17 +24457,6 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         decision.reply
       ].join("\n") + moveSuffix;
     }
-
-    // create/update/archive no longer write straight to the repository — they're staged for review
-    // (see applyZyraChatOperations), so a reply claiming "created"/"saved"/"archived" past tense is
-    // no longer accurate even when every requested operation produced a row. Appended after the
-    // model's own prose rather than replacing it, so the reply keeps whatever specifics it named.
-    const proposedCount = applied.testcases.filter((tc) => typeof tc.action === "string" && tc.action.startsWith("proposed-")).length;
-    const reviewHint = proposedCount > 0 && ru
-      ? ZYRA_RU.reviewHint(proposedCount)
-      : proposedCount > 0
-      ? `\n\n📝 ${proposedCount} of them ${proposedCount === 1 ? "is" : "are"} staged for your review — open the review panel to select, edit, or discard, then Save to add ${proposedCount === 1 ? "it" : "them"} to the repository. Nothing has been written to the repository yet.`
-      : "";
 
     // Gated on proposedCount, not just the reply text: move_to_suite/create_suite write immediately
     // (applied.testcases rows carry a real id, no "proposed-" action), so a reply claiming "saved"/
