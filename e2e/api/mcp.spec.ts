@@ -673,6 +673,46 @@ test.describe("MCP create postconditions use existing test-case field", () => {
   });
 });
 
+test.describe("MCP graph change-review discovery", () => {
+  test("a read-scoped agent discovers and inspects existing graph history without writing", async ({ request }) => {
+    const api = await newRequestContext.newContext({
+      baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] }
+    });
+    let tokenId: string | undefined;
+    try {
+      const tokenResponse = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+        data: { name: `E2E graph review read ${Date.now()}`, scopes: ["read"] }
+      });
+      expect(tokenResponse.ok()).toBeTruthy();
+      const tokenInfo = await tokenResponse.json();
+      tokenId = tokenInfo.id;
+      const catalogResponse = await api.post(`/api/projects/${ctx.projectId}/mcp`, {
+        headers: { Authorization: `Bearer ${tokenInfo.token}` },
+        data: { jsonrpc: "2.0", id: 2, method: "tools/list" }
+      });
+      expect(catalogResponse.ok()).toBeTruthy();
+      const names = (await catalogResponse.json()).result.tools.map((x: { name: string }) => x.name);
+      expect(names).toContain("list_qa_graph_changes");
+      const result = await callMcpTool(api, tokenInfo.token, "list_qa_graph_changes", { limit: 10 });
+      expect(Array.isArray(result.entries)).toBe(true);
+      expect(result.entries.every((entry: { reviewReceipt?: {
+        evidence?: { coverageAssertion: string; executionAssertion: string }
+      } }) => !entry.reviewReceipt ||
+        (entry.reviewReceipt.evidence?.coverageAssertion === "none" &&
+         entry.reviewReceipt.evidence?.executionAssertion === "none"))).toBe(true);
+      const bad = await callMcpToolExpectError(api, tokenInfo.token, "list_qa_graph_changes", {
+        beforeId: "1 OR TRUE"
+      });
+      expect(bad.message).toMatch(/beforeId/);
+    } finally {
+      if (tokenId) await request.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, {
+        failOnStatusCode: false
+      });
+      await api.dispose();
+    }
+  });
+});
+
 test.describe("MCP Notes use the existing test case field", () => {
   test("catalog advertises Notes and create/update/read-back preserves other case content", async ({ request }) => {
     const api = await newRequestContext.newContext({

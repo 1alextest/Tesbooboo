@@ -1,4 +1,6 @@
 import { BUG_SEVERITIES, LegacyService } from "../legacy/legacy.service";
+import { CurrentCacheGraphReader } from "../behavior-graph/current-cache-graph.reader";
+import { CurrentCacheGraphHistory } from "../behavior-graph/current-cache-graph.history";
 import { McpError, RpcCode, type McpTool, type McpToolContext } from "./mcp.types";
 
 /** Per-item cap for tools that loop over a single-record legacy call once per array entry — kept
@@ -158,6 +160,39 @@ function describeError(err: unknown): string {
 
 export function buildMcpTools(): McpTool[] {
   return [
+    {
+      name: "list_qa_graph_changes",
+      description:
+        "Read-only QA graph history for the token's existing project: committed changes, source-scope discontinuities, changed node/edge IDs and candidate native test case IDs. Cached links and source declarations do not establish coverage, execution, failure or approval. No code scan or test write is performed. Optional limit 1–100 and exclusive beforeId cursor.",
+      requiredScope: "read",
+      inputSchema: {
+        type: "object",
+        properties: {
+          limit: { type: "integer", minimum: 1, maximum: 100, description: "Maximum records (default 25)" },
+          beforeId: { type: "string", description: "Exclusive positive decimal history ID cursor" }
+        },
+        additionalProperties: false
+      },
+      handler: async (args, ctx) => {
+        if (args.limit !== undefined && (!Number.isInteger(args.limit) ||
+          (args.limit as number) < 1 || (args.limit as number) > 100)) {
+          throw new McpError(RpcCode.ToolExecutionError, "limit must be an integer between 1 and 100");
+        }
+        if (args.beforeId !== undefined &&
+            (typeof args.beforeId !== "string" || !/^[1-9][0-9]*$/.test(args.beforeId))) {
+          throw new McpError(RpcCode.ToolExecutionError, "beforeId must be a positive decimal history cursor");
+        }
+        const history = new CurrentCacheGraphHistory(
+          ctx.db, new CurrentCacheGraphReader(ctx.db, ctx.legacy)
+        );
+        const pageSize = (args.limit as number | undefined) ?? 25;
+        const entries = await history.listForUser(
+          ctx.userId, ctx.projectId, pageSize, args.beforeId as string | undefined
+        );
+        return { entries, nextBeforeId: entries.length === pageSize
+          ? entries[entries.length - 1].id : null };
+      }
+    },
     {
       name: "list_projects",
       description:
