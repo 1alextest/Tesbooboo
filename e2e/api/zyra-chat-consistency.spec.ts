@@ -8,6 +8,7 @@ import { MOVE_MODES, seedMoveRepository, settleMoveFixtures, verifyZyraMoveTurn,
 import { SINGLE_MOVE_SELECTORS, verifyZyraSingleMove } from "../utils/zyra-single-move";
 import { ALIAS_MOVE_MODES, verifyZyraAliasMove } from "../utils/zyra-alias-move";
 import { MISSING_SUITE_MODES, seedMissingSuiteRepository, verifyZyraMissingSuite } from "../utils/zyra-missing-suite";
+import { MOVE_TRACE_COUNTS, seedMoveTraceRepository, verifyZyraMoveTraceCount } from "../utils/zyra-move-trace-count";
 import {
   loginAs,
   provisionRbacTenant,
@@ -643,6 +644,18 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
       }
       await settleMoveFixtures([fixture, { ...fixture, firstId: fixture.blockedId }], state); await allocateFakeAiKey();
       await verifyZyraMissingSuite({ request: asOwner, ai, base, ownerId: tenant!.owner.userId, language, mode, fixture, state });
+    });
+  }
+
+  for (const language of ["en", "ru"] as const) for (const count of MOVE_TRACE_COUNTS) {
+    test(`Zyra move trace ${language}: ${count} persisted targets`, async () => {
+      const base = `${env.apiBaseUrl}/api/projects/${tenant!.mainProjectId}`;
+      const sql = answerRepositorySnapshotSql.replace(/\$1\b/g, literal(tenant!.mainProjectId));
+      const state = async () => JSON.parse(scalar(`SELECT row_to_json(snapshot)::text FROM (${sql}) snapshot;`)) as AnswerRepositoryState;
+      const fixture = await seedMoveTraceRepository(asOwner, base, `${language}-${count}`, count);
+      await settleMoveFixtures(fixture.allIds.map((id) => ({ ...fixture, firstId: id, secondId: id })), state);
+      await allocateFakeAiKey();
+      await verifyZyraMoveTraceCount({ request: asOwner, ai, base, ownerId: tenant!.owner.userId, language, count, fixture, state });
     });
   }
 
