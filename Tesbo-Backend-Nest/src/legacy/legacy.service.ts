@@ -15393,8 +15393,12 @@ export class LegacyService implements OnModuleInit {
       // `{testcaseIds: [], totalCount: 0}` on every create turn, silently erasing the
       // pendingReviewRequestIds recordZyraPendingReviewRequest had just set moments earlier in the
       // SAME call. See the changelog entry this was fixed alongside.
+      // Move cards are capped per operation; the existing readback, not that preview, has the full count.
+      // Keep known preview counts as a lower bound if the best-effort readback was unavailable.
+      const movedPreviewCount = applied.testcases.filter((tc) => tc.action === "moved").length;
+      const movedCount = Math.max(movedPreviewCount, applied.moveBreakdown?.reduce((total, suite) => total + suite.count, 0) ?? 0);
       onStage?.("finalizing", {
-        savedCount: applied.testcases.filter((tc) => !(typeof tc.action === "string" && tc.action.startsWith("proposed-"))).length,
+        savedCount: applied.testcases.filter((tc) => tc.action !== "moved" && !(typeof tc.action === "string" && tc.action.startsWith("proposed-"))).length + movedCount,
         proposedCount: applied.testcases.filter((tc) => typeof tc.action === "string" && tc.action.startsWith("proposed-")).length
       });
       const item = await this.insertZyraAssistantMessage({ sessionId, projectId, uid, decision, applied, testcases, activity, traceMessageId });
