@@ -622,6 +622,111 @@ test.describe("MCP create_testcase stores steps in the shape the test case edito
  * vocabulary as an enum, map a value onto it case-insensitively, and refuse anything else by name
  * instead of storing it. An omitted severity stays unset exactly as before.
  */
+/*
+ * Notes are testcases.attachments TEXT in the existing editor, not file uploads.
+ * A typed MCP client must discover the field and round-trip it through the
+ * same legacy writer and Test Case Detail API, without rewriting Context.
+ */
+test.describe("MCP Notes use the existing test case field", () => {
+  test("catalog advertises Notes and create/update/read-back preserves other case content", async ({ request }) => {
+    const api = await newRequestContext.newContext({
+      baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] },
+    });
+    let tokenId: string | undefined;
+    let caseId: string | undefined;
+    try {
+      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+        data: { name: `E2E MCP Notes ${Date.now()}`, scopes: ["read", "write"] }
+      });
+      expect(tokenRes.ok()).toBeTruthy();
+      const tokenBody = await tokenRes.json();
+      tokenId = tokenBody.id;
+      const token = tokenBody.token as string;
+
+      const catalogRes = await api.post(`/api/projects/${ctx.projectId}/mcp`, {
+        headers: { Authorization: `Bearer ${token}` },
+        data: { jsonrpc: "2.0", id: 2, method: "tools/list" }
+      });
+      const catalog = (await catalogRes.json()).result.tools;
+      for (const name of ["create_testcase", "update_testcase"]) {
+        const tool = catalog.find((item: { name: string }) => item.name === name);
+        expect(tool.inputSchema.properties.attachments.type).toBe("string");
+      }
+      expect(catalog.find((item: { name: string }) => item.name === "bulk_create_testcases")
+        .inputSchema.properties.testcases.items.properties.attachments.type).toBe("string");
+
+      const notes = "Technical support: café 🧪\\nEvidence: independent observation";
+      const created = await callMcpTool(api, token, "create_testcase", {
+        title: `E2E MCP Notes case ${Date.now()}`, description: "Human-readable purpose",
+        preconditions: "Authorized project member", attachments: notes
+      });
+      caseId = created.id;
+      expect(caseId).toBeTruthy();
+      let persisted = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${caseId}`)).json();
+      expect(persisted.attachments).toBe(notes);
+      expect(persisted.description).toBe("Human-readable purpose");
+      const originalSources = persisted.sourceRefs;
+      const originalSuite = persisted.suiteId;
+
+      await callMcpTool(api, token, "update_testcase", { testcaseId: caseId, title: "Reworded purpose" });
+      persisted = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${caseId}`)).json();
+      expect(persisted.attachments).toBe(notes);
+      expect(persisted.sourceRefs).toEqual(originalSources);
+      expect(persisted.suiteId).toBe(originalSuite);
+      await callMcpTool(api, token, "update_testcase", { testcaseId: caseId, attachments: "" });
+      persisted = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${caseId}`)).json();
+      expect(persisted.attachments).toBe("");
+      expect(persisted.description).toBe("Human-readable purpose");
+      expect(persisted.title).toBe("Reworded purpose");
+
+      const invalid = await callMcpToolExpectError(api, token, "update_testcase", {
+        testcaseId: caseId, attachments: null
+      });
+      expect(invalid.message).toMatch(/attachments.*Notes/i);
+      expect((await (await request.get(`/api/projects/${ctx.projectId}/testcases/${caseId}`)).json()).attachments).toBe("");
+    } finally {
+      if (caseId) await deleteCase(request, caseId);
+      if (tokenId) await request.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
+  test("mixed bulk Notes input isolates invalid item and persists valid sibling", async ({ request }) => {
+    const api = await newRequestContext.newContext({
+      baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] }
+    });
+    let tokenId: string | undefined;
+    const ids: string[] = [];
+    try {
+      const response = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+        data: { name: `E2E MCP Notes bulk ${Date.now()}`, scopes: ["write"] }
+      });
+      expect(response.ok()).toBeTruthy();
+      const tokenBody = await response.json();
+      tokenId = tokenBody.id;
+      const notes = "First Notes";
+      const result = await callMcpTool(api, tokenBody.token, "bulk_create_testcases", {
+        testcases: [
+          { title: `E2E Notes first ${Date.now()}`, attachments: notes },
+          { title: `E2E Notes invalid ${Date.now()}`, attachments: false },
+          { title: `E2E Notes last ${Date.now()}`, attachments: "" }
+        ]
+      });
+      for (const item of result.results) if (item.ok) ids.push(item.testcase.id);
+      expect(result).toMatchObject({ total: 3, succeeded: 2, failed: 1 });
+      expect(result.results[1].error).toMatch(/attachments.*Notes/i);
+      const first = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${result.results[0].testcase.id}`)).json();
+      const last = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${result.results[2].testcase.id}`)).json();
+      expect(first.attachments).toBe(notes);
+      expect([null, ""]).toContain(last.attachments);
+    } finally {
+      for (const id of ids) await deleteCase(request, id);
+      if (tokenId) await request.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+});
+
 test.describe("MCP test case severity uses the vocabulary Test Case Detail can display", () => {
   async function withWriteToken(
     request: APIRequestContext,

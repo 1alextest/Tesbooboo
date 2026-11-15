@@ -13,6 +13,78 @@ function fieldControl(page: Page, label: string): Locator {
   );
 }
 
+/** Verify the existing editor's Notes textarea after an authorized MCP write,
+ * then ensure the MCP omission path does not overwrite a subsequent human edit.
+ * Only disposable smoke-tenant records are used.
+ */
+test("MCP Notes round-trip through editor, preserve human edit, and explicitly clear", async ({ page, request }) => {
+  const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  const mcp = await pwRequest.newContext({
+    baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] },
+  });
+  let tokenId: string | undefined;
+  let caseId: string | undefined;
+  const title = `E2E MCP to UI Notes ${Date.now()}`;
+  const firstNotes = "MCP technical context: café 🧪";
+  const humanNotes = "Reviewer confirmed fixture and build.";
+  const call = async (token: string, name: string, args: Record<string, unknown>) => {
+    const response = await mcp.post(`/api/projects/${ctx.projectId}/mcp`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } },
+    });
+    expect(response.ok()).toBeTruthy();
+    const body = await response.json();
+    expect(body.error).toBeUndefined();
+    expect(body.result.isError).toBe(false);
+    return JSON.parse(body.result.content[0].text);
+  };
+  try {
+    const tokenResponse = await api.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      data: { name: `E2E Notes editor token ${Date.now()}`, scopes: ["write", "read"] },
+    });
+    expect(tokenResponse.ok()).toBeTruthy();
+    const tokenInfo = await tokenResponse.json();
+    tokenId = tokenInfo.id;
+    const token = tokenInfo.token as string;
+    const created = await call(token, "create_testcase", { title, attachments: firstNotes });
+    caseId = created.id;
+    expect(caseId).toBeTruthy();
+
+    await page.goto(`/projects/${ctx.projectId}/testcases`);
+    await expect(page.getByRole("button", { name: title })).toBeVisible();
+    await page.getByRole("button", { name: title }).click();
+    const panel = page.locator("aside");
+    const notes = panel.getByPlaceholder("Add notes, links to screenshots, logs, or reference docs");
+    await expect(notes).toHaveValue(firstNotes);
+    await notes.fill(humanNotes);
+    await panel.getByRole("button", { name: "Save changes" }).click();
+    await expect(panel.getByText("Test case updated successfully.")).toBeVisible();
+
+    const persisted = async () => {
+      const response = await api.get(`/api/projects/${ctx.projectId}/testcases/${caseId}`);
+      expect(response.ok()).toBeTruthy();
+      return response.json();
+    };
+    expect((await persisted()).attachments).toBe(humanNotes);
+
+    await call(token, "update_testcase", { testcaseId: caseId, description: "Readable test intent" });
+    expect((await persisted()).attachments).toBe(humanNotes);
+    await call(token, "update_testcase", { testcaseId: caseId, attachments: "" });
+    const cleared = await persisted();
+    expect(cleared.attachments).toBe("");
+    expect(cleared.description).toBe("Readable test intent");
+    expect(cleared.title).toBe(title);
+    await page.reload();
+    await page.getByRole("button", { name: title }).click();
+    await expect(page.locator("aside").getByPlaceholder("Add notes, links to screenshots, logs, or reference docs")).toHaveValue("");
+  } finally {
+    if (caseId) await api.delete(`/api/projects/${ctx.projectId}/testcases/${caseId}`, { failOnStatusCode: false });
+    if (tokenId) await api.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    await mcp.dispose();
+    await api.dispose();
+  }
+});
+
 test.describe("test case creation", () => {
   test("a user can create a test case from the UI and see it in the list", { tag: '@tesbo.testId("TES-TC-836")' }, async ({ page }) => {
     const title = `UI smoke test case ${Date.now()}`;
