@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, forwardRef, HttpException, Inject, Injectable, Logger, NotFoundException, OnModuleInit } from "@nestjs/common";
+import { assertApprovedNewRunCases } from "./approved-run-cases.policy";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
@@ -6880,6 +6881,9 @@ export class LegacyService implements OnModuleInit {
     const res = await this.db.transaction(async (client) => {
       const cycle = await this.lockActiveCycle(client, cycleId);
       this.assertAutomatedRunWritable(cycle);
+      // Apply the QA approval invariant at the canonical transaction boundary,
+      // not only the Test Run picker. Locks prevent a concurrent Draft demotion.
+      await assertApprovedNewRunCases(client, projectId, cycleId, ids);
       return client.query<{ id: string }>(
       `WITH input AS (
          SELECT id, ord FROM unnest($2::uuid[]) WITH ORDINALITY AS u(id, ord)
@@ -6917,7 +6921,7 @@ export class LegacyService implements OnModuleInit {
                 t.description, t.preconditions, t.postconditions, t.steps,
                 t.test_data, t.automation_status, t.automation_tags
            FROM input i
-           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3
+           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3 AND t.status = 'Approved'
            CROSS JOIN base
           WHERE EXISTS (SELECT 1 FROM cycles c WHERE c.id = $1 AND c.deleted_at IS NULL)
          ON CONFLICT (cycle_id, testcase_id) WHERE deleted_at IS NULL DO NOTHING

@@ -4,6 +4,7 @@ import * as path from "path";
 import { DatabaseService } from "../database/database.service";
 import type { PoolClient } from "pg";
 import { LegacyService, isUuid } from "../legacy/legacy.service";
+import { assertApprovedNewRunCases } from "../legacy/approved-run-cases.policy";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import { StorageService } from "../storage/storage.service";
 import {
@@ -389,8 +390,16 @@ export class AutomationService {
     runner: PoolClient | DatabaseService = this.db
   ): Promise<{ attached: number; unknown: string[] }> {
     if (!caseIds.length) return { attached: 0, unknown: [] };
+    // A direct createRun call has no surrounding transaction. Take the SAME
+    // row locks and Approved check as a manual run-add; callers with an existing
+    // PoolClient (replay, result, close races) already own that transaction.
+    if (runner === this.db) {
+      return this.db.transaction((client) => this.attachCases(runId, projectId, caseIds, client));
+    }
     const { found, unknown } = await this.resolveCases(projectId, caseIds);
     if (!found.size) return { attached: 0, unknown };
+    await assertApprovedNewRunCases(runner as PoolClient, projectId, runId,
+      [...found.values()].map((row) => row.id));
 
     const res = await (runner as DatabaseService).query<{ id: string }>(
       `WITH input AS (
@@ -425,7 +434,7 @@ export class AutomationService {
                 t.description, t.preconditions, t.postconditions, t.steps,
                 t.test_data, t.automation_status, t.automation_tags
            FROM input i
-           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3
+           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3 AND t.status = 'Approved'
            CROSS JOIN base
           WHERE EXISTS (SELECT 1 FROM cycles c WHERE c.id = $1 AND c.deleted_at IS NULL AND c.closed_at IS NULL)
          ON CONFLICT (cycle_id, testcase_id) WHERE deleted_at IS NULL DO NOTHING
