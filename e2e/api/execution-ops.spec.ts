@@ -83,7 +83,7 @@ test.describe("execution bulk operations, schedules and share links", () => {
     const testcaseIds: string[] = [];
     for (let i = 0; i < count; i++) {
       const res = await asOwner.post(`/api/projects/${project}/testcases`, {
-        data: { title: stamp(`case ${i + 1}`) },
+        data: { title: stamp(`case ${i + 1}`), status: "Approved" },
         failOnStatusCode: false,
       });
       expect(res.status(), `seeding a test case — ${await res.text()}`).toBe(201);
@@ -721,8 +721,8 @@ test.describe("execution bulk operations, schedules and share links", () => {
     const cycleId = (await cycle.json()).id;
 
     exec(
-      `INSERT INTO testcases (project_id, external_id, title)
-       SELECT ${literal(tenant!.mainProjectId)}, 'E2EBULK-' || g, 'E2E ExecOps bulk ' || lpad(g::text, 4, '0')
+      `INSERT INTO testcases (project_id, external_id, title, status)
+       SELECT ${literal(tenant!.mainProjectId)}, 'E2EBULK-' || g, 'E2E ExecOps bulk ' || lpad(g::text, 4, '0'), 'Approved'
          FROM generate_series(1, ${BATCH}) AS g;`,
     );
     const testcaseIds = column(
