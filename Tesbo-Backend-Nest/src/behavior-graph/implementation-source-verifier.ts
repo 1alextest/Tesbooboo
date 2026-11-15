@@ -101,7 +101,9 @@ export async function captureVerifiedSourceDeclarations(
     conceptKeys.add(identity);
     // Canonical line-range hash; a declaration cannot claim a digest for
     // content that is absent from this immutable pinned commit.
-    const actual = hash(content.slice(proposed.lineStart - 1, proposed.lineEnd).join("\n"));
+    const sourceLines = content.slice(proposed.lineStart - 1, proposed.lineEnd).join("\n");
+    if (!sourceLines.trim()) fail("declaration has no nonblank source evidence");
+    const actual = hash(sourceLines);
     if (actual !== proposed.declarationSha256) fail("declaration bytes do not match source");
     concepts.push({ ...proposed });
   }

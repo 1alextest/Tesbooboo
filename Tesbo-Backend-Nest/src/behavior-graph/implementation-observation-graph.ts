@@ -40,6 +40,8 @@ export interface TrustedSourceObservation {
 
 export interface ImplementationGraphCapture extends GraphCaptureForComparison {
   observedCommitSha: string;
+  conceptInventoryStatus: "unverified";
+  declarationClassification: "proposed_not_semantically_attested";
   sourceAttestation: "caller_must_verify";
   semantics: "declarations_not_runtime_verification";
   coverageAssertion: "none";
@@ -143,6 +145,8 @@ export function projectImplementationObservations(
     inventoryStatus: "complete",
     unresolvedDiagnostics: [],
     observedCommitSha: source.commitSha,
+    conceptInventoryStatus: "unverified",
+    declarationClassification: "proposed_not_semantically_attested",
     sourceAttestation: "caller_must_verify",
     semantics: "declarations_not_runtime_verification",
     coverageAssertion: "none",

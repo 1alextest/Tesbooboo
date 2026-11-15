@@ -85,6 +85,14 @@ describe("pinned source evidence validation before graph projection", () => {
     }), request())).rejects.toThrow("bounded source blob");
   });
 
+  it("does not permit a blank line to support a claimed behavior or route", async () => {
+    const r = reader({ readFileAtCommit: jest.fn().mockResolvedValue(Buffer.from("first\\n   \\n")) });
+    await expect(captureVerifiedSourceDeclarations(r, request({
+      proposedConcepts: [{ ...request().proposedConcepts[0], lineStart: 2, lineEnd: 2,
+        declarationSha256: sha("   ") }]
+    }))).rejects.toThrow("nonblank source evidence");
+  });
+
   it("rejects malformed and duplicate proposed concepts", async () => {
     const original = request().proposedConcepts[0];
     await expect(captureVerifiedSourceDeclarations(reader(), request({

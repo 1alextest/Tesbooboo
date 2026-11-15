@@ -46,6 +46,8 @@ describe("internal implementation source observation projection", () => {
     expect(observed.observedCommitSha).toBe(source.commitSha);
     expect(observed.executionAssertion).toBe("none");
     expect(observed.sourceAttestation).toBe("caller_must_verify");
+    expect(observed.conceptInventoryStatus).toBe("unverified");
+    expect(observed.declarationClassification).toBe("proposed_not_semantically_attested");
     expect(observed.semantics).toBe("declarations_not_runtime_verification");
   });
 
