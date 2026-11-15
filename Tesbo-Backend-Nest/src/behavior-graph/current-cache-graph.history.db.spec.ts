@@ -384,6 +384,12 @@ const url = process.env.DATABASE_URL ?? "";
           runId: cycleId, caseId, runName: "Graph impact QA run",
           caseStillInRun: true, execution: null
         });
+        // Graph-to-run handoff alone did not execute or fail the test.
+        const completedCount = async () => (await admin.query<{ n: number }>(
+          "SELECT COUNT(*)::int AS n FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id WHERE ci.cycle_id=$1 AND e.status IN ('Passed','Failed','Blocked')",
+          [cycleId]
+        )).rows[0].n;
+        expect(await completedCount()).toBe(0);
         // This is native execution history, not a status invented by the graph.
         // Metadata alone does not attest that the blob remains retrievable.
         const itemId = (await admin.query<{ id: string }>(
@@ -442,10 +448,9 @@ const url = process.env.DATABASE_URL ?? "";
           project_id: project, history_id: receiptId,
           cycle_id: cycleId, testcase_id: caseId, linked_by_user_id: user
         }]);
-        expect((await admin.query(
-          "SELECT COUNT(*)::int AS n FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id WHERE ci.cycle_id=$1 AND e.status IN ('Passed','Failed','Blocked')",
-          [cycleId]
-        )).rows[0].n).toBe(0);
+        // This later Failed status belongs to the explicitly seeded native
+        // execution; it must not be mistaken for an outcome created by linking.
+        expect(await completedCount()).toBe(1);
         const notCandidate = randomUUID();
         await expect(links.linkForUser(user, project, receiptId, cycleId,
           { testcaseIds: [caseId, notCandidate] })).rejects.toMatchObject({ status: 409 });
