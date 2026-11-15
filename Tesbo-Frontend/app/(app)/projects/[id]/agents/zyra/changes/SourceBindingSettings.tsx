@@ -40,7 +40,7 @@ export function SourceBindingSettings({ projectId }: { projectId: string }) {
       // Non-owners should not see the administrative setup form.
       // This is presentation only; server-side ownership remains mandatory.
       const message = cause instanceof Error ? cause.message : "Could not load source settings";
-      if (/403|forbidden|project owner required/i.test(message)) setAuthorized(false);
+      if (/403|forbidden|permission|project owner required/i.test(message)) setAuthorized(false);
       else { setAuthorized(true); setError(message); }
     }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
