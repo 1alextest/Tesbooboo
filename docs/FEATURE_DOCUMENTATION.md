@@ -6305,9 +6305,9 @@ The following is a **change map**, NOT a claim these files were edited or valida
 **Review provenance:** an analytical full-role lens challenge and scenario table may accompany this proposal in docs/reviews, but this alone is not an independently executed team run. No code, database migration, UI or model generator is implemented by this specification. Do not merge as normative requirements until the canonical eight-file archive, existing owner policy and independent team receipts are reconciled.
 
 
-#### MBT-001-M — Assurance-amended unresolved decisions and proof obligations
+#### MBT-001-M — Open design decisions and verification requirements
 
-This paragraph records a single-analyst role-lens challenge (2026-11-15), not a claim that independent canonical team agents were executed. The companion review record has lens-specific findings and verdict. These are **gates**, not permissions to invent defaults.
+These are product-design decisions and acceptance evidence the proposal has not yet resolved. They are not a team verdict, a substitute for external review, or directions to a reviewer about what to find.
 
 | ID | Disposition | Required closure before model spec freeze |
 |---|---|---|
@@ -6321,41 +6321,6 @@ This paragraph records a single-analyst role-lens challenge (2026-11-15), not a 
 | MBT-GATE-08 | BLOCKING | Human-approved target-execution scope, PII/destructive controls, real adapter evidence and audit; no modeled path can self-authorize production effects |
 | MBT-GATE-09 | BLOCKING | Complete existing-run / native-execution evidence linking with exact case/model/build revision, model stale-state recovery and a read-only executive truth table with UNKNOWN explicitly visible |
 
-**Assurance classification:** Blue/Green reuse and design composition look plausible from source. Red/Security/QA/Graph/Operability find material proof gaps. Purple and Grey are bounded to static or reasoned journeys; true live usability remains unknown. White outcome: NOT FROZEN, NO BUILD AUTHORIZATION for normative MBT engine until the gates are closed or explicitly dispositioned by human governance. This does not unwind PR #88's final-head 9/9 isolated CI evidence or its completed merge into `development`; MBT remains a separate proposed increment. Deployment, independent acceptance and model-based behavior remain unproven.
+**Review scope:** MBT-001 is a proposed capability, not implemented behavior. Use the existing canonical review-team charters and their orchestration unchanged to review this specification. Reviewers must receive the pinned specification, applicable project policy and source context, without any previous answer, suggested findings, issue list or reviewer verdict. A full team-run receipt is required before claiming those teams signed off. PR #88's separately evidenced merge and CI do not validate MBT behavior.
 
 
-#### MBT-001-N — Permanent application-agnostic assurance lens protocol (amended after PR #88 evidence correction)
-
-**Scope of reuse:** This review contract applies to any future Tesbo feature, any model/graph extension, and any other application under the assurance framework. Examples may illustrate a rule; the rule MUST name the general invariant, applicable domains and falsifying counterexample, not embed application-specific tables, project titles, URL slugs or tool vendors as its logic. Preserve and extend existing team charters; do not rename, merge or bypass teams to manufacture certification.
-
-**Artifact/evidence ladder — mandatory per material claim:**
-
-| Grade | Admissible assertion | Required evidence | Claims forbidden without next grade |
-|---|---|---|---|
-| C0 AUTHOR-REPORTED | PR body, issue, model-generated summary or design says feature exists | Literal claim, author, date, source ref | Cannot assert source implementation, behavior or deploy |
-| C1 CODE-VERIFIED | Pinned SHA code path contains stated control/flow | Exact commit, file/function, relevant unit/contract and negative code trace; conflict/competing path check | Cannot assert executed user journey or deployed behavior |
-| C2 CI-EXECUTED | Named checks ran on an exact pinned head/SHA | Workflow name/run IDs, completion/result and what was exercised; failures/skip and coverage boundaries | Passing OLD head never certifies NEW head or merge |
-| C3 DEPLOYED-OBSERVED | Deployed target actually ran a named journey on verified SHA/migrations | Deployment identity, authorized account/role, steps, observed UI/API/raw evidence, environment, timing | Cannot infer unrelated journeys, unseen states or source correctness |
-| C4 INDEPENDENT-ASSURED | Isolated reviewer with blind controls and human adjudication reproduced relevant risk probes | Original independent reviewer traces, seeded defect detection, benign control acceptance, false-positive analysis, withheld-key adjudication | Team names, shared-context reasoning and mock traces do not qualify |
-
-**Freshness and status rule:** Begin every review with exact repository, branch, HEAD, base, mergeability/merged_at, checked date, deployed build if known, and CI run SHA. When a PR moves from open to merged during review, update the status and dependency order; do not continue saying “open,” and do not equate merge with deploy. An earlier 9/9 CI may have been stale even when correct for its own SHA. Record C0/C1/C2/C3/C4 independently, never upgrade evidence on narrative confidence.
-
-**Reusable full-chain invariant for every lens:** Identify reachable authorized producers and prerequisites → authoritative versions/provenance/freshness/context → all material transformations and seams → exact write/commit/ack/retry/idempotency boundaries → positive and forbidden downstream effects → observable failure/block/cancel/recovery paths → human approval/role separation → retention and operational shutdown → both cold-start and second-domain proof. If a chain is absent, report UNKNOWN or BLOCKED, never quietly narrow away the missing journey.
-
-**Standing lens-specific requirements:**
-
-- **Blue (archaeology/reuse):** current product roles → module → context map first; enumerate native data owners and all equivalent implementation paths; explain why reuse unchanged, extension or proven library is insufficient before inventing a new store/agent/UI.
-- **Red (premise attack):** falsify the principal claim, construct a counterexample where observed code is defective but model says PASS, test drift/denominator tricks and old CI described as latest. Challenge “all tests graph-modeled” by bringing a legitimate non-state-based case.
-- **Green (seams/opportunity):** show a minimal integration preserving native run/case/review ownership, a competing library alternative with cost/license/maintenance evidence, and the incremental change that adds unique value.
-- **White (completeness gate):** do not certify until artifact integrity, versioned source evidence, all material journeys, independent cold role runs, negative controls and full-chain evidence are present. Missing canonical eight-spec bytes = NOT FROZEN, not a workaround.
-- **Security:** attempt foreign-project model/link retrieval, role revocation between preview/commit, model guard injection, unauthenticated execution, secret/PII egress and sandbox escape; require server-level enforcement in actual writes.
-- **Purple (design truth):** inspect existing source UI and authorized runtime baseline before styling; graph view must equal accessible table/list in capability, drafts must not appear approved, and collapse/edit/reconnect retains data.
-- **QA lifecycle/concurrency:** test model activation CAS, approver independence, two writers, retry after lost response, stale revision, case deletion, cancel/restart and exact native evidence-to-model attribution.
-- **Grey / end-user simulation:** exercise full actor journeys for novice QA, expert QA, BA, model author, reviewer, external executor, operator and executive; label each scripted simulation G0 versus actual observed G3. Do not replace browser/run evidence with a narrated scenario.
-- **Graph Assurance:** verify every expected-vs-observed dependency, case-to-path-to-attempt relation, version ID and semantic edge; unlinked/stale/infeasible/unreachable remain visible. An edge cannot self-attest verification, and an approved model cannot self-authorize target execution.
-- **Elephant-Goldfish (fresh eyes):** run a cold-context challenge of omitted actors, alternate entry paths, apparent reuse, invalid generalization, new dependencies, unsupported platforms, non-state-based cases and false-positive suppression; no access to prior team's conclusion until its own output is frozen.
-- **Observability/Operability:** prove bounded generation, queue/lease/fencing, cancellation, alerts, at-rest provenance, retention, schema rollback and on-call diagnosis. CI health alone is not a production runbook.
-
-**Qualification of the teams themselves:** Each independent lens must receive a pinned artifact pack and a separate fresh context (distinct context is not by itself independent reasoning). Score seeded important omissions and injected defects, known-good controls, false positives, uncertain cases and source citations. Record original unedited findings before seeing the expected answers, then reconcile and rerun a new seeded corpus. White signs only if consequential blind misses and unsupported high-confidence assertions are eliminated and live evidence gates are met; number of “team runs” alone is not a pass. If no independently isolated executor is available, label the review “one-analyst lens application” and leave C4 NOT RUN.
-
-**Current Tesbo check at proposal drafting:** PR #88 source integration can be referenced as C1, and final PR-head nine workflows as C2 **only for the particular CI cases they actually ran**. C3 deployed MBT and C4 independent MBT assurance remain NOT RUN. Focus genuinely new M1/M2 scope on approved expected models, typed transitions/guards/invariants, precise case-step mappings, bounded deterministic generation and proper coverage status; do not implement a second QA run/evidence store.
