@@ -86,7 +86,7 @@ describe("pinned source evidence validation before graph projection", () => {
   });
 
   it("does not permit a blank line to support a claimed behavior or route", async () => {
-    const r = reader({ readFileAtCommit: jest.fn().mockResolvedValue(Buffer.from("first\\n   \\n")) });
+    const r = reader({ readFileAtCommit: jest.fn().mockResolvedValue(Buffer.from("first\n   \n")) });
     await expect(captureVerifiedSourceDeclarations(r, request({
       proposedConcepts: [{ ...request().proposedConcepts[0], lineStart: 2, lineEnd: 2,
         declarationSha256: sha("   ") }]

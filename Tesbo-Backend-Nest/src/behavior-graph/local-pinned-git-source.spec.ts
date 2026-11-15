@@ -47,6 +47,7 @@ describe("real local pinned Git source reader", () => {
   });
 
   it("refuses branch movement between requested version and actual Git HEAD", async () => {
+    writeFileSync(join(root, "login.ts"), "changed implementation\n");
     git("add", "login.ts");
     git("commit", "-m", "changed");
     await expect(captureVerifiedSourceDeclarations(reader, {
