@@ -66,7 +66,7 @@ export class GraphChangeReviewDelivery {
       title: notificationMessages.qaChangeReview(),
       link: notificationLinks.zyraChangeReview(projectId),
       dedupeKey,
-      memberOf: { projectId, organizationId: row.organization_id }
+      memberOf: { projectId, organizationId: row.organization_id, projectRoles: ["qa_engineer", "manager", "owner"] }
     });
     // The native writer intentionally catches/logs failures; verify durable
     // per-recipient notifications and surface partial delivery honestly.
