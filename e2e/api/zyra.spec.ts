@@ -171,6 +171,25 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     )::text;`);
   }
 
+  test("model draft preview availability is a scoped read and creates no native records", async () => {
+    const projectId = tenant!.mainProjectId, endpoint = `/api/projects/${projectId}/agents/zyra/changes/model-preview`;
+    const before = previewQaState(projectId);
+    const good = await asQa.get(endpoint); expect(good.ok()).toBe(true);
+    expect(await good.json()).toEqual({ schemaVersion: "tesbo-fsm-preview-availability/1", enabled: true,
+      semantics: "SEQUENTIAL_FSM", maxStates: 32, maxTransitions: 64 });
+    for (const client of [anon, asGuest]) expect([401, 403, 404]).toContain((await client.get(endpoint)).status());
+    expect([403, 404]).toContain((await asQa.get(`/api/projects/${tenant!.secondProjectId}/agents/zyra/changes/model-preview`)).status());
+    const created = await asOwner.post(`/api/projects/${projectId}/apikeys`, { data: { name: `E2E preview availability ${Date.now()}`, scopes: ["read"] } });
+    expect(created.ok()).toBe(true); const token = await created.json();
+    try {
+      const read = await anon.get(endpoint, { headers: { Authorization: `Bearer ${token.token}` } });
+      expect(read.ok()).toBe(true); expect((await read.json()).enabled).toBe(true);
+      const denied = await anon.post(endpoint, { headers: { Authorization: `Bearer ${token.token}` }, data: modelPreviewDraft() });
+      expect(denied.status()).toBe(403);
+    } finally { await asOwner.delete(`/api/projects/${projectId}/apikeys/${token.id}`, { failOnStatusCode: false }); }
+    expect(previewQaState(projectId)).toBe(before);
+  });
+
   test("model draft preview validates structure without publishing or generating paths", async () => {
     const projectId = tenant!.mainProjectId, endpoint = `/api/projects/${projectId}/agents/zyra/changes/model-preview`;
     const before = previewQaState(projectId);

@@ -75,6 +75,177 @@ test.describe("zyra / agents (UI)", () => {
     if (tenant) purgeZyra(tenant);
   });
 
+  function modelUiDraft() {
+    return { schemaVersion: "tesbo-fsm-draft/1", semantics: "SEQUENTIAL_FSM", initialStateId: "ready",
+      states: [{ id: "ready", label: "Ready" }, { id: "done", label: "Done" }],
+      transitions: [{ id: "complete", from: "ready", to: "done", action: "Complete the action", expectedObservation: "Completion is visible" }] };
+  }
+  function modelUiRecords(projectId: string) {
+    return scalar(`SELECT json_build_object(
+      'cases',(SELECT COUNT(*) FROM testcases WHERE project_id=${literal(projectId)}),
+      'runs',(SELECT COUNT(*) FROM cycles WHERE project_id=${literal(projectId)}),
+      'executions',(SELECT COUNT(*) FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id
+        JOIN cycles c ON c.id=ci.cycle_id WHERE c.project_id=${literal(projectId)}),
+      'bugs',(SELECT COUNT(*) FROM bugs WHERE project_id=${literal(projectId)}),
+      'graph',(SELECT COUNT(*) FROM graph_capture_history WHERE project_id=${literal(projectId)}),
+      'links',(SELECT COUNT(*) FROM graph_review_run_case_links WHERE project_id=${literal(projectId)})
+    )::text;`);
+  }
+  async function openModelUi(browser: Browser, as: "owner" | "qa" = "qa") {
+    const page = await open(browser, "/agents/zyra/changes", as);
+    const panel = page.getByTestId("model-draft-preview");
+    await panel.locator("summary").focus();
+    await page.keyboard.press("Enter");
+    await expect(panel.getByLabel("Draft model JSON", { exact: true })).toBeVisible();
+    return { page, panel, editor: panel.getByLabel("Draft model JSON", { exact: true }) };
+  }
+
+  test("model draft preview UI inspects real drafts with honest diagnostics, keyboard access and no saved records", async ({ browser }, testInfo) => {
+    const projectId = tenant!.mainProjectId, before = modelUiRecords(projectId);
+    const { page, panel, editor } = await openModelUi(browser);
+    const submit = panel.getByRole("button", { name: "Preview draft", exact: true });
+    await expect(submit).toBeDisabled();
+    await panel.getByRole("button", { name: "Load example draft" }).focus();
+    await page.keyboard.press("Enter");
+    const sent = page.waitForResponse(response => response.url().endsWith("/changes/model-preview") && response.request().method() === "POST");
+    await submit.focus(); await page.keyboard.press("Enter");
+    const response = await sent; expect(response.status()).toBe(200); const native = await response.json();
+    const result = panel.getByRole("region", { name: "Draft model preview result", exact: true });
+    await expect(result).toBeVisible();
+    await expect(result.getByRole("status")).toContainText("Unapproved draft; source unverified; runtime evidence: none");
+    await expect(result.getByRole("table", { name: "Draft states", exact: true }).getByRole("row")).toHaveCount(native.states.length + 1);
+    await expect(result.getByRole("table", { name: "Draft transitions", exact: true }).getByRole("row")).toHaveCount(native.transitions.length + 1);
+    await expect(result).toContainText("Terminal state: done");
+    await result.getByText("Candidate fingerprint", { exact: true }).click();
+    await expect(result).toContainText(native.candidateDigest);
+    const draft = modelUiDraft();
+    draft.states.push({ id: "isolated", label: '<img src=x onerror="window.modelPreviewInjected=true">' });
+    draft.transitions.push({ id: "unreachable", from: "isolated", to: "done", action: "Unreachable action", expectedObservation: "Unreachable observation" });
+    await editor.fill(JSON.stringify(draft)); await expect(result).toHaveCount(0);
+    await submit.click(); await expect(result).toContainText("Unreachable state: isolated");
+    await expect(result).toContainText("Unreachable transition: unreachable");
+    await expect(result.getByText(draft.states[2].label, { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as { modelPreviewInjected?: boolean }).modelPreviewInjected)).toBeUndefined();
+    await expect(result.locator("img")).toHaveCount(0);
+    await testInfo.attach("model-preview-desktop", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    const collapse = page.getByRole("button", { name: "Collapse sidebar", exact: true });
+    if (await collapse.isVisible()) await collapse.click();
+    await expect(editor).toBeVisible();
+    expect(await panel.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    const scrollRegion = result.getByRole("region", { name: "Draft states and transitions" });
+    await scrollRegion.focus(); await expect(scrollRegion).toBeFocused();
+    await testInfo.attach("model-preview-mobile", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+    await page.reload(); await panel.locator("summary").click();
+    await expect(editor).toHaveValue(""); await expect(result).toHaveCount(0);
+    expect(modelUiRecords(projectId)).toBe(before);
+  });
+
+  test("model draft preview UI preserves invalid drafts and fails closed on disabled, denied and incompatible responses", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, before = modelUiRecords(projectId);
+    const { page, panel, editor } = await openModelUi(browser);
+    const endpoint = `**/api/projects/${projectId}/agents/zyra/changes/model-preview`;
+    const submit = panel.getByRole("button", { name: "Preview draft", exact: true });
+    let posts = 0;
+    page.on("request", request => { if (request.url().endsWith("/changes/model-preview") && request.method() === "POST") posts++; });
+    await editor.fill("   "); await expect(submit).toBeDisabled();
+    await editor.fill("{broken"); await submit.click();
+    await expect(panel.getByRole("alert")).toContainText("Enter valid JSON"); expect(posts).toBe(0);
+    for (const candidate of [null, {}, { ...modelUiDraft(), semantics: "CONCURRENT" },
+      { ...modelUiDraft(), states: Array.from({ length: 33 }, (_, i) => ({ id: `s${i}`, label: "State" })) }]) {
+      const value = JSON.stringify(candidate); await editor.fill(value);
+      const pending = page.waitForResponse(response => response.url().endsWith("/changes/model-preview") && response.request().method() === "POST");
+      await submit.click(); const response = await pending;
+      expect([400, 422]).toContain(response.status());
+      await expect(panel.getByRole("alert")).toContainText((await response.json()).error);
+      await expect(editor).toHaveValue(value); await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toHaveCount(0);
+    }
+    await editor.fill(JSON.stringify(modelUiDraft()));
+    for (const [status, error] of [[503, "Model draft preview is not enabled"], [403, "Project membership required"], [500, "Preview service unavailable"]] as const) {
+      await page.route(endpoint, route => route.request().method() === "POST"
+        ? route.fulfill({ status, json: { error } }) : route.continue());
+      await submit.click(); await expect(panel.getByRole("alert")).toHaveText(error);
+      await expect(editor).toHaveValue(JSON.stringify(modelUiDraft()));
+      await page.unroute(endpoint);
+    }
+    await page.route(endpoint, async route => {
+      if (route.request().method() !== "POST") return route.continue();
+      const response = await route.fetch(); const body = await response.json(); body.approval = "APPROVED";
+      await route.fulfill({ response, json: body });
+    });
+    await submit.click(); await expect(panel.getByRole("alert")).toContainText("supported unapproved draft preview");
+    await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toHaveCount(0);
+    await page.unroute(endpoint);
+    await page.route(endpoint, route => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await submit.click(); await expect(panel.getByRole("alert")).toContainText("draft remains unsaved");
+    await page.unroute(endpoint);
+    await page.route(endpoint, route => route.request().method() === "GET" ? route.fulfill({ json: {
+      schemaVersion: "tesbo-fsm-preview-availability/1", enabled: false, semantics: "SEQUENTIAL_FSM", maxStates: 32, maxTransitions: 64
+    } }) : route.continue());
+    await page.reload(); await panel.locator("summary").click();
+    await expect(panel.getByRole("status")).toHaveText("Draft model preview is not enabled.");
+    await expect(editor).toHaveCount(0);
+    await page.unroute(endpoint); await panel.getByRole("button", { name: "Check preview availability" }).click();
+    await expect(editor).toBeVisible(); await expect(editor).toHaveValue("");
+    expect(modelUiRecords(projectId)).toBe(before);
+  });
+
+  test("model draft preview UI discards delayed responses after edits and cancellation without replay", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, before = modelUiRecords(projectId);
+    const { page, panel, editor } = await openModelUi(browser);
+    const endpoint = `**/api/projects/${projectId}/agents/zyra/changes/model-preview`;
+    const releases: Array<() => void> = [], finished: Array<Promise<void>> = [];
+    let posts = 0;
+    await page.route(endpoint, async route => {
+      if (route.request().method() !== "POST") return route.continue();
+      posts++;
+      if (posts === 2) return route.continue();
+      const response = await route.fetch();
+      let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+      let finish!: () => void; finished.push(new Promise<void>(resolve => { finish = resolve; })); releases.push(release);
+      await gate;
+      try { await route.fulfill({ response }); } catch { /* Client cancellation is the scenario under test. */ }
+      finally { finish(); }
+    });
+    const submit = panel.getByRole("button", { name: "Preview draft", exact: true });
+    const result = panel.getByRole("region", { name: "Draft model preview result", exact: true });
+    try {
+      await editor.fill(JSON.stringify(modelUiDraft())); await submit.dblclick();
+      await expect.poll(() => releases.length).toBe(1); expect(posts).toBe(1);
+      const changed = modelUiDraft(); changed.states[0].label = "New draft only";
+      await editor.fill(JSON.stringify(changed)); await expect(result).toHaveCount(0);
+      await submit.click(); await expect(result).toContainText("New draft only");
+      releases[0](); await finished[0]; await expect(result).toContainText("New draft only"); expect(posts).toBe(2);
+      await submit.click(); await expect.poll(() => releases.length).toBe(2);
+      await panel.getByRole("button", { name: "Cancel preview" }).focus(); await page.keyboard.press("Enter");
+      await expect(panel.getByRole("status")).toContainText("Preview cancelled");
+      releases[1](); await finished[1]; await expect(result).toHaveCount(0); expect(posts).toBe(3);
+      await expect(editor).toHaveValue(JSON.stringify(changed));
+      expect(modelUiRecords(projectId)).toBe(before);
+    } finally { for (const release of releases) release(); await page.unroute(endpoint); }
+  });
+
+  test("model draft preview UI clears state through native project navigation and denies a foreign project", async ({ browser }) => {
+    const { page, panel, editor } = await openModelUi(browser, "owner");
+    await editor.fill(JSON.stringify(modelUiDraft())); await panel.getByRole("button", { name: "Preview draft", exact: true }).click();
+    await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toBeVisible();
+    await page.getByRole("link", { name: "All Projects", exact: true }).click();
+    await page.locator(`a[href="/projects/${tenant!.secondProjectId}/dashboard"]`).click();
+    await page.getByRole("link", { name: "Agents", exact: true }).click();
+    await page.getByRole("button", { name: /Zyra the Test Generator/ }).click();
+    await page.getByRole("link", { name: /Agent workspace/ }).click();
+    await page.getByRole("link", { name: "Change review", exact: true }).click();
+    await panel.locator("summary").click(); await expect(editor).toHaveValue("");
+    await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toHaveCount(0);
+    const qa = await open(browser, "/agents/zyra/changes", "qa");
+    const denied = qa.waitForResponse(response => response.url().includes(`/projects/${tenant!.secondProjectId}/agents/zyra/changes/model-preview`));
+    await qa.goto(`/projects/${tenant!.secondProjectId}/agents/zyra/changes`);
+    expect([403, 404]).toContain((await denied).status());
+    const foreignPanel = qa.getByTestId("model-draft-preview"); await foreignPanel.locator("summary").click();
+    await expect(foreignPanel.getByLabel("Draft model JSON", { exact: true })).toHaveCount(0);
+    await expect(foreignPanel.getByRole("alert")).toBeVisible();
+  });
+
   test("owner can inspect root-free source setup while QA cannot provision it", async ({ browser }) => {
     const projectId = tenant!.mainProjectId;
     const owner = await open(browser, "/agents/zyra/changes", "owner");

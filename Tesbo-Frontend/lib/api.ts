@@ -1,3 +1,4 @@
+import { requireModelDraftPreview, requireModelPreviewAvailability } from "./model-draft-preview";
 import { readStoredValue } from "./storage";
 import { EVIDENCE_MAX_FILES_PER_REQUEST } from "./validation";
 
@@ -4664,4 +4665,22 @@ export async function linkZyraGraphReviewRunCases(
   return api(`/api/projects/${projectId}/agents/zyra/changes/${historyId}/runs/${runId}/link`, {
     method: "POST", body: { testcaseIds }
   });
+}
+
+
+/** Same native stateless validator used by the project REST/MCP preview. */
+export async function getModelPreviewAvailability(projectId: string, signal?: AbortSignal) {
+  return requireModelPreviewAvailability(await api<unknown>(`/api/projects/${projectId}/agents/zyra/changes/model-preview`, { signal }));
+}
+export async function previewModelDraft(projectId: string, model: unknown, signal?: AbortSignal) {
+  try {
+    return requireModelDraftPreview(await api<unknown>(`/api/projects/${projectId}/agents/zyra/changes/model-preview`, {
+      method: "POST", body: model, signal
+    }));
+  } catch (cause) {
+    if (cause instanceof Error && cause.message === MUTATION_OUTCOME_UNCONFIRMED) {
+      throw new Error("Preview response was not received. The draft remains unsaved; retry when ready.");
+    }
+    throw cause;
+  }
 }

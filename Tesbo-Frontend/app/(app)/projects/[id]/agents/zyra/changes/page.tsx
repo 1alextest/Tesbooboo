@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ModelDraftPreview } from "./ModelDraftPreview";
 import { SourceBindingSettings } from "./SourceBindingSettings";
 import { ReviewCaseRunSetup } from "./ReviewCaseRunSetup";
 import { useParams } from "@/lib/routeParams";
@@ -102,6 +103,7 @@ export default function ZyraChangeReviewPage() {
         </button>
       </div>
       <SourceBindingSettings projectId={projectId} />
+      <ModelDraftPreview key={projectId} projectId={projectId} />
       <section aria-label="Manual QA verification actions" className="rounded-lg border border-[var(--border)] p-4 text-sm">
         <h2 className="font-semibold">Continue verification in existing Tesbo records</h2>
         <p className="mt-1 text-[var(--muted)]">

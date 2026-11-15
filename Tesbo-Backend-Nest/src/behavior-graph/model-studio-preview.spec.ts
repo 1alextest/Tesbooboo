@@ -74,6 +74,18 @@ describe("native preview authorization and opt-in wiring", () => {
     await expect(s.service.previewForUser("user", "project", draft())).rejects.toMatchObject({ status: 503, response: { code: "MODEL_PREVIEW_DISABLED" } });
     expect(s.query).not.toHaveBeenCalled();
   });
+  it("reports availability only after current native access, without enabling the feature or writing", async () => {
+    const s = setup(); const controller = new ModelStudioPreviewController(s.service);
+    await expect(controller.availability({ userId: "user" } as never, "project")).resolves.toEqual({
+      schemaVersion: "tesbo-fsm-preview-availability/1", enabled: true,
+      semantics: "SEQUENTIAL_FSM", maxStates: 32, maxTransitions: 64
+    });
+    delete process.env.TESBO_MODEL_PREVIEW_ENABLED;
+    await expect(s.service.availabilityForUser("user", "project")).resolves.toMatchObject({ enabled: false });
+    await expect(s.service.availabilityForUser(null, "project")).rejects.toMatchObject({ status: 403 });
+    await expect(setup(false).service.availabilityForUser("user", "project")).rejects.toMatchObject({ status: 403 });
+    expect(s.query.mock.calls.every(([sql]) => /^SELECT\b/i.test(String(sql).trim()))).toBe(true);
+  });
   it("refuses revocation or archive before returning computed structure", async () => {
     const s = setup(false);
     await expect(s.service.previewForUser("user", "project", draft())).rejects.toMatchObject({ status: 403 });
