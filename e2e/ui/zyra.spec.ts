@@ -412,7 +412,7 @@ test.describe("zyra / agents (UI)", () => {
         await expect(buttons).toBeDisabled();
         expect(attempts).toBe(1);
         release();
-        await expect(page.getByRole("alert")).toContainText("Injected retry failure");
+        await expect(page.getByText("Injected retry failure", { exact: true })).toBeVisible();
         await expect(buttons).toHaveCount(2);
         await expect(buttons.first()).toBeEnabled();
         await expect(buttons.last()).toBeEnabled();
