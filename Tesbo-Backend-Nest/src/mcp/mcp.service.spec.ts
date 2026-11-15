@@ -2491,7 +2491,11 @@ describe("McpService", () => {
 
     it("creates an empty cycle through the atomic native writer when every id is invalid", async () => {
       const { db } = makeDb({ ownedTestcaseIds: [] });
-      const legacy = makeLegacy();
+      const legacy = makeLegacy({
+        createCycleWithTestcasesForUser: jest.fn().mockResolvedValue({
+          cycle: { id: "cycle-new" }, requested: 0, added: 0, skipped: 0
+        })
+      });
       const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "create_cycle_from_testcases", arguments: { name: "Run", testcaseIds: ["tc-ghost"] } }),

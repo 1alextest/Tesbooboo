@@ -8,7 +8,7 @@ import type { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import type { StorageService } from "../storage/storage.service";
 
 const url = process.env.DATABASE_URL ?? "";
-(/\\/tesbo_ci(?:\\?|$)/.test(url) ? describe : describe.skip)(
+(/\/tesbo_ci(?:\?|$)/.test(url) ? describe : describe.skip)(
   "Approved-only run-case write policy — real migrated PostgreSQL", () => {
     let admin: Client, pool: Pool, project: string, user: string, approved: string, draft: string, inReview: string, foreign: string;
     const stamp = randomUUID();
