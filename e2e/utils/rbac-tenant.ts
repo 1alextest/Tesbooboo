@@ -58,6 +58,9 @@ export type RbacTenantKind =
   | "kb-embeddings"
   // Wave 7 — execution bulk ops, schedules, share links
   | "exec-ops"
+  // Shared test-run approval invariant: native REST, MCP and automation
+  // entry points write only to this disposable project's cycles/cases.
+  | "run-approval"
   // Wave 8 — integrations (Jira / Linear), authorization and validation layer
   | "integrations"
   // Wave 9 — Zyra, AI keys, MCP
