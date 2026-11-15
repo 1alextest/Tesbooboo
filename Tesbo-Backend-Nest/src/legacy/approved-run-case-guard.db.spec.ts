@@ -118,6 +118,11 @@ const url = process.env.DATABASE_URL ?? "";
       }
     );
 
+    it("rejects the separately seeded In Review case without creating a run item", async () => {
+      await expect(add([approved, other])).rejects.toMatchObject({ status: 409 });
+      expect(await count()).toBe(0);
+    });
+
     it("preserves skipped counts for foreign, deleted, duplicate and malformed case ids", async () => {
       const unknown = randomUUID();
       expect(await add([approved, approved, unknown, "bad-id"])).toEqual({
