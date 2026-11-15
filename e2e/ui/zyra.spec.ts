@@ -75,6 +75,29 @@ test.describe("zyra / agents (UI)", () => {
     if (tenant) purgeZyra(tenant);
   });
 
+  test("owner can inspect root-free source setup while QA cannot provision it", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId;
+    const owner = await open(browser, "/agents/zyra/changes", "owner");
+    const settings = owner.getByTestId("zyra-source-binding");
+    await expect(settings).toBeVisible();
+    await settings.locator("summary").click();
+    await expect(settings).toContainText("No project source binding has been configured.");
+    await settings.getByLabel("Source repository identity").fill("org/repo");
+    await settings.getByLabel("Approved checkout key").fill("not-approved");
+    await settings.getByLabel("Source Git ref").fill("development");
+    await settings.getByLabel("Source selection prefixes").fill("src");
+    await settings.getByRole("checkbox", { name: "Enable configured source capture" }).check();
+    await settings.getByRole("button", { name: "Save source binding" }).click();
+    await expect(settings.getByRole("alert")).toBeVisible();
+    expect(Number(scalar(`SELECT COUNT(*)::int FROM project_source_bindings
+      WHERE project_id=${literal(projectId)};`))).toBe(0);
+    await owner.close();
+
+    const qa = await open(browser, "/agents/zyra/changes", "qa");
+    await expect(qa.getByRole("heading", { name: "Change impact review" })).toBeVisible();
+    await expect(qa.getByTestId("zyra-source-binding")).toHaveCount(0);
+  });
+
   test("Zyra opens native change review, handles missing source bindings and preserves zero executions", async ({ browser }) => {
     const page = await open(browser, "/agents/zyra", "qa");
     await page.getByRole("link", { name: "Change review" }).click();
