@@ -41,6 +41,7 @@ describe("committed native QA notification delivery", () => {
     // Native writer filters current membership again at INSERT time.
     expect(writes[0]).toContain(ORG);
     expect(writes[0]).toContain(PROJECT);
+    expect(writes[0]).toContainEqual(["qa_engineer", "manager", "owner"]);
     const sql = query.mock.calls[0][0] as string;
     expect(sql).toContain("h.review_receipt_json IS NOT NULL");
     expect(sql).toContain("project_members");
