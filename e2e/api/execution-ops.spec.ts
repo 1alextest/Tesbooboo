@@ -87,7 +87,11 @@ test.describe("execution bulk operations, schedules and share links", () => {
         failOnStatusCode: false,
       });
       expect(res.status(), `seeding a test case — ${await res.text()}`).toBe(201);
-      testcaseIds.push((await res.json()).id);
+      const caseId = (await res.json()).id as string;
+      // Canonical creation starts at Draft; this test exercises valid run
+      // operations, not the separate approval transition.
+      exec("UPDATE testcases SET status='Approved' WHERE id=" + literal(caseId) + ";");
+      testcaseIds.push(caseId);
     }
 
     const cycle = await asOwner.post(`/api/projects/${project}/cycles`, {

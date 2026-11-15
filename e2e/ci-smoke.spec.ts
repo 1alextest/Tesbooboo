@@ -48,6 +48,12 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
     const testcaseResponse = await request.post(`${base}/testcases`, { data: { title: "CI authorization control", status: "Approved" } });
     expect(testcaseResponse.ok(), await testcaseResponse.text()).toBeTruthy();
     testcaseId = (await testcaseResponse.json()).id;
+    // createTestCase always starts as Draft, even if this CI request proposed
+    // an Approved status. Prepare the disposable fixture through the DB.
+    await db.query("UPDATE testcases SET status='Approved' WHERE id=$1", [testcaseId]);
+    expect((await db.query<{ status: string }>(
+      "SELECT status FROM testcases WHERE id=$1", [testcaseId]
+    )).rows[0].status).toBe("Approved");
     const cycleResponse = await request.post(`${base}/cycles`, { data: { name: "CI authorization control" } });
     expect(cycleResponse.ok(), await cycleResponse.text()).toBeTruthy();
     cycleId = (await cycleResponse.json()).id;
@@ -171,6 +177,12 @@ async function verifyHistoryImportText(
       expect(created.ok(), await created.text()).toBeTruthy();
       cases.push(await created.json());
     }
+    await db.query("UPDATE testcases SET status='Approved' WHERE id=ANY($1::uuid[])",
+      [cases.map((item) => item.id)]);
+    expect((await db.query<{ count: number }>(
+      "SELECT COUNT(*)::int AS count FROM testcases WHERE id=ANY($1::uuid[]) AND status='Approved'",
+      [cases.map((item) => item.id)]
+    )).rows[0].count).toBe(cases.length);
     const manual = await request.post(`${base}/cycles`, { data: { name: "CI history text" } });
     expect(manual.ok(), await manual.text()).toBeTruthy();
     const runId = (await manual.json()).id as string;
@@ -388,6 +400,9 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
       const caseResponse = await request.post(`${api}/api/projects/${project}/testcases`, { data: { title: `CI relationship case ${index}`, status: "Approved" } });
       expect(caseResponse.ok(), await caseResponse.text()).toBeTruthy();
       const testcaseId = (await caseResponse.json()).id;
+      await db.query("UPDATE testcases SET status='Approved' WHERE id=$1", [testcaseId]);
+      expect((await db.query<{ status: string }>("SELECT status FROM testcases WHERE id=$1",
+        [testcaseId])).rows[0].status).toBe("Approved");
       cases.push({ id: testcaseId, project });
       const runResponse = await request.post(`${api}/api/projects/${project}/cycles`, { data: { name: `CI relationship run ${index}` } });
       expect(runResponse.ok(), await runResponse.text()).toBeTruthy();
