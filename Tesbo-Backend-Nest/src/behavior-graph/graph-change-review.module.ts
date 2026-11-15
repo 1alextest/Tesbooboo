@@ -72,13 +72,10 @@ export class GraphChangeReviewModule implements OnModuleInit {
   constructor(@InjectQueue(GRAPH_QA_RECOVERY_QUEUE) private readonly recoveryQueue: Queue) {}
 
   async onModuleInit(): Promise<void> {
-    // Explicit opt-in; disabled environments must also retire any previously
-    // registered Redis scheduler rather than accidentally retaining delivery.
-    if (process.env.TESBO_GRAPH_QA_RECOVERY_ENABLED !== "1") {
-      await this.recoveryQueue.removeJobScheduler(GRAPH_QA_RECOVERY_SCHEDULER)
-        .catch((error: unknown) => this.logger.warn(`Recovery scheduler removal failed: ${String(error)}`));
-      return;
-    }
+    // Redis scheduler registration is cluster-wide. A disabled instance must
+    // never delete the shared scheduler while other instances remain enabled.
+    // The processor itself refuses jobs when this flag is not set.
+    if (process.env.TESBO_GRAPH_QA_RECOVERY_ENABLED !== "1") return;
     await this.recoveryQueue.upsertJobScheduler(
       GRAPH_QA_RECOVERY_SCHEDULER,
       { pattern: "*/10 * * * *", tz: "UTC" },
