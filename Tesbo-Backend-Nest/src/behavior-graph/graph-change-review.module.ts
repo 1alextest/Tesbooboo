@@ -57,6 +57,7 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
       useFactory: (bindings: ProjectSourceBindingReader, history: CurrentCacheGraphHistory) =>
         new ProjectSourceGraphCoordinator(bindings, history)
     }
-  ]
+  ],
+  exports: [ProjectSourceGraphCoordinator, GraphChangeReviewDelivery]
 })
 export class GraphChangeReviewModule {}

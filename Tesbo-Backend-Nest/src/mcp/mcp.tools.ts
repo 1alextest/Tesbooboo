@@ -194,6 +194,28 @@ export function buildMcpTools(): McpTool[] {
       }
     },
     {
+      name: "capture_qa_graph_change",
+      description:
+        "Capture the CURRENT server-approved project repository/ref and its configured source selection into the existing versioned QA graph history. Requires token write scope and the current project's write entitlement. No input parameters: clients cannot supply source paths, repository identity, manifests, fake behavior labels, test outcomes or approval. Returns committed history/receipt and actual QA notification delivery status. An implementation change does NOT fail a test or prove coverage. Projects without an approved source binding fail closed.",
+      requiredScope: "write",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      handler: async (args, ctx) => {
+        if (Object.keys(args).length) {
+          throw new McpError(RpcCode.ToolExecutionError,
+            "Source capture does not accept client-supplied paths, source manifests, or test assertions");
+        }
+        if (!ctx.graphCapture || !ctx.graphNotificationDelivery) {
+          throw new McpError(RpcCode.ToolExecutionError,
+            "Project source capture is not configured on this Tesbo server");
+        }
+        const result = await ctx.graphCapture.captureForUser(ctx.userId, ctx.projectId);
+        const delivery = result.reviewReceipt
+          ? await ctx.graphNotificationDelivery.deliverForUser(ctx.userId, ctx.projectId, result.id)
+          : null;
+        return { ...result, delivery };
+      }
+    },
+    {
       name: "list_projects",
       description:
         "List the project this API token is scoped to. Token credentials are project-scoped, so this returns exactly the one project the token can act on.",

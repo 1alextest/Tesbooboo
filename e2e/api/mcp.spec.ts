@@ -673,6 +673,41 @@ test.describe("MCP create postconditions use existing test-case field", () => {
   });
 });
 
+test.describe("MCP source capture ownership", () => {
+  test("write-scoped MCP client cannot invent a source repo or bypass missing project binding", async ({ request }) => {
+    const api = await newRequestContext.newContext({
+      baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] }
+    });
+    let tokenId: string | undefined;
+    try {
+      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+        data: { name: `E2E graph capture ${Date.now()}`, scopes: ["read", "write"] }
+      });
+      expect(tokenRes.ok()).toBeTruthy();
+      const info = await tokenRes.json();
+      tokenId = info.id;
+      const catalog = await api.post(`/api/projects/${ctx.projectId}/mcp`, {
+        headers: { Authorization: `Bearer ${info.token}` },
+        data: { jsonrpc: "2.0", id: 2, method: "tools/list" }
+      });
+      expect(catalog.ok()).toBeTruthy();
+      const names = (await catalog.json()).result.tools.map((item: { name: string }) => item.name);
+      expect(names).toContain("capture_qa_graph_change");
+      const injected = await callMcpToolExpectError(api, info.token, "capture_qa_graph_change", {
+        checkoutRoot: "/untrusted", executionAssertion: "passed"
+      });
+      expect(injected.message).toMatch(/does not accept client-supplied/i);
+      const missing = await callMcpToolExpectError(api, info.token, "capture_qa_graph_change", {});
+      expect(missing.message).toMatch(/source binding|not configured/i);
+    } finally {
+      if (tokenId) await request.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, {
+        failOnStatusCode: false
+      });
+      await api.dispose();
+    }
+  });
+});
+
 test.describe("MCP graph change-review discovery", () => {
   test("a read-scoped agent discovers and inspects existing graph history without writing", async ({ request }) => {
     const api = await newRequestContext.newContext({

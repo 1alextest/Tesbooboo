@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from "@nestjs/common";
+import { ForbiddenException, Injectable, Logger, NotFoundException, Optional, UnauthorizedException } from "@nestjs/common";
+import { ProjectSourceGraphCoordinator } from "../behavior-graph/project-source-graph.coordinator";
+import { GraphChangeReviewDelivery } from "../behavior-graph/graph-change-review.delivery";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
@@ -64,7 +66,9 @@ export class McpService {
   constructor(
     private readonly legacy: LegacyService,
     private readonly db: DatabaseService,
-    private readonly planLimits: PlanLimitsService
+    private readonly planLimits: PlanLimitsService,
+    @Optional() private readonly graphCapture?: ProjectSourceGraphCoordinator,
+    @Optional() private readonly graphNotificationDelivery?: GraphChangeReviewDelivery
   ) {}
 
   /** Actor id for the well-known "tesbo-mcp" agent (V65), used to attribute token-authed writes. */
@@ -240,7 +244,9 @@ export class McpService {
       userId: principal.userId ?? null,
       scopes,
       legacy: this.legacy,
-      db: this.db
+      db: this.db,
+      graphCapture: this.graphCapture,
+      graphNotificationDelivery: this.graphNotificationDelivery
     };
 
     try {

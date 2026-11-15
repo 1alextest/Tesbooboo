@@ -1,5 +1,7 @@
 import type { DatabaseService } from "../database/database.service";
 import type { LegacyService } from "../legacy/legacy.service";
+import type { ProjectSourceGraphCoordinator } from "../behavior-graph/project-source-graph.coordinator";
+import type { GraphChangeReviewDelivery } from "../behavior-graph/graph-change-review.delivery";
 
 /**
  * Tesbo MCP — protocol types.
@@ -135,6 +137,9 @@ export interface McpToolContext {
   scopes: TokenScope[];
   legacy: LegacyService;
   db: DatabaseService;
+  /** Existing project-bound capture and native notification services. */
+  graphCapture?: ProjectSourceGraphCoordinator;
+  graphNotificationDelivery?: GraphChangeReviewDelivery;
 }
 
 export interface McpTool {
