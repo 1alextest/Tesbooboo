@@ -1,7 +1,12 @@
+import { BullModule, InjectQueue } from "@nestjs/bullmq";
+import { Logger, OnModuleInit } from "@nestjs/common";
+import type { Queue } from "bullmq";
 import { Module } from "@nestjs/common";
 import { AppConfigService } from "../config/app-config.service";
 import { LegacyModule } from "../legacy/legacy.module";
 import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
+import { GraphChangeReviewRecovery } from "./graph-change-review.recovery";
+import { GraphReviewRecoveryProcessor, GRAPH_QA_RECOVERY_QUEUE, GRAPH_QA_RECOVERY_JOB, GRAPH_QA_RECOVERY_SCHEDULER } from "./graph-change-review.recovery.processor";
 import { DatabaseService } from "../database/database.service";
 import { CurrentCacheGraphReader } from "./current-cache-graph.reader";
 import { CurrentCacheGraphHistory } from "./current-cache-graph.history";
@@ -39,12 +44,14 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
 }
 
 @Module({
-  imports: [LegacyModule],
+  imports: [LegacyModule, BullModule.registerQueue({ name: GRAPH_QA_RECOVERY_QUEUE })],
   controllers: [GraphChangeReviewController],
   providers: [
     CurrentCacheGraphReader,
     CurrentCacheGraphHistory,
     GraphChangeReviewDelivery,
+    GraphChangeReviewRecovery,
+    GraphReviewRecoveryProcessor,
     {
       provide: ProjectSourceBindingReader,
       inject: [DatabaseService, AppConfigService],
@@ -60,4 +67,24 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
   ],
   exports: [ProjectSourceGraphCoordinator, GraphChangeReviewDelivery]
 })
-export class GraphChangeReviewModule {}
+export class GraphChangeReviewModule implements OnModuleInit {
+  private readonly logger = new Logger(GraphChangeReviewModule.name);
+
+  constructor(@InjectQueue(GRAPH_QA_RECOVERY_QUEUE) private readonly recoveryQueue: Queue) {}
+
+  async onModuleInit(): Promise<void> {
+    // Explicit opt-in; disabled environments must also retire any previously
+    // registered Redis scheduler rather than accidentally retaining delivery.
+    if (process.env.TESBO_GRAPH_QA_RECOVERY_ENABLED !== "1") {
+      await this.recoveryQueue.removeJobScheduler(GRAPH_QA_RECOVERY_SCHEDULER)
+        .catch((error: unknown) => this.logger.warn(`Recovery scheduler removal failed: ${String(error)}`));
+      return;
+    }
+    await this.recoveryQueue.upsertJobScheduler(
+      GRAPH_QA_RECOVERY_SCHEDULER,
+      { pattern: "*/10 * * * *", tz: "UTC" },
+      { name: GRAPH_QA_RECOVERY_JOB, data: {} }
+    ).then(() => this.logger.log("QA review notification recovery registered every 10 minutes"))
+      .catch((error: unknown) => this.logger.warn(`Recovery scheduler registration failed: ${String(error)}`));
+  }
+}
