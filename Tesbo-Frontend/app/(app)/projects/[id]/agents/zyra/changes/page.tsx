@@ -43,6 +43,11 @@ export default function ZyraChangeReviewPage() {
   // Keep this in the existing view rather than adding a second request/cache owner.
   const historyRequest = useRef({ generation: 0 });
   const historyReads = useRef(new Set<AbortController>());
+  // Capture/notification writes can commit even when a browser navigates away.
+  // Never apply their late UI feedback to another project or remount.
+  const mutationLifetime = useRef({ generation: 0 });
+  const activeProject = useRef(projectId);
+  activeProject.current = projectId;
   const load = useCallback(async (beforeId?: string) => {
     const request = ++historyRequest.current.generation;
     const controller = new AbortController();
@@ -65,23 +70,34 @@ export default function ZyraChangeReviewPage() {
   }, [projectId]);
 
   useEffect(() => {
+    mutationLifetime.current.generation++;
     setEntries([]);
     setCursor(undefined);
+    setError(null);
+    setNotice(null);
+    setCapturing(false);
+    setNotifying(null);
     void load();
     const reads = historyReads.current;
     const requestState = historyRequest.current;
+    const mutationState = mutationLifetime.current;
     return () => {
       requestState.generation++;
+      mutationState.generation++;
       for (const controller of reads) controller.abort();
       reads.clear();
     };
   }, [load]);
 
   async function capture() {
+    const mutation = mutationLifetime.current.generation;
+    const isCurrent = () => activeProject.current === projectId &&
+      mutationLifetime.current.generation === mutation;
     setCapturing(true);
     setNotice(null);
     try {
       const result = await captureZyraGraphChange(projectId);
+      if (!isCurrent()) return;
       setNotice(result.stored
         ? result.reviewReceipt
           ? "A change was recorded for QA triage. No tests have been executed or approved."
@@ -92,14 +108,20 @@ export default function ZyraChangeReviewPage() {
       }
       await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Source capture unavailable.");
-    } finally { setCapturing(false); }
+      if (isCurrent()) setError(cause instanceof Error ? cause.message : "Source capture unavailable.");
+    } finally {
+      if (isCurrent()) setCapturing(false);
+    }
   }
 
   async function retry(historyId: string) {
+    const mutation = mutationLifetime.current.generation;
+    const isCurrent = () => activeProject.current === projectId &&
+      mutationLifetime.current.generation === mutation;
     setNotifying(historyId);
     try {
       const result = await retryZyraGraphReviewNotification(projectId, historyId);
+      if (!isCurrent()) return;
       setNotice(result.status === "delivered"
         ? `Reviewer notifications confirmed for ${result.recipientCount} recipient(s).`
         : result.status === "pending"
@@ -107,8 +129,10 @@ export default function ZyraChangeReviewPage() {
           : "No eligible reviewer recipients are configured.");
       setError(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not retry notification.");
-    } finally { setNotifying(null); }
+      if (isCurrent()) setError(cause instanceof Error ? cause.message : "Could not retry notification.");
+    } finally {
+      if (isCurrent()) setNotifying(null);
+    }
   }
 
   return (
