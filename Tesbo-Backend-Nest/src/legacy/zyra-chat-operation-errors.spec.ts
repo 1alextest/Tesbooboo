@@ -286,6 +286,77 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
   }
 
   for (const language of ["en", "ru"] as const) {
+    it.each([0, 1, 25, 26])(`${language}: final trace counts all moved cases without expanding the 25-card preview (targets=%s)`, async (count) => {
+      const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
+      const ids = Array.from({ length: count }, (_, index) => `case-${index + 1}`);
+      const operations = [{ type: "move_to_suite", suiteId: "suite-own", testcaseIds: count ? ids : ["missing-case"] }];
+      jest.spyOn(svc as unknown as { getProjectSuite: (...a: unknown[]) => Promise<unknown> }, "getProjectSuite")
+        .mockResolvedValue({ id: "suite-own", name: "Destination" });
+      jest.spyOn(svc as unknown as { resolveZyraMoveTargets: (...a: unknown[]) => Promise<unknown> }, "resolveZyraMoveTargets")
+        .mockResolvedValue({ targets: ids.map((id) => ({ id })), requestedCount: count || 1 });
+      const transaction = jest.fn().mockResolvedValue(undefined);
+      (svc as unknown as { db: { transaction: jest.Mock } }).db.transaction = transaction;
+      (svc as unknown as { suitesCache: { invalidate: jest.Mock } }).suitesCache.invalidate = jest.fn().mockResolvedValue(undefined);
+      (svc as unknown as { testcasesListCache: { invalidate: jest.Mock } }).testcasesListCache.invalidate = jest.fn().mockResolvedValue(undefined);
+      jest.spyOn(svc, "getTestCase").mockImplementation(async (id) => ({ id, externalId: id, title: "Existing case", suiteId: "suite-own" }));
+      jest.spyOn(svc as unknown as { zyraMoveBreakdown: (...a: unknown[]) => Promise<unknown> }, "zyraMoveBreakdown")
+        .mockResolvedValue([{ suiteId: "suite-own", suiteName: "Destination", created: false, count }]);
+      const reply = language === "en" ? "Moved the requested test cases." : "Запрошенные тест-кейсы перемещены.";
+      jest.spyOn(svc as unknown as { buildZyraChatDecision: (...a: unknown[]) => Promise<unknown> }, "buildZyraChatDecision")
+        .mockResolvedValue({ reply, actionType: "suite", operations, testcases: [] });
+      let applied: AppliedShape | undefined, content = "";
+      jest.spyOn(svc as unknown as { insertZyraAssistantMessage: (...a: unknown[]) => Promise<unknown> }, "insertZyraAssistantMessage")
+        .mockImplementation(async (input) => {
+          applied = (input as Body).applied; content = finalReply(svc, operations, applied!, reply);
+          return { id: "assistant-1", status: "completed", content };
+        });
+      jest.spyOn(svc, "zyraChatSession").mockResolvedValue({ messages: [] });
+      const recorder = new ZyraTurnTraceRecorder();
+      await runInZyraLanguage(language, () => (svc as unknown as { executeZyraChatTurn: (...a: unknown[]) => Promise<unknown> }).executeZyraChatTurn({
+        projectId: "project-1", userId: "user-1", uid: "user-1", sessionId: "session-1",
+        message: "Move the requested test cases", userMessageId: "turn-1", sessionRow: {}
+      }, recorder.onStage));
+      expect(transaction).toHaveBeenCalledTimes(count ? 1 : 0);
+      expect(applied!.testcases).toHaveLength(Math.min(count, 25));
+      expect(applied!.reviewRequestId).toBeNull();
+      if (count) expect(content).toContain(language === "en" ? `${count} test case(s) total` : `всего тест-кейсов: ${count}`);
+      else expect(content).toContain(language === "en" ? "Nothing was saved" : "Ничего не сохранено");
+      const trace = recorder.finish();
+      expect(trace.outcome).toBe("completed");
+      expect(trace.steps.find((step) => step.stage === "finalizing")?.meta).toEqual({ savedCount: count, proposedCount: 0 });
+    });
+  }
+
+  it.each([
+    { name: "missing move readback", moveBreakdown: undefined, action: "moved" },
+    { name: "empty move readback", moveBreakdown: [], action: "moved" },
+    { name: "zero-count move readback", moveBreakdown: [{ suiteId: "suite-own", suiteName: "Destination", created: false, count: 0 }], action: "moved" },
+    { name: "other saved rows", moveBreakdown: [], action: "archived" }
+  ])("final trace preserves known preview counts and pending proposals: $name", async ({ moveBreakdown, action }) => {
+    const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
+    const applied = {
+      testcases: [{ id: "case-1", action }, { id: "case-2", action }, { id: null, action: "proposed-update" }],
+      activity: [], reviewRequestId: "review-1", moveBreakdown
+    };
+    const original = JSON.stringify(applied);
+    jest.spyOn(svc as unknown as { applyZyraChatOperations: (...a: unknown[]) => Promise<unknown> }, "applyZyraChatOperations")
+      .mockResolvedValue(applied);
+    jest.spyOn(svc as unknown as { buildZyraChatDecision: (...a: unknown[]) => Promise<unknown> }, "buildZyraChatDecision")
+      .mockResolvedValue({ reply: "Trace-only collaborator control", actionType: "suite",
+        operations: [{ type: "move_to_suite", suiteId: "suite-own", testcaseIds: ["case-1", "case-2"] }], testcases: [] });
+    jest.spyOn(svc as unknown as { insertZyraAssistantMessage: (...a: unknown[]) => Promise<unknown> }, "insertZyraAssistantMessage")
+      .mockResolvedValue({ id: "assistant-1", status: "completed" });
+    jest.spyOn(svc, "zyraChatSession").mockResolvedValue({ messages: [] });
+    const recorder = new ZyraTurnTraceRecorder();
+    await (svc as unknown as { executeZyraChatTurn: (...a: unknown[]) => Promise<unknown> }).executeZyraChatTurn({
+      projectId: "project-1", userId: "user-1", uid: "user-1", sessionId: "session-1",
+      message: "Trace count control", userMessageId: "turn-1", sessionRow: {}
+    }, recorder.onStage);
+    expect(JSON.stringify(applied)).toBe(original);
+    expect(recorder.finish().steps.find((step) => step.stage === "finalizing")?.meta).toEqual({ savedCount: 2, proposedCount: 1 });
+  });
+
+  for (const language of ["en", "ru"] as const) {
     const reply = language === "en" ? "Created the requested suites." : "Запрошенные наборы созданы.";
 
     it(`${language}: corrects the final reply when every create-suite operation fails`, async () => {
