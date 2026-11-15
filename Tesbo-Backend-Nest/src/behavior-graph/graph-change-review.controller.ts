@@ -1,4 +1,4 @@
-import { Controller, Get, HttpCode, Param, Post, Query, Req } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, HttpCode, Param, Post, Query, Req } from "@nestjs/common";
 import type { AuthenticatedRequest } from "../common/request.types";
 import { CurrentCacheGraphHistory } from "./current-cache-graph.history";
 import { ProjectSourceGraphCoordinator } from "./project-source-graph.coordinator";
@@ -41,7 +41,10 @@ export class GraphChangeReviewController {
 
   @Post("capture")
   @HttpCode(200)
-  async capture(@Req() request: AuthenticatedRequest, @Param("projectId") projectId: string) {
+  async capture(@Req() request: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body?: Record<string, unknown>) {
+    if (body && (typeof body !== "object" || Array.isArray(body) || Object.keys(body).length > 0)) {
+      throw new BadRequestException({ error: "Capture accepts no client source manifest or result assertions" });
+    }
     // No client-proposed semantics. This operation observes configured source
     // bytes and persists one native/implementation graph revision if changed.
     const observation = await this.coordinator.captureForUser(request.userId, projectId);

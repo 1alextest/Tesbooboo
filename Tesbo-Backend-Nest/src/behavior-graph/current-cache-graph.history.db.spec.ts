@@ -8,6 +8,7 @@ import { DatabaseService } from "../database/database.service";
 import { makeLegacy } from "../legacy/test-helpers/legacy-service.fixture";
 import { CurrentCacheGraphReader } from "./current-cache-graph.reader";
 import { CurrentCacheGraphHistory } from "./current-cache-graph.history";
+import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
 import { ProjectSourceBindingReader } from "./project-source-binding";
 import { ProjectSourceGraphCoordinator } from "./project-source-graph.coordinator";
 
@@ -265,6 +266,43 @@ const url = process.env.DATABASE_URL ?? "";
       } finally {
         await admin.query("DELETE FROM project_source_bindings WHERE project_id=$1", [project]);
         rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("delivers a committed change review through native per-user notifications exactly once", async () => {
+      const latest = await admin.query(
+        `SELECT id::text FROM graph_capture_history
+          WHERE project_id=$1 AND review_receipt_json IS NOT NULL
+          ORDER BY id DESC LIMIT 1`, [project]
+      );
+      expect(latest.rows).toHaveLength(1);
+      const historyId = latest.rows[0].id as string;
+      const dedupeKey = `qa_change_review:${project}:${historyId}`;
+      const svc = new GraphChangeReviewDelivery(new DatabaseService(pool), makeLegacy(new DatabaseService(pool)));
+      try {
+        const first = await svc.deliverForUser(user, project, historyId);
+        expect(first).toEqual({ status: "delivered", recipientCount: 1, pendingCount: 0 });
+        const second = await svc.deliverForUser(user, project, historyId);
+        expect(second).toEqual(first);
+        const persisted = await admin.query(
+          `SELECT type, link_entity_type, link_entity_id, dedupe_key
+             FROM notifications WHERE dedupe_key=$1 AND user_id=$2`,
+          [dedupeKey, user]
+        );
+        expect(persisted.rows).toEqual([{
+          type: "qa_change_review",
+          link_entity_type: "zyra_change_review",
+          link_entity_id: project,
+          dedupe_key: dedupeKey
+        }]);
+        await expect(svc.deliverForUser(user, project, "0 OR TRUE"))
+          .rejects.toMatchObject({ status: 404 });
+        await expect(svc.deliverForUser(user, project, "999999999999999999999"))
+          .rejects.toMatchObject({ status: 404 });
+        await expect(svc.deliverForUser(user, randomUUID(), historyId))
+          .rejects.toMatchObject({ status: 404 });
+      } finally {
+        await admin.query("DELETE FROM notifications WHERE dedupe_key=$1", [dedupeKey]);
       }
     });
 

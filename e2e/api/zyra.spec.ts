@@ -87,6 +87,10 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
 
     // No approved source binding for this disposable tenant. A capture must
     // fail instead of accepting caller-supplied checkout paths or manifests.
+    const forged = await asQa.post(url + "/capture", {
+      data: { repositoryRoot: "/untrusted", executionAssertion: "passed" }
+    });
+    expect(forged.status()).toBe(400);
     const denied = await asQa.post(url + "/capture", { data: {} });
     expect(denied.status()).toBe(409);
     const after = await asQa.get(url);

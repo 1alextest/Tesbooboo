@@ -52,6 +52,16 @@ describe("Zyra graph change-review native contract", () => {
     expect(delivery.deliverForUser).toHaveBeenCalledWith(USER, PROJECT, "7");
   });
 
+  it("does not accept client-authored source manifests or execution assertions", async () => {
+    const history = { listForUser: jest.fn() };
+    const coordinator = { captureForUser: jest.fn() };
+    const controller = new GraphChangeReviewController(history as never, coordinator as never, {} as never);
+    await expect(controller.capture({ userId: USER } as never, PROJECT, {
+      repositoryRoot: "/tmp/other", executionAssertion: "passed"
+    })).rejects.toMatchObject({ status: 400 });
+    expect(coordinator.captureForUser).not.toHaveBeenCalled();
+  });
+
   it("forwards malformed paging to the history guard rather than silently defaulting", async () => {
     const history = { listForUser: jest.fn().mockRejectedValue(new Error("invalid limit")) };
     const controller = new GraphChangeReviewController(history as never, {} as never, {} as never);
