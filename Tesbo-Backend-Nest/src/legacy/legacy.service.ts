@@ -19,6 +19,7 @@ import { validatePersonName } from "../common/person-name.util";
 import { canonicalizeImportValue, EXPORT_LOCALES, ExportLocale } from "../common/export-i18n";
 import { detectScriptLanguage } from "../common/script-language";
 import { writeNotifications } from "./notification-writer";
+import { assertApprovedRunCases } from "./approved-run-case-guard";
 import { expectedTestcaseRevision, TESTCASE_EDIT_REVISION_SQL } from "./testcase-edit-revision";
 import { isCoverageAnalysisRequest, notificationLinks, notificationMessages, runLabel, type NotificationLink, type NotificationType } from "./notification-events";
 import { runInZyraLanguage, zyraReplyLanguage } from "./zyra-language-context";
@@ -6894,6 +6895,11 @@ export class LegacyService implements OnModuleInit {
     const res = await this.db.transaction(async (client) => {
       const cycle = await this.lockActiveCycle(client, cycleId);
       this.assertAutomatedRunWritable(cycle);
+      // Hold the status of every currently active project-owned case stable
+      // until the INSERT commits. An existing Draft/In Review/Deprecated case
+      // rejects the WHOLE batch (never partially adds the Approved prefix).
+      // Unknown, foreign and malformed ids keep their legacy skipped counts.
+      await assertApprovedRunCases(client, projectId, ids);
       return client.query<{ id: string }>(
       `WITH input AS (
          SELECT id, ord FROM unnest($2::uuid[]) WITH ORDINALITY AS u(id, ord)
@@ -6931,7 +6937,7 @@ export class LegacyService implements OnModuleInit {
                 t.description, t.preconditions, t.postconditions, t.steps,
                 t.test_data, t.automation_status, t.automation_tags
            FROM input i
-           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3
+           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3 AND t.status = 'Approved'
            CROSS JOIN base
           WHERE EXISTS (SELECT 1 FROM cycles c WHERE c.id = $1 AND c.deleted_at IS NULL)
          ON CONFLICT (cycle_id, testcase_id) WHERE deleted_at IS NULL DO NOTHING
