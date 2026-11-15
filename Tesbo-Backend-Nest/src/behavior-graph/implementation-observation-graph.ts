@@ -39,6 +39,7 @@ export interface TrustedSourceObservation {
 }
 
 export interface ImplementationGraphCapture extends GraphCaptureForComparison {
+  observedCommitSha: string;
   sourceAttestation: "caller_must_verify";
   semantics: "declarations_not_runtime_verification";
   coverageAssertion: "none";
@@ -129,7 +130,6 @@ export function projectImplementationObservations(
   ]);
   const revision = digest([
     IMPLEMENTATION_PROJECTION_CONTRACT, existing.snapshot.revision,
-    source.commitSha,
     nodes.map((node) => [node.id, node.type, node.version]),
     edges.map((edge) => [edge.id, edge.type, edge.from, edge.to, edge.version])
   ]);
@@ -142,6 +142,7 @@ export function projectImplementationObservations(
     sourceScopeFingerprint: scope,
     inventoryStatus: "complete",
     unresolvedDiagnostics: [],
+    observedCommitSha: source.commitSha,
     sourceAttestation: "caller_must_verify",
     semantics: "declarations_not_runtime_verification",
     coverageAssertion: "none",

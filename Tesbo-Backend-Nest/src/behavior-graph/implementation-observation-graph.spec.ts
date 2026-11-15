@@ -43,6 +43,7 @@ describe("internal implementation source observation projection", () => {
     expect(observed.snapshot?.edges).toHaveLength(2);
     expect(observed.snapshot?.edges.every((e) => e.type === "declared_in_source")).toBe(true);
     expect(observed.coverageAssertion).toBe("none");
+    expect(observed.observedCommitSha).toBe(source.commitSha);
     expect(observed.executionAssertion).toBe("none");
     expect(observed.sourceAttestation).toBe("caller_must_verify");
     expect(observed.semantics).toBe("declarations_not_runtime_verification");
@@ -69,6 +70,17 @@ describe("internal implementation source observation projection", () => {
     expect(impact.removedNodes).toEqual([]);
     expect(impact.modifiedEdges).toHaveLength(1);
     expect(before.sourceScopeFingerprint).toBe(after.sourceScopeFingerprint);
+  });
+
+  it("keeps identical code revisions stable even when the observed commit changes", () => {
+    const before = project();
+    const after = project({ ...source, commitSha: "f".repeat(40) });
+    expect(before.observedCommitSha).not.toBe(after.observedCommitSha);
+    expect(before.snapshot?.revision).toBe(after.snapshot?.revision);
+    const impact = compareComparableGraphCaptures(before, after);
+    expect(impact.modifiedNodes).toEqual([]);
+    expect(impact.modifiedEdges).toEqual([]);
+    expect(prepareQaChangeReviewReceipt(before, after)).toBeNull();
   });
 
   it("treats branch/repository selection changes as incomparable scope instead of a clean delta", () => {
