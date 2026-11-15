@@ -1134,6 +1134,34 @@ describe("McpService", () => {
   });
 
   describe("update_testcase project scoping", () => {
+    it("advertises and forwards the optional existing-row revision precondition", async () => {
+      const { db } = makeDb({ testcaseProject: "proj-1", mcpActorId: "mcp-actor-1" });
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      const listed: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
+      const update = listed.result.tools.find((tool: any) => tool.name === "update_testcase");
+      expect(update.inputSchema.properties.expectedRevision).toMatchObject({ type: "string" });
+      const revision = "a".repeat(64);
+      const res: any = await svc.handleRequest(rpc("tools/call", {
+        name: "update_testcase", arguments: { testcaseId: "tc-1", title: "Guarded", expectedRevision: revision }
+      }), principal(), "proj-1");
+      expect(res.error).toBeUndefined();
+      expect(legacy.updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", {
+        title: "Guarded", expectedRevision: revision
+      });
+    });
+
+    it.each([null, "", 4, true, [], {}])("refuses malformed MCP expectedRevision %p before the legacy writer", async (expectedRevision) => {
+      const { db } = makeDb({ testcaseProject: "proj-1" });
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      const res: any = await svc.handleRequest(rpc("tools/call", {
+        name: "update_testcase", arguments: { testcaseId: "tc-1", expectedRevision, title: "Invalid" }
+      }), principal(), "proj-1");
+      expect(res.error.message).toMatch(/expectedRevision/);
+      expect(legacy.updateTestCase).not.toHaveBeenCalled();
+    });
+
     it("updates a test case when it belongs to the token's project, attributed to the agent actor", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();

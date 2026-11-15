@@ -5930,3 +5930,79 @@ outside this UI repair. No broader Phase 1/2 sign-off is implied.
 **Assurance run requirements:** security/inventory/source-scope ownership and reviewer model, cross-tenant access, forged JSON observation, ref movement, path traversal, symlink/submodule refusal, source byte vs semantic distinction, incomplete provider caches, binding update/revocation races, concurrent captures, dedupe and change receipts, storage/retention/operability, UI/MCP read acceptance and independent QA triage/execution evidence. CI's migrated PostgreSQL tests use a disposable project and temporary Git checkout. These checks do **not** establish a deployed end-to-end journey or independent ten-team assurance verdict.
 
 **Next stage:** register explicit project repository provisioning/authority through existing Tesbo setup/roles, expose only authorized history/QA review via Zyra or native review ownership, add a committed-receipt notification delivery/retry policy, and run the coding-agent source change → QA triage → test execution → evidence → human approval journey. Preserve spontaneous coding and prepared requirements as first-class origins, without model-first prerequisites.
+
+---
+
+### Shared case-edit content preconditions — implementation checkpoint (2026-11-15)
+
+**Separate scope:** this slice addresses the founder's conflict-aware human/MCP
+case-edit feedback, independently of the graph work in PR #88. It extends the
+existing case detail reader, single-case writer/transaction and editor. No new
+case/history/review store, migration, workspace authority, graph feature or
+automatic merge is introduced.
+
+**Wire contract:** authorized case-detail reads (REST UUID/readable reference and
+MCP `get_testcase`) return `editRevision`. It is an opaque lowercase SHA-256
+content fingerprint calculated in the same PostgreSQL SELECT as the native row.
+Single updates may send it as `expectedRevision`; malformed supplied values
+are refused, and a mismatching row returns HTTP 409 / `TESTCASE_EDIT_CONFLICT`
+(an ordinary tool error through MCP). The comparison is part of the actual
+UPDATE, not a separate read-then-check, so a concurrent committed row update
+must be rechecked after lock waiting. Refusal precedes custom-field/tag writes
+and postcommit activity/cache/embedding/notification effects. Existing
+project/token/role/plan guards and actor attribution remain authoritative.
+
+**Content, not a new revision history:** hash the actual native row except
+`embedding_status`, `embedding_content_hash` and `updated_at`. Existing indexing
+workers legitimately update those fields; they must not manufacture an authored
+edit conflict. Identity, ownership, hierarchy, Notes/body/steps, source citations,
+status and other native content still participate. Timestamp-only differences
+and a return to identical content do not represent a different fingerprint.
+V63's native historical snapshots remain unchanged. No JavaScript timestamp
+rounding, client hash computation, persisted token or extra database round trip
+is needed.
+
+**Editor behavior:** fetched revision metadata is retained with the loaded case
+and sent on Save/Archive/Unarchive. Missing metadata fails closed with a visible
+reload instruction, rather than silently dropping the guard. A rejected save
+retains unsaved form text and the old precondition; pressing Save again cannot
+quietly overwrite newer content. “Reload latest case” explicitly confirms that
+unsaved edits will be discarded. The user then reviews the current case and
+chooses what to save. Mutations are not automatically retried.
+
+**Compatibility and limits:** omission retains unconditional legacy single-edit
+behavior for existing clients/internal callers. MCP advertises the precondition
+and tells clients not to omit it as automatic conflict recovery. This is an
+opt-in row-content guard, not universal stale-write prevention, a permission
+token, a batch/review-set approval or a revision contract for independently
+stored custom-field values, tags and other relationships. Those metadata-only
+paths, delete/bulk/import/review semantics and mandatory preconditions for every
+client require separate reconciliation; do not claim they are solved here.
+
+**Verification:** identical final unit assertions against `cbc408b` reproduced
+**21 failed / 169 passed / 190 total**, zero skipped. The changed tree passed
+**1,286/1,286 tests in 49 suites**, covering existing non-DB legacy cases, MCP and
+token guards. Two surrounding fixture assumptions were updated without removing
+their assertions: the Notion SQL binding oracle now includes the optional null
+guard, and the Zyra read double recognizes the new row-plus-revision SELECT.
+All three non-incremental typechecks and backend build emission passed.
+Changed-file lint has no new findings; the existing nine backend findings
+(five in the legacy service, four in MCP tools) remain, not silently waived.
+
+**Authored native/integration coverage:** the existing migrated PostgreSQL
+repository spec now covers stale refusal with unchanged history/effects,
+actual row-lock interleaving, sub-millisecond content changes, embedding-only
+updates, missing rows and rollback after a late custom-tag failure. Existing
+case API/MCP/editor specs cover the transport and explicit review/reload flow.
+The existing isolated CI repository journey also checks browser retained Notes,
+confirmation dismissal, missing revision metadata, actual persisted history,
+MCP malformed/stale refusal and unchanged run/execution associations.
+
+**Unfinished gates:** collection succeeded for the existing isolated CI smoke
+selection (**19 of 19 journeys**, including the extended repository journey).
+That is collection, not execution. Local configured DB/API/browser runs remain
+unrun: this checkout has no root environment or authenticated A/B contexts, and
+no credentials were copied or replacement/shared database started. Exact-head
+CI needs publication/run approval; deployed impacted case/MCP/editor acceptance
+and independent review are separate gates. Nothing here authorizes edits to the
+twelve live Nesberry cases, production deployment or SDK publication.

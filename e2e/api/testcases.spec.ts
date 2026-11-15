@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, request as newRequestContext, test } from "@playwright/test";
 import { env } from "../utils/env";
 import { dbControlAvailable, literal, scalar } from "../utils/psql";
+import { testcaseEditState } from "../utils/testcase-edit-state";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 
@@ -26,6 +27,61 @@ async function deleteSuite(request: import("@playwright/test").APIRequestContext
 }
 
 test.describe("test case CRUD", () => {
+  test("row revisions preserve a newer edit and permit an explicitly reviewed retry", async ({ request }) => {
+    const created = await createCase(request, { attachments: "Original Notes" });
+    const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
+    try {
+      const initial = await (await request.get(url)).json();
+      expect(initial.editRevision).toMatch(/^[a-f0-9]{64}$/);
+      const first = await request.put(url, { data: { expectedRevision: initial.editRevision, attachments: "First reviewer Notes" } });
+      expect(first.ok()).toBeTruthy();
+      const committed = await (await request.get(url)).json();
+      const stale = await request.put(url, { data: { expectedRevision: initial.editRevision, attachments: "Stale Notes", title: "Do not replace" } });
+      expect(stale.status()).toBe(409);
+      expect((await stale.json()).code).toBe("TESTCASE_EDIT_CONFLICT");
+      expect(testcaseEditState(await (await request.get(url)).json())).toEqual(testcaseEditState(committed));
+      const retry = await request.put(url, { data: { expectedRevision: committed.editRevision, description: "Reviewed against current Notes" } });
+      expect(retry.ok()).toBeTruthy();
+      const saved = await (await request.get(url)).json();
+      expect(saved).toMatchObject({
+        id: initial.id, externalId: initial.externalId, suiteId: initial.suiteId, ownerId: initial.ownerId,
+        title: initial.title, attachments: "First reviewer Notes", description: "Reviewed against current Notes"
+      });
+      expect(saved.editRevision).not.toBe(committed.editRevision);
+    } finally { await deleteCase(request, created.id); }
+  });
+
+  test("malformed revisions never change a case and cannot restore a deleted case", async ({ request }) => {
+    const created = await createCase(request);
+    const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
+    try {
+      const initial = await (await request.get(url)).json();
+      for (const expectedRevision of [null, "", " ", "a".repeat(63), "a".repeat(65), "g".repeat(64), 1, true, [initial.editRevision], {}]) {
+        const refused = await request.put(url, { data: { expectedRevision, title: "Invalid replacement" } });
+        expect(refused.status()).toBe(400);
+        expect(testcaseEditState(await (await request.get(url)).json())).toEqual(testcaseEditState(initial));
+      }
+      await deleteCase(request, created.id);
+      const missing = await request.put(url, { data: { expectedRevision: initial.editRevision, title: "Must not restore" } });
+      expect(missing.status()).toBe(404);
+    } finally { await deleteCase(request, created.id); }
+  });
+
+  test("two simultaneous edits using one revision cannot both commit", async ({ request }) => {
+    const created = await createCase(request);
+    const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
+    try {
+      const initial = await (await request.get(url)).json();
+      const results = await Promise.all(["Editor one", "Editor two"].map((attachments) =>
+        request.put(url, { data: { expectedRevision: initial.editRevision, attachments } })));
+      expect(results.map((response) => response.status()).sort()).toEqual([200, 409]);
+      const winner = results.findIndex((response) => response.ok());
+      const saved = await (await request.get(url)).json();
+      expect(saved.attachments).toBe(["Editor one", "Editor two"][winner]);
+      expect(saved.id).toBe(created.id);
+    } finally { await deleteCase(request, created.id); }
+  });
+
   test("supports the create -> read -> update -> list -> delete lifecycle", { tag: '@tesbo.testId("TES-TC-551")' }, async ({ request }) => {
     const title = `E2E smoke test case ${Date.now()}`;
 
