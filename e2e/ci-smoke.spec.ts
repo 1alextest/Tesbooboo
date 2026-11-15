@@ -15,6 +15,7 @@ import { verifyCiZyraReviewFeedback } from "./utils/ci-zyra-review-feedback";
 import { verifyCiZyraSuiteFeedback } from "./utils/ci-zyra-suite-feedback";
 import { verifyCiZyraAnswerFeedback } from "./utils/ci-zyra-answer-feedback";
 import { verifyCiZyraMoveFeedback } from "./utils/ci-zyra-move-feedback";
+import { verifyCiZyraSingleMove } from "./utils/ci-zyra-single-move";
 
 async function verifyBugCreateAccess(request: APIRequestContext, api: string, projectId: string, ownerId: string, organizationId: string) {
   // Called only after the test's explicit loopback/disposable-database safety checks.
@@ -887,6 +888,21 @@ test("Zyra suite assignment reports operation errors without losing completed mo
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   await verifyCiZyraMoveFeedback(page, api, web, ids[0], ids[1], ownerId, testInfo);
   expect(errors).toEqual([]);
+});
+
+test("Zyra single-case suite moves treat scalar and list IDs equally without crossing project scope", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy(); const ownerId = (await login.json()).userId as string;
+  const ids: string[] = [];
+  for (const [name, key] of [["CI Zyra Single Move", "ZSM"], ["CI Zyra Single Other", "ZSN"]]) {
+    const created = await page.request.post(`${api}/api/projects`, { data: { name, key } }); expect(created.ok(), await created.text()).toBeTruthy(); ids.push((await created.json()).id);
+  }
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyCiZyraSingleMove(page, api, web, ids[0], ids[1], ownerId, testInfo); expect(errors).toEqual([]);
 });
 
 test("browser API transport never replays ambiguous mutations and retains bounded read retries", async () => {

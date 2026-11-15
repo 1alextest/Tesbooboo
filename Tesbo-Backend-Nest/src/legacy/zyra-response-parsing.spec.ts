@@ -54,6 +54,9 @@ function makeLegacy(): LegacyService {
 type Internals = {
   parseModelJson: (raw: string, salvageFields?: string[]) => Record<string, unknown> | null;
   sanitizeZyraReply: (raw: unknown, fallback: string) => string;
+  normalizeZyraChatDecision: (raw: Record<string, unknown>, message: string, existing: unknown[], intent: "suite") => {
+    actionType: string; operations: Array<Record<string, unknown>>;
+  };
   reconcileZyraReply: (
     decision: { reply: string; actionType: string; operations: { type: string }[]; __salvaged?: boolean },
     applied: { testcases: unknown[]; activity: { title?: string; detail?: string }[] }
@@ -69,6 +72,33 @@ describe("Zyra model-response parsing", () => {
 
   beforeEach(() => {
     svc = makeLegacy();
+  });
+
+  describe("single-case suite-move normalization", () => {
+    const suiteId = "00000000-0000-4000-8000-000000000001";
+    const testcaseId = "00000000-0000-4000-8000-000000000002";
+    const normalize = (service: LegacyService, operation: Record<string, unknown>) => internals(service).normalizeZyraChatDecision({
+      reply: "Moved the requested test case.", actionType: "suite", operations: [{ type: "move_to_suite", ...operation }], testcases: []
+    }, "Move this test case to the suite", [], "suite");
+
+    it.each([
+      { testcaseId }, { externalId: "PRO-TC-1" },
+      { testcaseIds: [testcaseId] }, { externalIds: ["PRO-TC-1"] },
+      { allExisting: true }, { fromLastPlan: true }
+    ])("retains an existing-writer selector %j", (selector) => {
+      const result = normalize(svc, { suiteId, ...selector });
+      expect(result.actionType).toBe("suite");
+      expect(result.operations).toHaveLength(1);
+      expect(result.operations[0]).toMatchObject({ type: "move_to_suite", suiteId, ...selector });
+    });
+
+    it.each([
+      {}, { suiteId }, { suiteId, testcaseId: "" }, { suiteId, externalId: "   " },
+      { suiteId, testcaseIds: [] }, { suiteId, externalIds: [] },
+      { testcaseId }, { externalId: "PRO-TC-1" }
+    ])("still rejects a missing destination or empty selector: %j", (operation) => {
+      expect(normalize(svc, operation).operations).toEqual([]);
+    });
   });
 
   describe("parseModelJson", () => {
