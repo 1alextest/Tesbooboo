@@ -23,7 +23,7 @@ export async function verifyProductionReporter(page: Page, api: string, web: str
   await db.connect();
   try {
     for (const title of ["reporter pass", "reporter failure", "reporter skip"]) {
-      const response = await request.post(`${base}/testcases`, { data: { title } });
+      const response = await request.post(`${base}/testcases`, { data: { title, status: "Approved" } });
       expect(response.ok(), await response.text()).toBeTruthy();
       cases.push(await response.json());
     }
