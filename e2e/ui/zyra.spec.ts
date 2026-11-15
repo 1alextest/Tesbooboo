@@ -284,6 +284,11 @@ test.describe("zyra / agents (UI)", () => {
       await reopened.getByRole("button", { name: "Refresh recorded handoffs" }).click();
       const handoffs = reopened.getByRole("region", { name: "Persisted QA handoffs" });
       await expect(handoffs).toContainText("native status: Failed");
+      const gaps = reopened.getByRole("region", { name: "QA verification gaps" });
+      await expect(gaps).toContainText("1 nominated case");
+      await expect(gaps).toContainText("1 with a subsequently recorded native result");
+      await expect(gaps).toContainText("1 with later evidence-file metadata");
+      await expect(gaps).toContainText("No coverage, deployed build match");
       await expect(handoffs).toContainText("active evidence metadata: 1");
       await expect(handoffs).toContainText("1 added after handoff");
       await expect(handoffs).toContainText("recorded after handoff; build provenance not verified");

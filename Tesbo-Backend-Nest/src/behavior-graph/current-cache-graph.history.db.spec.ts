@@ -387,6 +387,11 @@ const url = process.env.DATABASE_URL ?? "";
           runId: cycleId, caseId, runName: "Graph impact QA run",
           caseStillInRun: true, execution: null
         });
+        expect(read.summary).toMatchObject({
+          nominatedCaseCount: 1, selectedCaseCount: 1,
+          withoutSubsequentResultCount: 1, withSubsequentResultCount: 0,
+          coverageAssertion: "none", approvalAssertion: "none"
+        });
         // Graph-to-run handoff alone did not execute or fail the test.
         const completedCount = async () => (await admin.query<{ n: number }>(
           "SELECT COUNT(*)::int AS n FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id WHERE ci.cycle_id=$1 AND e.status IN ('Passed','Failed','Blocked')",
@@ -419,6 +424,10 @@ const url = process.env.DATABASE_URL ?? "";
           }
         });
         expect(observed.links[0].execution?.executedAt).toBeTruthy();
+        expect(observed.summary).toMatchObject({
+          nominatedCaseCount: 1, withSubsequentResultCount: 1,
+          withLaterEvidenceMetadataCount: 1, historicalResultOnlyCount: 0
+        });
         // An older native result may remain Failed but cannot be presented as
         // verification of this later human handoff. File metadata can also predate it.
         await admin.query(
@@ -431,6 +440,10 @@ const url = process.env.DATABASE_URL ?? "";
         expect(historical.links[0].execution).toMatchObject({
           status: "Failed", executedAfterHandoff: false,
           evidenceFileCount: 1, evidenceAddedAfterHandoffCount: 0
+        });
+        expect(historical.summary).toMatchObject({
+          withSubsequentResultCount: 0, withoutSubsequentResultCount: 1,
+          historicalResultOnlyCount: 1, withLaterEvidenceMetadataCount: 0
         });
         await admin.query("UPDATE attachments SET deleted_at=now() WHERE id=$1", [evidenceId]);
         const afterMetadataDelete = await links.listForUser(user, project, receiptId);
