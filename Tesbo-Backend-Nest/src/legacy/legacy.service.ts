@@ -6529,7 +6529,7 @@ export class LegacyService implements OnModuleInit {
    * Kept unguarded for the MCP tool, whose API token is already bound to one project. Route traffic
    * goes through createCycleForUser.
    */
-  async createCycle(projectId: string, body: Body) {
+  async createCycle(projectId: string, body: Body, transactionClient?: PoolClient) {
     validateBoundedField(body.name, "Test run name", CYCLE_NAME_MAX_LENGTH);
     validateBoundedField(body.environment, "Environment", CYCLE_LABEL_MAX_LENGTH);
     validateBoundedField(body.buildVersion, "Build version", CYCLE_LABEL_MAX_LENGTH);
@@ -6550,10 +6550,15 @@ export class LegacyService implements OnModuleInit {
     );
     // All REST aliases and both MCP creation tools reach this writer. Do not depend on
     // a particular adapter checking the Plan or copy a stale pre-transaction eligibility read.
-    const res = body.planId ? await this.db.transaction(async (client) => {
-      await this.lockPlanProjectReference(client, "plans", projectId, body.planId, "Plan");
-      return insert(client);
-    }) : await insert(this.db);
+    const res = transactionClient
+      ? (body.planId
+          ? (await this.lockPlanProjectReference(transactionClient, "plans", projectId, body.planId, "Plan"),
+            await insert(transactionClient))
+          : await insert(transactionClient))
+      : body.planId ? await this.db.transaction(async (client) => {
+          await this.lockPlanProjectReference(client, "plans", projectId, body.planId, "Plan");
+          return insert(client);
+        }) : await insert(this.db);
     return toCamel(res.rows[0]);
   }
 
@@ -6878,27 +6883,18 @@ export class LegacyService implements OnModuleInit {
    * the selection, with nothing to say where it stopped. Doing the whole thing in one statement makes
    * it atomic: the run either gains the full selection or none of it.
    */
-  async addCycleTestCases(cycleId: string, userId: string | null | undefined, body: Body) {
-    const projectId = await this.requireCycleAccess(userId, cycleId);
-    const raw = body.testcaseIds || (body.testcaseId ? [body.testcaseId] : []);
-
-    // Malformed ids used to reach Postgres as `WHERE id = $1` against a uuid column and fail the
-    // request with a driver error; unknown ones were skipped. Both are dropped here so a single bad
-    // id in a large selection cannot 500 the whole add, and `= ANY($2::uuid[])` never sees a value
-    // it cannot cast.
-    // `requested` is the raw selection size, so added + skipped always accounts for every id the
-    // caller sent — including duplicates and ids dropped as malformed below.
-    const requested = normalizeJsonArray(raw).length;
-    const ids = [...new Set(normalizeJsonArray(raw).map((id) => String(id)).filter((id) => isUuid(id)))];
-    if (!ids.length) return { requested, added: 0, skipped: requested };
-
-    const res = await this.db.transaction(async (client) => {
+  /** Authoritative case-membership writer shared by direct API and MCP's atomic create+add.
+   * The run and each case status are locked until the enclosing transaction COMMIT.
+   */
+  private async addApprovedCycleCasesInClient(
+    client: PoolClient, cycleId: string, projectId: string, ids: string[]
+  ): Promise<number> {
       const cycle = await this.lockActiveCycle(client, cycleId);
       this.assertAutomatedRunWritable(cycle);
       // Approved-only is enforced here, under the same PostgreSQL transaction
       // and case row locks as the INSERT; UI/MCP checks are insufficient.
       await assertApprovedCycleCasesAtWrite(client, projectId, cycleId, ids);
-      return client.query<{ id: string }>(
+      const inserted = await client.query<{ id: string }>(
       `WITH input AS (
          SELECT id, ord FROM unnest($2::uuid[]) WITH ORDINALITY AS u(id, ord)
        ),
@@ -6948,9 +6944,44 @@ export class LegacyService implements OnModuleInit {
        RETURNING id`,
       [cycleId, ids, projectId]
       );
-    });
+      return inserted.rows.length;
+  }
 
-    return { requested, added: res.rows.length, skipped: requested - res.rows.length };
+  async addCycleTestCases(cycleId: string, userId: string | null | undefined, body: Body) {
+    const projectId = await this.requireCycleAccess(userId, cycleId);
+    const raw = body.testcaseIds || (body.testcaseId ? [body.testcaseId] : []);
+
+    // Malformed ids used to reach Postgres as `WHERE id = $1` against a uuid column and fail the
+    // request with a driver error; unknown ones were skipped. Both are dropped here so a single bad
+    // id in a large selection cannot 500 the whole add, and `= ANY($2::uuid[])` never sees a value
+    // it cannot cast.
+    // `requested` is the raw selection size, so added + skipped always accounts for every id the
+    // caller sent — including duplicates and ids dropped as malformed below.
+    const requested = normalizeJsonArray(raw).length;
+    const ids = [...new Set(normalizeJsonArray(raw).map((id) => String(id)).filter((id) => isUuid(id)))];
+    if (!ids.length) return { requested, added: 0, skipped: requested };
+
+    const added = await this.db.transaction((client) =>
+      this.addApprovedCycleCasesInClient(client, cycleId, projectId, ids));
+    return { requested, added, skipped: requested - added };
+  }
+
+  /** All-or-nothing native run creation + approved case selection for MCP.
+   * The old two independent calls could leave an empty Run if attachment failed.
+   */
+  async createCycleWithApprovedTestCases(
+    projectId: string, userId: string | null | undefined, body: Body, testcaseIds: string[]
+  ) {
+    await this.requireProjectAccess(userId, projectId);
+    const requested = testcaseIds.length;
+    const ids = [...new Set(testcaseIds.filter((id) => isUuid(id)))];
+    return this.db.transaction(async (client) => {
+      const cycle = await this.createCycle(projectId, body, client);
+      const added = ids.length
+        ? await this.addApprovedCycleCasesInClient(client, cycle.id, projectId, ids)
+        : 0;
+      return { cycle, requested, added, skipped: requested - added };
+    });
   }
 
   /**
