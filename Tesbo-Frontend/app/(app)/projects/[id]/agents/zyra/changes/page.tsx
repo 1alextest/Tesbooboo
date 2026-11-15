@@ -47,6 +47,7 @@ export default function ZyraChangeReviewPage() {
   // Never apply their late UI feedback to another project or remount.
   const mutationLifetime = useRef({ generation: 0 });
   const activeProject = useRef(projectId);
+  const notificationInFlight = useRef<{ historyId: string; generation: number } | null>(null);
   activeProject.current = projectId;
   const load = useCallback(async (beforeId?: string) => {
     const request = ++historyRequest.current.generation;
@@ -76,6 +77,7 @@ export default function ZyraChangeReviewPage() {
     setError(null);
     setNotice(null);
     setCapturing(false);
+    notificationInFlight.current = null;
     setNotifying(null);
     void load();
     const reads = historyReads.current;
@@ -115,9 +117,15 @@ export default function ZyraChangeReviewPage() {
   }
 
   async function retry(historyId: string) {
+    // Only one native delivery attempt per page at a time. The database dedupes
+    // committed notifications; this lock prevents conflicting UI outcomes.
+    if (notificationInFlight.current) return;
     const mutation = mutationLifetime.current.generation;
+    const attempt = { historyId, generation: mutation };
+    notificationInFlight.current = attempt;
     const isCurrent = () => activeProject.current === projectId &&
-      mutationLifetime.current.generation === mutation;
+      mutationLifetime.current.generation === mutation &&
+      notificationInFlight.current === attempt;
     setNotifying(historyId);
     try {
       const result = await retryZyraGraphReviewNotification(projectId, historyId);
@@ -131,7 +139,10 @@ export default function ZyraChangeReviewPage() {
     } catch (cause) {
       if (isCurrent()) setError(cause instanceof Error ? cause.message : "Could not retry notification.");
     } finally {
-      if (isCurrent()) setNotifying(null);
+      if (isCurrent()) {
+        notificationInFlight.current = null;
+        setNotifying(null);
+      }
     }
   }
 
@@ -229,7 +240,7 @@ export default function ZyraChangeReviewPage() {
                       candidateCaseIds={receipt.candidates.map((candidate) =>
                         canonicalReviewCaseId(candidate.caseNodeId, projectId)
                       ).filter((id): id is string => id !== null)} />
-                    <button type="button" disabled={notifying === entry.id} onClick={() => void retry(entry.id)}
+                    <button type="button" disabled={notifying !== null} onClick={() => void retry(entry.id)}
                       className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm disabled:opacity-60">
                       {notifying === entry.id ? "Checking notification…" : "Notify QA reviewers"}
                     </button>
