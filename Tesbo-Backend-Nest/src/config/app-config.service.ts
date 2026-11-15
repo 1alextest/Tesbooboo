@@ -8,7 +8,7 @@ export class AppConfigService {
   private readonly env = this.loadEnv();
 
   readonly port = this.integer("PORT", 7000);
-  /** Server-owned checkout allowlist. Unset means no repository is authorized. */
+  /** Server-owned checkout allowlist; unset means source capture is disabled. */
   readonly graphApprovedCheckoutsJson = this.optionalString("TESBO_GRAPH_APPROVED_CHECKOUTS_JSON");
   readonly databaseUrl = this.normalizeDatabaseUrl(this.string("DATABASE_URL", "postgresql://localhost:5432/tesbo"));
   readonly databaseUser = this.optionalString("DATABASE_USER");
