@@ -9,6 +9,7 @@ import { makeLegacy } from "../legacy/test-helpers/legacy-service.fixture";
 import { CurrentCacheGraphReader } from "./current-cache-graph.reader";
 import { CurrentCacheGraphHistory } from "./current-cache-graph.history";
 import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
+import { GraphChangeReviewRecovery } from "./graph-change-review.recovery";
 import { writeNotifications } from "../legacy/notification-writer";
 import { ProjectSourceBindingReader } from "./project-source-binding";
 import { ProjectSourceGraphCoordinator } from "./project-source-graph.coordinator";
@@ -328,7 +329,11 @@ const url = process.env.DATABASE_URL ?? "";
         // A missing notification after a committed receipt is recovered
         // without a human identity or duplicate durable rows.
         await admin.query("DELETE FROM notifications WHERE dedupe_key=$1", [dedupeKey]);
-        expect(await svc.recoverCommittedForSystem(project, historyId)).toEqual(first);
+        const recovery = new GraphChangeReviewRecovery(new DatabaseService(pool), svc);
+        const recovered = await recovery.runOnce();
+        expect(recovered).toMatchObject({ eligible: 1, delivered: 1, pending: 0, failed: 0 });
+        const repeated = await recovery.runOnce();
+        expect(repeated).toMatchObject({ eligible: 0, delivered: 0, pending: 0, failed: 0 });
         expect(await svc.recoverCommittedForSystem(project, historyId)).toEqual(first);
         expect((await admin.query(
           "SELECT COUNT(*)::int AS count FROM notifications WHERE dedupe_key=$1 AND user_id=$2",
