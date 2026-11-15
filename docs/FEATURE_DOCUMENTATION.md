@@ -5850,3 +5850,21 @@ PR #54 owns assignment-versus-deletion consistency; hierarchy-parent/cycle races
 historical cleanup, unknown postcommit outcomes, independent security/release
 review, deployed acceptance and the existing F.1/D1–D6 owner decisions remain
 outside this UI repair. No broader Phase 1/2 sign-off is implied.
+
+---
+
+### T-455 graph-to-QA handoff — implementation and assurance checkpoint (2026-11-15)
+
+**Product ownership:** reuse Tesbo's existing Requirements, Test Cases, Runs/Results, Evidence/Bugs, Zyra/Review Board, and Notifications/Activity records and authorization. This is an implementation checkpoint in the existing living feature document, **not a ninth specification or a second graph/approval/notification platform**.
+
+**Verified source foundation:** `src/behavior-graph/current-cache-graph.reader.ts` provides a project-authorized coherent read of cached Jira/Linear/Notion requirement rows and native test-case links; `current-cache-graph-projection.ts` versions these as `cached_requirement`, `test_case`, and `references_cached_requirement`. The source-neutral comparison and `qa-review-candidates.ts` identify direct edits and explicitly related candidates without asserting coverage. PR #80 proposes a pure version-bound receipt suitable for future native QA triage and duplicate suppression; it has **no persisted snapshot, notification writer, endpoint, MCP tool, or actual user review**.
+
+**Native notification source already present (must be reused rather than replaced):**
+- `src/legacy/notification-events.ts` has `requirement_updated` and `integration_sync_completed/failed`, along with the existing matrix wording. A requirement update is already a native event type; do **not** introduce `graph_requirement_updated` as a duplicate.
+- `src/integration-sync/integration-sync.processor.ts` already resolves owners/creators of test cases explicitly linked to a changed requirement; `integration-sync.requirements.spec.ts` asserts recipients and Requirements navigation.
+- `src/legacy/notification-writer.ts` is the existing idempotent user-scoped writer, with `dedupeKey`, actor exclusion, and current project/organization membership filtering. Importing it blindly into another class without checking module dependencies and transaction boundaries risks duplicate or missing notifications.
+- The sync-completion notification is a different concern from a changed-requirement candidate. A local cache observation is **not** evidence the remote provider history is complete/fresh or that every applicable QA candidate was found.
+
+**Acceptance boundary / next vertical slice:** (1) verify canonical eight specification sources and independently run assurance lenses against the exact graph PR; (2) decide historical snapshot retention, partial/unsynced provider handling, provenance, concurrency and post-COMMIT delivery recovery; (3) persist project-scoped server-authorized captures with version, contract/scope, idempotency and source metadata; (4) feed the existing QA/Zyra review and notification entry points rather than creating another inbox; (5) prove a source change → impacted reference → human triage → authorized test run → evidence/version link → approval path end to end. Neither an AI assertion nor a cached reference is an executed test, validated behavior, or approved coverage. The six synthetic draft-case fixtures are **not** the live NES-TC cases; no live authoring or publication is implied.
+
+**Side findings / non-goals:** a missing link must not mean 'no tests'; an unchanged cache must not certify 'no upstream change'; user-supplied graph snapshots must never assert completeness or create notifications; future events must not send before committed source evidence is available or be silently lost after a partially committed write. Notes-MCP authoring support and its separate retest do not replace T-455 or change graph acceptance.
