@@ -23,10 +23,10 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
   }
   const rows = Object.entries(parsed);
   if (rows.length > 50) throw new Error("Too many approved graph checkouts");
-  const registry: Record<string, { root: string; repositoryId: string }> = {};
+  const registry: Record<string, { root: string; repositoryId: string }> = Object.create(null) as Record<string, { root: string; repositoryId: string }>;
   for (const [key, value] of rows) {
     const row = value as { root?: unknown; repositoryId?: unknown } | null;
-    if (!/^[A-Za-z0-9_-]{1,100}$/.test(key) || !row || typeof row !== "object" ||
+    if (!/^[A-Za-z0-9_-]{1,100}$/.test(key) || ["__proto__", "constructor", "prototype"].includes(key) || !row || typeof row !== "object" ||
         Object.keys(row).sort().join(",") !== "repositoryId,root" ||
         typeof row.root !== "string" || !row.root.startsWith("/") ||
         row.root.includes("\0") || row.root.includes("..") ||

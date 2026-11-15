@@ -4561,6 +4561,7 @@ export type GraphReviewHistoryRow = {
 };
 export type GraphReviewCaptureResult = {
   id: string; revision: string; stored: boolean; reviewReceipt: GraphReviewReceipt | null;
+  delivery: GraphReviewDeliveryStatus | null;
 };
 /** Uses the existing graph history and Zyra's project scope, not a second review store. */
 export async function listZyraGraphChanges(
@@ -4572,6 +4573,19 @@ export async function listZyraGraphChanges(
 }
 export async function captureZyraGraphChange(projectId: string): Promise<GraphReviewCaptureResult> {
   return api(`/api/projects/${projectId}/agents/zyra/changes/capture`, {
+    method: "POST", body: {}
+  });
+}
+
+export type GraphReviewDeliveryStatus = {
+  status: "delivered" | "pending" | "no_recipients";
+  recipientCount: number;
+  pendingCount: number;
+};
+export async function retryZyraGraphReviewNotification(
+  projectId: string, historyId: string
+): Promise<GraphReviewDeliveryStatus> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/${historyId}/notify`, {
     method: "POST", body: {}
   });
 }

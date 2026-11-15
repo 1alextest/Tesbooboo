@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams } from "@/lib/routeParams";
 import { useCallback, useEffect, useState } from "react";
 import {
-  captureZyraGraphChange, listZyraGraphChanges,
+  captureZyraGraphChange, listZyraGraphChanges, retryZyraGraphReviewNotification,
   type GraphReviewHistoryRow
 } from "@/lib/api";
 
@@ -16,6 +16,7 @@ export default function ZyraChangeReviewPage() {
   const [cursor, setCursor] = useState<string | undefined>();
   const [loading, setLoading] = useState(true);
   const [capturing, setCapturing] = useState(false);
+  const [notifying, setNotifying] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -43,10 +44,28 @@ export default function ZyraChangeReviewPage() {
           ? "A change was recorded for QA triage. No tests have been executed or approved."
           : "A source baseline or scope change was recorded. Impact is not yet comparable."
         : "No change to the observed graph content.");
+      if (result.delivery?.status === "pending") {
+        setNotice(`Graph recorded; ${result.delivery.pendingCount} reviewer notification(s) are pending delivery.`);
+      }
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Source capture unavailable.");
     } finally { setCapturing(false); }
+  }
+
+  async function retry(historyId: string) {
+    setNotifying(historyId);
+    try {
+      const result = await retryZyraGraphReviewNotification(projectId, historyId);
+      setNotice(result.status === "delivered"
+        ? `Reviewer notifications confirmed for ${result.recipientCount} recipient(s).`
+        : result.status === "pending"
+          ? `${result.pendingCount} reviewer notification(s) remain pending.`
+          : "No eligible reviewer recipients are configured.");
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not retry notification.");
+    } finally { setNotifying(null); }
   }
 
   return (
@@ -112,6 +131,10 @@ export default function ZyraChangeReviewPage() {
                       Evidence basis: {receipt.evidence.basis}. Source freshness unverified;
                       execution and coverage unverified. QA must choose and run applicable cases separately.
                     </p>
+                    <button type="button" disabled={notifying === entry.id} onClick={() => void retry(entry.id)}
+                      className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm disabled:opacity-60">
+                      {notifying === entry.id ? "Checking notification…" : "Notify QA reviewers"}
+                    </button>
                     <Link href={`/projects/${projectId}/agents/zyra`} className="text-sm underline">
                       Continue review with Zyra
                     </Link>
