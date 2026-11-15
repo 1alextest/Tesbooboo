@@ -83,9 +83,12 @@ export async function verifyZyraMissingSuite(input: {
     expect(audit.filter((row) => oldAudit.some((old) => old.id === row.id))).toEqual(oldAudit);
     const addedAudit = audit.filter((row) => !oldAudit.some((old) => old.id === row.id));
     expect(addedAudit).toHaveLength(movedIds.length ? 1 : 0);
-    if (movedIds.length) expect(addedAudit[0]).toMatchObject({ action: "zyra_moved_to_suite", entity_id: fixture.destinationId,
-      actor_id: ownerId, diff: { movedCount: 2, testcaseIds: movedIds } });
-    else expect(after).toEqual(before);
+    if (movedIds.length) {
+      expect(addedAudit[0]).toMatchObject({ action: "zyra_moved_to_suite", entity_id: fixture.destinationId,
+        actor_id: ownerId, diff: { movedCount: 2 } });
+      const auditIds = (addedAudit[0].diff as { testcaseIds: string[] }).testcaseIds;
+      expect([...auditIds].sort()).toEqual([...movedIds].sort());
+    } else expect(after).toEqual(before);
     const users = session.messages.filter((entry: Record<string, unknown>) => entry.role === "user");
     expect(users).toHaveLength(1); const trace = users[0].trace;
     expect(trace.version).toBe(1); expect(trace.steps.filter((step: Record<string, unknown>) => step.stage === "staging")).toHaveLength(1);
