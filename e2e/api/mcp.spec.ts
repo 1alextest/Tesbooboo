@@ -4338,8 +4338,8 @@ test.describe("MCP create_cycle_from_testcases", () => {
       baseURL: env.apiBaseUrl,
       storageState: path.join(__dirname, "../.auth/state-b.json"),
     });
-    const tcA = await createCase(request, { title: `E2E MCP Cycle From Cases A ${stamp}` });
-    const tcB = await createCase(request, { title: `E2E MCP Cycle From Cases B ${stamp}` });
+    const tcA = await createCase(request, { title: `E2E MCP Cycle From Cases A ${stamp}`, status: "Approved" });
+    const tcB = await createCase(request, { title: `E2E MCP Cycle From Cases B ${stamp}`, status: "Approved" });
     let tokenId: string | undefined;
     let cycleId: string | undefined;
     let bCaseId: string | undefined;
@@ -4676,3 +4676,31 @@ test.describe("MCP test case ID", () => {
     }
   });
 });
+
+test("MCP create-cycle refuses non-Approved cases before writing any run", async ({ request }) => {
+  const stamp = Date.now();
+  const draft = await createCase(request, { title: `E2E MCP Draft boundary ${stamp}`, status: "Draft" });
+  const context = await newRequestContext.newContext({
+    baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] }
+  });
+  let tokenId: string | undefined;
+  try {
+    const issued = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      data: { name: `E2E Approved-only MCP ${stamp}`, scopes: ["write"] }
+    });
+    expect(issued.ok()).toBeTruthy();
+    const token = await issued.json();
+    tokenId = token.id;
+    const runName = `E2E MCP reject Draft ${stamp}`;
+    const refusal = await callMcpToolExpectError(context, token.token,
+      "create_cycle_from_testcases", { name: runName, testcaseIds: [draft.id] });
+    expect(refusal.message).toMatch(/Only Approved/);
+    const runs = await (await request.get(`/api/projects/${ctx.projectId}/cycles`)).json();
+    expect(runs.some((run: { name: string }) => run.name === runName)).toBe(false);
+  } finally {
+    await context.dispose();
+    if (tokenId) await request.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    await deleteCase(request, draft.id);
+  }
+});
+

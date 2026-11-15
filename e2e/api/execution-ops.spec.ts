@@ -83,7 +83,7 @@ test.describe("execution bulk operations, schedules and share links", () => {
     const testcaseIds: string[] = [];
     for (let i = 0; i < count; i++) {
       const res = await asOwner.post(`/api/projects/${project}/testcases`, {
-        data: { title: stamp(`case ${i + 1}`) },
+        data: { title: stamp(`case ${i + 1}`), status: "Approved" },
         failOnStatusCode: false,
       });
       expect(res.status(), `seeding a test case — ${await res.text()}`).toBe(201);

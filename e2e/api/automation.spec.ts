@@ -62,7 +62,7 @@ async function seedCases(api: APIRequestContext, count: number, label: string): 
   const cases: SeededCase[] = [];
   for (let index = 0; index < count; index += 1) {
     const res = await api.post(`/api/projects/${ctxA.projectId}/testcases`, {
-      data: { title: `E2E Automation ${label} ${index} ${Date.now()}` },
+      data: { title: `E2E Automation ${label} ${index} ${Date.now()}`, status: "Approved" },
     });
     expect(res.ok(), `seeding test case ${index} for ${label}`).toBeTruthy();
     const body = await res.json();
@@ -1475,3 +1475,23 @@ test.describe("automation ingest - soft-deleted run (hard-delete remediation Pha
     }
   });
 });
+
+test("automation run creation rejects known Draft case before creating a native run", async ({ request: api }) => {
+  const title = "E2E automation Draft policy " + Date.now();
+  const created = await api.post(`/api/projects/${ctxA.projectId}/testcases`, {
+    data: { title, status: "Draft" }
+  });
+  expect(created.ok()).toBeTruthy();
+  const draft = await created.json();
+  try {
+    const runName = "E2E rejected Draft automation " + Date.now();
+    const result = await createRun(api, { name: runName, caseIds: [draft.externalId] });
+    expect(result.status()).toBe(409);
+    expect((await result.json()).error).toMatch(/Only Approved/);
+    const runs = await (await api.get(`/api/projects/${ctxA.projectId}/cycles`)).json();
+    expect(runs.some((run: { name: string }) => run.name === runName)).toBe(false);
+  } finally {
+    await api.delete(`/api/projects/${ctxA.projectId}/testcases/${draft.id}`, { failOnStatusCode: false });
+  }
+});
+

@@ -9,12 +9,65 @@ const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.js
 /** Creates a test case in the shared project and adds it to the run; returns the case id. */
 async function addCase(request: any, runId: string): Promise<string> {
   const tc = await (
-    await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Run Case ${Date.now()}` } })
+    await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Run Case ${Date.now()}`, status: "Approved" } })
   ).json();
   const res = await request.post(`/api/cycles/${runId}/testcases`, { data: { testcaseIds: [tc.id] } });
   expect(res.ok()).toBeTruthy();
   return tc.id;
 }
+
+test("approved-only run attachment refuses Draft or mixed selection and preserves canonical execution history", async ({ request }) => {
+  const stamp = Date.now().toString();
+  const created: string[] = [];
+  let runId: string | undefined;
+  try {
+    const add = async (status: string) => {
+      const res = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+        data: { title: `E2E native policy ${status} ${stamp}`, status }
+      });
+      expect(res.ok(), await res.text()).toBeTruthy();
+      const row = await res.json();
+      created.push(row.id);
+      return row.id as string;
+    };
+    const approved = await add("Approved");
+    const draft = await add("Draft");
+    const review = await add("In Review");
+    const createdRun = await request.post(`/api/projects/${ctx.projectId}/cycles`, {
+      data: { name: "E2E Approved boundary " + stamp }
+    });
+    expect(createdRun.ok()).toBeTruthy();
+    runId = (await createdRun.json()).id;
+
+    const mixed = await request.post(`/api/cycles/${runId}/testcases`, {
+      data: { testcaseIds: [approved, draft] }, failOnStatusCode: false
+    });
+    expect(mixed.status()).toBe(409);
+    expect((await mixed.json()).error).toMatch(/Only Approved/);
+    expect(await (await request.get(`/api/cycles/${runId}/executions`)).json()).toHaveLength(0);
+
+    const inReview = await request.post(`/api/cycles/${runId}/testcases`, {
+      data: { testcaseIds: [review] }, failOnStatusCode: false
+    });
+    expect(inReview.status()).toBe(409);
+    const added = await request.post(`/api/cycles/${runId}/testcases`, {
+      data: { testcaseIds: [approved] }, failOnStatusCode: false
+    });
+    expect(added.ok(), await added.text()).toBeTruthy();
+    expect(await added.json()).toMatchObject({ added: 1, skipped: 0 });
+    const retried = await request.post(`/api/cycles/${runId}/testcases`, {
+      data: { testcaseIds: [approved] }, failOnStatusCode: false
+    });
+    expect(retried.ok(), await retried.text()).toBeTruthy();
+    expect(await retried.json()).toMatchObject({ added: 0, skipped: 1 });
+    const executions = await (await request.get(`/api/cycles/${runId}/executions`)).json();
+    expect(executions).toHaveLength(1);
+    expect(executions[0]).toMatchObject({ testcaseId: approved, status: "Untested" });
+  } finally {
+    if (runId) await request.delete(`/api/cycles/${runId}`, { failOnStatusCode: false });
+    for (const id of created) await request.delete(`/api/projects/${ctx.projectId}/testcases/${id}`, { failOnStatusCode: false });
+  }
+});
 
 test.describe("test cycle / run CRUD", () => {
   test("supports the create -> read -> update -> list -> delete lifecycle", { tag: '@tesbo.testId("TES-TC-170")' }, async ({ request }) => {
