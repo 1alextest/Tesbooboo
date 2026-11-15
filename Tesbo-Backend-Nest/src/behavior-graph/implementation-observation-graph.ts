@@ -44,6 +44,7 @@ export interface ImplementationGraphCapture extends GraphCaptureForComparison {
   observedCommitSha: string;
   conceptInventoryStatus: "unverified";
   declarationClassification: "proposed_not_semantically_attested";
+  sourceByteEvidence: "unattested" | "verified_pinned_git";
   sourceAttestation: "caller_must_verify";
   semantics: "declarations_not_runtime_verification";
   coverageAssertion: "none";
@@ -157,6 +158,7 @@ export function projectImplementationObservations(
     observedCommitSha: source.commitSha,
     conceptInventoryStatus: "unverified",
     declarationClassification: "proposed_not_semantically_attested",
+    sourceByteEvidence: "unattested",
     sourceAttestation: "caller_must_verify",
     semantics: "declarations_not_runtime_verification",
     coverageAssertion: "none",

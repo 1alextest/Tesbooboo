@@ -137,6 +137,7 @@ describe("internal implementation source observation projection", () => {
     expect(receipt?.changed.modifiedNodeIds[0]).toContain("implementation_file");
     expect(receipt?.candidates).toEqual([]);
     expect(receipt?.evidence).toMatchObject({
+      basis: "source_declaration_unattested",
       coverageAssertion: "none",
       executionAssertion: "none",
       verification: "not_performed"
