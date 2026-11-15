@@ -36,7 +36,7 @@ export class CurrentCacheGraphHistory {
     userId: string | null | undefined,
     projectId: string,
     limit = 25,
-    beforeId?: string
+    beforeId?: unknown
   ): Promise<Array<{
     id: string;
     revision: string;
@@ -48,7 +48,7 @@ export class CurrentCacheGraphHistory {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
       throw new ConflictException({ error: "Graph history limit must be 1–100" });
     }
-    if (beforeId !== undefined && (!/^[1-9][0-9]*$/.test(beforeId) ||
+    if (beforeId !== undefined && (typeof beforeId !== "string" || !/^[1-9][0-9]*$/.test(beforeId) ||
         beforeId.length > 19 || BigInt(beforeId) > 9223372036854775807n)) {
       throw new ConflictException({ error: "Invalid history cursor" });
     }

@@ -36,6 +36,12 @@ export class ProjectSourceBindingReader {
     private readonly approved: ApprovedSourceRegistry
   ) {}
 
+  /** Expose only a boolean allowlist decision, never the server's filesystem root. */
+  isApprovedCheckout(checkoutKey: string, repositoryId: string): boolean {
+    return Object.prototype.hasOwnProperty.call(this.approved, checkoutKey) &&
+      this.approved[checkoutKey]?.repositoryId === repositoryId;
+  }
+
   async resolveForUser(userId: string | null | undefined, projectId: string): Promise<{
     binding: ProjectSourceBinding;
     checkout: ApprovedSourceCheckout;

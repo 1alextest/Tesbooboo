@@ -6006,3 +6006,185 @@ no credentials were copied or replacement/shared database started. Exact-head
 CI needs publication/run approval; deployed impacted case/MCP/editor acceptance
 and independent review are separate gates. Nothing here authorizes edits to the
 twelve live Nesberry cases, production deployment or SDK publication.
+
+---
+
+### T-455 native Zyra change review, committed-receipt notifications (2026-11-15)
+
+**Consolidated successor:** PR #88 builds on merged T-455 PR #86 and reuses the same graph ledger, case/requisite links and Zyra entry point. It registers an authenticated project-scoped `/agents/zyra/changes` REST API and a change-review view **inside Zyra**. The view distinguishes initial baselines, source-scope discontinuities and comparable changes; displays exact affected node identities and explicitly linked test-case review candidates, and states that references are not coverage and source changes are not failed executions. The capture action accepts **no client source manifest**: only approved server checkout configuration, the project source binding and native auth/plan write guards can initiate it. Unconfigured projects fail closed.
+
+**Notification reuse:** a new, distinct `qa_change_review` event is emitted through Tesbo's **existing** notification writer/type catalogue and user notification table, with a stable per-recipient deduplication key for a **committed** graph-history receipt. It navigates to the actual Zyra change-review page, not an unavailable route. Recipient discovery selects current QA/manager/owner members, and the native insert rechecks both project and organization membership. After writing, delivery is verified by inspecting persisted per-user notifications. The API reports `delivered`, `pending`, or `no_recipients`; a scoped retry action is idempotent and does not duplicate delivered notifications. This is **manual / capture-triggered retry**, not guaranteed unattended outbox recovery. A failed confirmation cannot convert an already committed graph capture into a false failure.
+
+**Verification matrix:** backend unit contracts for registry validation, no foreign checkout paths, API project identity, invalid paging/source payloads, native per-recipient notification/partial confirmation and unauthorized history; disposable migrated PostgreSQL test for native graph receipt → actual notification row → idempotent replay; existing Zyra API and browser Playwright specs for empty view, navigation, unconfigured capture and unauthorized API. New exact-head CI + authorized deployment E2E remains required; passing Jest/migrated PostgreSQL is not an executed user acceptance or a live connected agent proof. No source scanning scheduler, autonomous delivery, semantic behavior verification, automatic test failure or approval was introduced.
+
+**Outstanding:** administrator-provisioned project Git binding UI/permission contract; source scan trigger from an authorized coding agent/CI; genuinely linked implementation/route/state/journey→requirements/cases with evidence provenance; QA action selection, execution/evidence/finding and human approval; durable unattended notification retries/operability, retention and independent multi-team assurance. Do not duplicate native test case, run, Notes, Zyra or notification owners.
+
+---
+
+### T-455 connected MCP coding-agent → Zyra QA impact handoff (2026-11-15)
+
+**Delivery unit:** Existing large PR #88 extends merged behavioral graph PR #86 with a native Zyra Change Review page, project-scoped authorized REST history/capture, native committed-receipt notifications, explicit retry, and now two MCP tools in the **existing** Tesbo server. No other case repository, AI assistant, graph ledger or approval board is created. This is a code/CI stage, not a deployed acceptance verdict.
+
+**Connected agent interfaces:** `list_qa_graph_changes` requires MCP read scope, reads the same `CurrentCacheGraphHistory.listForUser` with bounded newest-first cursor pagination and current project+organization membership, and returns review candidates plus exact changed identities. `capture_qa_graph_change` requires MCP write scope and the existing project-plan write guard; it calls the same trusted project source coordinator and notification delivery used by Zyra. The capture tool takes **zero client-supplied fields**, so an agent cannot invent repository roots, source files, behavior verification, execution outcomes or approvals. An absent/disabled server source binding fails closed. Session fingerprinting invalidates old MCP tool catalogs on deploy.
+
+**Canonical cases and QA boundary:** the Zyra review view resolves only JSON case-node tuples matching `["test_case", currentProjectId, validUuid]` into existing case-detail links; it does not clone cases, infer coverage from no/yes links, create test cycles, mark results or approve drafts. A coding agent can follow a committed receipt to `get_testcase` and the native test-run tools if/when QA authorizes genuine execution with evidence. Historical source changes with no explicitly linked case require further investigation, not a “no tests affected” certificate.
+
+**Native delivery semantics:** graph-history capture/receipt commits before notification writes. Existing `writeNotifications` enforces per-user dedupe and both current project/workspace membership at insert. The receipt-linked QA view is the actual notification destination. A delivery reply distinguishes confirmed rows, pending recipients and no recipients; retries use the same deterministic key. No unattended retry scheduler or guaranteed delivery latency is claimed.
+
+**Verification plan/results:** exact-head MCP unit tests cover discovery, read/write scopes, locked-project parity, project isolation, invalid limits/cursors, rejected caller source claims, successful coordinator invocation, duplicate/no-change capture and notification outcomes. The existing migrated PostgreSQL authorization parity suite inventories all **52** current MCP tools as **31 writes + 21 reads** rather than sampling names; a new tool without a classified negative fixture fails CI. Existing MCP API Playwright tests cover discovery/read/capture failure in an unconfigured smoke tenant, and existing Zyra UI E2E verifies exact canonical case navigation from a disposable committed review. All new Playwright tests are authored but **not** claimed as deployed execution. Never substitute local database fixtures for the root-env shared server.
+
+**Gaps:** trusted source checkout provisioning UI/permissions, automatic CI/coding-agent source-change triggers, reliable unattended post-COMMIT notification retries/monitoring, evidence-backed route/state/journey-to-native-case relationships, QA traceable test-run selection/execution/evidence/defect links, approval and full independent cross-application assurance. A source byte fingerprint is not proof of deployed behavior; a QA review receipt is not a test result.
+
+---
+
+### T-455 notification eligibility race and smoke catalog parity checkpoint (2026-11-15)
+
+**Why:** Review receipt creation and notification delivery are independent operations. A user can lose the QA, manager or owner role or active organization/project membership after recipient discovery but before insertion. Membership alone does not establish continued permission to receive a restricted QA impact alert. The 50-to-52 MCP catalog expansion also revealed two independent older UI smoke assertions.
+
+**Change:** The existing `writeNotifications` now accepts an optional `memberOf.projectRoles` restriction on the existing project-scoped notification predicate. It checks allowed role plus non-deleted project and organization memberships inside the same INSERT SELECT as the notification write. Graph delivery supplies QA/manager/owner roles. Other notification callers remain unconstrained by project role; an explicit empty role list refuses delivery. Per-user dedupe, committed receipt lookup and post-insert row confirmation remain unchanged.
+
+**Regressions:** native notification tests check active-membership/role SQL predicates and empty allowlists; the graph-delivery contract checks role-bound writer arguments. The UI smoke checks both the exact 52-tool discovery set and its 52-tool connection diagnostic. Previous CI at `99ae093b` passed eight workflows but smoke failed on the diagnostic still expecting 50. Latest-head CI remains independently required.
+
+**Open evidence gates:** real role-revocation interleaving under migrated PostgreSQL, authorized deployed coding-agent source-to-Zyra-to-QA execution in disposable tenants, delivery replay, unchanged canonical case/execution status until genuine QA actions, durable unattended retry/monitoring, approved source checkout provisioning, and independently executed assurance teams. No autonomous delivery guarantee, semantic behavior certification or automatic case approval is claimed.
+
+---
+
+### T-455 opt-in durable graph notification recovery (2026-11-15)
+
+**Architecture and ownership:** The existing `graph_capture_history` committed receipt and native `notifications` table are authoritative. No parallel graph store, outbox table, agent, or QA case repository is introduced. A dedicated small BullMQ worker in the existing GraphChangeReviewModule retries missing native notification rows using the same GraphChangeReviewDelivery and existing per-user dedupe key. It does not mutate test cases, executions, approval decisions, findings, evidence, or source bindings.
+
+**Opt-in:** Set server environment variable `TESBO_GRAPH_QA_RECOVERY_ENABLED=1` only after repository deployment and acceptance are authorized. Without this exact value an instance does not register the shared scheduler and its processor refuses even previously queued jobs. Because the Redis scheduler identity is shared by the entire backend cluster, a disabled instance never removes it during mixed-configuration rollout. Operators retiring recovery cluster-wide must explicitly remove the registered scheduler after all workers have been disabled; otherwise inert jobs may still be enqueued. With the flag enabled, the same Redis-backed scheduler identity is upserted every ten minutes UTC, avoiding one schedule per instance. This does not mean capture/source scanning is scheduled: only committed QA receipt notification delivery is retried.
+
+**Bounded recovery:** Each pass reads at most 100 committed, comparable review receipts captured in the previous 48 hours. The query checks currently active projects, QA/manager/owner project memberships, active organization memberships, and absence of the stable per-recipient native notification row. Receipt rows are processed sequentially with per-item error isolation and a structured summary (`eligible`, `delivered`, `pending`, `noRecipients`, `failed`) on **every** run (including empty-backlog heartbeats) in backend logs. A batch at the 100-receipt cap emits a saturation warning; it does not assert the backlog is drained. Repeating the job is idempotent through native `(user_id, dedupe_key)` uniqueness and the same insertion-time project/organization/role restrictions. Never claim that a notification was sent merely because a row was selected or a write was attempted.
+
+**Safety and limits:** The worker only calls an internal trusted recovery method; REST and MCP continue to require authenticated project identity for manual retries and cannot invoke system recovery. The internal method does not forge a human actor, accepts no arbitrary source bytes, and rejects invalid/uncommitted receipt identifiers. A disabled queue, archived project, revoked member, or ineligible role must not deliver a new notification. Delivery is best effort rather than exactly-once external delivery; the unique row is the actual evidence of notification availability.
+
+**Operator runbook:** Inspect GraphChangeReviewRecovery log summaries and the committed receipt + notification dedupe rows for suspected gaps. Diagnose Redis scheduler connectivity, current role/membership, retention window, and database write errors. Preserve the graph receipt; restart/re-enable the worker only after correcting infrastructure. To retry a specific older receipt, use the existing authorized manual `/agents/zyra/changes/:historyId/notify` route from Zyra. Do not backfill arbitrarily old receipts as new events without explicit review because membership and recipient intent may have changed.
+
+**Verification status:** Automated unit contracts cover backlog selection predicates, idempotent delivery service reuse, isolated per-receipt failures, rejected missing IDs and worker disablement. Previously introduced migrated-PostgreSQL tests cover durable native receipt delivery plus revoked membership and role refusal. Exact HEAD CI must pass; enabling the scheduler in a configured deployment, its real Redis timer behavior, operational alerts, latency/SLO and a connected-agent-to-human-QA acceptance journey remain outstanding. No assurance-team certification or deployed verification is asserted.
+
+---
+
+### T-455 native owner source provisioning (2026-11-15)
+
+**Purpose:** close the gap between server-admin allowlisting and project configuration. Reuse native `project_source_bindings`, approved checkout registry, existing Zyra change review and global project plan write guards. Do not create an alternative integration app, source scanner, test repository, or client-controlled checkout location.
+
+**Native owner UI/API:** `GET` and `POST /api/projects/:projectId/agents/zyra/changes/source-binding` manage only `repositoryId`, `checkoutKey`, `refName`, `selectionPrefixes`, and `enabled`. The same Zyra change-review view exposes the setup form to project owners; QA/manager access is refused server-side and does not display the form. Neither API nor UI exposes server checkout roots or credentials. The server registry remains environment-admin controlled through `TESBO_GRAPH_APPROVED_CHECKOUTS_JSON`; approved project configuration is not proof the checkout exists or can be read.
+
+**Authority and mutation:** Current project owner + organization membership and active project are required. Owner membership is rechecked inside the upsert SQL with locked authorization rows before any project binding can be inserted/updated. Unknown/mismatched checkout key/repository identity, path traversal, arbitrary manifest, unexpected body fields, bad ref, invalid/duplicate selections and invalid types fail closed; the existing binding is left unchanged. Disabling preserves the identity and provenance but prevents capture through the current source reader. The global plan write lock covers the POST; GET remains accessible to owners on locked projects.
+
+**Regression matrix:** owner GET empty/existing without checkout root, known checkout creation, disable, owner-to-QA demotion, missing owner, unknown checkout, raw path/credentials injection, foreign project, malformed and duplicate path prefixes, invalid ref/field types, no unauthorized writes, and actual migrated PostgreSQL persistence. The existing API and browser suites now exercise refused roles, rejected source payloads and the native UI, including unchanged binding rows on failure.
+
+**Important limits:** Server operators still need to provision the real approved Git checkout and repository ID via trusted deployment configuration; the UI cannot invent an approved source, and cannot configure credentials. There is no claim of active semantic route/journey verification from a pinned source byte observation. Exact-head CI, approved deployed API/browser E2E, independent assurance agents and the complete coding-agent → QA run/evidence/approval flow are still outstanding.
+
+---
+
+### T-455 human-selected QA test-run handoff and mutation uncertainty (2026-11-15)
+
+**Owner and purpose.** The graph receipt suggests explicitly linked canonical test cases, but it does not prove that a test covers changed behavior, that tests have executed, or that any finding was approved. The native Zyra Change Impact Review now offers a human-controlled test-run handoff. The reviewer must select case IDs explicitly; zero cases are selected automatically. Only same-project, UUID-shaped canonical `test_case` node tuples are eligible in the UI; the existing test-run API remains authoritative and validates live project ownership and case eligibility. No parallel case/run/approval tables or agents were introduced.
+
+**Two native destinations.** A reviewer may add cases to an existing open manual Test Run (`listTestRuns` and `addTestCasesToRun`), or create a new run via existing `createTestRun`, then attach selected cases with the same native endpoint. New runs require a human-provided name and environment. The new run's description contains a human-readable graph receipt reference for context, **not** a verified traceability edge or formal attestation. The UI links to the canonical run for execution, evidence, defects and human review; it never sets execution status, invents evidence, creates a defect or approves a test.
+
+**Ambiguous mutation safeguards.** Create+attach are two distinct commits; Tesbo already implements them as separate native operations. If attachment fails or its response is lost after a successful CREATE, the UI retains the actual run ID and retries attachment against that SAME run. The canonical add operation deduplicates the case membership. If the initial CREATE response is lost, the run ID is unknown: the UI blocks blind recreation, directs the reviewer to inspect native Test Runs, allows refreshing the open-run list and linking the existing run, and requires explicit confirmation before a fresh CREATE. Skipped attachments are reported as skipped (already present or no longer eligible), not as proven coverage. No automatic retry occurs for non-idempotent writes.
+
+**Validation matrix.** The existing disposable Zyra browser E2E now covers explicit selection, required environment, persisted cycle and cycle-item rows, unchanged Passed/Failed/Blocked execution counts, source receipt -> existing canonical case link, duplicate attachment retry, and an injected HTTP 503 **after real database commit** for both attachment and run creation. It verifies one run/case membership rather than trusting a UI toast. The recovery worker's migrated PostgreSQL test is isolated to its own synthetic project using a parameterized *internal only* project filter; the scheduled worker continues to scan all eligible projects. No tests may send other tenants' QA notifications simply to exercise a global recovery fixture.
+
+**CI execution rather than authored-only tests.** Extended the existing isolated CI smoke workflow to run the impacted Zyra API and UI tests using explicit localhost API/web bases, the same temporary PostgreSQL/Redis services and disposable RBAC tenants, direct DB transport, with Playwright reporter network submission disabled. No external AI provider or live customer data is involved. This is a CI local-stack proof only; authorized deployed end-to-end acceptance, live Git checkout registration, realistic route/state/journey traceability, execution/evidence/defect/approval workflow and independently executed assurance teams are still mandatory release gates.
+
+**Operability and limitations.** The run builder limits selection to 200 distinct suggested case IDs per receipt and refers reviewers to the existing repository for any remainder; it does not auto-select or silently declare remaining scope unimpacted. A run description is context metadata only: the later formal graph-to-run evidence relationship, source revision/build provenance, and human QA sign-off remain unimplemented. Guard the opt-in recovery scheduler across mixed-instance deployments; check SQL-confirmed notification rows rather than reporting successful delivery from an enqueued job.
+---
+
+### T-455 persistent human QA run/case handoff references (V147) — 2026-11-15
+
+**Single-source ownership:** V147 adds only a *relationship table* `graph_review_run_case_links`. It carries project, committed graph-history receipt, canonical cycle/run, canonical test-case ID, human selector, and timestamp. Three composite project+ID unique indexes and foreign keys prevent cross-project references even outside the API. No test case, run, execution, evidence, defect, approval or graph source record is copied. Native soft deletions retain associations; an actual hard delete of a referenced parent cascades the relationship and therefore cannot be treated as indefinite audit archival.
+
+**Positive write contract:** A human explicitly selects 1–200 distinct canonical case UUIDs from a committed comparable graph receipt and attaches them through Tesbo's native run API first. Only then POST `.../changes/:historyId/runs/:cycleId/link` is called with `{ testcaseIds }`. One serialized PostgreSQL transaction validates current project+organization membership and QA/manager/owner role, active project/cycle/cycle-items/testcase rows, and *each* selected canonical tuple in the existing receipt's `candidates`. Reject the entire batch on a single nonmatching or missing case. Duplicate POSTs return `newlyLinked:0` on the existing composite primary key without rewriting origin or attributing any execution status. No source paths, forged results, coverage flags, approval fields or foreign-project IDs may be written.
+
+**Read contract:** GET `.../changes/:historyId/runs` returns authorized per-receipt native run/case handoff references, current run name/status and association timestamp. It never infers that cases passed, failed, were executed or cover behavior. The existing Zyra change review's run-preparation section shows these persisted links after reload and navigates to the canonical native run for evidence, defects and human decision-making. Failure to record a link after a successful native attachment must be presented as a retryable *association* failure; it must never implicitly roll back the run, create a duplicate, or assert that execution occurred.
+
+**Tests:** backend unit contracts cover malformed/forged inputs, unknown receipts, authorization, atomic all-case eligibility and idempotent replay. Migrated PostgreSQL integration tests create an actual committed review and native cycle/case association, assert persisted project-scoped FK provenance and zero completed executions, verify repeated inserts, reject foreign project and non-nominated cases, roll back mixed batches, and recheck denied membership. Existing disposable Zyra browser/API E2E now check the full handoff path, persistence across reload, duplicate insertion avoidance and rejected forged execution payloads. Those authored tests must be executed by exact-head CI before this is considered verified.
+
+**Assurance boundaries and next phases:** This proves only a *human test-selection handoff*, not semantic implementation-route-state/journey correctness or test coverage. Source bytes remain pinned but proposed behavior semantics remain unverified. A later supported execution/evidence association must join existing run results, attachments/defects and human QA approval with explicit provenance; never mutate a source receipt to claim success, or construct a second execution store. Live deployed Git checkout, independent assurance team execution, full agent→Zyra→run→evidence→approval acceptance, retention/hard-delete policy and scheduler operations remain release gates.
+
+---
+
+### Recovered pilot feedback and bounded PR #88 repair checkpoint (2026-11-15)
+
+**Scope:** the founder's feedback covers more than MCP Notes/Postconditions.
+The table below reconciles that existing feedback with inspected source, rather
+than creating another specification or claiming all requested capabilities are
+missing. Historical checkpoints above retain their recorded scope. The current
+integration includes the PR owner's work through `3e774a2761df0fd6ff087e655908c7e67cecd915`.
+No live Nesberry cases, project-token grants, production deployment, SDK
+publication or paid resources were changed.
+
+| Feedback | Current source finding and remaining work |
+|---|---|
+| Notes and creation-time Postconditions | Already advertised and handled by the existing MCP case tools. Reuse those native fields; do not add another Notes/final-state field. The separately prepared Notes release, actual serving build, connected-client catalog and deployed read/write acceptance remain distinct evidence. |
+| Workspace project provisioning and secure access handoff | Native browser project creation and project-scoped API tokens already exist. MCP `list_projects` deliberately returns only its token's project; no workspace machine principal/provisioning contract was found in the inspected auth/MCP paths. Define explicit workspace authority and secure new-project-scoped access handoff before extending them. Never reinterpret an existing project token as workspace authority or return credentials in chat/MCP results. |
+| Structured Context/source associations | Existing case `source_refs`, Zyra citation resolution, detail rendering and external requirement-link tools are the owners to extend. `sanitizeSourceRefsInput` checks shape and bounds, not source existence/access; MCP's advertised authoring fields do not establish validated citation authoring. Require actual accessible sources and explicit omit/replace/clear semantics, not arbitrary Context text, invented external keys or another citation store. |
+| Starter case-authoring guidance | Reconcile existing onboarding, knowledge and agent-guidance ownership with the supplied complete versioned project-neutral package. No complete onboarding skill-bundle provisioner was identified in this inspection. Do not copy Nesberry roles, reference inaccessible assets or overwrite workspace customizations; workspace defaults require separate owner/admin authority. |
+| Relationship-based journey/traceability views | Reuse native case IDs, source/requirement links and the existing graph. Source-declared route/state/behavior/journey observations are present, but they do not establish verified behavioral dependencies, saved multidimensional views or coverage. Preserve provenance and identity rather than cloning cases between cohorts. |
+| Change-impact analysis and notifications | PR #88 already supplies graph review, native notifications/recovery, owner source setup, MCP read/capture and durable human-selected run/case handoff links. Repair and verify that implementation rather than creating another inbox, assistant or graph. Source semantics, execution/evidence/defect/approval provenance and deployed acceptance remain separate gates. A change must not automatically edit, fail or approve a case. |
+| Conflict-aware edits, review/recovery and field contracts | The inspected shared `updateTestCaseWithClient` updates active rows without a caller-revision predicate; `updateTestCase` and the advertised MCP update schema supply none. This is a source-level concurrency concern, not a reproduced live lost-update incident. Existing history, Zyra review-batch transactions, omitted-field preservation and per-item bulk outcomes must be retained. Confirm the edit-conflict policy and audit UI/API/MCP field support before extending the shared writer; do not impose all-or-nothing semantics on deliberately per-item bulk creation. |
+| Readiness and source/review freshness | Inspect existing run/reporting/versioning facilities before adding statuses. Case counts, source citations, pinned source bytes, a prepared run and an impact receipt each convey different evidence; none alone means runnable prerequisites, executed coverage or human approval. Target/data/access binding and independent procedure/comprehension review remain the authoring/QA workflow's responsibility. |
+
+**Bounded security/navigation repair:** CodeQL alert
+[#42](https://github.com/1alextest/Tesbooboo/security/code-scanning/42)
+identified HTTP parameter type confusion in the existing graph-history reader.
+Treat `beforeId` as runtime `unknown` and require a primitive string before regex,
+length or bigint operations. Structured HTTP limits remain invalid without
+running coercion hooks. Preserve authentication-first refusal, the existing
+1–100 limit, exact bigint cursor bounds, project authorization and SQL parameters.
+Add structured-query negatives and maximum-cursor acceptance to the existing
+Zyra API spec. Navigation checks resolve and assert exact canonical project/case
+identities instead of assuming UUID address-bar spelling. Retain the owner's
+newer whitespace fix, durable-link persistence/reload/duplicate/forged-outcome
+checks and cleanup unchanged.
+
+**Local evidence:** 27 new paging regressions first produced **8 failures /
+34 passes / 42 total** on the unmodified controller/history implementation.
+After integration, **426/426 tests across 19 suites passed, zero skipped**,
+including all non-database behavior-graph suites, MCP, token authorization and
+native notification contracts. Broader verification initially exposed a Windows
+symlink-fixture privilege failure; the same existing security test now constructs
+a real Git mode-`120000` entry and verifies it before asserting reader refusal.
+No symlink check was skipped or mocked. Backend/frontend/E2E non-incremental
+typechecks, changed-file lint, backend build emission and actual status-JSX
+rendering checks passed. JSX rendering is not browser acceptance; collaborator
+doubles are not PostgreSQL persistence evidence.
+
+**Still required:** fresh exact-head CodeQL and browser/DB CI on this repair;
+the owner's earlier green smoke is not a run of the repaired tree. No configured
+API/browser/database E2E or migration was launched by this local continuation.
+Shared/deployed execution still requires the repository's explicit selection,
+runner and approval gates. Do not declare the alert closed, PR complete or
+release approved from unit/typecheck results. Canonical-source reconciliation,
+F1–F9 / D1–D6 / E1–E7 decisions and independent security/release assurance remain
+outstanding. After this bounded repair, resume conflict/revision and field-contract
+reconciliation alongside the separately authorized workspace handoff design,
+not infrastructure planning or a duplicate graph implementation.
+
+---
+
+### T-455 live QA execution and evidence reconciliation (2026-11-15)
+
+**Read-only, canonical authority:** Extend the existing per-graph-receipt `GET .../changes/:historyId/runs` response; do not add another execution snapshot, mutable outcome store, or alternate approval record. Every human-selected handoff link keeps project/cycle/testcase FK provenance, but reads the **current** native `cycles`, active `cycle_items`, active `testcases`, active `executions`, and active `attachments` metadata. The response explicitly distinguishes a live/native execution row from a historical or deleted case/run.
+
+**Reported fields:** `caseStillInRun` requires an active run + active cycle-item + active canonical case. `execution` is null when no active execution applies. Otherwise expose the actual execution ID/status/time, whether real actual-result notes exist, the stored defect reference if any, and count of active native execution-attachment metadata rows. This does NOT validate stored attachment bytes, that a defect was adjudicated, or that the status applies to the currently deployed build. The UI links directly to the native execution view and offers a read-only refresh after a tester edits that record elsewhere.
+
+**Temporal provenance:** Existing native test runs can contain executions and files **older than the graph handoff**. The response therefore distinguishes `executedAfterHandoff` (native `executed_at >= graph_review_run_case_links.linked_at`) and `evidenceAddedAfterHandoffCount` (active attachment metadata whose `created_at` follows the handoff). An older Failed/Passed status remains visible as history but is explicitly *not evidence for this change*. A later result/evidence item is likewise only temporally subsequent: the source commit, test build, environment, run config, coverage assertions, file-byte availability and human approval still require independent verification.
+
+**Regression basis:** Extended backend SQL/contract checks and migrated PostgreSQL tests create a disposable manual QA run, record a real execution row and native attachment metadata, verify counts/time flags, artificially make the execution/metadata older than the handoff, then soft-delete attachment and cycle-item records to prove no stale active result is reported. The existing Zyra browser E2E verifies that a human-triggered result appears after refresh, alongside a native execution URL and a clear unverified-build disclaimer. Tests do not fake coverage or approve any case.
+
+**Open gates:** Exact-head CI on this revision, running against a genuinely configured approved Git checkout, full linked requirements/behavior/state/journey model provenance, actual stored file access, executable quality evidence, independent assurance-team execution and human QA approval remain required. Do not interpret `executedAfterHandoff=true` or an attachment count as conclusive regression verification.
+
+---
+
+### T-455 approved-case policy and native add bypass side finding (2026-11-15)
+
+**Existing product policy discovered during independent source/baseline challenge:** Tesbo's native run-case picker permits **only `Approved` test cases** to be selected, but the older baseline explicitly documents that this is **client-side-only**: direct `POST /api/cycles/:cycleId/testcases` can still add Draft/In Review cases. That pre-existing native API bypass is *not* cured by a graph-specific UI or metadata relationship guard. Treat it as a cross-feature authorization/business-rule gap requiring a separate native shared-service fix and automated direct-API negative test; do not claim the application-wide approval invariant is already enforced.
+
+**Current graph handoff containment:** Before performing either non-idempotent run CREATE or case attachment, the Zyra graph handoff reads each explicitly selected canonical case through Tesbo's own `getTestCase` API (bounded groups of eight) and refuses any status other than `Approved`. A preflight denial is **not** reported as uncertain CREATE and leaves no new run. The persistent graph-run-case linkage endpoint independently enforces `tc.status='Approved'` in the atomic SQL eligibility gate. Both blocks preserve the human approval rule for this new path; client-server interleavings and the old native add endpoint remain separate risks.
+
+**Regression matrix:** unit SQL contracts assert the server Approved predicate; migrated PostgreSQL checks an Approved candidate links and its subsequent Draft status makes an additional link request conflict without mutation. The disposable Zyra browser journey creates an Approved canonical test case, exercises actual handoff/progression, then demotes it to Draft and asserts the preflight refuses another run CREATE, with no mutation and no misleading ambiguous-outcome banner. This guard prevents this feature from introducing a second known bypass but does not replace server-wide enforcement in the shared native run-add service.

@@ -1,5 +1,7 @@
 import { BUG_SEVERITIES, LegacyService } from "../legacy/legacy.service";
 import { expectedTestcaseRevision } from "../legacy/testcase-edit-revision";
+import { CurrentCacheGraphReader } from "../behavior-graph/current-cache-graph.reader";
+import { CurrentCacheGraphHistory } from "../behavior-graph/current-cache-graph.history";
 import { McpError, RpcCode, type McpTool, type McpToolContext } from "./mcp.types";
 
 /** Per-item cap for tools that loop over a single-record legacy call once per array entry — kept
@@ -159,6 +161,61 @@ function describeError(err: unknown): string {
 
 export function buildMcpTools(): McpTool[] {
   return [
+    {
+      name: "list_qa_graph_changes",
+      description:
+        "Read-only QA graph history for the token's existing project: committed changes, source-scope discontinuities, changed node/edge IDs and candidate native test case IDs. Cached links and source declarations do not establish coverage, execution, failure or approval. No code scan or test write is performed. Optional limit 1–100 and exclusive beforeId cursor.",
+      requiredScope: "read",
+      inputSchema: {
+        type: "object",
+        properties: {
+          limit: { type: "integer", minimum: 1, maximum: 100, description: "Maximum records (default 25)" },
+          beforeId: { type: "string", description: "Exclusive positive decimal history ID cursor" }
+        },
+        additionalProperties: false
+      },
+      handler: async (args, ctx) => {
+        if (args.limit !== undefined && (!Number.isInteger(args.limit) ||
+          (args.limit as number) < 1 || (args.limit as number) > 100)) {
+          throw new McpError(RpcCode.ToolExecutionError, "limit must be an integer between 1 and 100");
+        }
+        if (args.beforeId !== undefined &&
+            (typeof args.beforeId !== "string" || !/^[1-9][0-9]*$/.test(args.beforeId))) {
+          throw new McpError(RpcCode.ToolExecutionError, "beforeId must be a positive decimal history cursor");
+        }
+        const history = new CurrentCacheGraphHistory(
+          ctx.db, new CurrentCacheGraphReader(ctx.db, ctx.legacy)
+        );
+        const pageSize = (args.limit as number | undefined) ?? 25;
+        const entries = await history.listForUser(
+          ctx.userId, ctx.projectId, pageSize, args.beforeId as string | undefined
+        );
+        return { entries, nextBeforeId: entries.length === pageSize
+          ? entries[entries.length - 1].id : null };
+      }
+    },
+    {
+      name: "capture_qa_graph_change",
+      description:
+        "Capture the CURRENT server-approved project repository/ref and its configured source selection into the existing versioned QA graph history. Requires token write scope and the current project's write entitlement. No input parameters: clients cannot supply source paths, repository identity, manifests, fake behavior labels, test outcomes or approval. Returns committed history/receipt and actual QA notification delivery status. An implementation change does NOT fail a test or prove coverage. Projects without an approved source binding fail closed.",
+      requiredScope: "write",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      handler: async (args, ctx) => {
+        if (Object.keys(args).length) {
+          throw new McpError(RpcCode.ToolExecutionError,
+            "Source capture does not accept client-supplied paths, source manifests, or test assertions");
+        }
+        if (!ctx.graphCapture || !ctx.graphNotificationDelivery) {
+          throw new McpError(RpcCode.ToolExecutionError,
+            "Project source capture is not configured on this Tesbo server");
+        }
+        const result = await ctx.graphCapture.captureForUser(ctx.userId, ctx.projectId);
+        const delivery = result.reviewReceipt
+          ? await ctx.graphNotificationDelivery.deliverForUser(ctx.userId, ctx.projectId, result.id)
+          : null;
+        return { ...result, delivery };
+      }
+    },
     {
       name: "list_projects",
       description:

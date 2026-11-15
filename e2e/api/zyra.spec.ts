@@ -63,6 +63,94 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     if (tenant) purge(tenant);
   });
 
+  // T-455: native Zyra change-review history is a scoped read of existing
+  // persisted graph observations, not a second case/test-run repository.
+  test("graph change history is project scoped and unconfigured capture fails closed", async () => {
+    const projectId = tenant!.mainProjectId;
+    const url = `/api/projects/${projectId}/agents/zyra/changes`;
+    const good = await asQa.get(url);
+    expect(good.ok()).toBeTruthy();
+    const body = await good.json();
+    expect(Array.isArray(body.entries)).toBe(true);
+    expect(body.entries.every((entry: { reviewReceipt?: { evidence?: { coverageAssertion: string } } }) =>
+      !entry.reviewReceipt || entry.reviewReceipt.evidence?.coverageAssertion === "none")).toBe(true);
+
+    const badLimit = await asQa.get(url + "?limit=0");
+    expect(badLimit.status()).toBe(409);
+    const badCursor = await asQa.get(url + "?beforeId=0%20OR%20TRUE");
+    expect(badCursor.status()).toBe(409);
+    // A query parser can produce arrays/objects despite a controller's
+    // string annotation. Refuse them before bigint/number coercion or SQL.
+    for (const query of ["beforeId[]=1", "beforeId[value]=1", "limit[]=25", "limit[value]=25"]) {
+      const malformed = await asQa.get(url + "?" + query);
+      expect(malformed.status(), `structured query ${query}: ${await malformed.text()}`).toBe(409);
+    }
+    const largestCursor = await asQa.get(url + "?beforeId=9223372036854775807&limit=1");
+    expect(largestCursor.status()).toBe(200);
+
+    const cross = await asQa.get(`/api/projects/${tenant!.secondProjectId}/agents/zyra/changes`);
+    expect([403, 404]).toContain(cross.status());
+    const unauthenticated = await anon.get(url);
+    expect([401, 403, 404]).toContain(unauthenticated.status());
+
+    // No approved source binding for this disposable tenant. A capture must
+    // fail instead of accepting caller-supplied checkout paths or manifests.
+    const forged = await asQa.post(url + "/capture", {
+      data: { repositoryRoot: "/untrusted", executionAssertion: "passed" }
+    });
+    expect(forged.status()).toBe(400);
+    const denied = await asQa.post(url + "/capture", { data: {} });
+    expect(denied.status()).toBe(409);
+    const links = await asQa.get(url + "/999999999/runs");
+    expect([403, 404]).toContain(links.status());
+    const forgedStatus = await asQa.post(url + "/999999999/runs/" +
+      "00000000-0000-4000-8000-000000000003/link", {
+      data: { testcaseIds: ["00000000-0000-4000-8000-000000000004"], executionStatus: "Passed" }
+    });
+    expect(forgedStatus.status()).toBe(400);
+    const foreignHistory = await asGuest.get(url + "/999999999/runs");
+    expect([403, 404]).toContain(foreignHistory.status());
+    const after = await asQa.get(url);
+    expect((await after.json()).entries).toEqual(body.entries);
+  });
+
+  test("source binding setup is owner-only and cannot accept unapproved roots or repositories", async () => {
+    const projectId = tenant!.mainProjectId;
+    const endpoint = `/api/projects/${projectId}/agents/zyra/changes/source-binding`;
+    const before = await asOwner.get(endpoint);
+    expect(before.status(), await before.text()).toBe(200);
+    expect(await before.json()).toEqual({ configured: false, binding: null });
+
+    for (const client of [asManager, asQa, asGuest, anon]) {
+      const read = await client.get(endpoint);
+      expect([401, 403, 404]).toContain(read.status());
+      const denied = await client.post(endpoint, { data: {
+        repositoryId: "org/repo", checkoutKey: "trusted",
+        refName: "development", selectionPrefixes: ["src"], enabled: true
+      } });
+      expect([401, 403, 404]).toContain(denied.status());
+    }
+
+    for (const invalid of [
+      { repositoryId: "org/repo", checkoutKey: "unknown", refName: "development",
+        selectionPrefixes: ["src"], enabled: true },
+      { repositoryId: "org/repo", checkoutKey: "unknown", refName: "development",
+        selectionPrefixes: ["src"], enabled: true, root: "/tmp/untrusted" },
+      { repositoryId: "org/repo", checkoutKey: "unknown", refName: "../main",
+        selectionPrefixes: ["src"], enabled: true },
+      { repositoryId: "org/repo", checkoutKey: "unknown", refName: "development",
+        selectionPrefixes: ["../secrets"], enabled: true }
+    ]) {
+      const denied = await asOwner.post(endpoint, { data: invalid });
+      expect(denied.status(), await denied.text()).toBe(400);
+    }
+    const after = await asOwner.get(endpoint);
+    expect(after.status()).toBe(200);
+    expect(await after.json()).toEqual({ configured: false, binding: null });
+    expect(Number(scalar(`SELECT COUNT(*)::int FROM project_source_bindings
+      WHERE project_id=${literal(projectId)};`))).toBe(0);
+  });
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
   function url(suffix: string, projectId?: string): string {

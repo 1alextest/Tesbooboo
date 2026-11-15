@@ -75,6 +75,324 @@ test.describe("zyra / agents (UI)", () => {
     if (tenant) purgeZyra(tenant);
   });
 
+  test("owner can inspect root-free source setup while QA cannot provision it", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId;
+    const owner = await open(browser, "/agents/zyra/changes", "owner");
+    const settings = owner.getByTestId("zyra-source-binding");
+    await expect(settings).toBeVisible();
+    await settings.locator("summary").click();
+    await expect(settings).toContainText("No project source binding has been configured.");
+    await settings.getByLabel("Source repository identity").fill("org/repo");
+    await settings.getByLabel("Approved checkout key").fill("not-approved");
+    await settings.getByLabel("Source Git ref").fill("development");
+    await settings.getByLabel("Source selection prefixes").fill("src");
+    await settings.getByRole("checkbox", { name: "Enable configured source capture" }).check();
+    await settings.getByRole("button", { name: "Save source binding" }).click();
+    await expect(settings.getByRole("alert")).toBeVisible();
+    expect(Number(scalar(`SELECT COUNT(*)::int FROM project_source_bindings
+      WHERE project_id=${literal(projectId)};`))).toBe(0);
+    await owner.close();
+
+    const qa = await open(browser, "/agents/zyra/changes", "qa");
+    await expect(qa.getByRole("heading", { name: "Change impact review" })).toBeVisible();
+    await expect(qa.getByTestId("zyra-source-binding")).toHaveCount(0);
+  });
+
+  test("Zyra opens native change review, handles missing source bindings and preserves zero executions", async ({ browser }) => {
+    const page = await open(browser, "/agents/zyra", "qa");
+    await page.getByRole("link", { name: "Change review" }).click();
+    await expect(page.getByRole("heading", { name: "Change impact review" })).toBeVisible();
+    const workflow = page.getByRole("navigation", { name: "Native QA workflow" });
+    for (const [name, suffix] of [["Requirements", "requirements"], ["Test cases", "testcases"],
+      ["Test runs and execution", "cycles"], ["Defects", "bugs"]] as const) {
+      await expect(workflow.getByRole("link", { name })).toHaveAttribute(
+        "href", `/projects/${tenant!.mainProjectId}/${suffix}`
+      );
+    }
+    await expect(page.getByText("No committed graph observations are available for this project.")).toBeVisible();
+    await expect(page.getByText(/no case is failed, executed or approved/i)).toBeVisible();
+    await page.getByRole("button", { name: "Capture configured source" }).click();
+    await expect(page.getByRole("alert")).toBeVisible();
+    // No approved checkout exists in this disposable test tenant; don't
+    // fabricate one or claim capture success.
+    await expect(page.getByText("No committed graph observations are available for this project.")).toBeVisible();
+    const resolvedResponse = await api.get("/api/route-resolve", { params: { project: tenant!.mainProjectId } });
+    expect(resolvedResponse.ok()).toBeTruthy();
+    const resolved = await resolvedResponse.json();
+    expect(resolved.projectId).toBe(tenant!.mainProjectId);
+    expect(resolved.projectKey).toEqual(expect.any(String));
+    await page.getByRole("link", { name: "Back to Zyra" }).click();
+    // RouteParamsProvider deliberately canonicalizes UUID URLs to readable
+    // references. Assert the exact resolved project, not either spelling.
+    await expect(page).toHaveURL((url) =>
+      url.pathname === `/projects/${encodeURIComponent(resolved.projectKey)}/agents/zyra`);
+    await expect(page.getByRole("link", { name: "Change review" })).toBeVisible();
+  });
+
+  test("graph review links an explicitly nominated case to its existing canonical record", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId;
+    const stamp = Date.now().toString();
+    const baseRevision = `e2e-graph-base-${stamp}`;
+    const reviewRevision = `e2e-graph-change-${stamp}`;
+    let caseId: string | undefined;
+    let createdRunId: string | undefined;
+    let uncertainRunId: string | undefined;
+    try {
+      caseId = scalar(`INSERT INTO testcases(project_id,external_id,title,status)
+        VALUES (${literal(projectId)},${literal("ZYU-GR-TC")},${literal("E2E linked graph review")},'Approved')
+        RETURNING id;`);
+      const nodeId = JSON.stringify(["test_case", projectId, caseId]);
+      const capture = (revision: string) => JSON.stringify({
+        snapshot: { projectId, revision, nodes: [], edges: [] },
+        inventoryStatus: "complete", unresolvedDiagnostics: [],
+        contractId: "e2e-native-graph-v1", sourceScopeFingerprint: "e2e-local-source"
+      });
+      const receipt = {
+        id: `e2e-review-${stamp}`, projectId, status: "needs_qa_triage",
+        source: { contractId: "e2e-native-graph-v1", scopeFingerprint: "e2e-local-source",
+          fromRevision: baseRevision, toRevision: reviewRevision },
+        changed: { addedNodeIds: [], modifiedNodeIds: [nodeId], removedNodeIds: [],
+          addedEdgeIds: [], modifiedEdgeIds: [], removedEdgeIds: [] },
+        candidates: [{ caseNodeId: nodeId, reasons: ["case_changed"], requirementNodeIds: [] }],
+        unlinkedCaseNodeIds: [],
+        evidence: { basis: "cached_source_reference_only", upstreamFreshness: "unverified",
+          coverageAssertion: "none", executionAssertion: "none", verification: "not_performed" }
+      };
+      exec(`INSERT INTO graph_capture_history
+        (project_id, contract_id, source_scope_fingerprint, revision, capture_json)
+        VALUES (${literal(projectId)}, 'e2e-native-graph-v1', 'e2e-local-source',
+          ${literal(baseRevision)}, ${literal(capture(baseRevision))}::jsonb);`);
+      const historyId = scalar(`INSERT INTO graph_capture_history
+        (project_id, contract_id, source_scope_fingerprint, revision, capture_json, review_receipt_json)
+        VALUES (${literal(projectId)}, 'e2e-native-graph-v1', 'e2e-local-source',
+          ${literal(reviewRevision)}, ${literal(capture(reviewRevision))}::jsonb,
+          ${literal(JSON.stringify(receipt))}::jsonb) RETURNING id;`);
+
+      const page = await open(browser, "/agents/zyra/changes", "qa");
+      await expect(page.getByRole("heading", { name: "Change impact review" })).toBeVisible();
+      const link = page.getByRole("link", { name: "Open existing test case" });
+      await expect(link).toHaveAttribute("href", `/projects/${projectId}/testcases/${caseId}`);
+      await expect(page.getByText("Review reason: case_changed")).toBeVisible();
+      await expect(page.getByText(/execution and coverage unverified/i)).toBeVisible();
+      // Trigger the actual native notification path from a disposable tenant,
+      // verify durable rows, then replay. No test execution or case mutation.
+      const countNotifications = () => Number(scalar(`SELECT COUNT(*)::int FROM notifications
+        WHERE dedupe_key = ${literal(`qa_change_review:${projectId}:${historyId}`)};`));
+      expect(countNotifications()).toBe(0);
+      await page.getByRole("button", { name: "Notify QA reviewers" }).click();
+      await expect(page.getByRole("status")).toContainText(/Reviewer notifications confirmed/);
+      const delivered = countNotifications();
+      expect(delivered).toBeGreaterThan(0);
+      await page.getByRole("button", { name: "Notify QA reviewers" }).click();
+      await expect(page.getByRole("status")).toContainText(/Reviewer notifications confirmed/);
+      expect(countNotifications(), "repeat notification is idempotent").toBe(delivered);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM executions e
+        JOIN cycle_items ci ON ci.id=e.cycle_item_id JOIN cycles c ON c.id=ci.cycle_id
+        WHERE c.project_id=${literal(projectId)} AND ci.testcase_id=${literal(caseId)};`))).toBe(0);
+
+      const prepare = page.getByTestId("graph-review-run-" + historyId);
+      await prepare.locator("summary").click();
+      const create = prepare.getByRole("button", { name: "Create run and add selected cases" });
+      await expect(create).toBeDisabled(); // Explicit human selection, never automatic.
+      await prepare.getByRole("checkbox", { name: "Select linked case 1" }).check();
+      await expect(create).toBeDisabled(); // Environment is not fabricated from a source receipt.
+      await prepare.getByLabel("Execution environment").fill("Disposable QA");
+      await prepare.getByLabel("New run name").fill("E2E Graph QA triage " + stamp);
+
+      // Simulate a lost attachment response AFTER the native server committed it.
+      // Retry must reuse the one already-created run, not create a duplicate.
+      const pathPattern = "**/api/cycles/*/testcases";
+      let interrupted = false;
+      const intercept = async (route: import("@playwright/test").Route) => {
+        if (interrupted || route.request().method() !== "POST") return route.continue();
+        interrupted = true;
+        const response = await route.fetch();
+        expect(response.ok(), await response.text()).toBeTruthy();
+        await route.fulfill({
+          status: 503, contentType: "application/json",
+          body: JSON.stringify({ error: "Injected response failure after successful attachment" })
+        });
+      };
+      await page.route(pathPattern, intercept);
+      try {
+        await create.click();
+        await expect(prepare.getByRole("alert")).toContainText(/already exists/i);
+      } finally {
+        await page.unroute(pathPattern, intercept);
+      }
+      expect(interrupted).toBe(true);
+      const runLink = prepare.getByRole("link", { name: "Open native test run" });
+      const href = await runLink.getAttribute("href");
+      expect(href).toMatch(new RegExp("^/projects/" + projectId + "/cycles/[0-9a-f-]{36}$"));
+      createdRunId = href!.split("/").at(-1)!;
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM cycles
+        WHERE id=${literal(createdRunId)} AND project_id=${literal(projectId)};`))).toBe(1);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items
+        WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
+      await prepare.getByRole("button", { name: "Retry adding to same test run" }).click();
+      await expect(prepare.getByRole("status")).toContainText(/1 case\(s\) requested; 0 newly added; 1 skipped/);
+      // The separate handoff relationship is persisted after native case
+      // attachment, never on graph nomination alone.
+      const linkedCount = (runId: string) => Number(scalar(
+        "SELECT COUNT(*)::int FROM graph_review_run_case_links WHERE project_id=" +
+        literal(projectId) + " AND history_id=" + literal(historyId) +
+        " AND cycle_id=" + literal(runId) + " AND testcase_id=" + literal(caseId!) + ";"
+      ));
+      expect(linkedCount(createdRunId!)).toBe(1);
+      await expect(prepare.getByRole("region", { name: "Persisted QA handoffs" }))
+        .toContainText(/native status:|no active execution record/);
+      await expect(prepare.getByRole("region", { name: "Persisted QA handoffs" }))
+        .toContainText(/not verification or approval|no result inferred/);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items
+        WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM executions e
+        JOIN cycle_items ci ON ci.id=e.cycle_item_id
+        WHERE ci.cycle_id=${literal(createdRunId)}
+          AND e.status IN ('Passed','Failed','Blocked');`))).toBe(0);
+
+      // Reopen the same receipt and select its existing run. Re-adding a
+      // canonical case must be idempotent through the native API.
+      await page.reload();
+      const reopened = page.getByTestId("graph-review-run-" + historyId);
+      await reopened.locator("summary").click();
+      await reopened.getByRole("checkbox", { name: "Select linked case 1" }).check();
+      await reopened.getByRole("radio", { name: "Add to existing test run" }).check();
+      await reopened.getByLabel("Existing open test run").selectOption(createdRunId);
+      await reopened.getByRole("button", { name: "Add selected cases to run" }).click();
+      await expect(reopened.getByRole("status")).toContainText(/0 newly added; 1 skipped/);
+      expect(linkedCount(createdRunId!)).toBe(1); // Re-add does not duplicate durable provenance.
+      await expect(reopened.getByRole("region", { name: "Persisted QA handoffs" }))
+        .toContainText("selected case");
+
+      // Progress the canonical execution independently of the graph. The
+      // persisted handoff must reflect the actual native result and attachment
+      // metadata after a manual refresh, never manufacture either value.
+      const item = scalar("SELECT id FROM cycle_items WHERE cycle_id=" +
+        literal(createdRunId!) + " AND testcase_id=" + literal(caseId!) + ";");
+      let progressedExecutionId = scalar("SELECT id FROM executions WHERE cycle_item_id=" +
+        literal(item) + " AND deleted_at IS NULL;");
+      if (!progressedExecutionId) {
+        progressedExecutionId = scalar("INSERT INTO executions(cycle_item_id,status) VALUES (" +
+          literal(item) + ", 'Untested') RETURNING id;");
+      }
+      exec("UPDATE executions SET status='Failed', executed_at=now(), actual_result=" +
+        literal("Observed mismatch in disposable QA run") +
+        ", defect_key='BUG-17' WHERE id=" + literal(progressedExecutionId) + ";");
+      exec("INSERT INTO attachments(project_id,entity_type,entity_id,file_name,storage_path) VALUES (" +
+        literal(projectId) + ", 'execution', " + literal(progressedExecutionId) +
+        ", 'fixture-observation.txt', 'fixture://metadata-only');");
+      await reopened.getByRole("button", { name: "Refresh recorded handoffs" }).click();
+      const handoffs = reopened.getByRole("region", { name: "Persisted QA handoffs" });
+      await expect(handoffs).toContainText("native status: Failed");
+      await expect(handoffs).toContainText("active evidence metadata: 1");
+      await expect(handoffs).toContainText("1 added after handoff");
+      await expect(handoffs).toContainText("recorded after handoff; build provenance not verified");
+      await expect(handoffs).toContainText("defect reference: BUG-17");
+      await expect(handoffs.getByRole("link", { name: "Open native execution" }))
+        .toHaveAttribute("href",
+          "/projects/" + projectId + "/cycles/" + createdRunId +
+          "/execute/" + progressedExecutionId);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items
+        WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
+
+
+      // A lost CREATE response might follow a successful database commit.
+      // Do not blindly retry: find the already-created run in the native list.
+      await page.reload();
+      const uncertain = page.getByTestId("graph-review-run-" + historyId);
+      await uncertain.locator("summary").click();
+      await uncertain.getByRole("checkbox", { name: "Select linked case 1" }).check();
+      const uncertainName = "E2E Unconfirmed graph run " + stamp;
+      await uncertain.getByLabel("New run name").fill(uncertainName);
+      await uncertain.getByLabel("Execution environment").fill("Disposable QA");
+      const createPath = "**/api/projects/" + projectId + "/cycles";
+      let injectedCreateLoss = false;
+      const interceptCreate = async (route: import("@playwright/test").Route) => {
+        if (injectedCreateLoss || route.request().method() !== "POST") return route.continue();
+        injectedCreateLoss = true;
+        const response = await route.fetch();
+        expect(response.ok(), await response.text()).toBeTruthy();
+        uncertainRunId = (await response.json()).id as string;
+        await route.fulfill({ status: 503, contentType: "application/json",
+          body: JSON.stringify({ error: "Injected create response loss after commit" }) });
+      };
+      await page.route(createPath, interceptCreate);
+      try {
+        await uncertain.getByRole("button", { name: "Create run and add selected cases" }).click();
+        await expect(uncertain.getByRole("alert").first()).toContainText(/Run creation outcome unconfirmed/);
+      } finally {
+        await page.unroute(createPath, interceptCreate);
+      }
+      expect(injectedCreateLoss).toBe(true);
+      expect(uncertainRunId).toBeTruthy();
+      await expect(uncertain.getByRole("button", { name: "Create run and add selected cases" })).toBeDisabled();
+      const countRun = () => Number(scalar("SELECT COUNT(*)::int FROM cycles WHERE project_id=" +
+        literal(projectId) + " AND name=" + literal(uncertainName) + ";"));
+      expect(countRun()).toBe(1);
+      await uncertain.getByRole("radio", { name: "Add to existing test run" }).check();
+      await uncertain.getByRole("button", { name: "Refresh available test runs" }).click();
+      await uncertain.getByLabel("Existing open test run").selectOption(uncertainRunId!);
+      await uncertain.getByRole("button", { name: "Add selected cases to run" }).click();
+      await expect(uncertain.getByRole("status")).toContainText(/1 newly added; 0 skipped/);
+      expect(linkedCount(uncertainRunId!)).toBe(1);
+      expect(linkedCount(createdRunId!)).toBe(1);
+      expect(Number(scalar("SELECT COUNT(*)::int FROM cycle_items WHERE cycle_id=" +
+        literal(uncertainRunId!) + " AND testcase_id=" + literal(caseId) + ";"))).toBe(1);
+      expect(countRun()).toBe(1);
+
+      // A graph candidate still in Draft must be refused before run creation
+      // or any ambiguous-mutation state. Native Test Runs only select Approved cases.
+      exec("UPDATE testcases SET status='Draft' WHERE id=" + literal(caseId!) + ";");
+      const beforeDraft = Number(scalar("SELECT COUNT(*)::int FROM cycles WHERE project_id=" +
+        literal(projectId) + " AND deleted_at IS NULL;"));
+      await page.reload();
+      const rejected = page.getByTestId("graph-review-run-" + historyId);
+      await rejected.locator("summary").click();
+      await rejected.getByRole("checkbox", { name: "Select linked case 1" }).check();
+      await rejected.getByLabel("Execution environment").fill("Disposable QA");
+      await rejected.getByRole("button", { name: "Create run and add selected cases" }).click();
+      await expect(rejected.getByRole("alert")).toContainText("Only Approved test cases");
+      await expect(rejected.getByRole("alert")).not.toContainText("Run creation outcome unconfirmed");
+      expect(Number(scalar("SELECT COUNT(*)::int FROM cycles WHERE project_id=" +
+        literal(projectId) + " AND deleted_at IS NULL;"))).toBe(beforeDraft);
+
+      const resolvedResponse = await api.get("/api/route-resolve", { params: { project: projectId, testcase: caseId } });
+      expect(resolvedResponse.ok()).toBeTruthy();
+      const resolved = await resolvedResponse.json();
+      expect(resolved.projectId).toBe(projectId);
+      expect(resolved.testcaseId).toBe(caseId);
+      expect(resolved.projectKey).toEqual(expect.any(String));
+      expect(resolved.testcaseRef).toEqual(expect.any(String));
+      await page.getByRole("link", { name: "Open existing test case" }).click();
+      await expect(page).toHaveURL((url) => url.pathname ===
+        `/projects/${encodeURIComponent(resolved.projectKey)}/testcases/${encodeURIComponent(resolved.testcaseRef)}`);
+    } finally {
+      for (const runId of [createdRunId, uncertainRunId]) {
+        if (!runId) continue;
+        exec("DELETE FROM attachments WHERE project_id=" + literal(projectId) +
+          " AND entity_type='execution' AND entity_id IN (SELECT e.id FROM executions e" +
+          " JOIN cycle_items ci ON ci.id=e.cycle_item_id WHERE ci.cycle_id=" + literal(runId) + ");");
+      }
+      exec("DELETE FROM graph_review_run_case_links WHERE project_id=" + literal(projectId) +
+        " AND history_id IN (SELECT id FROM graph_capture_history WHERE project_id=" +
+        literal(projectId) + " AND revision=" + literal(reviewRevision) + ");");
+      for (const runId of [createdRunId, uncertainRunId]) {
+        if (!runId) continue;
+        exec("DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id=" +
+          literal(runId) + ");");
+        exec("DELETE FROM cycle_items WHERE cycle_id=" + literal(runId) + ";");
+        exec("DELETE FROM cycles WHERE id=" + literal(runId) + ";");
+      }
+      exec(`DELETE FROM notifications WHERE dedupe_key IN
+        (SELECT 'qa_change_review:' || project_id::text || ':' || id::text
+           FROM graph_capture_history
+          WHERE project_id=${literal(projectId)} AND revision=${literal(reviewRevision)});`);
+      exec(`DELETE FROM graph_capture_history WHERE project_id = ${literal(projectId)}
+         AND revision IN (${literal(baseRevision)},${literal(reviewRevision)});`);
+      if (caseId) exec(`DELETE FROM testcases WHERE id = ${literal(caseId)};`);
+    }
+  });
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
   function purgeZyra(t: RbacTenant): void {

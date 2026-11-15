@@ -1133,6 +1133,135 @@ describe("McpService", () => {
     });
   });
 
+  describe("committed QA graph changes via read-only MCP", () => {
+    it("advertises source-change history as read-only with no case mutation or fake coverage", async () => {
+      const { db } = makeDb();
+      const svc = new McpService(makeLegacy(), db, writableLimits);
+      const catalog: any = await svc.handleRequest(rpc("tools/list"), principal({ scopes: ["read"] }), "proj-1");
+      const entry = catalog.result.tools.find((item: any) => item.name === "list_qa_graph_changes");
+      expect(entry).toBeDefined();
+      expect(entry.inputSchema.properties.beforeId.type).toBe("string");
+      expect(entry.inputSchema.additionalProperties).toBe(false);
+      expect(entry.description).toMatch(/do not establish coverage/i);
+    });
+
+    it("passes project and current member identity to the existing scoped history query", async () => {
+      const { db, query } = makeDb();
+      (query as jest.Mock).mockImplementation((sql: string, _params: unknown[]) =>
+        sql.includes("authorized_history AS MATERIALIZED")
+          ? Promise.resolve({ rows: [{ authorized: true, entries: [{
+              id: "18", revision: "rev", capturedAt: "2026-11-15T00:00:00Z",
+              reviewReceipt: null, changeState: "source_scope_changed"
+            }] }] })
+          : Promise.resolve({ rows: [] }));
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      const reply: any = await svc.handleRequest(rpc("tools/call", {
+        name: "list_qa_graph_changes", arguments: { limit: 1 }
+      }), principal({ scopes: ["read"] }), "proj-1");
+      expect(reply.error).toBeUndefined();
+      const content = JSON.parse(reply.result.content[0].text);
+      expect(content.entries).toHaveLength(1);
+      expect(content.entries[0].changeState).toBe("source_scope_changed");
+      expect(content.nextBeforeId).toBe("18");
+      const call = (query.mock.calls as unknown as Array<[string, unknown[]]>)
+        .find((item) => item[0].includes("authorized_history AS MATERIALIZED"));
+      expect(call?.[1]).toEqual(["proj-1", "user-1", null, 1]);
+      expect(legacy.createTestCase).not.toHaveBeenCalled();
+      expect(legacy.updateTestCase).not.toHaveBeenCalled();
+    });
+
+    it("refuses malformed limits and cursors before touching storage", async () => {
+      const { db, query } = makeDb();
+      const svc = new McpService(makeLegacy(), db, writableLimits);
+      for (const args of [
+        { limit: 0 }, { limit: 101 }, { limit: 2.5 }, { limit: "4" },
+        { beforeId: "0 OR TRUE" }, { beforeId: null }, { beforeId: -1 }
+      ]) {
+        const reply: any = await svc.handleRequest(rpc("tools/call", {
+          name: "list_qa_graph_changes", arguments: args
+        }), principal(), "proj-1");
+        expect(reply.error.code).toBe(RpcCode.ToolExecutionError);
+      }
+      expect(query).not.toHaveBeenCalled();
+    });
+
+    it("rejects write-only scoped tokens and cross-project MCP URLs before reading graph history", async () => {
+      const { db, query } = makeDb();
+      const svc = new McpService(makeLegacy(), db, writableLimits);
+      const args = rpc("tools/call", { name: "list_qa_graph_changes", arguments: {} });
+      const scope: any = await svc.handleRequest(args, principal({ scopes: ["write"] }), "proj-1");
+      expect(scope.error.code).toBe(RpcCode.ScopeDenied);
+      const foreign: any = await svc.handleRequest(args, principal({ scopes: ["read"] }), "proj-2");
+      expect(foreign.error.code).toBe(RpcCode.ProjectScopeDenied);
+      expect(query).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("authorized source-change capture from MCP", () => {
+    it("requires a write-scoped token and refuses client-authored source assertions", async () => {
+      const { db, query } = makeDb();
+      const capture = { captureForUser: jest.fn() };
+      const notify = { deliverForUser: jest.fn() };
+      const svc = new McpService(makeLegacy(), db, writableLimits, capture as never, notify as never);
+      const args = rpc("tools/call", { name: "capture_qa_graph_change", arguments: {} });
+      const readonly: any = await svc.handleRequest(args, principal({ scopes: ["read"] }), "proj-1");
+      expect(readonly.error.code).toBe(RpcCode.ScopeDenied);
+      const otherProject: any = await svc.handleRequest(args, principal(), "other-project");
+      expect(otherProject.error.code).toBe(RpcCode.ProjectScopeDenied);
+      for (const forbidden of [{ repositoryRoot: "/unsafe" }, { executionAssertion: "passed" },
+                               { source: [] }, { approved: true }]) {
+        const res: any = await svc.handleRequest(rpc("tools/call", {
+          name: "capture_qa_graph_change", arguments: forbidden
+        }), principal(), "proj-1");
+        expect(res.error.code).toBe(RpcCode.ToolExecutionError);
+      }
+      expect(capture.captureForUser).not.toHaveBeenCalled();
+      expect(notify.deliverForUser).not.toHaveBeenCalled();
+      // Actor resolution for a write tool is unrelated to source integrity.
+      expect(query.mock.calls.some(([sql]) => sql.includes("graph_capture_history"))).toBe(false);
+    });
+
+    it("calls the existing project coordinator and notifies only for a committed review receipt", async () => {
+      const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
+      const receipt = { id: "sha", status: "needs_qa_triage" };
+      const capture = { captureForUser: jest.fn().mockResolvedValue({
+        id: "18", revision: "r1", stored: true, reviewReceipt: receipt
+      }) };
+      const notify = { deliverForUser: jest.fn().mockResolvedValue({
+        status: "pending", recipientCount: 2, pendingCount: 1
+      }) };
+      const svc = new McpService(makeLegacy(), db, writableLimits, capture as never, notify as never);
+      const response: any = await svc.handleRequest(rpc("tools/call", {
+        name: "capture_qa_graph_change", arguments: {}
+      }), principal(), "proj-1");
+      expect(response.error).toBeUndefined();
+      expect(JSON.parse(response.result.content[0].text)).toMatchObject({
+        id: "18", stored: true, delivery: { status: "pending", pendingCount: 1 }
+      });
+      expect(capture.captureForUser).toHaveBeenCalledWith("user-1", "proj-1");
+      expect(notify.deliverForUser).toHaveBeenCalledWith("user-1", "proj-1", "18");
+      capture.captureForUser.mockResolvedValueOnce({
+        id: "18", revision: "r1", stored: false, reviewReceipt: null
+      });
+      const same: any = await svc.handleRequest(rpc("tools/call", {
+        name: "capture_qa_graph_change", arguments: {}
+      }), principal(), "proj-1");
+      expect(JSON.parse(same.result.content[0].text).delivery).toBeNull();
+      expect(notify.deliverForUser).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses source capture if no approved server coordinator is connected", async () => {
+      const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
+      const svc = new McpService(makeLegacy(), db, writableLimits);
+      const response: any = await svc.handleRequest(rpc("tools/call", {
+        name: "capture_qa_graph_change", arguments: {}
+      }), principal(), "proj-1");
+      expect(response.error.code).toBe(RpcCode.ToolExecutionError);
+      expect(response.error.message).toMatch(/not configured/);
+    });
+  });
+
   describe("update_testcase project scoping", () => {
     it("advertises and forwards the optional existing-row revision precondition", async () => {
       const { db } = makeDb({ testcaseProject: "proj-1", mcpActorId: "mcp-actor-1" });

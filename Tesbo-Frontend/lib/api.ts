@@ -4538,3 +4538,114 @@ export async function uploadExecutionEvidence(
   }
   return res.json() as Promise<{ list: ExecutionEvidence[]; total: number }>;
 }
+
+
+export type GraphReviewReceipt = {
+  id: string;
+  projectId: string;
+  status: "needs_qa_triage";
+  candidates: Array<{ caseNodeId: string; reasons: string[]; requirementNodeIds: string[] }>;
+  changed: {
+    addedNodeIds: string[]; modifiedNodeIds: string[]; removedNodeIds: string[];
+    addedEdgeIds: string[]; modifiedEdgeIds: string[]; removedEdgeIds: string[];
+  };
+  evidence: { basis: string; coverageAssertion: "none"; executionAssertion: "none";
+    upstreamFreshness: "unverified"; verification: "not_performed" };
+};
+export type GraphReviewHistoryRow = {
+  id: string;
+  revision: string;
+  capturedAt: string;
+  changeState: "baseline" | "source_scope_changed" | "changed";
+  reviewReceipt: GraphReviewReceipt | null;
+};
+export type GraphReviewCaptureResult = {
+  id: string; revision: string; stored: boolean; reviewReceipt: GraphReviewReceipt | null;
+  delivery: GraphReviewDeliveryStatus | null;
+};
+/** Uses the existing graph history and Zyra's project scope, not a second review store. */
+export async function listZyraGraphChanges(
+  projectId: string, limit = 25, beforeId?: string
+): Promise<{ entries: GraphReviewHistoryRow[] }> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (beforeId) params.set("beforeId", beforeId);
+  return api(`/api/projects/${projectId}/agents/zyra/changes?${params.toString()}`);
+}
+export async function captureZyraGraphChange(projectId: string): Promise<GraphReviewCaptureResult> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/capture`, {
+    method: "POST", body: {}
+  });
+}
+
+export type GraphReviewDeliveryStatus = {
+  status: "delivered" | "pending" | "no_recipients";
+  recipientCount: number;
+  pendingCount: number;
+};
+export async function retryZyraGraphReviewNotification(
+  projectId: string, historyId: string
+): Promise<GraphReviewDeliveryStatus> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/${historyId}/notify`, {
+    method: "POST", body: {}
+  });
+}
+
+/** Root-free source binding administration in the existing Zyra change review. */
+export type GraphSourceBinding = {
+  repositoryId: string;
+  checkoutKey: string;
+  refName: string;
+  selectionPrefixes: string[];
+  enabled: boolean;
+};
+export type GraphSourceBindingResponse = {
+  configured: boolean;
+  binding: GraphSourceBinding | null;
+};
+export async function getZyraGraphSourceBinding(projectId: string): Promise<GraphSourceBindingResponse> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/source-binding`);
+}
+export async function setZyraGraphSourceBinding(
+  projectId: string, binding: GraphSourceBinding
+): Promise<GraphSourceBindingResponse> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/source-binding`, {
+    method: "POST", body: binding
+  });
+}
+
+/** Persisted, human-selected graph review → native test-run/case handoff.
+ * These are references only, never execution/coverage/approval verdicts.
+ */
+export type GraphReviewRunExecutionObservation = {
+  id: string;
+  /** Native status only. No graph-generated verification or QA approval. */
+  status: string;
+  executedAt: string | null;
+  executedAfterHandoff: boolean;
+  actualResultRecorded: boolean;
+  defectKey: string | null;
+  /** Native active attachment metadata count, not verified stored bytes. */
+  evidenceFileCount: number;
+  evidenceAddedAfterHandoffCount: number;
+};
+export type GraphReviewRunCaseLink = {
+  runId: string;
+  caseId: string;
+  linkedAt: string;
+  runName: string;
+  runStatus: string;
+  caseStillInRun: boolean;
+  execution: GraphReviewRunExecutionObservation | null;
+};
+export async function listZyraGraphReviewRunLinks(
+  projectId: string, historyId: string
+): Promise<{ links: GraphReviewRunCaseLink[] }> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/${historyId}/runs`);
+}
+export async function linkZyraGraphReviewRunCases(
+  projectId: string, historyId: string, runId: string, testcaseIds: string[]
+): Promise<{ historyId: string; runId: string; selected: number; newlyLinked: number }> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/${historyId}/runs/${runId}/link`, {
+    method: "POST", body: { testcaseIds }
+  });
+}
