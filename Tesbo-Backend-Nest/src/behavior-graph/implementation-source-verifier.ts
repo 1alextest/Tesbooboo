@@ -28,6 +28,7 @@ export interface SourceVerificationRequest {
 const GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const MAX_FILES = 2000;
+const MAX_TREE_ENTRIES = 100000;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 const MAX_CONCEPTS = 4000;
@@ -69,7 +70,7 @@ export async function captureVerifiedSourceDeclarations(
       new Set(prefixes).size !== prefixes.length) fail("invalid source selection");
   const canonicalPrefixes = [...prefixes].sort();
   const paths = await reader.listFilesAtCommit(resolvedSha);
-  if (!Array.isArray(paths) || paths.length > MAX_FILES) fail("source inventory missing or exceeds limit");
+  if (!Array.isArray(paths) || paths.length > MAX_TREE_ENTRIES) fail("source inventory missing or exceeds limit");
   const seen = new Set<string>();
   for (const path of paths) {
     if (!goodPath(path) || seen.has(path)) fail("invalid or duplicate source tree path");
@@ -79,6 +80,7 @@ export async function captureVerifiedSourceDeclarations(
     ? paths.filter((path) => canonicalPrefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/")))
     : paths;
   if (!selected.length) fail("selected source scope is empty");
+  if (selected.length > MAX_FILES) fail("selected source inventory exceeds limit");
   const files: Array<{ path: string; contentSha256: string }> = [];
   const lines = new Map<string, string[]>();
   let totalBytes = 0;
@@ -128,6 +130,27 @@ export async function captureVerifiedSourceDeclarations(
     files,
     concepts
   };
+}
+
+
+/**
+ * Internal branded receipt of byte-verified source data. This guards against
+ * accidental JSON/request objects reaching persistence. Real trust still
+ * depends on the server-approved Git reader and project binding.
+ */
+export class VerifiedPinnedSource {
+  private constructor(readonly value: TrustedSourceObservation) { Object.freeze(this); }
+
+  static async capture(reader: PinnedSourceReader, request: SourceVerificationRequest): Promise<VerifiedPinnedSource> {
+    const observation = await captureVerifiedSourceDeclarations(reader, request);
+    const immutable: TrustedSourceObservation = Object.freeze({
+      ...observation,
+      files: Object.freeze(observation.files.map((file) => Object.freeze({ ...file }))),
+      concepts: Object.freeze(observation.concepts.map((concept) => Object.freeze({ ...concept }))),
+      selectionPrefixes: Object.freeze([...(observation.selectionPrefixes ?? [])])
+    });
+    return new VerifiedPinnedSource(immutable);
+  }
 }
 
 /** Single adapter path; downstream graph provenance remains caller-attested. */

@@ -3,7 +3,8 @@ import { DatabaseService } from "../database/database.service";
 import { CurrentCacheGraphReader } from "./current-cache-graph.reader";
 import { prepareQaChangeReviewReceipt, type QaChangeReviewReceipt } from "./qa-change-review-receipt";
 import type { GraphCaptureForComparison } from "./graph-comparison-gate";
-import { projectImplementationObservations, type TrustedSourceObservation } from "./implementation-observation-graph";
+import { projectImplementationObservations } from "./implementation-observation-graph";
+import { VerifiedPinnedSource } from "./implementation-source-verifier";
 import type { ProjectSourceBinding } from "./project-source-binding";
 
 /** Internal history entry. This does not signal delivery or user acceptance. */
@@ -110,14 +111,15 @@ export class CurrentCacheGraphHistory {
   async captureVerifiedImplementationForUser(
     userId: string | null | undefined,
     projectId: string,
-    verified: { binding: ProjectSourceBinding; observation: TrustedSourceObservation }
+    verified: { binding: ProjectSourceBinding; observation: VerifiedPinnedSource }
   ): Promise<PersistedGraphObservation> {
-    if (!verified || verified.binding.projectId !== projectId ||
-        verified.observation.projectId !== projectId ||
-        verified.binding.repositoryId !== verified.observation.repositoryId ||
-        verified.binding.refName !== verified.observation.refName ||
+    if (!verified || !(verified.observation instanceof VerifiedPinnedSource) ||
+        verified.binding.projectId !== projectId ||
+        verified.observation.value.projectId !== projectId ||
+        verified.binding.repositoryId !== verified.observation.value.repositoryId ||
+        verified.binding.refName !== verified.observation.value.refName ||
         JSON.stringify([...verified.binding.selectionPrefixes].sort()) !==
-          JSON.stringify([...(verified.observation.selectionPrefixes ?? [])].sort())) {
+          JSON.stringify([...(verified.observation.value.selectionPrefixes ?? [])].sort())) {
       throw new ConflictException({ error: "Source observation does not match authorized binding" });
     }
     return this.recordForUser(userId, projectId, verified);
@@ -130,7 +132,7 @@ export class CurrentCacheGraphHistory {
   private async recordForUser(
     userId: string | null | undefined,
     projectId: string,
-    verified?: { binding: ProjectSourceBinding; observation: TrustedSourceObservation }
+    verified?: { binding: ProjectSourceBinding; observation: VerifiedPinnedSource }
   ): Promise<PersistedGraphObservation> {
     if (!userId) throw new ForbiddenException({ error: "Authenticated project membership required" });
     return this.db.transaction(async (client) => {
@@ -156,7 +158,7 @@ export class CurrentCacheGraphHistory {
       }
       const native = await this.reader.captureForUserInTransaction(userId, projectId, client);
       const capture: GraphCaptureForComparison = verified
-        ? projectImplementationObservations(native, verified.observation)
+        ? projectImplementationObservations(native, verified.observation.value)
         : native;
       if (capture.inventoryStatus !== "complete" || !capture.snapshot ||
           capture.unresolvedDiagnostics.length !== 0) {

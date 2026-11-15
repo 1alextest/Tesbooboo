@@ -76,6 +76,15 @@ describe("pinned source evidence validation before graph projection", () => {
     }
   });
 
+  it("supports a bounded selected scope within a repository with more files than the selection limit", async () => {
+    const paths = [file, ...Array.from({ length: 2000 }, (_, i) => `docs/doc-${i}.txt`)];
+    const r = reader({ listFilesAtCommit: jest.fn().mockResolvedValue(paths) });
+    const observation = await captureVerifiedSourceDeclarations(r, request({ selectionPrefixes: ["src"] }));
+    expect(observation.files).toHaveLength(1);
+    expect(observation.selectionPrefixes).toEqual(["src"]);
+    expect(r.readFileAtCommit).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects incomplete source/blob inventory instead of claiming comprehensive observations", async () => {
     await expect(captureVerifiedSourceDeclarations(reader({
       listFilesAtCommit: jest.fn().mockResolvedValue(Array.from({ length: 2001 }, (_, i) => `src/f${i}.ts`))

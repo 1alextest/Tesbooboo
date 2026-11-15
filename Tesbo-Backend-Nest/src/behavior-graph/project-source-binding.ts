@@ -2,10 +2,10 @@ import { ConflictException, ForbiddenException } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
 import { LocalPinnedGitSourceReader } from "./local-pinned-git-source";
 import {
-  captureVerifiedSourceDeclarations,
+  VerifiedPinnedSource,
   type SourceVerificationRequest
 } from "./implementation-source-verifier";
-import type { SourceConceptObservation, TrustedSourceObservation } from "./implementation-observation-graph";
+import type { SourceConceptObservation } from "./implementation-observation-graph";
 
 /**
  * Installed by an administrator in server configuration. Never load checkout
@@ -97,7 +97,7 @@ export class ProjectSourceBindingReader {
     userId: string | null | undefined,
     projectId: string,
     proposedConcepts: readonly SourceConceptObservation[] = []
-  ): Promise<{ binding: ProjectSourceBinding; observation: TrustedSourceObservation }> {
+  ): Promise<{ binding: ProjectSourceBinding; observation: VerifiedPinnedSource }> {
     const { binding, checkout } = await this.resolveForUser(userId, projectId);
     const reader = await LocalPinnedGitSourceReader.fromConfiguredCheckout(binding.repositoryId, checkout.root);
     const pinned = await reader.resolveRef(binding.refName);
@@ -105,7 +105,7 @@ export class ProjectSourceBindingReader {
       projectId, refName: binding.refName, expectedCommitSha: pinned,
       proposedConcepts, selectionPrefixes: binding.selectionPrefixes
     };
-    const observation = await captureVerifiedSourceDeclarations(reader, request);
+    const observation = await VerifiedPinnedSource.capture(reader, request);
     return { binding, observation };
   }
 }

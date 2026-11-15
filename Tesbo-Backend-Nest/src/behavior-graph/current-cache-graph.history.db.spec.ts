@@ -206,12 +206,40 @@ const url = process.env.DATABASE_URL ?? "";
         expect(saved.capture_json.observedCommitSha).toBe(git("rev-parse", "HEAD"));
 
         const row = await bindings.verifyForUser(user, project);
+        await expect(store.captureVerifiedImplementationForUser(user, project, {
+          ...row, observation: { ...row.observation.value } as never
+        })).rejects.toMatchObject({ status: 409 });
         await admin.query(
           "UPDATE project_source_bindings SET ref_name='main' WHERE project_id=$1",
           [project]
         );
         await expect(store.captureVerifiedImplementationForUser(user, project, row))
           .rejects.toMatchObject({ status: 409 });
+        await admin.query("UPDATE project_source_bindings SET ref_name='development' WHERE project_id=$1", [project]);
+
+        // A new selected source scope is a discontinuity, never an empty change.
+        await admin.query(
+          "UPDATE project_source_bindings SET selection_prefixes=ARRAY['src/feature.ts'] WHERE project_id=$1",
+          [project]
+        );
+        const repointed = await coordinator.captureForUser(user, project);
+        expect(repointed.stored).toBe(true);
+        expect(repointed.reviewReceipt).toBeNull();
+        const latest = await store.listForUser(user, project, 1);
+        expect(latest[0].changeState).toBe("source_scope_changed");
+
+        // Membership revoked after scanning must not authorize persistence.
+        const stale = await bindings.verifyForUser(user, project);
+        await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [project, user]);
+        try {
+          await expect(store.captureVerifiedImplementationForUser(user, project, stale))
+            .rejects.toMatchObject({ status: 403 });
+        } finally {
+          await admin.query(
+            "INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",
+            [project, user]
+          );
+        }
         await expect(coordinator.captureForUser(randomUUID(), project))
           .rejects.toMatchObject({ status: 403 });
       } finally {
