@@ -99,9 +99,9 @@ jobs:
           # A lost mutation response must never produce a duplicate run/case.
           # No live customer tenant or paid external AI provider is involved.
           npx playwright test -c playwright.config.ts \
-            api/zyra.spec.ts ui/zyra.spec.ts \
+            api/zyra.spec.ts ui/zyra.spec.ts api/approved-run-cases.spec.ts \
             --workers=1 \
-            -g "graph change history is project scoped|source binding setup is owner-only|Zyra opens native change review|owner can inspect root-free source setup|graph review links an explicitly nominated case"
+            -g "graph change history is project scoped|source binding setup is owner-only|Zyra opens native change review|owner can inspect root-free source setup|graph review links an explicitly nominated case|Approved-only cases at native run write boundary"
       - name: Capture smoke evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
