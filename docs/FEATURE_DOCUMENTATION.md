@@ -6088,3 +6088,17 @@ F1–F9 / D1–D6 / E1–E7 decisions and independent security/release assurance
 outstanding. After this bounded repair, resume conflict/revision and field-contract
 reconciliation alongside the separately authorized workspace handoff design,
 not infrastructure planning or a duplicate graph implementation.
+
+---
+
+### T-455 live QA execution and evidence reconciliation (2026-11-15)
+
+**Read-only, canonical authority:** Extend the existing per-graph-receipt `GET .../changes/:historyId/runs` response; do not add another execution snapshot, mutable outcome store, or alternate approval record. Every human-selected handoff link keeps project/cycle/testcase FK provenance, but reads the **current** native `cycles`, active `cycle_items`, active `testcases`, active `executions`, and active `attachments` metadata. The response explicitly distinguishes a live/native execution row from a historical or deleted case/run.
+
+**Reported fields:** `caseStillInRun` requires an active run + active cycle-item + active canonical case. `execution` is null when no active execution applies. Otherwise expose the actual execution ID/status/time, whether real actual-result notes exist, the stored defect reference if any, and count of active native execution-attachment metadata rows. This does NOT validate stored attachment bytes, that a defect was adjudicated, or that the status applies to the currently deployed build. The UI links directly to the native execution view and offers a read-only refresh after a tester edits that record elsewhere.
+
+**Temporal provenance:** Existing native test runs can contain executions and files **older than the graph handoff**. The response therefore distinguishes `executedAfterHandoff` (native `executed_at >= graph_review_run_case_links.linked_at`) and `evidenceAddedAfterHandoffCount` (active attachment metadata whose `created_at` follows the handoff). An older Failed/Passed status remains visible as history but is explicitly *not evidence for this change*. A later result/evidence item is likewise only temporally subsequent: the source commit, test build, environment, run config, coverage assertions, file-byte availability and human approval still require independent verification.
+
+**Regression basis:** Extended backend SQL/contract checks and migrated PostgreSQL tests create a disposable manual QA run, record a real execution row and native attachment metadata, verify counts/time flags, artificially make the execution/metadata older than the handoff, then soft-delete attachment and cycle-item records to prove no stale active result is reported. The existing Zyra browser E2E verifies that a human-triggered result appears after refresh, alongside a native execution URL and a clear unverified-build disclaimer. Tests do not fake coverage or approve any case.
+
+**Open gates:** Exact-head CI on this revision, running against a genuinely configured approved Git checkout, full linked requirements/behavior/state/journey model provenance, actual stored file access, executable quality evidence, independent assurance-team execution and human QA approval remain required. Do not interpret `executedAfterHandoff=true` or an attachment count as conclusive regression verification.
