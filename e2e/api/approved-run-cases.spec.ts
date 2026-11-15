@@ -193,7 +193,10 @@ test.describe("Approved-only cases at native run write boundary", () => {
     const draft = createCase("Draft");
     const name = "E2E Approved Boundary Automation " + Date.now();
     const endpoint = `/api/projects/${tenant!.mainProjectId}/automation/runs`;
-    const data = { name, environment: "Disposable CI", caseIds: [draft.externalId] };
+    const data = {
+      name, environment: "Disposable CI", caseIds: [draft.externalId],
+      externalId: "APR-AUTO-" + Date.now()
+    };
     const denied = await owner.post(endpoint, { data, failOnStatusCode: false });
     expect(denied.status(), await denied.text()).toBe(409);
     expect(Number(scalar("SELECT COUNT(*)::int FROM cycles WHERE project_id=" +
@@ -211,6 +214,11 @@ test.describe("Approved-only cases at native run write boundary", () => {
     // execution history must remain writable; only NEW additions require
     // current approval. This is not permission to add a new Draft case.
     exec("UPDATE testcases SET status='Draft' WHERE id=" + literal(draft.id) + ";");
+    const reused = await owner.post(endpoint, { data, failOnStatusCode: false });
+    expect(reused.ok(), await reused.text()).toBeTruthy();
+    expect(await reused.json()).toMatchObject({ reused: true, casesAttached: 0 });
+    expect(items(runId)).toBe(1);
+
     const reported = await owner.post(
       `/api/projects/${tenant!.mainProjectId}/automation/runs/${runId}/results`, {
         data: { caseId: draft.externalId, status: "fail", retryCount: 0, durationMs: 5 },
