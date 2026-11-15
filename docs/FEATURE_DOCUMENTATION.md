@@ -6653,3 +6653,13 @@ The 40-journey independent review inventory remains the review baseline; these s
 
 
 **Compatibility follow-up (2026-11-15):** The positive cases in the *existing* native Cycles, Automation, Executions and Attachment API suites now explicitly create `Approved` case fixtures before adding them to runs (9 isolated fixture changes). These are not artificial waivers: the workflows genuinely expect an executable case. Deliberately Draft/In Review/Deprecated negative fixtures and the earlier approval-boundary tests remain unchanged. The CI smoke pipeline now runs six representative pre-existing positive API tests in addition to the dedicated REST/MCP/automation negative/positive approval suite, so a policy fix must preserve historical retry, run execution and evidence behavior in actual HTTP tests.
+
+---
+
+### Native Approved-only write boundary — additional proof (2026-11-15)
+
+**Reuse verification:** Live `development` source already contains `assertApprovedNewRunCases` in the canonical `LegacyService.insertApprovedCycleItems`, called from direct REST and atomic MCP run creation, and `AutomationService.attachCases`. Its transaction locks the cycle, locks active same-project case rows with `FOR SHARE`, and enforces `Approved` again in the insert. Existing migrated PostgreSQL/Playwright tests already covered Draft, In Review, mixed-batch atomicity, concurrency demotion, MCP and automation. Do **not** create another writer, queue or duplicate agent to implement this already-shipped policy.
+
+**New remaining gap now tested:** After an explicit soft removal of a case from a test run, a later re-add is a **new** association and requires fresh approval. The historical cycle-item/execution identity must remain unchanged even when the case is subsequently demoted. Added migrated PostgreSQL and disposable REST API tests for: add Approved → remove → demote to Draft → reject a new add with 409, no new active item/execution → re-approve → allow exactly one new item/execution → replay as idempotent skip. Also added direct REST foreign-project Approved-case rejection: a QA user in the primary project cannot import an Approved case from their other project, and the returned `requested/added/skipped` contract does not expose status or existence.
+
+**Scope of proof:** These are executable regressions of Tesbo's existing shared writer, not a new implementation path. They run as part of the existing `Approved-only native run attachments` dedicated disposable API suite under the isolated smoke workflow and migrated PostgreSQL quality job. No production tenant, live evidence, protected branch, second graph, or duplication of canonical case/run stores is touched.

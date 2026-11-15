@@ -54,6 +54,10 @@ test.describe("Approved-only native run attachments", () => {
       literal(status) + ") RETURNING id;");
   }
 
+  function caseIdForRemoval(): string {
+    return caseId("APR-REMOVAL-" + Date.now(), "Approved");
+  }
+
   async function cycle(name: string): Promise<string> {
     const res = await asOwner.post("/api/projects/" + tenant!.mainProjectId + "/cycles", {
       data: { name }, failOnStatusCode: false
@@ -117,6 +121,71 @@ test.describe("Approved-only native run attachments", () => {
     }, failOnStatusCode: false });
     expect(unknown.status(),await unknown.text()).toBe(201);
     expect(await unknown.json()).toMatchObject({ requested: 2,added: 0,skipped: 2 });
+  });
+
+  test("REST re-add after soft removal rejects Draft and retains historical result rows", async () => {
+    const caseId = caseIdForRemoval();
+    const run = await cycle("E2E Soft-removed Approval " + Date.now());
+    const endpoint = "/api/cycles/" + run + "/testcases";
+    const insert = async () => asQa.post(endpoint, {
+      data: { testcaseIds: [caseId] }, failOnStatusCode: false
+    });
+    const first = await insert();
+    expect(first.status(), await first.text()).toBe(201);
+    expect(await first.json()).toMatchObject({ requested: 1, added: 1, skipped: 0 });
+    const oldItem = scalar("SELECT id FROM cycle_items WHERE cycle_id=" +
+      literal(run) + " AND testcase_id=" + literal(caseId) + " AND deleted_at IS NULL;");
+    const oldExecution = scalar("SELECT id FROM executions WHERE cycle_item_id=" +
+      literal(oldItem) + ";");
+    expect(oldExecution).toBeTruthy();
+
+    const removed = await asQa.delete(endpoint + "/" + caseId, { failOnStatusCode: false });
+    expect(removed.ok(), await removed.text()).toBe(true);
+    expect(countItems(run)).toBe(0);
+    expect(Number(scalar("SELECT COUNT(*)::int FROM cycle_items WHERE id=" +
+      literal(oldItem) + " AND deleted_at IS NOT NULL;"))).toBe(1);
+
+    // A removed membership is a NEW association, unlike idempotent replay
+    // of an active item. Demotion must reject it before creating a new result.
+    exec("UPDATE testcases SET status='Draft' WHERE id=" + literal(caseId) + ";");
+    const denied = await insert();
+    expect(denied.status(), await denied.text()).toBe(409);
+    expect((await denied.json()).error).toMatch(/Only Approved/i);
+    expect(countItems(run)).toBe(0);
+    expect(countExecutions(run)).toBe(0);
+    expect(Number(scalar("SELECT COUNT(*)::int FROM executions WHERE cycle_item_id=" +
+      literal(oldItem) + ";"))).toBe(1); // Historical execution not destroyed.
+
+    exec("UPDATE testcases SET status='Approved' WHERE id=" + literal(caseId) + ";");
+    const restored = await insert();
+    expect(restored.status(), await restored.text()).toBe(201);
+    expect(await restored.json()).toMatchObject({ requested: 1, added: 1, skipped: 0 });
+    expect(countItems(run)).toBe(1);
+    expect(countExecutions(run)).toBe(1);
+    expect(Number(scalar("SELECT COUNT(*)::int FROM cycle_items WHERE cycle_id=" +
+      literal(run) + " AND testcase_id=" + literal(caseId) + ";"))).toBe(2);
+    const replay = await insert();
+    expect(replay.status(), await replay.text()).toBe(201);
+    expect(await replay.json()).toMatchObject({ added: 0, skipped: 1 });
+    expect(countItems(run)).toBe(1);
+  });
+
+  test("REST skips foreign-project Approved cases without importing their test or revealing status", async () => {
+    const run = await cycle("E2E Cross-project Approval " + Date.now());
+    const foreign = scalar("INSERT INTO testcases(project_id,external_id,title,status) VALUES (" +
+      literal(tenant!.secondProjectId) + ", " + literal("APR-FOREIGN-" + Date.now()) +
+      ", 'Foreign approved candidate', 'Approved') RETURNING id;");
+    try {
+      const response = await asQa.post("/api/cycles/" + run + "/testcases", {
+        data: { testcaseIds: [foreign] }, failOnStatusCode: false
+      });
+      expect(response.status(), await response.text()).toBe(201);
+      expect(await response.json()).toMatchObject({ requested: 1, added: 0, skipped: 1 });
+      expect(countItems(run)).toBe(0);
+      expect(countExecutions(run)).toBe(0);
+    } finally {
+      exec("DELETE FROM testcases WHERE id=" + literal(foreign) + ";");
+    }
   });
 
   test("MCP create-from-cases is atomic and returns no run for a Draft candidate", async () => {
