@@ -42,7 +42,8 @@ export class LocalPinnedGitSourceReader implements PinnedSourceReader {
     const { stdout } = await exec("git", ["-C", this.root, ...args], {
       encoding: "buffer", maxBuffer, timeout: 10000
     });
-    return stdout as Buffer;
+    if (!Buffer.isBuffer(stdout)) throw new Error("Git command did not return raw bytes");
+    return stdout;
   }
 
   async resolveRef(refName: string): Promise<string> {

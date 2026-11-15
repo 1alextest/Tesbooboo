@@ -16,7 +16,7 @@ describe("real local pinned Git source reader", () => {
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
 
-  beforeAll(async () => {
+  beforeEach(async () => {
     root = mkdtempSync(join(tmpdir(), "tesbo-graph-git-"));
     execFileSync("git", ["init", "-b", "development", root], { stdio: "pipe" });
     git("config", "user.name", "Tesbo CI");
@@ -28,7 +28,7 @@ describe("real local pinned Git source reader", () => {
     reader = await LocalPinnedGitSourceReader.fromConfiguredCheckout("test/application", root);
   });
 
-  afterAll(() => { if (root) rmSync(root, { recursive: true, force: true }); });
+  afterEach(() => { if (root) rmSync(root, { recursive: true, force: true }); });
 
   it("resolves a real immutable branch and verifies bytes against Git, not the worktree", async () => {
     expect(await reader.resolveRef("development")).toBe(commit);
