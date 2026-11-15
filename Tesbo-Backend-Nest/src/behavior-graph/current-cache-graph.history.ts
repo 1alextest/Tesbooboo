@@ -24,6 +24,69 @@ export class CurrentCacheGraphHistory {
     private readonly reader: CurrentCacheGraphReader
   ) {}
 
+  /**
+   * Read-only, bounded review feed. This is not a new public QA inbox.
+   * Authorization and data selection happen in the SAME SQL statement so a
+   * revoked member never receives an earlier captured private snapshot.
+   */
+  async listForUser(
+    userId: string | null | undefined,
+    projectId: string,
+    limit = 25,
+    beforeId?: string
+  ): Promise<Array<{
+    id: string;
+    revision: string;
+    capturedAt: string;
+    reviewReceipt: QaChangeReviewReceipt | null;
+  }>> {
+    if (!userId) throw new ForbiddenException({ error: "Authenticated project membership required" });
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new ConflictException({ error: "Graph history limit must be 1–100" });
+    }
+    if (beforeId !== undefined && (!/^[1-9][0-9]*$/.test(beforeId) ||
+        beforeId.length > 19 || BigInt(beforeId) > 9223372036854775807n)) {
+      throw new ConflictException({ error: "Invalid history cursor" });
+    }
+    const result = await this.db.query<{
+      authorized: boolean;
+      entries: Array<{
+        id: string; revision: string; capturedAt: string; reviewReceipt: QaChangeReviewReceipt | null
+      }>;
+    }>(
+      `WITH allowed AS MATERIALIZED (
+         SELECT DISTINCT p.id FROM projects p
+           JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=$2::uuid
+           JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id=$2::uuid
+          WHERE p.id=$1::uuid
+            AND (to_jsonb(p)->>'deleted_at') IS NULL
+            AND (to_jsonb(p)->>'archived_at') IS NULL
+            AND COALESCE((to_jsonb(p)->>'is_archived')::boolean,false)=false
+            AND (to_jsonb(pm)->>'deleted_at') IS NULL
+            AND (to_jsonb(om)->>'deleted_at') IS NULL
+       )
+       SELECT EXISTS(SELECT 1 FROM allowed) AS authorized,
+              COALESCE(
+                (SELECT jsonb_agg(jsonb_build_object(
+                   'id', x.id::text, 'revision', x.revision,
+                   'capturedAt', x.captured_at, 'reviewReceipt', x.review_receipt_json
+                 ) ORDER BY x.id DESC)
+                   FROM (
+                     SELECT h.id, h.revision, h.captured_at, h.review_receipt_json
+                       FROM graph_capture_history h JOIN allowed a ON a.id=h.project_id
+                      WHERE ($3::bigint IS NULL OR h.id < $3::bigint)
+                      ORDER BY h.id DESC LIMIT $4
+                   ) x),
+                '[]'::jsonb
+              ) AS entries`,
+      [projectId, userId, beforeId ?? null, limit]
+    );
+    if (!result.rows[0]?.authorized) {
+      throw new ForbiddenException({ error: "Project membership required for graph history" });
+    }
+    return result.rows[0].entries;
+  }
+
   async captureForUser(userId: string | null | undefined, projectId: string): Promise<PersistedGraphObservation> {
     if (!userId) throw new ForbiddenException({ error: "Authenticated project membership required" });
     return this.db.transaction(async (client) => {
