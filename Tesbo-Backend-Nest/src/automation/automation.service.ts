@@ -274,6 +274,19 @@ export class AutomationService {
       });
     }
     const caseIds = this.normalizeCaseIds(body?.caseIds);
+    // Reject known Draft/In Review/Deprecated cases before opening a new
+    // automation run. The attach writer repeats this check with row locks
+    // inside the write transaction to close a concurrent status-change race.
+    if (caseIds.length) {
+      const { found } = await this.resolveCases(projectId, caseIds);
+      const ineligible = [...found.values()].filter((row) => row.status !== "Approved");
+      if (ineligible.length) {
+        throw new ConflictException({
+          error: "Only Approved test cases can be added to a test run",
+          ineligibleTestcaseIds: ineligible.map((row) => row.id)
+        });
+      }
+    }
 
     // Idempotency check before the insert so a re-run gets its existing run back with the same
     // shape as a fresh create, rather than a 409 it would have to special-case.
