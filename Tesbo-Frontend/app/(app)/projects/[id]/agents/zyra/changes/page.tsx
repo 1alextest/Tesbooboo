@@ -8,6 +8,22 @@ import {
   type GraphReviewHistoryRow
 } from "@/lib/api";
 
+/** IDs are JSON tuples produced by Tesbo's canonical case projector.
+ * Never let an arbitrary graph node or foreign-project tuple become a case URL.
+ */
+function canonicalReviewCaseId(nodeId: string, projectId: string): string | null {
+  try {
+    const parts: unknown = JSON.parse(nodeId);
+    if (!Array.isArray(parts) || parts.length !== 3 ||
+        parts[0] !== "test_case" || parts[1] !== projectId ||
+        typeof parts[2] !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(parts[2])) {
+      return null;
+    }
+    return parts[2];
+  } catch { return null; }
+}
+
 /** An inspection view inside Zyra, not a second agent or approval board. */
 export default function ZyraChangeReviewPage() {
   const params = useParams();
@@ -121,8 +137,20 @@ export default function ZyraChangeReviewPage() {
                     {receipt.candidates.length > 0 ? <ul className="space-y-2 text-sm">
                       {receipt.candidates.map((candidate) =>
                         <li key={candidate.caseNodeId} className="rounded border border-[var(--border)] p-2">
-                          <code className="break-all">{candidate.caseNodeId}</code>
+                          {canonicalReviewCaseId(candidate.caseNodeId, projectId) ? (
+                            <Link className="break-all text-sm underline"
+                              href={`/projects/${projectId}/testcases/${canonicalReviewCaseId(candidate.caseNodeId, projectId)}`}>
+                              Open existing test case
+                            </Link>
+                          ) : <code className="break-all">{candidate.caseNodeId}</code>}
                           <div className="text-xs text-[var(--muted)]">Review reason: {candidate.reasons.join(", ")}</div>
+                          {candidate.requirementNodeIds.length > 0 && (
+                            <details className="mt-2 text-xs">
+                              <summary className="cursor-pointer">Explicit requirement references ({candidate.requirementNodeIds.length})</summary>
+                              <ul className="mt-1 list-disc pl-4">{candidate.requirementNodeIds.map((id) =>
+                                <li key={id} className="break-all"><code>{id}</code></li>)}</ul>
+                            </details>
+                          )}
                         </li>)}
                     </ul> : <p className="text-sm text-[var(--muted)]">
                       No explicit case reference was identified. This does not establish that no tests are affected.
