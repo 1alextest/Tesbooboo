@@ -285,6 +285,8 @@ test.describe("zyra / agents (UI)", () => {
       const handoffs = reopened.getByRole("region", { name: "Persisted QA handoffs" });
       await expect(handoffs).toContainText("native status: Failed");
       await expect(handoffs).toContainText("active evidence metadata: 1");
+      await expect(handoffs).toContainText("1 added after handoff");
+      await expect(handoffs).toContainText("recorded after handoff; build provenance not verified");
       await expect(handoffs).toContainText("defect reference: BUG-17");
       await expect(handoffs.getByRole("link", { name: "Open native execution" }))
         .toHaveAttribute("href",

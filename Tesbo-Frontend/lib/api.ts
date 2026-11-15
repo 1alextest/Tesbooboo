@@ -4621,10 +4621,12 @@ export type GraphReviewRunExecutionObservation = {
   /** Native status only. No graph-generated verification or QA approval. */
   status: string;
   executedAt: string | null;
+  executedAfterHandoff: boolean;
   actualResultRecorded: boolean;
   defectKey: string | null;
   /** Native active attachment metadata count, not verified stored bytes. */
   evidenceFileCount: number;
+  evidenceAddedAfterHandoffCount: number;
 };
 export type GraphReviewRunCaseLink = {
   runId: string;

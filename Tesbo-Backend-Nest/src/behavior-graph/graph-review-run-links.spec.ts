@@ -93,6 +93,9 @@ describe("committed graph review → native run/case relationships", () => {
     expect(sql).toContain("LEFT JOIN executions e");
     expect(sql).toContain("att.entity_type='execution'");
     expect(sql).toContain("att.deleted_at IS NULL");
+    expect(sql).toContain("e.executed_at >= l.linked_at");
+    expect(sql).toContain("att.created_at >= l.linked_at");
+    expect(sql).toContain("c.deleted_at IS NULL AND tc.id IS NOT NULL");
     expect(sql).toContain("'caseStillInRun', ci.id IS NOT NULL");
     expect(JSON.stringify(read)).not.toContain("verified");
   });
@@ -103,13 +106,16 @@ describe("committed graph review → native run/case relationships", () => {
       runId: RUN, caseId: CASE, linkedAt: "2026-11-15T00:00:00Z",
       runName: "Human verification", runStatus: "In Progress", caseStillInRun: true,
       execution: { id: "00000000-0000-4000-8000-000000000005", status: "Failed",
-        executedAt: "2026-11-15T01:00:00Z", actualResultRecorded: true,
-        defectKey: "BUG-17", evidenceFileCount: 2 }
+        executedAt: "2026-11-15T01:00:00Z", executedAfterHandoff: true,
+        actualResultRecorded: true, defectKey: "BUG-17",
+        evidenceFileCount: 2, evidenceAddedAfterHandoffCount: 1 }
     }] }] });
     const result = await svc.listForUser(USER, PROJECT, HISTORY);
     expect(result.links[0]).toMatchObject({
       caseStillInRun: true,
-      execution: { status: "Failed", evidenceFileCount: 2, defectKey: "BUG-17" }
+      execution: { status: "Failed", evidenceFileCount: 2,
+        evidenceAddedAfterHandoffCount: 1, executedAfterHandoff: true,
+        defectKey: "BUG-17" }
     });
     expect(JSON.stringify(result)).not.toContain("approved");
     expect(JSON.stringify(result)).not.toContain("verified");

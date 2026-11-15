@@ -183,6 +183,11 @@ export function ReviewCaseRunSetup({
                       {link.execution.executedAt &&
                         <span>{"; recorded "}{new Date(link.execution.executedAt).toLocaleString()}</span>}
                       {"; active evidence metadata: "}{link.execution.evidenceFileCount}
+                      {" ("}{link.execution.evidenceAddedAfterHandoffCount}
+                      {" added after handoff)"}
+                      {link.execution.executedAfterHandoff
+                        ? "; recorded after handoff; build provenance not verified"
+                        : "; earlier or undated execution; not evidence for this change"}
                       {link.execution.actualResultRecorded && "; actual-result notes recorded"}
                       {link.execution.defectKey && <span>{"; defect reference: "}{link.execution.defectKey}</span>}
                       {" — execution status and attachment metadata are not verification or approval"}

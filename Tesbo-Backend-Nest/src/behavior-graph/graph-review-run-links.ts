@@ -11,10 +11,13 @@ export interface QaRunCaseExecution {
   /** Native result, not a graph-inferred pass/fail or approval. */
   status: string;
   executedAt: string | null;
+  /** Temporal relationship only; does not prove matching deployed build. */
+  executedAfterHandoff: boolean;
   actualResultRecorded: boolean;
   defectKey: string | null;
   /** Count of active native attachment metadata, not verification of stored file bytes. */
   evidenceFileCount: number;
+  evidenceAddedAfterHandoffCount: number;
 }
 
 export interface QaRunCaseLink {
@@ -78,6 +81,9 @@ export class GraphReviewRunLinks {
            'caseStillInRun', ci.id IS NOT NULL,
            'execution', CASE WHEN e.id IS NULL THEN NULL ELSE jsonb_build_object(
              'id', e.id::text, 'status', e.status, 'executedAt', e.executed_at,
+             'executedAfterHandoff', (
+               e.executed_at IS NOT NULL AND e.executed_at >= l.linked_at
+             ),
              'actualResultRecorded', NULLIF(btrim(e.actual_result), '') IS NOT NULL,
              'defectKey', e.defect_key,
              'evidenceFileCount', (
@@ -85,13 +91,22 @@ export class GraphReviewRunLinks {
                 WHERE att.project_id=l.project_id
                   AND att.entity_type='execution' AND att.entity_id=e.id
                   AND att.deleted_at IS NULL
+             ),
+             'evidenceAddedAfterHandoffCount', (
+               SELECT COUNT(*)::int FROM attachments att
+                WHERE att.project_id=l.project_id
+                  AND att.entity_type='execution' AND att.entity_id=e.id
+                  AND att.deleted_at IS NULL AND att.created_at >= l.linked_at
              )
            ) END
          ) ORDER BY l.linked_at, l.cycle_id, l.testcase_id)
            FROM graph_review_run_case_links l
            JOIN cycles c ON c.id=l.cycle_id AND c.project_id=l.project_id
+           LEFT JOIN testcases tc ON tc.id=l.testcase_id
+             AND tc.project_id=l.project_id AND tc.deleted_at IS NULL
            LEFT JOIN cycle_items ci ON ci.cycle_id=l.cycle_id
              AND ci.testcase_id=l.testcase_id AND ci.deleted_at IS NULL
+             AND c.deleted_at IS NULL AND tc.id IS NOT NULL
            LEFT JOIN executions e ON e.cycle_item_id=ci.id AND e.deleted_at IS NULL
            JOIN allowed a ON a.id=l.project_id
           WHERE l.history_id=$3::bigint

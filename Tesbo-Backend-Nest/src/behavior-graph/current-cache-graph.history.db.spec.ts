@@ -405,13 +405,29 @@ const url = process.env.DATABASE_URL ?? "";
           caseStillInRun: true,
           execution: {
             id: executionId, status: "Failed", actualResultRecorded: true,
-            defectKey: "BUG-17", evidenceFileCount: 1
+            executedAfterHandoff: true, defectKey: "BUG-17",
+            evidenceFileCount: 1, evidenceAddedAfterHandoffCount: 1
           }
         });
         expect(observed.links[0].execution?.executedAt).toBeTruthy();
+        // An older native result may remain Failed but cannot be presented as
+        // verification of this later human handoff. File metadata can also predate it.
+        await admin.query(
+          "UPDATE executions SET executed_at=now() - interval '1 day' WHERE id=$1", [executionId]
+        );
+        await admin.query(
+          "UPDATE attachments SET created_at=now() - interval '1 day' WHERE id=$1", [evidenceId]
+        );
+        const historical = await links.listForUser(user, project, receiptId);
+        expect(historical.links[0].execution).toMatchObject({
+          status: "Failed", executedAfterHandoff: false,
+          evidenceFileCount: 1, evidenceAddedAfterHandoffCount: 0
+        });
         await admin.query("UPDATE attachments SET deleted_at=now() WHERE id=$1", [evidenceId]);
         const afterMetadataDelete = await links.listForUser(user, project, receiptId);
-        expect(afterMetadataDelete.links[0].execution?.evidenceFileCount).toBe(0);
+        expect(afterMetadataDelete.links[0].execution).toMatchObject({
+          evidenceFileCount: 0, evidenceAddedAfterHandoffCount: 0
+        });
         // Historical handoff survives soft removal from the active run but
         // does not masquerade as a currently executable case.
         await admin.query("UPDATE cycle_items SET deleted_at=now() WHERE id=$1", [itemId]);
