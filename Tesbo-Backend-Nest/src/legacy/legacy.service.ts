@@ -23426,7 +23426,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       .filter((op) => {
         if (op.type === "create") return !!op.draft;
         if (op.type === "create_suite") return !!op.suiteName;
-        if (op.type === "move_to_suite") return (!!op.suiteName || !!op.suiteId) && (op.allExisting || op.fromLastPlan || !!op.externalIds?.length || !!op.testcaseIds?.length);
+        // The project-scoped resolver already accepts scalar IDs as well as lists; do not drop them here.
+        if (op.type === "move_to_suite") return (!!op.suiteName || !!op.suiteId) &&
+          (op.allExisting || op.fromLastPlan || !!op.externalIds?.length || !!op.testcaseIds?.length || !!op.testcaseId?.trim() || !!op.externalId?.trim());
         // An archive may name a SET (every existing testcase, or several ids) as well as one case —
         // a confirmed "delete all the test cases" arrives as allExisting:true, and dropping it here
         // is what left the confirmation with nothing to stage. applyZyraChatOperations expands it.
