@@ -46,6 +46,16 @@ const SEVERITY_SCHEMA = {
   description: `One of ${BUG_SEVERITIES.join(", ")} (matched case-insensitively). Omit to leave severity unset.`
 };
 
+/** The existing testcases.attachments TEXT field is displayed as Notes in the editor.
+ * MCP schemas are advisory, so a malformed supplied value must be rejected
+ * before the legacy writer; omission must pass through without stale reads.
+ */
+function validateTestcaseNotes(body: Record<string, unknown>): void {
+  if (Object.prototype.hasOwnProperty.call(body, "attachments") && typeof body.attachments !== "string") {
+    throw new McpError(RpcCode.ToolExecutionError, '"attachments" (Notes) must be a string; omit to preserve Notes, or pass "" to clear');
+  }
+}
+
 function canonicalizeSeverity(body: Record<string, unknown>): Record<string, unknown> {
   const raw = body.severity;
   if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) return body;
@@ -185,7 +195,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "get_testcase",
       description:
-        "Get one test case by id in the token's project, with its full detail: description, preconditions, postconditions, steps, test data, priority, severity, type, automation fields, component, status, estimated duration, and Jira/Linear links. Required: testcaseId.",
+        "Get one test case by id in the token's project, with its full detail: description, preconditions, postconditions, steps, test data, priority, severity, type, automation fields, component, status, estimated duration, Notes (attachments plain text), sourceRefs citations, and Jira/Linear links. Required: testcaseId.",
       requiredScope: "read",
       inputSchema: {
         type: "object",
@@ -202,7 +212,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "create_testcase",
       description:
-        "Create a test case in the token's project. Required: title. Optional: suiteId, description, preconditions, steps (array of {stepNumber, action, expectedResult} — expectedResult belongs on the step it applies to, not in the overall description), testData, priority, severity, type, automationStatus, component, status. The write is attributed to the Tesbo MCP agent actor.",
+        "Create a test case in the token's project. Required: title. Optional: suiteId, description, preconditions, steps (array of {stepNumber, action, expectedResult} — expectedResult belongs on the step it applies to, not in the overall description), testData, attachments (plain-text Notes in the editor; omit or pass an empty string to leave Notes empty), priority, severity, type, automationStatus, component, status. The write is attributed to the Tesbo MCP agent actor.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -223,6 +233,7 @@ export function buildMcpTools(): McpTool[] {
             }
           },
           testData: { type: "string" },
+          attachments: { type: "string", description: "Plain-text Notes in the editor (not uploaded files or Context citations)." },
           priority: { type: "string" },
           severity: SEVERITY_SCHEMA,
           type: { type: "string" },
@@ -235,6 +246,7 @@ export function buildMcpTools(): McpTool[] {
       },
       handler: async (args, ctx) => {
         requireString(args, "title");
+        validateTestcaseNotes(args);
         // An MCP caller gets no schema enforcement (inputSchema is advisory only — see
         // mcp.service.ts), so its `steps` can drift onto synonym keys the editor doesn't read
         // (e.g. "expected" instead of "expectedResult") exactly the way Zyra's chat/task-board
@@ -254,7 +266,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "update_testcase",
       description:
-        "Update a test case in the token's project. Required: testcaseId. Optional: externalId (the case's ID such as NAP-TC-12; must stay unique in the project, no spaces, up to 32 characters; past runs show the new ID), suiteId, title, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult}), testData, priority, severity, type, automationStatus, component, status, estimatedDuration, customFieldValues. Only fields you pass are changed; omitted fields keep their current value. To archive or restore a test case, prefer archive_testcase/restore_testcase over setting status here directly. The write is attributed to the Tesbo MCP agent actor.",
+        "Update a test case in the token's project. Required: testcaseId. Optional: externalId (the case's ID such as NAP-TC-12; must stay unique in the project, no spaces, up to 32 characters; past runs show the new ID), suiteId, title, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult}), testData, attachments (plain-text Notes; omit to preserve, string to replace, empty string to clear; null is invalid), priority, severity, type, automationStatus, component, status, estimatedDuration, customFieldValues. Only fields you pass are changed; omitted fields keep their current value. To archive or restore a test case, prefer archive_testcase/restore_testcase over setting status here directly. The write is attributed to the Tesbo MCP agent actor.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -278,6 +290,7 @@ export function buildMcpTools(): McpTool[] {
             }
           },
           testData: { type: "string" },
+          attachments: { type: "string", description: "Plain-text Notes. Omit to preserve, pass a string to replace, or pass an empty string to clear." },
           priority: { type: "string" },
           severity: SEVERITY_SCHEMA,
           type: { type: "string" },
@@ -292,6 +305,7 @@ export function buildMcpTools(): McpTool[] {
       },
       handler: async (args, ctx) => {
         const testcaseId = requireString(args, "testcaseId");
+        validateTestcaseNotes(args);
         // updateTestCase() takes no project argument of its own — it derives the project from the
         // row it finds by id — so the tool must check project ownership itself before calling it.
         await requireProjectOwnedRow(ctx, "testcases", testcaseId, "Test case");
@@ -362,7 +376,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "bulk_create_testcases",
       description:
-        `Create up to ${LegacyService.MAX_BULK_TESTCASES} test cases in the token's project in one call. Required: testcases (array; each item accepts the same fields as create_testcase — title required per item, plus optional suiteId, description, preconditions, steps, testData, priority, severity, type, automationStatus, component, status). Each item is created independently through the same path create_testcase uses — one item failing (e.g. a missing title or a too-long field) does not stop the rest from being created. The response's results array reports every item's outcome by its index in the input array, so a partial batch never silently drops a failure. This deliberately does not use the app's own bulk-import path, which is all-or-nothing (one bad row rolls back the whole batch) — per-item isolation was required here instead.`,
+        `Create up to ${LegacyService.MAX_BULK_TESTCASES} test cases in the token's project in one call. Required: testcases (array; each item accepts the same fields as create_testcase — title required per item, plus optional suiteId, description, preconditions, steps, testData, attachments (plain-text Notes), priority, severity, type, automationStatus, component, status). Each item is created independently through the same path create_testcase uses — one item failing (e.g. a missing title or a too-long field) does not stop the rest from being created. The response's results array reports every item's outcome by its index in the input array, so a partial batch never silently drops a failure. This deliberately does not use the app's own bulk-import path, which is all-or-nothing (one bad row rolls back the whole batch) — per-item isolation was required here instead.`,
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -388,6 +402,7 @@ export function buildMcpTools(): McpTool[] {
                   }
                 },
                 testData: { type: "string" },
+                attachments: { type: "string", description: "Plain-text Notes in the editor." },
                 priority: { type: "string" },
                 severity: SEVERITY_SCHEMA,
                 type: { type: "string" },
@@ -415,6 +430,7 @@ export function buildMcpTools(): McpTool[] {
         for (let index = 0; index < items.length; index++) {
           const item = (items[index] || {}) as Record<string, unknown>;
           try {
+            validateTestcaseNotes(item);
             if (typeof item.title !== "string" || item.title.trim() === "") {
               throw new Error('"title" is required and must be a non-empty string');
             }

@@ -998,6 +998,91 @@ describe("McpService", () => {
     });
   });
 
+  describe("existing test-case Notes over MCP", () => {
+    it("advertises Notes on create, update and per-item bulk create without another field", async () => {
+      const { db } = makeDb();
+      const svc = new McpService(makeLegacy(), db, writableLimits);
+      const res: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
+      for (const name of ["create_testcase", "update_testcase"]) {
+        const tool = res.result.tools.find((entry: any) => entry.name === name);
+        expect(tool.inputSchema.properties.attachments.type).toBe("string");
+        expect(tool.description).toMatch(/Notes/);
+      }
+      const bulk = res.result.tools.find((entry: any) => entry.name === "bulk_create_testcases");
+      expect(bulk.inputSchema.properties.testcases.items.properties.attachments.type).toBe("string");
+      const detail = res.result.tools.find((entry: any) => entry.name === "get_testcase");
+      expect(detail.description).toMatch(/Notes/);
+    });
+
+    it("sends exact Unicode and multiline Notes through create without changing other fields", async () => {
+      const { db } = makeDb();
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      const notes = "Evidence: café 🧪\nSource: QA reviewer";
+      const res: any = await svc.handleRequest(rpc("tools/call", {
+        name: "create_testcase", arguments: { title: "Draft", suiteId: "suite-1", attachments: notes }
+      }), principal(), "proj-1");
+      expect(res.result.isError).toBe(false);
+      expect((legacy as any).createTestCase).toHaveBeenCalledWith("proj-1", "mcp-actor-1", {
+        title: "Draft", suiteId: "suite-1", attachments: notes
+      });
+    });
+
+    it("preserves omitted Notes and passes replacement or explicit empty clear unchanged", async () => {
+      const { db } = makeDb();
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      for (const payload of [{ title: "Reworded" }, { attachments: "New text" }, { attachments: "" }]) {
+        const res: any = await svc.handleRequest(rpc("tools/call", {
+          name: "update_testcase", arguments: { testcaseId: "tc-1", ...payload }
+        }), principal(), "proj-1");
+        expect(res.result.isError).toBe(false);
+        expect((legacy as any).updateTestCase).toHaveBeenLastCalledWith("tc-1", "mcp-actor-1", payload);
+      }
+      expect((legacy as any).updateTestCase).toHaveBeenCalledTimes(3);
+    });
+
+    it.each([null, 8, true, [], {}, ["bad"]])("refuses invalid Notes %p before any create or update writer", async (notes) => {
+      const { db } = makeDb();
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      for (const [name, payload] of [
+        ["create_testcase", { title: "Draft", attachments: notes }],
+        ["update_testcase", { testcaseId: "tc-1", attachments: notes }]
+      ] as const) {
+        const res: any = await svc.handleRequest(rpc("tools/call", {
+          name, arguments: payload
+        }), principal(), "proj-1");
+        expect(res.result.isError).toBe(true);
+        expect(res.result.content[0].text).toMatch(/attachments.*Notes/i);
+      }
+      expect((legacy as any).createTestCase).not.toHaveBeenCalled();
+      expect((legacy as any).updateTestCase).not.toHaveBeenCalled();
+    });
+
+    it("isolates invalid bulk Notes while preserving order and later valid entries", async () => {
+      const { db } = makeDb();
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      const res: any = await svc.handleRequest(rpc("tools/call", {
+        name: "bulk_create_testcases",
+        arguments: { testcases: [
+          { title: "First", attachments: "Note 1" },
+          { title: "Invalid", attachments: null },
+          { title: "Last", attachments: "" }
+        ] }
+      }), principal(), "proj-1");
+      const body = JSON.parse(res.result.content[0].text);
+      expect(body.succeeded).toBe(2);
+      expect(body.failed).toBe(1);
+      expect(body.results[1].error).toMatch(/attachments.*Notes/i);
+      expect((legacy as any).createTestCase).toHaveBeenCalledTimes(2);
+      expect((legacy as any).createTestCase).toHaveBeenNthCalledWith(2, "proj-1", "mcp-actor-1", {
+        title: "Last", attachments: ""
+      });
+    });
+  });
+
   describe("update_testcase project scoping", () => {
     it("updates a test case when it belongs to the token's project, attributed to the agent actor", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
