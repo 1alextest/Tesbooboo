@@ -4637,9 +4637,25 @@ export type GraphReviewRunCaseLink = {
   caseStillInRun: boolean;
   execution: GraphReviewRunExecutionObservation | null;
 };
+/** Counts describe current workflow gaps, never coverage or QA approval. */
+export type QaVerificationGapSummary = {
+  nominatedCaseCount: number;
+  selectedCaseCount: number;
+  notSelectedCount: number;
+  withoutSubsequentResultCount: number;
+  withSubsequentResultCount: number;
+  withLaterEvidenceMetadataCount: number;
+  historicalResultOnlyCount: number;
+  invalidOrRepeatedNominationCount: number;
+  unlinkedCaseNodeCount: number;
+  observedChangeCount: number;
+  sourceOnlyChangeNeedsTriage: boolean;
+  coverageAssertion: "none";
+  approvalAssertion: "none";
+};
 export async function listZyraGraphReviewRunLinks(
   projectId: string, historyId: string
-): Promise<{ links: GraphReviewRunCaseLink[] }> {
+): Promise<{ links: GraphReviewRunCaseLink[]; summary: QaVerificationGapSummary }> {
   return api(`/api/projects/${projectId}/agents/zyra/changes/${historyId}/runs`);
 }
 export async function linkZyraGraphReviewRunCases(

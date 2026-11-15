@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
+import { summarizeQaVerificationGaps, type QaVerificationGaps } from "./qa-verification-gaps";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HISTORY_ID = /^[1-9][0-9]{0,18}$/;
@@ -52,12 +53,12 @@ export class GraphReviewRunLinks {
   }
 
   async listForUser(userId: string | null | undefined, projectId: string, historyId: string):
-    Promise<{ links: QaRunCaseLink[] }> {
+    Promise<{ links: QaRunCaseLink[]; summary: QaVerificationGaps }> {
     if (!userId) throw new ForbiddenException({ error: "Project membership required" });
     this.validHistory(historyId);
     await this.legacy.requireProjectAccess(userId, projectId);
     const result = await this.db.query<{
-      allowed: boolean; links: QaRunCaseLink[];
+      allowed: boolean; links: QaRunCaseLink[]; review_receipt: unknown;
     }>(
       `WITH allowed AS MATERIALIZED (
          SELECT p.id FROM projects p
@@ -74,6 +75,9 @@ export class GraphReviewRunLinks {
          SELECT 1 FROM allowed a JOIN graph_capture_history h
            ON h.project_id=a.id AND h.id=$3::bigint AND h.review_receipt_json IS NOT NULL
        ) AS allowed,
+       (SELECT h.review_receipt_json FROM graph_capture_history h
+         JOIN allowed a ON a.id=h.project_id
+        WHERE h.id=$3::bigint AND h.review_receipt_json IS NOT NULL) AS review_receipt,
        COALESCE((
          SELECT jsonb_agg(jsonb_build_object(
            'runId', l.cycle_id::text, 'caseId', l.testcase_id::text,
@@ -113,8 +117,10 @@ export class GraphReviewRunLinks {
        ), '[]'::jsonb) AS links`,
       [projectId, userId, historyId]
     );
-    if (!result.rows[0]?.allowed) throw new NotFoundException({ error: "Committed change review not found" });
-    return { links: result.rows[0].links };
+    const row = result.rows[0];
+    if (!row?.allowed) throw new NotFoundException({ error: "Committed change review not found" });
+    return { links: row.links,
+      summary: summarizeQaVerificationGaps(projectId, row.review_receipt, row.links) };
   }
 
   async linkForUser(

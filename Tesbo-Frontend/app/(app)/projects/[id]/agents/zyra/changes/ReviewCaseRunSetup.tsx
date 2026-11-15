@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useRef, useState } from "react";
 import {
   addTestCasesToRun, createTestRun, getTestCase, listTestRuns, listZyraGraphReviewRunLinks,
-  linkZyraGraphReviewRunCases, type GraphReviewRunCaseLink, type TestRunListItem
+  linkZyraGraphReviewRunCases, type GraphReviewRunCaseLink,
+  type QaVerificationGapSummary, type TestRunListItem
 } from "@/lib/api";
 
 /**
@@ -25,6 +26,7 @@ export function ReviewCaseRunSetup({
   const [existingId, setExistingId] = useState("");
   const [openRuns, setOpenRuns] = useState<TestRunListItem[]>([]);
   const [recordedLinks, setRecordedLinks] = useState<GraphReviewRunCaseLink[]>([]);
+  const [gapSummary, setGapSummary] = useState<QaVerificationGapSummary | null>(null);
   const [runsLoaded, setRunsLoaded] = useState(false);
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [loadingLinks, setLoadingLinks] = useState(false);
@@ -62,8 +64,9 @@ export function ReviewCaseRunSetup({
   async function loadRecordedLinks() {
     setLoadingLinks(true);
     try {
-      const { links } = await listZyraGraphReviewRunLinks(projectId, receiptId);
+      const { links, summary } = await listZyraGraphReviewRunLinks(projectId, receiptId);
       setRecordedLinks(links);
+      setGapSummary(summary);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load recorded QA handoffs.");
     } finally {
@@ -219,6 +222,41 @@ export function ReviewCaseRunSetup({
           </ul>
         )}
       </section>
+      {gapSummary && (
+        <section aria-label="QA verification gaps" className="mt-3 border-t border-[var(--border)] pt-3">
+          <h3 className="font-medium">Verification gaps</h3>
+          <p className="mt-1 text-xs">
+            {gapSummary.nominatedCaseCount} nominated case(s); {gapSummary.selectedCaseCount}
+            {" selected for native runs; "}{gapSummary.notSelectedCount}{" not selected."}
+          </p>
+          <p className="mt-1 text-xs">
+            {gapSummary.withSubsequentResultCount}{" with a subsequently recorded native result; "}
+            {gapSummary.withoutSubsequentResultCount}{" without one; "}
+            {gapSummary.withLaterEvidenceMetadataCount}{" with later evidence-file metadata."}
+          </p>
+          {gapSummary.historicalResultOnlyCount > 0 && (
+            <p className="mt-1 text-xs">
+              {gapSummary.historicalResultOnlyCount}{" nominated case(s) have only historical, pre-handoff results."}
+            </p>
+          )}
+          {gapSummary.unlinkedCaseNodeCount > 0 && (
+            <p className="mt-1 text-xs">
+              {gapSummary.unlinkedCaseNodeCount}{" unlinked case node(s) still require traceability review."}
+            </p>
+          )}
+          {gapSummary.invalidOrRepeatedNominationCount > 0 && (
+            <p className="mt-1 text-xs">
+              {gapSummary.invalidOrRepeatedNominationCount}{" malformed or repeated nominations require investigation."}
+            </p>
+          )}
+          {gapSummary.sourceOnlyChangeNeedsTriage && (
+            <p className="mt-1 text-xs">Changed graph nodes have no nominated cases. QA triage is required.</p>
+          )}
+          <p className="mt-1 text-xs text-[var(--muted)]">
+            No coverage, deployed build match, actual file bytes or human QA approval has been verified.
+          </p>
+        </section>
+      )}
       <fieldset className="mt-3 space-y-2">
         <legend className="font-medium">Select cases to verify ({selected.length} selected)</legend>
         {cases.map((id, index) => (
