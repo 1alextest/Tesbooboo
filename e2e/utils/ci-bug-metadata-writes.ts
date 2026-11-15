@@ -57,7 +57,9 @@ export async function verifyBugMetadataWrites(page: Page, api: string, web: stri
   try {
     const testcase = await post(`${base}/testcases`, { title: "CI bug-edit linked case" });
     const run = await post(`${base}/cycles`, { name: "CI bug-edit manual control" });
+    await db.query("UPDATE testcases SET status='Approved' WHERE id=$1", [testcase.id]);
     await post(`${api}/api/cycles/${run.id}/testcases`, { testcaseIds: [testcase.id] });
+    await db.query("UPDATE testcases SET status='Draft' WHERE id=$1", [testcase.id]);
     const linked = [{ testcaseId: testcase.id, cycleId: run.id }];
     async function fixture(label: string) {
       const bug = await post(`${base}/bugs`, {

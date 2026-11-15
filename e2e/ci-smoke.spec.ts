@@ -652,7 +652,8 @@ test("history import, bug authorization and finalized automation preserve persis
   const cases: string[] = [];
   const consoleErrors: string[] = [];
   page.on("pageerror", (error) => consoleErrors.push(error.message));
-
+  const approvalDb = new Client({ connectionString: process.env.DATABASE_URL });
+  await approvalDb.connect();
   try {
     await verifyBugCreateAccess(request, api, projectId, bootstrap.userId, bootstrap.organizationId);
     await verifyBugLinkRelationships(request, api, projectId, bootstrap.userId);
@@ -666,6 +667,13 @@ test("history import, bug authorization and finalized automation preserve persis
         expect(testcaseResponse.ok(), await testcaseResponse.text()).toBeTruthy();
         const testcase = await testcaseResponse.json();
         cases.push(testcase.id);
+        // A native testcase CREATE starts as Draft regardless of a proposed
+        // status. This disposable execution fixture must explicitly be approved
+        // before automation may attach it.
+        await approvalDb.query("UPDATE testcases SET status='Approved' WHERE id=$1", [testcase.id]);
+        expect((await approvalDb.query<{ status: string }>(
+          "SELECT status FROM testcases WHERE id=$1", [testcase.id]
+        )).rows[0].status).toBe("Approved");
         const runResponse = await request.post(`${base}/automation/runs`, {
           data: { name: title, caseIds: [testcase.externalId] }
         });
@@ -744,6 +752,7 @@ test("history import, bug authorization and finalized automation preserve persis
     for (const id of bugs) await request.delete(`${api}/api/bugs/${id}`, { failOnStatusCode: false });
     for (const id of runs) await request.delete(`${api}/api/cycles/${id}`, { failOnStatusCode: false });
     for (const id of cases) await request.delete(`${base}/testcases/${id}`, { failOnStatusCode: false });
+    await approvalDb.end();
   }
 });
 

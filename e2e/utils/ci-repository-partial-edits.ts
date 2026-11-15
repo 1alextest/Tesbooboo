@@ -89,7 +89,12 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
     const selected = await post(`${base}/testcases`, { title: "CI Archive retains relationships", suiteId: first.id, ownerId, description: "Preserve authored body", steps: [{ action: "Act", expectedResult: "Expect" }], jiraIssueKey: "CI-1", jiraUrl: "https://example.invalid/CI-1" });
     const control = await post(`${base}/testcases`, { title: "CI Unselected repository control", suiteId: first.id, ownerId });
     const run = await post(`${base}/cycles`, { name: "CI Existing manual run" });
+    // The archive/unarchive scenario intentionally starts with a Draft case.
+    // Temporarily approve only to establish the historical run association,
+    // then restore Draft before capturing its unchanged-state baseline.
+    await db.query("UPDATE testcases SET status='Approved' WHERE id=$1", [selected.id]);
     await post(`${api}/api/cycles/${run.id}/testcases`, { testcaseIds: [selected.id] });
+    await db.query("UPDATE testcases SET status='Draft' WHERE id=$1", [selected.id]);
     const controlBefore = await caseState(control.id);
     const associations = async () => {
       const state = await projectState(); return { runs: state.runs, items: state.items, executions: state.executions };

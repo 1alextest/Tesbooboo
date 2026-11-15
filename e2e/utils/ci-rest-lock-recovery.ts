@@ -42,7 +42,11 @@ export async function verifyRestLockRecovery(page: Page, api: string, web: strin
     const plan = await post(`${base}/plans`, { name: "CI REST recovery Plan" });
     const run = await post(`${base}/cycles`, { name: "CI REST recovery Run", environment: "QA" });
     const testcase = await post(`${base}/testcases`, { title: "CI REST recovery Case" });
+    await db.query("UPDATE testcases SET status='Approved' WHERE id=$1", [testcase.id]);
     await post(`${api}/api/cycles/${run.id}/testcases`, { testcaseIds: [testcase.id] });
+    // The rest of this scenario tests existing persisted run/Plan UI edits,
+    // not case approval; its baseline remains a normal Draft case.
+    await db.query("UPDATE testcases SET status='Draft' WHERE id=$1", [testcase.id]);
     const execution = (await db.query("SELECT e.id FROM executions e JOIN cycle_items i ON i.id=e.cycle_item_id WHERE i.cycle_id=$1", [run.id])).rows[0];
     await db.query("UPDATE executions SET actual_result='Retained UI result',history='[{\"status\":\"Blocked\"}]'::jsonb WHERE id=$1", [execution.id]);
     const planUrl = `${web}/projects/${projectId}/plans/${plan.id}`, runUrl = `${web}/projects/${projectId}/cycles/${run.id}`;
