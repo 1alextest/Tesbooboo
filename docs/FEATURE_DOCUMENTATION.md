@@ -5981,8 +5981,9 @@ client require separate reconciliation; do not claim they are solved here.
 
 **Verification:** identical final unit assertions against `cbc408b` reproduced
 **21 failed / 169 passed / 190 total**, zero skipped. The changed tree passed
-**1,286/1,286 tests in 49 suites**, covering existing non-DB legacy cases, MCP and
-token guards. Two surrounding fixture assumptions were updated without removing
+**1,286/1,286 tests in 49 suites** before integration; after retaining merged
+`development@7fdd4ba`, the same selection passed **1,296/1,296, zero skipped**,
+covering existing non-DB legacy cases, MCP and token guards. Two surrounding fixture assumptions were updated without removing
 their assertions: the Notion SQL binding oracle now includes the optional null
 guard, and the Zyra read double recognizes the new row-plus-revision SELECT.
 All three non-incremental typechecks and backend build emission passed.
@@ -6000,6 +6001,8 @@ MCP malformed/stale refusal and unchanged run/execution associations.
 
 **Unfinished gates:** collection succeeded for the existing isolated CI smoke
 selection (**19 of 19 journeys**, including the extended repository journey).
+The merged workflow's existing five selected Zyra scenarios also collected
+successfully; their implementation is unchanged by this slice.
 That is collection, not execution. Local configured DB/API/browser runs remain
 unrun: this checkout has no root environment or authenticated A/B contexts, and
 no credentials were copied or replacement/shared database started. Exact-head
