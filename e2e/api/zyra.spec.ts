@@ -97,6 +97,43 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect((await after.json()).entries).toEqual(body.entries);
   });
 
+  test("source binding setup is owner-only and cannot accept unapproved roots or repositories", async () => {
+    const projectId = tenant!.mainProjectId;
+    const endpoint = `/api/projects/${projectId}/agents/zyra/changes/source-binding`;
+    const before = await asOwner.get(endpoint);
+    expect(before.status(), await before.text()).toBe(200);
+    expect(await before.json()).toEqual({ configured: false, binding: null });
+
+    for (const client of [asManager, asQa, asGuest, anon]) {
+      const read = await client.get(endpoint);
+      expect([401, 403, 404]).toContain(read.status());
+      const denied = await client.post(endpoint, { data: {
+        repositoryId: "org/repo", checkoutKey: "trusted",
+        refName: "development", selectionPrefixes: ["src"], enabled: true
+      } });
+      expect([401, 403, 404]).toContain(denied.status());
+    }
+
+    for (const invalid of [
+      { repositoryId: "org/repo", checkoutKey: "unknown", refName: "development",
+        selectionPrefixes: ["src"], enabled: true },
+      { repositoryId: "org/repo", checkoutKey: "unknown", refName: "development",
+        selectionPrefixes: ["src"], enabled: true, root: "/tmp/untrusted" },
+      { repositoryId: "org/repo", checkoutKey: "unknown", refName: "../main",
+        selectionPrefixes: ["src"], enabled: true },
+      { repositoryId: "org/repo", checkoutKey: "unknown", refName: "development",
+        selectionPrefixes: ["../secrets"], enabled: true }
+    ]) {
+      const denied = await asOwner.post(endpoint, { data: invalid });
+      expect(denied.status(), await denied.text()).toBe(400);
+    }
+    const after = await asOwner.get(endpoint);
+    expect(after.status()).toBe(200);
+    expect(await after.json()).toEqual({ configured: false, binding: null });
+    expect(Number(scalar(`SELECT COUNT(*)::int FROM project_source_bindings
+      WHERE project_id=${literal(projectId)};`))).toBe(0);
+  });
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
   function url(suffix: string, projectId?: string): string {
