@@ -136,7 +136,9 @@ test.describe("Approved-only native run attachments", () => {
         data: { jsonrpc:"2.0",id:1,method:"tools/call",
           params:{ name:"create_cycle_from_testcases",arguments:{ name, testcaseIds:caseIds } } }
       });
-      expect(response.status()).toBe(200);
+      // The native MCP JSON-RPC adapter returns 201 on successful transport,
+      // including tool-execution errors carried in the JSON-RPC body.
+      expect(response.status()).toBe(201);
       return response.json();
     };
     try {
@@ -187,7 +189,10 @@ test.describe("Approved-only native run attachments", () => {
     const result=await anon.post("/api/cycles/"+run+"/testcases",{
       data:{testcaseIds:[approved]},failOnStatusCode:false
     });
-    expect([401,403,404]).toContain(result.status());
+    // Legacy session authentication uses 400 Authentication required here.
+    // Assert the exact public API contract rather than an invented 401.
+    expect(result.status(), await result.text()).toBe(400);
+    expect((await result.json()).error).toMatch(/Authentication required/i);
     expect(countItems(run)).toBe(0);
   });
 });
