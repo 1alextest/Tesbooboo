@@ -102,6 +102,13 @@ jobs:
             api/zyra.spec.ts ui/zyra.spec.ts \
             --workers=1 \
             -g "graph change history is project scoped|source binding setup is owner-only|Zyra opens native change review|owner can inspect root-free source setup|graph review links an explicitly nominated case"
+      - name: Verify Approved-only run entrypoints across REST, automation and MCP
+        working-directory: e2e
+        run: |
+          npx playwright test -c playwright.config.ts \
+            api/cycles.spec.ts api/automation.spec.ts api/mcp.spec.ts \
+            --workers=1 --retries=0 \
+            -g "approved-only run attachment refuses|automation run creation rejects known Draft|MCP create-cycle refuses non-Approved"
       - name: Capture smoke evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
