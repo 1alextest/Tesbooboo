@@ -3,6 +3,7 @@ import type { AuthenticatedRequest } from "../common/request.types";
 import { CurrentCacheGraphHistory } from "./current-cache-graph.history";
 import { ProjectSourceGraphCoordinator } from "./project-source-graph.coordinator";
 import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
+import { ProjectSourceBindingManagement } from "./project-source-binding.management";
 
 /**
  * Native Zyra project review surface over the existing graph_history ledger.
@@ -14,8 +15,24 @@ export class GraphChangeReviewController {
   constructor(
     private readonly history: CurrentCacheGraphHistory,
     private readonly coordinator: ProjectSourceGraphCoordinator,
-    private readonly delivery: GraphChangeReviewDelivery
+    private readonly delivery: GraphChangeReviewDelivery,
+    private readonly sourceManagement?: ProjectSourceBindingManagement
   ) {}
+
+  @Get("source-binding")
+  getSourceBinding(@Req() request: AuthenticatedRequest, @Param("projectId") projectId: string) {
+    if (!this.sourceManagement) throw new Error("Source binding management not configured");
+    return this.sourceManagement.getForOwner(request.userId, projectId);
+  }
+
+  @Post("source-binding")
+  @HttpCode(200)
+  setSourceBinding(
+    @Req() request: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: unknown
+  ) {
+    if (!this.sourceManagement) throw new Error("Source binding management not configured");
+    return this.sourceManagement.setForOwner(request.userId, projectId, body);
+  }
 
   @Get()
   async list(
