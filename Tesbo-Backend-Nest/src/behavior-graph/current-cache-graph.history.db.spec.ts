@@ -9,6 +9,7 @@ import { makeLegacy } from "../legacy/test-helpers/legacy-service.fixture";
 import { CurrentCacheGraphReader } from "./current-cache-graph.reader";
 import { CurrentCacheGraphHistory } from "./current-cache-graph.history";
 import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
+import { writeNotifications } from "../legacy/notification-writer";
 import { ProjectSourceBindingReader } from "./project-source-binding";
 import { ProjectSourceGraphCoordinator } from "./project-source-graph.coordinator";
 
@@ -266,6 +267,35 @@ const url = process.env.DATABASE_URL ?? "";
       } finally {
         await admin.query("DELETE FROM project_source_bindings WHERE project_id=$1", [project]);
         rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("refuses restricted QA notification delivery after role exclusion or project membership revocation", async () => {
+      const db = new DatabaseService(pool);
+      const key = `qa_change_review:role-bound:${stamp}`;
+      const options = {
+        type: "qa_change_review" as const, title: "QA graph impact review",
+        dedupeKey: key, memberOf: {
+          organizationId: org, projectId: project, projectRoles: ["owner"]
+        }
+      };
+      // An otherwise valid QA member is not an owner; the role filter is enforced
+      // in PostgreSQL at INSERT time, not only in the earlier recipient lookup.
+      expect(await writeNotifications(db, [user], options)).toBe(0);
+      await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [project, user]);
+      try {
+        expect(await writeNotifications(db, [user], {
+          ...options, memberOf: { ...options.memberOf, projectRoles: ["qa_engineer", "manager", "owner"] }
+        })).toBe(0);
+        expect((await admin.query(
+          "SELECT COUNT(*)::int AS count FROM notifications WHERE dedupe_key=$1", [key]
+        )).rows[0].count).toBe(0);
+      } finally {
+        await admin.query(
+          "INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",
+          [project, user]
+        );
+        await admin.query("DELETE FROM notifications WHERE dedupe_key=$1", [key]);
       }
     });
 
