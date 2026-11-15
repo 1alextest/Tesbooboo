@@ -122,6 +122,30 @@ describe("committed graph review → native run/case relationships", () => {
     expect(JSON.stringify(result)).not.toContain("verified");
   });
 
+  it("derives gap counts only after project-scoped committed receipt authorization", async () => {
+    const { svc, query } = setup();
+    query.mockResolvedValueOnce({ rows: [{
+      allowed: true,
+      review_receipt: { candidates: [{
+        caseNodeId: JSON.stringify(["test_case", PROJECT, CASE])
+      }], changed: { modifiedNodeIds: ["implementation:file"] } },
+      links: [{
+        runId: RUN, caseId: CASE, linkedAt: "2026-11-15T00:00:00Z",
+        runName: "QA run", runStatus: "Planning", caseStillInRun: true,
+        execution: null
+      }]
+    }] });
+    const response = await svc.listForUser(USER, PROJECT, HISTORY);
+    expect(response.summary).toMatchObject({
+      nominatedCaseCount: 1, selectedCaseCount: 1,
+      withoutSubsequentResultCount: 1, withSubsequentResultCount: 0,
+      coverageAssertion: "none", approvalAssertion: "none"
+    });
+    const sql = query.mock.calls[0][0] as string;
+    expect(sql).toContain("AS review_receipt");
+    expect(sql).toContain("JOIN allowed a ON a.id=h.project_id");
+  });
+
   it("never leaks foreign or uncommitted receipt associations to a caller", async () => {
     const { svc, query } = setup();
     query.mockResolvedValueOnce({ rows: [{ allowed: false, links: [] }] });

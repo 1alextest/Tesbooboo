@@ -6194,6 +6194,20 @@ not infrastructure planning or a duplicate graph implementation.
 
 ---
 
+### T-456 live QA verification gap summary (2026-11-15)
+
+**Why:** A graph receipt and persisted human case/run handoff are not regression verification. QA also needs a bounded, explicit accounting of which nominated cases have actually been selected, which still lack a subsequent native result, and which have only pre-handoff history. Extend the existing Zyra review instead of building a new status/approval store.
+
+**Source and semantics:** `GraphReviewRunLinks.listForUser` now reads the committed receipt and existing authorized native run-case execution references in one project-scoped SQL request. A pure projector `summarizeQaVerificationGaps` deduplicates canonical same-project case nodes and returns: nominated/selected/unselected counts; cases without a native result recorded after the human handoff; cases with such a subsequent result; cases with later attachment **metadata**; cases with only historical results; excluded malformed/duplicate nominations; explicitly unlinked case-node count; and a source-only-change-needs-triage flag when observed graph nodes/edges changed without case nominations. The response always records `coverageAssertion:'none'` and `approvalAssertion:'none'`.
+
+**No false proof:** Even a later native Passed status or evidence attachment is not sufficient to establish that the executed build matches the captured source, that attached bytes remain accessible, that requirements are fully covered, or that QA approved the change. Post-handoff result means only the native execution timestamp and status exist; pre-handoff Failed/Passed history cannot be laundered into acceptance. No snapshots, duplicate run results, or new mutation endpoints were added.
+
+**Validation:** Unit fixtures cover unselected candidates, Untested executions, post-handoff observations, old results, forged/malformed/foreign graph nominees and zero-case source changes. Migrated PostgreSQL cases assert the gap counts before actual native execution, after subsequent result+attachment metadata, and after moving timestamps before the handoff. The existing disposable Zyra Playwright journey checks refreshed gap counts and the no-coverage/no-approval disclaimer. Exact-head CI and deployed accepted source/build verification are outstanding at authoring time.
+
+**Source-only UI parity (follow-up):** The native review gap section now remains accessible even when a committed source-only receipt nominates zero cases; it shows the `sourceOnlyChangeNeedsTriage` warning but hides run/case selection controls. This prevents an unexplained empty view or a false implication that no tests need investigation. The disposable Zyra browser scenario inserts a source-only committed receipt, opens its review section, asserts a zero-nomination triage warning and no create-run button, then cleans up the synthetic history row.
+
+---
+
 ### Native Test Run Approved-only persistence policy — 2026-11-15
 
 **Purpose and authority.** Tesbo already permits only **Approved** cases to be selected in the Test Run picker. That was only a UI rule: direct HTTP, MCP and automated ingestion could attach Draft/In Review cases. This remediation now applies the rule at the **canonical native cycle-item write boundary**, not as a new assistant, test-case store, or independent run system.

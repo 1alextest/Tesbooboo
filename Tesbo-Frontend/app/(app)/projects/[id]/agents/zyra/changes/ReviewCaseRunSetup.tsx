@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useRef, useState } from "react";
 import {
   addTestCasesToRun, createTestRun, getTestCase, listTestRuns, listZyraGraphReviewRunLinks,
-  linkZyraGraphReviewRunCases, type GraphReviewRunCaseLink, type TestRunListItem
+  linkZyraGraphReviewRunCases, type GraphReviewRunCaseLink,
+  type QaVerificationGapSummary, type TestRunListItem
 } from "@/lib/api";
 
 /**
@@ -25,6 +26,7 @@ export function ReviewCaseRunSetup({
   const [existingId, setExistingId] = useState("");
   const [openRuns, setOpenRuns] = useState<TestRunListItem[]>([]);
   const [recordedLinks, setRecordedLinks] = useState<GraphReviewRunCaseLink[]>([]);
+  const [gapSummary, setGapSummary] = useState<QaVerificationGapSummary | null>(null);
   const [runsLoaded, setRunsLoaded] = useState(false);
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [loadingLinks, setLoadingLinks] = useState(false);
@@ -39,8 +41,6 @@ export function ReviewCaseRunSetup({
     runId: string; selected: number; added: number; skipped: number; linked: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  if (!cases.length) return null;
 
   async function loadRuns(force = false) {
     if ((runsLoaded && !force) || loadingRuns) return;
@@ -62,8 +62,9 @@ export function ReviewCaseRunSetup({
   async function loadRecordedLinks() {
     setLoadingLinks(true);
     try {
-      const { links } = await listZyraGraphReviewRunLinks(projectId, receiptId);
+      const { links, summary } = await listZyraGraphReviewRunLinks(projectId, receiptId);
       setRecordedLinks(links);
+      setGapSummary(summary);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load recorded QA handoffs.");
     } finally {
@@ -153,14 +154,17 @@ export function ReviewCaseRunSetup({
       className="rounded border border-[var(--border)] p-3 text-sm"
       onToggle={(event) => {
         if (event.currentTarget.open) {
-          void loadRuns();
+          if (cases.length) void loadRuns();
           void loadRecordedLinks();
         }
       }}>
-      <summary className="cursor-pointer font-semibold">Prepare a test run from linked candidates</summary>
+      <summary className="cursor-pointer font-semibold">
+        {cases.length ? "Prepare a test run from linked candidates" : "Review source-only QA gaps"}
+      </summary>
       <p className="mt-2 text-xs text-[var(--muted)]">
-        Choose applicable cases explicitly. This adds them to an existing Tesbo test run or creates a
-        new one; nothing is executed, failed, approved, or marked covered.
+        {cases.length
+          ? "Choose applicable cases explicitly. This uses canonical Tesbo test runs; no execution, failure or approval is inferred."
+          : "No explicitly nominated cases were found. QA must investigate affected behavior and derive applicable cases before preparing a run."}
       </p>
       {candidateCaseIds.length > cases.length && (
         <p role="note" className="mt-2 text-xs">
@@ -219,6 +223,43 @@ export function ReviewCaseRunSetup({
           </ul>
         )}
       </section>
+      {gapSummary && (
+        <section aria-label="QA verification gaps" className="mt-3 border-t border-[var(--border)] pt-3">
+          <h3 className="font-medium">Verification gaps</h3>
+          <p className="mt-1 text-xs">
+            {gapSummary.nominatedCaseCount} nominated case(s); {gapSummary.selectedCaseCount}
+            {" selected for native runs; "}{gapSummary.notSelectedCount}{" not selected."}
+          </p>
+          <p className="mt-1 text-xs">
+            {gapSummary.withSubsequentResultCount}{" with a subsequently recorded native result; "}
+            {gapSummary.withoutSubsequentResultCount}{" without one; "}
+            {gapSummary.withLaterEvidenceMetadataCount}{" with later evidence-file metadata."}
+          </p>
+          {gapSummary.historicalResultOnlyCount > 0 && (
+            <p className="mt-1 text-xs">
+              {gapSummary.historicalResultOnlyCount}{" nominated case(s) have only historical, pre-handoff results."}
+            </p>
+          )}
+          {gapSummary.unlinkedCaseNodeCount > 0 && (
+            <p className="mt-1 text-xs">
+              {gapSummary.unlinkedCaseNodeCount}{" unlinked case node(s) still require traceability review."}
+            </p>
+          )}
+          {gapSummary.invalidOrRepeatedNominationCount > 0 && (
+            <p className="mt-1 text-xs">
+              {gapSummary.invalidOrRepeatedNominationCount}{" malformed or repeated nominations require investigation."}
+            </p>
+          )}
+          {gapSummary.sourceOnlyChangeNeedsTriage && (
+            <p className="mt-1 text-xs">Changed graph nodes have no nominated cases. QA triage is required.</p>
+          )}
+          <p className="mt-1 text-xs text-[var(--muted)]">
+            No coverage, deployed build match, actual file bytes or human QA approval has been verified.
+          </p>
+        </section>
+      )}
+      {cases.length > 0 && (
+        <>
       <fieldset className="mt-3 space-y-2">
         <legend className="font-medium">Select cases to verify ({selected.length} selected)</legend>
         {cases.map((id, index) => (
@@ -308,6 +349,8 @@ export function ReviewCaseRunSetup({
             (complete?.runId ?? pendingRunId)}>Open native test run</Link>
         )}
       </div>
+        </>
+      )}
       {error && <p role="alert" className="mt-2">{error}</p>}
       {complete && (
         <p role="status" className="mt-2">

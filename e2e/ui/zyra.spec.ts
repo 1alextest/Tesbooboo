@@ -134,6 +134,7 @@ test.describe("zyra / agents (UI)", () => {
     const stamp = Date.now().toString();
     const baseRevision = `e2e-graph-base-${stamp}`;
     const reviewRevision = `e2e-graph-change-${stamp}`;
+    const sourceOnlyRevision = `e2e-graph-unlinked-${stamp}`;
     let caseId: string | undefined;
     let createdRunId: string | undefined;
     let uncertainRunId: string | undefined;
@@ -284,6 +285,11 @@ test.describe("zyra / agents (UI)", () => {
       await reopened.getByRole("button", { name: "Refresh recorded handoffs" }).click();
       const handoffs = reopened.getByRole("region", { name: "Persisted QA handoffs" });
       await expect(handoffs).toContainText("native status: Failed");
+      const gaps = reopened.getByRole("region", { name: "QA verification gaps" });
+      await expect(gaps).toContainText("1 nominated case");
+      await expect(gaps).toContainText("1 with a subsequently recorded native result");
+      await expect(gaps).toContainText("1 with later evidence-file metadata");
+      await expect(gaps).toContainText("No coverage, deployed build match");
       await expect(handoffs).toContainText("active evidence metadata: 1");
       await expect(handoffs).toContainText("1 added after handoff");
       await expect(handoffs).toContainText("recorded after handoff; build provenance not verified");
@@ -356,6 +362,27 @@ test.describe("zyra / agents (UI)", () => {
       expect(Number(scalar("SELECT COUNT(*)::int FROM cycles WHERE project_id=" +
         literal(projectId) + " AND deleted_at IS NULL;"))).toBe(beforeDraft);
 
+      // A source-only change has no nominated cases. Do not hide its triage
+      // section or expose run creation as a substitute for identifying scope.
+      const sourceOnlyReceipt = {
+        ...receipt, id: "e2e-source-only-" + stamp, candidates: [],
+        unlinkedCaseNodeIds: [],
+        changed: { ...receipt.changed, modifiedNodeIds: ["implementation_file:src/app.ts"] }
+      };
+      const sourceOnlyHistoryId = scalar(`INSERT INTO graph_capture_history
+        (project_id, contract_id, source_scope_fingerprint, revision, capture_json, review_receipt_json)
+        VALUES (${literal(projectId)}, 'e2e-native-graph-v1', 'e2e-local-source',
+          ${literal(sourceOnlyRevision)}, ${literal(capture(sourceOnlyRevision))}::jsonb,
+          ${literal(JSON.stringify(sourceOnlyReceipt))}::jsonb) RETURNING id;`);
+      await page.goto("/projects/" + projectId + "/agents/zyra/changes");
+      const sourceOnly = page.getByTestId("graph-review-run-" + sourceOnlyHistoryId);
+      await expect(sourceOnly.getByText("Review source-only QA gaps")).toBeVisible();
+      await sourceOnly.locator("summary").click();
+      const sourceGaps = sourceOnly.getByRole("region", { name: "QA verification gaps" });
+      await expect(sourceGaps).toContainText("0 nominated case");
+      await expect(sourceGaps).toContainText("Changed graph nodes have no nominated cases");
+      await expect(sourceOnly.getByRole("button", { name: "Create run and add selected cases" })).toHaveCount(0);
+
       const resolvedResponse = await api.get("/api/route-resolve", { params: { project: projectId, testcase: caseId } });
       expect(resolvedResponse.ok()).toBeTruthy();
       const resolved = await resolvedResponse.json();
@@ -388,7 +415,7 @@ test.describe("zyra / agents (UI)", () => {
            FROM graph_capture_history
           WHERE project_id=${literal(projectId)} AND revision=${literal(reviewRevision)});`);
       exec(`DELETE FROM graph_capture_history WHERE project_id = ${literal(projectId)}
-         AND revision IN (${literal(baseRevision)},${literal(reviewRevision)});`);
+         AND revision IN (${literal(baseRevision)},${literal(reviewRevision)},${literal(sourceOnlyRevision)});`);
       if (caseId) exec(`DELETE FROM testcases WHERE id = ${literal(caseId)};`);
     }
   });
