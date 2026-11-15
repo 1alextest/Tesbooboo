@@ -230,10 +230,17 @@ const url = process.env.DATABASE_URL ?? "";
 
         // Membership revoked after scanning must not authorize persistence.
         const stale = await bindings.verifyForUser(user, project);
+        const beforeRevocation = (await admin.query(
+          "SELECT COUNT(*)::int AS count FROM graph_capture_history WHERE project_id=$1", [project]
+        )).rows[0].count;
         await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [project, user]);
         try {
+          // Native requireProjectAccess conceals inaccessible projects as 404.
           await expect(store.captureVerifiedImplementationForUser(user, project, stale))
-            .rejects.toMatchObject({ status: 403 });
+            .rejects.toMatchObject({ status: 404 });
+          expect((await admin.query(
+            "SELECT COUNT(*)::int AS count FROM graph_capture_history WHERE project_id=$1", [project]
+          )).rows[0].count).toBe(beforeRevocation);
         } finally {
           await admin.query(
             "INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",
