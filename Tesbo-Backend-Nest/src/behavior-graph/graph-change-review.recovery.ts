@@ -74,8 +74,11 @@ export class GraphChangeReviewRecovery {
         );
       }
     }
-    if (summary.eligible || summary.failed) {
-      this.logger.log(`QA graph notification recovery: ${JSON.stringify(summary)}`);
+    // Heartbeat even for an empty backlog permits operators to detect a stalled
+    // scheduler. A full batch is a capacity signal, not proof the queue is drained.
+    this.logger.log(`QA graph notification recovery: ${JSON.stringify(summary)}`);
+    if (summary.eligible === GRAPH_QA_RECOVERY_BATCH) {
+      this.logger.warn("QA graph notification recovery reached batch cap; backlog may remain");
     }
     return summary;
   }
