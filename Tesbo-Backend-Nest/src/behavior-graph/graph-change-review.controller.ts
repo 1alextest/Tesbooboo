@@ -2,6 +2,7 @@ import { Controller, Get, HttpCode, Param, Post, Query, Req } from "@nestjs/comm
 import type { AuthenticatedRequest } from "../common/request.types";
 import { CurrentCacheGraphHistory } from "./current-cache-graph.history";
 import { ProjectSourceGraphCoordinator } from "./project-source-graph.coordinator";
+import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
 
 /**
  * Native Zyra project review surface over the existing graph_history ledger.
@@ -12,7 +13,8 @@ import { ProjectSourceGraphCoordinator } from "./project-source-graph.coordinato
 export class GraphChangeReviewController {
   constructor(
     private readonly history: CurrentCacheGraphHistory,
-    private readonly coordinator: ProjectSourceGraphCoordinator
+    private readonly coordinator: ProjectSourceGraphCoordinator,
+    private readonly delivery: GraphChangeReviewDelivery
   ) {}
 
   @Get()
@@ -27,11 +29,25 @@ export class GraphChangeReviewController {
     return { entries: await this.history.listForUser(request.userId, projectId, limit, beforeId) };
   }
 
+  @Post(":historyId/notify")
+  @HttpCode(200)
+  retryNotification(
+    @Req() request: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("historyId") historyId: string
+  ) {
+    return this.delivery.deliverForUser(request.userId, projectId, historyId);
+  }
+
   @Post("capture")
   @HttpCode(200)
   async capture(@Req() request: AuthenticatedRequest, @Param("projectId") projectId: string) {
     // No client-proposed semantics. This operation observes configured source
     // bytes and persists one native/implementation graph revision if changed.
-    return this.coordinator.captureForUser(request.userId, projectId);
+    const observation = await this.coordinator.captureForUser(request.userId, projectId);
+    const delivery = observation.reviewReceipt
+      ? await this.delivery.deliverForUser(request.userId, projectId, observation.id)
+      : null;
+    return { ...observation, delivery };
   }
 }

@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AppConfigService } from "../config/app-config.service";
 import { LegacyModule } from "../legacy/legacy.module";
 import { LegacyService } from "../legacy/legacy.service";
+import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
 import { DatabaseService } from "../database/database.service";
 import { CurrentCacheGraphReader } from "./current-cache-graph.reader";
 import { CurrentCacheGraphHistory } from "./current-cache-graph.history";
@@ -44,6 +45,7 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
   providers: [
     CurrentCacheGraphReader,
     CurrentCacheGraphHistory,
+    GraphChangeReviewDelivery,
     {
       provide: ProjectSourceBindingReader,
       inject: [DatabaseService, AppConfigService],
