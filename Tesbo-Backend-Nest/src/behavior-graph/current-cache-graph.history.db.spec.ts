@@ -325,6 +325,16 @@ const url = process.env.DATABASE_URL ?? "";
           link_entity_id: project,
           dedupe_key: dedupeKey
         }]);
+        // A missing notification after a committed receipt is recovered
+        // without a human identity or duplicate durable rows.
+        await admin.query("DELETE FROM notifications WHERE dedupe_key=$1", [dedupeKey]);
+        expect(await svc.recoverCommittedForSystem(project, historyId)).toEqual(first);
+        expect(await svc.recoverCommittedForSystem(project, historyId)).toEqual(first);
+        expect((await admin.query(
+          "SELECT COUNT(*)::int AS count FROM notifications WHERE dedupe_key=$1 AND user_id=$2",
+          [dedupeKey, user]
+        )).rows[0].count).toBe(1);
+
         await expect(svc.deliverForUser(user, project, "0 OR TRUE"))
           .rejects.toMatchObject({ status: 404 });
         await expect(svc.deliverForUser(user, project, "999999999999999999999"))
