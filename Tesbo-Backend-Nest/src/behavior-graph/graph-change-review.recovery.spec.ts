@@ -55,7 +55,17 @@ describe("graph QA notification recovery from durable receipts", () => {
     const processor = new GraphReviewRecoveryProcessor(recovery as never);
     expect(await processor.process({ name: "unexpected" } as never)).toBeNull();
     expect(recovery.runOnce).not.toHaveBeenCalled();
-    await processor.process({ name: GRAPH_QA_RECOVERY_JOB } as never);
-    expect(recovery.runOnce).toHaveBeenCalledTimes(1);
+    const previous = process.env.TESBO_GRAPH_QA_RECOVERY_ENABLED;
+    try {
+      delete process.env.TESBO_GRAPH_QA_RECOVERY_ENABLED;
+      expect(await processor.process({ name: GRAPH_QA_RECOVERY_JOB } as never)).toBeNull();
+      expect(recovery.runOnce).not.toHaveBeenCalled();
+      process.env.TESBO_GRAPH_QA_RECOVERY_ENABLED = "1";
+      await processor.process({ name: GRAPH_QA_RECOVERY_JOB } as never);
+      expect(recovery.runOnce).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previous === undefined) delete process.env.TESBO_GRAPH_QA_RECOVERY_ENABLED;
+      else process.env.TESBO_GRAPH_QA_RECOVERY_ENABLED = previous;
+    }
   });
 });
