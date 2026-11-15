@@ -212,7 +212,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "create_testcase",
       description:
-        "Create a test case in the token's project. Required: title. Optional: suiteId, description, preconditions, steps (array of {stepNumber, action, expectedResult} — expectedResult belongs on the step it applies to, not in the overall description), testData, attachments (plain-text Notes in the editor; omit or pass an empty string to leave Notes empty), priority, severity, type, automationStatus, component, status. The write is attributed to the Tesbo MCP agent actor.",
+        "Create a test case in the token's project. Required: title. Optional: suiteId, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult} — expectedResult belongs on the step it applies to, not in the overall description), testData, attachments (plain-text Notes in the editor; omit or pass an empty string to leave Notes empty), priority, severity, type, automationStatus, component, status. The write is attributed to the Tesbo MCP agent actor.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -221,6 +221,7 @@ export function buildMcpTools(): McpTool[] {
           suiteId: { type: "string" },
           description: { type: "string" },
           preconditions: { type: "string" },
+          postconditions: { type: "string", description: "Expected state after the test; distinct from each step expectedResult." },
           steps: {
             type: "array",
             items: {
@@ -376,7 +377,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "bulk_create_testcases",
       description:
-        `Create up to ${LegacyService.MAX_BULK_TESTCASES} test cases in the token's project in one call. Required: testcases (array; each item accepts the same fields as create_testcase — title required per item, plus optional suiteId, description, preconditions, steps, testData, attachments (plain-text Notes), priority, severity, type, automationStatus, component, status). Each item is created independently through the same path create_testcase uses — one item failing (e.g. a missing title or a too-long field) does not stop the rest from being created. The response's results array reports every item's outcome by its index in the input array, so a partial batch never silently drops a failure. This deliberately does not use the app's own bulk-import path, which is all-or-nothing (one bad row rolls back the whole batch) — per-item isolation was required here instead.`,
+        `Create up to ${LegacyService.MAX_BULK_TESTCASES} test cases in the token's project in one call. Required: testcases (array; each item accepts the same fields as create_testcase — title required per item, plus optional suiteId, description, preconditions, postconditions, steps, testData, attachments (plain-text Notes), priority, severity, type, automationStatus, component, status). Each item is created independently through the same path create_testcase uses — one item failing (e.g. a missing title or a too-long field) does not stop the rest from being created. The response's results array reports every item's outcome by its index in the input array, so a partial batch never silently drops a failure. This deliberately does not use the app's own bulk-import path, which is all-or-nothing (one bad row rolls back the whole batch) — per-item isolation was required here instead.`,
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -390,6 +391,7 @@ export function buildMcpTools(): McpTool[] {
                 suiteId: { type: "string" },
                 description: { type: "string" },
                 preconditions: { type: "string" },
+                postconditions: { type: "string", description: "Expected state after the test; not per-step expectedResult." },
                 steps: {
                   type: "array",
                   items: {

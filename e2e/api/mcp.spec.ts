@@ -627,6 +627,52 @@ test.describe("MCP create_testcase stores steps in the shape the test case edito
  * A typed MCP client must discover the field and round-trip it through the
  * same legacy writer and Test Case Detail API, without rewriting Context.
  */
+test.describe("MCP create postconditions use existing test-case field", () => {
+  test("single and bulk create retain postconditions on the normal REST case reader", async ({ request }) => {
+    const mcpApi = await newRequestContext.newContext({
+      baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] }
+    });
+    let tokenId: string | undefined;
+    const caseIds: string[] = [];
+    try {
+      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+        data: { name: `E2E MCP postconditions ${Date.now()}`, scopes: ["read", "write"] }
+      });
+      expect(tokenRes.ok()).toBeTruthy();
+      const tokenBody = await tokenRes.json();
+      tokenId = tokenBody.id;
+      const token = tokenBody.token as string;
+      const one = await callMcpTool(mcpApi, token, "create_testcase", {
+        title: `E2E MCP postconditions single ${Date.now()}`,
+        description: "Readable case intent",
+        postconditions: "No source records changed"
+      });
+      caseIds.push(one.id);
+      const afterOne = await request.get(`/api/projects/${ctx.projectId}/testcases/${one.id}`);
+      expect(afterOne.ok()).toBeTruthy();
+      expect(await afterOne.json()).toMatchObject({
+        postconditions: "No source records changed",
+        description: "Readable case intent"
+      });
+      const many = await callMcpTool(mcpApi, token, "bulk_create_testcases", {
+        testcases: [
+          { title: `E2E MCP postconditions first ${Date.now()}`, postconditions: "Audit remains intact" },
+          { title: `E2E MCP postconditions second ${Date.now()}`, postconditions: "" }
+        ]
+      });
+      for (const item of many.results) if (item.ok) caseIds.push(item.testcase.id);
+      expect(many).toMatchObject({ succeeded: 2, failed: 0 });
+      const first = await request.get(`/api/projects/${ctx.projectId}/testcases/${many.results[0].testcase.id}`);
+      expect(first.ok()).toBeTruthy();
+      expect((await first.json()).postconditions).toBe("Audit remains intact");
+    } finally {
+      for (const id of caseIds) await deleteCase(request, id);
+      if (tokenId) await request.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
+      await mcpApi.dispose();
+    }
+  });
+});
+
 test.describe("MCP Notes use the existing test case field", () => {
   test("catalog advertises Notes and create/update/read-back preserves other case content", async ({ request }) => {
     const api = await newRequestContext.newContext({
