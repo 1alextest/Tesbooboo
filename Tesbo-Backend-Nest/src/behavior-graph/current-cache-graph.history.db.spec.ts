@@ -70,6 +70,33 @@ const url = process.env.DATABASE_URL ?? "";
       expect((await admin.query("SELECT COUNT(*)::int AS count FROM graph_capture_history WHERE project_id=$1", [project])).rows[0].count).toBe(2);
     });
 
+    it("lists history with current membership, stable newest-first pagination and no raw snapshot exposure", async () => {
+      const full = await store.listForUser(user, project);
+      expect(full).toHaveLength(2);
+      expect(BigInt(full[0].id)).toBeGreaterThan(BigInt(full[1].id));
+      expect(full[0].reviewReceipt?.evidence.coverageAssertion).toBe("none");
+      expect(full[0]).not.toHaveProperty("capture_json");
+      expect(full[0]).not.toHaveProperty("captureJson");
+      const page = await store.listForUser(user, project, 1);
+      const older = await store.listForUser(user, project, 1, page[0].id);
+      expect(page.map((e) => e.id)).toEqual([full[0].id]);
+      expect(older.map((e) => e.id)).toEqual([full[1].id]);
+      expect(await store.listForUser(user, project, 1, full[1].id)).toEqual([]);
+    });
+
+    it("refuses cross-project history reads and invalid pagination without exposing records", async () => {
+      await expect(store.listForUser(randomUUID(), project)).rejects.toMatchObject({ status: 403 });
+      await expect(store.listForUser(null, project)).rejects.toMatchObject({ status: 403 });
+      await expect(store.listForUser(user, project, 0)).rejects.toMatchObject({ status: 409 });
+      await expect(store.listForUser(user, project, 101)).rejects.toMatchObject({ status: 409 });
+      await expect(store.listForUser(user, project, 1, "0 OR TRUE")).rejects.toMatchObject({ status: 409 });
+      const foreign = (await admin.query(
+        "INSERT INTO projects(organization_id,key,name) VALUES ($1,'GHIF','Foreign graph') RETURNING id",
+        [org]
+      )).rows[0].id;
+      await expect(store.listForUser(user, foreign)).rejects.toMatchObject({ status: 403 });
+    });
+
     it("refuses incomplete local source cache rather than persisting false completeness", async () => {
       await admin.query("UPDATE testcases SET jira_issue_key='UNSYNCED-1' WHERE id=$1", [caseId]);
       try {
