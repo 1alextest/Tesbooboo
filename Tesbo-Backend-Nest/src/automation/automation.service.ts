@@ -4,6 +4,7 @@ import * as path from "path";
 import { DatabaseService } from "../database/database.service";
 import type { PoolClient } from "pg";
 import { LegacyService, isUuid } from "../legacy/legacy.service";
+import { assertApprovedCycleCasesAtWrite } from "../legacy/approved-cycle-cases";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import { StorageService } from "../storage/storage.service";
 import {
@@ -389,9 +390,17 @@ export class AutomationService {
     runner: PoolClient | DatabaseService = this.db
   ): Promise<{ attached: number; unknown: string[] }> {
     if (!caseIds.length) return { attached: 0, unknown: [] };
+    // Fresh automation run creation previously called this with the pool,
+    // outside any transaction. Ensure case status locks survive through
+    // INSERT, just as for reused runs and report-result ingestion.
+    if (runner === this.db) {
+      return this.db.transaction((client) => this.attachCases(runId, projectId, caseIds, client));
+    }
     const { found, unknown } = await this.resolveCases(projectId, caseIds);
     if (!found.size) return { attached: 0, unknown };
-
+    await assertApprovedCycleCasesAtWrite(
+      runner, projectId, runId, [...found.values()].map((row) => row.id)
+    );
     const res = await (runner as DatabaseService).query<{ id: string }>(
       `WITH input AS (
          SELECT id, ord FROM unnest($2::uuid[]) WITH ORDINALITY AS u(id, ord)
@@ -426,6 +435,7 @@ export class AutomationService {
                 t.test_data, t.automation_status, t.automation_tags
            FROM input i
            JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3
+             AND t.status = 'Approved'
            CROSS JOIN base
           WHERE EXISTS (SELECT 1 FROM cycles c WHERE c.id = $1 AND c.deleted_at IS NULL AND c.closed_at IS NULL)
          ON CONFLICT (cycle_id, testcase_id) WHERE deleted_at IS NULL DO NOTHING
