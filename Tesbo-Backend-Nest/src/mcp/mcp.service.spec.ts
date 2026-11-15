@@ -26,6 +26,9 @@ function makeLegacy(overrides: Partial<Record<string, jest.Mock>> = {}) {
       .fn()
       .mockResolvedValue([{ id: "cycle-1", name: "Cycle 1", planId: "plan-1", passed: 1, failed: 0, blocked: 0, skipped: 0, untested: 1 }]),
     createCycle: jest.fn().mockResolvedValue({ id: "cycle-new" }),
+    createCycleWithTestcasesForUser: jest.fn().mockResolvedValue({
+      cycle: { id: "cycle-new" }, requested: 1, added: 1, skipped: 0
+    }),
     addCycleTestCases: jest.fn().mockResolvedValue({ requested: 1, added: 1, skipped: 0 }),
     getPlan: jest.fn().mockResolvedValue({ id: "plan-1", projectId: "proj-1", name: "Plan 1" }),
     executions: jest
@@ -2471,8 +2474,10 @@ describe("McpService", () => {
     it("creates a cycle and adds only the valid test cases, reporting invalid ids separately", async () => {
       const { db } = makeDb({ ownedTestcaseIds: ["tc-1", "tc-2"] });
       const legacy = makeLegacy({
-        createCycle: jest.fn().mockResolvedValue({ id: "cycle-new", name: "Sprint 12 Run" }),
-        addCycleTestCases: jest.fn().mockResolvedValue({ requested: 2, added: 2, skipped: 0 })
+        createCycleWithTestcasesForUser: jest.fn().mockResolvedValue({
+          cycle: { id: "cycle-new", name: "Sprint 12 Run" },
+          requested: 2, added: 2, skipped: 0
+        })
       });
       const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
@@ -2484,12 +2489,13 @@ describe("McpService", () => {
         "proj-1"
       );
       expect(res.result.isError).toBe(false);
-      expect((legacy as any).createCycle).toHaveBeenCalledWith(
-        "proj-1",
-        expect.objectContaining({ name: "Sprint 12 Run" })
+      expect((legacy as any).createCycleWithTestcasesForUser).toHaveBeenCalledWith(
+        "user-7", "proj-1", expect.objectContaining({
+          name: "Sprint 12 Run", testcaseIds: ["tc-1", "tc-2"]
+        })
       );
-      // addCycleTestCases requires a real user (requireCycleAccess), not the agent actor.
-      expect((legacy as any).addCycleTestCases).toHaveBeenCalledWith("cycle-new", "user-7", { testcaseIds: ["tc-1", "tc-2"] });
+      expect((legacy as any).createCycle).not.toHaveBeenCalled();
+      expect((legacy as any).addCycleTestCases).not.toHaveBeenCalled();
       const body = JSON.parse(res.result.content[0].text);
       expect(body.cycle.id).toBe("cycle-new");
       expect(body.testcasesRequested).toBe(3);
@@ -2499,19 +2505,25 @@ describe("McpService", () => {
 
     it("deduplicates repeated testcaseIds before adding", async () => {
       const { db } = makeDb({ ownedTestcaseIds: ["tc-1"] });
-      const legacy = makeLegacy({ addCycleTestCases: jest.fn().mockResolvedValue({ requested: 1, added: 1, skipped: 0 }) });
+      const legacy = makeLegacy();
       const svc = new McpService(legacy, db, writableLimits);
       await svc.handleRequest(
         rpc("tools/call", { name: "create_cycle_from_testcases", arguments: { name: "Run", testcaseIds: ["tc-1", "tc-1"] } }),
         principal(),
         "proj-1"
       );
-      expect((legacy as any).addCycleTestCases).toHaveBeenCalledWith("cycle-new", "user-1", { testcaseIds: ["tc-1"] });
+      expect((legacy as any).createCycleWithTestcasesForUser).toHaveBeenCalledWith(
+        "user-1", "proj-1", expect.objectContaining({ testcaseIds: ["tc-1"] })
+      );
     });
 
-    it("creates the cycle but skips addCycleTestCases entirely when every id is invalid", async () => {
+    it("creates an empty cycle through the atomic native writer when every id is invalid", async () => {
       const { db } = makeDb({ ownedTestcaseIds: [] });
-      const legacy = makeLegacy();
+      const legacy = makeLegacy({
+        createCycleWithTestcasesForUser: jest.fn().mockResolvedValue({
+          cycle: { id: "cycle-new" }, requested: 0, added: 0, skipped: 0
+        })
+      });
       const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
         rpc("tools/call", { name: "create_cycle_from_testcases", arguments: { name: "Run", testcaseIds: ["tc-ghost"] } }),
@@ -2519,6 +2531,9 @@ describe("McpService", () => {
         "proj-1"
       );
       expect(res.result.isError).toBe(false);
+      expect((legacy as any).createCycleWithTestcasesForUser).toHaveBeenCalledWith(
+        "user-1", "proj-1", expect.objectContaining({ testcaseIds: [] })
+      );
       expect((legacy as any).addCycleTestCases).not.toHaveBeenCalled();
       const body = JSON.parse(res.result.content[0].text);
       expect(body.testcasesAdded).toBe(0);
@@ -2535,6 +2550,24 @@ describe("McpService", () => {
         "proj-1"
       );
       expect(res.error.code).toBe(RpcCode.ProjectScopeDenied);
+      expect((legacy as any).createCycleWithTestcasesForUser).not.toHaveBeenCalled();
+    });
+
+    it("fails a rejected non-Approved selection before returning any cycle", async () => {
+      const { db } = makeDb({ ownedTestcaseIds: ["tc-1"] });
+      const legacy = makeLegacy({
+        createCycleWithTestcasesForUser: jest.fn().mockRejectedValue(
+          new Error("Only Approved test cases can be added to a test run")
+        )
+      });
+      const svc = new McpService(legacy, db, writableLimits);
+      const res: any = await svc.handleRequest(
+        rpc("tools/call", { name: "create_cycle_from_testcases",
+          arguments: { name: "Unapproved Run", testcaseIds: ["tc-1"] } }),
+        principal(), "proj-1"
+      );
+      expect(res.error).toBeDefined();
+      expect((legacy as any).createCycleWithTestcasesForUser).toHaveBeenCalledTimes(1);
       expect((legacy as any).createCycle).not.toHaveBeenCalled();
     });
 

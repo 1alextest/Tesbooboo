@@ -4,6 +4,7 @@ import * as path from "path";
 import { DatabaseService } from "../database/database.service";
 import type { PoolClient } from "pg";
 import { LegacyService, isUuid } from "../legacy/legacy.service";
+import { assertApprovedNewRunCases } from "../legacy/approved-run-cases.policy";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import { StorageService } from "../storage/storage.service";
 import {
@@ -300,8 +301,13 @@ export class AutomationService {
     }
 
     let runId: string;
+    let attached: { attached: number; unknown: string[] };
     try {
-      const res = await this.db.query<{ id: string }>(
+      // Run creation and case attachment are one transaction. If an existing
+      // case is Draft/In Review, or is demoted while a CI shard is attaching
+      // it, reject the entire attempt rather than leaving an orphan run.
+      const created = await this.db.transaction(async (client) => {
+        const res = await client.query<{ id: string }>(
         `INSERT INTO cycles (
            project_id, name, description, environment, build_version, release_name, owner_id,
            status, started_at, source, triggered_by, commit_sha, branch_name, build_url, external_id
@@ -324,7 +330,11 @@ export class AutomationService {
           externalId
         ]
       );
-      runId = res.rows[0].id;
+        const attached = await this.attachCases(res.rows[0].id, projectId, caseIds, client);
+        return { runId: res.rows[0].id, attached };
+      });
+      runId = created.runId;
+      attached = created.attached;
     } catch (err) {
       // Two shards racing on the same externalId: the loser's insert violates the partial unique
       // index. Resolve to the winner's run instead of failing the shard's whole session.
@@ -356,7 +366,6 @@ export class AutomationService {
       throw err;
     }
 
-    const attached = await this.attachCases(runId, projectId, caseIds);
     await this.legacy.logProjectActivity(projectId, actorId, "automation_run_created", "cycle", runId, name, {
       triggeredBy: triggeredByRaw ?? null,
       branch: this.boundedString(body?.branch, "branch", MAX_BRANCH_LENGTH),
@@ -389,8 +398,16 @@ export class AutomationService {
     runner: PoolClient | DatabaseService = this.db
   ): Promise<{ attached: number; unknown: string[] }> {
     if (!caseIds.length) return { attached: 0, unknown: [] };
+    // A direct createRun call has no surrounding transaction. Take the SAME
+    // row locks and Approved check as a manual run-add; callers with an existing
+    // PoolClient (replay, result, close races) already own that transaction.
+    if (runner === this.db) {
+      return this.db.transaction((client) => this.attachCases(runId, projectId, caseIds, client));
+    }
     const { found, unknown } = await this.resolveCases(projectId, caseIds);
     if (!found.size) return { attached: 0, unknown };
+    await assertApprovedNewRunCases(runner as PoolClient, projectId, runId,
+      [...found.values()].map((row) => row.id));
 
     const res = await (runner as DatabaseService).query<{ id: string }>(
       `WITH input AS (
@@ -425,7 +442,7 @@ export class AutomationService {
                 t.description, t.preconditions, t.postconditions, t.steps,
                 t.test_data, t.automation_status, t.automation_tags
            FROM input i
-           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3
+           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3 AND t.status = 'Approved'
            CROSS JOIN base
           WHERE EXISTS (SELECT 1 FROM cycles c WHERE c.id = $1 AND c.deleted_at IS NULL AND c.closed_at IS NULL)
          ON CONFLICT (cycle_id, testcase_id) WHERE deleted_at IS NULL DO NOTHING

@@ -12,7 +12,7 @@ async function makeExecutionFixture(request: import("@playwright/test").APIReque
   ).json();
   const testcase = await (
     await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-      data: { title: `E2E Execution Test Case ${Date.now()}` },
+      data: { title: `E2E Execution Test Case ${Date.now()}`, status: "Approved" },
     })
   ).json();
   await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
@@ -419,6 +419,7 @@ test.describe("run history survives a deleted test case", () => {
       await request.post(`/api/projects/${ctx.projectId}/testcases`, {
         data: {
           title: `E2E Deleted TC Snapshot ${Date.now()}`,
+          status: "Approved",
           description: "Full description",
           preconditions: "Some precondition",
           postconditions: "Some postcondition",

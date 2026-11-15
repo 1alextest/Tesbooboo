@@ -27,8 +27,8 @@ export async function verifyPlanProjectLineage(page: Page, api: string, web: str
     const foreign = await post(`${other}/plans`, { name: "CI PRIVATE foreign Plan" });
     const suite = await post(`${base}/suites`, { name: "CI Local Lineage Suite" });
     const foreignSuite = await post(`${other}/suites`, { name: "CI PRIVATE foreign Suite" });
-    const testcase = await post(`${base}/testcases`, { title: "CI Local Lineage Case" });
-    const foreignCase = await post(`${other}/testcases`, { title: "CI PRIVATE foreign Case" });
+    const testcase = await post(`${base}/testcases`, { title: "CI Local Lineage Case", status: "Approved" });
+    const foreignCase = await post(`${other}/testcases`, { title: "CI PRIVATE foreign Case", status: "Approved" });
     const run = await post(`${base}/cycles`, { name: "CI Local Linked Run", planId: plan.id });
     const unlinked = await post(`${base}/cycles`, { name: "CI Local Unlinked Run" });
     const issued = await post(`${base}/apikeys`, { name: "CI Plan lineage MCP", scopes: ["read", "write"] }); tokenId = issued.id;

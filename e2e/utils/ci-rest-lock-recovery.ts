@@ -41,7 +41,7 @@ export async function verifyRestLockRecovery(page: Page, api: string, web: strin
     expect(configured.ok(), await configured.text()).toBeTruthy();
     const plan = await post(`${base}/plans`, { name: "CI REST recovery Plan" });
     const run = await post(`${base}/cycles`, { name: "CI REST recovery Run", environment: "QA" });
-    const testcase = await post(`${base}/testcases`, { title: "CI REST recovery Case" });
+    const testcase = await post(`${base}/testcases`, { title: "CI REST recovery Case", status: "Approved" });
     await post(`${api}/api/cycles/${run.id}/testcases`, { testcaseIds: [testcase.id] });
     const execution = (await db.query("SELECT e.id FROM executions e JOIN cycle_items i ON i.id=e.cycle_item_id WHERE i.cycle_id=$1", [run.id])).rows[0];
     await db.query("UPDATE executions SET actual_result='Retained UI result',history='[{\"status\":\"Blocked\"}]'::jsonb WHERE id=$1", [execution.id]);

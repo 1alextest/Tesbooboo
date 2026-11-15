@@ -9,7 +9,7 @@ const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.js
 /** Creates a test case in the shared project and adds it to the run; returns the case id. */
 async function addCase(request: any, runId: string): Promise<string> {
   const tc = await (
-    await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Run Case ${Date.now()}` } })
+    await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Run Case ${Date.now()}`, status: "Approved" } })
   ).json();
   const res = await request.post(`/api/cycles/${runId}/testcases`, { data: { testcaseIds: [tc.id] } });
   expect(res.ok()).toBeTruthy();
@@ -103,12 +103,12 @@ test.describe("test cycle / run CRUD", () => {
     ).json();
     const testcaseA = await (
       await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-        data: { title: `E2E Cycle Case A ${Date.now()}` },
+        data: { title: `E2E Cycle Case A ${Date.now()}`, status: "Approved" },
       })
     ).json();
     const testcaseB = await (
       await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-        data: { title: `E2E Cycle Case B ${Date.now()}` },
+        data: { title: `E2E Cycle Case B ${Date.now()}`, status: "Approved" },
       })
     ).json();
 
@@ -296,7 +296,7 @@ test.describe("adding test cases to a run", () => {
     const testcaseIds: string[] = [];
     for (let i = 0; i < count; i++) {
       const res = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-        data: { title: `E2E RunCase ${stamp} #${String(i + 1).padStart(3, "0")}` },
+        data: { title: `E2E RunCase ${stamp} #${String(i + 1).padStart(3, "0")}`, status: "Approved" },
       });
       testcaseIds.push((await res.json()).id as string);
     }

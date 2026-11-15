@@ -65,7 +65,15 @@ async function deleteCycleRest(request: import("@playwright/test").APIRequestCon
 }
 
 async function addCycleTestCaseRest(request: import("@playwright/test").APIRequestContext, cycleId: string, testcaseId: string) {
-  await request.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseId } });
+  // This helper seeds execution-focused E2E fixtures, not the approval
+  // workflow. Make the *existing* case Approved through Tesbo's native API
+  // before putting it into a run, matching the normal Test Runs picker.
+  const ready = await request.put(`/api/projects/${ctx.projectId}/testcases/${testcaseId}`, {
+    data: { status: "Approved" }
+  });
+  expect(ready.ok(), await ready.text()).toBeTruthy();
+  const attached = await request.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseId } });
+  expect(attached.ok(), await attached.text()).toBeTruthy();
 }
 
 async function getCycleExecutionsRest(request: import("@playwright/test").APIRequestContext, cycleId: string) {
@@ -4338,8 +4346,8 @@ test.describe("MCP create_cycle_from_testcases", () => {
       baseURL: env.apiBaseUrl,
       storageState: path.join(__dirname, "../.auth/state-b.json"),
     });
-    const tcA = await createCase(request, { title: `E2E MCP Cycle From Cases A ${stamp}` });
-    const tcB = await createCase(request, { title: `E2E MCP Cycle From Cases B ${stamp}` });
+    const tcA = await createCase(request, { title: `E2E MCP Cycle From Cases A ${stamp}`, status: "Approved" });
+    const tcB = await createCase(request, { title: `E2E MCP Cycle From Cases B ${stamp}`, status: "Approved" });
     let tokenId: string | undefined;
     let cycleId: string | undefined;
     let bCaseId: string | undefined;

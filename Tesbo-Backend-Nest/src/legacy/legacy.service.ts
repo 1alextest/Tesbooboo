@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, forwardRef, HttpException, Inject, Injectable, Logger, NotFoundException, OnModuleInit } from "@nestjs/common";
+import { assertApprovedNewRunCases } from "./approved-run-cases.policy";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
@@ -6528,7 +6529,7 @@ export class LegacyService implements OnModuleInit {
    * Kept unguarded for the MCP tool, whose API token is already bound to one project. Route traffic
    * goes through createCycleForUser.
    */
-  async createCycle(projectId: string, body: Body) {
+  async createCycle(projectId: string, body: Body, runner?: PoolClient) {
     validateBoundedField(body.name, "Test run name", CYCLE_NAME_MAX_LENGTH);
     validateBoundedField(body.environment, "Environment", CYCLE_LABEL_MAX_LENGTH);
     validateBoundedField(body.buildVersion, "Build version", CYCLE_LABEL_MAX_LENGTH);
@@ -6549,11 +6550,40 @@ export class LegacyService implements OnModuleInit {
     );
     // All REST aliases and both MCP creation tools reach this writer. Do not depend on
     // a particular adapter checking the Plan or copy a stale pre-transaction eligibility read.
-    const res = body.planId ? await this.db.transaction(async (client) => {
-      await this.lockPlanProjectReference(client, "plans", projectId, body.planId, "Plan");
-      return insert(client);
-    }) : await insert(this.db);
+    const res = runner
+      ? await (async () => {
+          if (body.planId) {
+            await this.lockPlanProjectReference(runner, "plans", projectId, body.planId, "Plan");
+          }
+          return insert(runner);
+        })()
+      : body.planId ? await this.db.transaction(async (client) => {
+          await this.lockPlanProjectReference(client, "plans", projectId, body.planId, "Plan");
+          return insert(client);
+        }) : await insert(this.db);
     return toCamel(res.rows[0]);
+  }
+
+  /**
+   * Native atomic path for MCP "create_cycle_from_testcases". Creating a run
+   * and attaching cases as separate public requests can leave an orphan run
+   * when an existing case is demoted to Draft between the two. Share the
+   * same Approved-only writer, plan lineage and run locking as REST instead.
+   */
+  async createCycleWithTestcasesForUser(
+    userId: string | null | undefined, projectId: string, body: Body
+  ): Promise<{ cycle: ReturnType<typeof toCamel>; requested: number; added: number; skipped: number }> {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    const raw = body.testcaseIds || (body.testcaseId ? [body.testcaseId] : []);
+    const requested = normalizeJsonArray(raw).length;
+    const ids = [...new Set(normalizeJsonArray(raw).map((id) => String(id)).filter((id) => isUuid(id)))];
+    return this.db.transaction(async (client) => {
+      const cycle = await this.createCycle(projectId, body, client);
+      const results = ids.length
+        ? await this.insertApprovedCycleItems(client, projectId, cycle.id, ids)
+        : { rows: [] };
+      return { cycle, requested, added: results.rows.length, skipped: requested - results.rows.length };
+    });
   }
 
   /**
@@ -6891,9 +6921,20 @@ export class LegacyService implements OnModuleInit {
     const ids = [...new Set(normalizeJsonArray(raw).map((id) => String(id)).filter((id) => isUuid(id)))];
     if (!ids.length) return { requested, added: 0, skipped: requested };
 
-    const res = await this.db.transaction(async (client) => {
+    const res = await this.db.transaction((client) =>
+      this.insertApprovedCycleItems(client, projectId, cycleId, ids)
+    );
+    return { requested, added: res.rows.length, skipped: requested - res.rows.length };
+  }
+
+  private async insertApprovedCycleItems(
+    client: PoolClient, projectId: string, cycleId: string, ids: string[]
+  ) {
       const cycle = await this.lockActiveCycle(client, cycleId);
       this.assertAutomatedRunWritable(cycle);
+      // Apply the QA approval invariant at the canonical transaction boundary,
+      // not only the Test Run picker. Locks prevent a concurrent Draft demotion.
+      await assertApprovedNewRunCases(client, projectId, cycleId, ids);
       return client.query<{ id: string }>(
       `WITH input AS (
          SELECT id, ord FROM unnest($2::uuid[]) WITH ORDINALITY AS u(id, ord)
@@ -6931,7 +6972,7 @@ export class LegacyService implements OnModuleInit {
                 t.description, t.preconditions, t.postconditions, t.steps,
                 t.test_data, t.automation_status, t.automation_tags
            FROM input i
-           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3
+           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3 AND t.status = 'Approved'
            CROSS JOIN base
           WHERE EXISTS (SELECT 1 FROM cycles c WHERE c.id = $1 AND c.deleted_at IS NULL)
          ON CONFLICT (cycle_id, testcase_id) WHERE deleted_at IS NULL DO NOTHING
@@ -6943,9 +6984,7 @@ export class LegacyService implements OnModuleInit {
        RETURNING id`,
       [cycleId, ids, projectId]
       );
-    });
 
-    return { requested, added: res.rows.length, skipped: requested - res.rows.length };
   }
 
   /**
