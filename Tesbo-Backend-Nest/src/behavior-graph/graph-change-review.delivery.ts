@@ -27,7 +27,7 @@ export class GraphChangeReviewDelivery {
     }
     await this.legacy.requireProjectAccess(userId, projectId);
     const result = await this.db.query<{
-      id: string; recipient_ids: string[];
+      id: string; organization_id: string; recipient_ids: string[];
     }>(
       `WITH allowed AS MATERIALIZED (
          SELECT DISTINCT p.id, p.organization_id FROM projects p
@@ -40,7 +40,7 @@ export class GraphChangeReviewDelivery {
             AND (to_jsonb(caller)->>'deleted_at') IS NULL
             AND (to_jsonb(om)->>'deleted_at') IS NULL
        )
-       SELECT h.id::text,
+       SELECT h.id::text, a.organization_id::text AS organization_id,
               COALESCE((
                 SELECT array_agg(DISTINCT pm.user_id::text)
                   FROM project_members pm
@@ -66,7 +66,7 @@ export class GraphChangeReviewDelivery {
       title: notificationMessages.qaChangeReview(),
       link: notificationLinks.zyraChangeReview(projectId),
       dedupeKey,
-      memberOf: { projectId }
+      memberOf: { projectId, organizationId: row.organization_id }
     });
     // The native writer intentionally catches/logs failures; verify durable
     // per-recipient notifications and surface partial delivery honestly.

@@ -3,13 +3,14 @@ import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
 const USER = "00000000-0000-4000-8000-000000000001";
 const PROJECT = "00000000-0000-4000-8000-000000000002";
 const REVIEW = "27";
+const ORG = "00000000-0000-4000-8000-000000000004";
 const ids = [USER, "00000000-0000-4000-8000-000000000003"];
 
 function fixture(options: { delivered?: string[]; confirmationFails?: boolean; missing?: boolean } = {}) {
   const writes: unknown[][] = [];
   const query = jest.fn(async (sql: string, params: unknown[] = []) => {
     if (sql.includes("FROM graph_capture_history")) {
-      return { rows: options.missing ? [] : [{ id: REVIEW, recipient_ids: ids }] };
+      return { rows: options.missing ? [] : [{ id: REVIEW, organization_id: ORG, recipient_ids: ids }] };
     }
     if (sql.includes("INSERT INTO notifications")) {
       writes.push(params);
@@ -37,6 +38,9 @@ describe("committed native QA notification delivery", () => {
     expect(writes[0][3]).toBe("zyra_change_review");
     expect(writes[0][4]).toBe(PROJECT);
     expect(writes[0][5]).toBe(`qa_change_review:${PROJECT}:${REVIEW}`);
+    // Native writer filters current membership again at INSERT time.
+    expect(writes[0]).toContain(ORG);
+    expect(writes[0]).toContain(PROJECT);
     const sql = query.mock.calls[0][0] as string;
     expect(sql).toContain("h.review_receipt_json IS NOT NULL");
     expect(sql).toContain("project_members");
