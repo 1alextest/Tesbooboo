@@ -10,6 +10,7 @@ export type SingleMoveSelector = typeof SINGLE_MOVE_SELECTORS[number] | "foreign
 export async function verifyZyraSingleMove(input: {
   request: APIRequestContext; ai: FakeAiServer; base: string; ownerId: string; language: "en" | "ru";
   selector: SingleMoveSelector; fixture: MoveFixture; foreignId?: string; state: () => Promise<MoveRepositoryState>;
+  targetSelectors?: { testcaseId?: string; externalId?: string; testcaseIds?: string[]; externalIds?: string[] };
   afterReply?: (evidence: { sessionId: string; language: "en" | "ru"; selector: SingleMoveSelector; expectedMove: boolean;
     reply: string; externalId: string; session: Record<string, unknown>; fixture: MoveFixture; before: MoveRepositoryState; after: MoveRepositoryState }) => Promise<void>;
 }) {
@@ -18,11 +19,11 @@ export async function verifyZyraSingleMove(input: {
   const original = before.cases.find((row) => row.id === fixture.firstId)!;
   expect(original).toBeTruthy();
   const externalId = String(original.external_id), expectedMove = (SINGLE_MOVE_SELECTORS as readonly string[]).includes(selector);
-  const target = selector === "testcaseId" ? { testcaseId: fixture.firstId }
+  const target = input.targetSelectors ?? (selector === "testcaseId" ? { testcaseId: fixture.firstId }
     : selector === "externalId" ? { externalId }
     : selector === "testcaseIds" ? { testcaseIds: [fixture.firstId] }
     : selector === "externalIds" ? { externalIds: [externalId] }
-    : { testcaseId: selector === "foreign-id" ? foreignId : selector === "missing-id" ? randomUUID() : "not-a-uuid" };
+    : { testcaseId: selector === "foreign-id" ? foreignId : selector === "missing-id" ? randomUUID() : "not-a-uuid" });
   if (selector === "foreign-id") expect(foreignId).toMatch(/^[a-f0-9-]{36}$/i);
   const reply = language === "en" ? "Moved the requested test case." : "Запрошенный тест-кейс перемещён.";
   let sessionId = "";
