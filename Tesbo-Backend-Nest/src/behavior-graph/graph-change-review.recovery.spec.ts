@@ -20,12 +20,24 @@ describe("graph QA notification recovery from durable receipts", () => {
     expect(await recovery.runOnce()).toEqual({
       eligible: 2, delivered: 1, pending: 1, noRecipients: 0, failed: 0
     });
-    expect(query.mock.calls[0][1]).toEqual([GRAPH_QA_RECOVERY_BATCH]);
+    expect(query.mock.calls[0][1]).toEqual([GRAPH_QA_RECOVERY_BATCH, null]);
     const sql = query.mock.calls[0][0] as string;
     for (const fragment of ["h.review_receipt_json IS NOT NULL", "48 hours", "organization_members",
       "project_members", "pm.role IN", "LEFT JOIN notifications", "n.id IS NULL",
-      "ORDER BY h.id ASC", "LIMIT $1"]) expect(sql).toContain(fragment);
+      "ORDER BY h.id ASC", "LIMIT $1", "($2::uuid IS NULL OR h.project_id=$2::uuid)"]) expect(sql).toContain(fragment);
     expect(recoverCommittedForSystem.mock.calls).toEqual([[PROJECT, "12"], [PROJECT, "13"]]);
+  });
+
+  it("supports isolated project replay without changing the scheduler-wide default", async () => {
+    const { recovery, query, recoverCommittedForSystem } = setup([
+      { project_id: PROJECT, history_id: "21" }
+    ]);
+    recoverCommittedForSystem.mockResolvedValue({ status: "delivered" });
+    expect(await recovery.runOnce(PROJECT)).toEqual({
+      eligible: 1, delivered: 1, pending: 0, noRecipients: 0, failed: 0
+    });
+    expect(query.mock.calls[0][1]).toEqual([GRAPH_QA_RECOVERY_BATCH, PROJECT]);
+    expect(query.mock.calls[0][0]).toContain("h.project_id=$2::uuid");
   });
 
   it("isolates failed deliveries without dropping later receipts", async () => {

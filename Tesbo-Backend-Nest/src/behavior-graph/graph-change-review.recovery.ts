@@ -28,12 +28,17 @@ export class GraphChangeReviewRecovery {
     private readonly delivery: GraphChangeReviewDelivery
   ) {}
 
-  async runOnce(): Promise<GraphReviewRecoverySummary> {
+  /** Optional internal project scope enables isolated replays and database-safe QA fixtures.
+   * The scheduled worker always calls runOnce() without a scope, covering all eligible projects.
+   * No HTTP/MCP route accepts this argument.
+   */
+  async runOnce(projectId?: string): Promise<GraphReviewRecoverySummary> {
     const result = await this.db.query<{ project_id: string; history_id: string }>(
       `SELECT h.project_id::text AS project_id, h.id::text AS history_id
          FROM graph_capture_history h
          JOIN projects p ON p.id=h.project_id
         WHERE h.review_receipt_json IS NOT NULL
+          AND ($2::uuid IS NULL OR h.project_id=$2::uuid)
           AND h.captured_at >= now() - interval '48 hours'
           AND (to_jsonb(p)->>'deleted_at') IS NULL
           AND (to_jsonb(p)->>'archived_at') IS NULL
@@ -53,7 +58,7 @@ export class GraphChangeReviewRecovery {
           )
         ORDER BY h.id ASC
         LIMIT $1`,
-      [GRAPH_QA_RECOVERY_BATCH]
+      [GRAPH_QA_RECOVERY_BATCH, projectId ?? null]
     );
 
     const summary: GraphReviewRecoverySummary = {

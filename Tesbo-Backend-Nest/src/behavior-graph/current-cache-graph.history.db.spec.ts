@@ -373,9 +373,26 @@ const url = process.env.DATABASE_URL ?? "";
         // without a human identity or duplicate durable rows.
         await admin.query("DELETE FROM notifications WHERE dedupe_key=$1", [dedupeKey]);
         const recovery = new GraphChangeReviewRecovery(new DatabaseService(pool), svc);
-        const recovered = await recovery.runOnce();
-        expect(recovered).toMatchObject({ eligible: 1, delivered: 1, pending: 0, failed: 0 });
-        const repeated = await recovery.runOnce();
+        // The recovery service normally scans ALL projects. This suite shares a
+        // migrated database with other parallel suites, so isolate the real
+        // worker query to its own synthetic project rather than notifying
+        // unrelated fixtures or assuming the global backlog has exactly one row.
+        const backlog = await admin.query<{ count: number }>(
+          `SELECT COUNT(*)::int AS count FROM graph_capture_history h
+            WHERE h.project_id=$1::uuid
+              AND h.review_receipt_json IS NOT NULL
+              AND h.captured_at >= now() - interval '48 hours'
+              AND NOT EXISTS (
+                SELECT 1 FROM notifications n WHERE n.user_id=$2::uuid
+                  AND n.type='qa_change_review'
+                  AND n.dedupe_key=('qa_change_review:' || h.project_id::text || ':' || h.id::text)
+              )`, [project, user]
+        );
+        const expected = backlog.rows[0].count;
+        expect(expected).toBeGreaterThanOrEqual(1); // Includes the deleted target.
+        const recovered = await recovery.runOnce(project);
+        expect(recovered).toMatchObject({ eligible: expected, delivered: expected, pending: 0, failed: 0 });
+        const repeated = await recovery.runOnce(project);
         expect(repeated).toMatchObject({ eligible: 0, delivered: 0, pending: 0, failed: 0 });
         expect(await svc.recoverCommittedForSystem(project, historyId)).toEqual(first);
         expect((await admin.query(
@@ -390,7 +407,10 @@ const url = process.env.DATABASE_URL ?? "";
         await expect(svc.deliverForUser(user, randomUUID(), historyId))
           .rejects.toMatchObject({ status: 404 });
       } finally {
-        await admin.query("DELETE FROM notifications WHERE dedupe_key=$1", [dedupeKey]);
+        await admin.query(
+          "DELETE FROM notifications WHERE type='qa_change_review' AND link_entity_type='zyra_change_review' AND link_entity_id=$1",
+          [project]
+        );
       }
     });
 
