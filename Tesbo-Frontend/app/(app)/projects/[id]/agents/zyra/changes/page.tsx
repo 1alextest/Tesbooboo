@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { SourceBindingSettings } from "./SourceBindingSettings";
 import { useParams } from "@/lib/routeParams";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -99,6 +100,7 @@ export default function ZyraChangeReviewPage() {
           {capturing ? "Capturing…" : "Capture configured source"}
         </button>
       </div>
+      <SourceBindingSettings projectId={projectId} />
       <p className="text-sm text-[var(--muted)]">
         Captures require an administrator-approved project source binding. A reference does not prove
         coverage; no case is failed, executed or approved from this page.
