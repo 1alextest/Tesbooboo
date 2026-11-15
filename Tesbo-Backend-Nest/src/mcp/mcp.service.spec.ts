@@ -1053,8 +1053,8 @@ describe("McpService", () => {
         const res: any = await svc.handleRequest(rpc("tools/call", {
           name, arguments: payload
         }), principal(), "proj-1");
-        expect(res.result.isError).toBe(true);
-        expect(res.result.content[0].text).toMatch(/attachments.*Notes/i);
+        expect(res.error.code).toBe(RpcCode.ToolExecutionError);
+        expect(res.error.message).toMatch(/attachments.*Notes/i);
       }
       expect((legacy as any).createTestCase).not.toHaveBeenCalled();
       expect((legacy as any).updateTestCase).not.toHaveBeenCalled();
