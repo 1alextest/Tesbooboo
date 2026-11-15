@@ -412,9 +412,12 @@ export class AutomationService {
     const { found, unknown } = await this.resolveCases(projectId, caseIds);
     if (!found.size) return { attached: 0, unknown };
     const selectedIds = [...found.values()].map((row) => row.id);
-    await assertApprovedRunCases(runner, projectId, selectedIds);
+    // Above, the DatabaseService branch has returned by starting a native
+    // transaction. The remaining runner is the existing PoolClient.
+    const client = runner as PoolClient;
+    await assertApprovedRunCases(client, projectId, selectedIds);
 
-    const res = await runner.query<{ id: string }>(
+    const res = await client.query<{ id: string }>(
       `WITH input AS (
          SELECT id, ord FROM unnest($2::uuid[]) WITH ORDINALITY AS u(id, ord)
        ),
