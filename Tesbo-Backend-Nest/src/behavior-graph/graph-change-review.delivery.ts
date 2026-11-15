@@ -52,7 +52,7 @@ export class GraphChangeReviewDelivery {
             AND (to_jsonb(caller)->>'deleted_at') IS NULL
             AND (to_jsonb(caller_org)->>'deleted_at') IS NULL
         )`
-      : "";
+      : "AND $2::uuid IS NULL";
     const result = await this.db.query<{
       id: string; organization_id: string; recipient_ids: string[];
     }>(
