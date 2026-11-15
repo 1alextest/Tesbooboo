@@ -1,5 +1,6 @@
 import { BUG_SEVERITIES, LegacyService } from "../legacy/legacy.service";
 import { expectedTestcaseRevision } from "../legacy/testcase-edit-revision";
+import { assertApprovedRunCases } from "../legacy/approved-run-case-guard";
 import { CurrentCacheGraphReader } from "../behavior-graph/current-cache-graph.reader";
 import { CurrentCacheGraphHistory } from "../behavior-graph/current-cache-graph.history";
 import { McpError, RpcCode, type McpTool, type McpToolContext } from "./mcp.types";
@@ -958,7 +959,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "create_cycle_from_testcases",
       description:
-        "Create a test cycle (test run) in the token's project and add the given test cases to it in one call — the same two-step workflow (create the run, then add test cases) the app's own UI performs; there is no single-statement backend path that does both. Required: name, testcaseIds (array). Optional: description, environment, buildVersion, releaseName, planId. Every testcaseId is validated against the token's project first — ids that don't exist or belong to another project are listed in invalidTestcaseIds and are never added, rather than silently vanishing into a bare skipped count. Duplicate ids in the input are deduplicated before adding.",
+        "Create a test cycle (test run) in the token's project using only Approved test cases and add the given test cases in one call — the same two-step workflow (create the run, then add test cases) the app's own UI performs; there is no single-statement backend path that does both. Required: name, testcaseIds (array). Optional: description, environment, buildVersion, releaseName, planId. Every testcaseId is validated against the token's project first — ids that don't exist or belong to another project are listed in invalidTestcaseIds and are never added, rather than silently vanishing into a bare skipped count. Duplicate ids in the input are deduplicated before adding.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -982,6 +983,14 @@ export function buildMcpTools(): McpTool[] {
           await requireProjectOwnedRow(ctx, "plans", args.planId, "Plan");
         }
         const { validIds, invalidIds } = await partitionOwnedIds(ctx, "testcases", requestedIds);
+        // MCP creates the native run and attaches cases as two writes. Reject
+        // known Draft/In Review/Deprecated cases BEFORE opening the run, then
+        // rely on the same locked canonical writer for the final race check.
+        if (validIds.length) {
+          await ctx.db.transaction((client) =>
+            assertApprovedRunCases(client, ctx.projectId, validIds)
+          );
+        }
         const cycle = await ctx.legacy.createCycle(ctx.projectId, {
           name: args.name,
           description: args.description,
