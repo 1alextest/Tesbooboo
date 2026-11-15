@@ -48,9 +48,9 @@ describe("QA review candidates over native graph references", () => {
     }]);
   });
 
-  it("reports both old and new reference endpoints on a retargeted case", () => {
+  it("reports both old and new reference endpoints on a retargeted and content-edited case", () => {
     const result = deriveQaReviewCandidates(capture(base), capture({
-      ...base, cases: base.cases.map((c, i) => i === 0 ? { ...c, jiraIssueKey: "X-2" } : c)
+      ...base, cases: base.cases.map((c, i) => i === 0 ? { ...c, jiraIssueKey: "X-2", description: "Updated for the new requirement" } : c)
     }));
     expect(result.candidates).toEqual([{
       caseNodeId: caseId(1), reasons: ["case_changed", "reference_changed"],
@@ -58,15 +58,31 @@ describe("QA review candidates over native graph references", () => {
     }]);
   });
 
-  it("retains a candidate for a removed link without inventing its replacement", () => {
+  it("retains both reasons for a content edit and removed link without inventing its replacement", () => {
     const result = deriveQaReviewCandidates(capture(base), capture({
-      ...base, cases: base.cases.map((c, i) => i === 0 ? { ...c, jiraIssueKey: null } : c)
+      ...base, cases: base.cases.map((c, i) => i === 0 ? { ...c, jiraIssueKey: null, description: "Standalone scenario after unlinking" } : c)
     }));
     expect(result.candidates[0]).toEqual({
       caseNodeId: caseId(1), reasons: ["case_changed", "reference_changed"],
       requirementNodeIds: [requirementId(1)]
     });
     expect(result.unlinkedCaseNodeIds).toContain(caseId(1));
+  });
+
+  // Native reference fields version edges, not case-content-v1. A link-only edit must not
+  // manufacture a direct content-change reason; combined edits above retain both assertions.
+  it.each(["X-2", null])("keeps a link-only change to %s distinct from a case-content edit", (jiraIssueKey) => {
+    const result = deriveQaReviewCandidates(capture(base), capture({
+      ...base, cases: base.cases.map((c, i) => i === 0 ? { ...c, jiraIssueKey } : c)
+    }));
+    expect(result.candidates).toEqual([{
+      caseNodeId: caseId(1), reasons: ["reference_changed"],
+      requirementNodeIds: jiraIssueKey === null ? [requirementId(1)] : [requirementId(1), requirementId(2)]
+    }]);
+    expect(result.unlinkedCaseNodeIds).toEqual((jiraIssueKey === null ? [1, 4, 5, 6] : [4, 5, 6]).map(caseId));
+    expect(result.coverageAssertion).toBe("none");
+    expect(result.executionAssertion).toBe("none");
+    expect(result.upstreamFreshness).toBe("unverified");
   });
 
   it("reports no candidates for an unchanged source despite a new capture", () => {
