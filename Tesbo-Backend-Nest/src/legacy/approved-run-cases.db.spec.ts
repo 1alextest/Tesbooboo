@@ -113,6 +113,37 @@ const url = process.env.DATABASE_URL ?? "";
       } finally { await resetStatus(); }
     });
 
+    it("requires renewed approval after soft removal and preserves the previous execution snapshot", async () => {
+      await resetStatus();
+      const cycle = await newCycle("Re-approval after removal");
+      const svc = service();
+      expect(await svc.addCycleTestCases(cycle, user, { testcaseIds: [approved] }))
+        .toMatchObject({ added: 1 });
+      const oldItem = (await cases(cycle)).rows[0].id;
+      const oldExecution = (await executions(cycle)).rows[0].id;
+      await admin.query("UPDATE cycle_items SET deleted_at=now() WHERE id=$1", [oldItem]);
+      await admin.query("UPDATE executions SET deleted_at=now() WHERE id=$1", [oldExecution]);
+      await admin.query("UPDATE testcases SET status='Draft' WHERE id=$1", [approved]);
+      try {
+        await expect(svc.addCycleTestCases(cycle, user, { testcaseIds: [approved] }))
+          .rejects.toMatchObject({ status: 409 });
+        expect((await cases(cycle)).rows).toHaveLength(0);
+        expect((await admin.query<{ id: string }>(
+          "SELECT id FROM executions WHERE id=$1", [oldExecution]
+        )).rows).toHaveLength(1);
+        await admin.query("UPDATE testcases SET status='Approved' WHERE id=$1", [approved]);
+        expect(await svc.addCycleTestCases(cycle, user, { testcaseIds: [approved] }))
+          .toMatchObject({ added: 1, skipped: 0 });
+        expect((await cases(cycle)).rows).toHaveLength(1);
+        expect((await executions(cycle)).rows).toHaveLength(1);
+        expect((await admin.query<{ id: string }>(
+          "SELECT id FROM cycle_items WHERE cycle_id=$1 AND testcase_id=$2", [cycle,approved]
+        )).rows).toHaveLength(2);
+      } finally {
+        await resetStatus();
+      }
+    });
+
     it("an MCP-originated create + approved attachment is atomic; mixed Draft rolls back the new run", async () => {
       await resetStatus();
       const svc = service(), name = "Atomic MCP " + stamp;
