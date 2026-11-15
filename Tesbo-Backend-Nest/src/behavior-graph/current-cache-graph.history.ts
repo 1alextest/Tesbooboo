@@ -133,7 +133,7 @@ export class CurrentCacheGraphHistory {
   private async recordForUser(
     userId: string | null | undefined,
     projectId: string,
-    verified?: { binding: ProjectSourceBinding; observation: VerifiedPinnedSource }
+    verified?: { binding: ProjectSourceBinding; observation: VerifiedPinnedSource; revalidatePinnedRef: () => Promise<boolean> }
   ): Promise<PersistedGraphObservation> {
     if (!userId) throw new ForbiddenException({ error: "Authenticated project membership required" });
     return this.db.transaction(async (client) => {
