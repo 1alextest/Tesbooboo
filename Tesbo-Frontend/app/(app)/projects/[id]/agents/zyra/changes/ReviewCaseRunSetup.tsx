@@ -27,6 +27,8 @@ export function ReviewCaseRunSetup({
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [working, setWorking] = useState(false);
   const [pendingRunId, setPendingRunId] = useState<string | null>(null);
+  const [creationUnconfirmed, setCreationUnconfirmed] = useState(false);
+  const [checkedForDuplicate, setCheckedForDuplicate] = useState(false);
   const [complete, setComplete] = useState<{
     runId: string; selected: number; added: number; skipped: number;
   } | null>(null);
@@ -34,8 +36,8 @@ export function ReviewCaseRunSetup({
 
   if (!cases.length) return null;
 
-  async function loadRuns() {
-    if (runsLoaded || loadingRuns) return;
+  async function loadRuns(force = false) {
+    if ((runsLoaded && !force) || loadingRuns) return;
     setLoadingRuns(true);
     try {
       const runs = await listTestRuns(projectId);
@@ -60,7 +62,9 @@ export function ReviewCaseRunSetup({
 
   async function attachSelected() {
     if (working || !selected.length || (mode === "new" && !pendingRunId &&
-        (!runName.trim() || !environment.trim())) || (mode === "existing" && !existingId)) return;
+        (!runName.trim() || !environment.trim() ||
+         (creationUnconfirmed && !checkedForDuplicate))) ||
+        (mode === "existing" && !existingId)) return;
     setError(null);
     setComplete(null);
     setWorking(true);
@@ -77,6 +81,8 @@ export function ReviewCaseRunSetup({
         });
         runId = run.id;
         setPendingRunId(runId);
+        setCreationUnconfirmed(false);
+        setCheckedForDuplicate(false);
       }
       if (!runId) throw new Error("Select a test run first.");
       const result = await addTestCasesToRun(runId, selected);
@@ -84,9 +90,18 @@ export function ReviewCaseRunSetup({
         runId, selected: selected.length, added: result.added, skipped: result.skipped
       });
     } catch (cause) {
-      setError((runId && mode === "new"
-        ? "Test run " + runId + " already exists. Retry attaching to this same run; do not create another. "
-        : "") + (cause instanceof Error ? cause.message : "Could not attach selected test cases."));
+      if (mode === "new" && !runId) {
+        // A lost response to createTestRun could follow a successful DB commit.
+        // Never retry this non-idempotent CREATE automatically or blindly.
+        setCreationUnconfirmed(true);
+        setCheckedForDuplicate(false);
+        setError("Run creation outcome unconfirmed. Check existing runs before another creation. " +
+          (cause instanceof Error ? cause.message : "Run creation could not be confirmed."));
+      } else {
+        setError((runId && mode === "new"
+          ? "Test run " + runId + " already exists. Retry attaching to this same run; do not create another. "
+          : "") + (cause instanceof Error ? cause.message : "Could not attach selected test cases."));
+      }
     } finally {
       setWorking(false);
     }
@@ -126,6 +141,22 @@ export function ReviewCaseRunSetup({
         <label><input type="radio" name={"destination-" + receiptId} checked={mode === "existing"}
           onChange={() => { setMode("existing"); setComplete(null); }} /> Add to existing test run</label>
       </fieldset>
+      {creationUnconfirmed && !pendingRunId && (
+        <div className="mt-3 space-y-2 rounded border border-[var(--border)] p-3">
+          <p role="alert">Run creation may already have committed. Check the native
+            <Link href={"/projects/" + projectId + "/cycles"} className="mx-1 underline">
+              Test Runs
+            </Link>
+            list, refresh existing runs below, and attach to the run if it exists.
+          </p>
+          <label className="flex items-start gap-2">
+            <input type="checkbox" checked={checkedForDuplicate}
+              aria-label="I checked that no duplicate run exists"
+              onChange={(event) => setCheckedForDuplicate(event.target.checked)} />
+            I checked and confirmed that no matching run exists before trying to create another.
+          </label>
+        </div>
+      )}
       {mode === "new" ? (
         <div className="mt-3 grid gap-2">
           <label>New run name
@@ -155,20 +186,22 @@ export function ReviewCaseRunSetup({
           </label>
           {loadingRuns && <p>Loading existing test runs…</p>}
           {runsLoaded && !openRuns.length && <p>No open manual runs are available.</p>}
-          {!runsLoaded && !loadingRuns && (
-            <button type="button" className="mt-2 underline" onClick={() => void loadRuns()}>
-              Retry loading test runs
-            </button>
-          )}
+          <button type="button" disabled={loadingRuns}
+            className="mt-2 underline disabled:opacity-60"
+            onClick={() => void loadRuns(true)}>
+            Refresh available test runs
+          </button>
         </div>
       )}
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <button type="button" disabled={working || !selected.length ||
           (mode === "existing" && !existingId) ||
-          (mode === "new" && !pendingRunId && (!runName.trim() || !environment.trim()))}
+          (mode === "new" && !pendingRunId && (!runName.trim() || !environment.trim() ||
+            (creationUnconfirmed && !checkedForDuplicate)))}
           onClick={() => void attachSelected()}
           className="rounded border border-[var(--border)] px-3 py-2 disabled:opacity-60">
-          {working ? "Attaching cases…" : pendingRunId ? "Retry adding to same test run"
+          {working ? "Preparing cases…" : pendingRunId
+            ? complete ? "Add selected cases to same run" : "Retry adding to same test run"
             : mode === "new" ? "Create run and add selected cases" : "Add selected cases to run"}
         </button>
         {(pendingRunId || complete) && (
