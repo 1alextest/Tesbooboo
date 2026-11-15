@@ -238,12 +238,13 @@ test.describe("zyra / agents (UI)", () => {
     await panel.locator("summary").click(); await expect(editor).toHaveValue("");
     await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toHaveCount(0);
     const qa = await open(browser, "/agents/zyra/changes", "qa");
-    const denied = qa.waitForResponse(response => response.url().includes(`/projects/${tenant!.secondProjectId}/agents/zyra/changes/model-preview`));
+    // ProjectDataProvider rejects this project before child inspectors mount.
+    // Assert the real outer access boundary, not an endpoint it never calls.
+    const denied = qa.waitForResponse(response => response.url().endsWith(`/api/projects/${tenant!.secondProjectId}`));
     await qa.goto(`/projects/${tenant!.secondProjectId}/agents/zyra/changes`);
     expect([403, 404]).toContain((await denied).status());
-    const foreignPanel = qa.getByTestId("model-draft-preview"); await foreignPanel.locator("summary").click();
-    await expect(foreignPanel.getByLabel("Draft model JSON", { exact: true })).toHaveCount(0);
-    await expect(foreignPanel.getByRole("alert")).toBeVisible();
+    await expect(qa).toHaveURL(/\/projects$/);
+    await expect(qa.getByTestId("model-draft-preview")).toHaveCount(0);
   });
 
   test("owner can inspect root-free source setup while QA cannot provision it", async ({ browser }) => {
