@@ -230,7 +230,7 @@ test.describe("zyra / agents (UI)", () => {
       const linkedCount = (runId: string) => Number(scalar(
         "SELECT COUNT(*)::int FROM graph_review_run_case_links WHERE project_id=" +
         literal(projectId) + " AND history_id=" + literal(historyId) +
-        " AND cycle_id=" + literal(runId) + " AND testcase_id=" + literal(caseId) + ";"
+        " AND cycle_id=" + literal(runId) + " AND testcase_id=" + literal(caseId!) + ";"
       ));
       expect(linkedCount(createdRunId!)).toBe(1);
       await expect(prepare.getByRole("region", { name: "Persisted QA handoffs" }))
