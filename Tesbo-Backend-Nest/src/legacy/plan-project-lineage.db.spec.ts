@@ -594,8 +594,8 @@ const url = process.env.DATABASE_URL ?? "";
         // Every red-case target is independent: an actually persisted deletion or edit must not
         // make the next reproduction fail on a missing parent instead of its intended lock oracle.
         restPlan = (await setup.query("INSERT INTO plans (project_id,name) VALUES ($1,'REST lock Plan') RETURNING id", [locked])).rows[0].id;
-        restCase = (await setup.query("INSERT INTO testcases (project_id,external_id,title) VALUES ($1,$2,'REST lock Case') RETURNING id", [locked, `REST-${randomUUID().slice(0, 24)}`])).rows[0].id;
-        spareCase = (await setup.query("INSERT INTO testcases (project_id,external_id,title) VALUES ($1,$2,'REST spare Case') RETURNING id", [locked, `REST-${randomUUID().slice(0, 24)}`])).rows[0].id;
+        restCase = (await setup.query("INSERT INTO testcases (project_id,external_id,title,status) VALUES ($1,$2,'REST lock Case','Approved') RETURNING id", [locked, `REST-${randomUUID().slice(0, 24)}`])).rows[0].id;
+        spareCase = (await setup.query("INSERT INTO testcases (project_id,external_id,title,status) VALUES ($1,$2,'REST spare Case','Approved') RETURNING id", [locked, `REST-${randomUUID().slice(0, 24)}`])).rows[0].id;
         restItem = (await setup.query("INSERT INTO plan_items (plan_id,testcase_id) VALUES ($1,$2) RETURNING id", [restPlan, restCase])).rows[0].id;
         restRun = (await setup.query("INSERT INTO cycles (project_id,plan_id,name) VALUES ($1,$2,'REST lock Run') RETURNING id", [locked, restPlan])).rows[0].id;
         const item = (await setup.query("INSERT INTO cycle_items (cycle_id,testcase_id,snapshot_title) VALUES ($1,$2,'REST retained snapshot') RETURNING id", [restRun, restCase])).rows[0].id;
