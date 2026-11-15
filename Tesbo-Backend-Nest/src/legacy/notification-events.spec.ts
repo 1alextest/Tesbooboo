@@ -1,3 +1,4 @@
+import { writeNotifications } from "./notification-writer";
 import { LegacyService } from "./legacy.service";
 import { clipNotificationTitle, isCoverageAnalysisRequest, NOTIFICATION_PRIORITY, notificationLinks, notificationMessages, runLabel } from "./notification-events";
 import type { DatabaseService } from "../database/database.service";
@@ -114,9 +115,8 @@ describe("notifyUsers", () => {
   });
 
   it("enforces active scope membership and current QA roles at INSERT time", async () => {
-    const { svc, dbQuery } = makeLegacy();
-    dbQuery.mockResolvedValueOnce({ rows: [{ id: "n1" }] });
-    await svc.notifyUsers([OTHER, THIRD], {
+    const dbQuery = jest.fn().mockResolvedValue({ rows: [{ id: "n1" }] });
+    await writeNotifications({ query: dbQuery } as never, [OTHER, THIRD], {
       type: "qa_change_review", title: "Review a change", dedupeKey: "change:1",
       memberOf: { organizationId: ORG_ID, projectId: PROJECT_ID, projectRoles: ["qa_engineer", "manager", "owner"] }
     });
@@ -128,8 +128,8 @@ describe("notifyUsers", () => {
   });
 
   it("fails closed when explicit project role eligibility is empty", async () => {
-    const { svc, dbQuery } = makeLegacy();
-    expect(await svc.notifyUsers([OTHER], {
+    const dbQuery = jest.fn();
+    expect(await writeNotifications({ query: dbQuery } as never, [OTHER], {
       type: "qa_change_review", title: "t",
       memberOf: { organizationId: ORG_ID, projectId: PROJECT_ID, projectRoles: [] }
     })).toBe(0);
