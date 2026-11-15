@@ -102,6 +102,13 @@ test.describe("zyra / agents (UI)", () => {
     const page = await open(browser, "/agents/zyra", "qa");
     await page.getByRole("link", { name: "Change review" }).click();
     await expect(page.getByRole("heading", { name: "Change impact review" })).toBeVisible();
+    const workflow = page.getByRole("navigation", { name: "Native QA workflow" });
+    for (const [name, suffix] of [["Requirements", "requirements"], ["Test cases", "testcases"],
+      ["Test runs and execution", "cycles"], ["Defects", "bugs"]] as const) {
+      await expect(workflow.getByRole("link", { name })).toHaveAttribute(
+        "href", `/projects/${tenant!.mainProjectId}/${suffix}`
+      );
+    }
     await expect(page.getByText("No committed graph observations are available for this project.")).toBeVisible();
     await expect(page.getByText(/no case is failed, executed or approved/i)).toBeVisible();
     await page.getByRole("button", { name: "Capture configured source" }).click();
