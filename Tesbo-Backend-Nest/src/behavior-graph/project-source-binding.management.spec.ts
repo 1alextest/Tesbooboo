@@ -8,7 +8,7 @@ const CONFIG = {
 };
 
 function fixture(options: { owner?: boolean; binding?: boolean; saved?: boolean; approved?: boolean } = {}) {
-  const query = jest.fn(async (sql: string) => {
+  const query = jest.fn(async (sql: string, _params: unknown[] = []) => {
     if (sql.includes("SELECT EXISTS(")) return { rows: [{ allowed: options.owner !== false }] };
     if (sql.includes("SELECT b.repository_id")) return {
       rows: options.binding === false ? [] : [{
