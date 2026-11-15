@@ -42,8 +42,6 @@ export function ReviewCaseRunSetup({
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  if (!cases.length) return null;
-
   async function loadRuns(force = false) {
     if ((runsLoaded && !force) || loadingRuns) return;
     setLoadingRuns(true);
@@ -156,14 +154,17 @@ export function ReviewCaseRunSetup({
       className="rounded border border-[var(--border)] p-3 text-sm"
       onToggle={(event) => {
         if (event.currentTarget.open) {
-          void loadRuns();
+          if (cases.length) void loadRuns();
           void loadRecordedLinks();
         }
       }}>
-      <summary className="cursor-pointer font-semibold">Prepare a test run from linked candidates</summary>
+      <summary className="cursor-pointer font-semibold">
+        {cases.length ? "Prepare a test run from linked candidates" : "Review source-only QA gaps"}
+      </summary>
       <p className="mt-2 text-xs text-[var(--muted)]">
-        Choose applicable cases explicitly. This adds them to an existing Tesbo test run or creates a
-        new one; nothing is executed, failed, approved, or marked covered.
+        {cases.length
+          ? "Choose applicable cases explicitly. This uses canonical Tesbo test runs; no execution, failure or approval is inferred."
+          : "No explicitly nominated cases were found. QA must investigate affected behavior and derive applicable cases before preparing a run."}
       </p>
       {candidateCaseIds.length > cases.length && (
         <p role="note" className="mt-2 text-xs">
@@ -257,6 +258,8 @@ export function ReviewCaseRunSetup({
           </p>
         </section>
       )}
+      {cases.length > 0 && (
+        <>
       <fieldset className="mt-3 space-y-2">
         <legend className="font-medium">Select cases to verify ({selected.length} selected)</legend>
         {cases.map((id, index) => (
@@ -346,6 +349,8 @@ export function ReviewCaseRunSetup({
             (complete?.runId ?? pendingRunId)}>Open native test run</Link>
         )}
       </div>
+        </>
+      )}
       {error && <p role="alert" className="mt-2">{error}</p>}
       {complete && (
         <p role="status" className="mt-2">
