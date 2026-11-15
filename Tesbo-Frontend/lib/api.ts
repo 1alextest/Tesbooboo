@@ -4589,3 +4589,26 @@ export async function retryZyraGraphReviewNotification(
     method: "POST", body: {}
   });
 }
+
+/** Root-free source binding administration in the existing Zyra change review. */
+export type GraphSourceBinding = {
+  repositoryId: string;
+  checkoutKey: string;
+  refName: string;
+  selectionPrefixes: string[];
+  enabled: boolean;
+};
+export type GraphSourceBindingResponse = {
+  configured: boolean;
+  binding: GraphSourceBinding | null;
+};
+export async function getZyraGraphSourceBinding(projectId: string): Promise<GraphSourceBindingResponse> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/source-binding`);
+}
+export async function setZyraGraphSourceBinding(
+  projectId: string, binding: GraphSourceBinding
+): Promise<GraphSourceBindingResponse> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/source-binding`, {
+    method: "POST", body: binding
+  });
+}
