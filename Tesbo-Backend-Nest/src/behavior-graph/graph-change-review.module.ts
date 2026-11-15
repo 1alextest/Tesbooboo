@@ -14,6 +14,7 @@ import {
   type ApprovedSourceRegistry
 } from "./project-source-binding";
 import { ProjectSourceGraphCoordinator } from "./project-source-graph.coordinator";
+import { ProjectSourceBindingManagement } from "./project-source-binding.management";
 import { GraphChangeReviewController } from "./graph-change-review.controller";
 
 /** Server-admin configuration only. No filesystem root comes from REST/MCP. */
@@ -51,6 +52,7 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
     GraphChangeReviewDelivery,
     GraphChangeReviewRecovery,
     GraphReviewRecoveryProcessor,
+    ProjectSourceBindingManagement,
     {
       provide: ProjectSourceBindingReader,
       inject: [DatabaseService, AppConfigService],
