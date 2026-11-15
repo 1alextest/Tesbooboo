@@ -5,7 +5,7 @@ import { ModelDraftPreview } from "./ModelDraftPreview";
 import { SourceBindingSettings } from "./SourceBindingSettings";
 import { ReviewCaseRunSetup } from "./ReviewCaseRunSetup";
 import { useParams } from "@/lib/routeParams";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   captureZyraGraphChange, listZyraGraphChanges, retryZyraGraphReviewNotification,
   type GraphReviewHistoryRow
@@ -39,19 +39,32 @@ export default function ZyraChangeReviewPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  // A late page request must not replace newer history or cross a project switch.
+  // Keep this in the existing view rather than adding a second request/cache owner.
+  const historyRequest = useRef(0);
   const load = useCallback(async (beforeId?: string) => {
+    const request = ++historyRequest.current;
     setLoading(true);
     try {
       const result = await listZyraGraphChanges(projectId, 25, beforeId);
+      if (historyRequest.current !== request) return;
       setEntries(result.entries);
       setCursor(result.entries.length === 25 ? result.entries[result.entries.length - 1].id : undefined);
       setError(null);
     } catch (cause) {
+      if (historyRequest.current !== request) return;
       setError(cause instanceof Error ? cause.message : "Could not read change history.");
-    } finally { setLoading(false); }
+    } finally {
+      if (historyRequest.current === request) setLoading(false);
+    }
   }, [projectId]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    setEntries([]);
+    setCursor(undefined);
+    void load();
+    return () => { historyRequest.current++; };
+  }, [load]);
 
   async function capture() {
     setCapturing(true);
