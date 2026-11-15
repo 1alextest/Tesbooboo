@@ -6,12 +6,26 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HISTORY_ID = /^[1-9][0-9]{0,18}$/;
 const MAX_HISTORY = 9223372036854775807n;
 
+export interface QaRunCaseExecution {
+  id: string;
+  /** Native result, not a graph-inferred pass/fail or approval. */
+  status: string;
+  executedAt: string | null;
+  actualResultRecorded: boolean;
+  defectKey: string | null;
+  /** Count of active native attachment metadata, not verification of stored file bytes. */
+  evidenceFileCount: number;
+}
+
 export interface QaRunCaseLink {
   runId: string;
   caseId: string;
   linkedAt: string;
   runName: string;
   runStatus: string;
+  /** A historical handoff may outlive a soft-removed case in that run. */
+  caseStillInRun: boolean;
+  execution: QaRunCaseExecution | null;
 }
 
 /**
@@ -60,10 +74,25 @@ export class GraphReviewRunLinks {
        COALESCE((
          SELECT jsonb_agg(jsonb_build_object(
            'runId', l.cycle_id::text, 'caseId', l.testcase_id::text,
-           'linkedAt', l.linked_at, 'runName', c.name, 'runStatus', c.status
+           'linkedAt', l.linked_at, 'runName', c.name, 'runStatus', c.status,
+           'caseStillInRun', ci.id IS NOT NULL,
+           'execution', CASE WHEN e.id IS NULL THEN NULL ELSE jsonb_build_object(
+             'id', e.id::text, 'status', e.status, 'executedAt', e.executed_at,
+             'actualResultRecorded', NULLIF(btrim(e.actual_result), '') IS NOT NULL,
+             'defectKey', e.defect_key,
+             'evidenceFileCount', (
+               SELECT COUNT(*)::int FROM attachments att
+                WHERE att.project_id=l.project_id
+                  AND att.entity_type='execution' AND att.entity_id=e.id
+                  AND att.deleted_at IS NULL
+             )
+           ) END
          ) ORDER BY l.linked_at, l.cycle_id, l.testcase_id)
            FROM graph_review_run_case_links l
            JOIN cycles c ON c.id=l.cycle_id AND c.project_id=l.project_id
+           LEFT JOIN cycle_items ci ON ci.cycle_id=l.cycle_id
+             AND ci.testcase_id=l.testcase_id AND ci.deleted_at IS NULL
+           LEFT JOIN executions e ON e.cycle_item_id=ci.id AND e.deleted_at IS NULL
            JOIN allowed a ON a.id=l.project_id
           WHERE l.history_id=$3::bigint
        ), '[]'::jsonb) AS links`,
