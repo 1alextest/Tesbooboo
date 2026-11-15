@@ -48,6 +48,7 @@ export default function ZyraChangeReviewPage() {
   const mutationLifetime = useRef({ generation: 0 });
   const activeProject = useRef(projectId);
   const notificationInFlight = useRef<{ historyId: string; generation: number } | null>(null);
+  const captureInFlight = useRef<{ generation: number } | null>(null);
   activeProject.current = projectId;
   const load = useCallback(async (beforeId?: string) => {
     const request = ++historyRequest.current.generation;
@@ -78,6 +79,7 @@ export default function ZyraChangeReviewPage() {
     setNotice(null);
     setCapturing(false);
     notificationInFlight.current = null;
+    captureInFlight.current = null;
     setNotifying(null);
     void load();
     const reads = historyReads.current;
@@ -92,9 +94,15 @@ export default function ZyraChangeReviewPage() {
   }, [load]);
 
   async function capture() {
+    // A double-click can arrive before React commits the disabled state.
+    // Source capture has its own lock; notification retry remains independent.
+    if (captureInFlight.current) return;
     const mutation = mutationLifetime.current.generation;
+    const attempt = { generation: mutation };
+    captureInFlight.current = attempt;
     const isCurrent = () => activeProject.current === projectId &&
-      mutationLifetime.current.generation === mutation;
+      mutationLifetime.current.generation === mutation &&
+      captureInFlight.current === attempt;
     setCapturing(true);
     setNotice(null);
     try {
@@ -112,7 +120,10 @@ export default function ZyraChangeReviewPage() {
     } catch (cause) {
       if (isCurrent()) setError(cause instanceof Error ? cause.message : "Source capture unavailable.");
     } finally {
-      if (isCurrent()) setCapturing(false);
+      if (isCurrent()) {
+        captureInFlight.current = null;
+        setCapturing(false);
+      }
     }
   }
 
