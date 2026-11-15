@@ -166,12 +166,12 @@ export class CurrentCacheGraphHistory {
         }
       }
       const native = await this.reader.captureForUserInTransaction(userId, projectId, client);
-      const capture: GraphCaptureForComparison = verified
+      const capture = verified
         ? {
           ...projectImplementationObservations(native, verified.observation.value),
           // Only the configured, byte-checked, branded Git source path receives
           // this stronger evidence label. Proposed semantics remain unverified.
-          sourceByteEvidence: "verified_pinned_git"
+          sourceByteEvidence: "verified_pinned_git" as const
         }
         : native;
       if (capture.inventoryStatus !== "complete" || !capture.snapshot ||
