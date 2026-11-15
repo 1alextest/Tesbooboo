@@ -955,7 +955,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "create_cycle_from_testcases",
       description:
-        "Create a test cycle (test run) in the token's project and add the given test cases to it in one call — the same two-step workflow (create the run, then add test cases) the app's own UI performs; there is no single-statement backend path that does both. Required: name, testcaseIds (array). Optional: description, environment, buildVersion, releaseName, planId. Every testcaseId is validated against the token's project first — ids that don't exist or belong to another project are listed in invalidTestcaseIds and are never added, rather than silently vanishing into a bare skipped count. Duplicate ids in the input are deduplicated before adding.",
+        "Atomically create a test cycle (test run) and attach existing Approved project test cases. If a selected active case is Draft/In Review/Archived, the whole write is refused without creating an empty run. Required: name, testcaseIds (array). Optional: description, environment, buildVersion, releaseName, planId. Missing or foreign-project ids are listed separately as invalidTestcaseIds; duplicates are removed. Run and case addition reuse the native Tesbo writer, not a parallel system.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -979,24 +979,24 @@ export function buildMcpTools(): McpTool[] {
           await requireProjectOwnedRow(ctx, "plans", args.planId, "Plan");
         }
         const { validIds, invalidIds } = await partitionOwnedIds(ctx, "testcases", requestedIds);
-        const cycle = await ctx.legacy.createCycle(ctx.projectId, {
-          name: args.name,
-          description: args.description,
-          environment: args.environment,
-          buildVersion: args.buildVersion,
-          releaseName: args.releaseName,
-          planId: args.planId
-        });
-        // addCycleTestCases requires a real, org-access-checkable user (requireCycleAccess), same
-        // reasoning as update_suite/update_bug/bulk_update_testcases.
-        const addResult =
-          validIds.length > 0
-            ? await ctx.legacy.addCycleTestCases(cycle.id, ctx.userId, { testcaseIds: validIds })
-            : { requested: 0, added: 0, skipped: 0 };
+        // One native transaction for run creation, approved-case validation
+        // and case attachment. A Draft case or concurrent demotion rolls the
+        // whole attempt back, including the newly inserted run.
+        const prepared = await ctx.legacy.createCycleWithTestcasesForUser(
+          ctx.userId, ctx.projectId, {
+            name: args.name,
+            description: args.description,
+            environment: args.environment,
+            buildVersion: args.buildVersion,
+            releaseName: args.releaseName,
+            planId: args.planId,
+            testcaseIds: validIds
+          }
+        );
         return {
-          cycle,
+          cycle: prepared.cycle,
           testcasesRequested: requestedIds.length,
-          testcasesAdded: addResult.added,
+          testcasesAdded: prepared.added,
           invalidTestcaseIds: invalidIds
         };
       }
