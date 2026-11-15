@@ -541,7 +541,7 @@ async function verifyBrowserMutationResponseLoss(page: Page, api: string, web: s
   await db.connect();
   try {
     const title = "CI lost browser create acknowledgement";
-    const testcaseResponse = await request.post(`${base}/testcases`, { data: { title } });
+    const testcaseResponse = await request.post(`${base}/testcases`, { data: { title, status: "Approved" } });
     expect(testcaseResponse.ok(), await testcaseResponse.text()).toBeTruthy();
     const testcase = await testcaseResponse.json();
     caseId = testcase.id;
@@ -647,7 +647,7 @@ test("history import, bug authorization and finalized automation preserve persis
     for (const surface of ["drawer", "full-page"]) {
       for (const status of ["pass", "fail"]) {
         const title = `CI sealed ${surface} ${status}`;
-        const testcaseResponse = await request.post(`${base}/testcases`, { data: { title } });
+        const testcaseResponse = await request.post(`${base}/testcases`, { data: { title, status: "Approved" } });
         expect(testcaseResponse.ok(), await testcaseResponse.text()).toBeTruthy();
         const testcase = await testcaseResponse.json();
         cases.push(testcase.id);

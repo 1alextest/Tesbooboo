@@ -86,7 +86,7 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
     const first = await post(`${base}/suites`, { name: "CI Original parent" });
     const second = await post(`${base}/suites`, { name: "CI Concurrent parent" });
     const child = await post(`${base}/suites`, { name: "CI Child suite", parentId: first.id, description: "Original description", preconditions: "Original setup" });
-    const selected = await post(`${base}/testcases`, { title: "CI Archive retains relationships", suiteId: first.id, ownerId, description: "Preserve authored body", steps: [{ action: "Act", expectedResult: "Expect" }], jiraIssueKey: "CI-1", jiraUrl: "https://example.invalid/CI-1" });
+    const selected = await post(`${base}/testcases`, { title: "CI Archive retains relationships", status: "Approved", suiteId: first.id, ownerId, description: "Preserve authored body", steps: [{ action: "Act", expectedResult: "Expect" }], jiraIssueKey: "CI-1", jiraUrl: "https://example.invalid/CI-1" });
     const control = await post(`${base}/testcases`, { title: "CI Unselected repository control", suiteId: first.id, ownerId });
     const run = await post(`${base}/cycles`, { name: "CI Existing manual run" });
     await post(`${api}/api/cycles/${run.id}/testcases`, { testcaseIds: [selected.id] });
@@ -121,7 +121,9 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
       await openCase(selected.title, first.name);
       await expect(suiteField()).toHaveValue(first.id);
       const after = await caseState(selected.id);
-      expect(domain(after.row)).toEqual(domain(before.row));
+      // Unarchive always restores Draft. Historical run membership persists
+      // even though the case was Approved when first added.
+      expect(domain(after.row)).toEqual({ ...domain(before.row), status: "Draft" });
       expectHistory(middle, after, 1, ownerId);
       expectHistory(before, after, 2);
       expect(await associations()).toEqual(associationsBefore); expectCaseUnchanged(controlBefore, await caseState(control.id));
