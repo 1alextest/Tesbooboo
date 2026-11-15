@@ -75,6 +75,21 @@ test.describe("zyra / agents (UI)", () => {
     if (tenant) purgeZyra(tenant);
   });
 
+  test("Zyra opens native change review, handles missing source bindings and preserves zero executions", async ({ browser }) => {
+    const page = await open(browser, "/agents/zyra", "qa");
+    await page.getByRole("link", { name: "Change review" }).click();
+    await expect(page.getByRole("heading", { name: "Change impact review" })).toBeVisible();
+    await expect(page.getByText("No committed graph observations are available for this project.")).toBeVisible();
+    await expect(page.getByText(/no case is failed, executed or approved/i)).toBeVisible();
+    await page.getByRole("button", { name: "Capture configured source" }).click();
+    await expect(page.getByRole("alert")).toBeVisible();
+    // No approved checkout exists in this disposable test tenant; don't
+    // fabricate one or claim capture success.
+    await expect(page.getByText("No committed graph observations are available for this project.")).toBeVisible();
+    await page.getByRole("link", { name: "Back to Zyra" }).click();
+    await expect(page).toHaveURL(new RegExp(`/projects/${tenant!.mainProjectId}/agents/zyra`));
+  });
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
   function purgeZyra(t: RbacTenant): void {
