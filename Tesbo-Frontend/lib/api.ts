@@ -4566,11 +4566,11 @@ export type GraphReviewCaptureResult = {
 };
 /** Uses the existing graph history and Zyra's project scope, not a second review store. */
 export async function listZyraGraphChanges(
-  projectId: string, limit = 25, beforeId?: string
+  projectId: string, limit = 25, beforeId?: string, signal?: AbortSignal
 ): Promise<{ entries: GraphReviewHistoryRow[] }> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (beforeId) params.set("beforeId", beforeId);
-  return api(`/api/projects/${projectId}/agents/zyra/changes?${params.toString()}`);
+  return api(`/api/projects/${projectId}/agents/zyra/changes?${params.toString()}`, { signal });
 }
 export async function captureZyraGraphChange(projectId: string): Promise<GraphReviewCaptureResult> {
   return api(`/api/projects/${projectId}/agents/zyra/changes/capture`, {
