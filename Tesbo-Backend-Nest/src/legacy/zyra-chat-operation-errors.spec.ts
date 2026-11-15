@@ -327,6 +327,35 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
     });
   }
 
+  it.each([
+    { name: "missing move readback", moveBreakdown: undefined, action: "moved" },
+    { name: "empty move readback", moveBreakdown: [], action: "moved" },
+    { name: "zero-count move readback", moveBreakdown: [{ suiteId: "suite-own", suiteName: "Destination", created: false, count: 0 }], action: "moved" },
+    { name: "other saved rows", moveBreakdown: [], action: "archived" }
+  ])("final trace preserves known preview counts and pending proposals: $name", async ({ moveBreakdown, action }) => {
+    const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
+    const applied = {
+      testcases: [{ id: "case-1", action }, { id: "case-2", action }, { id: null, action: "proposed-update" }],
+      activity: [], reviewRequestId: "review-1", moveBreakdown
+    };
+    const original = JSON.stringify(applied);
+    jest.spyOn(svc as unknown as { applyZyraChatOperations: (...a: unknown[]) => Promise<unknown> }, "applyZyraChatOperations")
+      .mockResolvedValue(applied);
+    jest.spyOn(svc as unknown as { buildZyraChatDecision: (...a: unknown[]) => Promise<unknown> }, "buildZyraChatDecision")
+      .mockResolvedValue({ reply: "Trace-only collaborator control", actionType: "suite",
+        operations: [{ type: "move_to_suite", suiteId: "suite-own", testcaseIds: ["case-1", "case-2"] }], testcases: [] });
+    jest.spyOn(svc as unknown as { insertZyraAssistantMessage: (...a: unknown[]) => Promise<unknown> }, "insertZyraAssistantMessage")
+      .mockResolvedValue({ id: "assistant-1", status: "completed" });
+    jest.spyOn(svc, "zyraChatSession").mockResolvedValue({ messages: [] });
+    const recorder = new ZyraTurnTraceRecorder();
+    await (svc as unknown as { executeZyraChatTurn: (...a: unknown[]) => Promise<unknown> }).executeZyraChatTurn({
+      projectId: "project-1", userId: "user-1", uid: "user-1", sessionId: "session-1",
+      message: "Trace count control", userMessageId: "turn-1", sessionRow: {}
+    }, recorder.onStage);
+    expect(JSON.stringify(applied)).toBe(original);
+    expect(recorder.finish().steps.find((step) => step.stage === "finalizing")?.meta).toEqual({ savedCount: 2, proposedCount: 1 });
+  });
+
   for (const language of ["en", "ru"] as const) {
     const reply = language === "en" ? "Created the requested suites." : "Запрошенные наборы созданы.";
 
