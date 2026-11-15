@@ -339,6 +339,23 @@ test.describe("zyra / agents (UI)", () => {
       expect(Number(scalar("SELECT COUNT(*)::int FROM cycle_items WHERE cycle_id=" +
         literal(uncertainRunId!) + " AND testcase_id=" + literal(caseId) + ";"))).toBe(1);
       expect(countRun()).toBe(1);
+
+      // A graph candidate still in Draft must be refused before run creation
+      // or any ambiguous-mutation state. Native Test Runs only select Approved cases.
+      exec("UPDATE testcases SET status='Draft' WHERE id=" + literal(caseId!) + ";");
+      const beforeDraft = Number(scalar("SELECT COUNT(*)::int FROM cycles WHERE project_id=" +
+        literal(projectId) + " AND deleted_at IS NULL;"));
+      await page.reload();
+      const rejected = page.getByTestId("graph-review-run-" + historyId);
+      await rejected.locator("summary").click();
+      await rejected.getByRole("checkbox", { name: "Select linked case 1" }).check();
+      await rejected.getByLabel("Execution environment").fill("Disposable QA");
+      await rejected.getByRole("button", { name: "Create run and add selected cases" }).click();
+      await expect(rejected.getByRole("alert")).toContainText("Only Approved test cases");
+      await expect(rejected.getByRole("alert")).not.toContainText("Run creation outcome unconfirmed");
+      expect(Number(scalar("SELECT COUNT(*)::int FROM cycles WHERE project_id=" +
+        literal(projectId) + " AND deleted_at IS NULL;"))).toBe(beforeDraft);
+
       const resolvedResponse = await api.get("/api/route-resolve", { params: { project: projectId, testcase: caseId } });
       expect(resolvedResponse.ok()).toBeTruthy();
       const resolved = await resolvedResponse.json();
