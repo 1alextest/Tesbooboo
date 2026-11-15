@@ -783,8 +783,8 @@ test.describe("execution bulk operations, schedules and share links", () => {
     const cycleId = (await cycle.json()).id;
 
     exec(
-      `INSERT INTO testcases (project_id, external_id, title)
-       SELECT ${literal(tenant!.mainProjectId)}, 'E2ERETRY-' || g, 'E2E ExecOps retry ' || lpad(g::text, 4, '0')
+      `INSERT INTO testcases (project_id, external_id, title, status)
+       SELECT ${literal(tenant!.mainProjectId)}, 'E2ERETRY-' || g, 'E2E ExecOps retry ' || lpad(g::text, 4, '0'), 'Approved'
          FROM generate_series(1, ${BATCH}) AS g;`,
     );
     const testcaseIds = column(
