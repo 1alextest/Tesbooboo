@@ -225,6 +225,16 @@ test.describe("zyra / agents (UI)", () => {
         WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
       await prepare.getByRole("button", { name: "Retry adding to same test run" }).click();
       await expect(prepare.getByRole("status")).toContainText(/1 case\(s\) requested; 0 newly added; 1 skipped/);
+      // The separate handoff relationship is persisted after native case
+      // attachment, never on graph nomination alone.
+      const linkedCount = (runId: string) => Number(scalar(
+        "SELECT COUNT(*)::int FROM graph_review_run_case_links WHERE project_id=" +
+        literal(projectId) + " AND history_id=" + literal(historyId) +
+        " AND cycle_id=" + literal(runId) + " AND testcase_id=" + literal(caseId) + ";"
+      ));
+      expect(linkedCount(createdRunId!)).toBe(1);
+      await expect(prepare.getByRole("region", { name: "Persisted QA handoffs" }))
+        .toContainText("execution and approval require separate evidence");
       expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items
         WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
       expect(Number(scalar(`SELECT COUNT(*)::int FROM executions e
@@ -242,6 +252,9 @@ test.describe("zyra / agents (UI)", () => {
       await reopened.getByLabel("Existing open test run").selectOption(createdRunId);
       await reopened.getByRole("button", { name: "Add selected cases to run" }).click();
       await expect(reopened.getByRole("status")).toContainText(/0 newly added; 1 skipped/);
+      expect(linkedCount(createdRunId!)).toBe(1); // Re-add does not duplicate durable provenance.
+      await expect(reopened.getByRole("region", { name: "Persisted QA handoffs" }))
+        .toContainText("selected case");
       expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items
         WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
 
@@ -284,12 +297,17 @@ test.describe("zyra / agents (UI)", () => {
       await uncertain.getByLabel("Existing open test run").selectOption(uncertainRunId!);
       await uncertain.getByRole("button", { name: "Add selected cases to run" }).click();
       await expect(uncertain.getByRole("status")).toContainText(/1 newly added; 0 skipped/);
+      expect(linkedCount(uncertainRunId!)).toBe(1);
+      expect(linkedCount(createdRunId!)).toBe(1);
       expect(Number(scalar("SELECT COUNT(*)::int FROM cycle_items WHERE cycle_id=" +
         literal(uncertainRunId!) + " AND testcase_id=" + literal(caseId) + ";"))).toBe(1);
       expect(countRun()).toBe(1);
       await page.getByRole("link", { name: "Open existing test case" }).click();
       await expect(page).toHaveURL(new RegExp("/projects/" + projectId + "/testcases/" + caseId + "$"));
     } finally {
+      exec("DELETE FROM graph_review_run_case_links WHERE project_id=" + literal(projectId) +
+        " AND history_id IN (SELECT id FROM graph_capture_history WHERE project_id=" +
+        literal(projectId) + " AND revision=" + literal(reviewRevision) + ");");
       for (const runId of [createdRunId, uncertainRunId]) {
         if (!runId) continue;
         exec("DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id=" +
