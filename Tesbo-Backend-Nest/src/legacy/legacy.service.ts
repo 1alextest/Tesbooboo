@@ -15378,7 +15378,7 @@ export class LegacyService implements OnModuleInit {
       // the existing step so the recorder does not label the turn completed without errors. This
       // neither infers rollback/suite counts nor changes how any operation is applied.
       if (decision.operations.length && decision.operations.every((op) => op.type === "create_suite" || op.type === "move_to_suite") &&
-          applied.activity.some((entry) => entry.title === "An operation failed unexpectedly")) {
+          applied.activity.some((entry) => entry.title === "An operation failed unexpectedly" || entry.title === "Could not move testcases")) {
         onStage?.("staging", { status: "failed" }, "update");
       }
       const activity = [
@@ -16903,7 +16903,13 @@ export class LegacyService implements OnModuleInit {
         const suite = op.suiteId
           ? await this.getProjectSuite(projectId, op.suiteId)
           : await this.resolveOrCreateSuiteByName(projectId, String(op.suiteName));
-        if (!suite) continue;
+        if (!suite) {
+          // The destination is unavailable; this says nothing about whether the source cases exist.
+          activity.push({ actor: "agent", title: "Could not move testcases",
+            detail: "The destination suite is unavailable in this project, so this assignment was not applied. Check the destination suite before retrying.",
+            createdAt: new Date().toISOString() });
+          continue;
+        }
         let matchedAnything = false;
         let patchedTotal = 0;
 
@@ -24392,7 +24398,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     // Suite assignment also writes independently; a caught error is neither a missing target nor
     // proof of rollback. Keep completed moves and any still-pending review guidance alongside it.
     if (decision.operations.length && decision.operations.every((op) => op.type === "create_suite" || op.type === "move_to_suite") &&
-        applied.activity.some((entry) => entry.title === "An operation failed unexpectedly")) {
+        applied.activity.some((entry) => entry.title === "An operation failed unexpectedly" || entry.title === "Could not move testcases")) {
       const warning = ru ? ZYRA_RU.suiteOperationError
         : "⚠️ Suite operations reported an error. Do not treat the response below as confirmation that every operation completed. Any changes already applied were kept; check the activity log before retrying.";
       return warning + "\n\n" + decision.reply + reviewHint + moveSuffix;
