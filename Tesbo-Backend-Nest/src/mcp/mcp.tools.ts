@@ -982,6 +982,22 @@ export function buildMcpTools(): McpTool[] {
           await requireProjectOwnedRow(ctx, "plans", args.planId, "Plan");
         }
         const { validIds, invalidIds } = await partitionOwnedIds(ctx, "testcases", requestedIds);
+        // Refuse known non-Approved cases BEFORE the non-idempotent cycle
+        // create, rather than creating an empty run then failing the add.
+        // The shared addCycleTestCases writer also holds row locks and
+        // enforces approval at its INSERT boundary against concurrent changes.
+        if (validIds.length) {
+          const selected = await ctx.db.query<{ id: string; status: string }>(
+            "SELECT id::text, status FROM testcases WHERE project_id=$1::uuid AND id=ANY($2::uuid[]) AND deleted_at IS NULL",
+            [ctx.projectId, validIds]
+          );
+          const unapproved = selected.rows.filter((row) => row.status !== "Approved");
+          if (unapproved.length) {
+            throw new McpError(RpcCode.ToolExecutionError,
+              "Only Approved test cases can be added to a test run: " +
+                unapproved.map((row) => row.id).join(", "));
+          }
+        }
         const cycle = await ctx.legacy.createCycle(ctx.projectId, {
           name: args.name,
           description: args.description,
