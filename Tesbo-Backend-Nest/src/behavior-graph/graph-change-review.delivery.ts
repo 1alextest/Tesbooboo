@@ -26,19 +26,43 @@ export class GraphChangeReviewDelivery {
       throw new NotFoundException({ error: "Change review not found" });
     }
     await this.legacy.requireProjectAccess(userId, projectId);
+    return this.deliverCommitted(projectId, historyId, userId);
+  }
+
+  /**
+   * Trusted internal background-recovery entrypoint. Never expose this method
+   * from a controller or MCP tool. No caller identity is fabricated.
+   */
+  async recoverCommittedForSystem(projectId: string, historyId: string): Promise<GraphReviewDeliveryState> {
+    if (!POSITIVE_ID.test(historyId) || BigInt(historyId) > BIGINT_MAX) {
+      throw new NotFoundException({ error: "Change review not found" });
+    }
+    return this.deliverCommitted(projectId, historyId, null);
+  }
+
+  private async deliverCommitted(
+    projectId: string, historyId: string, callerId: string | null
+  ): Promise<GraphReviewDeliveryState> {
+    const callerMembership = callerId
+      ? `AND EXISTS (
+          SELECT 1 FROM project_members caller
+          JOIN organization_members caller_org ON caller_org.organization_id=p.organization_id
+            AND caller_org.user_id=caller.user_id
+          WHERE caller.project_id=p.id AND caller.user_id=$2::uuid
+            AND (to_jsonb(caller)->>'deleted_at') IS NULL
+            AND (to_jsonb(caller_org)->>'deleted_at') IS NULL
+        )`
+      : "";
     const result = await this.db.query<{
       id: string; organization_id: string; recipient_ids: string[];
     }>(
       `WITH allowed AS MATERIALIZED (
          SELECT DISTINCT p.id, p.organization_id FROM projects p
-           JOIN project_members caller ON caller.project_id=p.id AND caller.user_id=$2::uuid
-           JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id=$2::uuid
           WHERE p.id=$1::uuid
             AND (to_jsonb(p)->>'deleted_at') IS NULL
             AND (to_jsonb(p)->>'archived_at') IS NULL
             AND COALESCE((to_jsonb(p)->>'is_archived')::boolean,false)=false
-            AND (to_jsonb(caller)->>'deleted_at') IS NULL
-            AND (to_jsonb(om)->>'deleted_at') IS NULL
+            ${callerMembership}
        )
        SELECT h.id::text, a.organization_id::text AS organization_id,
               COALESCE((
@@ -53,7 +77,7 @@ export class GraphChangeReviewDelivery {
          FROM graph_capture_history h
          JOIN allowed a ON a.id=h.project_id
         WHERE h.id=$3::bigint AND h.review_receipt_json IS NOT NULL`,
-      [projectId, userId, historyId]
+      [projectId, callerId, historyId]
     );
     const row = result.rows[0];
     if (!row) throw new NotFoundException({ error: "Committed QA review receipt not found" });
