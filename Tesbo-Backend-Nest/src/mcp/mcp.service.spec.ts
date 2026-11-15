@@ -3026,7 +3026,7 @@ describe("MCP native model draft preview", () => {
   });
   it("blocks revoked membership at dispatch and at the native completion fence", async () => {
     const { svc, legacy, invoked, query } = setup();
-    legacy.requireProjectAccess.mockRejectedValueOnce(new ForbiddenException("Removed"));
+    jest.spyOn(legacy, "requireProjectAccess").mockRejectedValueOnce(new ForbiddenException("Removed"));
     const revoked: any = await svc.handleRequest(call(), principal(), "proj-1");
     expect(revoked.error.code).toBe(RpcCode.ProjectScopeDenied);
     expect(invoked).not.toHaveBeenCalled();
