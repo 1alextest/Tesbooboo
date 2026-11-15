@@ -1,4 +1,5 @@
 import { BUG_SEVERITIES, LegacyService } from "../legacy/legacy.service";
+import { expectedTestcaseRevision } from "../legacy/testcase-edit-revision";
 import { CurrentCacheGraphReader } from "../behavior-graph/current-cache-graph.reader";
 import { CurrentCacheGraphHistory } from "../behavior-graph/current-cache-graph.history";
 import { McpError, RpcCode, type McpTool, type McpToolContext } from "./mcp.types";
@@ -252,7 +253,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "get_testcase",
       description:
-        "Get one test case by id in the token's project, with its full detail: description, preconditions, postconditions, steps, test data, priority, severity, type, automation fields, component, status, estimated duration, Notes (attachments plain text), sourceRefs citations, and Jira/Linear links. Required: testcaseId.",
+        "Get one test case by id in the token's project, with its full detail: description, preconditions, postconditions, steps, test data, priority, severity, type, automation fields, component, status, estimated duration, Notes (attachments plain text), sourceRefs citations, Jira/Linear links, and editRevision. Pass editRevision as expectedRevision on update_testcase to refuse a stale row edit. Required: testcaseId.",
       requiredScope: "read",
       inputSchema: {
         type: "object",
@@ -324,13 +325,14 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "update_testcase",
       description:
-        "Update a test case in the token's project. Required: testcaseId. Optional: externalId (the case's ID such as NAP-TC-12; must stay unique in the project, no spaces, up to 32 characters; past runs show the new ID), suiteId, title, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult}), testData, attachments (plain-text Notes; omit to preserve, string to replace, empty string to clear; null is invalid), priority, severity, type, automationStatus, component, status, estimatedDuration, customFieldValues. Only fields you pass are changed; omitted fields keep their current value. To archive or restore a test case, prefer archive_testcase/restore_testcase over setting status here directly. The write is attributed to the Tesbo MCP agent actor.",
+        "Update a test case in the token's project. Required: testcaseId. Optional: expectedRevision (editRevision from get_testcase; recommended to refuse stale row edits), externalId (the case's ID such as NAP-TC-12; must stay unique in the project, no spaces, up to 32 characters; past runs show the new ID), suiteId, title, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult}), testData, attachments (plain-text Notes; omit to preserve, string to replace, empty string to clear; null is invalid), priority, severity, type, automationStatus, component, status, estimatedDuration, customFieldValues. A revision conflict writes nothing; reread and review before trying again, never automatically overwrite. Omitting expectedRevision retains unconditional legacy edits. Only fields you pass are changed; omitted fields keep their current value. To archive or restore a test case, prefer archive_testcase/restore_testcase over setting status here directly. The write is attributed to the Tesbo MCP agent actor.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
         properties: {
           testcaseId: { type: "string" },
           externalId: { type: "string" },
+          expectedRevision: { type: "string", pattern: "^[a-f0-9]{64}$", description: "Opaque editRevision from get_testcase. Guards the stored case row, not independently stored custom fields/tags. Reread and review on conflict; do not silently omit it to overwrite newer content." },
           suiteId: { type: "string" },
           title: { type: "string" },
           description: { type: "string" },
@@ -364,6 +366,7 @@ export function buildMcpTools(): McpTool[] {
       handler: async (args, ctx) => {
         const testcaseId = requireString(args, "testcaseId");
         validateTestcaseNotes(args);
+        expectedTestcaseRevision(args.expectedRevision);
         // updateTestCase() takes no project argument of its own — it derives the project from the
         // row it finds by id — so the tool must check project ownership itself before calling it.
         await requireProjectOwnedRow(ctx, "testcases", testcaseId, "Test case");
@@ -955,7 +958,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "create_cycle_from_testcases",
       description:
-        "Create a test cycle (test run) in the token's project and add the given test cases to it in one call — the same two-step workflow (create the run, then add test cases) the app's own UI performs; there is no single-statement backend path that does both. Required: name, testcaseIds (array). Optional: description, environment, buildVersion, releaseName, planId. Every testcaseId is validated against the token's project first — ids that don't exist or belong to another project are listed in invalidTestcaseIds and are never added, rather than silently vanishing into a bare skipped count. Duplicate ids in the input are deduplicated before adding.",
+        "Atomically create a test cycle (test run) and attach existing Approved project test cases. If a selected active case is Draft/In Review/Archived, the whole write is refused without creating an empty run. Required: name, testcaseIds (array). Optional: description, environment, buildVersion, releaseName, planId. Missing or foreign-project ids are listed separately as invalidTestcaseIds; duplicates are removed. Run and case addition reuse the native Tesbo writer, not a parallel system.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -979,24 +982,24 @@ export function buildMcpTools(): McpTool[] {
           await requireProjectOwnedRow(ctx, "plans", args.planId, "Plan");
         }
         const { validIds, invalidIds } = await partitionOwnedIds(ctx, "testcases", requestedIds);
-        const cycle = await ctx.legacy.createCycle(ctx.projectId, {
-          name: args.name,
-          description: args.description,
-          environment: args.environment,
-          buildVersion: args.buildVersion,
-          releaseName: args.releaseName,
-          planId: args.planId
-        });
-        // addCycleTestCases requires a real, org-access-checkable user (requireCycleAccess), same
-        // reasoning as update_suite/update_bug/bulk_update_testcases.
-        const addResult =
-          validIds.length > 0
-            ? await ctx.legacy.addCycleTestCases(cycle.id, ctx.userId, { testcaseIds: validIds })
-            : { requested: 0, added: 0, skipped: 0 };
+        // One native transaction for run creation, approved-case validation
+        // and case attachment. A Draft case or concurrent demotion rolls the
+        // whole attempt back, including the newly inserted run.
+        const prepared = await ctx.legacy.createCycleWithTestcasesForUser(
+          ctx.userId, ctx.projectId, {
+            name: args.name,
+            description: args.description,
+            environment: args.environment,
+            buildVersion: args.buildVersion,
+            releaseName: args.releaseName,
+            planId: args.planId,
+            testcaseIds: validIds
+          }
+        );
         return {
-          cycle,
+          cycle: prepared.cycle,
           testcasesRequested: requestedIds.length,
-          testcasesAdded: addResult.added,
+          testcasesAdded: prepared.added,
           invalidTestcaseIds: invalidIds
         };
       }

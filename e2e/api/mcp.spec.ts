@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, test, request as newRequestContext, type APIRequestContext } from "@playwright/test";
 import { env } from "../utils/env";
+import { testcaseEditState } from "../utils/testcase-edit-state";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 // Account B: a second, fully independent account/org/project (see global-setup.ts and
@@ -64,7 +65,15 @@ async function deleteCycleRest(request: import("@playwright/test").APIRequestCon
 }
 
 async function addCycleTestCaseRest(request: import("@playwright/test").APIRequestContext, cycleId: string, testcaseId: string) {
-  await request.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseId } });
+  // This helper seeds execution-focused E2E fixtures, not the approval
+  // workflow. Make the *existing* case Approved through Tesbo's native API
+  // before putting it into a run, matching the normal Test Runs picker.
+  const ready = await request.put(`/api/projects/${ctx.projectId}/testcases/${testcaseId}`, {
+    data: { status: "Approved" }
+  });
+  expect(ready.ok(), await ready.text()).toBeTruthy();
+  const attached = await request.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseId } });
+  expect(attached.ok(), await attached.text()).toBeTruthy();
 }
 
 async function getCycleExecutionsRest(request: import("@playwright/test").APIRequestContext, cycleId: string) {
@@ -147,6 +156,47 @@ async function callMcpToolExpectError(
   expect(body.error).toBeDefined();
   return body.error as { code: number; message: string };
 }
+
+test("MCP revision preconditions refuse stale and malformed edits without overwriting human Notes", async ({ request }) => {
+  const created = await createCase(request, { attachments: "Original Notes" });
+  const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
+  const mcp = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
+  let tokenId: string | undefined;
+  try {
+    const response = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      data: { name: `E2E edit revision ${Date.now()}`, scopes: ["read", "write"] }
+    });
+    expect(response.ok()).toBeTruthy();
+    const issued = await response.json();
+    tokenId = issued.id;
+    const initial = await callMcpTool(mcp, issued.token, "get_testcase", { testcaseId: created.id });
+    expect(initial.editRevision).toMatch(/^[a-f0-9]{64}$/);
+    expect((await request.put(url, { data: { attachments: "Human edited Notes" } })).ok()).toBeTruthy();
+    const committed = await (await request.get(url)).json();
+    const stale = await callMcpToolExpectError(mcp, issued.token, "update_testcase", {
+      testcaseId: created.id, expectedRevision: initial.editRevision, attachments: "Stale machine Notes"
+    });
+    expect(stale.message).toMatch(/changed since it was loaded/);
+    expect(testcaseEditState(await (await request.get(url)).json())).toEqual(testcaseEditState(committed));
+    for (const expectedRevision of [null, "", 7, true, [], {}]) {
+      const invalid = await callMcpToolExpectError(mcp, issued.token, "update_testcase", {
+        testcaseId: created.id, expectedRevision, title: "Must not change"
+      });
+      expect(invalid.message).toContain("expectedRevision");
+      expect(testcaseEditState(await (await request.get(url)).json())).toEqual(testcaseEditState(committed));
+    }
+    const saved = await callMcpTool(mcp, issued.token, "update_testcase", {
+      testcaseId: created.id, expectedRevision: committed.editRevision, description: "Reviewed update"
+    });
+    expect(saved.attachments).toBe("Human edited Notes");
+    expect(saved.description).toBe("Reviewed update");
+    expect(saved.editRevision).not.toBe(committed.editRevision);
+  } finally {
+    await deleteCase(request, created.id);
+    if (tokenId) await request.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    await mcp.dispose();
+  }
+});
 
 test.describe("MCP initialize", () => {
   test("advertises top-level instructions orienting a client to the whole server", async ({ request }) => {
@@ -4296,8 +4346,8 @@ test.describe("MCP create_cycle_from_testcases", () => {
       baseURL: env.apiBaseUrl,
       storageState: path.join(__dirname, "../.auth/state-b.json"),
     });
-    const tcA = await createCase(request, { title: `E2E MCP Cycle From Cases A ${stamp}` });
-    const tcB = await createCase(request, { title: `E2E MCP Cycle From Cases B ${stamp}` });
+    const tcA = await createCase(request, { title: `E2E MCP Cycle From Cases A ${stamp}`, status: "Approved" });
+    const tcB = await createCase(request, { title: `E2E MCP Cycle From Cases B ${stamp}`, status: "Approved" });
     let tokenId: string | undefined;
     let cycleId: string | undefined;
     let bCaseId: string | undefined;

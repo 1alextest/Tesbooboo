@@ -65,7 +65,7 @@ test.describe("attachments", () => {
     const suffix = Date.now();
     const testcase = await (
       await asOwner.post(`/api/projects/${tenant.mainProjectId}/testcases`, {
-        data: { title: `E2E Attachment Case ${suffix}` },
+        data: { title: `E2E Attachment Case ${suffix}`, status: "Approved" },
       })
     ).json();
     const cycle = await (
@@ -676,7 +676,7 @@ test.describe("attachments", () => {
     const suffix = Date.now();
     const testcase = await (
       await asOwner.post(`/api/projects/${tenant!.mainProjectId}/testcases`, {
-        data: { title: `E2E Trace Scope Case ${suffix}` },
+        data: { title: `E2E Trace Scope Case ${suffix}`, status: "Approved" },
       })
     ).json();
     const otherCycle = await (
