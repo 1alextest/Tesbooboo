@@ -209,6 +209,19 @@ const url = process.env.DATABASE_URL ?? "";
         await expect(store.captureVerifiedImplementationForUser(user, project, {
           ...row, observation: { ...row.observation.value } as never
         })).rejects.toMatchObject({ status: 409 });
+        // Ref movement after byte verification and before the DB lock must
+        // not write a stale observation over a newer commit.
+        writeFileSync(join(root, "src", "feature.ts"), "export const ready = 'newest';\n");
+        git("add", "src/feature.ts");
+        git("commit", "-m", "advanced while scanner was running");
+        const beforeStale = (await admin.query(
+          "SELECT COUNT(*)::int AS count FROM graph_capture_history WHERE project_id=$1", [project]
+        )).rows[0].count;
+        await expect(store.captureVerifiedImplementationForUser(user, project, row))
+          .rejects.toMatchObject({ status: 409 });
+        expect((await admin.query(
+          "SELECT COUNT(*)::int AS count FROM graph_capture_history WHERE project_id=$1", [project]
+        )).rows[0].count).toBe(beforeStale);
         await admin.query(
           "UPDATE project_source_bindings SET ref_name='main' WHERE project_id=$1",
           [project]

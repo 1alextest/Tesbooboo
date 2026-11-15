@@ -97,7 +97,12 @@ export class ProjectSourceBindingReader {
     userId: string | null | undefined,
     projectId: string,
     proposedConcepts: readonly SourceConceptObservation[] = []
-  ): Promise<{ binding: ProjectSourceBinding; observation: VerifiedPinnedSource }> {
+  ): Promise<{
+    binding: ProjectSourceBinding;
+    observation: VerifiedPinnedSource;
+    /** Rechecked AFTER the history writer acquires the project lock. */
+    revalidatePinnedRef: () => Promise<boolean>;
+  }> {
     const { binding, checkout } = await this.resolveForUser(userId, projectId);
     const reader = await LocalPinnedGitSourceReader.fromConfiguredCheckout(binding.repositoryId, checkout.root);
     const pinned = await reader.resolveRef(binding.refName);
@@ -106,6 +111,10 @@ export class ProjectSourceBindingReader {
       proposedConcepts, selectionPrefixes: binding.selectionPrefixes
     };
     const observation = await VerifiedPinnedSource.capture(reader, request);
-    return { binding, observation };
+    return {
+      binding, observation,
+      revalidatePinnedRef: async () =>
+        (await reader.resolveRef(binding.refName)) === observation.value.commitSha
+    };
   }
 }

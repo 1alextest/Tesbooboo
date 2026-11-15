@@ -111,9 +111,10 @@ export class CurrentCacheGraphHistory {
   async captureVerifiedImplementationForUser(
     userId: string | null | undefined,
     projectId: string,
-    verified: { binding: ProjectSourceBinding; observation: VerifiedPinnedSource }
+    verified: { binding: ProjectSourceBinding; observation: VerifiedPinnedSource; revalidatePinnedRef: () => Promise<boolean> }
   ): Promise<PersistedGraphObservation> {
     if (!verified || !(verified.observation instanceof VerifiedPinnedSource) ||
+        typeof verified.revalidatePinnedRef !== "function" ||
         verified.binding.projectId !== projectId ||
         verified.observation.value.projectId !== projectId ||
         verified.binding.repositoryId !== verified.observation.value.repositoryId ||
@@ -154,6 +155,14 @@ export class CurrentCacheGraphHistory {
         );
         if (scoped.rows.length !== 1) {
           throw new ConflictException({ error: "Source binding changed before graph history commit" });
+        }
+        // Source bytes were pinned BEFORE the DB transaction. Recheck the
+        // branch under the project lock so an older scan cannot commit after
+        // a newer scan and masquerade as a reverse-ordered implementation change.
+        let current = false;
+        try { current = await verified.revalidatePinnedRef(); } catch { current = false; }
+        if (!current) {
+          throw new ConflictException({ error: "Source ref moved before graph history commit" });
         }
       }
       const native = await this.reader.captureForUserInTransaction(userId, projectId, client);
