@@ -1083,6 +1083,56 @@ describe("McpService", () => {
     });
   });
 
+  describe("create postconditions with native test-case writer", () => {
+    it("advertises existing postconditions for single and bulk create without another field", async () => {
+      const { db } = makeDb();
+      const svc = new McpService(makeLegacy(), db, writableLimits);
+      const catalog: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
+      const one = catalog.result.tools.find((t: any) => t.name === "create_testcase");
+      const bulk = catalog.result.tools.find((t: any) => t.name === "bulk_create_testcases");
+      expect(one.inputSchema.properties.postconditions.type).toBe("string");
+      expect(bulk.inputSchema.properties.testcases.items.properties.postconditions.type).toBe("string");
+      expect(one.description).toContain("postconditions");
+      expect(bulk.description).toContain("postconditions");
+    });
+
+    it("passes postconditions through the existing create writer and preserves omission", async () => {
+      const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      for (const args of [
+        { title: "Postcondition case", postconditions: "Inventory remains unchanged" },
+        { title: "Omitted postcondition" }
+      ]) {
+        const result: any = await svc.handleRequest(rpc("tools/call", {
+          name: "create_testcase", arguments: args
+        }), principal(), "proj-1");
+        expect(result.result.isError).toBe(false);
+        expect((legacy as any).createTestCase).toHaveBeenLastCalledWith("proj-1", "mcp-actor-1", args);
+      }
+    });
+
+    it("passes postconditions through per-item bulk create, maintaining item isolation", async () => {
+      const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      const result: any = await svc.handleRequest(rpc("tools/call", {
+        name: "bulk_create_testcases", arguments: { testcases: [
+          { title: "First", postconditions: "No side effects" },
+          { title: "Bad missing title" , postconditions: "Not saved" },
+          { title: "Last", postconditions: "" }
+        ].map((row, index) => index === 1 ? { postconditions: row.postconditions } : row) }
+      }), principal(), "proj-1");
+      expect(result.result.isError).toBe(false);
+      const response = JSON.parse(result.result.content[0].text);
+      expect(response).toMatchObject({ total: 3, succeeded: 2, failed: 1 });
+      expect((legacy as any).createTestCase).toHaveBeenCalledTimes(2);
+      expect((legacy as any).createTestCase).toHaveBeenNthCalledWith(2, "proj-1", "mcp-actor-1", {
+        title: "Last", postconditions: ""
+      });
+    });
+  });
+
   describe("update_testcase project scoping", () => {
     it("updates a test case when it belongs to the token's project, attributed to the agent actor", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
