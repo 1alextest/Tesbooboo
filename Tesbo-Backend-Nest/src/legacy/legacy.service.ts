@@ -17302,13 +17302,17 @@ export class LegacyService implements OnModuleInit {
     const externalIds = [...(op.externalIds || []), ...(op.externalId ? [op.externalId] : [])].map((value) => String(value).trim()).filter(Boolean);
     const internalIds = [...(op.testcaseIds || []), ...(op.testcaseId ? [op.testcaseId] : [])].map((value) => String(value).trim()).filter((value) => uuidPattern.test(value));
     if (!externalIds.length && !internalIds.length) return { targets: [], requestedCount: null };
-    // Unique named identifiers, not the raw (possibly duplicate-heavy) list — the model repeating
-    // "TC-5" twice in the same operation must not manufacture a false "1 of 2 could not be moved".
-    const requestedCount = new Set([...externalIds, ...internalIds]).size;
     const res = await this.db.query(
-      "SELECT id FROM testcases WHERE project_id = $1 AND (external_id = ANY($2::text[]) OR id = ANY($3::uuid[])) AND deleted_at IS NULL",
+      "SELECT id, external_id FROM testcases WHERE project_id = $1 AND (external_id = ANY($2::text[]) OR id = ANY($3::uuid[])) AND deleted_at IS NULL",
       [projectId, externalIds, internalIds]
     ).catch(() => ({ rows: [] as Body[] }));
+    // Count resolved identities once, even when both UUID and external-id aliases name them.
+    // Keep unresolved selectors distinct; only UUIDs have case-insensitive identity semantics.
+    const matchedIds = new Set(res.rows.map((row) => String(row.id).toLowerCase()));
+    const matchedExternalIds = new Set(res.rows.map((row) => row.external_id));
+    const unresolvedIds = new Set(internalIds.map((id) => id.toLowerCase()).filter((id) => !matchedIds.has(id)));
+    const unresolvedExternalIds = new Set(externalIds.filter((id) => !matchedExternalIds.has(id)));
+    const requestedCount = matchedIds.size + unresolvedIds.size + unresolvedExternalIds.size;
     return { targets: res.rows.map((row) => ({ id: String(row.id) })), requestedCount };
   }
 
