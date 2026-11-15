@@ -79,6 +79,14 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(badLimit.status()).toBe(409);
     const badCursor = await asQa.get(url + "?beforeId=0%20OR%20TRUE");
     expect(badCursor.status()).toBe(409);
+    // A query parser can produce arrays/objects despite a controller's
+    // string annotation. Refuse them before bigint/number coercion or SQL.
+    for (const query of ["beforeId[]=1", "beforeId[value]=1", "limit[]=25", "limit[value]=25"]) {
+      const malformed = await asQa.get(url + "?" + query);
+      expect(malformed.status(), `structured query ${query}: ${await malformed.text()}`).toBe(409);
+    }
+    const largestCursor = await asQa.get(url + "?beforeId=9223372036854775807&limit=1");
+    expect(largestCursor.status()).toBe(200);
 
     const cross = await asQa.get(`/api/projects/${tenant!.secondProjectId}/agents/zyra/changes`);
     expect([403, 404]).toContain(cross.status());

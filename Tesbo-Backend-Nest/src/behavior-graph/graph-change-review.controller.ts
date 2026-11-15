@@ -36,11 +36,12 @@ export class GraphChangeReviewController {
   async list(
     @Req() request: AuthenticatedRequest,
     @Param("projectId") projectId: string,
-    @Query("limit") rawLimit?: string,
-    @Query("beforeId") beforeId?: string
+    @Query("limit") rawLimit?: unknown,
+    @Query("beforeId") beforeId?: unknown
   ) {
-    const limit = rawLimit === undefined ? 25 : Number(rawLimit);
-    // The history service rejects non-integers and out-of-bounds cursors.
+    const limit = rawLimit === undefined ? 25 : typeof rawLimit === "string" ? Number(rawLimit) : NaN;
+    // Query parsers can return arrays/objects. Keep malformed limits invalid
+    // without coercing them, and retain the history service's auth-first guard.
     return { entries: await this.history.listForUser(request.userId, projectId, limit, beforeId) };
   }
 

@@ -116,8 +116,16 @@ test.describe("zyra / agents (UI)", () => {
     // No approved checkout exists in this disposable test tenant; don't
     // fabricate one or claim capture success.
     await expect(page.getByText("No committed graph observations are available for this project.")).toBeVisible();
+    const resolvedResponse = await api.get("/api/route-resolve", { params: { project: tenant!.mainProjectId } });
+    expect(resolvedResponse.ok()).toBeTruthy();
+    const resolved = await resolvedResponse.json();
+    expect(resolved.projectId).toBe(tenant!.mainProjectId);
+    expect(resolved.projectKey).toEqual(expect.any(String));
     await page.getByRole("link", { name: "Back to Zyra" }).click();
-    await expect(page).toHaveURL(new RegExp(`/projects/${tenant!.mainProjectId}/agents/zyra`));
+    // RouteParamsProvider deliberately canonicalizes UUID URLs to readable
+    // references. Assert the exact resolved project, not either spelling.
+    await expect(page).toHaveURL((url) =>
+      url.pathname === `/projects/${encodeURIComponent(resolved.projectKey)}/agents/zyra`);
   });
 
   test("graph review links an explicitly nominated case to its existing canonical record", async ({ browser }) => {
@@ -284,8 +292,16 @@ test.describe("zyra / agents (UI)", () => {
       expect(Number(scalar("SELECT COUNT(*)::int FROM cycle_items WHERE cycle_id=" +
         literal(uncertainRunId!) + " AND testcase_id=" + literal(caseId) + ";"))).toBe(1);
       expect(countRun()).toBe(1);
+      const resolvedResponse = await api.get("/api/route-resolve", { params: { project: projectId, testcase: caseId } });
+      expect(resolvedResponse.ok()).toBeTruthy();
+      const resolved = await resolvedResponse.json();
+      expect(resolved.projectId).toBe(projectId);
+      expect(resolved.testcaseId).toBe(caseId);
+      expect(resolved.projectKey).toEqual(expect.any(String));
+      expect(resolved.testcaseRef).toEqual(expect.any(String));
       await page.getByRole("link", { name: "Open existing test case" }).click();
-      await expect(page).toHaveURL(new RegExp("/projects/" + projectId + "/testcases/" + caseId + "$"));
+      await expect(page).toHaveURL((url) => url.pathname ===
+        `/projects/${encodeURIComponent(resolved.projectKey)}/testcases/${encodeURIComponent(resolved.testcaseRef)}`);
     } finally {
       for (const runId of [createdRunId, uncertainRunId]) {
         if (!runId) continue;

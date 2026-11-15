@@ -217,7 +217,7 @@ export function ReviewCaseRunSetup({
       {error && <p role="alert" className="mt-2">{error}</p>}
       {complete && (
         <p role="status" className="mt-2">
-          {complete.selected} case(s) requested; {complete.added} newly added; {complete.skipped}
+          {complete.selected} case(s) requested; {complete.added} newly added; {complete.skipped}{" "}
           skipped (already present or no longer eligible). Open the run to verify assignments,
           record actual execution evidence, and obtain human review.
         </p>
