@@ -6550,15 +6550,20 @@ export class LegacyService implements OnModuleInit {
     );
     // All REST aliases and both MCP creation tools reach this writer. Do not depend on
     // a particular adapter checking the Plan or copy a stale pre-transaction eligibility read.
-    const res = transactionClient
-      ? (body.planId
-          ? (await this.lockPlanProjectReference(transactionClient, "plans", projectId, body.planId, "Plan"),
-            await insert(transactionClient))
-          : await insert(transactionClient))
-      : body.planId ? await this.db.transaction(async (client) => {
-          await this.lockPlanProjectReference(client, "plans", projectId, body.planId, "Plan");
-          return insert(client);
-        }) : await insert(this.db);
+    let res: { rows: QueryResultRow[] };
+    if (transactionClient) {
+      if (body.planId) {
+        await this.lockPlanProjectReference(transactionClient, "plans", projectId, body.planId, "Plan");
+      }
+      res = await insert(transactionClient);
+    } else if (body.planId) {
+      res = await this.db.transaction(async (client) => {
+        await this.lockPlanProjectReference(client, "plans", projectId, body.planId, "Plan");
+        return insert(client);
+      });
+    } else {
+      res = await insert(this.db);
+    }
     return toCamel(res.rows[0]);
   }
 
