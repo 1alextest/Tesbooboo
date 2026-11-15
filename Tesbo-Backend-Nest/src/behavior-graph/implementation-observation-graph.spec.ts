@@ -1,4 +1,5 @@
 import { compareComparableGraphCaptures } from "./graph-comparison-gate";
+import { prepareQaChangeReviewReceipt } from "./qa-change-review-receipt";
 import { projectImplementationObservations, type TrustedSourceObservation } from "./implementation-observation-graph";
 import type { GraphCaptureForComparison } from "./graph-comparison-gate";
 
@@ -96,6 +97,42 @@ describe("internal implementation source observation projection", () => {
   it("rejects incomplete native graph rather than adding implementation declarations to it", () => {
     expect(() => projectImplementationObservations({ ...base, inventoryStatus: "unknown" }, source))
       .toThrow("base graph capture is not complete");
+  });
+
+  it("routes a code-only source change into existing QA receipt semantics without auto-failing a case", () => {
+    const before = project();
+    const after = project({
+      ...source,
+      commitSha: "f".repeat(40),
+      files: source.files.map((file) =>
+        file.path === "src/routes/login.ts" ? { ...file, contentSha256: hex("f") } : file)
+    });
+    const receipt = prepareQaChangeReviewReceipt(before, after);
+    expect(receipt?.status).toBe("needs_qa_triage");
+    expect(receipt?.changed.modifiedNodeIds).toHaveLength(1);
+    expect(receipt?.changed.modifiedNodeIds[0]).toContain("implementation_file");
+    expect(receipt?.candidates).toEqual([]);
+    expect(receipt?.evidence).toMatchObject({
+      coverageAssertion: "none",
+      executionAssertion: "none",
+      verification: "not_performed"
+    });
+  });
+
+  it("preserves removed source declarations as explicit removal impacts", () => {
+    const before = project();
+    const after = project({
+      ...source,
+      commitSha: "f".repeat(40),
+      concepts: source.concepts.filter((concept) => concept.kind !== "route")
+    });
+    const delta = compareComparableGraphCaptures(before, after);
+    expect(delta.removedNodes).toHaveLength(1);
+    expect(delta.removedNodes[0]).toContain("source_declaration");
+    expect(delta.removedEdges).toHaveLength(1);
+    const receipt = prepareQaChangeReviewReceipt(before, after);
+    expect(receipt?.changed.removedNodeIds).toEqual(delta.removedNodes);
+    expect(receipt?.changed.removedEdgeIds).toEqual(delta.removedEdges);
   });
 
   it("supports behavior/journey declarations without inventing links to test cases", () => {
