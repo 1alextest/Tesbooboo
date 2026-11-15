@@ -18,6 +18,8 @@ export class GraphReviewRecoveryProcessor extends WorkerHost {
       this.logger.warn(`Unknown graph notification recovery job: ${job.name}`);
       return null;
     }
+    // A previously queued job must not run after an operator disables recovery.
+    if (process.env.TESBO_GRAPH_QA_RECOVERY_ENABLED !== "1") return null;
     return this.recovery.runOnce();
   }
 }
