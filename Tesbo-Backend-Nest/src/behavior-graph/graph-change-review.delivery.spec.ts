@@ -48,6 +48,23 @@ describe("committed native QA notification delivery", () => {
     expect(sql).toContain("organization_members");
   });
 
+  it("system recovery retries only a committed receipt without fabricating human membership", async () => {
+    const { svc, query } = fixture();
+    expect(await svc.recoverCommittedForSystem(PROJECT, REVIEW)).toEqual({
+      status: "delivered", recipientCount: 2, pendingCount: 0
+    });
+    const sql = query.mock.calls[0][0] as string;
+    expect(sql).toContain("h.review_receipt_json IS NOT NULL");
+    expect(sql).not.toContain("caller.user_id=$2::uuid");
+    expect(query.mock.calls[0][1]).toEqual([PROJECT, null, REVIEW]);
+  });
+
+  it("system recovery refuses an invalid or missing receipt", async () => {
+    const { svc } = fixture({ missing: true });
+    await expect(svc.recoverCommittedForSystem(PROJECT, "not-an-id")).rejects.toMatchObject({ status: 404 });
+    await expect(svc.recoverCommittedForSystem(PROJECT, REVIEW)).rejects.toMatchObject({ status: 404 });
+  });
+
   it("reports only missing recipients as pending instead of asserting delivery", async () => {
     const { svc } = fixture({ delivered: [USER] });
     expect(await svc.deliverForUser(USER, PROJECT, REVIEW)).toEqual({
