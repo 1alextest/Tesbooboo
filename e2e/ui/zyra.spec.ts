@@ -316,6 +316,10 @@ test.describe("zyra / agents (UI)", () => {
     } finally {
       releaseFirst?.();
       await page.unrouteAll({ behavior: "wait" });
+      // This suite reuses its disposable tenant across tests: remove the graph
+      // fixture explicitly, rather than poisoning later history assertions.
+      exec(`DELETE FROM graph_capture_history WHERE project_id=${literal(projectId)}
+        AND revision LIKE ${literal("e2e-history-race-" + stamp + "-%")};`);
     }
   });
 
