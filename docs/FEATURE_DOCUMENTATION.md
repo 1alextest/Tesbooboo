@@ -6029,3 +6029,62 @@ outside this UI repair. No broader Phase 1/2 sign-off is implied.
 **Tests:** backend unit contracts cover malformed/forged inputs, unknown receipts, authorization, atomic all-case eligibility and idempotent replay. Migrated PostgreSQL integration tests create an actual committed review and native cycle/case association, assert persisted project-scoped FK provenance and zero completed executions, verify repeated inserts, reject foreign project and non-nominated cases, roll back mixed batches, and recheck denied membership. Existing disposable Zyra browser/API E2E now check the full handoff path, persistence across reload, duplicate insertion avoidance and rejected forged execution payloads. Those authored tests must be executed by exact-head CI before this is considered verified.
 
 **Assurance boundaries and next phases:** This proves only a *human test-selection handoff*, not semantic implementation-route-state/journey correctness or test coverage. Source bytes remain pinned but proposed behavior semantics remain unverified. A later supported execution/evidence association must join existing run results, attachments/defects and human QA approval with explicit provenance; never mutate a source receipt to claim success, or construct a second execution store. Live deployed Git checkout, independent assurance team execution, full agent→Zyra→run→evidence→approval acceptance, retention/hard-delete policy and scheduler operations remain release gates.
+
+---
+
+### Recovered pilot feedback and bounded PR #88 repair checkpoint (2026-11-15)
+
+**Scope:** the founder's feedback covers more than MCP Notes/Postconditions.
+The table below reconciles that existing feedback with inspected source, rather
+than creating another specification or claiming all requested capabilities are
+missing. Historical checkpoints above retain their recorded scope. The current
+integration includes the PR owner's work through `3e774a2761df0fd6ff087e655908c7e67cecd915`.
+No live Nesberry cases, project-token grants, production deployment, SDK
+publication or paid resources were changed.
+
+| Feedback | Current source finding and remaining work |
+|---|---|
+| Notes and creation-time Postconditions | Already advertised and handled by the existing MCP case tools. Reuse those native fields; do not add another Notes/final-state field. The separately prepared Notes release, actual serving build, connected-client catalog and deployed read/write acceptance remain distinct evidence. |
+| Workspace project provisioning and secure access handoff | Native browser project creation and project-scoped API tokens already exist. MCP `list_projects` deliberately returns only its token's project; no workspace machine principal/provisioning contract was found in the inspected auth/MCP paths. Define explicit workspace authority and secure new-project-scoped access handoff before extending them. Never reinterpret an existing project token as workspace authority or return credentials in chat/MCP results. |
+| Structured Context/source associations | Existing case `source_refs`, Zyra citation resolution, detail rendering and external requirement-link tools are the owners to extend. `sanitizeSourceRefsInput` checks shape and bounds, not source existence/access; MCP's advertised authoring fields do not establish validated citation authoring. Require actual accessible sources and explicit omit/replace/clear semantics, not arbitrary Context text, invented external keys or another citation store. |
+| Starter case-authoring guidance | Reconcile existing onboarding, knowledge and agent-guidance ownership with the supplied complete versioned project-neutral package. No complete onboarding skill-bundle provisioner was identified in this inspection. Do not copy Nesberry roles, reference inaccessible assets or overwrite workspace customizations; workspace defaults require separate owner/admin authority. |
+| Relationship-based journey/traceability views | Reuse native case IDs, source/requirement links and the existing graph. Source-declared route/state/behavior/journey observations are present, but they do not establish verified behavioral dependencies, saved multidimensional views or coverage. Preserve provenance and identity rather than cloning cases between cohorts. |
+| Change-impact analysis and notifications | PR #88 already supplies graph review, native notifications/recovery, owner source setup, MCP read/capture and durable human-selected run/case handoff links. Repair and verify that implementation rather than creating another inbox, assistant or graph. Source semantics, execution/evidence/defect/approval provenance and deployed acceptance remain separate gates. A change must not automatically edit, fail or approve a case. |
+| Conflict-aware edits, review/recovery and field contracts | The inspected shared `updateTestCaseWithClient` updates active rows without a caller-revision predicate; `updateTestCase` and the advertised MCP update schema supply none. This is a source-level concurrency concern, not a reproduced live lost-update incident. Existing history, Zyra review-batch transactions, omitted-field preservation and per-item bulk outcomes must be retained. Confirm the edit-conflict policy and audit UI/API/MCP field support before extending the shared writer; do not impose all-or-nothing semantics on deliberately per-item bulk creation. |
+| Readiness and source/review freshness | Inspect existing run/reporting/versioning facilities before adding statuses. Case counts, source citations, pinned source bytes, a prepared run and an impact receipt each convey different evidence; none alone means runnable prerequisites, executed coverage or human approval. Target/data/access binding and independent procedure/comprehension review remain the authoring/QA workflow's responsibility. |
+
+**Bounded security/navigation repair:** CodeQL alert
+[#42](https://github.com/1alextest/Tesbooboo/security/code-scanning/42)
+identified HTTP parameter type confusion in the existing graph-history reader.
+Treat `beforeId` as runtime `unknown` and require a primitive string before regex,
+length or bigint operations. Structured HTTP limits remain invalid without
+running coercion hooks. Preserve authentication-first refusal, the existing
+1–100 limit, exact bigint cursor bounds, project authorization and SQL parameters.
+Add structured-query negatives and maximum-cursor acceptance to the existing
+Zyra API spec. Navigation checks resolve and assert exact canonical project/case
+identities instead of assuming UUID address-bar spelling. Retain the owner's
+newer whitespace fix, durable-link persistence/reload/duplicate/forged-outcome
+checks and cleanup unchanged.
+
+**Local evidence:** 27 new paging regressions first produced **8 failures /
+34 passes / 42 total** on the unmodified controller/history implementation.
+After integration, **426/426 tests across 19 suites passed, zero skipped**,
+including all non-database behavior-graph suites, MCP, token authorization and
+native notification contracts. Broader verification initially exposed a Windows
+symlink-fixture privilege failure; the same existing security test now constructs
+a real Git mode-`120000` entry and verifies it before asserting reader refusal.
+No symlink check was skipped or mocked. Backend/frontend/E2E non-incremental
+typechecks, changed-file lint, backend build emission and actual status-JSX
+rendering checks passed. JSX rendering is not browser acceptance; collaborator
+doubles are not PostgreSQL persistence evidence.
+
+**Still required:** fresh exact-head CodeQL and browser/DB CI on this repair;
+the owner's earlier green smoke is not a run of the repaired tree. No configured
+API/browser/database E2E or migration was launched by this local continuation.
+Shared/deployed execution still requires the repository's explicit selection,
+runner and approval gates. Do not declare the alert closed, PR complete or
+release approved from unit/typecheck results. Canonical-source reconciliation,
+F1–F9 / D1–D6 / E1–E7 decisions and independent security/release assurance remain
+outstanding. After this bounded repair, resume conflict/revision and field-contract
+reconciliation alongside the separately authorized workspace handoff design,
+not infrastructure planning or a duplicate graph implementation.
