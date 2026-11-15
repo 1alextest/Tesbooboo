@@ -123,8 +123,17 @@ describe("notifyUsers", () => {
     const [sql, params] = dbQuery.mock.calls[0];
     expect(sql).toContain("(to_jsonb(pm)->>'deleted_at') IS NULL");
     expect(sql).toContain("(to_jsonb(om)->>'deleted_at') IS NULL");
-    expect(sql).toContain("pm.role = ANY($9::text[])");
+    expect(sql).toContain("pm.role::text = ANY($9::text[])");
     expect(params).toEqual([[OTHER, THIRD], "qa_change_review", "Review a change", null, null, "change:1", ORG_ID, PROJECT_ID, ["qa_engineer", "manager", "owner"]]);
+  });
+
+  it("does not silently widen a role-restricted notification without project scope", async () => {
+    const dbQuery = jest.fn();
+    expect(await writeNotifications({ query: dbQuery } as never, [OTHER], {
+      type: "qa_change_review", title: "t",
+      memberOf: { organizationId: ORG_ID, projectRoles: ["owner"] }
+    })).toBe(0);
+    expect(dbQuery).not.toHaveBeenCalled();
   });
 
   it("fails closed when explicit project role eligibility is empty", async () => {
