@@ -38,6 +38,12 @@ jobs:
       NEXT_PUBLIC_API_URL: http://127.0.0.1:7000
       CI_API_BASE_URL: http://127.0.0.1:7000
       CI_WEB_BASE_URL: http://127.0.0.1:3000
+      # The broader Playwright config uses these, unlike ci-smoke.config.ts.
+      # Never let it silently default to the unrelated 1010/1011 stack.
+      API_BASE_URL: http://127.0.0.1:7000
+      WEB_BASE_URL: http://127.0.0.1:3000
+      E2E_AUTO_PROVISION: "true"
+      E2E_DB_TRANSPORT: direct
       TESBO_REPORTER_ENABLED: "0"
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
@@ -86,6 +92,16 @@ jobs:
           curl -fsS http://127.0.0.1:7000/health
           curl -fsS http://127.0.0.1:3000/login >/dev/null
           npx playwright test -c playwright.ci-smoke.config.ts
+      - name: Verify graph change-review, source setup and human QA handoff E2E
+        working-directory: e2e
+        run: |
+          # Only impacted Zyra tests, with dedicated disposable RBAC tenants.
+          # A lost mutation response must never produce a duplicate run/case.
+          # No live customer tenant or paid external AI provider is involved.
+          npx playwright test -c playwright.config.ts \
+            api/zyra.spec.ts ui/zyra.spec.ts \
+            --workers=1 \
+            -g "graph change history is project scoped|source binding setup is owner-only|Zyra opens native change review|owner can inspect root-free source setup|graph review links an explicitly nominated case"
       - name: Capture smoke evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -95,6 +111,7 @@ jobs:
           retention-days: 7
           path: |
             e2e/playwright-report-ci/
+            e2e/playwright-report/
             e2e/test-results/
             /tmp/tesbo-backend.log
             /tmp/tesbo-web.log
