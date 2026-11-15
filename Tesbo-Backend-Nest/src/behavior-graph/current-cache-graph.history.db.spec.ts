@@ -6,7 +6,7 @@ import { CurrentCacheGraphReader } from "./current-cache-graph.reader";
 import { CurrentCacheGraphHistory } from "./current-cache-graph.history";
 
 const url = process.env.DATABASE_URL ?? "";
-(/\\/tesbo_ci(?:\\?|$)/.test(url) ? describe : describe.skip)(
+(/\/tesbo_ci(?:\?|$)/.test(url) ? describe : describe.skip)(
   "current cache graph history — real migrated PostgreSQL", () => {
     let admin: Client, pool: Pool, store: CurrentCacheGraphHistory;
     let org: string, project: string, user: string, caseId: string;
