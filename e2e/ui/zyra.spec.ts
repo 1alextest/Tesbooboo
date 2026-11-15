@@ -270,6 +270,55 @@ test.describe("zyra / agents (UI)", () => {
     await expect(qa.getByTestId("zyra-source-binding")).toHaveCount(0);
   });
 
+  test("change history ignores late pagination replies and retains the latest authorized page", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, stamp = Date.now().toString();
+    // Real committed baseline rows, not invented case/run/execution records. Only the
+    // transport timing of one read response is controlled to reproduce a response race.
+    exec(`INSERT INTO graph_capture_history
+      (project_id, contract_id, source_scope_fingerprint, revision, capture_json)
+      SELECT ${literal(projectId)}, 'e2e-history-race', 'e2e-race-scope',
+        'e2e-history-race-' || ${literal(stamp)} || '-' || n::text,
+        jsonb_build_object('snapshot', jsonb_build_object('projectId', ${literal(projectId)},
+          'revision', 'e2e-history-race-' || ${literal(stamp)} || '-' || n::text,
+          'nodes', '[]'::jsonb, 'edges', '[]'::jsonb),
+          'inventoryStatus', 'complete', 'unresolvedDiagnostics', '[]'::jsonb,
+          'contractId', 'e2e-history-race', 'sourceScopeFingerprint', 'e2e-race-scope')
+      FROM generate_series(1, 27) AS n;`);
+    const page = await open(browser, "/agents/zyra/changes", "qa");
+    const older = page.getByRole("button", { name: "Older observations" });
+    await expect(older).toBeVisible();
+    let releaseFirst: (() => void) | undefined;
+    let firstIntercepted: (() => void) | undefined;
+    const held = new Promise<void>(resolve => { firstIntercepted = resolve; });
+    const gate = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let requests = 0;
+    await page.route(url => url.pathname.endsWith("/agents/zyra/changes") &&
+      url.searchParams.has("beforeId"), async route => {
+      if (++requests === 1) {
+        firstIntercepted?.();
+        await gate;
+        await route.fulfill({ status: 200, contentType: "application/json",
+          body: JSON.stringify({ entries: [] }) }).catch(() => {});
+      } else {
+        await route.continue();
+      }
+    });
+    try {
+      await older.click();
+      await held;
+      // Same cursor, newer request. It returns the genuine two older rows.
+      await older.click();
+      await expect(page.getByText("Older observations")).toHaveCount(0);
+      await expect(page.locator("section[aria-label='Graph change history'] article")).toHaveCount(2);
+      releaseFirst?.();
+      await expect(page.locator("section[aria-label='Graph change history'] article")).toHaveCount(2);
+      await expect(page.getByText("No committed graph observations are available for this project.")).toHaveCount(0);
+    } finally {
+      releaseFirst?.();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+
   test("Zyra opens native change review, handles missing source bindings and preserves zero executions", async ({ browser }) => {
     const page = await open(browser, "/agents/zyra", "qa");
     await page.getByRole("link", { name: "Change review" }).click();
