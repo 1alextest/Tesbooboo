@@ -121,11 +121,11 @@ test.describe("zyra / agents (UI)", () => {
         (project_id, contract_id, source_scope_fingerprint, revision, capture_json)
         VALUES (${literal(projectId)}, 'e2e-native-graph-v1', 'e2e-local-source',
           ${literal(baseRevision)}, ${literal(capture(baseRevision))}::jsonb);`);
-      exec(`INSERT INTO graph_capture_history
+      const historyId = scalar(`INSERT INTO graph_capture_history
         (project_id, contract_id, source_scope_fingerprint, revision, capture_json, review_receipt_json)
         VALUES (${literal(projectId)}, 'e2e-native-graph-v1', 'e2e-local-source',
           ${literal(reviewRevision)}, ${literal(capture(reviewRevision))}::jsonb,
-          ${literal(JSON.stringify(receipt))}::jsonb);`);
+          ${literal(JSON.stringify(receipt))}::jsonb) RETURNING id;`);
 
       const page = await open(browser, "/agents/zyra/changes", "qa");
       await expect(page.getByRole("heading", { name: "Change impact review" })).toBeVisible();
@@ -133,9 +133,28 @@ test.describe("zyra / agents (UI)", () => {
       await expect(link).toHaveAttribute("href", `/projects/${projectId}/testcases/${caseId}`);
       await expect(page.getByText("Review reason: case_changed")).toBeVisible();
       await expect(page.getByText(/execution and coverage unverified/i)).toBeVisible();
+      // Trigger the actual native notification path from a disposable tenant,
+      // verify durable rows, then replay. No test execution or case mutation.
+      const countNotifications = () => Number(scalar(`SELECT COUNT(*)::int FROM notifications
+        WHERE dedupe_key = ${literal(`qa_change_review:${projectId}:${historyId}`)};`));
+      expect(countNotifications()).toBe(0);
+      await page.getByRole("button", { name: "Notify QA reviewers" }).click();
+      await expect(page.getByRole("status")).toContainText(/Reviewer notifications confirmed/);
+      const delivered = countNotifications();
+      expect(delivered).toBeGreaterThan(0);
+      await page.getByRole("button", { name: "Notify QA reviewers" }).click();
+      await expect(page.getByRole("status")).toContainText(/Reviewer notifications confirmed/);
+      expect(countNotifications(), "repeat notification is idempotent").toBe(delivered);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM executions e
+        JOIN cycle_items ci ON ci.id=e.cycle_item_id JOIN cycles c ON c.id=ci.cycle_id
+        WHERE c.project_id=${literal(projectId)} AND ci.testcase_id=${literal(caseId)};`))).toBe(0);
       await link.click();
       await expect(page).toHaveURL(new RegExp("/projects/" + projectId + "/testcases/" + caseId + "$"));
     } finally {
+      exec(`DELETE FROM notifications WHERE dedupe_key IN
+        (SELECT 'qa_change_review:' || project_id::text || ':' || id::text
+           FROM graph_capture_history
+          WHERE project_id=${literal(projectId)} AND revision=${literal(reviewRevision)});`);
       exec(`DELETE FROM graph_capture_history WHERE project_id = ${literal(projectId)}
          AND revision IN (${literal(baseRevision)},${literal(reviewRevision)});`);
       if (caseId) exec(`DELETE FROM testcases WHERE id = ${literal(caseId)};`);
