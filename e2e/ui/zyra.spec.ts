@@ -331,6 +331,38 @@ test.describe("zyra / agents (UI)", () => {
     }
   });
 
+  test("change review refuses duplicate source capture while first request is pending", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId;
+    const before = Number(scalar(`SELECT COUNT(*)::int FROM graph_capture_history
+      WHERE project_id=${literal(projectId)};`));
+    const page = await open(browser, "/agents/zyra/changes", "owner");
+    const endpoint = `**/api/projects/${projectId}/agents/zyra/changes/capture`;
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const intercepted = new Promise<void>(resolve => { started = resolve; });
+    let attempts = 0;
+    await page.route(endpoint, async route => {
+      attempts++;
+      started();
+      await gate;
+      try { await route.fulfill({ status: 503, json: { error: "Injected capture unavailable" } }); }
+      catch { /* A navigated-away request can be cancelled. */ }
+    });
+    try {
+      const capture = page.getByRole("button", { name: "Capture configured source" });
+      await capture.dblclick();
+      await intercepted;
+      await expect(page.getByRole("button", { name: "Capturing…" })).toBeDisabled();
+      expect(attempts).toBe(1);
+      release();
+      await expect(page.getByText("Injected capture unavailable", { exact: true })).toBeVisible();
+      await expect(capture).toBeEnabled();
+      expect(attempts).toBe(1);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM graph_capture_history
+        WHERE project_id=${literal(projectId)};`))).toBe(before);
+    } finally { release(); await page.unrouteAll({ behavior: "wait" }); }
+  });
+
   test("change review discards late source-capture feedback after project navigation", async ({ browser }) => {
     const projectId = tenant!.mainProjectId, otherProjectId = tenant!.secondProjectId;
     const before = Number(scalar(`SELECT COUNT(*)::int FROM graph_capture_history
