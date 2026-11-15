@@ -40,13 +40,22 @@ export function SourceBindingSettings({ projectId }: { projectId: string }) {
       // Non-owners should not see the administrative setup form.
       // This is presentation only; server-side ownership remains mandatory.
       const message = cause instanceof Error ? cause.message : "Could not load source settings";
-      if (/403|forbidden|permission|project owner required/i.test(message)) setAuthorized(false);
-      else { setAuthorized(true); setError(message); }
+      // Any failed authorization read must fail closed. A temporary 5xx is
+      // not permission to render an administrative form for an unknown user.
+      setAuthorized(false);
+      if (!/403|forbidden|permission|project owner required/i.test(message)) {
+        setError(message);
+      }
     }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [projectId]);
 
-  if (loading || !authorized) return null;
+  if (loading) return null;
+  if (!authorized) {
+    return error ? <p role="alert" className="text-sm">
+      Source binding settings could not be loaded: {error}
+    </p> : null;
+  }
 
   async function save() {
     setSaving(true);

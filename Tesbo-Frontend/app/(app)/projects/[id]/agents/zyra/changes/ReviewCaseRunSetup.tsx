@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   addTestCasesToRun, createTestRun, listTestRuns, type TestRunListItem
 } from "@/lib/api";
@@ -26,6 +26,9 @@ export function ReviewCaseRunSetup({
   const [runsLoaded, setRunsLoaded] = useState(false);
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [working, setWorking] = useState(false);
+  // React state disables the button on render; this synchronous ref also
+  // rejects a second event in the same render/commit window.
+  const submitting = useRef(false);
   const [pendingRunId, setPendingRunId] = useState<string | null>(null);
   const [creationUnconfirmed, setCreationUnconfirmed] = useState(false);
   const [checkedForDuplicate, setCheckedForDuplicate] = useState(false);
@@ -61,10 +64,11 @@ export function ReviewCaseRunSetup({
   }
 
   async function attachSelected() {
-    if (working || !selected.length || (mode === "new" && !pendingRunId &&
+    if (submitting.current || working || !selected.length || (mode === "new" && !pendingRunId &&
         (!runName.trim() || !environment.trim() ||
          (creationUnconfirmed && !checkedForDuplicate))) ||
         (mode === "existing" && !existingId)) return;
+    submitting.current = true;
     setError(null);
     setComplete(null);
     setWorking(true);
@@ -103,6 +107,7 @@ export function ReviewCaseRunSetup({
           : "") + (cause instanceof Error ? cause.message : "Could not attach selected test cases."));
       }
     } finally {
+      submitting.current = false;
       setWorking(false);
     }
   }
