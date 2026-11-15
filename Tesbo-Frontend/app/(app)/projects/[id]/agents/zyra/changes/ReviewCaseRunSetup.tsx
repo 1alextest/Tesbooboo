@@ -197,10 +197,11 @@ export function ReviewCaseRunSetup({
       </fieldset>
       {creationUnconfirmed && !pendingRunId && (
         <div className="mt-3 space-y-2 rounded border border-[var(--border)] p-3">
-          <p role="alert">Run creation may already have committed. Check the native
-            <Link href={"/projects/" + projectId + "/cycles"} className="mx-1 underline">
+          <p role="alert">
+            Run creation outcome unconfirmed. It may already have committed. Check the native{" "}
+            <Link href={"/projects/" + projectId + "/cycles"} className="underline">
               Test Runs
-            </Link>
+            </Link>{" "}
             list, refresh existing runs below, and attach to the run if it exists.
           </p>
           <label className="flex items-start gap-2">

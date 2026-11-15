@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HISTORY_ID = /^[1-9][0-9]{0,18}$/;
 const MAX_HISTORY = 9223372036854775807n;
 
