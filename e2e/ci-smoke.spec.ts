@@ -45,7 +45,7 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
     });
     expect(login.ok(), await login.text()).toBeTruthy();
 
-    const testcaseResponse = await request.post(`${base}/testcases`, { data: { title: "CI authorization control" } });
+    const testcaseResponse = await request.post(`${base}/testcases`, { data: { title: "CI authorization control", status: "Approved" } });
     expect(testcaseResponse.ok(), await testcaseResponse.text()).toBeTruthy();
     testcaseId = (await testcaseResponse.json()).id;
     const cycleResponse = await request.post(`${base}/cycles`, { data: { name: "CI authorization control" } });
@@ -167,7 +167,7 @@ async function verifyHistoryImportText(
   });
   try {
     for (let i = 0; i < 2; i++) {
-      const created = await request.post(`${base}/testcases`, { data: { title: `CI history text ${i}` } });
+      const created = await request.post(`${base}/testcases`, { data: { title: `CI history text ${i}`, status: "Approved" } });
       expect(created.ok(), await created.text()).toBeTruthy();
       cases.push(await created.json());
     }
@@ -385,7 +385,7 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
     const foreignProject = (await foreignResponse.json()).id;
     const targets: Array<{ testcaseId: string; cycleId: string; executionId: string }> = [];
     for (const [index, project] of [projectId, projectId, foreignProject].entries()) {
-      const caseResponse = await request.post(`${api}/api/projects/${project}/testcases`, { data: { title: `CI relationship case ${index}` } });
+      const caseResponse = await request.post(`${api}/api/projects/${project}/testcases`, { data: { title: `CI relationship case ${index}`, status: "Approved" } });
       expect(caseResponse.ok(), await caseResponse.text()).toBeTruthy();
       const testcaseId = (await caseResponse.json()).id;
       cases.push({ id: testcaseId, project });
