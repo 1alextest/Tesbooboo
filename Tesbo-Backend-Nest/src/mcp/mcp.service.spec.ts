@@ -1,3 +1,4 @@
+import { ConflictException } from "@nestjs/common";
 import { McpService } from "./mcp.service";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
