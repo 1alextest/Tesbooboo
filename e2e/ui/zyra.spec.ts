@@ -126,6 +126,7 @@ test.describe("zyra / agents (UI)", () => {
     const baseRevision = `e2e-graph-base-${stamp}`;
     const reviewRevision = `e2e-graph-change-${stamp}`;
     let caseId: string | undefined;
+    let createdRunId: string | undefined;
     try {
       caseId = scalar(`INSERT INTO testcases(project_id,external_id,title)
         VALUES (${literal(projectId)},${literal("ZYU-GR-TC")},${literal("E2E linked graph review")})
@@ -178,9 +179,77 @@ test.describe("zyra / agents (UI)", () => {
       expect(Number(scalar(`SELECT COUNT(*)::int FROM executions e
         JOIN cycle_items ci ON ci.id=e.cycle_item_id JOIN cycles c ON c.id=ci.cycle_id
         WHERE c.project_id=${literal(projectId)} AND ci.testcase_id=${literal(caseId)};`))).toBe(0);
-      await link.click();
+
+      const prepare = page.getByTestId("graph-review-run-" + historyId);
+      await prepare.locator("summary").click();
+      const create = prepare.getByRole("button", { name: "Create run and add selected cases" });
+      await expect(create).toBeDisabled(); // Explicit human selection, never automatic.
+      await prepare.getByRole("checkbox", { name: "Select linked case 1" }).check();
+      await expect(create).toBeDisabled(); // Environment is not fabricated from a source receipt.
+      await prepare.getByLabel("Execution environment").fill("Disposable QA");
+      await prepare.getByLabel("New run name").fill("E2E Graph QA triage " + stamp);
+
+      // Simulate a lost attachment response AFTER the native server committed it.
+      // Retry must reuse the one already-created run, not create a duplicate.
+      const pathPattern = "**/api/cycles/*/testcases";
+      let interrupted = false;
+      const intercept = async (route: import("@playwright/test").Route) => {
+        if (interrupted || route.request().method() !== "POST") return route.continue();
+        interrupted = true;
+        const response = await route.fetch();
+        expect(response.ok(), await response.text()).toBeTruthy();
+        await route.fulfill({
+          status: 503, contentType: "application/json",
+          body: JSON.stringify({ error: "Injected response failure after successful attachment" })
+        });
+      };
+      await page.route(pathPattern, intercept);
+      try {
+        await create.click();
+        await expect(prepare.getByRole("alert")).toContainText(/already exists/i);
+      } finally {
+        await page.unroute(pathPattern, intercept);
+      }
+      expect(interrupted).toBe(true);
+      const runLink = prepare.getByRole("link", { name: "Open native test run" });
+      const href = await runLink.getAttribute("href");
+      expect(href).toMatch(new RegExp("^/projects/" + projectId + "/cycles/[0-9a-f-]{36}$"));
+      createdRunId = href!.split("/").at(-1)!;
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM cycles
+        WHERE id=${literal(createdRunId)} AND project_id=${literal(projectId)};`))).toBe(1);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items
+        WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
+      await prepare.getByRole("button", { name: "Retry adding to same test run" }).click();
+      await expect(prepare.getByRole("status")).toContainText(/1 case\(s\) requested; 0 newly added; 1 skipped/);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items
+        WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM executions e
+        JOIN cycle_items ci ON ci.id=e.cycle_item_id
+        WHERE ci.cycle_id=${literal(createdRunId)}
+          AND e.status IN ('Passed','Failed','Blocked');`))).toBe(0);
+
+      // Reopen the same receipt and select its existing run. Re-adding a
+      // canonical case must be idempotent through the native API.
+      await page.reload();
+      const reopened = page.getByTestId("graph-review-run-" + historyId);
+      await reopened.locator("summary").click();
+      await reopened.getByRole("checkbox", { name: "Select linked case 1" }).check();
+      await reopened.getByRole("radio", { name: "Add to existing test run" }).check();
+      await reopened.getByLabel("Existing open test run").selectOption(createdRunId);
+      await reopened.getByRole("button", { name: "Add selected cases to run" }).click();
+      await expect(reopened.getByRole("status")).toContainText(/0 newly added; 1 skipped/);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items
+        WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
+
+      await page.getByRole("link", { name: "Open existing test case" }).click();
       await expect(page).toHaveURL(new RegExp("/projects/" + projectId + "/testcases/" + caseId + "$"));
     } finally {
+      if (createdRunId) {
+        exec(`DELETE FROM executions WHERE cycle_item_id IN
+          (SELECT id FROM cycle_items WHERE cycle_id=${literal(createdRunId)});`);
+        exec(`DELETE FROM cycle_items WHERE cycle_id=${literal(createdRunId)};`);
+        exec(`DELETE FROM cycles WHERE id=${literal(createdRunId)};`);
+      }
       exec(`DELETE FROM notifications WHERE dedupe_key IN
         (SELECT 'qa_change_review:' || project_id::text || ':' || id::text
            FROM graph_capture_history
