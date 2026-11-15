@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { SourceBindingSettings } from "./SourceBindingSettings";
+import { ReviewCaseRunSetup } from "./ReviewCaseRunSetup";
 import { useParams } from "@/lib/routeParams";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -174,6 +175,10 @@ export default function ZyraChangeReviewPage() {
                       Evidence basis: {receipt.evidence.basis}. Source freshness unverified;
                       execution and coverage unverified. QA must choose and run applicable cases separately.
                     </p>
+                    <ReviewCaseRunSetup projectId={projectId} receiptId={entry.id}
+                      candidateCaseIds={receipt.candidates.map((candidate) =>
+                        canonicalReviewCaseId(candidate.caseNodeId, projectId)
+                      ).filter((id): id is string => id !== null)} />
                     <button type="button" disabled={notifying === entry.id} onClick={() => void retry(entry.id)}
                       className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm disabled:opacity-60">
                       {notifying === entry.id ? "Checking notification…" : "Notify QA reviewers"}
