@@ -90,6 +90,7 @@ const url = process.env.DATABASE_URL ?? "";
       await expect(store.listForUser(user, project, 0)).rejects.toMatchObject({ status: 409 });
       await expect(store.listForUser(user, project, 101)).rejects.toMatchObject({ status: 409 });
       await expect(store.listForUser(user, project, 1, "0 OR TRUE")).rejects.toMatchObject({ status: 409 });
+      await expect(store.listForUser(user, project, 1, "99999999999999999999")).rejects.toMatchObject({ status: 409 });
       const foreign = (await admin.query(
         "INSERT INTO projects(organization_id,key,name) VALUES ($1,'GHIF','Foreign graph') RETURNING id",
         [org]

@@ -44,7 +44,8 @@ export class CurrentCacheGraphHistory {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
       throw new ConflictException({ error: "Graph history limit must be 1–100" });
     }
-    if (beforeId !== undefined && !/^[1-9][0-9]*$/.test(beforeId)) {
+    if (beforeId !== undefined && (!/^[1-9][0-9]*$/.test(beforeId) ||
+        beforeId.length > 19 || BigInt(beforeId) > 9223372036854775807n)) {
       throw new ConflictException({ error: "Invalid history cursor" });
     }
     const result = await this.db.query<{
@@ -54,7 +55,7 @@ export class CurrentCacheGraphHistory {
       }>;
     }>(
       `WITH allowed AS MATERIALIZED (
-         SELECT p.id FROM projects p
+         SELECT DISTINCT p.id FROM projects p
            JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=$2::uuid
            JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id=$2::uuid
           WHERE p.id=$1::uuid
