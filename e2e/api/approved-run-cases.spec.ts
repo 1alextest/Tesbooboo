@@ -204,6 +204,32 @@ test.describe("Approved-only cases at native run write boundary", () => {
     expect(allowed.ok(), await allowed.text()).toBeTruthy();
     const body = await allowed.json();
     expect(body.casesAttached).toBe(1);
-    expect(items(body.runId || body.id)).toBe(1);
+    const runId = (body.runId || body.id) as string;
+    expect(items(runId)).toBe(1);
+
+    // A case approved when first attached may later be demoted. Existing
+    // execution history must remain writable; only NEW additions require
+    // current approval. This is not permission to add a new Draft case.
+    exec("UPDATE testcases SET status='Draft' WHERE id=" + literal(draft.id) + ";");
+    const reported = await owner.post(
+      `/api/projects/${tenant!.mainProjectId}/automation/runs/${runId}/results`, {
+        data: { caseId: draft.externalId, status: "fail", retryCount: 0, durationMs: 5 },
+        failOnStatusCode: false
+      }
+    );
+    expect(reported.ok(), await reported.text()).toBeTruthy();
+    expect((await reported.json()).status).toBe("Failed");
+    expect(items(runId)).toBe(1);
+    expect(executed(runId)).toBe(1);
+
+    const freshDraft = createCase("Draft");
+    const newAttach = await owner.post(
+      `/api/projects/${tenant!.mainProjectId}/automation/runs/${runId}/results`, {
+        data: { caseId: freshDraft.externalId, status: "fail", retryCount: 0 },
+        failOnStatusCode: false
+      }
+    );
+    expect(newAttach.status(), await newAttach.text()).toBe(409);
+    expect(items(runId)).toBe(1);
   });
 });
