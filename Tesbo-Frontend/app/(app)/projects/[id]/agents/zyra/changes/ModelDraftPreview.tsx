@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { getModelPreviewAvailability, previewModelDraft } from "@/lib/api";
 import type { ModelDraftPreview as Preview, ModelPreviewAvailability } from "@/lib/model-draft-preview";
 
@@ -10,6 +10,8 @@ const EXAMPLE = JSON.stringify({ schemaVersion: "tesbo-fsm-draft/1", semantics: 
 
 /** Local component state only. A result belongs to one exact input and project. */
 export function ModelDraftPreview({ projectId }: { projectId: string }) {
+  const editorId = useId();
+  const helpId = editorId + "-help";
   const [availability, setAvailability] = useState<ModelPreviewAvailability | null>(null);
   const [checking, setChecking] = useState(true);
   const [check, setCheck] = useState(0);
@@ -85,12 +87,13 @@ export function ModelDraftPreview({ projectId }: { projectId: string }) {
           <button type="button" onClick={() => setCheck(value => value + 1)} className="underline">Check preview availability</button>
         </>}
         {availability?.enabled && <form onSubmit={event => { event.preventDefault(); void submit(); }} className="space-y-3">
-          <label className="block">Draft model JSON
-            <textarea aria-describedby="model-preview-help" value={text} rows={12} maxLength={1000000}
+          <div>
+            <label className="block" htmlFor={editorId}>Draft model JSON</label>
+            <textarea id={editorId} aria-describedby={helpId} value={text} rows={12} maxLength={1000000}
               onChange={event => { invalidate(); setText(event.target.value); }}
               className="mt-1 w-full min-w-0 rounded border border-[var(--border)] bg-transparent p-2 font-mono text-xs" />
-          </label>
-          <p id="model-preview-help" className="text-xs text-[var(--muted)]">
+          </div>
+          <p id={helpId} className="text-xs text-[var(--muted)]">
             Use the draft format shown by the example: 1–32 states and up to 64 transitions. Labels, actions and expected observations are inert draft text.
             An example does not establish requirements or an approved oracle.
           </p>
