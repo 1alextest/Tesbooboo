@@ -331,6 +331,37 @@ test.describe("zyra / agents (UI)", () => {
     }
   });
 
+  test("change review discards late source-capture feedback after project navigation", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, otherProjectId = tenant!.secondProjectId;
+    const before = Number(scalar(`SELECT COUNT(*)::int FROM graph_capture_history
+      WHERE project_id=${literal(projectId)};`));
+    const page = await open(browser, "/agents/zyra/changes", "owner");
+    const endpoint = `**/api/projects/${projectId}/agents/zyra/changes/capture`;
+    let release!: () => void, intercepted!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { intercepted = resolve; });
+    await page.route(endpoint, async route => {
+      intercepted();
+      await gate;
+      try { await route.fulfill({ status: 503, json: { error: "Stale source capture response" } }); }
+      catch { /* Navigating away may cancel an in-flight request. */ }
+    });
+    try {
+      await page.getByRole("button", { name: "Capture configured source" }).click();
+      await started;
+      await page.goto(`${env.webBaseUrl}/projects/${otherProjectId}/agents/zyra/changes`);
+      await expect(page.getByRole("heading", { name: "Change impact review" })).toBeVisible();
+      release();
+      await expect(page.getByText("Stale source capture response")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Capture configured source" })).toBeEnabled();
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM graph_capture_history
+        WHERE project_id=${literal(projectId)};`))).toBe(before);
+    } finally {
+      release();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+
   test("Zyra opens native change review, handles missing source bindings and preserves zero executions", async ({ browser }) => {
     const page = await open(browser, "/agents/zyra", "qa");
     await page.getByRole("link", { name: "Change review" }).click();
