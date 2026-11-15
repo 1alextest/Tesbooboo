@@ -99,6 +99,18 @@ const url = process.env.DATABASE_URL ?? "";
       await expect(store.listForUser(user, foreign)).rejects.toMatchObject({ status: 403 });
     });
 
+    it("refuses incomplete local source cache rather than persisting false completeness", async () => {
+      await admin.query("UPDATE testcases SET jira_issue_key='UNSYNCED-1' WHERE id=$1", [caseId]);
+      try {
+        await expect(store.captureForUser(user, project)).rejects.toMatchObject({
+          status: 409,
+          response: { error: "Graph capture not comparable: cached source inventory incomplete or ambiguous" }
+        });
+        expect((await admin.query("SELECT COUNT(*)::int AS count FROM graph_capture_history WHERE project_id=$1", [project])).rows[0].count).toBe(2);
+      } finally {
+        await admin.query("UPDATE testcases SET jira_issue_key=NULL WHERE id=$1", [caseId]);
+      }
+    });
     it("marks a provider mapping or contract discontinuity as unknown, including across pages", async () => {
       // Disposable DB fixture: simulate a distinct, committed source-scope
       // observation without manufacturing any requirement-to-case coverage.
@@ -121,17 +133,5 @@ const url = process.env.DATABASE_URL ?? "";
       expect(older[0].changeState).toBe("changed");
     });
 
-    it("refuses incomplete local source cache rather than persisting false completeness", async () => {
-      await admin.query("UPDATE testcases SET jira_issue_key='UNSYNCED-1' WHERE id=$1", [caseId]);
-      try {
-        await expect(store.captureForUser(user, project)).rejects.toMatchObject({
-          status: 409,
-          response: { error: "Graph capture not comparable: cached source inventory incomplete or ambiguous" }
-        });
-        expect((await admin.query("SELECT COUNT(*)::int AS count FROM graph_capture_history WHERE project_id=$1", [project])).rows[0].count).toBe(2);
-      } finally {
-        await admin.query("UPDATE testcases SET jira_issue_key=NULL WHERE id=$1", [caseId]);
-      }
-    });
   }
 );
