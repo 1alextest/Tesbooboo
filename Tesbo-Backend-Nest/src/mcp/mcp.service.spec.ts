@@ -3014,7 +3014,7 @@ describe("MCP native model draft preview", () => {
     expect(result.error.data).toEqual({ code: "MODEL_PREVIEW_UNAVAILABLE", httpStatus: 503 });
   });
   it("blocks read scope, cross-project and a write lock before the native validator", async () => {
-    const limits = { assertProjectWritable: jest.fn().mockRejectedValue(new ForbiddenException("Project locked")) } as unknown as PlanLimitsService;
+    const limits = { assertProjectWritable: jest.fn().mockRejectedValue(new ForbiddenException({ error: "Project locked" })) } as unknown as PlanLimitsService;
     const { svc, invoked } = setup(limits);
     const read: any = await svc.handleRequest(call(), principal({ scopes: ["read"] }), "proj-1");
     expect(read.error.code).toBe(RpcCode.ScopeDenied);
