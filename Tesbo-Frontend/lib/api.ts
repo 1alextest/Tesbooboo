@@ -4538,3 +4538,40 @@ export async function uploadExecutionEvidence(
   }
   return res.json() as Promise<{ list: ExecutionEvidence[]; total: number }>;
 }
+
+
+export type GraphReviewReceipt = {
+  id: string;
+  projectId: string;
+  status: "needs_qa_triage";
+  candidates: Array<{ caseNodeId: string; reasons: string[]; requirementNodeIds: string[] }>;
+  changed: {
+    addedNodeIds: string[]; modifiedNodeIds: string[]; removedNodeIds: string[];
+    addedEdgeIds: string[]; modifiedEdgeIds: string[]; removedEdgeIds: string[];
+  };
+  evidence: { basis: string; coverageAssertion: "none"; executionAssertion: "none";
+    upstreamFreshness: "unverified"; verification: "not_performed" };
+};
+export type GraphReviewHistoryRow = {
+  id: string;
+  revision: string;
+  capturedAt: string;
+  changeState: "baseline" | "source_scope_changed" | "changed";
+  reviewReceipt: GraphReviewReceipt | null;
+};
+export type GraphReviewCaptureResult = {
+  id: string; revision: string; stored: boolean; reviewReceipt: GraphReviewReceipt | null;
+};
+/** Uses the existing graph history and Zyra's project scope, not a second review store. */
+export async function listZyraGraphChanges(
+  projectId: string, limit = 25, beforeId?: string
+): Promise<{ entries: GraphReviewHistoryRow[] }> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (beforeId) params.set("beforeId", beforeId);
+  return api(`/api/projects/${projectId}/agents/zyra/changes?${params.toString()}`);
+}
+export async function captureZyraGraphChange(projectId: string): Promise<GraphReviewCaptureResult> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/capture`, {
+    method: "POST", body: {}
+  });
+}

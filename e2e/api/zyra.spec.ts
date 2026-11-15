@@ -63,6 +63,36 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     if (tenant) purge(tenant);
   });
 
+  // T-455: native Zyra change-review history is a scoped read of existing
+  // persisted graph observations, not a second case/test-run repository.
+  test("graph change history is project scoped and unconfigured capture fails closed", async () => {
+    const projectId = tenant!.mainProjectId;
+    const url = `/api/projects/${projectId}/agents/zyra/changes`;
+    const good = await asQa.get(url);
+    expect(good.ok()).toBeTruthy();
+    const body = await good.json();
+    expect(Array.isArray(body.entries)).toBe(true);
+    expect(body.entries.every((entry: { reviewReceipt?: { evidence?: { coverageAssertion: string } } }) =>
+      !entry.reviewReceipt || entry.reviewReceipt.evidence?.coverageAssertion === "none")).toBe(true);
+
+    const badLimit = await asQa.get(url + "?limit=0");
+    expect(badLimit.status()).toBe(409);
+    const badCursor = await asQa.get(url + "?beforeId=0%20OR%20TRUE");
+    expect(badCursor.status()).toBe(409);
+
+    const cross = await asQa.get(`/api/projects/${tenant!.secondProjectId}/agents/zyra/changes`);
+    expect([403, 404]).toContain(cross.status());
+    const unauthenticated = await anon.get(url);
+    expect([401, 403, 404]).toContain(unauthenticated.status());
+
+    // No approved source binding for this disposable tenant. A capture must
+    // fail instead of accepting caller-supplied checkout paths or manifests.
+    const denied = await asQa.post(url + "/capture", { data: {} });
+    expect(denied.status()).toBe(409);
+    const after = await asQa.get(url);
+    expect((await after.json()).entries).toEqual(body.entries);
+  });
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
   function url(suffix: string, projectId?: string): string {
