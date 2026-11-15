@@ -15,6 +15,8 @@ import { LegacyService } from "./legacy.service";
 import { buildMcpTools } from "../mcp/mcp.tools";
 import { McpController } from "../mcp/mcp.controller";
 import { McpService } from "../mcp/mcp.service";
+import { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
+import { ModelStudioPreviewController } from "../behavior-graph/model-studio-preview.controller";
 import { AuthMiddleware } from "../auth/auth.middleware";
 import { ApiTokenService } from "../auth/api-token.service";
 import { ApiTokenRestGuard } from "../auth/api-token-rest.guard";
@@ -241,7 +243,7 @@ const url = process.env.DATABASE_URL ?? "";
       await setup.query("INSERT INTO attachments (project_id,entity_type,entity_id,file_name,content_type,file_size,storage_path,uploaded_by) VALUES ($1,'execution',$2,'keep.txt','text/plain',4,'ci/mcp-lock/keep',$3)", [locked, executionId, owner]);
       quota = jest.spyOn(limits, "assertProjectWritable");
       const module = await Test.createTestingModule({
-        controllers: [McpController, LegacyController], providers: [McpService,
+        controllers: [McpController, LegacyController, ModelStudioPreviewController], providers: [McpService, ModelStudioPreview,
           { provide: DatabaseService, useValue: db }, { provide: LegacyService, useValue: legacy },
           { provide: PlanLimitsService, useValue: limits },
           { provide: ProjectLookupService, useValue: new ProjectLookupService(db, requestCache) },
@@ -313,6 +315,27 @@ const url = process.env.DATABASE_URL ?? "";
         status: 201, body: { jsonrpc: "2.0", id: 7, error: { code: -32003,
           message: expect.stringContaining("This project is read-only") } }, business: before
       });
+    });
+
+    it("keeps native model availability readable while the real project lock refuses preview before validation", async () => {
+      const before = await businessState(), endpoint = `${base}/api/projects/${locked}/agents/zyra/changes/model-preview`;
+      const validator = jest.spyOn(app.get(ModelStudioPreview), "previewForUser");
+      const read = await fetch(endpoint, { headers: { Authorization: `Bearer ${readToken}` } });
+      expect(read.status).toBe(200);
+      expect(await read.json()).toMatchObject({ schemaVersion: "tesbo-fsm-preview-availability/1", enabled: expect.any(Boolean),
+        semantics: "SEQUENTIAL_FSM", maxStates: 32, maxTransitions: 64 });
+      const credentials: Record<string, string>[] = [
+        { Authorization: `Bearer ${writeToken}` }, { Cookie: `${settings.sessionCookieName}=${session}` }
+      ];
+      for (const headers of credentials) {
+        const response = await fetch(endpoint, { method: "POST", headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ schemaVersion: "tesbo-fsm-draft/1", semantics: "SEQUENTIAL_FSM", initialStateId: "start",
+            states: [{ id: "start", label: "Start" }], transitions: [] }) });
+        expect(response.status).toBe(403);
+        expect((await response.json() as { error: string }).error).toContain("This project is read-only");
+      }
+      expect(validator).not.toHaveBeenCalled();
+      expect(await businessState()).toEqual(before);
     });
 
     const writes: Record<string, () => Record<string, unknown>> = {
