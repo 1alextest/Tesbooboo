@@ -127,6 +127,7 @@ test.describe("zyra / agents (UI)", () => {
     const reviewRevision = `e2e-graph-change-${stamp}`;
     let caseId: string | undefined;
     let createdRunId: string | undefined;
+    let uncertainRunId: string | undefined;
     try {
       caseId = scalar(`INSERT INTO testcases(project_id,external_id,title)
         VALUES (${literal(projectId)},${literal("ZYU-GR-TC")},${literal("E2E linked graph review")})
@@ -241,14 +242,57 @@ test.describe("zyra / agents (UI)", () => {
       expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items
         WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
 
+
+      // A lost CREATE response might follow a successful database commit.
+      // Do not blindly retry: find the already-created run in the native list.
+      await page.reload();
+      const uncertain = page.getByTestId("graph-review-run-" + historyId);
+      await uncertain.locator("summary").click();
+      await uncertain.getByRole("checkbox", { name: "Select linked case 1" }).check();
+      const uncertainName = "E2E Unconfirmed graph run " + stamp;
+      await uncertain.getByLabel("New run name").fill(uncertainName);
+      await uncertain.getByLabel("Execution environment").fill("Disposable QA");
+      const createPath = "**/api/projects/" + projectId + "/cycles";
+      let injectedCreateLoss = false;
+      const interceptCreate = async (route: import("@playwright/test").Route) => {
+        if (injectedCreateLoss || route.request().method() !== "POST") return route.continue();
+        injectedCreateLoss = true;
+        const response = await route.fetch();
+        expect(response.ok(), await response.text()).toBeTruthy();
+        uncertainRunId = (await response.json()).id as string;
+        await route.fulfill({ status: 503, contentType: "application/json",
+          body: JSON.stringify({ error: "Injected create response loss after commit" }) });
+      };
+      await page.route(createPath, interceptCreate);
+      try {
+        await uncertain.getByRole("button", { name: "Create run and add selected cases" }).click();
+        await expect(uncertain.getByRole("alert").first()).toContainText(/Run creation outcome unconfirmed/);
+      } finally {
+        await page.unroute(createPath, interceptCreate);
+      }
+      expect(injectedCreateLoss).toBe(true);
+      expect(uncertainRunId).toBeTruthy();
+      await expect(uncertain.getByRole("button", { name: "Create run and add selected cases" })).toBeDisabled();
+      const countRun = () => Number(scalar("SELECT COUNT(*)::int FROM cycles WHERE project_id=" +
+        literal(projectId) + " AND name=" + literal(uncertainName) + ";"));
+      expect(countRun()).toBe(1);
+      await uncertain.getByRole("radio", { name: "Add to existing test run" }).check();
+      await uncertain.getByRole("button", { name: "Refresh available test runs" }).click();
+      await uncertain.getByLabel("Existing open test run").selectOption(uncertainRunId!);
+      await uncertain.getByRole("button", { name: "Add selected cases to run" }).click();
+      await expect(uncertain.getByRole("status")).toContainText(/1 newly added; 0 skipped/);
+      expect(Number(scalar("SELECT COUNT(*)::int FROM cycle_items WHERE cycle_id=" +
+        literal(uncertainRunId) + " AND testcase_id=" + literal(caseId) + ";"))).toBe(1);
+      expect(countRun()).toBe(1);
       await page.getByRole("link", { name: "Open existing test case" }).click();
       await expect(page).toHaveURL(new RegExp("/projects/" + projectId + "/testcases/" + caseId + "$"));
     } finally {
-      if (createdRunId) {
-        exec(`DELETE FROM executions WHERE cycle_item_id IN
-          (SELECT id FROM cycle_items WHERE cycle_id=${literal(createdRunId)});`);
-        exec(`DELETE FROM cycle_items WHERE cycle_id=${literal(createdRunId)};`);
-        exec(`DELETE FROM cycles WHERE id=${literal(createdRunId)};`);
+      for (const runId of [createdRunId, uncertainRunId]) {
+        if (!runId) continue;
+        exec("DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id=" +
+          literal(runId) + ");");
+        exec("DELETE FROM cycle_items WHERE cycle_id=" + literal(runId) + ";");
+        exec("DELETE FROM cycles WHERE id=" + literal(runId) + ";");
       }
       exec(`DELETE FROM notifications WHERE dedupe_key IN
         (SELECT 'qa_change_review:' || project_id::text || ':' || id::text
