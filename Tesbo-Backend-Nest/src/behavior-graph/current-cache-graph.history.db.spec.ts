@@ -381,8 +381,43 @@ const url = process.env.DATABASE_URL ?? "";
         const read = await links.listForUser(user, project, receiptId);
         expect(read.links).toHaveLength(1);
         expect(read.links[0]).toMatchObject({
-          runId: cycleId, caseId, runName: "Graph impact QA run"
+          runId: cycleId, caseId, runName: "Graph impact QA run",
+          caseStillInRun: true, execution: null
         });
+        // This is native execution history, not a status invented by the graph.
+        // Metadata alone does not attest that the blob remains retrievable.
+        const itemId = (await admin.query<{ id: string }>(
+          "SELECT id FROM cycle_items WHERE cycle_id=$1 AND testcase_id=$2 AND deleted_at IS NULL",
+          [cycleId, caseId]
+        )).rows[0].id;
+        const executionId = (await admin.query<{ id: string }>(
+          `INSERT INTO executions(cycle_item_id,status,actual_result,defect_key,executed_at)
+             VALUES ($1,'Failed','QA found a mismatch','BUG-17', now()) RETURNING id`,
+          [itemId]
+        )).rows[0].id;
+        const evidenceId = (await admin.query<{ id: string }>(
+          `INSERT INTO attachments(project_id,entity_type,entity_id,file_name,storage_path)
+             VALUES ($1,'execution',$2,'fixture-evidence.txt','fixture://not-a-real-file') RETURNING id`,
+          [project, executionId]
+        )).rows[0].id;
+        const observed = await links.listForUser(user, project, receiptId);
+        expect(observed.links[0]).toMatchObject({
+          caseStillInRun: true,
+          execution: {
+            id: executionId, status: "Failed", actualResultRecorded: true,
+            defectKey: "BUG-17", evidenceFileCount: 1
+          }
+        });
+        expect(observed.links[0].execution?.executedAt).toBeTruthy();
+        await admin.query("UPDATE attachments SET deleted_at=now() WHERE id=$1", [evidenceId]);
+        const afterMetadataDelete = await links.listForUser(user, project, receiptId);
+        expect(afterMetadataDelete.links[0].execution?.evidenceFileCount).toBe(0);
+        // Historical handoff survives soft removal from the active run but
+        // does not masquerade as a currently executable case.
+        await admin.query("UPDATE cycle_items SET deleted_at=now() WHERE id=$1", [itemId]);
+        const removed = await links.listForUser(user, project, receiptId);
+        expect(removed.links[0]).toMatchObject({ caseStillInRun: false, execution: null });
+        await admin.query("UPDATE cycle_items SET deleted_at=NULL WHERE id=$1", [itemId]);
         const persisted = await admin.query(
           "SELECT project_id, history_id::text, cycle_id, testcase_id, linked_by_user_id FROM graph_review_run_case_links WHERE history_id=$1",
           [receiptId]
@@ -420,6 +455,7 @@ const url = process.env.DATABASE_URL ?? "";
         }
       } finally {
         await admin.query("DELETE FROM graph_review_run_case_links WHERE history_id=$1", [receiptId]);
+        await admin.query("DELETE FROM attachments WHERE project_id=$1 AND entity_type='execution' AND entity_id IN (SELECT e.id FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id WHERE ci.cycle_id=$2)", [project, cycleId]);
         await admin.query("DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id=$1)", [cycleId]);
         await admin.query("DELETE FROM cycle_items WHERE cycle_id=$1", [cycleId]);
         await admin.query("DELETE FROM cycles WHERE id=$1", [cycleId]);

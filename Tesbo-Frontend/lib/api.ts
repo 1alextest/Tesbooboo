@@ -4616,12 +4616,24 @@ export async function setZyraGraphSourceBinding(
 /** Persisted, human-selected graph review → native test-run/case handoff.
  * These are references only, never execution/coverage/approval verdicts.
  */
+export type GraphReviewRunExecutionObservation = {
+  id: string;
+  /** Native status only. No graph-generated verification or QA approval. */
+  status: string;
+  executedAt: string | null;
+  actualResultRecorded: boolean;
+  defectKey: string | null;
+  /** Native active attachment metadata count, not verified stored bytes. */
+  evidenceFileCount: number;
+};
 export type GraphReviewRunCaseLink = {
   runId: string;
   caseId: string;
   linkedAt: string;
   runName: string;
   runStatus: string;
+  caseStillInRun: boolean;
+  execution: GraphReviewRunExecutionObservation | null;
 };
 export async function listZyraGraphReviewRunLinks(
   projectId: string, historyId: string

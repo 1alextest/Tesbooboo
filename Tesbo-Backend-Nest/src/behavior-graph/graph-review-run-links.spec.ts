@@ -89,7 +89,30 @@ describe("committed graph review → native run/case relationships", () => {
     expect(params).toEqual([PROJECT, USER, HISTORY]);
     expect(sql).toContain("JOIN allowed a ON a.id=l.project_id");
     expect(sql).toContain("h.review_receipt_json IS NOT NULL");
+    expect(sql).toContain("LEFT JOIN cycle_items ci");
+    expect(sql).toContain("LEFT JOIN executions e");
+    expect(sql).toContain("att.entity_type='execution'");
+    expect(sql).toContain("att.deleted_at IS NULL");
+    expect(sql).toContain("'caseStillInRun', ci.id IS NOT NULL");
     expect(JSON.stringify(read)).not.toContain("verified");
+  });
+
+  it("exposes only real native execution metadata, not inferred approval or checked file bytes", async () => {
+    const { svc, query } = setup();
+    query.mockResolvedValueOnce({ rows: [{ allowed: true, links: [{
+      runId: RUN, caseId: CASE, linkedAt: "2026-11-15T00:00:00Z",
+      runName: "Human verification", runStatus: "In Progress", caseStillInRun: true,
+      execution: { id: "00000000-0000-4000-8000-000000000005", status: "Failed",
+        executedAt: "2026-11-15T01:00:00Z", actualResultRecorded: true,
+        defectKey: "BUG-17", evidenceFileCount: 2 }
+    }] }] });
+    const result = await svc.listForUser(USER, PROJECT, HISTORY);
+    expect(result.links[0]).toMatchObject({
+      caseStillInRun: true,
+      execution: { status: "Failed", evidenceFileCount: 2, defectKey: "BUG-17" }
+    });
+    expect(JSON.stringify(result)).not.toContain("approved");
+    expect(JSON.stringify(result)).not.toContain("verified");
   });
 
   it("never leaks foreign or uncommitted receipt associations to a caller", async () => {

@@ -169,7 +169,24 @@ export function ReviewCaseRunSetup({
                   {link.runName || "Open native run"}
                 </Link>
                 {" — selected case "}<code>{link.caseId}</code>
-                {"; execution and approval require separate evidence"}
+                {link.caseStillInRun ? (
+                  link.execution ? (
+                    <span>
+                      {" — native status: "}<strong>{link.execution.status}</strong>
+                      {link.execution.executedAt &&
+                        <span>{"; recorded "}{new Date(link.execution.executedAt).toLocaleString()}</span>}
+                      {"; active evidence metadata: "}{link.execution.evidenceFileCount}
+                      {link.execution.actualResultRecorded && "; actual-result notes recorded"}
+                      {link.execution.defectKey && <span>{"; defect reference: "}{link.execution.defectKey}</span>}
+                      {" — execution status and attachment metadata are not verification or approval"}
+                      <Link className="ml-2 underline"
+                        href={"/projects/" + projectId + "/cycles/" + link.runId +
+                          "/execute/" + link.execution.id}>
+                        Open native execution
+                      </Link>
+                    </span>
+                  ) : <span>{" — no active execution record; no result inferred"}</span>
+                ) : <span>{" — case no longer active in this run; handoff retained as history"}</span>}
               </li>
             ))}
           </ul>
