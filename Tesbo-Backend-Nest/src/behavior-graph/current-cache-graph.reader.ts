@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable } from "@nestjs/common";
+import type { PoolClient } from "pg";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
 import {
@@ -140,9 +141,28 @@ export class CurrentCacheGraphReader {
   ) {}
 
   async captureForUser(userId: string | null | undefined, projectId: string): Promise<CurrentCacheGraphCapture> {
+    return this.captureUsingQuery(userId, projectId, (sql, params) => this.db.query<CaptureSqlRow>(sql, params));
+  }
+
+  /**
+   * History recorder's transaction-bound capture. The single source SELECT and
+   * subsequent history write share the same client/transaction/advisory lock.
+   * Not registered as a controller, tool, or public service.
+   */
+  async captureForUserInTransaction(
+    userId: string | null | undefined, projectId: string, client: PoolClient
+  ): Promise<CurrentCacheGraphCapture> {
+    return this.captureUsingQuery(userId, projectId, (sql, params) => client.query<CaptureSqlRow>(sql, params));
+  }
+
+  private async captureUsingQuery(
+    userId: string | null | undefined,
+    projectId: string,
+    query: (sql: string, params: unknown[]) => Promise<{ rows: CaptureSqlRow[] }>
+  ): Promise<CurrentCacheGraphCapture> {
     if (!userId) throw new ForbiddenException({ error: "Authenticated project membership required" });
     const project = await this.legacy.requireProjectAccess(userId, projectId);
-    const result = await this.db.query<CaptureSqlRow>(
+    const result = await query(
       CURRENT_CACHE_CAPTURE_SQL,
       [projectId, project.organization_id, userId]
     );
