@@ -362,6 +362,69 @@ test.describe("zyra / agents (UI)", () => {
     }
   });
 
+  test("change review serializes native notification retries across different receipts", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, stamp = Date.now().toString();
+    const saved: string[] = [];
+    const capture = (revision: string) => JSON.stringify({
+      snapshot: { projectId, revision, nodes: [], edges: [] }, inventoryStatus: "complete",
+      unresolvedDiagnostics: [], contractId: "e2e-notify-serialization",
+      sourceScopeFingerprint: "e2e-notify-serialization"
+    });
+    try {
+      for (let n = 0; n < 2; n++) {
+        const revision = `notify-serialization-${stamp}-${n}`;
+        const receipt = {
+          id: revision, projectId, status: "needs_qa_triage",
+          source: { contractId: "e2e-notify-serialization", scopeFingerprint: "e2e-notify-serialization",
+            fromRevision: "before", toRevision: revision },
+          changed: { addedNodeIds: [], modifiedNodeIds: [], removedNodeIds: [],
+            addedEdgeIds: [], modifiedEdgeIds: [], removedEdgeIds: [] },
+          candidates: [], unlinkedCaseNodeIds: [],
+          evidence: { basis: "cached_source_reference_only", upstreamFreshness: "unverified",
+            coverageAssertion: "none", executionAssertion: "none", verification: "not_performed" }
+        };
+        saved.push(scalar(`INSERT INTO graph_capture_history
+          (project_id, contract_id, source_scope_fingerprint, revision, capture_json, review_receipt_json)
+          VALUES (${literal(projectId)}, 'e2e-notify-serialization', 'e2e-notify-serialization',
+            ${literal(revision)}, ${literal(capture(revision))}::jsonb,
+            ${literal(JSON.stringify(receipt))}::jsonb) RETURNING id;`));
+      }
+      const page = await open(browser, "/agents/zyra/changes", "qa");
+      const buttons = page.getByRole("button", { name: "Notify QA reviewers" });
+      await expect(buttons).toHaveCount(2);
+      let release!: () => void, signal!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const started = new Promise<void>(resolve => { signal = resolve; });
+      let attempts = 0;
+      const endpoint = `**/api/projects/${projectId}/agents/zyra/changes/*/notify`;
+      await page.route(endpoint, async route => {
+        attempts++;
+        signal();
+        await gate;
+        try { await route.fulfill({ status: 503, json: { error: "Injected retry failure" } }); }
+        catch { /* Route teardown can cancel an in-flight read of the response. */ }
+      });
+      try {
+        await buttons.first().click();
+        await started;
+        await expect(buttons).toHaveCount(1);
+        await expect(page.getByRole("button", { name: "Checking notification…" })).toBeDisabled();
+        await expect(buttons).toBeDisabled();
+        expect(attempts).toBe(1);
+        release();
+        await expect(page.getByRole("alert")).toContainText("Injected retry failure");
+        await expect(buttons).toHaveCount(2);
+        await expect(buttons.first()).toBeEnabled();
+        await expect(buttons.last()).toBeEnabled();
+        expect(attempts).toBe(1);
+      } finally { release(); await page.unrouteAll({ behavior: "wait" }); }
+    } finally {
+      for (const id of saved) {
+        exec(`DELETE FROM graph_capture_history WHERE project_id=${literal(projectId)} AND id=${literal(id)}::bigint;`);
+      }
+    }
+  });
+
   test("Zyra opens native change review, handles missing source bindings and preserves zero executions", async ({ browser }) => {
     const page = await open(browser, "/agents/zyra", "qa");
     await page.getByRole("link", { name: "Change review" }).click();
