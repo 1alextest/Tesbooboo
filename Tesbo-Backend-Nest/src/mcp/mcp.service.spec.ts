@@ -77,9 +77,10 @@ function makeDb(
     planProject?: string | null | undefined;
     /** ids partitionOwnedIds should treat as belonging to the token's project. */
     ownedTestcaseIds?: string[];
+    approvedCaseStatuses?: Record<string, string>;
   } = {}
 ) {
-  const query = jest.fn((sql: string) => {
+  const query = jest.fn((sql: string, values?: unknown[]) => {
     if (sql.includes("FROM actors a JOIN agents g")) {
       return Promise.resolve({ rows: opts.mcpActorId ? [{ id: opts.mcpActorId }] : [] });
     }
@@ -90,6 +91,14 @@ function makeDb(
             ? []
             : [{ project_id: opts.executionProject, cycle_id: opts.executionCycleId ?? "cycle-1" }]
       });
+    }
+    // Shared run-add policy preflight uses a locked status selection. MCP
+    // fixture IDs are abstract here, so map their configured status explicitly.
+    if (sql.includes("SELECT id::text AS id, status FROM testcases")) {
+      const ids = (values?.[1] as string[] | undefined) ?? [];
+      return Promise.resolve({ rows: ids.map((id) => ({
+        id, status: opts.approvedCaseStatuses?.[id] ?? "Approved"
+      })) });
     }
     // partitionOwnedIds's query (`id = ANY($1::uuid[])`) is checked before the single-id
     // requireProjectOwnedRow query below — both match "FROM testcases WHERE id", but only this
@@ -124,7 +133,9 @@ function makeDb(
     }
     return Promise.resolve({ rows: [] });
   });
-  return { db: { query } as unknown as DatabaseService, query };
+  const transaction = jest.fn(async (fn: (client: { query: typeof query }) => Promise<unknown>) =>
+    fn({ query }));
+  return { db: { query, transaction } as unknown as DatabaseService, query, transaction };
 }
 
 // Existing contract cases use an explicitly writable entitlement collaborator. Billing-enabled
@@ -2495,6 +2506,24 @@ describe("McpService", () => {
       expect(body.testcasesRequested).toBe(3);
       expect(body.testcasesAdded).toBe(2);
       expect(body.invalidTestcaseIds).toEqual(["tc-ghost"]);
+    });
+
+    it("rejects a known Draft case before creating a cycle, preserving the user's approval policy", async () => {
+      const { db, transaction } = makeDb({
+        ownedTestcaseIds: ["tc-1", "tc-2"],
+        approvedCaseStatuses: { "tc-1": "Approved", "tc-2": "Draft" }
+      });
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      const res: any = await svc.handleRequest(
+        rpc("tools/call", { name: "create_cycle_from_testcases",
+          arguments: { name: "Must not be created", testcaseIds: ["tc-1", "tc-2"] } }),
+        principal(), "proj-1"
+      );
+      expect(transaction).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(res)).toContain("Only Approved test cases");
+      expect((legacy as any).createCycle).not.toHaveBeenCalled();
+      expect((legacy as any).addCycleTestCases).not.toHaveBeenCalled();
     });
 
     it("deduplicates repeated testcaseIds before adding", async () => {
