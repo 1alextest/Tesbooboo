@@ -15395,7 +15395,8 @@ export class LegacyService implements OnModuleInit {
       // SAME call. See the changelog entry this was fixed alongside.
       // Move cards are capped per operation; the existing readback, not that preview, has the full count.
       // Keep known preview counts as a lower bound if the best-effort readback was unavailable.
-      const movedPreviewCount = applied.testcases.filter((tc) => tc.action === "moved").length;
+      // Repeated moves keep every card/write, but the saved-case count (like the footer) is distinct.
+      const movedPreviewCount = new Set(applied.testcases.filter((tc) => tc.action === "moved").map((tc) => tc.id)).size;
       const movedCount = Math.max(movedPreviewCount, applied.moveBreakdown?.reduce((total, suite) => total + suite.count, 0) ?? 0);
       onStage?.("finalizing", {
         savedCount: applied.testcases.filter((tc) => tc.action !== "moved" && !(typeof tc.action === "string" && tc.action.startsWith("proposed-"))).length + movedCount,

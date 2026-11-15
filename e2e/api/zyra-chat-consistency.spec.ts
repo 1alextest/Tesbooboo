@@ -9,6 +9,7 @@ import { SINGLE_MOVE_SELECTORS, verifyZyraSingleMove } from "../utils/zyra-singl
 import { ALIAS_MOVE_MODES, verifyZyraAliasMove } from "../utils/zyra-alias-move";
 import { MISSING_SUITE_MODES, seedMissingSuiteRepository, verifyZyraMissingSuite } from "../utils/zyra-missing-suite";
 import { MOVE_TRACE_COUNTS, seedMoveTraceRepository, verifyZyraMoveTraceCount } from "../utils/zyra-move-trace-count";
+import { OVERLAPPING_MOVE_MODES, seedOverlappingMoveRepository, verifyZyraOverlappingMoveTrace } from "../utils/zyra-overlapping-move-trace";
 import {
   loginAs,
   provisionRbacTenant,
@@ -656,6 +657,18 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
       await settleMoveFixtures(fixture.allIds.map((id) => ({ ...fixture, firstId: id, secondId: id })), state);
       await allocateFakeAiKey();
       await verifyZyraMoveTraceCount({ request: asOwner, ai, base, ownerId: tenant!.owner.userId, language, count, fixture, state });
+    });
+  }
+
+  for (const language of ["en", "ru"] as const) for (const mode of OVERLAPPING_MOVE_MODES) {
+    test(`Zyra ordered move trace ${language}: ${mode} 26-case writes`, async () => {
+      const base = `${env.apiBaseUrl}/api/projects/${tenant!.mainProjectId}`;
+      const sql = answerRepositorySnapshotSql.replace(/\$1\b/g, literal(tenant!.mainProjectId));
+      const state = async () => JSON.parse(scalar(`SELECT row_to_json(snapshot)::text FROM (${sql}) snapshot;`)) as AnswerRepositoryState;
+      const fixture = await seedOverlappingMoveRepository(asOwner, base, `${language}-${mode}`, mode);
+      await settleMoveFixtures([fixture.first, fixture.last].flatMap((group) => group.allIds.map((id) => ({ ...group, firstId: id, secondId: id }))), state);
+      await allocateFakeAiKey();
+      await verifyZyraOverlappingMoveTrace({ request: asOwner, ai, base, ownerId: tenant!.owner.userId, language, mode, fixture, state });
     });
   }
 

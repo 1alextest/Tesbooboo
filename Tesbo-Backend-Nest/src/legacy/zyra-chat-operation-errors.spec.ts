@@ -327,6 +327,50 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
     });
   }
 
+  for (const language of ["en", "ru"] as const) for (const count of [1, 25, 26]) {
+    it.each(["overlap", "disjoint"] as const)(`${language}: two ${count}-case moves count distinct saved cases, not repeated preview rows (%s)`, async (mode) => {
+      const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
+      const first = Array.from({ length: count }, (_, index) => `case-${index + 1}`);
+      const last = mode === "overlap" ? first : Array.from({ length: count }, (_, index) => `other-${index + 1}`);
+      const expected = new Set([...first, ...last]).size;
+      const operations = [{ type: "move_to_suite", suiteId: "suite-first", testcaseIds: first },
+        { type: "move_to_suite", suiteId: "suite-last", testcaseIds: last }];
+      jest.spyOn(svc as unknown as { getProjectSuite: (...a: unknown[]) => Promise<unknown> }, "getProjectSuite")
+        .mockImplementation(async (_project, id) => ({ id, name: String(id) }));
+      jest.spyOn(svc as unknown as { resolveZyraMoveTargets: (...a: unknown[]) => Promise<unknown> }, "resolveZyraMoveTargets")
+        .mockImplementation(async (_project, _session, op) => ({ targets: (op as Body).testcaseIds.map((id: string) => ({ id })), requestedCount: count }));
+      let suiteId = "";
+      const transaction = jest.fn().mockImplementation(async () => { suiteId = operations[transaction.mock.calls.length - 1].suiteId; });
+      (svc as unknown as { db: { transaction: jest.Mock } }).db.transaction = transaction;
+      (svc as unknown as { suitesCache: { invalidate: jest.Mock } }).suitesCache.invalidate = jest.fn().mockResolvedValue(undefined);
+      (svc as unknown as { testcasesListCache: { invalidate: jest.Mock } }).testcasesListCache.invalidate = jest.fn().mockResolvedValue(undefined);
+      jest.spyOn(svc, "getTestCase").mockImplementation(async (id) => ({ id, externalId: id, title: "Existing case", suiteId }));
+      jest.spyOn(svc as unknown as { zyraMoveBreakdown: (...a: unknown[]) => Promise<unknown> }, "zyraMoveBreakdown")
+        .mockResolvedValue([{ suiteId: "suite-first", suiteName: "First", created: false, count: mode === "overlap" ? 0 : count },
+          { suiteId: "suite-last", suiteName: "Last", created: false, count }]);
+      const reply = language === "en" ? "Moved the requested test cases." : "Запрошенные тест-кейсы перемещены.";
+      jest.spyOn(svc as unknown as { buildZyraChatDecision: (...a: unknown[]) => Promise<unknown> }, "buildZyraChatDecision")
+        .mockResolvedValue({ reply, actionType: "suite", operations, testcases: [] });
+      let applied: AppliedShape | undefined, content = "";
+      jest.spyOn(svc as unknown as { insertZyraAssistantMessage: (...a: unknown[]) => Promise<unknown> }, "insertZyraAssistantMessage")
+        .mockImplementation(async (input) => {
+          applied = (input as Body).applied; content = finalReply(svc, operations, applied!, reply);
+          return { id: "assistant-1", status: "completed", content };
+        });
+      jest.spyOn(svc, "zyraChatSession").mockResolvedValue({ messages: [] });
+      const recorder = new ZyraTurnTraceRecorder();
+      await runInZyraLanguage(language, () => (svc as unknown as { executeZyraChatTurn: (...a: unknown[]) => Promise<unknown> }).executeZyraChatTurn({
+        projectId: "project-1", userId: "user-1", uid: "user-1", sessionId: "session-1", message: "Move the requested cases",
+        userMessageId: "turn-1", sessionRow: {}
+      }, recorder.onStage));
+      expect(transaction).toHaveBeenCalledTimes(2);
+      expect(applied!.testcases).toHaveLength(2 * Math.min(count, 25));
+      expect(applied!.reviewRequestId).toBeNull();
+      expect(content).toContain(language === "en" ? `${expected} test case(s) total` : `всего тест-кейсов: ${expected}`);
+      expect(recorder.finish().steps.find((step) => step.stage === "finalizing")?.meta).toEqual({ savedCount: expected, proposedCount: 0 });
+    });
+  }
+
   it.each([
     { name: "missing move readback", moveBreakdown: undefined, action: "moved" },
     { name: "empty move readback", moveBreakdown: [], action: "moved" },
