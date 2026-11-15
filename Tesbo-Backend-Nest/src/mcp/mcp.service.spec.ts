@@ -1015,7 +1015,7 @@ describe("McpService", () => {
     });
 
     it("sends exact Unicode and multiline Notes through create without changing other fields", async () => {
-      const { db } = makeDb();
+      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
       const svc = new McpService(legacy, db, writableLimits);
       const notes = "Evidence: café 🧪\nSource: QA reviewer";
@@ -1029,7 +1029,7 @@ describe("McpService", () => {
     });
 
     it("preserves omitted Notes and passes replacement or explicit empty clear unchanged", async () => {
-      const { db } = makeDb();
+      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
       const svc = new McpService(legacy, db, writableLimits);
       for (const payload of [{ title: "Reworded" }, { attachments: "New text" }, { attachments: "" }]) {
@@ -1043,7 +1043,7 @@ describe("McpService", () => {
     });
 
     it.each([null, 8, true, [], {}, ["bad"]])("refuses invalid Notes %p before any create or update writer", async (notes) => {
-      const { db } = makeDb();
+      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
       const svc = new McpService(legacy, db, writableLimits);
       for (const [name, payload] of [
@@ -1061,7 +1061,7 @@ describe("McpService", () => {
     });
 
     it("isolates invalid bulk Notes while preserving order and later valid entries", async () => {
-      const { db } = makeDb();
+      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
       const legacy = makeLegacy();
       const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/call", {
