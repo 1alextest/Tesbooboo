@@ -273,6 +273,16 @@ export class AutomationService {
       });
     }
     const caseIds = this.normalizeCaseIds(body?.caseIds);
+    if (caseIds.length) {
+      const { found } = await this.resolveCases(projectId, caseIds);
+      const unapproved = [...found.values()].filter((row) => row.status !== "Approved");
+      if (unapproved.length) {
+        throw new ConflictException({
+          error: "Only Approved test cases can be attached to an automated run",
+          testcaseIds: unapproved.map((row) => row.externalId)
+        });
+      }
+    }
 
     // Idempotency check before the insert so a re-run gets its existing run back with the same
     // shape as a fresh create, rather than a 409 it would have to special-case.
@@ -391,6 +401,13 @@ export class AutomationService {
     if (!caseIds.length) return { attached: 0, unknown: [] };
     const { found, unknown } = await this.resolveCases(projectId, caseIds);
     if (!found.size) return { attached: 0, unknown };
+    const unapproved = [...found.values()].filter((row) => row.status !== "Approved");
+    if (unapproved.length) {
+      throw new ConflictException({
+        error: "Only Approved test cases can be attached to an automated run",
+        testcaseIds: unapproved.map((row) => row.externalId)
+      });
+    }
 
     const res = await (runner as DatabaseService).query<{ id: string }>(
       `WITH input AS (
@@ -425,7 +442,7 @@ export class AutomationService {
                 t.description, t.preconditions, t.postconditions, t.steps,
                 t.test_data, t.automation_status, t.automation_tags
            FROM input i
-           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3
+           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3 AND t.status = 'Approved'
            CROSS JOIN base
           WHERE EXISTS (SELECT 1 FROM cycles c WHERE c.id = $1 AND c.deleted_at IS NULL AND c.closed_at IS NULL)
          ON CONFLICT (cycle_id, testcase_id) WHERE deleted_at IS NULL DO NOTHING
