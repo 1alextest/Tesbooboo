@@ -31,8 +31,7 @@ export async function settleMoveFixtures(fixtures: MoveFixture[], state: () => P
   await expect.poll(async () => {
     const snapshot = await state();
     return fixtures.flatMap((fixture) => [fixture.firstId, fixture.secondId]).every((id) =>
-      snapshot.cases.some((row) => row.id === id && row.embedding_status === "pending") &&
-      snapshot.history.some((version) => version.testcase_id === id && (version.snapshot as Record<string, unknown>)?.embedding_status === "queued"));
+      snapshot.cases.some((row) => row.id === id && row.embedding_status === "pending" && row.embedding_queued_at != null));
   }, { message: "keyless move fixtures must settle before immutable baselines and fake-key allocation" }).toBe(true);
 }
 
