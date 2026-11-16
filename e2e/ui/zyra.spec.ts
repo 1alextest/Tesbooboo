@@ -75,6 +75,219 @@ test.describe("zyra / agents (UI)", () => {
     if (tenant) purgeZyra(tenant);
   });
 
+  function modelUiDraft() {
+    return { schemaVersion: "tesbo-fsm-draft/1", semantics: "SEQUENTIAL_FSM", initialStateId: "ready",
+      states: [{ id: "ready", label: "Ready" }, { id: "done", label: "Done" }],
+      transitions: [{ id: "complete", from: "ready", to: "done", action: "Complete the action", expectedObservation: "Completion is visible" }] };
+  }
+  function modelUiRecords(projectId: string) {
+    return scalar(`SELECT json_build_object(
+      'cases',(SELECT COUNT(*) FROM testcases WHERE project_id=${literal(projectId)}),
+      'runs',(SELECT COUNT(*) FROM cycles WHERE project_id=${literal(projectId)}),
+      'executions',(SELECT COUNT(*) FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id
+        JOIN cycles c ON c.id=ci.cycle_id WHERE c.project_id=${literal(projectId)}),
+      'bugs',(SELECT COUNT(*) FROM bugs WHERE project_id=${literal(projectId)}),
+      'graph',(SELECT COUNT(*) FROM graph_capture_history WHERE project_id=${literal(projectId)}),
+      'links',(SELECT COUNT(*) FROM graph_review_run_case_links WHERE project_id=${literal(projectId)})
+    )::text;`);
+  }
+  async function openModelUi(browser: Browser, as: "owner" | "qa" = "qa") {
+    const page = await open(browser, "/agents/zyra/changes", as);
+    const panel = page.getByTestId("model-draft-preview");
+    await panel.locator("summary").focus();
+    await page.keyboard.press("Enter");
+    await expect(panel.getByLabel("Draft model JSON", { exact: true })).toBeVisible();
+    return { page, panel, editor: panel.getByLabel("Draft model JSON", { exact: true }) };
+  }
+
+  test("model draft preview UI inspects real drafts with honest diagnostics, keyboard access and no saved records", async ({ browser }, testInfo) => {
+    const projectId = tenant!.mainProjectId, before = modelUiRecords(projectId);
+    const { page, panel, editor } = await openModelUi(browser);
+    const submit = panel.getByRole("button", { name: "Preview draft", exact: true });
+    await expect(submit).toBeDisabled();
+    await panel.getByRole("button", { name: "Load example draft" }).focus();
+    await page.keyboard.press("Enter");
+    const sent = page.waitForResponse(response => response.url().endsWith("/changes/model-preview") && response.request().method() === "POST");
+    await submit.focus(); await page.keyboard.press("Enter");
+    const response = await sent; expect(response.status()).toBe(200); const native = await response.json();
+    const result = panel.getByRole("region", { name: "Draft model preview result", exact: true });
+    await expect(result).toBeVisible();
+    await expect(result.getByRole("status")).toContainText("Unapproved draft; source unverified; runtime evidence: none");
+    await expect(result.getByRole("table", { name: "Draft states", exact: true }).getByRole("row")).toHaveCount(native.states.length + 1);
+    await expect(result.getByRole("table", { name: "Draft transitions", exact: true }).getByRole("row")).toHaveCount(native.transitions.length + 1);
+    await expect(result).toContainText("Terminal state: done");
+    await result.getByText("Candidate fingerprint", { exact: true }).click();
+    await expect(result).toContainText(native.candidateDigest);
+    const draft = modelUiDraft();
+    draft.states.push({ id: "isolated", label: '<img src=x onerror="window.modelPreviewInjected=true">' });
+    draft.transitions.push({ id: "unreachable", from: "isolated", to: "done", action: "Unreachable action", expectedObservation: "Unreachable observation" });
+    await editor.fill(JSON.stringify(draft)); await expect(result).toHaveCount(0);
+    await submit.click(); await expect(result).toContainText("Unreachable state: isolated");
+    await expect(result).toContainText("Unreachable transition: unreachable");
+    await expect(result.getByText(draft.states[2].label, { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as { modelPreviewInjected?: boolean }).modelPreviewInjected)).toBeUndefined();
+    await expect(result.locator("img")).toHaveCount(0);
+    await testInfo.attach("model-preview-desktop", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    const collapse = page.getByRole("button", { name: "Collapse sidebar", exact: true });
+    if (await collapse.isVisible()) await collapse.click();
+    // Sidebar's existing width transition takes 200ms; measure the chosen
+    // collapsed layout, not an intermediate animated width. Keep overflow strict.
+    await expect(page.getByRole("complementary")).toHaveCSS("width", "60px");
+    await expect(editor).toBeVisible();
+    expect(await panel.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    const scrollRegion = result.getByRole("region", { name: "Draft states and transitions" });
+    await scrollRegion.focus(); await expect(scrollRegion).toBeFocused();
+    await testInfo.attach("model-preview-mobile", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+    await page.reload(); await panel.locator("summary").click();
+    await expect(editor).toHaveValue(""); await expect(result).toHaveCount(0);
+    expect(modelUiRecords(projectId)).toBe(before);
+  });
+
+  test("model draft preview UI preserves invalid drafts and fails closed on disabled, denied and incompatible responses", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, before = modelUiRecords(projectId);
+    const { page, panel, editor } = await openModelUi(browser);
+    const endpoint = `**/api/projects/${projectId}/agents/zyra/changes/model-preview`;
+    const submit = panel.getByRole("button", { name: "Preview draft", exact: true });
+    let posts = 0;
+    page.on("request", request => { if (request.url().endsWith("/changes/model-preview") && request.method() === "POST") posts++; });
+    await editor.fill("   "); await expect(submit).toBeDisabled();
+    await editor.fill("{broken"); await submit.click();
+    await expect(panel.getByRole("alert")).toContainText("Enter valid JSON"); expect(posts).toBe(0);
+    for (const candidate of [null, [], true, 42, "not a model"]) {
+      await editor.fill(JSON.stringify(candidate)); await submit.click();
+      await expect(panel.getByRole("alert")).toContainText("Enter a JSON model object");
+      expect(posts).toBe(0); await expect(editor).toHaveValue(JSON.stringify(candidate));
+    }
+    for (const candidate of [{}, { ...modelUiDraft(), semantics: "CONCURRENT" },
+      { ...modelUiDraft(), states: Array.from({ length: 33 }, (_, i) => ({ id: `s${i}`, label: "State" })) }]) {
+      const value = JSON.stringify(candidate); await editor.fill(value);
+      const pending = page.waitForResponse(response => response.url().endsWith("/changes/model-preview") && response.request().method() === "POST");
+      await submit.click(); const response = await pending;
+      expect([400, 422]).toContain(response.status());
+      await expect(panel.getByRole("alert")).toContainText((await response.json()).error);
+      await expect(editor).toHaveValue(value); await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toHaveCount(0);
+    }
+    await editor.fill(JSON.stringify(modelUiDraft()));
+    for (const [status, error] of [[503, "Model draft preview is not enabled"], [403, "Project membership required"], [500, "Preview service unavailable"]] as const) {
+      await page.route(endpoint, route => route.request().method() === "POST"
+        ? route.fulfill({ status, json: { error } }) : route.continue());
+      await submit.click(); await expect(panel.getByRole("alert")).toHaveText(error);
+      await expect(editor).toHaveValue(JSON.stringify(modelUiDraft()));
+      await page.unroute(endpoint);
+    }
+    await page.route(endpoint, async route => {
+      if (route.request().method() !== "POST") return route.continue();
+      const response = await route.fetch(); const body = await response.json(); body.approval = "APPROVED";
+      await route.fulfill({ response, json: body });
+    });
+    await submit.click(); await expect(panel.getByRole("alert")).toContainText("supported unapproved draft preview");
+    await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toHaveCount(0);
+    await page.unroute(endpoint);
+    // An otherwise trusted HTTP response must not be rendered as structurally
+    // accepted when its displayed rows disagree with its own definition, or
+    // when the envelope adds an unauthorized business authority assertion.
+    for (const corruption of ["different-state-label", "foreign-transition", "foreign-diagnostic",
+      "hidden-publication", "duplicate-state-id", "different-model-version"] as const) {
+      await page.route(endpoint, async route => {
+        if (route.request().method() !== "POST") return route.continue();
+        const response = await route.fetch();
+        const body = await response.json();
+        if (corruption === "different-state-label") body.states[0].label = "Forged display label";
+        if (corruption === "foreign-transition") body.transitions[0].from = "outside";
+        if (corruption === "foreign-diagnostic") body.diagnostics.push({ code: "TERMINAL_STATE", elementId: "outside" });
+        if (corruption === "hidden-publication") body.published = true;
+        if (corruption === "duplicate-state-id") body.states[1].id = body.states[0].id;
+        if (corruption === "different-model-version") body.definition.schemaVersion = "tesbo-fsm-draft/2";
+        await route.fulfill({ response, json: body });
+      });
+      await submit.click();
+      await expect(panel.getByRole("alert")).toContainText("supported unapproved draft preview");
+      await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toHaveCount(0);
+      await expect(editor).toHaveValue(JSON.stringify(modelUiDraft()));
+      await page.unroute(endpoint);
+    }
+    await page.route(endpoint, route => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await submit.click(); await expect(panel.getByRole("alert")).toContainText("draft remains unsaved");
+    await page.unroute(endpoint);
+    await page.route(endpoint, route => route.request().method() === "GET" ? route.fulfill({ json: {
+      schemaVersion: "tesbo-fsm-preview-availability/1", enabled: false, semantics: "SEQUENTIAL_FSM", maxStates: 32, maxTransitions: 64
+    } }) : route.continue());
+    await page.reload(); await panel.locator("summary").click();
+    await expect(panel.getByRole("status")).toHaveText("Draft model preview is not enabled.");
+    await expect(editor).toHaveCount(0);
+    await page.unroute(endpoint);
+    await page.route(endpoint, route => route.request().method() === "GET" ? route.fulfill({ json: {
+      schemaVersion: "tesbo-fsm-preview-availability/1", enabled: true,
+      semantics: "SEQUENTIAL_FSM", maxStates: 32, maxTransitions: 64,
+      publication: "APPROVED" // Unknown authority must not unlock editing.
+    } }) : route.continue());
+    await panel.getByRole("button", { name: "Check preview availability" }).click();
+    await expect(panel.getByRole("alert")).toContainText("Preview availability could not be verified");
+    await expect(editor).toHaveCount(0);
+    await page.unroute(endpoint);
+    await panel.getByRole("button", { name: "Check preview availability" }).click();
+    await expect(editor).toBeVisible(); await expect(editor).toHaveValue("");
+    expect(modelUiRecords(projectId)).toBe(before);
+  });
+
+  test("model draft preview UI discards delayed responses after edits and cancellation without replay", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, before = modelUiRecords(projectId);
+    const { page, panel, editor } = await openModelUi(browser);
+    const endpoint = `**/api/projects/${projectId}/agents/zyra/changes/model-preview`;
+    const releases: Array<() => void> = [], finished: Array<Promise<void>> = [];
+    let posts = 0;
+    await page.route(endpoint, async route => {
+      if (route.request().method() !== "POST") return route.continue();
+      posts++;
+      if (posts === 2) return route.continue();
+      const response = await route.fetch();
+      let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+      let finish!: () => void; finished.push(new Promise<void>(resolve => { finish = resolve; })); releases.push(release);
+      await gate;
+      try { await route.fulfill({ response }); } catch { /* Client cancellation is the scenario under test. */ }
+      finally { finish(); }
+    });
+    const submit = panel.getByRole("button", { name: "Preview draft", exact: true });
+    const result = panel.getByRole("region", { name: "Draft model preview result", exact: true });
+    try {
+      await editor.fill(JSON.stringify(modelUiDraft())); await submit.dblclick();
+      await expect.poll(() => releases.length).toBe(1); expect(posts).toBe(1);
+      const changed = modelUiDraft(); changed.states[0].label = "New draft only";
+      await editor.fill(JSON.stringify(changed)); await expect(result).toHaveCount(0);
+      await submit.click(); await expect(result).toContainText("New draft only");
+      releases[0](); await finished[0]; await expect(result).toContainText("New draft only"); expect(posts).toBe(2);
+      await submit.click(); await expect.poll(() => releases.length).toBe(2);
+      await panel.getByRole("button", { name: "Cancel preview" }).focus(); await page.keyboard.press("Enter");
+      await expect(panel.getByRole("status")).toContainText("Preview cancelled");
+      releases[1](); await finished[1]; await expect(result).toHaveCount(0); expect(posts).toBe(3);
+      await expect(editor).toHaveValue(JSON.stringify(changed));
+      expect(modelUiRecords(projectId)).toBe(before);
+    } finally { for (const release of releases) release(); await page.unroute(endpoint); }
+  });
+
+  test("model draft preview UI clears state through native project navigation and denies a foreign project", async ({ browser }) => {
+    const { page, panel, editor } = await openModelUi(browser, "owner");
+    await editor.fill(JSON.stringify(modelUiDraft())); await panel.getByRole("button", { name: "Preview draft", exact: true }).click();
+    await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toBeVisible();
+    await page.getByRole("link", { name: "All Projects", exact: true }).click();
+    await page.locator(`a[href="/projects/${tenant!.secondProjectId}/dashboard"]`).click();
+    await page.getByRole("link", { name: "Agents", exact: true }).click();
+    await page.getByRole("button", { name: /Zyra the Test Generator/ }).click();
+    await page.getByRole("link", { name: /Agent workspace/ }).click();
+    await page.getByRole("link", { name: "Change review", exact: true }).click();
+    await panel.locator("summary").click(); await expect(editor).toHaveValue("");
+    await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toHaveCount(0);
+    const qa = await open(browser, "/agents/zyra/changes", "qa");
+    // ProjectDataProvider rejects this project before child inspectors mount.
+    // Assert the real outer access boundary, not an endpoint it never calls.
+    const denied = qa.waitForResponse(response => response.url().endsWith(`/api/projects/${tenant!.secondProjectId}`));
+    await qa.goto(`/projects/${tenant!.secondProjectId}/agents/zyra/changes`);
+    expect([403, 404]).toContain((await denied).status());
+    await expect(qa).toHaveURL(/\/projects$/);
+    await expect(qa.getByTestId("model-draft-preview")).toHaveCount(0);
+  });
+
   test("owner can inspect root-free source setup while QA cannot provision it", async ({ browser }) => {
     const projectId = tenant!.mainProjectId;
     const owner = await open(browser, "/agents/zyra/changes", "owner");
@@ -98,6 +311,242 @@ test.describe("zyra / agents (UI)", () => {
     await expect(qa.getByTestId("zyra-source-binding")).toHaveCount(0);
   });
 
+  test("source binding pending save preserves submitted fields and recovers from native refusal", async ({ browser }, testInfo) => {
+    const projectId = tenant!.mainProjectId;
+    const before = Number(scalar(`SELECT COUNT(*)::int FROM project_source_bindings
+      WHERE project_id=${literal(projectId)};`));
+    const page = await open(browser, "/agents/zyra/changes", "owner");
+    const settings = page.getByTestId("zyra-source-binding");
+    await settings.locator("summary").click();
+    const repository = settings.getByLabel("Source repository identity");
+    const checkout = settings.getByLabel("Approved checkout key");
+    const ref = settings.getByLabel("Source Git ref");
+    const prefixes = settings.getByLabel("Source selection prefixes");
+    const enabled = settings.getByRole("checkbox", { name: "Enable configured source capture" });
+    await repository.fill("org/repo");
+    await checkout.fill("not-approved");
+    await ref.fill("development");
+    await prefixes.fill("src");
+    await enabled.check();
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const intercepted = new Promise<void>(resolve => { started = resolve; });
+    let attempts = 0;
+    await page.route(`**/api/projects/${projectId}/agents/zyra/changes/source-binding`, async route => {
+      if (route.request().method() !== "POST") return route.continue();
+      attempts++;
+      // Exercise the genuine native refusal. Only response timing is controlled;
+      // no approved checkout or successful persistence is fabricated.
+      const response = await route.fetch();
+      expect(response.status()).toBe(400);
+      expect(route.request().postDataJSON()).toEqual({ repositoryId: "org/repo",
+        checkoutKey: "not-approved", refName: "development", selectionPrefixes: ["src"], enabled: true });
+      started();
+      await gate;
+      await route.fulfill({ response });
+    });
+    try {
+      await settings.getByRole("button", { name: "Save source binding", exact: true }).dblclick();
+      await intercepted;
+      await expect(settings.getByRole("button", { name: "Saving source binding…" })).toBeDisabled();
+      for (const input of [repository, checkout, ref, prefixes, enabled]) await expect(input).toBeDisabled();
+      await testInfo.attach("source-binding-pending-save", { body: await settings.screenshot(), contentType: "image/png" });
+      expect(attempts).toBe(1);
+      release();
+      await expect(settings.getByRole("alert")).toContainText("administrator-approved checkout");
+      for (const input of [repository, checkout, ref, prefixes, enabled]) await expect(input).toBeEnabled();
+      await expect(repository).toHaveValue("org/repo");
+      await expect(checkout).toHaveValue("not-approved");
+      await expect(ref).toHaveValue("development");
+      await expect(prefixes).toHaveValue("src");
+      await expect(enabled).toBeChecked();
+      await settings.getByRole("button", { name: "Save source binding", exact: true }).click();
+      await expect.poll(() => attempts).toBe(2);
+      await expect(settings.getByRole("button", { name: "Save source binding", exact: true })).toBeEnabled();
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM project_source_bindings
+        WHERE project_id=${literal(projectId)};`))).toBe(before);
+    } finally { release(); await page.unrouteAll({ behavior: "wait" }); }
+  });
+
+  test("change history ignores late pagination replies and retains the latest authorized page", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, stamp = Date.now().toString();
+    // Real committed baseline rows, not invented case/run/execution records. Only the
+    // transport timing of one read response is controlled to reproduce a response race.
+    exec(`INSERT INTO graph_capture_history
+      (project_id, contract_id, source_scope_fingerprint, revision, capture_json)
+      SELECT ${literal(projectId)}, 'e2e-history-race', 'e2e-race-scope',
+        'e2e-history-race-' || ${literal(stamp)} || '-' || n::text,
+        jsonb_build_object('snapshot', jsonb_build_object('projectId', ${literal(projectId)},
+          'revision', 'e2e-history-race-' || ${literal(stamp)} || '-' || n::text,
+          'nodes', '[]'::jsonb, 'edges', '[]'::jsonb),
+          'inventoryStatus', 'complete', 'unresolvedDiagnostics', '[]'::jsonb,
+          'contractId', 'e2e-history-race', 'sourceScopeFingerprint', 'e2e-race-scope')
+      FROM generate_series(1, 27) AS n;`);
+    const page = await open(browser, "/agents/zyra/changes", "qa");
+    const older = page.getByRole("button", { name: "Older observations" });
+    await expect(older).toBeVisible();
+    let releaseFirst: (() => void) | undefined;
+    let firstIntercepted: (() => void) | undefined;
+    const held = new Promise<void>(resolve => { firstIntercepted = resolve; });
+    const gate = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let requests = 0;
+    await page.route(url => url.pathname.endsWith("/agents/zyra/changes") &&
+      url.searchParams.has("beforeId"), async route => {
+      if (++requests === 1) {
+        firstIntercepted?.();
+        await gate;
+        await route.fulfill({ status: 200, contentType: "application/json",
+          body: JSON.stringify({ entries: [] }) }).catch(() => {});
+      } else {
+        await route.continue();
+      }
+    });
+    try {
+      await older.click();
+      await held;
+      // Same cursor, newer request. It returns the genuine two older rows.
+      await older.click();
+      await expect(page.getByText("Older observations")).toHaveCount(0);
+      await expect(page.locator("section[aria-label='Graph change history'] article")).toHaveCount(2);
+      releaseFirst?.();
+      await expect(page.locator("section[aria-label='Graph change history'] article")).toHaveCount(2);
+      await expect(page.getByText("No committed graph observations are available for this project.")).toHaveCount(0);
+    } finally {
+      releaseFirst?.();
+      await page.unrouteAll({ behavior: "wait" });
+      // This suite reuses its disposable tenant across tests: remove the graph
+      // fixture explicitly, rather than poisoning later history assertions.
+      exec(`DELETE FROM graph_capture_history WHERE project_id=${literal(projectId)}
+        AND revision LIKE ${literal("e2e-history-race-" + stamp + "-%")};`);
+    }
+  });
+
+  test("change review refuses duplicate source capture while first request is pending", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId;
+    const before = Number(scalar(`SELECT COUNT(*)::int FROM graph_capture_history
+      WHERE project_id=${literal(projectId)};`));
+    const page = await open(browser, "/agents/zyra/changes", "owner");
+    const endpoint = `**/api/projects/${projectId}/agents/zyra/changes/capture`;
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const intercepted = new Promise<void>(resolve => { started = resolve; });
+    let attempts = 0;
+    await page.route(endpoint, async route => {
+      attempts++;
+      started();
+      await gate;
+      try { await route.fulfill({ status: 503, json: { error: "Injected capture unavailable" } }); }
+      catch { /* A navigated-away request can be cancelled. */ }
+    });
+    try {
+      const capture = page.getByRole("button", { name: "Capture configured source" });
+      await capture.dblclick();
+      await intercepted;
+      await expect(page.getByRole("button", { name: "Capturing…" })).toBeDisabled();
+      expect(attempts).toBe(1);
+      release();
+      await expect(page.getByText("Injected capture unavailable", { exact: true })).toBeVisible();
+      await expect(capture).toBeEnabled();
+      expect(attempts).toBe(1);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM graph_capture_history
+        WHERE project_id=${literal(projectId)};`))).toBe(before);
+    } finally { release(); await page.unrouteAll({ behavior: "wait" }); }
+  });
+
+  test("change review discards late source-capture feedback after project navigation", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, otherProjectId = tenant!.secondProjectId;
+    const before = Number(scalar(`SELECT COUNT(*)::int FROM graph_capture_history
+      WHERE project_id=${literal(projectId)};`));
+    const page = await open(browser, "/agents/zyra/changes", "owner");
+    const endpoint = `**/api/projects/${projectId}/agents/zyra/changes/capture`;
+    let release!: () => void, intercepted!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { intercepted = resolve; });
+    await page.route(endpoint, async route => {
+      intercepted();
+      await gate;
+      try { await route.fulfill({ status: 503, json: { error: "Stale source capture response" } }); }
+      catch { /* Navigating away may cancel an in-flight request. */ }
+    });
+    try {
+      await page.getByRole("button", { name: "Capture configured source" }).click();
+      await started;
+      await page.goto(`${env.webBaseUrl}/projects/${otherProjectId}/agents/zyra/changes`);
+      await expect(page.getByRole("heading", { name: "Change impact review" })).toBeVisible();
+      release();
+      await expect(page.getByText("Stale source capture response")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Capture configured source" })).toBeEnabled();
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM graph_capture_history
+        WHERE project_id=${literal(projectId)};`))).toBe(before);
+    } finally {
+      release();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+
+  test("change review serializes native notification retries across different receipts", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, stamp = Date.now().toString();
+    const saved: string[] = [];
+    const capture = (revision: string) => JSON.stringify({
+      snapshot: { projectId, revision, nodes: [], edges: [] }, inventoryStatus: "complete",
+      unresolvedDiagnostics: [], contractId: "e2e-notify-serialization",
+      sourceScopeFingerprint: "e2e-notify-serialization"
+    });
+    try {
+      for (let n = 0; n < 2; n++) {
+        const revision = `notify-serialization-${stamp}-${n}`;
+        const receipt = {
+          id: revision, projectId, status: "needs_qa_triage",
+          source: { contractId: "e2e-notify-serialization", scopeFingerprint: "e2e-notify-serialization",
+            fromRevision: "before", toRevision: revision },
+          changed: { addedNodeIds: [], modifiedNodeIds: [], removedNodeIds: [],
+            addedEdgeIds: [], modifiedEdgeIds: [], removedEdgeIds: [] },
+          candidates: [], unlinkedCaseNodeIds: [],
+          evidence: { basis: "cached_source_reference_only", upstreamFreshness: "unverified",
+            coverageAssertion: "none", executionAssertion: "none", verification: "not_performed" }
+        };
+        saved.push(scalar(`INSERT INTO graph_capture_history
+          (project_id, contract_id, source_scope_fingerprint, revision, capture_json, review_receipt_json)
+          VALUES (${literal(projectId)}, 'e2e-notify-serialization', 'e2e-notify-serialization',
+            ${literal(revision)}, ${literal(capture(revision))}::jsonb,
+            ${literal(JSON.stringify(receipt))}::jsonb) RETURNING id;`));
+      }
+      const page = await open(browser, "/agents/zyra/changes", "qa");
+      const buttons = page.getByRole("button", { name: "Notify QA reviewers" });
+      await expect(buttons).toHaveCount(2);
+      let release!: () => void, signal!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const started = new Promise<void>(resolve => { signal = resolve; });
+      let attempts = 0;
+      const endpoint = `**/api/projects/${projectId}/agents/zyra/changes/*/notify`;
+      await page.route(endpoint, async route => {
+        attempts++;
+        signal();
+        await gate;
+        try { await route.fulfill({ status: 503, json: { error: "Injected retry failure" } }); }
+        catch { /* Route teardown can cancel an in-flight read of the response. */ }
+      });
+      try {
+        await buttons.first().click();
+        await started;
+        await expect(buttons).toHaveCount(1);
+        await expect(page.getByRole("button", { name: "Checking notification…" })).toBeDisabled();
+        await expect(buttons).toBeDisabled();
+        expect(attempts).toBe(1);
+        release();
+        await expect(page.getByText("Injected retry failure", { exact: true })).toBeVisible();
+        await expect(buttons).toHaveCount(2);
+        await expect(buttons.first()).toBeEnabled();
+        await expect(buttons.last()).toBeEnabled();
+        expect(attempts).toBe(1);
+      } finally { release(); await page.unrouteAll({ behavior: "wait" }); }
+    } finally {
+      for (const id of saved) {
+        exec(`DELETE FROM graph_capture_history WHERE project_id=${literal(projectId)} AND id=${literal(id)}::bigint;`);
+      }
+    }
+  });
+
   test("Zyra opens native change review, handles missing source bindings and preserves zero executions", async ({ browser }) => {
     const page = await open(browser, "/agents/zyra", "qa");
     await page.getByRole("link", { name: "Change review" }).click();
@@ -112,7 +561,8 @@ test.describe("zyra / agents (UI)", () => {
     await expect(page.getByText("No committed graph observations are available for this project.")).toBeVisible();
     await expect(page.getByText(/no case is failed, executed or approved/i)).toBeVisible();
     await page.getByRole("button", { name: "Capture configured source" }).click();
-    await expect(page.getByRole("alert")).toBeVisible();
+    // Next also exposes a route-announcer alert; assert the native refusal itself.
+    await expect(page.getByText("Project source binding is not enabled or configured", { exact: true })).toBeVisible();
     // No approved checkout exists in this disposable test tenant; don't
     // fabricate one or claim capture success.
     await expect(page.getByText("No committed graph observations are available for this project.")).toBeVisible();

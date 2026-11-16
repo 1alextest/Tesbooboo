@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { ModelDraftPreview } from "./ModelDraftPreview";
 import { SourceBindingSettings } from "./SourceBindingSettings";
 import { ReviewCaseRunSetup } from "./ReviewCaseRunSetup";
 import { useParams } from "@/lib/routeParams";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   captureZyraGraphChange, listZyraGraphChanges, retryZyraGraphReviewNotification,
   type GraphReviewHistoryRow
@@ -38,25 +39,75 @@ export default function ZyraChangeReviewPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  // A late page request must not replace newer history or cross a project switch.
+  // Keep this in the existing view rather than adding a second request/cache owner.
+  const historyRequest = useRef({ generation: 0 });
+  const historyReads = useRef(new Set<AbortController>());
+  // Capture/notification writes can commit even when a browser navigates away.
+  // Never apply their late UI feedback to another project or remount.
+  const mutationLifetime = useRef({ generation: 0 });
+  const activeProject = useRef(projectId);
+  const notificationInFlight = useRef<{ historyId: string; generation: number } | null>(null);
+  const captureInFlight = useRef<{ generation: number } | null>(null);
+  activeProject.current = projectId;
   const load = useCallback(async (beforeId?: string) => {
+    const request = ++historyRequest.current.generation;
+    const controller = new AbortController();
+    const reads = historyReads.current;
+    reads.add(controller);
     setLoading(true);
     try {
-      const result = await listZyraGraphChanges(projectId, 25, beforeId);
+      const result = await listZyraGraphChanges(projectId, 25, beforeId, controller.signal);
+      if (historyRequest.current.generation !== request) return;
       setEntries(result.entries);
       setCursor(result.entries.length === 25 ? result.entries[result.entries.length - 1].id : undefined);
       setError(null);
     } catch (cause) {
+      if (historyRequest.current.generation !== request) return;
       setError(cause instanceof Error ? cause.message : "Could not read change history.");
-    } finally { setLoading(false); }
+    } finally {
+      reads.delete(controller);
+      if (historyRequest.current.generation === request) setLoading(false);
+    }
   }, [projectId]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    mutationLifetime.current.generation++;
+    setEntries([]);
+    setCursor(undefined);
+    setError(null);
+    setNotice(null);
+    setCapturing(false);
+    notificationInFlight.current = null;
+    captureInFlight.current = null;
+    setNotifying(null);
+    void load();
+    const reads = historyReads.current;
+    const requestState = historyRequest.current;
+    const mutationState = mutationLifetime.current;
+    return () => {
+      requestState.generation++;
+      mutationState.generation++;
+      for (const controller of reads) controller.abort();
+      reads.clear();
+    };
+  }, [load]);
 
   async function capture() {
+    // A double-click can arrive before React commits the disabled state.
+    // Source capture has its own lock; notification retry remains independent.
+    if (captureInFlight.current) return;
+    const mutation = mutationLifetime.current.generation;
+    const attempt = { generation: mutation };
+    captureInFlight.current = attempt;
+    const isCurrent = () => activeProject.current === projectId &&
+      mutationLifetime.current.generation === mutation &&
+      captureInFlight.current === attempt;
     setCapturing(true);
     setNotice(null);
     try {
       const result = await captureZyraGraphChange(projectId);
+      if (!isCurrent()) return;
       setNotice(result.stored
         ? result.reviewReceipt
           ? "A change was recorded for QA triage. No tests have been executed or approved."
@@ -67,14 +118,29 @@ export default function ZyraChangeReviewPage() {
       }
       await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Source capture unavailable.");
-    } finally { setCapturing(false); }
+      if (isCurrent()) setError(cause instanceof Error ? cause.message : "Source capture unavailable.");
+    } finally {
+      if (isCurrent()) {
+        captureInFlight.current = null;
+        setCapturing(false);
+      }
+    }
   }
 
   async function retry(historyId: string) {
+    // Only one native delivery attempt per page at a time. The database dedupes
+    // committed notifications; this lock prevents conflicting UI outcomes.
+    if (notificationInFlight.current) return;
+    const mutation = mutationLifetime.current.generation;
+    const attempt = { historyId, generation: mutation };
+    notificationInFlight.current = attempt;
+    const isCurrent = () => activeProject.current === projectId &&
+      mutationLifetime.current.generation === mutation &&
+      notificationInFlight.current === attempt;
     setNotifying(historyId);
     try {
       const result = await retryZyraGraphReviewNotification(projectId, historyId);
+      if (!isCurrent()) return;
       setNotice(result.status === "delivered"
         ? `Reviewer notifications confirmed for ${result.recipientCount} recipient(s).`
         : result.status === "pending"
@@ -82,8 +148,13 @@ export default function ZyraChangeReviewPage() {
           : "No eligible reviewer recipients are configured.");
       setError(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not retry notification.");
-    } finally { setNotifying(null); }
+      if (isCurrent()) setError(cause instanceof Error ? cause.message : "Could not retry notification.");
+    } finally {
+      if (isCurrent()) {
+        notificationInFlight.current = null;
+        setNotifying(null);
+      }
+    }
   }
 
   return (
@@ -101,7 +172,8 @@ export default function ZyraChangeReviewPage() {
           {capturing ? "Capturing…" : "Capture configured source"}
         </button>
       </div>
-      <SourceBindingSettings projectId={projectId} />
+      <SourceBindingSettings key={projectId} projectId={projectId} />
+      <ModelDraftPreview key={projectId} projectId={projectId} />
       <section aria-label="Manual QA verification actions" className="rounded-lg border border-[var(--border)] p-4 text-sm">
         <h2 className="font-semibold">Continue verification in existing Tesbo records</h2>
         <p className="mt-1 text-[var(--muted)]">
@@ -179,7 +251,7 @@ export default function ZyraChangeReviewPage() {
                       candidateCaseIds={receipt.candidates.map((candidate) =>
                         canonicalReviewCaseId(candidate.caseNodeId, projectId)
                       ).filter((id): id is string => id !== null)} />
-                    <button type="button" disabled={notifying === entry.id} onClick={() => void retry(entry.id)}
+                    <button type="button" disabled={notifying !== null} onClick={() => void retry(entry.id)}
                       className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm disabled:opacity-60">
                       {notifying === entry.id ? "Checking notification…" : "Notify QA reviewers"}
                     </button>

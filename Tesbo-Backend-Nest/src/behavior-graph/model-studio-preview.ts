@@ -8,6 +8,15 @@ import { DraftPreviewError, previewDraftModel } from "./model-studio-preview.cor
 export class ModelStudioPreview {
   constructor(private readonly db: DatabaseService, private readonly legacy: LegacyService) {}
 
+  async availabilityForUser(userId: string | null | undefined, projectId: string) {
+    if (!userId) throw new ForbiddenException({ error: "Project membership required" });
+    const project = await this.legacy.requireProjectAccess(userId, projectId);
+    await this.fenceCurrentAccess(userId, projectId, project.organization_id);
+    return { schemaVersion: "tesbo-fsm-preview-availability/1" as const,
+      enabled: process.env.TESBO_MODEL_PREVIEW_ENABLED === "1",
+      semantics: "SEQUENTIAL_FSM" as const, maxStates: 32, maxTransitions: 64 };
+  }
+
   async previewForUser(userId: string | null | undefined, projectId: string, input: unknown): Promise<ReturnType<typeof previewDraftModel>> {
     if (!userId) throw new ForbiddenException({ error: "Project membership required" });
     const project = await this.legacy.requireProjectAccess(userId, projectId);
@@ -25,6 +34,11 @@ export class ModelStudioPreview {
     // Reuse the native access boundary, then fence a revoke/archive occurring
     // during validation before returning any project-scoped result. No input
     // field can supply a tenant, principal, family identity or approval grant.
+    await this.fenceCurrentAccess(userId, projectId, project.organization_id);
+    return preview;
+  }
+
+  private async fenceCurrentAccess(userId: string, projectId: string, organizationId: string) {
     const access = await this.db.query<{ allowed: boolean }>(
       `SELECT EXISTS (
          SELECT 1 FROM projects p
@@ -36,9 +50,8 @@ export class ModelStudioPreview {
             AND COALESCE((to_jsonb(p)->>'is_archived')::boolean,false)=false
             AND (to_jsonb(pm)->>'deleted_at') IS NULL
             AND (to_jsonb(om)->>'deleted_at') IS NULL
-       ) AS allowed`, [projectId, project.organization_id, userId]
+       ) AS allowed`, [projectId, organizationId, userId]
     );
     if (!access.rows[0]?.allowed) throw new ForbiddenException({ error: "Project access changed during model preview" });
-    return preview;
   }
 }
