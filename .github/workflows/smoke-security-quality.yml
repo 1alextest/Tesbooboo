@@ -105,6 +105,16 @@ jobs:
           selection='source binding pending save|graph change history is project scoped|source binding setup is owner-only|model draft preview|change history ignores late pagination replies|change review refuses duplicate source capture|change review discards late source-capture feedback|change review serializes native notification retries|Zyra opens native change review|owner can inspect root-free source setup|graph review links an explicitly nominated case'
           npx playwright test -c playwright.config.ts api/zyra.spec.ts ui/zyra.spec.ts --workers=10 -g "$selection" --list
           npx playwright test -c playwright.config.ts api/zyra.spec.ts ui/zyra.spec.ts --workers=10 --output=test-results-zyra -g "$selection"
+      - name: Verify fresh MCP catalog and canonical QA fields on isolated backend
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-mcp
+        run: |
+          # Read-only MCP initialize/tools-list against this exact isolated build.
+          # A passing source catalog does not establish the external client's deployment.
+          selection="a current session is served, and tools/list exposes the deployed create_testcase schema"
+          npx playwright test -c playwright.config.ts api/mcp.spec.ts --workers=10 --output=test-results-mcp -g "$selection" --list
+          npx playwright test -c playwright.config.ts api/mcp.spec.ts --workers=10 --output=test-results-mcp -g "$selection"
       - name: Verify Approved-only native run attachments
         working-directory: e2e
         env:
