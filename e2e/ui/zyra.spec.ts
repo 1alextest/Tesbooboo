@@ -144,6 +144,88 @@ test.describe("zyra / agents (UI)", () => {
     expect(modelUiRecords(projectId)).toBe(before);
   });
 
+  test("model draft preview graph preserves native cycles, parallel edges and keyboard inspection without writes", async ({ browser }, testInfo) => {
+    const before = modelUiRecords(tenant!.mainProjectId);
+    const { page, panel, editor } = await openModelUi(browser);
+    const draft = modelUiDraft();
+    draft.states.push({ id: "isolated", label: '<img src=x onerror="window.graphInjected=true">' });
+    draft.transitions.push(
+      { id: "return", from: "done", to: "ready", action: "Return", expectedObservation: "Ready again" },
+      { id: "loop", from: "ready", to: "ready", action: "Stay ready", expectedObservation: "Still ready" },
+      { id: "parallel", from: "ready", to: "done", action: "Alternative completion", expectedObservation: "Alternative result" },
+      { id: "unreachable", from: "isolated", to: "done", action: "Never observed", expectedObservation: "Unapproved expectation" });
+    await editor.fill(JSON.stringify(draft));
+    const sent = page.waitForResponse(r => r.url().endsWith("/changes/model-preview") && r.request().method() === "POST");
+    await panel.getByRole("button", { name: "Preview draft", exact: true }).click();
+    const response = await sent; expect(response.status()).toBe(200); const native = await response.json();
+    const graph = panel.getByRole("region", { name: "Draft state graph", exact: true });
+    await expect(graph.getByRole("img")).toHaveAccessibleName("3 draft states and 5 directed transitions");
+    expect(await graph.locator("[data-model-state]").evaluateAll(nodes => nodes.map(n => n.getAttribute("data-model-state"))))
+      .toEqual(native.states.map((s: { id: string }) => s.id));
+    expect(await graph.locator("[data-model-transition]").evaluateAll(nodes => nodes.map(n => n.getAttribute("data-model-transition"))))
+      .toEqual(native.transitions.map((t: { id: string }) => t.id));
+    const inspect = graph.getByLabel("Inspect draft transition", { exact: true });
+    await inspect.focus();
+    // Native select keyboard navigation, not a pointer-only SVG interaction.
+    await page.keyboard.press("Home"); await page.keyboard.press("End");
+    const selected = native.transitions.at(-1);
+    await expect(inspect).toHaveValue(selected.id);
+    const details = graph.locator("dl");
+    await expect(details).toContainText(selected.action);
+    await expect(details).toContainText(selected.expectedObservation);
+    await inspect.selectOption("loop"); await expect(details).toContainText("Ready (ready) → Ready (ready)");
+    await inspect.selectOption("parallel"); await expect(details).toContainText("Alternative completion");
+    await inspect.selectOption("unreachable"); await expect(details).toContainText("Unreachable; no runtime evidence");
+    await expect(graph.locator("img,script,a")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as { graphInjected?: boolean }).graphInjected)).toBeUndefined();
+    const scroll = graph.getByRole("region", { name: "Scrollable draft graph", exact: true });
+    expect(await scroll.evaluate(el => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
+    await testInfo.attach("draft-graph-desktop", { body: await scroll.screenshot(), contentType: "image/png" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    const collapse = page.getByRole("button", { name: "Collapse sidebar", exact: true });
+    if (await collapse.isVisible()) await collapse.click();
+    await expect(page.getByRole("complementary")).toHaveCSS("width", "60px");
+    const actualSize = graph.getByRole("checkbox", { name: "Show graph at actual size" });
+    await actualSize.focus(); await page.keyboard.press("Space"); await expect(actualSize).toBeChecked();
+    await scroll.focus(); await expect(scroll).toBeFocused();
+    expect(await scroll.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
+    expect(await panel.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await expect.poll(() => graph.locator('[data-model-state="isolated"]').evaluate(el => {
+      const box = el.getBoundingClientRect(), pane = el.closest("svg")!.parentElement!.getBoundingClientRect();
+      return box.x + box.width / 2 >= pane.left && box.x + box.width / 2 <= pane.right &&
+        box.y + box.height / 2 >= pane.top && box.y + box.height / 2 <= pane.bottom;
+    })).toBe(true);
+    await testInfo.attach("draft-graph-mobile", { body: await scroll.screenshot(), contentType: "image/png" });
+    await editor.fill("{}"); await expect(graph).toHaveCount(0);
+    expect(modelUiRecords(tenant!.mainProjectId)).toBe(before);
+  });
+
+  test("model draft preview graph handles one empty state and maximum native bounds without inventing edges", async ({ browser }) => {
+    const before = modelUiRecords(tenant!.mainProjectId);
+    const { panel, editor } = await openModelUi(browser);
+    const graph = panel.getByRole("region", { name: "Draft state graph", exact: true });
+    const draft = { ...modelUiDraft(), states: [{ id: "ready", label: "Ready" }], transitions: [] as ReturnType<typeof modelUiDraft>["transitions"] };
+    await editor.fill(JSON.stringify(draft)); await panel.getByRole("button", { name: "Preview draft", exact: true }).click();
+    await expect(graph.getByRole("img")).toHaveAccessibleName("1 draft states and 0 directed transitions");
+    await expect(graph.locator("[data-model-state]")).toHaveCount(1);
+    await expect(graph.locator("[data-model-transition]")).toHaveCount(0);
+    await expect(graph.getByLabel("Inspect draft transition", { exact: true })).toHaveCount(0);
+    await expect(graph).toContainText("This graph has no declared transitions.");
+    const maximum = { ...modelUiDraft(), initialStateId: "s0",
+      states: Array.from({ length: 32 }, (_, n) => ({ id: `s${n}`, label: `State ${n}` })),
+      transitions: Array.from({ length: 64 }, (_, n) => ({ id: `t${n}`, from: `s${n % 32}`, to: `s${(n + 1) % 32}`,
+        action: `Action ${n}`, expectedObservation: `Observation ${n}` })) };
+    await editor.fill(JSON.stringify(maximum)); await panel.getByRole("button", { name: "Preview draft", exact: true }).click();
+    await expect(graph.getByRole("img")).toHaveAccessibleName("32 draft states and 64 directed transitions");
+    await expect(graph.locator("[data-model-state]")).toHaveCount(32);
+    await expect(graph.locator("[data-model-transition]")).toHaveCount(64);
+    await expect(graph.locator("path[d*='NaN'],path[d*='Infinity']")).toHaveCount(0);
+    await graph.getByLabel("Inspect draft transition", { exact: true }).selectOption("t63");
+    await expect(graph.locator("dl")).toContainText("Action 63");
+    await panel.getByRole("button", { name: "Clear draft", exact: true }).click(); await expect(graph).toHaveCount(0);
+    expect(modelUiRecords(tenant!.mainProjectId)).toBe(before);
+  });
+
   test("model draft preview UI preserves invalid drafts and fails closed on disabled, denied and incompatible responses", async ({ browser }) => {
     const projectId = tenant!.mainProjectId, before = modelUiRecords(projectId);
     const { page, panel, editor } = await openModelUi(browser);

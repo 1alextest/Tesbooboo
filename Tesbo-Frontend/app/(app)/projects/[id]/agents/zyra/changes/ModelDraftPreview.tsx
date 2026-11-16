@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { getModelPreviewAvailability, previewModelDraft } from "@/lib/api";
 import type { ModelDraftPreview as Preview, ModelPreviewAvailability } from "@/lib/model-draft-preview";
+import { ModelDraftGraph } from "./ModelDraftGraph";
 
 const EXAMPLE = JSON.stringify({ schemaVersion: "tesbo-fsm-draft/1", semantics: "SEQUENTIAL_FSM", initialStateId: "ready",
   states: [{ id: "ready", label: "Ready" }, { id: "done", label: "Done" }],
@@ -121,6 +122,7 @@ export function ModelDraftPreview({ projectId }: { projectId: string }) {
         {result && <section aria-label="Draft model preview result" className="space-y-3">
           <p role="status">Structure accepted for preview. Unapproved draft; source unverified; runtime evidence: none.</p>
           <p className="text-xs text-[var(--muted)]">Reachability describes this draft only. It does not prove application behavior. Nothing was saved, published or activated.</p>
+          <ModelDraftGraph key={result.candidateDigest} preview={result} />
           <div className="max-h-80 overflow-auto rounded border border-[var(--border)]" tabIndex={0} role="region" aria-label="Draft states and transitions">
             <table className="w-full text-left text-xs">
               <caption className="p-2 text-left font-semibold">Draft states</caption>
