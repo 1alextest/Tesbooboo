@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { ForbiddenException, Injectable, Logger, NotFoundException, Optional, UnauthorizedException } from "@nestjs/common";
 import { ProjectSourceGraphCoordinator } from "../behavior-graph/project-source-graph.coordinator";
 import { GraphChangeReviewDelivery } from "../behavior-graph/graph-change-review.delivery";
+import { BUILD_GIT_SHA } from "../build-provenance";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
@@ -51,15 +52,16 @@ export class McpService {
    * free text on stage" report). Session ids embed this value — see isCurrentSession.
    *
    * A content hash rather than GIT_SHA: it changes exactly when the schemas do (a deploy that
-   * leaves MCP untouched does not force every client to reconnect), and it works where GIT_SHA is
-   * "local" — local dev, e2e, and prod, whose deploy does not pass GIT_SHA through today.
+   * leaves MCP untouched does not force every client to reconnect), and it works even when the
+   * build is unidentified ("local") — local dev, e2e, or a deploy exposing neither GIT_SHA nor
+   * RAILWAY_GIT_COMMIT_SHA.
    */
   private readonly toolsFingerprint = createHash("sha256")
     .update(JSON.stringify({ tools: this.listToolsPayload(), instructions: MCP_SERVER_INSTRUCTIONS }))
     .digest("hex")
     .slice(0, 16);
-  /** SemVer build metadata: which deploy (GIT_SHA) and which tool set (fingerprint) this is. */
-  readonly serverVersion = `${MCP_SERVER_VERSION}+${process.env.GIT_SHA || "local"}.${this.toolsFingerprint}`;
+  /** SemVer build metadata: which deploy (resolved build commit) and which tool set (fingerprint) this is. */
+  readonly serverVersion = `${MCP_SERVER_VERSION}+${BUILD_GIT_SHA}.${this.toolsFingerprint}`;
 
   // Resolved once and reused — the MCP agent's actor id never changes at runtime.
   private mcpActorIdPromise: Promise<string | null> | null = null;

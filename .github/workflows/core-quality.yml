@@ -76,7 +76,7 @@ jobs:
       - name: Frontend TypeScript
         run: npx tsc --noEmit
       - name: Frontend content security, document-write and MCP diagnostic regressions
-        run: node --test ../scripts/frontend-content-security.test.mjs ../scripts/document-write-queue.test.mjs ../scripts/mcp-connection-check.test.mjs
+        run: node --test ../scripts/frontend-content-security.test.mjs ../scripts/document-write-queue.test.mjs ../scripts/mcp-connection-check.test.mjs ../scripts/mcp-deploy-check.test.mjs
       - name: Frontend production build
         env:
           NEXT_TELEMETRY_DISABLED: "1"
