@@ -61,6 +61,8 @@ export type RbacTenantKind =
   // Shared test-run approval invariant: native REST, MCP and automation
   // entry points write only to this disposable project's cycles/cases.
   | "run-approval"
+  // Isolated human+MCP machine token lifecycle; never use a real customer project.
+  | "mcp-lifecycle"
   // Wave 8 — integrations (Jira / Linear), authorization and validation layer
   | "integrations"
   // Wave 9 — Zyra, AI keys, MCP

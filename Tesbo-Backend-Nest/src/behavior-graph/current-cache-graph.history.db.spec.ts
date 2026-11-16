@@ -383,6 +383,35 @@ const url = process.env.DATABASE_URL ?? "";
           .toEqual({ historyId: receiptId, runId: cycleId, selected: 1, newlyLinked: 0 });
         const read = await links.listForUser(user, project, receiptId);
         expect(read.links).toHaveLength(1);
+        expect(read.links[0].commitProvenance).toMatchObject({
+          sourceCommitSha: null, runReportedCommitSha: null, comparison: "unknown"
+        });
+        // This is a migrated-db fixture for the INTERNAL byte-verified receipt.
+        // Do not mistake a matching caller-reported commit for deployed runtime proof.
+        const sourceSha = "a".repeat(40), otherSha = "b".repeat(40);
+        await admin.query(`UPDATE graph_capture_history SET capture_json =
+          jsonb_set(jsonb_set(capture_json,'{sourceByteEvidence}',
+            '"verified_pinned_git"'::jsonb),'{observedCommitSha}',to_jsonb($2::text))
+          WHERE id=$1`, [receiptId, sourceSha]);
+        await admin.query("UPDATE cycles SET commit_sha=$2 WHERE id=$1", [cycleId, sourceSha]);
+        const sameCommit = await links.listForUser(user, project, receiptId);
+        expect(sameCommit.links[0].commitProvenance).toEqual({
+          sourceCommitSha: sourceSha, runReportedCommitSha: sourceSha,
+          comparison: "reported_equal_unverified"
+        });
+        await admin.query("UPDATE cycles SET commit_sha=$2 WHERE id=$1", [cycleId, otherSha]);
+        const differentCommit = await links.listForUser(user, project, receiptId);
+        expect(differentCommit.links[0].commitProvenance).toEqual({
+          sourceCommitSha: sourceSha, runReportedCommitSha: otherSha,
+          comparison: "reported_different"
+        });
+        await admin.query(`UPDATE graph_capture_history SET capture_json =
+          jsonb_set(capture_json,'{sourceByteEvidence}','"unattested"'::jsonb)
+          WHERE id=$1`, [receiptId]);
+        const untrusted = await links.listForUser(user, project, receiptId);
+        expect(untrusted.links[0].commitProvenance).toMatchObject({
+          sourceCommitSha: null, runReportedCommitSha: otherSha, comparison: "unknown"
+        });
         expect(read.links[0]).toMatchObject({
           runId: cycleId, caseId, runName: "Graph impact QA run",
           caseStillInRun: true, execution: null
@@ -455,7 +484,16 @@ const url = process.env.DATABASE_URL ?? "";
         await admin.query("UPDATE cycle_items SET deleted_at=now() WHERE id=$1", [itemId]);
         const removed = await links.listForUser(user, project, receiptId);
         expect(removed.links[0]).toMatchObject({ caseStillInRun: false, execution: null });
+        expect(removed.summary).toMatchObject({
+          nominatedCaseCount: 1, selectedCaseCount: 0, notSelectedCount: 1,
+          historicalSelectionOnlyCount: 1, withSubsequentResultCount: 0,
+          withLaterEvidenceMetadataCount: 0, coverageAssertion: "none"
+        });
         await admin.query("UPDATE cycle_items SET deleted_at=NULL WHERE id=$1", [itemId]);
+        const restoredSelection = await links.listForUser(user, project, receiptId);
+        expect(restoredSelection.summary).toMatchObject({
+          selectedCaseCount: 1, notSelectedCount: 0, historicalSelectionOnlyCount: 0
+        });
         const persisted = await admin.query(
           "SELECT project_id, history_id::text, cycle_id, testcase_id, linked_by_user_id FROM graph_review_run_case_links WHERE history_id=$1",
           [receiptId]
