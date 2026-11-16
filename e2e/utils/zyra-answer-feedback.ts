@@ -50,6 +50,14 @@ export async function seedAnswerRepository(request: APIRequestContext, base: str
   } });
   expect(created.status(), await created.text()).toBe(201);
   const caseId = (await created.json()).id;
+  // A baseline with real history. Before V148 the embedding-status transitions created a version
+  // row here; that bookkeeping is now excluded, so seed one genuine authored revision and keep the
+  // assertion below meaningful: the answer turn must preserve existing history, not pass on an
+  // empty snapshot.
+  const edited = await request.put(`${base}/testcases/${caseId}`, {
+    data: { description: "An existing case, not output of this answer (authored baseline)" }
+  });
+  expect(edited.ok(), await edited.text()).toBeTruthy();
   // Same queued->pending boundary established by the review-close smoke. V148 no longer records
   // the transient queued state in testcase_versions, so embedding_queued_at is the durable signal.
   await expect.poll(async () => {
