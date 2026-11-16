@@ -315,11 +315,32 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
 
   test("a current session is served, and tools/list exposes the deployed create_testcase schema", async ({ request }) => {
     await withToken(request, ["read"], async (api, token) => {
-      const session = (await initialize(api, token)).headers["mcp-session-id"];
+      const init = await initialize(api, token);
+      const session = init.headers["mcp-session-id"];
       const list = await rpc(api, token, { id: 2, method: "tools/list" }, session);
       expect(list.status).toBeLessThan(300);
-      const create = (list.body.result.tools as Array<{ name: string; inputSchema: any }>).find((t) => t.name === "create_testcase");
-      expect(create?.inputSchema.properties.severity.enum, "the severity fix's enum is what a fresh session sees").toEqual(["Critical", "High", "Medium", "Low"]);
+      const tools = list.body.result.tools as Array<{ name: string; inputSchema: {
+        properties?: Record<string, { type?: string; enum?: string[] }>;
+      } }>;
+      const names = tools.map(t => t.name);
+      // Exact source/deployment contract. A 50-tool client cache is not proof
+      // that this server is current, nor can 53 source tools prove stage deployed.
+      expect(names, "freshly initialized deployed catalog").toHaveLength(53);
+      expect(new Set(names).size, "MCP names must be unique").toBe(53);
+      for (const name of ["list_qa_graph_changes", "capture_qa_graph_change", "preview_behavior_model_draft"]) {
+        expect(names).toContain(name);
+      }
+      const create = tools.find(t => t.name === "create_testcase");
+      const update = tools.find(t => t.name === "update_testcase");
+      expect(create?.inputSchema.properties?.severity?.enum, "current severity vocabulary")
+        .toEqual(["Critical", "High", "Medium", "Low"]);
+      expect(create?.inputSchema.properties?.postconditions?.type, "create-time Postconditions").toBe("string");
+      expect(create?.inputSchema.properties?.attachments?.type, "create-time plain-text Notes").toBe("string");
+      expect(update?.inputSchema.properties?.postconditions?.type, "update-time Postconditions").toBe("string");
+      expect(update?.inputSchema.properties?.attachments?.type, "update-time plain-text Notes").toBe("string");
+      const fingerprint = String(init.body.result.serverInfo.version).split(".").at(-1);
+      expect(fingerprint).toMatch(/^[a-f0-9]{16}$/);
+      expect(session).toMatch(new RegExp("^" + fingerprint + "\\."));
     });
   });
 
