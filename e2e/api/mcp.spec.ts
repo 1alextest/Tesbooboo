@@ -305,6 +305,48 @@ test("MCP revision preconditions refuse stale and malformed edits without overwr
   }
 });
 
+test("MCP postconditions preserve omission, clear explicitly and refuse invalid types", async ({ request }) => {
+  const created = await createCase(request, { postconditions: "Initial final state" });
+  const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
+  const mcp = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
+  let tokenId: string | undefined;
+  try {
+    const response = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      data: { name: `E2E postconditions ${Date.now()}`, scopes: ["read", "write"] }
+    });
+    expect(response.ok()).toBeTruthy();
+    const issued = await response.json();
+    tokenId = issued.id;
+
+    const initial = await callMcpTool(mcp, issued.token, "get_testcase", { testcaseId: created.id });
+    expect(initial.postconditions).toBe("Initial final state");
+
+    // Omission preserves the stored value; an unrelated edit must not clear it.
+    const omitted = await callMcpTool(mcp, issued.token, "update_testcase", {
+      testcaseId: created.id, description: "Unrelated edit", expectedRevision: initial.editRevision
+    });
+    expect(omitted.postconditions).toBe("Initial final state");
+
+    // "" is the explicit clear; null is not.
+    const cleared = await callMcpTool(mcp, issued.token, "update_testcase", {
+      testcaseId: created.id, postconditions: "", expectedRevision: omitted.editRevision
+    });
+    expect(cleared.postconditions).toBe("");
+
+    for (const postconditions of [null, 8, true, [], {}]) {
+      const invalid = await callMcpToolExpectError(mcp, issued.token, "update_testcase", {
+        testcaseId: created.id, postconditions, expectedRevision: cleared.editRevision
+      });
+      expect(invalid.message).toMatch(/postconditions/i);
+    }
+    expect((await (await request.get(url)).json()).postconditions).toBe("");
+  } finally {
+    await deleteCase(request, created.id);
+    if (tokenId) await request.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    await mcp.dispose();
+  }
+});
+
 test.describe("MCP initialize", () => {
   test("advertises top-level instructions orienting a client to the whole server", async ({ request }) => {
     let tokenId: string | undefined;
