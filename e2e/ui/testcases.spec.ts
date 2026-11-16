@@ -562,10 +562,9 @@ test.describe("suite name validation and error display (UI)", () => {
       suiteId = created.id;
 
       await page.goto(`/projects/${ctx.projectId}/testcases`);
-      await page.getByRole("button", { name: suiteName, exact: true }).hover();
-      // Parent and child both expose this action. Scope to the selected child
-      // suite's row so the test cannot rename a different suite.
-      await childRow.locator("..").getByTitle("Rename suite").click();
+      const suiteRowButton = page.getByRole("button", { name: suiteName, exact: true });
+      await suiteRowButton.hover();
+      await suiteRowButton.locator("..").getByTitle("Rename suite").click();
 
       const nameInput = page.getByPlaceholder("Enter suite name");
       await expect(nameInput).toHaveValue(suiteName);
@@ -1327,7 +1326,8 @@ test.describe("suite description and preconditions in the repository", () => {
       await page.getByTestId(`suite-expand-${parentId}`).click();
       const childRow = page.getByRole("button", { name: new RegExp(childName) }).first();
       await childRow.hover();
-      await page.getByTitle("Rename suite").click();
+      // Parent and child both expose Rename; target the child row's action.
+      await childRow.locator("..").getByTitle("Rename suite").click();
 
       const description = page.getByPlaceholder("What does this suite cover?");
       const preconditions = page.getByPlaceholder("What must be true before running these test cases?");
