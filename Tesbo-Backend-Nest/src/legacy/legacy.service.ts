@@ -11990,12 +11990,23 @@ export class LegacyService implements OnModuleInit {
   // when the project has an OpenAI key allocated — no other provider offers a compatible
   // transcription endpoint we can safely assume the shape of.
   private async transcribeKnowledgeFile(projectId: string, fileId: string, buffer: Buffer, ext: string, mimeType: string, fileName: string): Promise<void> {
+    const traceSeed = `knowledge:transcription:${fileId}`;
+    const traceMeta = { projectId, fileId, ext, fileName: String(fileName || "").slice(0, 120) };
     try {
       const project = await this.db.query<{ organization_id: string }>("SELECT organization_id FROM projects WHERE id = $1", [projectId]);
       const allocation = await this.zyraAiAllocation(projectId);
       const key = allocation.key;
       if (!key || String(key.provider || "").toLowerCase() !== "openai") {
         await this.db.query("UPDATE knowledge_files SET extraction_status = 'unsupported' WHERE id = $1", [fileId]);
+        void recordStandaloneGeneration({
+          traceSeed,
+          name: "knowledge.transcription",
+          provider: String(key?.provider || "unknown"),
+          model: "whisper-1",
+          input: { fileName, ext, mimeType, sizeBytes: buffer.length },
+          output: { status: "unsupported", reason: "openai key required" },
+          metadata: traceMeta
+        });
         return;
       }
       const form = new FormData();
@@ -12018,9 +12029,28 @@ export class LegacyService implements OnModuleInit {
         [fileId, text || null]
       );
       if (text) this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "file", fileId, "transcribed");
+      void recordStandaloneGeneration({
+        traceSeed,
+        name: "knowledge.transcription",
+        provider: "openai",
+        model: "whisper-1",
+        input: { fileName, ext, mimeType, sizeBytes: buffer.length },
+        output: { status: "ready", transcriptChars: text.length },
+        metadata: traceMeta
+      });
     } catch (err) {
-      this.logger.warn(`Knowledge-base transcription failed for file ${fileId}: ${err instanceof Error ? err.message : err}`);
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Knowledge-base transcription failed for file ${fileId}: ${message}`);
       await this.db.query("UPDATE knowledge_files SET extraction_status = 'failed', updated_at = now() WHERE id = $1", [fileId]).catch(() => undefined);
+      void recordStandaloneGeneration({
+        traceSeed,
+        name: "knowledge.transcription",
+        provider: "openai",
+        model: "whisper-1",
+        input: { fileName, ext, mimeType, sizeBytes: buffer.length },
+        errorMessage: message,
+        metadata: traceMeta
+      });
     }
   }
 
