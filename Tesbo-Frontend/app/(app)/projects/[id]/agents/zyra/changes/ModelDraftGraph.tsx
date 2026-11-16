@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ModelDraftPreview } from "@/lib/model-draft-preview";
 
 /** Schematic presentation of the admitted native response; never a model interpreter. */
@@ -8,6 +8,7 @@ export function ModelDraftGraph({ preview }: { preview: ModelDraftPreview }) {
   const id = useId().replace(/:/g, "");
   const [selected, setSelected] = useState(preview.transitions[0]?.id ?? "");
   const [actualSize, setActualSize] = useState(false);
+  const viewport = useRef<HTMLDivElement>(null);
   const radius = Math.max(140, preview.states.length * 26);
   const size = radius * 2 + 320;
   const positions = new Map(preview.states.map((state, index) => {
@@ -16,6 +17,15 @@ export function ModelDraftGraph({ preview }: { preview: ModelDraftPreview }) {
     return [state.id, { x: size / 2 + orbit * Math.cos(angle), y: size / 2 + orbit * Math.sin(angle) }];
   }));
   const edge = preview.transitions.find(item => item.id === selected);
+  const focus = positions.get(edge?.from ?? preview.definition.initialStateId)!;
+  useEffect(() => {
+    const pane = viewport.current;
+    if (!pane) return;
+    // Start actual-size inspection at the selected source, not empty canvas.
+    pane.scrollTo(actualSize ? {
+      left: focus.x - pane.clientWidth / 2, top: focus.y - pane.clientHeight / 2
+    } : { left: 0, top: 0 });
+  }, [actualSize, selected, focus.x, focus.y]);
   const stateName = (stateId: string) => preview.states.find(state => state.id === stateId)?.label ?? stateId;
 
   return <section aria-label="Draft state graph" className="min-w-0 space-y-3 rounded border border-[var(--border)] p-3">
@@ -26,10 +36,11 @@ export function ModelDraftGraph({ preview }: { preview: ModelDraftPreview }) {
       <input type="checkbox" checked={actualSize} onChange={event => setActualSize(event.target.checked)} />
       Show graph at actual size
     </label>
-    <div role="region" aria-label="Scrollable draft graph" tabIndex={0}
+    <div ref={viewport} role="region" aria-label="Scrollable draft graph" tabIndex={0}
       className="max-h-96 min-w-0 overflow-auto rounded border border-[var(--border)]">
       <svg role="img" aria-labelledby={`${id}-title`} aria-describedby={`${id}-description`} viewBox={`0 0 ${size} ${size}`}
-        className="mx-auto block" style={{ width: actualSize ? size : "100%", maxWidth: actualSize ? undefined : 680 }}>
+        className="mx-auto block" style={{ width: actualSize ? size : "100%", height: actualSize ? size : "auto",
+          maxWidth: actualSize ? undefined : 680, maxHeight: actualSize ? undefined : 360 }}>
         <title id={`${id}-title`}>{preview.states.length} draft states and {preview.transitions.length} directed transitions</title>
         <desc id={`${id}-description`}>Circular layout, not execution order. Use Inspect draft transition below for exact endpoints, action and expected observation. Initial state: {preview.definition.initialStateId}.</desc>
         <defs><marker id={`${id}-arrow`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">

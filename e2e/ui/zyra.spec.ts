@@ -178,18 +178,24 @@ test.describe("zyra / agents (UI)", () => {
     await inspect.selectOption("unreachable"); await expect(details).toContainText("Unreachable; no runtime evidence");
     await expect(graph.locator("img,script,a")).toHaveCount(0);
     expect(await page.evaluate(() => (window as unknown as { graphInjected?: boolean }).graphInjected)).toBeUndefined();
-    await testInfo.attach("draft-graph-desktop", { body: await graph.screenshot(), contentType: "image/png" });
+    const scroll = graph.getByRole("region", { name: "Scrollable draft graph", exact: true });
+    expect(await scroll.evaluate(el => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
+    await testInfo.attach("draft-graph-desktop", { body: await scroll.screenshot(), contentType: "image/png" });
     await page.setViewportSize({ width: 390, height: 844 });
     const collapse = page.getByRole("button", { name: "Collapse sidebar", exact: true });
     if (await collapse.isVisible()) await collapse.click();
     await expect(page.getByRole("complementary")).toHaveCSS("width", "60px");
     const actualSize = graph.getByRole("checkbox", { name: "Show graph at actual size" });
     await actualSize.focus(); await page.keyboard.press("Space"); await expect(actualSize).toBeChecked();
-    const scroll = graph.getByRole("region", { name: "Scrollable draft graph", exact: true });
     await scroll.focus(); await expect(scroll).toBeFocused();
     expect(await scroll.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
     expect(await panel.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
-    await testInfo.attach("draft-graph-mobile", { body: await graph.screenshot(), contentType: "image/png" });
+    await expect.poll(() => graph.locator('[data-model-state="isolated"]').evaluate(el => {
+      const box = el.getBoundingClientRect(), pane = el.closest("svg")!.parentElement!.getBoundingClientRect();
+      return box.x + box.width / 2 >= pane.left && box.x + box.width / 2 <= pane.right &&
+        box.y + box.height / 2 >= pane.top && box.y + box.height / 2 <= pane.bottom;
+    })).toBe(true);
+    await testInfo.attach("draft-graph-mobile", { body: await scroll.screenshot(), contentType: "image/png" });
     await editor.fill("{}"); await expect(graph).toHaveCount(0);
     expect(modelUiRecords(tenant!.mainProjectId)).toBe(before);
   });
