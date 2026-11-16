@@ -2131,11 +2131,18 @@ test.describe("editing a test case ID", () => {
     const p = `Z${Date.now()}`;
     const tc = await createCase(request, { title: `E2E ID History ${p}` });
     try {
+      const snapshotCount = () => Number(scalar(`SELECT COUNT(*)::int FROM testcase_versions
+        WHERE testcase_id = ${literal(tc.id)};`));
+      const baseline = snapshotCount();
       const put = await request.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-3`, title: `E2E ID History ${p} edited` } });
       expect(put.ok(), await put.text()).toBeTruthy();
-      const rows = scalar(`SELECT count(*) || ':' || count(*) FILTER (WHERE snapshot->>'external_id' = ${literal(tc.externalId)} AND snapshot->>'title' = ${literal(`E2E ID History ${p}`)}) FROM testcase_versions WHERE testcase_id = ${literal(tc.id)};`);
-      // One snapshot, holding the case as it was before the edit (old id AND old title).
-      expect(rows).toBe("1:1");
+      // The single ID-edit action contributes one historical snapshot even if
+      // creation/other legitimate earlier mutations already generated versions.
+      expect(snapshotCount() - baseline).toBe(1);
+      const latest = scalar(`SELECT snapshot->>'external_id' || ':' || snapshot->>'title'
+        FROM testcase_versions WHERE testcase_id = ${literal(tc.id)}
+        ORDER BY version DESC LIMIT 1;`);
+      expect(latest).toBe(`${tc.externalId}:E2E ID History ${p}`);
     } finally {
       await deleteCase(request, tc.id);
     }
@@ -2146,9 +2153,11 @@ test.describe("editing a test case ID", () => {
     const p = `Z${Date.now()}`;
     const tc = await createCase(request, { title: `E2E ID Only ${p}` });
     try {
+      const before = Number(scalar(`SELECT COUNT(*)::int FROM testcase_versions WHERE testcase_id = ${literal(tc.id)};`));
       const put = await request.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-4` } });
       expect(put.ok(), await put.text()).toBeTruthy();
-      expect(scalar(`SELECT count(*) FROM testcase_versions WHERE testcase_id = ${literal(tc.id)};`)).toBe("1");
+      const after = Number(scalar(`SELECT COUNT(*)::int FROM testcase_versions WHERE testcase_id = ${literal(tc.id)};`));
+      expect(after - before).toBe(1);
     } finally {
       await deleteCase(request, tc.id);
     }
@@ -2199,11 +2208,15 @@ test.describe("editing a test case ID", () => {
 
   test("a run that already holds the case shows the new ID, including after the case is deleted", async ({ request }) => {
     const p = `Z${Date.now()}`;
-    const tc = await createCase(request, { title: `E2E Run Snapshot ${p}` });
+    const tc = await createCase(request, { title: `E2E Run Snapshot ${p}`, status: "Approved" });
     const cycle = await (await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Run Snapshot ${p}` } })).json();
     try {
-      await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [tc.id] } });
+      const attachment = await request.post(`/api/cycles/${cycle.id}/testcases`, {
+        data: { testcaseIds: [tc.id] }, failOnStatusCode: false
+      });
+      expect(attachment.ok(), await attachment.text()).toBeTruthy();
       const before = await (await request.get(`/api/cycles/${cycle.id}/executions`)).json();
+      expect(before).toHaveLength(1);
       expect(before[0].externalId).toBe(tc.externalId);
 
       const put = await request.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-9` } });
