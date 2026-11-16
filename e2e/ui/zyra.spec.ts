@@ -909,6 +909,7 @@ test.describe("zyra / agents (UI)", () => {
       await reopened.getByRole("button", { name: "Refresh recorded handoffs" }).click();
       const handoffs = reopened.getByRole("region", { name: "Persisted QA handoffs" });
       await expect(handoffs).toContainText("native status: Failed");
+      await expect(handoffs).toContainText("Source/run commit provenance unavailable; target build NOT verified.");
       const gaps = reopened.getByRole("region", { name: "QA verification gaps" });
       await expect(gaps).toContainText("1 nominated case");
       await expect(gaps).toContainText("1 with a subsequently recorded native result");
@@ -925,6 +926,23 @@ test.describe("zyra / agents (UI)", () => {
       expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items
         WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
 
+
+      // A durable handoff is NOT currently selected after the native cycle item
+      // is soft-removed. Restore the exact fixture even if a browser check fails.
+      const attachedItem = scalar(`SELECT id FROM cycle_items
+        WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)}
+          AND deleted_at IS NULL;`);
+      exec(`UPDATE cycle_items SET deleted_at=now() WHERE id=${literal(attachedItem)};`);
+      try {
+        await reopened.getByRole("button", { name: "Refresh recorded handoffs" }).click();
+        await expect(gaps).toContainText("0 currently attached to active native runs");
+        await expect(gaps).toContainText("1 nominated case(s) have only historical");
+        await expect(handoffs).toContainText("case no longer active in this run");
+      } finally {
+        exec(`UPDATE cycle_items SET deleted_at=NULL WHERE id=${literal(attachedItem)};`);
+      }
+      await reopened.getByRole("button", { name: "Refresh recorded handoffs" }).click();
+      await expect(gaps).toContainText("1 currently attached to active native runs");
 
       // A lost CREATE response might follow a successful database commit.
       // Do not blindly retry: find the already-created run in the native list.

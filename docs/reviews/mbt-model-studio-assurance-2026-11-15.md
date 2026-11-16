@@ -28,3 +28,22 @@ Every actual finding should identify the exact requirement or omitted user journ
 - The latest eight canonical Tesbo specification files still require source-preserving reconciliation; the v1.4.21 raw ZIP was not available for that operation in this session.
 
 **Review output destination:** record independently produced, original role findings and evidence in this existing review area after the respective review executes. Do not append imagined team verdicts to this manifest.
+
+
+## PR #100 — current pinned implementation review input (2026-11-16)
+
+**Target:** Tesbo `1alextest/Tesbooboo` PR #100, `feat/qa-mcp-lifecycle-provenance-20261116`, on the `development` branch after PR #98. Pin the **exact head SHA and canonical specification package SHA** before real reviewer dispatch; this section intentionally does not predetermine any role's result. The originating 50-tool Nesberry agent observations are external read-only evidence, not an executed end-to-end proof.
+
+**Proposed review boundary:** Existing Zyra draft preview, graph history capture, graph-to-native case/run handoffs, QA gap summary, native cycle `commit_sha`, source `observedCommitSha`, MCP token catalog and credential-scoped operations. The specific implementation increments are: current-selection vs historical-only discrimination; read-only reported source/run commit comparison; and a disposable MCP create/read/revision-guarded-update/archive test. Native requirements, cases, executions, run membership, attachments, notification delivery, approved checkout binding, project/org access and plan locks remain authoritative owners. No new model persistence or test-result store is proposed.
+
+**Review question (not a preassigned verdict):** Do the specs and implementation correctly distinguish durable handoff, current execution eligibility, timestamped result, source-byte identity, caller-reported run revision, actual deployed target revision, evidence-byte validity and human acceptance? Can the current implementation's contracts be satisfied through native owners without a duplicate graph/approval/actor service? May a legitimate alternative skip a model entirely and still run ordinary cases? Classify all unknowns and justified nonissues explicitly. The roles must independently derive checks, counterexamples and remaining gaps from their charters, not repeat this prompt's issue vocabulary as their findings.
+
+**Existing source-inspected observations, NOT independent team findings:**
+- Soft-removed case/run links had been counted as current selection by `summarizeQaVerificationGaps`. PR #100 now distinguishes current vs historical-only; unit and database proofs are required at exact head.
+- The native source graph can pin Git bytes and native runs can store a caller-reported `commit_sha`, but there is no proven trusted deploy-to-target attestation linking them. PR #100 surfaces only an unverified reported comparison, not behavior/coverage/approval.
+- The external connected client can read Nesberry but its 50-tool catalog differs from current source. Need a fresh authenticated server/catalog receipt and separate authorized disposable connection; source code tests do not resolve this.
+- The existing independent role orchestrator is **not exposed as a callable agent runner in this conversation**. No role dispatch, independent findings, mandatory Graph closeout, White freeze or deployment has been executed here.
+
+**Required real review receipts:** Per role, capture charter revision, isolated invocation ID, source/spec SHA, actual documents/tools inspected, original findings and severities, counterexamples, acceptance oracles, execution mode and unknowns. Run normal Blue→Red→Grey→White pre-gate and successor specialist sequence through Graph→White; do not edit or lead the teams' verdicts. Keep unedited role outputs before reconciliation. A report compiled by the implementation author does not replace independent reviewers.
+
+**Release separation:** CI can prove the isolated local stack and disposable project. Public deployed MCP tool/version verification, actual tester-to-application browser/device execution, matching target build, retrievable evidence bytes and human approval require distinct authorized end-to-end evidence. Keep that status BLOCKED until actual proof.

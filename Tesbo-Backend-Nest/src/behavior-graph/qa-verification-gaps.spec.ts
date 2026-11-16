@@ -63,6 +63,21 @@ describe("read-only QA verification gap assessment", () => {
     });
   });
 
+  it("preserves a soft-removed handoff without counting it as current case selection or verification", () => {
+    const removed = { ...link(A, null), caseStillInRun: false };
+    const active = link(B, null);
+    expect(summarizeQaVerificationGaps(PROJECT, {
+      candidates: [candidate(A), candidate(B), candidate(C)]
+    }, [removed, active])).toMatchObject({
+      nominatedCaseCount: 3, selectedCaseCount: 1, notSelectedCount: 2,
+      historicalSelectionOnlyCount: 1, withoutSubsequentResultCount: 3,
+      withSubsequentResultCount: 0, coverageAssertion: "none", approvalAssertion: "none"
+    });
+    const restored = { ...removed, caseStillInRun: true };
+    expect(summarizeQaVerificationGaps(PROJECT, { candidates: [candidate(A)] }, [restored]))
+      .toMatchObject({ selectedCaseCount: 1, notSelectedCount: 0, historicalSelectionOnlyCount: 0 });
+  });
+
   it("deduplicates nominated cases, excludes foreign/malformed nodes, and never promotes status", () => {
     const result = summarizeQaVerificationGaps(PROJECT, {
       candidates: [candidate(A), candidate(A),

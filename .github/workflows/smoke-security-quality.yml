@@ -119,7 +119,7 @@ jobs:
         run: |
           # Read-only MCP initialize/tools-list against this exact isolated build.
           # A passing source catalog does not establish the external client's deployment.
-          selection="a current session is served, and tools/list exposes the deployed create_testcase schema"
+          selection="a current session is served, and tools/list exposes the deployed create_testcase schema|disposable MCP agent create read update archive lifecycle preserves project and run boundaries"
           npx playwright test -c playwright.config.ts api/mcp.spec.ts --workers=10 --output=test-results-mcp -g "$selection" --list
           npx playwright test -c playwright.config.ts api/mcp.spec.ts --workers=10 --output=test-results-mcp -g "$selection"
       - name: Verify Approved-only native run attachments

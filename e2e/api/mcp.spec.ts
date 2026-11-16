@@ -3,6 +3,8 @@ import path from "node:path";
 import { expect, test, request as newRequestContext, type APIRequestContext } from "@playwright/test";
 import { env } from "../utils/env";
 import { testcaseEditState } from "../utils/testcase-edit-state";
+import { loginAs, provisionRbacTenant } from "../utils/rbac-tenant";
+import { literal, scalar } from "../utils/psql";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 // Account B: a second, fully independent account/org/project (see global-setup.ts and
@@ -156,6 +158,111 @@ async function callMcpToolExpectError(
   expect(body.error).toBeDefined();
   return body.error as { code: number; message: string };
 }
+
+test("disposable MCP agent create read update archive lifecycle preserves project and run boundaries", async () => {
+  // A separate synthetic tenant is the only allowed target. No Nesberry token,
+  // production case or existing project membership is ever reused by this test.
+  const tenant = await provisionRbacTenant("mcp-lifecycle");
+  test.skip(!tenant, "requires direct SQL control for the disposable tenant; remote agents must be connected separately");
+  const projectId = tenant!.mainProjectId;
+  const owner = await loginAs(tenant!.owner);
+  const machine = await newRequestContext.newContext({
+    baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] }
+  });
+  const title = `E2E isolated MCP lifecycle ${Date.now()}`;
+  const caseUrl = (id: string) => `/api/projects/${projectId}/testcases/${id}`;
+  const counts = () => ({
+    runs: Number(scalar(`SELECT COUNT(*)::int FROM cycles WHERE project_id=${literal(projectId)};`)),
+    executions: Number(scalar(`SELECT COUNT(*)::int FROM executions e
+      JOIN cycle_items ci ON ci.id=e.cycle_item_id JOIN cycles c ON c.id=ci.cycle_id
+      WHERE c.project_id=${literal(projectId)};`))
+  });
+  const prior = counts();
+  let tokenId: string | undefined, caseId: string | undefined;
+  try {
+    const issue = await owner.post(`/api/projects/${projectId}/apikeys`, {
+      data: { name: `E2E isolated MCP QA ${Date.now()}`, scopes: ["read", "write"] }
+    });
+    expect(issue.ok(), await issue.text()).toBeTruthy();
+    const issued = await issue.json();
+    tokenId = issued.id;
+    const token = issued.token as string;
+    const headers = { Authorization: `Bearer ${token}` };
+    const rpc = async (method: string, params: Record<string, unknown> = {}, url = "/api/mcp") => {
+      const res = await machine.post(url, {
+        headers, data: { jsonrpc: "2.0", id: 1, method, params }
+      });
+      expect(res.ok(), `${method}: ${res.status()} ${await res.text()}`).toBeTruthy();
+      return res.json();
+    };
+    const call = async (name: string, args: Record<string, unknown> = {}) => {
+      const body = await rpc("tools/call", { name, arguments: args });
+      expect(body.error).toBeUndefined();
+      expect(body.result?.isError).toBe(false);
+      return JSON.parse(body.result.content[0].text);
+    };
+    const rejected = async (name: string, args: Record<string, unknown> = {}) => {
+      const body = await rpc("tools/call", { name, arguments: args });
+      expect(body.error).toBeDefined();
+      return body.error as { code: number; message: string };
+    };
+    const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {} });
+    expect(init.result.serverInfo.name).toBe("tesbo-mcp");
+    const catalog = (await rpc("tools/list")).result.tools as Array<{ name: string }>;
+    expect(catalog).toHaveLength(53);
+    expect(new Set(catalog.map(item => item.name)).size).toBe(53);
+    expect(catalog.map(item => item.name)).toContain("list_qa_graph_changes");
+    const foreign = await rpc("tools/list", {}, `/api/projects/${tenant!.secondProjectId}/mcp`);
+    expect(foreign.error?.code).toBe(-32001); // token cannot switch project via URL
+
+    const created = await call("create_testcase", {
+      title, description: "Disposable QA lifecycle proof", status: "Draft",
+      attachments: "Initial Notes", postconditions: "Environment unchanged"
+    });
+    caseId = created.id;
+    const original = await call("get_testcase", { testcaseId: caseId });
+    expect(original).toMatchObject({
+      id: caseId, title, status: "Draft", attachments: "Initial Notes",
+      postconditions: "Environment unchanged"
+    });
+    expect(original.editRevision).toMatch(/^[a-f0-9]{64}$/);
+
+    const amended = await call("update_testcase", {
+      testcaseId: caseId, expectedRevision: original.editRevision,
+      attachments: "Reviewed Notes", postconditions: "All fixtures cleaned",
+      description: "Verified by the connected machine over native MCP"
+    });
+    expect(amended.editRevision).not.toBe(original.editRevision);
+    const persisted = await owner.get(caseUrl(caseId!));
+    expect(persisted.ok()).toBeTruthy();
+    expect(await persisted.json()).toMatchObject({
+      attachments: "Reviewed Notes", postconditions: "All fixtures cleaned",
+      description: "Verified by the connected machine over native MCP"
+    });
+    const stale = await rejected("update_testcase", {
+      testcaseId: caseId, expectedRevision: original.editRevision, attachments: "Stale overwrite"
+    });
+    expect(stale.message).toMatch(/changed since it was loaded/);
+    expect((await (await owner.get(caseUrl(caseId!))).json()).attachments).toBe("Reviewed Notes");
+
+    expect((await call("archive_testcase", { testcaseId: caseId })).status).toBe("Archived");
+    expect((await call("get_testcase", { testcaseId: caseId })).postconditions).toBe("All fixtures cleaned");
+    const hidden = await call("list_testcases", { search: title });
+    expect(hidden.rows.some((item: { id: string }) => item.id === caseId)).toBe(false);
+    const archived = await call("list_testcases", { search: title, includeArchived: true });
+    expect(archived.rows.some((item: { id: string }) => item.id === caseId)).toBe(true);
+    const graph = await call("list_qa_graph_changes", { limit: 10 });
+    expect(Array.isArray(graph.entries)).toBe(true);
+    const noSource = await rejected("capture_qa_graph_change", {});
+    expect(noSource.message).toMatch(/source binding|not configured/i);
+    expect(counts()).toEqual(prior); // no fake run/execution from source discovery or case edits
+  } finally {
+    if (caseId) await owner.delete(caseUrl(caseId), { failOnStatusCode: false });
+    if (tokenId) await owner.delete(`/api/projects/${projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    await machine.dispose();
+    await owner.dispose();
+  }
+});
 
 test("MCP revision preconditions refuse stale and malformed edits without overwriting human Notes", async ({ request }) => {
   const created = await createCase(request, { attachments: "Original Notes" });

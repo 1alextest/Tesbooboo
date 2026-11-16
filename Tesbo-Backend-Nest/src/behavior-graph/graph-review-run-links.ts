@@ -21,7 +21,16 @@ export interface QaRunCaseExecution {
   evidenceAddedAfterHandoffCount: number;
 }
 
+/** Compare an internally pinned source commit to the commit REPORTED by a run.
+ * Equality cannot establish which build the target actually deployed.
+ */
+export interface QaRunCommitComparison {
+  sourceCommitSha: string | null;
+  runReportedCommitSha: string | null;
+  comparison: "unknown" | "reported_equal_unverified" | "reported_different";
+}
 export interface QaRunCaseLink {
+  commitProvenance?: QaRunCommitComparison;
   runId: string;
   caseId: string;
   linkedAt: string;
@@ -83,6 +92,14 @@ export class GraphReviewRunLinks {
            'runId', l.cycle_id::text, 'caseId', l.testcase_id::text,
            'linkedAt', l.linked_at, 'runName', c.name, 'runStatus', c.status,
            'caseStillInRun', ci.id IS NOT NULL,
+           'commitProvenance', jsonb_build_object(
+             'sourceCommitSha', provenance.source_sha,
+             'runReportedCommitSha', provenance.run_sha,
+             'comparison', CASE
+               WHEN provenance.source_sha IS NULL OR provenance.run_sha IS NULL THEN 'unknown'
+               WHEN provenance.source_sha=provenance.run_sha THEN 'reported_equal_unverified'
+               ELSE 'reported_different' END
+           ),
            'execution', CASE WHEN e.id IS NULL THEN NULL ELSE jsonb_build_object(
              'id', e.id::text, 'status', e.status, 'executedAt', e.executed_at,
              'executedAfterHandoff', (
@@ -105,7 +122,19 @@ export class GraphReviewRunLinks {
            ) END
          ) ORDER BY l.linked_at, l.cycle_id, l.testcase_id)
            FROM graph_review_run_case_links l
+           JOIN graph_capture_history h ON h.id=l.history_id AND h.project_id=l.project_id
            JOIN cycles c ON c.id=l.cycle_id AND c.project_id=l.project_id
+           CROSS JOIN LATERAL (
+             SELECT
+               CASE WHEN h.capture_json->>'sourceByteEvidence'='verified_pinned_git'
+                 AND length(h.capture_json->>'observedCommitSha') IN (40,64)
+                 AND translate(lower(h.capture_json->>'observedCommitSha'),
+                   '0123456789abcdef','')=''
+                 THEN lower(h.capture_json->>'observedCommitSha') ELSE NULL END AS source_sha,
+               CASE WHEN length(c.commit_sha) IN (40,64)
+                 AND translate(lower(c.commit_sha),'0123456789abcdef','')=''
+                 THEN lower(c.commit_sha) ELSE NULL END AS run_sha
+           ) provenance
            LEFT JOIN testcases tc ON tc.id=l.testcase_id
              AND tc.project_id=l.project_id AND tc.deleted_at IS NULL
            LEFT JOIN cycle_items ci ON ci.cycle_id=l.cycle_id

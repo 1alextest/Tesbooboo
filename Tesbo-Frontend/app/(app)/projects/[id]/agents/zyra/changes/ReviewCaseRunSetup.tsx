@@ -195,6 +195,19 @@ export function ReviewCaseRunSetup({
                   {link.runName || "Open native run"}
                 </Link>
                 {" — selected case "}<code>{link.caseId}</code>
+                <span className="block text-[var(--muted)]">
+                  {link.commitProvenance?.comparison === "reported_equal_unverified"
+                    ? "Run-reported commit matches pinned source; deployment and target build are NOT verified."
+                    : link.commitProvenance?.comparison === "reported_different"
+                      ? "Run-reported commit differs from pinned source; investigate target build before verification."
+                      : "Source/run commit provenance unavailable; target build NOT verified."}
+                  {link.commitProvenance?.sourceCommitSha && (
+                    <span>{" Pinned source: "}<code className="break-all">{link.commitProvenance.sourceCommitSha}</code></span>
+                  )}
+                  {link.commitProvenance?.runReportedCommitSha && (
+                    <span>{" Run reported: "}<code className="break-all">{link.commitProvenance.runReportedCommitSha}</code></span>
+                  )}
+                </span>
                 {link.caseStillInRun ? (
                   link.execution ? (
                     <span>
@@ -228,8 +241,14 @@ export function ReviewCaseRunSetup({
           <h3 className="font-medium">Verification gaps</h3>
           <p className="mt-1 text-xs">
             {gapSummary.nominatedCaseCount} nominated case(s); {gapSummary.selectedCaseCount}
-            {" selected for native runs; "}{gapSummary.notSelectedCount}{" not selected."}
+            {" currently attached to active native runs; "}{gapSummary.notSelectedCount}{" not currently attached."}
           </p>
+          {gapSummary.historicalSelectionOnlyCount > 0 && (
+            <p className="mt-1 text-xs">
+              {gapSummary.historicalSelectionOnlyCount}
+              {" nominated case(s) have only historical, no-longer-active run handoffs. Reassess selection."}
+            </p>
+          )}
           <p className="mt-1 text-xs">
             {gapSummary.withSubsequentResultCount}{" with a subsequently recorded native result; "}
             {gapSummary.withoutSubsequentResultCount}{" without one; "}

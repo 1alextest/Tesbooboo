@@ -7,8 +7,11 @@ import type { QaRunCaseLink } from "./graph-review-run-links";
  */
 export interface QaVerificationGaps {
   nominatedCaseCount: number;
+  /** Currently attached to an active canonical run, not merely linked in history. */
   selectedCaseCount: number;
   notSelectedCount: number;
+  /** Durable prior selections whose case is no longer active in any nominated run. */
+  historicalSelectionOnlyCount: number;
   withoutSubsequentResultCount: number;
   withSubsequentResultCount: number;
   withLaterEvidenceMetadataCount: number;
@@ -63,11 +66,15 @@ export function summarizeQaVerificationGaps(
     else ids.add(id);
   }
 
-  let selectedCaseCount = 0, withSubsequentResultCount = 0;
-  let withLaterEvidenceMetadataCount = 0, historicalResultOnlyCount = 0;
+  let selectedCaseCount = 0, historicalSelectionOnlyCount = 0;
+  let withSubsequentResultCount = 0, withLaterEvidenceMetadataCount = 0, historicalResultOnlyCount = 0;
   for (const id of ids) {
-    const selected = links.filter((link) => link.caseId.toLowerCase() === id);
+    const history = links.filter((link) => link.caseId.toLowerCase() === id);
+    // A soft-deleted cycle item/case/run is a valid historical receipt, but
+    // it cannot satisfy current QA test selection or contribute a new result.
+    const selected = history.filter((link) => link.caseStillInRun);
     if (selected.length) selectedCaseCount++;
+    else if (history.length) historicalSelectionOnlyCount++;
     const subsequent = selected.some((link) => link.execution &&
       link.execution.executedAfterHandoff && link.execution.executedAt &&
       link.execution.status !== "Untested");
@@ -86,6 +93,7 @@ export function summarizeQaVerificationGaps(
     nominatedCaseCount: count,
     selectedCaseCount,
     notSelectedCount: count - selectedCaseCount,
+    historicalSelectionOnlyCount,
     withoutSubsequentResultCount: count - withSubsequentResultCount,
     withSubsequentResultCount,
     withLaterEvidenceMetadataCount,
