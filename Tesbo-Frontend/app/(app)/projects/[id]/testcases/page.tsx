@@ -1075,12 +1075,6 @@ export default function TestCasesPage() {
       ]);
       if (!isCurrent()) return;
       setPanelTestcaseId(canonicalId);
-      requestedCase.current = `${projectId}:${canonicalId}`;
-      const query = new URLSearchParams(window.location.search);
-      if (query.get("caseId") !== canonicalId) {
-        query.set("caseId", canonicalId);
-        router.replace(`${window.location.pathname}?${query}`, { scroll: false });
-      }
       fillFormFromTestCase(data);
       setPanelCustomFields(customFields);
       setCustomFieldValues(Object.fromEntries(customFields.map((f) => [f.id, f.value])));
