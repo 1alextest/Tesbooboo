@@ -1567,13 +1567,15 @@ export default function TestCasesPage() {
         // patched client-side. setSuiteCasesPage(1) above already resets the page it's sliced to.
         applyTestCasesPatch(applySingleCaseDelta(suites, repoSummary, status, effectiveSuiteId, 1));
         await loadSelectedSuiteCases();
-        setPanelSuccess("Test case created successfully.");
-        setTimeout(() => setPanelSuccess(null), 4000);
         if (submitAction === "create-next") {
           resetForm(effectiveSuiteId ?? activeSuiteId);
         } else {
           await openViewPanel(created.id);
         }
+        // Reopening the canonical saved case resets transient panel messages.
+        // Announce success AFTER the round-trip so the user actually sees it.
+        setPanelSuccess("Test case created successfully.");
+        setTimeout(() => setPanelSuccess(null), 4000);
       } else if (panelMode === "edit" && panelTestcaseId) {
         await updateTestCase(projectId, panelTestcaseId, {
           expectedRevision: panelEditRevision,
@@ -1595,8 +1597,6 @@ export default function TestCasesPage() {
           customFieldValues,
           customTagIds: panelTagIds,
         });
-        setPanelSuccess("Test case updated successfully.");
-        setTimeout(() => setPanelSuccess(null), 4000);
         // panelOriginalStatus/SuiteId are the values fillFormFromTestCase last set from a real fetch
         // (i.e. what's actually persisted before this save) — status/suiteId here are the just-
         // submitted new values. customFieldDefinitions is dropped (never changes on a testcase edit).
@@ -1627,6 +1627,8 @@ export default function TestCasesPage() {
         await loadSelectedSuiteCases();
         await openViewPanel(panelTestcaseId);
         setPanelTab(savedTab);
+        setPanelSuccess("Test case updated successfully.");
+        setTimeout(() => setPanelSuccess(null), 4000);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to save test case.";

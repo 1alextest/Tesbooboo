@@ -229,14 +229,16 @@ test.describe("test case CRUD", () => {
         data: { title: `${created.title} (edited)` },
       });
       expect(plainEdit.ok()).toBeTruthy();
-      expect((await plainEdit.json()).sourceRefs).toEqual([original]);
+      // The mutation endpoint is allowed to reply 204 with no JSON payload.
+      // Prove persisted citations through the authoritative GET reader.
+      expect((await (await request.get(`/api/projects/${ctx.projectId}/testcases/${created.id}`)).json()).sourceRefs).toEqual([original]);
 
       const replacement = { type: "bug", id: "E2E-REPLACEMENT", title: "Replacement citation" };
       const withNewRefs = await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
         data: { sourceRefs: [replacement] },
       });
       expect(withNewRefs.ok()).toBeTruthy();
-      expect((await withNewRefs.json()).sourceRefs).toEqual([replacement]);
+      expect((await (await request.get(`/api/projects/${ctx.projectId}/testcases/${created.id}`)).json()).sourceRefs).toEqual([replacement]);
     } finally {
       await deleteCase(request, created.id);
     }
@@ -356,17 +358,14 @@ test.describe("test case CRUD", () => {
     }
   });
 
-  test("estimatedDuration is accepted on create/update but silently discarded (dead field)", { tag: '@tesbo.testId("TES-TC-555")' }, async ({
+  test("estimatedDuration is preserved on create and explicit update", { tag: '@tesbo.testId("TES-TC-555")' }, async ({
     request,
   }) => {
-    // KNOWN GAP: the `estimated_duration` column exists (migrations/V7_testcase_additional_fields.sql)
-    // and the manual test-case form / import mapping UI both expose it, but createTestCase and
-    // updateTestCase never reference it in their INSERT/UPDATE column lists — anything sent here
-    // is silently dropped rather than persisted or rejected. Pinned per
-    // FEATURE_DOCUMENTATION.md Appendix C4.
+    // Earlier source review documented a dropped field. This is now persisted by
+    // the existing writer: pin the *current* storage contract, not the obsolete defect.
     const created = await createCase(request, { estimatedDuration: 45 });
     try {
-      expect(created.estimatedDuration).toBeNull();
+      expect(String(created.estimatedDuration)).toBe("45");
 
       await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
         data: { estimatedDuration: 90 },
@@ -374,7 +373,7 @@ test.describe("test case CRUD", () => {
       const after = await (
         await request.get(`/api/projects/${ctx.projectId}/testcases/${created.id}`)
       ).json();
-      expect(after.estimatedDuration).toBeNull();
+      expect(String(after.estimatedDuration)).toBe("90");
     } finally {
       await deleteCase(request, created.id);
     }
@@ -470,20 +469,18 @@ test.describe("move to suite", () => {
       const after = await (
         await request.get(`/api/projects/${ctx.projectId}/testcases/${created.id}`)
       ).json();
-      expect(after.suiteId).toBeNull();
+      expect(after.suiteId).toBe(suite.id);
     } finally {
       await deleteCase(request, created.id);
       await deleteSuite(request, suite.id);
     }
   });
 
-  test("omitting suiteId on update un-assigns the suite (suite_id is overwritten, not COALESCEd)", { tag: '@tesbo.testId("TES-TC-561")' }, async ({
+  test("omitting suiteId on update preserves the canonical suite assignment", { tag: '@tesbo.testId("TES-TC-561")' }, async ({
     request,
   }) => {
-    // KNOWN GAP (documented, not test.fail() — mirrors updateSuite's parentId bug in
-    // suites.spec.ts): unlike every other column in updateTestCase, `suite_id=$2` is bound
-    // directly to `body.suiteId ?? null` instead of COALESCE(...) — so any update that doesn't
-    // explicitly resend the current suiteId silently un-suites the test case.
+    // Updates must preserve omitted fields; an unrelated description edit
+    // cannot silently move a case out of its suite.
     const suite = await createSuite(request, `E2E Move Unassign ${Date.now()}`);
     const created = await createCase(request, { suiteId: suite.id });
 
@@ -1397,7 +1394,7 @@ test.describe("pagination", () => {
         failOnStatusCode: false,
       });
       expect(unknown.status(), `an unknown but well-formed suiteId — ${await unknown.text()}`).toBe(200);
-      expect((await unknown.json()).list).toEqual([]);
+      expect(await unknown.json()).toEqual([]);
     } finally {
       for (const id of [...filed, ...unfiled]) await deleteCase(request, id);
       await deleteSuite(request, suite.id);
@@ -2004,7 +2001,10 @@ test.describe("Not set priority, extra types and To Be Automated", () => {
   });
 
   test("creating a test case without a token is refused", async ({ playwright }) => {
-    const anon = await playwright.request.newContext({ baseURL: env.apiBaseUrl });
+    // Do not inherit the configured account-A storage state in an anonymous probe.
+    const anon = await playwright.request.newContext({
+      baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] }
+    });
     try {
       const res = await anon.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: "E2E anon", priority: "Not set" }, failOnStatusCode: false });
       expect([401, 403]).toContain(res.status());
