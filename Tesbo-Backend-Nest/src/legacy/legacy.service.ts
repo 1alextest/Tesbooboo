@@ -18950,10 +18950,35 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       `Tool name: ${params.toolName}`,
       `Tool result JSON: ${JSON.stringify(params.toolDecision)}`
     ].join("\n");
-    const raw = providerWire(params.provider) === "anthropic"
-      ? await this.zyraChatWithAnthropic(params.key, params.model, finalizePrompt, params.message)
-      : await this.zyraChatWithOpenAi(params.key, params.model, finalizePrompt, params.message);
+    const traceSeed = `zyra:tool-finalize:${params.projectId}:${Date.now()}`;
+    let raw: Body;
+    try {
+      raw = providerWire(params.provider) === "anthropic"
+        ? await this.zyraChatWithAnthropic(params.key, params.model, finalizePrompt, params.message)
+        : await this.zyraChatWithOpenAi(params.key, params.model, finalizePrompt, params.message);
+    } catch (err) {
+      void recordStandaloneGeneration({
+        traceSeed,
+        name: "zyra.tool_decision.finalize",
+        provider: params.provider,
+        model: params.model,
+        input: { system: finalizePrompt, user: params.message, toolName: params.toolName },
+        errorMessage: err instanceof Error ? err.message : String(err),
+        metadata: { projectId: params.projectId, toolName: params.toolName }
+      });
+      throw err;
+    }
     await this.recordZyraTokenUsage(params.projectId, "chat_tool_finalize", params.provider, params.model, raw.__zyraUsage || {});
+    void recordStandaloneGeneration({
+      traceSeed,
+      name: "zyra.tool_decision.finalize",
+      provider: params.provider,
+      model: params.model,
+      input: { system: finalizePrompt, user: params.message, toolName: params.toolName },
+      output: { reply: String(raw.reply || "").slice(0, 500), reasoningSummary: String(raw.reasoningSummary || "").slice(0, 300) },
+      usage: raw.__zyraUsage ? { input: Number(raw.__zyraUsage.input || 0), output: Number(raw.__zyraUsage.output || 0), cached: Number(raw.__zyraUsage.cached || 0) || undefined } : undefined,
+      metadata: { projectId: params.projectId, toolName: params.toolName }
+    });
     return {
       reply: this.sanitizeZyraReply(raw.reply, String(params.toolDecision.reply || "")),
       reasoningSummary: String(raw.reasoningSummary || params.toolDecision.reasoningSummary || "").slice(0, 1500),
@@ -22611,8 +22636,33 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // "All – Exhaustive" run planned 49 — so the tier meant as "everything" fell well short of it.
       `Return ONLY JSON: {"scenarios": ["short scenario label", ...]}. List ${params.maxScenarios} scenarios, ordered from most to least important. This is exhaustive coverage: keep working through ${LegacyService.ZYRA_PLAN_COVERAGE_AREAS} until you reach ${params.maxScenarios}. Stop short only if the feature genuinely has no more distinct scenarios that the existing testcases do not already cover. No markdown, no commentary.`
     ].join("\n");
-    const parsed = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, userPrompt);
+    const traceSeedBase = `zyra:scenario-plan:${params.projectId}:${Date.now()}`;
+    let parsed: Body;
+    try {
+      parsed = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, userPrompt);
+    } catch (err) {
+      void recordStandaloneGeneration({
+        traceSeed: traceSeedBase,
+        name: "zyra.scenario_plan",
+        provider: params.provider,
+        model: params.model,
+        input: { system: systemPrompt, user: userPrompt, maxScenarios: params.maxScenarios },
+        errorMessage: err instanceof Error ? err.message : String(err),
+        metadata: { projectId: params.projectId }
+      });
+      throw err;
+    }
     await this.recordZyraTokenUsage(params.projectId, "chat_plan", params.provider, params.model, parsed.__zyraUsage || {});
+    void recordStandaloneGeneration({
+      traceSeed: traceSeedBase,
+      name: "zyra.scenario_plan",
+      provider: params.provider,
+      model: params.model,
+      input: { system: systemPrompt, user: userPrompt, maxScenarios: params.maxScenarios },
+      output: { scenarios: normalizeJsonArray(parsed.scenarios).slice(0, 20) },
+      usage: parsed.__zyraUsage ? { input: Number(parsed.__zyraUsage.input || 0), output: Number(parsed.__zyraUsage.output || 0) } : undefined,
+      metadata: { projectId: params.projectId }
+    });
     const scenarios = LegacyService.mergeZyraScenarios([], parsed.scenarios, params.maxScenarios);
 
     // One top-up round when the first answer still stops well short of the target — models tend to
@@ -22628,8 +22678,33 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           "",
           `Return ONLY JSON: {"scenarios": [...]} with up to ${params.maxScenarios - scenarios.length} MORE distinct scenarios that neither the list above nor the existing testcases cover, ordered from most to least important. Return {"scenarios": []} if there are genuinely none left.`
         ].join("\n");
-        const more = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, topUpPrompt);
+        const topUpSeed = `${traceSeedBase}:topup`;
+        let more: Body;
+        try {
+          more = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, topUpPrompt);
+        } catch (topUpErr) {
+          void recordStandaloneGeneration({
+            traceSeed: topUpSeed,
+            name: "zyra.scenario_plan.topup",
+            provider: params.provider,
+            model: params.model,
+            input: { system: systemPrompt, user: topUpPrompt, existingCount: scenarios.length, maxScenarios: params.maxScenarios },
+            errorMessage: topUpErr instanceof Error ? topUpErr.message : String(topUpErr),
+            metadata: { projectId: params.projectId }
+          });
+          throw topUpErr;
+        }
         await this.recordZyraTokenUsage(params.projectId, "chat_plan", params.provider, params.model, more.__zyraUsage || {});
+        void recordStandaloneGeneration({
+          traceSeed: topUpSeed,
+          name: "zyra.scenario_plan.topup",
+          provider: params.provider,
+          model: params.model,
+          input: { system: systemPrompt, user: topUpPrompt, existingCount: scenarios.length, maxScenarios: params.maxScenarios },
+          output: { scenarios: normalizeJsonArray(more.scenarios).slice(0, 20) },
+          usage: more.__zyraUsage ? { input: Number(more.__zyraUsage.input || 0), output: Number(more.__zyraUsage.output || 0) } : undefined,
+          metadata: { projectId: params.projectId }
+        });
         return LegacyService.mergeZyraScenarios(scenarios, more.scenarios, params.maxScenarios);
       } catch (err) {
         this.logger.warn(`Scenario top-up failed for project ${params.projectId}, keeping the ${scenarios.length}-scenario plan: ${err instanceof Error ? err.message : err}`);
