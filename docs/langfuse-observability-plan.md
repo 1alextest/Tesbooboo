@@ -4,11 +4,16 @@ Status: **Phase 1 shipped, partially.** `src/observability/` (`langfuse.ts`, `ai
 is wired into `buildZyraChatDecision`: session/user identity, Jira context, knowledge context,
 existing-coverage, the router call, the generator call (`generateZyraChatTestcasesWithAi`), and a
 `reply-reconciliation` guardrail span are all traced today. Best-effort model-price seeding for
-common catalog models is implemented at startup (§3.5). **Not yet done**, still matching this doc's
-original Phase 1–4 scope below: the remaining call sites in §1.1 (#2, #3, #6–9), scores/evals
-(Phase 3), dashboards/alerts (Phase 4), and §9 e2e coverage. This header was stale for a while —
-it read "no product code has been changed" after Phase 1's module had already shipped; keep it in
-sync with reality going forward rather than treating this doc as a proposal once code exists.
+common catalog models is implemented at startup (§3.5). **Progress since initial ship:** tool-decision
+finalizer (`finalizeZyraToolDecisionWithAi`), scenario planner/top-up (`planZyraChatScenarios`),
+Zyra memory summarization (`summarizeForZyraMemory`), knowledge-base transcription
+(`transcribeKnowledgeFile`), and integration-sync decision summaries
+(`IntegrationSyncDecisions.summarize`) now emit standalone Langfuse generations with usage/error
+metadata where available. RAG ingestion/testcase embedding jobs are traced via `embedding-trace.ts`.
+**Still open:** background `continueZyraChatPlan` batch generations have no attached turn trace,
+`applyZyraChatOperations` is not recorded as a distinct tool span on the interactive turn, broader
+usage parsing/trace attachment gaps may remain in other AI paths, scores/evals (Phase 3),
+dashboards/alerts (Phase 4), and §9 e2e coverage. Keep this header in sync with reality.
 Target instance: **self-hosted Langfuse OSS v4.17.0**, project `Tesbo Test Manager` (org `Tesbo`).
 
 Scope: end-to-end observability (traces, token/cost accounting, quality scores) over every LLM and

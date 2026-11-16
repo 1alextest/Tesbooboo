@@ -18750,7 +18750,31 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         });
         live.total = batch.length;
         const batchLive = live;
-        const decision = await runWithZyraLiveBatch(batchLive, () => this.generateZyraPlanPiece({ ...pieceContext, scenarios: batch, onContext: emitContext }));
+        const batchTraceSeed = `zyra:plan-batch:${planId}:${doneCount}:${Date.now()}`;
+        let decision: ZyraChatDecision;
+        try {
+          decision = await runWithZyraLiveBatch(batchLive, () => this.generateZyraPlanPiece({ ...pieceContext, scenarios: batch, onContext: emitContext }));
+          void recordStandaloneGeneration({
+            traceSeed: batchTraceSeed,
+            name: "zyra.plan.generate_batch",
+            provider,
+            model,
+            input: { planId, sessionId, scenarios: batch.slice(0, 20), batchSize: batch.length, doneCount, totalCount },
+            output: { draftedCount: LegacyService.zyraDraftedCount(decision) },
+            metadata: { projectId, sessionId, planId }
+          });
+        } catch (err) {
+          void recordStandaloneGeneration({
+            traceSeed: batchTraceSeed,
+            name: "zyra.plan.generate_batch",
+            provider,
+            model,
+            input: { planId, sessionId, scenarios: batch.slice(0, 20), batchSize: batch.length, doneCount, totalCount },
+            errorMessage: err instanceof Error ? err.message : String(err),
+            metadata: { projectId, sessionId, planId }
+          });
+          throw err;
+        }
         stage("generating", { draftedCount: LegacyService.zyraDraftedCount(decision) }, "update");
         const gated = this.applyStorageGateToGenerated(decision, capabilities);
         if (gated.operations.length) stage("staging", { operationCounts: LegacyService.tallyZyraOperationTypes(gated.operations) });
