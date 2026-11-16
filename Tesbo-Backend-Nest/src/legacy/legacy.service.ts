@@ -9,7 +9,7 @@ import { EmailService } from "../auth/email.service";
 import { PasswordService } from "../auth/password.service";
 import { AppConfigService } from "../config/app-config.service";
 import { DatabaseService } from "../database/database.service";
-import { endZyraTurn, recordExistingCoverage, recordGeneration, recordJiraContext, recordKnowledgeContext, recordReconciliation, recordStandaloneGeneration, startZyraTurn, type TurnHandle } from "../observability/ai-trace";
+import { endZyraTurn, recordExistingCoverage, recordGeneration, recordJiraContext, recordKnowledgeContext, recordReconciliation, recordStandaloneGeneration, recordStandaloneTool, startZyraTurn, type TurnHandle } from "../observability/ai-trace";
 import { StorageService } from "../storage/storage.service";
 import { encryptSecret, decryptSecret } from "../common/crypto.util";
 import { externallyReachableBaseUrl } from "../common/external-url.util";
@@ -15218,6 +15218,19 @@ export class LegacyService implements OnModuleInit {
       // A confirmed archive is applied now rather than staged — but only when THIS message really is
       // the user's confirmation (zyraIsArchiveConfirmation), never on the model's word alone.
       const applied = await this.applyZyraChatOperations(projectId, uid, sessionId, decision.operations, { archiveConfirmed: this.zyraIsArchiveConfirmation(message), live: decision.liveStaged });
+      void recordStandaloneTool({
+        traceSeed: traceMessageId,
+        name: "zyra.apply_operations",
+        input: {
+          operationsRequested: decision.operations.length,
+          operationTypes: LegacyService.tallyZyraOperationTypes(decision.operations)
+        },
+        output: {
+          testcases: applied.testcases.length,
+          reviewRequestId: applied.reviewRequestId || null
+        },
+        metadata: { projectId, sessionId }
+      });
       const activity = [
         { actor: "user", title: "Asked Zyra", detail: message.slice(0, 320), createdAt: new Date().toISOString() },
         ...applied.activity

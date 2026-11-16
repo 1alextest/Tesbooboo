@@ -9,10 +9,11 @@ finalizer (`finalizeZyraToolDecisionWithAi`), scenario planner/top-up (`planZyra
 Zyra memory summarization (`summarizeForZyraMemory`), knowledge-base transcription
 (`transcribeKnowledgeFile`), and integration-sync decision summaries
 (`IntegrationSyncDecisions.summarize`) now emit standalone Langfuse generations with usage/error
-metadata where available. RAG ingestion/testcase embedding jobs are traced via `embedding-trace.ts`.
-**Still open:** background `continueZyraChatPlan` batch generations have no attached turn trace,
-`applyZyraChatOperations` is not recorded as a distinct tool span on the interactive turn, broader
-usage parsing/trace attachment gaps may remain in other AI paths, scores/evals (Phase 3),
+metadata where available. RAG ingestion/testcase embedding jobs are traced via `embedding-trace.ts`,
+background `continueZyraChatPlan` batch generation emits standalone traces, and the interactive
+`applyZyraChatOperations` call records a `zyra.apply_operations` tool span. **Still open:** background
+batch traces are standalone (not attached to the originating conversation trace), broader usage
+parsing/trace attachment gaps may remain in other AI paths, scores/evals (Phase 3),
 dashboards/alerts (Phase 4), and §9 e2e coverage. Keep this header in sync with reality.
 Target instance: **self-hosted Langfuse OSS v4.17.0**, project `Tesbo Test Manager` (org `Tesbo`).
 

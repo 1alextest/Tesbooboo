@@ -45,7 +45,7 @@ jest.mock("@langfuse/tracing", () => ({
   LangfuseOtelSpanAttributes
 }));
 
-import { recordGeneration, recordReconciliation, startZyraTurn, type TurnHandle } from "./ai-trace";
+import { recordGeneration, recordReconciliation, recordStandaloneTool, startZyraTurn, type TurnHandle } from "./ai-trace";
 
 describe("ai-trace.ts", () => {
   beforeEach(() => {
@@ -130,6 +130,48 @@ describe("ai-trace.ts", () => {
         throw new Error("SDK exploded");
       });
       expect(() => recordGeneration(turn, { name: "router", provider: "openai", model: "gpt-4o", output: {} })).not.toThrow();
+    });
+  });
+
+  describe("recordStandaloneTool", () => {
+    it("is a no-op when tracing is off", async () => {
+      isTracingEnabledMock.mockReturnValue(false);
+      await recordStandaloneTool({ traceSeed: "seed-1", name: "zyra.apply_operations", input: {}, output: {} });
+      expect(topLevelCalls).toHaveLength(0);
+      expect(createTraceIdMock).not.toHaveBeenCalled();
+    });
+
+    it("records a tool observation under the deterministic trace id with the given metadata", async () => {
+      isTracingEnabledMock.mockReturnValue(true);
+      await recordStandaloneTool({
+        traceSeed: "seed-1",
+        name: "zyra.apply_operations",
+        input: { operationsRequested: 2 },
+        output: { testcases: 2 },
+        metadata: { projectId: "project-1", sessionId: "session-1" }
+      });
+      expect(createTraceIdMock).toHaveBeenCalledWith("seed-1");
+      expect(topLevelCalls).toHaveLength(1);
+      const call = topLevelCalls[0];
+      expect(call.name).toBe("zyra.apply_operations");
+      expect(call.opts.asType).toBe("tool");
+      expect(call.attrs.metadata).toEqual({ projectId: "project-1", sessionId: "session-1" });
+      expect(call.attrs.output).toEqual({ testcases: 2 });
+    });
+
+    it("marks failures as error observations and never throws", async () => {
+      isTracingEnabledMock.mockReturnValue(true);
+      await expect(
+        recordStandaloneTool({ traceSeed: "seed-1", name: "zyra.apply_operations", errorMessage: "db down" })
+      ).resolves.toBeUndefined();
+      const call = topLevelCalls[0];
+      expect(call.attrs.level).toBe("ERROR");
+      expect(call.attrs.statusMessage).toBe("db down");
+
+      startObservationMock.mockImplementationOnce(() => {
+        throw new Error("SDK exploded");
+      });
+      await expect(recordStandaloneTool({ traceSeed: "seed-2", name: "zyra.apply_operations" })).resolves.toBeUndefined();
     });
   });
 

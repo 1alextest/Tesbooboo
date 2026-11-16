@@ -422,6 +422,40 @@ export async function recordStandaloneGeneration(ctx: {
   }
 }
 
+/**
+ * Record a non-LLM tool/operation span under a trace derived from a deterministic seed.
+ *
+ * Used for work that happens after the root turn span closed (e.g. applyZyraChatOperations), where
+ * the caller still knows the turn's trace seed but no longer holds a TurnHandle. Never throws.
+ */
+export async function recordStandaloneTool(ctx: {
+  traceSeed: string;
+  name: string;
+  input?: unknown;
+  output?: unknown;
+  errorMessage?: string;
+  metadata?: Record<string, string>;
+}): Promise<void> {
+  if (!isTracingEnabled()) return;
+  try {
+    const { startObservation, createTraceId } = await import("@langfuse/tracing");
+    const traceId = await createTraceId(ctx.traceSeed);
+    const span = startObservation(
+      ctx.name,
+      {
+        input: ctx.input,
+        output: ctx.errorMessage ? { error: ctx.errorMessage, ...(ctx.output !== undefined ? { output: ctx.output } : {}) } : ctx.output,
+        metadata: ctx.metadata || {},
+        ...(ctx.errorMessage ? { level: "ERROR", statusMessage: shorten(ctx.errorMessage) } : {})
+      },
+      { asType: "tool", parentSpanContext: { traceId, spanId: "0000000000000001", traceFlags: 1 } }
+    ) as unknown as Observation;
+    span.end();
+  } catch (err) {
+    logger.warn(`recordStandaloneTool failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 export async function recordReconciliation(
   ctx: { messageId: string; sessionId: string; projectId: string; userId?: string | null },
   data: {
