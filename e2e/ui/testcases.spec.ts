@@ -762,6 +762,24 @@ test.describe("test case detail — linked bugs", () => {
 // icon plus HTML5 drag-and-drop) so a user could reorder data columns. That reordering was
 // removed; only the per-column resize handle should remain.
 test.describe("test case repository table — column drag-and-drop removed", () => {
+  // The repository only renders its table once at least one case exists, and the CI project starts
+  // empty, so seed one instead of depending on whatever the shared project happened to contain.
+  let fixtureApi: import("@playwright/test").APIRequestContext;
+  let fixtureCaseId = "";
+
+  test.beforeAll(async ({ playwright }) => {
+    fixtureApi = await playwright.request.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const created = await (
+      await fixtureApi.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI table chrome fixture ${Date.now()}` } })
+    ).json();
+    fixtureCaseId = created.id;
+  });
+
+  test.afterAll(async () => {
+    if (fixtureCaseId) await fixtureApi.delete(`/api/projects/${ctx.projectId}/testcases/${fixtureCaseId}`, { failOnStatusCode: false });
+    if (fixtureApi) await fixtureApi.dispose();
+  });
+
   test("column headers are no longer draggable, and dragging one does not reorder columns", async ({ page }) => {
     await page.goto(`/projects/${ctx.projectId}/testcases`);
 
@@ -819,6 +837,24 @@ test.describe("test case repository table — column drag-and-drop removed", () 
 // can't: that a click reorders what's on screen, asks the server for the sort, and that the
 // refetch doesn't blank the table while in flight.
 test.describe("test case repository table — column sort", () => {
+  // The filter-refetch test below needs one existing row before it can observe the in-flight state;
+  // CI starts from an empty project, so seed one rather than relying on older tests' leftovers.
+  let fixtureApi: import("@playwright/test").APIRequestContext;
+  let fixtureCaseId = "";
+
+  test.beforeAll(async ({ playwright }) => {
+    fixtureApi = await playwright.request.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const created = await (
+      await fixtureApi.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI filter refetch fixture ${Date.now()}` } })
+    ).json();
+    fixtureCaseId = created.id;
+  });
+
+  test.afterAll(async () => {
+    if (fixtureCaseId) await fixtureApi.delete(`/api/projects/${ctx.projectId}/testcases/${fixtureCaseId}`, { failOnStatusCode: false });
+    if (fixtureApi) await fixtureApi.dispose();
+  });
+
   test("the Test case title header sorts the visible rows ascending, then descending on a second click", async ({ page }) => {
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
     const marker = `UI Sort Title ${Date.now()}`;
@@ -1083,7 +1119,9 @@ test.describe("test case repository table and detail panel — Context column", 
       const caseRow = page.getByRole("row").filter({
         has: page.getByRole("button", { name: `${marker} with citation`, exact: true })
       });
-      await caseRow.getByRole("button", { name: "Context used (1)" }).click();
+      // The row exposes both a focusable wrapper with role="button" and the real <button>, so the
+      // accessible name alone is ambiguous under strict mode. Scope to the button element.
+      await caseRow.locator("button", { hasText: "Context used (1)" }).click();
       await page.getByRole("button", { name: cited.title, exact: false }).click();
 
       const drawer = page.locator('div[role="presentation"]').last();
@@ -1246,7 +1284,10 @@ test.describe("Not set priority and the added Type / Automation Type values", ()
       const typeOptions = await type.locator("option").allTextContents();
       for (const t of ["Sanity", "API", "UI", "Acceptance", "Usability", "Compatibility", "Exploratory", "Other"]) expect(typeOptions).toContain(t);
 
-      await page.getByPlaceholder("Search by title or ID…").fill(`UI picker ${stamp}`);
+      // The titles put a label between "UI picker" and the stamp ("UI picker NotSet <stamp>"), so
+      // the old marker was not a contiguous substring of either title and filtered both out. The
+      // stamp itself is unique and present in both.
+      await page.getByPlaceholder("Search by title or ID…").fill(String(stamp));
       await priority.selectOption("Not set");
       await expect(page.getByText(`UI picker NotSet ${stamp}`)).toBeVisible();
       await expect(page.getByText(`UI picker P1 ${stamp}`)).toHaveCount(0);
