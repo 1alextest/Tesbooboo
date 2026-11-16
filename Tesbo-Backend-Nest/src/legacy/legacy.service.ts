@@ -10,7 +10,7 @@ import { EmailService } from "../auth/email.service";
 import { PasswordService } from "../auth/password.service";
 import { AppConfigService } from "../config/app-config.service";
 import { DatabaseService } from "../database/database.service";
-import { endZyraTurn, recordExistingCoverage, recordGeneration, recordJiraContext, recordKnowledgeContext, recordReconciliation, startZyraTurn, type TurnHandle } from "../observability/ai-trace";
+import { endZyraTurn, recordExistingCoverage, recordGeneration, recordJiraContext, recordKnowledgeContext, recordReconciliation, recordStandaloneGeneration, startZyraTurn, type TurnHandle } from "../observability/ai-trace";
 import { StorageService } from "../storage/storage.service";
 import { encryptSecret, decryptSecret } from "../common/crypto.util";
 import { externallyReachableBaseUrl } from "../common/external-url.util";
@@ -47,8 +47,7 @@ import {
   markdownToNotionRichText,
   notionPageTitle,
   notionPropertiesMarkdown,
-  notionTicketFields,
-  renderNotionProperties
+  notionTicketFields
 } from "../integration-sync/notion-render";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import { RequestCacheService } from "../request-cache/request-cache.service";
@@ -4561,7 +4560,7 @@ export class LegacyService implements OnModuleInit {
       total = Number(counted.rows[0]?.n || 0);
     }
     // total_count is transport for the header, not part of a test case.
-    return { rows: res.rows.map(({ total_count, ...row }) => toCamel(row)), total };
+    return { rows: res.rows.map(({ total_count: _totalCount, ...row }) => toCamel(row)), total };
   }
 
   /**
@@ -8982,7 +8981,7 @@ export class LegacyService implements OnModuleInit {
   static displayFileName(originalName: string, max = 255): string {
     const base = path
       .basename(String(originalName ?? "").replace(/\\/g, "/"))
-      // eslint-disable-next-line no-control-regex
+       
       .replace(/[\u0000-\u001f\u007f]/g, "")
       .trim();
     if (!base || base === "." || base === "..") return "upload";
@@ -12218,12 +12217,23 @@ export class LegacyService implements OnModuleInit {
   // when the project has an OpenAI key allocated — no other provider offers a compatible
   // transcription endpoint we can safely assume the shape of.
   private async transcribeKnowledgeFile(projectId: string, fileId: string, buffer: Buffer, ext: string, mimeType: string, fileName: string): Promise<void> {
+    const traceSeed = `knowledge:transcription:${fileId}`;
+    const traceMeta = { projectId, fileId, ext, fileName: String(fileName || "").slice(0, 120) };
     try {
       const project = await this.db.query<{ organization_id: string }>("SELECT organization_id FROM projects WHERE id = $1", [projectId]);
       const allocation = await this.zyraAiAllocation(projectId);
       const key = allocation.key;
       if (!key || String(key.provider || "").toLowerCase() !== "openai") {
         await this.db.query("UPDATE knowledge_files SET extraction_status = 'unsupported' WHERE id = $1", [fileId]);
+        void recordStandaloneGeneration({
+          traceSeed,
+          name: "knowledge.transcription",
+          provider: String(key?.provider || "unknown"),
+          model: "whisper-1",
+          input: { fileName, ext, mimeType, sizeBytes: buffer.length },
+          output: { status: "unsupported", reason: "openai key required" },
+          metadata: traceMeta
+        });
         return;
       }
       const form = new FormData();
@@ -12246,9 +12256,28 @@ export class LegacyService implements OnModuleInit {
         [fileId, text || null]
       );
       if (text) this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "file", fileId, "transcribed");
+      void recordStandaloneGeneration({
+        traceSeed,
+        name: "knowledge.transcription",
+        provider: "openai",
+        model: "whisper-1",
+        input: { fileName, ext, mimeType, sizeBytes: buffer.length },
+        output: { status: "ready", transcriptChars: text.length },
+        metadata: traceMeta
+      });
     } catch (err) {
-      this.logger.warn(`Knowledge-base transcription failed for file ${fileId}: ${err instanceof Error ? err.message : err}`);
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Knowledge-base transcription failed for file ${fileId}: ${message}`);
       await this.db.query("UPDATE knowledge_files SET extraction_status = 'failed', updated_at = now() WHERE id = $1", [fileId]).catch(() => undefined);
+      void recordStandaloneGeneration({
+        traceSeed,
+        name: "knowledge.transcription",
+        provider: "openai",
+        model: "whisper-1",
+        input: { fileName, ext, mimeType, sizeBytes: buffer.length },
+        errorMessage: message,
+        metadata: traceMeta
+      });
     }
   }
 
@@ -15739,7 +15768,7 @@ export class LegacyService implements OnModuleInit {
       // cleared now the new reply carries it, so the original message reads as its first attempt again.
       await this.db.query("UPDATE zyra_chat_messages SET status = 'resumed', trace = NULL WHERE id = $1 AND status = 'resuming'", [messageId]);
       onSettled?.({ ok: true, payload: { message: item, session: await this.zyraChatSession(projectId, userId, sessionId) } });
-    } catch (err) {
+    } catch {
       // Anything that throws here (not a timeout — those are caught inside buildZyraChatDecision and
       // returned as another timed-out decision, not thrown) leaves this checkpoint resumable again
       // rather than stranding it in 'resuming' forever. Still counts toward the cap: the user's
@@ -17821,7 +17850,8 @@ export class LegacyService implements OnModuleInit {
         // A chunk numbers its scenarios 1..size; renumber against the whole batch. A number outside
         // the chunk is dropped, so the batch outcome counts it as unmapped rather than misattributing it.
         const scenario = typeof draft.scenario === "number" && draft.scenario >= 1 && draft.scenario <= size ? draft.scenario + offset : undefined;
-        const { scenario: _drop, ...rest } = draft;
+        const rest = { ...(draft as Record<string, unknown>) };
+        delete rest.scenario;
         drafts.push(scenario === undefined ? rest : { ...rest, scenario });
       }
       // Kept aligned with this chunk's drafts, so a later chunk's matches stay at its own drafts' indexes.
@@ -18987,7 +19017,31 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         });
         live.total = batch.length;
         const batchLive = live;
-        const decision = await runWithZyraLiveBatch(batchLive, () => this.generateZyraPlanPiece({ ...pieceContext, scenarios: batch, onContext: emitContext }));
+        const batchTraceSeed = `zyra:plan-batch:${planId}:${doneCount}:${Date.now()}`;
+        let decision: ZyraChatDecision;
+        try {
+          decision = await runWithZyraLiveBatch(batchLive, () => this.generateZyraPlanPiece({ ...pieceContext, scenarios: batch, onContext: emitContext }));
+          void recordStandaloneGeneration({
+            traceSeed: batchTraceSeed,
+            name: "zyra.plan.generate_batch",
+            provider,
+            model,
+            input: { planId, sessionId, scenarios: batch.slice(0, 20), batchSize: batch.length, doneCount, totalCount },
+            output: { draftedCount: LegacyService.zyraDraftedCount(decision) },
+            metadata: { projectId, sessionId, planId }
+          });
+        } catch (err) {
+          void recordStandaloneGeneration({
+            traceSeed: batchTraceSeed,
+            name: "zyra.plan.generate_batch",
+            provider,
+            model,
+            input: { planId, sessionId, scenarios: batch.slice(0, 20), batchSize: batch.length, doneCount, totalCount },
+            errorMessage: err instanceof Error ? err.message : String(err),
+            metadata: { projectId, sessionId, planId }
+          });
+          throw err;
+        }
         stage("generating", { draftedCount: LegacyService.zyraDraftedCount(decision) }, "update");
         const gated = this.applyStorageGateToGenerated(decision, capabilities);
         if (gated.operations.length) stage("staging", { operationCounts: LegacyService.tallyZyraOperationTypes(gated.operations) });
@@ -19187,10 +19241,35 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       `Tool name: ${params.toolName}`,
       `Tool result JSON: ${JSON.stringify(params.toolDecision)}`
     ].join("\n");
-    const raw = providerWire(params.provider) === "anthropic"
-      ? await this.zyraChatWithAnthropic(params.key, params.model, finalizePrompt, params.message)
-      : await this.zyraChatWithOpenAi(params.key, params.model, finalizePrompt, params.message);
+    const traceSeed = `zyra:tool-finalize:${params.projectId}:${Date.now()}`;
+    let raw: Body;
+    try {
+      raw = providerWire(params.provider) === "anthropic"
+        ? await this.zyraChatWithAnthropic(params.key, params.model, finalizePrompt, params.message)
+        : await this.zyraChatWithOpenAi(params.key, params.model, finalizePrompt, params.message);
+    } catch (err) {
+      void recordStandaloneGeneration({
+        traceSeed,
+        name: "zyra.tool_decision.finalize",
+        provider: params.provider,
+        model: params.model,
+        input: { system: finalizePrompt, user: params.message, toolName: params.toolName },
+        errorMessage: err instanceof Error ? err.message : String(err),
+        metadata: { projectId: params.projectId, toolName: params.toolName }
+      });
+      throw err;
+    }
     await this.recordZyraTokenUsage(params.projectId, "chat_tool_finalize", params.provider, params.model, raw.__zyraUsage || {});
+    void recordStandaloneGeneration({
+      traceSeed,
+      name: "zyra.tool_decision.finalize",
+      provider: params.provider,
+      model: params.model,
+      input: { system: finalizePrompt, user: params.message, toolName: params.toolName },
+      output: { reply: String(raw.reply || "").slice(0, 500), reasoningSummary: String(raw.reasoningSummary || "").slice(0, 300) },
+      usage: raw.__zyraUsage ? { input: Number(raw.__zyraUsage.input || 0), output: Number(raw.__zyraUsage.output || 0), cached: Number(raw.__zyraUsage.cached || 0) || undefined } : undefined,
+      metadata: { projectId: params.projectId, toolName: params.toolName }
+    });
     return {
       reply: this.sanitizeZyraReply(raw.reply, String(params.toolDecision.reply || "")),
       reasoningSummary: String(raw.reasoningSummary || params.toolDecision.reasoningSummary || "").slice(0, 1500),
@@ -20673,7 +20752,14 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // Plain-text completion for internal note-taking (memory summarization) — unlike
   // zyraChatWithOpenAi/zyraChatWithAnthropic this does not force a JSON response shape,
   // since the caller wants a short prose/bullet answer, not a structured chat decision.
-  private async summarizeForZyraMemory(provider: string, model: string, key: Body, prompt: string): Promise<string> {
+  private async summarizeForZyraMemory(
+    provider: string,
+    model: string,
+    key: Body,
+    prompt: string,
+    traceCtx?: { projectId?: string; userId?: string | null }
+  ): Promise<string> {
+    const traceSeedBase = `zyra:memory-summary:${traceCtx?.projectId || "unknown"}:${Date.now()}`;
     try {
       if (providerWire(provider) === "anthropic") {
         const chatUrl = normalizeAnthropicMessagesUrlFor(provider, key.base_url);
@@ -20687,7 +20773,23 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           if (!res.ok) continue;
           const data = await res.json() as Body;
           const text = normalizeJsonArray(data.content).map((item) => item?.text || "").join("\n").trim();
-          if (text) return text;
+          if (text) {
+            void recordStandaloneGeneration({
+              traceSeed: `${traceSeedBase}:${candidate}`,
+              name: "zyra.memory.summarize",
+              provider,
+              model: candidate,
+              input: { prompt },
+              output: text,
+              usage: data.usage ? {
+                input: Number(data.usage.input_tokens || 0),
+                output: Number(data.usage.output_tokens || 0),
+                cached: Number(data.usage.cache_read_input_tokens || 0) || undefined
+              } : undefined,
+              metadata: { projectId: String(traceCtx?.projectId || ""), userId: String(traceCtx?.userId || "") }
+            });
+            return text;
+          }
         }
         return "";
       }
@@ -20699,8 +20801,34 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       });
       if (!res.ok) return "";
       const data = await res.json() as Body;
-      return String(data.choices?.[0]?.message?.content || "").trim();
-    } catch {
+      const text = String(data.choices?.[0]?.message?.content || "").trim();
+      if (text) {
+        void recordStandaloneGeneration({
+          traceSeed: `${traceSeedBase}:${model}`,
+          name: "zyra.memory.summarize",
+          provider,
+          model,
+          input: { prompt },
+          output: text,
+          usage: data.usage ? {
+            input: Number(data.usage.prompt_tokens || 0),
+            output: Number(data.usage.completion_tokens || 0),
+            cached: Number(data.usage.prompt_tokens_details?.cached_tokens || 0) || undefined
+          } : undefined,
+          metadata: { projectId: String(traceCtx?.projectId || ""), userId: String(traceCtx?.userId || "") }
+        });
+      }
+      return text;
+    } catch (err) {
+      void recordStandaloneGeneration({
+        traceSeed: traceSeedBase,
+        name: "zyra.memory.summarize",
+        provider,
+        model,
+        input: { prompt },
+        errorMessage: err instanceof Error ? err.message : String(err),
+        metadata: { projectId: String(traceCtx?.projectId || ""), userId: String(traceCtx?.userId || "") }
+      });
       return "";
     }
   }
@@ -20732,7 +20860,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       `User: ${params.userMessage}`,
       `Result: ${params.outcome}`
     ].join("\n");
-    const summary = (await this.summarizeForZyraMemory(params.provider, params.model, params.key, prompt))
+    const summary = (await this.summarizeForZyraMemory(params.provider, params.model, params.key, prompt, { projectId: params.projectId, userId: params.userId }))
       .split("\n").map((line) => line.trim()).filter(Boolean).slice(0, 6).join("\n");
     const entry = summary || `- ${params.userMessage.slice(0, 200)}\n- ${params.outcome.slice(0, 200)}`;
     await this.rememberZyraMemory(params.projectId, params.userId, entry);
@@ -22800,8 +22928,33 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // "All – Exhaustive" run planned 49 — so the tier meant as "everything" fell well short of it.
       `Return ONLY JSON: {"scenarios": ["short scenario label", ...]}. List ${params.maxScenarios} scenarios, ordered from most to least important. This is exhaustive coverage: keep working through ${LegacyService.ZYRA_PLAN_COVERAGE_AREAS} until you reach ${params.maxScenarios}. Stop short only if the feature genuinely has no more distinct scenarios that the existing testcases do not already cover. No markdown, no commentary.`
     ].join("\n");
-    const parsed = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, userPrompt);
+    const traceSeedBase = `zyra:scenario-plan:${params.projectId}:${Date.now()}`;
+    let parsed: Body;
+    try {
+      parsed = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, userPrompt);
+    } catch (err) {
+      void recordStandaloneGeneration({
+        traceSeed: traceSeedBase,
+        name: "zyra.scenario_plan",
+        provider: params.provider,
+        model: params.model,
+        input: { system: systemPrompt, user: userPrompt, maxScenarios: params.maxScenarios },
+        errorMessage: err instanceof Error ? err.message : String(err),
+        metadata: { projectId: params.projectId }
+      });
+      throw err;
+    }
     await this.recordZyraTokenUsage(params.projectId, "chat_plan", params.provider, params.model, parsed.__zyraUsage || {});
+    void recordStandaloneGeneration({
+      traceSeed: traceSeedBase,
+      name: "zyra.scenario_plan",
+      provider: params.provider,
+      model: params.model,
+      input: { system: systemPrompt, user: userPrompt, maxScenarios: params.maxScenarios },
+      output: { scenarios: normalizeJsonArray(parsed.scenarios).slice(0, 20) },
+      usage: parsed.__zyraUsage ? { input: Number(parsed.__zyraUsage.input || 0), output: Number(parsed.__zyraUsage.output || 0) } : undefined,
+      metadata: { projectId: params.projectId }
+    });
     const scenarios = LegacyService.mergeZyraScenarios([], parsed.scenarios, params.maxScenarios);
 
     // One top-up round when the first answer still stops well short of the target — models tend to
@@ -22817,8 +22970,33 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           "",
           `Return ONLY JSON: {"scenarios": [...]} with up to ${params.maxScenarios - scenarios.length} MORE distinct scenarios that neither the list above nor the existing testcases cover, ordered from most to least important. Return {"scenarios": []} if there are genuinely none left.`
         ].join("\n");
-        const more = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, topUpPrompt);
+        const topUpSeed = `${traceSeedBase}:topup`;
+        let more: Body;
+        try {
+          more = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, topUpPrompt);
+        } catch (topUpErr) {
+          void recordStandaloneGeneration({
+            traceSeed: topUpSeed,
+            name: "zyra.scenario_plan.topup",
+            provider: params.provider,
+            model: params.model,
+            input: { system: systemPrompt, user: topUpPrompt, existingCount: scenarios.length, maxScenarios: params.maxScenarios },
+            errorMessage: topUpErr instanceof Error ? topUpErr.message : String(topUpErr),
+            metadata: { projectId: params.projectId }
+          });
+          throw topUpErr;
+        }
         await this.recordZyraTokenUsage(params.projectId, "chat_plan", params.provider, params.model, more.__zyraUsage || {});
+        void recordStandaloneGeneration({
+          traceSeed: topUpSeed,
+          name: "zyra.scenario_plan.topup",
+          provider: params.provider,
+          model: params.model,
+          input: { system: systemPrompt, user: topUpPrompt, existingCount: scenarios.length, maxScenarios: params.maxScenarios },
+          output: { scenarios: normalizeJsonArray(more.scenarios).slice(0, 20) },
+          usage: more.__zyraUsage ? { input: Number(more.__zyraUsage.input || 0), output: Number(more.__zyraUsage.output || 0) } : undefined,
+          metadata: { projectId: params.projectId }
+        });
         return LegacyService.mergeZyraScenarios(scenarios, more.scenarios, params.maxScenarios);
       } catch (err) {
         this.logger.warn(`Scenario top-up failed for project ${params.projectId}, keeping the ${scenarios.length}-scenario plan: ${err instanceof Error ? err.message : err}`);
@@ -23572,7 +23750,6 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // matter less here, but they are kept correct anyway.
   private detectZyraChatIntent(message: string): ZyraChatIntent {
     const lower = message.toLowerCase();
-    const jiraWords = /\b(jira|ticket|tickets|story|stories|issue|issues)\b/.test(lower);
     const testcaseWords = /\b(testcase|test case|testcases|test cases|case|cases|coverage)\b/.test(lower);
     const createWords = /\b(creat|generat|draft|prepar|author)\w*\b|\b(add|adds|added|adding|write|writes|writing|wrote|make|makes|making|new)\b/.test(lower);
     const updateWords = /\b(updat|chang|revis|edit|modif|improv)\w*\b|\b(mark|marks|marked)\b/.test(lower);

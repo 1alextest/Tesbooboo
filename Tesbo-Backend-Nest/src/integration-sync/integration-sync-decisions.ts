@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
+import { recordStandaloneGeneration } from "../observability/ai-trace";
 import { DECISION_PROMPT_CHAR_BUDGET } from "./integration-sync.constants";
 import { RemoteComment, RemoteTicket } from "./integration-sync.types";
 
@@ -12,6 +13,8 @@ export interface ChatAllocation {
   auth_scheme: string | null;
   is_active: boolean;
 }
+
+type ChatCompletionResult = { text: string; usage?: { input?: number; output?: number; cached?: number } };
 
 function trimTrailingSlashes(value: string): string {
   let end = value.length;
@@ -89,16 +92,40 @@ export class IntegrationSyncDecisions {
       .filter(Boolean)
       .join("\n");
 
+    const provider = String(allocation.provider || "").toLowerCase();
+    const model = allocation.default_model || (provider === "anthropic" ? "claude-sonnet-4-6" : "gpt-4o-mini");
+    const traceSeed = `integration-sync:decision:${ticket.issueId}:${Date.now()}`;
+    const traceMeta = { ticketKey: String(ticket.issueKey || ""), ticketId: String(ticket.issueId || ""), commentCount: String(comments.length) };
+
     try {
-      const provider = String(allocation.provider || "").toLowerCase();
       const raw = provider === "anthropic" ? await this.callAnthropic(allocation, userPrompt) : await this.callOpenAI(allocation, userPrompt);
-      const text = raw.trim();
+      const text = String(raw.text || "").trim();
+      await recordStandaloneGeneration({
+        traceSeed,
+        name: "integration.sync.decision-summary",
+        provider,
+        model,
+        input: { system: SYSTEM_PROMPT, user: userPrompt },
+        output: text,
+        usage: raw.usage,
+        metadata: traceMeta
+      });
       // The model is instructed to emit exactly NONE when a thread settled nothing — treat that
       // as "no decisions section" rather than writing the literal word into the document.
       if (!text || /^none\.?$/i.test(text)) return null;
       return text;
     } catch (err) {
-      this.logger.warn(`Decision summary failed for ${ticket.issueKey}: ${err instanceof Error ? err.message : err}`);
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Decision summary failed for ${ticket.issueKey}: ${message}`);
+      await recordStandaloneGeneration({
+        traceSeed,
+        name: "integration.sync.decision-summary",
+        provider,
+        model,
+        input: { system: SYSTEM_PROMPT, user: userPrompt },
+        errorMessage: message,
+        metadata: traceMeta
+      });
       return null;
     }
   }
@@ -121,7 +148,7 @@ export class IntegrationSyncDecisions {
     return (kept.length ? kept : [rendered[rendered.length - 1].slice(0, DECISION_PROMPT_CHAR_BUDGET)]).join("\n\n");
   }
 
-  private async callOpenAI(allocation: ChatAllocation, userPrompt: string): Promise<string> {
+  private async callOpenAI(allocation: ChatAllocation, userPrompt: string): Promise<ChatCompletionResult> {
     const authHeader = String(allocation.auth_header_name || "Authorization");
     const scheme = String(allocation.auth_scheme ?? "Bearer").trim();
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -142,11 +169,22 @@ export class IntegrationSyncDecisions {
       })
     });
     if (!res.ok) throw new Error(`openai chat failed (${res.status})`);
-    const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    return String(data.choices?.[0]?.message?.content || "");
+    const data = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
+    };
+    const text = String(data.choices?.[0]?.message?.content || "");
+    const usage = data.usage
+      ? {
+          input: data.usage.prompt_tokens,
+          output: data.usage.completion_tokens,
+          cached: data.usage.prompt_tokens_details?.cached_tokens
+        }
+      : undefined;
+    return { text, usage };
   }
 
-  private async callAnthropic(allocation: ChatAllocation, userPrompt: string): Promise<string> {
+  private async callAnthropic(allocation: ChatAllocation, userPrompt: string): Promise<ChatCompletionResult> {
     const headers: Record<string, string> = { "Content-Type": "application/json", "anthropic-version": "2023-06-01" };
     const cleanKey = String(allocation.api_key || "").replace(/^bearer\s+/i, "").trim();
     const customHeader = allocation.auth_header_name && allocation.auth_header_name.toLowerCase() !== "authorization";
@@ -169,10 +207,18 @@ export class IntegrationSyncDecisions {
       })
     });
     if (!res.ok) throw new Error(`anthropic messages failed (${res.status})`);
-    const data = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
-    return (data.content || [])
+    const data = (await res.json()) as { content?: Array<{ type?: string; text?: string }>; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number } };
+    const text = (data.content || [])
       .filter((block) => block.type === "text")
       .map((block) => String(block.text || ""))
       .join("\n");
+    const usage = data.usage
+      ? {
+          input: data.usage.input_tokens,
+          output: data.usage.output_tokens,
+          cached: data.usage.cache_read_input_tokens
+        }
+      : undefined;
+    return { text, usage };
   }
 }
