@@ -18298,6 +18298,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         status: "running",
         originalMessage: params.message,
         jiraIssueKeys: params.jiraIssueKeys,
+        // The turn that started this plan. Background batches outlive its span; seeding their
+        // standalone generations from this same value rejoins the originating chat trace.
+        traceSeed: params.trace?.traceSeed || null,
         // The starting turn's sources: originalMessage is often the follow-up that confirmed the plan
         // ("yes"), which names none of them, so re-gathering on it alone would lose them by batch 2.
         contextRefs: params.contextRefs || null,
@@ -18453,6 +18456,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         status: "running",
         originalMessage: params.message,
         jiraIssueKeys: params.jiraIssueKeys,
+        // See the regular plan's identical field: keeps background batches on the originating trace.
+        traceSeed: params.trace?.traceSeed || null,
         // Not carried: the starting turn's sources are the first tickets the message named, and each
         // batch reads its own tickets instead (generateZyraScopedBatch).
         contextRefs: null,
@@ -18777,7 +18782,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         });
         live.total = batch.length;
         const batchLive = live;
-        const batchTraceSeed = `zyra:plan-batch:${planId}:${doneCount}:${Date.now()}`;
+        // A plan started before this field existed (or by a path with no turn handle) falls back to
+        // its old standalone per-batch seed.
+        const batchTraceSeed = plan.traceSeed ? String(plan.traceSeed) : `zyra:plan-batch:${planId}:${doneCount}:${Date.now()}`;
         let decision: ZyraChatDecision;
         try {
           decision = await runWithZyraLiveBatch(batchLive, () => this.generateZyraPlanPiece({ ...pieceContext, scenarios: batch, onContext: emitContext }));
@@ -20533,6 +20540,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           const data = await res.json() as Body;
           const text = normalizeJsonArray(data.content).map((item) => item?.text || "").join("\n").trim();
           if (text) {
+            const cached = Number(data.usage?.cache_read_input_tokens || 0) + Number(data.usage?.cache_creation_input_tokens || 0);
             void recordStandaloneGeneration({
               traceSeed: `${traceSeedBase}:${candidate}`,
               name: "zyra.memory.summarize",
@@ -20541,9 +20549,12 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
               input: { prompt },
               output: text,
               usage: data.usage ? {
-                input: Number(data.usage.input_tokens || 0),
+                // Anthropic's input_tokens excludes cache reads/creations; fold them in so `input`
+                // means the same thing it does for OpenAI's prompt_tokens (which already includes
+                // cached), and keep the cache share separately for cachedInputTokens.
+                input: Number(data.usage.input_tokens || 0) + cached,
                 output: Number(data.usage.output_tokens || 0),
-                cached: Number(data.usage.cache_read_input_tokens || 0) || undefined
+                cached: cached || undefined
               } : undefined,
               metadata: { projectId: String(traceCtx?.projectId || ""), userId: String(traceCtx?.userId || "") }
             });
@@ -23355,7 +23366,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
    * One JSON completion with the generation budget (ZYRA_GENERATE_TIMEOUT_MS, caller-chosen
    * max_tokens) — the router helpers above are pinned to the router's 60s/4096-token budget.
    */
-  private async zyraAuthorJson(key: Body, provider: string, model: string, system: string, user: string, maxTokens: number): Promise<{ parsed: Body | null; usage: { input: number; output: number; total: number }; rawText: string }> {
+  private async zyraAuthorJson(key: Body, provider: string, model: string, system: string, user: string, maxTokens: number): Promise<{ parsed: Body | null; usage: { input: number; output: number; total: number; cached?: number }; rawText: string }> {
     const signal = () => LegacyService.zyraProviderSignal(LegacyService.ZYRA_GENERATE_TIMEOUT_MS);
     if (providerWire(provider) === "anthropic") {
       let lastStatus = "";
@@ -23382,9 +23393,10 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         const data = await res.json() as Body;
         const rawText = normalizeJsonArray(data.content).map((item) => item?.text || "").join("\n").trim();
         const usage = data.usage || {};
-        const input = Number(usage.input_tokens || 0) + Number(usage.cache_read_input_tokens || 0) + Number(usage.cache_creation_input_tokens || 0);
+        const cached = Number(usage.cache_read_input_tokens || 0) + Number(usage.cache_creation_input_tokens || 0);
+        const input = Number(usage.input_tokens || 0) + cached;
         const output = Number(usage.output_tokens || 0);
-        return { parsed: this.parseModelJson(rawText || "{}"), usage: { input, output, total: input + output }, rawText };
+        return { parsed: this.parseModelJson(rawText || "{}"), usage: { input, output, total: input + output, ...(cached ? { cached } : {}) }, rawText };
       }
       throw new Error(`Claude update drafting failed: ${lastStatus || "No compatible model was accepted."}`);
     }
@@ -23402,9 +23414,15 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const data = await res.json() as Body;
     const rawText = String(data.choices?.[0]?.message?.content || "{}");
     const usage = data.usage || {};
+    const cached = Number(usage.prompt_tokens_details?.cached_tokens || 0);
     return {
       parsed: this.parseModelJson(rawText),
-      usage: { input: Number(usage.prompt_tokens || 0), output: Number(usage.completion_tokens || 0), total: Number(usage.total_tokens || 0) },
+      usage: {
+        input: Number(usage.prompt_tokens || 0),
+        output: Number(usage.completion_tokens || 0),
+        total: Number(usage.total_tokens || 0),
+        ...(cached ? { cached } : {})
+      },
       rawText
     };
   }

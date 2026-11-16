@@ -13,11 +13,12 @@ metadata where available. Provider usage parsing now carries cached input tokens
 `prompt_tokens_details.cached_tokens`, Anthropic cache read/create counts) through the router,
 scenario planner/top-up, tool finalizer and memory-summary generations. RAG ingestion/testcase
 embedding jobs and the one-off testcase backfill are traced via `embedding-trace.ts`,
-background `continueZyraChatPlan` batch generation emits standalone traces, and the interactive
-`applyZyraChatOperations` call records a `zyra.apply_operations` tool span. **Still open:** background
-batch traces are standalone (not attached to the originating conversation trace), broader usage
-parsing/trace attachment gaps may remain in other AI paths, scores/evals (Phase 3),
-dashboards/alerts (Phase 4), and §9 e2e coverage. Keep this header in sync with reality.
+background `continueZyraChatPlan` batch generations rejoin the originating turn's trace (seeded from
+the chat message id stored in `active_plan`), and the interactive `applyZyraChatOperations` call
+records a `zyra.apply_operations` tool span. **Still open:** plans created before that plan field
+existed fall back to standalone per-batch traces, broader usage parsing/trace attachment gaps may
+remain in other AI paths, scores/evals (Phase 3), dashboards/alerts (Phase 4), and §9 e2e coverage.
+Keep this header in sync with reality.
 Target instance: **self-hosted Langfuse OSS v4.17.0**, project `Tesbo Test Manager` (org `Tesbo`).
 
 Scope: end-to-end observability (traces, token/cost accounting, quality scores) over every LLM and
@@ -377,8 +378,9 @@ traceIdFor(generationTask) = await createTraceId(taskId)          // ai_generati
 
 Same id every time, from data we already store. A support report maps to its trace by computing the
 id — no column, no backfill, and it works for rows written before the feature shipped. Background
-plan resumption currently emits standalone traces seeded per batch (`zyra:plan-batch:...`);
-reattaching them to the originating message id is still open (see the status header).
+plan resumption stores the originating message id in `active_plan` and seeds its batch traces from
+it, so they land on the originating turn's trace; a plan created before that field existed falls
+back to a standalone per-batch seed.
 
 This also removes the migration from scope, which shrinks the e2e surface (§9) and the review risk.
 

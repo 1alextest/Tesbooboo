@@ -207,16 +207,17 @@ export class IntegrationSyncDecisions {
       })
     });
     if (!res.ok) throw new Error(`anthropic messages failed (${res.status})`);
-    const data = (await res.json()) as { content?: Array<{ type?: string; text?: string }>; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number } };
+    const data = (await res.json()) as { content?: Array<{ type?: string; text?: string }>; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } };
     const text = (data.content || [])
       .filter((block) => block.type === "text")
       .map((block) => String(block.text || ""))
       .join("\n");
+    const cached = Number(data.usage?.cache_read_input_tokens || 0) + Number(data.usage?.cache_creation_input_tokens || 0);
     const usage = data.usage
       ? {
-          input: data.usage.input_tokens,
-          output: data.usage.output_tokens,
-          cached: data.usage.cache_read_input_tokens
+          input: Number(data.usage.input_tokens || 0) + cached,
+          output: Number(data.usage.output_tokens || 0),
+          cached: cached || undefined
         }
       : undefined;
     return { text, usage };

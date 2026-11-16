@@ -227,6 +227,7 @@ describe("ai-trace.ts", () => {
     isTracingEnabledMock.mockReturnValue(true);
     const turn = await startZyraTurn({ messageId: "msg-1", sessionId: "session-1", projectId: "project-1", message: "hi" });
     await recordReconciliation({ messageId: "msg-1", sessionId: "session-1", projectId: "project-1" }, { bannerFired: null, reason: "", requested: 0, appliedCount: 0, proposedCount: 0, reply: "" });
+    expect(turn.traceSeed).toBe("msg-1");
     expect(turn.traceId).toBe(topLevelCalls[topLevelCalls.length - 1].opts.parentSpanContext ? (topLevelCalls[topLevelCalls.length - 1].opts.parentSpanContext as Record<string, unknown>).traceId : null);
   });
 });

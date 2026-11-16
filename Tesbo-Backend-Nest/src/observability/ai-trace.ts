@@ -42,12 +42,18 @@ export interface TurnHandle {
   /** Null when tracing is off, or when the SDK failed to produce a span. */
   readonly span: unknown | null;
   readonly traceId: string | null;
+  /**
+   * The deterministic seed this turn's trace id was derived from (the chat message id).
+   * Kept so work that outlives the turn's span — e.g. background plan batches — can rejoin the
+   * same trace through createTraceId(seed) instead of starting a standalone one.
+   */
+  readonly traceSeed?: string | null;
   /** Restamped onto every child span, the way propagateAttributes would. See stampTraceIdentity. */
   readonly sessionId?: string | null;
   readonly userId?: string | null;
 }
 
-const NO_TURN: TurnHandle = { span: null, traceId: null };
+const NO_TURN: TurnHandle = { span: null, traceId: null, traceSeed: null };
 
 function shorten(value: unknown, max = META_MAX): string {
   const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
@@ -140,7 +146,7 @@ export async function startZyraTurn(ctx: {
       if (fromSdk !== local) logger.warn(`Langfuse renamed a trace attribute: expected "${local}", SDK says "${fromSdk}".`);
     }
 
-    const turn: TurnHandle = { span, traceId, sessionId: ctx.sessionId, userId: ctx.userId ?? null };
+    const turn: TurnHandle = { span, traceId, traceSeed: ctx.messageId, sessionId: ctx.sessionId, userId: ctx.userId ?? null };
     stampTraceIdentity(span, turn);
     span.otelSpan?.setAttribute(TRACE_NAME, "zyra.chat.turn");
 
