@@ -4630,6 +4630,12 @@ export type GraphReviewRunExecutionObservation = {
   evidenceAddedAfterHandoffCount: number;
 };
 export type GraphReviewRunCaseLink = {
+  /** Machine/human supplied CI commit compared with server-pinned Git. Not deployed-build proof. */
+  commitProvenance?: {
+    sourceCommitSha: string | null;
+    runReportedCommitSha: string | null;
+    comparison: "unknown" | "reported_equal_unverified" | "reported_different";
+  };
   runId: string;
   caseId: string;
   linkedAt: string;
@@ -4643,6 +4649,7 @@ export type QaVerificationGapSummary = {
   nominatedCaseCount: number;
   selectedCaseCount: number;
   notSelectedCount: number;
+  historicalSelectionOnlyCount: number;
   withoutSubsequentResultCount: number;
   withSubsequentResultCount: number;
   withLaterEvidenceMetadataCount: number;
