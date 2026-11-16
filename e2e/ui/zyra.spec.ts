@@ -184,6 +184,29 @@ test.describe("zyra / agents (UI)", () => {
     await submit.click(); await expect(panel.getByRole("alert")).toContainText("supported unapproved draft preview");
     await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toHaveCount(0);
     await page.unroute(endpoint);
+    // An otherwise trusted HTTP response must not be rendered as structurally
+    // accepted when its displayed rows disagree with its own definition, or
+    // when the envelope adds an unauthorized business authority assertion.
+    for (const corruption of ["different-state-label", "foreign-transition", "foreign-diagnostic",
+      "hidden-publication", "duplicate-state-id", "different-model-version"] as const) {
+      await page.route(endpoint, async route => {
+        if (route.request().method() !== "POST") return route.continue();
+        const response = await route.fetch();
+        const body = await response.json();
+        if (corruption === "different-state-label") body.states[0].label = "Forged display label";
+        if (corruption === "foreign-transition") body.transitions[0].from = "outside";
+        if (corruption === "foreign-diagnostic") body.diagnostics.push({ code: "TERMINAL_STATE", elementId: "outside" });
+        if (corruption === "hidden-publication") body.published = true;
+        if (corruption === "duplicate-state-id") body.states[1].id = body.states[0].id;
+        if (corruption === "different-model-version") body.definition.schemaVersion = "tesbo-fsm-draft/2";
+        await route.fulfill({ response, json: body });
+      });
+      await submit.click();
+      await expect(panel.getByRole("alert")).toContainText("supported unapproved draft preview");
+      await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toHaveCount(0);
+      await expect(editor).toHaveValue(JSON.stringify(modelUiDraft()));
+      await page.unroute(endpoint);
+    }
     await page.route(endpoint, route => route.request().method() === "POST" ? route.abort("failed") : route.continue());
     await submit.click(); await expect(panel.getByRole("alert")).toContainText("draft remains unsaved");
     await page.unroute(endpoint);
