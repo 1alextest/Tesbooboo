@@ -216,7 +216,17 @@ test.describe("zyra / agents (UI)", () => {
     await page.reload(); await panel.locator("summary").click();
     await expect(panel.getByRole("status")).toHaveText("Draft model preview is not enabled.");
     await expect(editor).toHaveCount(0);
-    await page.unroute(endpoint); await panel.getByRole("button", { name: "Check preview availability" }).click();
+    await page.unroute(endpoint);
+    await page.route(endpoint, route => route.request().method() === "GET" ? route.fulfill({ json: {
+      schemaVersion: "tesbo-fsm-preview-availability/1", enabled: true,
+      semantics: "SEQUENTIAL_FSM", maxStates: 32, maxTransitions: 64,
+      publication: "APPROVED" // Unknown authority must not unlock editing.
+    } }) : route.continue());
+    await panel.getByRole("button", { name: "Check preview availability" }).click();
+    await expect(panel.getByRole("alert")).toContainText("Preview availability could not be verified");
+    await expect(editor).toHaveCount(0);
+    await page.unroute(endpoint);
+    await panel.getByRole("button", { name: "Check preview availability" }).click();
     await expect(editor).toBeVisible(); await expect(editor).toHaveValue("");
     expect(modelUiRecords(projectId)).toBe(before);
   });
