@@ -42,7 +42,7 @@ describe("repository partial edits — optional row-revision precondition", () =
     expect(await svc.getTestCaseForUser(USER, PROJECT, CASE)).toMatchObject({ id: CASE, editRevision: REVISION });
     expect(await svc.getTestCase(CASE)).toMatchObject({ id: CASE, editRevision: REVISION });
     for (const [sql] of query.mock.calls) {
-      expect(sql).toContain("sha256(convert_to((to_jsonb(testcases) - 'embedding_status' - 'embedding_content_hash' - 'updated_at')::text");
+      expect(sql).toContain("sha256(convert_to((to_jsonb(testcases) - 'embedding_status' - 'embedding_content_hash' - 'embedding_queued_at' - 'updated_at')::text");
       expect(sql).toContain("AS edit_revision");
     }
     expect(query).toHaveBeenCalledTimes(2);
@@ -52,7 +52,7 @@ describe("repository partial edits — optional row-revision precondition", () =
     const f = fixture();
     await f.svc.updateTestCase(CASE, USER, { title: "Edited", expectedRevision: REVISION, customTagIds: [] });
     const [sql, values] = f.query.mock.calls.find(([sql]) => sql.includes("UPDATE testcases SET"))!;
-    expect(sql).toContain("sha256(convert_to((to_jsonb(testcases) - 'embedding_status' - 'embedding_content_hash' - 'updated_at')::text");
+    expect(sql).toContain("sha256(convert_to((to_jsonb(testcases) - 'embedding_status' - 'embedding_content_hash' - 'embedding_queued_at' - 'updated_at')::text");
     expect(sql).toContain("$37::text");
     expect(values?.[36]).toBe(REVISION);
     expect(values?.[24]).toBeNull(); // omitted Notes never get read/echoed back

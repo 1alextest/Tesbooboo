@@ -51,7 +51,7 @@ export class RagIngestionService {
   // this hook or covered by a future backfill decision.
   async enqueueTestcaseEmbedding(payload: TestcaseEmbeddingJobPayload): Promise<void> {
     await this.db
-      .query(`UPDATE testcases SET embedding_status = 'queued' WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL`, [
+      .query(`UPDATE testcases SET embedding_status = 'queued', embedding_queued_at = now() WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL`, [
         payload.testcaseId,
         payload.projectId
       ])

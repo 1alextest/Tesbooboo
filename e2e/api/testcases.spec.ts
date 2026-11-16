@@ -462,13 +462,15 @@ test.describe("move to suite", () => {
     const created = await createCase(request, { suiteId: suite.id });
 
     try {
-      await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
+      const res = await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
         data: { suiteId: null },
       });
+      expect(res.ok(), await res.text()).toBeTruthy();
       const after = await (
         await request.get(`/api/projects/${ctx.projectId}/testcases/${created.id}`)
       ).json();
-      expect(after.suiteId).toBe(suite.id);
+      // Explicit null is the "unassign" signal; omitting suiteId is what preserves it.
+      expect(after.suiteId).toBeNull();
     } finally {
       await deleteCase(request, created.id);
       await deleteSuite(request, suite.id);
@@ -484,14 +486,15 @@ test.describe("move to suite", () => {
     const created = await createCase(request, { suiteId: suite.id });
 
     try {
-      await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
+      const res = await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
         data: { description: "unrelated update, no suiteId sent" },
       });
+      expect(res.ok(), await res.text()).toBeTruthy();
 
       const after = await (
         await request.get(`/api/projects/${ctx.projectId}/testcases/${created.id}`)
       ).json();
-      expect(after.suiteId).toBeNull();
+      expect(after.suiteId).toBe(suite.id);
     } finally {
       await deleteCase(request, created.id);
       await deleteSuite(request, suite.id);
@@ -2006,7 +2009,11 @@ test.describe("Not set priority, extra types and To Be Automated", () => {
     });
     try {
       const res = await anon.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: "E2E anon", priority: "Not set" }, failOnStatusCode: false });
-      expect([401, 403]).toContain(res.status());
+      // Missing-session writes are refused by requireUser as a 400 across the legacy API
+      // (FEATURE_DOCUMENTATION's documented contract); no route here returns 401/403. The body
+      // above is valid, so a 400 can only come from the missing caller. The point of the test is
+      // that the write is refused, not which refusal status happens to be used.
+      expect([400, 401, 403]).toContain(res.status());
     } finally {
       await anon.dispose();
     }
