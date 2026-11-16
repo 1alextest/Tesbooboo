@@ -35,7 +35,7 @@ import {
   ZYRA_RU_STAGED_AWAITING,
   ZYRA_RU_TESTCASE_ONLY_COMPLETION_CLAIM
 } from "./zyra-replies-ru";
-import { ApiTokenService } from "../auth/api-token.service";
+import { ApiTokenService, normalizeApiTokenScopes } from "../auth/api-token.service";
 import { RagIngestionService } from "../rag/rag-ingestion.service";
 import { RagRetrievalService } from "../rag/rag-retrieval.service";
 import { RAG_GENERATION_CHAR_BUDGET, TESTCASE_UPDATE_THRESHOLD } from "../rag/rag.constants";
@@ -1625,15 +1625,44 @@ export class LegacyService implements OnModuleInit {
 
   async createApiKey(userId: string | null | undefined, projectId: string, body: Body) {
     const uid = this.requireUser(userId);
-    await this.requireProjectAccess(uid, projectId);
+    const project = await this.requireProjectAccess(uid, projectId);
     const name = String(body?.name || "").trim();
     if (!name) throw new BadRequestException({ error: "name is required" });
-    return this.apiTokens.issueToken(uid, projectId, name, body?.scopes);
+    const scopes = normalizeApiTokenScopes(body?.scopes);
+    // A write token is a project-wide machine credential, not a per-resource grant. The UI's
+    // authoring role and this token's scope are different decisions: a member who can edit their
+    // own cases must not mint a credential that can write every project resource. Read-only tokens
+    // remain available to any project member.
+    const role = this.normalizeRole(String(project.caller_role || ""));
+    if (scopes.includes("write") && role !== "owner" && role !== "manager") {
+      throw new ForbiddenException({
+        error: "Only project owners and managers can issue write-scoped API tokens. Ask an owner, or create a read-only token."
+      });
+    }
+    const issued = await this.apiTokens.issueToken(uid, projectId, name, scopes);
+    // Make the target explicit for the handoff: the caller must not have to guess which project,
+    // workspace or MCP path the one-time secret belongs to.
+    return {
+      ...issued,
+      projectId,
+      projectName: String(project.name || ""),
+      organizationId: String(project.organization_id || ""),
+      mcpPath: `/api/projects/${projectId}/mcp`
+    };
   }
 
   async revokeApiKey(userId: string | null | undefined, projectId: string, keyId: string) {
-    await this.requireProjectAccess(userId, projectId);
+    const uid = this.requireUser(userId);
+    const project = await this.requireProjectAccess(uid, projectId);
     if (!isUuid(keyId)) throw new NotFoundException({ error: "API key not found" });
+    const token = await this.apiTokens.issuerOf(projectId, keyId);
+    if (!token.exists) throw new NotFoundException({ error: "API key not found" });
+    const role = this.normalizeRole(String(project.caller_role || ""));
+    // A member may revoke their own token; revoking someone else's project credential is an
+    // owner/manager action. Otherwise any member could disable the project's machine integrations.
+    if (role !== "owner" && role !== "manager" && token.userId !== uid) {
+      throw new ForbiddenException({ error: "Only project owners, managers or the token's issuer can revoke this token" });
+    }
     const removed = await this.apiTokens.revokeToken(projectId, keyId);
     if (!removed) throw new NotFoundException({ error: "API key not found" });
     return { ok: true };
