@@ -1678,8 +1678,8 @@ export async function listTestCases(
   });
 }
 
-export async function getTestCase(projectId: string, testcaseId: string): Promise<Record<string, unknown>> {
-  return api(`/api/projects/${projectId}/testcases/${testcaseId}`);
+export async function getTestCase(projectId: string, testcaseId: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  return api(`/api/projects/${projectId}/testcases/${encodeURIComponent(testcaseId)}`, { signal });
 }
 
 export async function createTestCase(projectId: string, data: Record<string, unknown>): Promise<{ id: string; externalId: string; title: string; createdAt: string }> {

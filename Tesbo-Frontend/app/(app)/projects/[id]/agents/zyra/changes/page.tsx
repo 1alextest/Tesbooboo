@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { ModelDraftPreview } from "./ModelDraftPreview";
+import { ModelCaseContext } from "./ModelCaseContext";
 import { SourceBindingSettings } from "./SourceBindingSettings";
 import { ReviewCaseRunSetup } from "./ReviewCaseRunSetup";
 import { useParams } from "@/lib/routeParams";
@@ -31,6 +33,7 @@ function canonicalReviewCaseId(nodeId: string, projectId: string): string | null
 export default function ZyraChangeReviewPage() {
   const params = useParams();
   const projectId = params.id as string;
+  const caseRef = useSearchParams().get("caseId");
   const [entries, setEntries] = useState<GraphReviewHistoryRow[]>([]);
   const [cursor, setCursor] = useState<string | undefined>();
   const [loading, setLoading] = useState(true);
@@ -173,6 +176,7 @@ export default function ZyraChangeReviewPage() {
         </button>
       </div>
       <SourceBindingSettings key={projectId} projectId={projectId} />
+      {caseRef !== null && <ModelCaseContext key={`${projectId}:${caseRef}`} projectId={projectId} caseRef={caseRef} />}
       <ModelDraftPreview key={projectId} projectId={projectId} />
       <section aria-label="Manual QA verification actions" className="rounded-lg border border-[var(--border)] p-4 text-sm">
         <h2 className="font-semibold">Continue verification in existing Tesbo records</h2>

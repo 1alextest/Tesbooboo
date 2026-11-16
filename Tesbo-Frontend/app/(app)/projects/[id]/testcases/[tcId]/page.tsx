@@ -9,6 +9,7 @@ type TestCaseDetailRouteProps = {
 };
 
 export default async function TestCaseDetailPage({ params }: TestCaseDetailRouteProps) {
-  const { id } = await params;
-  redirect(`/projects/${id}/testcases`);
+  const { id, tcId } = await params;
+  // Keep the repository's existing editor as the one case-detail owner.
+  redirect(`/projects/${encodeURIComponent(id)}/testcases?caseId=${encodeURIComponent(tcId)}`);
 }

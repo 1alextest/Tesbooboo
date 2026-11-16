@@ -309,6 +309,11 @@ export default function TestCasesPage() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const requestedCaseId = searchParams.get("caseId");
+  const panelRead = useRef({ generation: 0, projectId: "" });
+  panelRead.current.projectId = params.id as string;
+  const requestedCase = useRef<string | null>(null);
+  const loadRequestedCase = useRef<((id: string) => Promise<void>) | null>(null);
   const { currentUser } = useAppData();
   const projectId = params.id as string;
   const activeSuiteId = searchParams.get("suiteId");
@@ -1017,6 +1022,9 @@ export default function TestCasesPage() {
   }
 
   async function openCreatePanel() {
+    panelRead.current.generation++;
+    clearCaseQuery();
+    setPanelLoading(false);
     setPanelError(null);
     setPanelTestcaseId(null);
     setPanelMode("create");
@@ -1025,6 +1033,9 @@ export default function TestCasesPage() {
   }
 
   async function openCreatePanelForSuite(targetSuiteId: string) {
+    panelRead.current.generation++;
+    clearCaseQuery();
+    setPanelLoading(false);
     setPanelError(null);
     setPanelTestcaseId(null);
     setPanelMode("create");
@@ -1033,6 +1044,11 @@ export default function TestCasesPage() {
   }
 
   async function openViewPanel(testcaseId: string) {
+    const state = panelRead.current, generation = ++state.generation;
+    const isCurrent = () => state.generation === generation && state.projectId === projectId;
+    requestedCase.current = `${projectId}:${testcaseId}`;
+    resetForm();
+    setPanelSuccess(null);
     setPanelError(null);
     setPanelLoading(true);
     setPanelTestcaseId(testcaseId);
@@ -1049,31 +1065,66 @@ export default function TestCasesPage() {
     setCustomFieldErrors({});
     setSelectedSourceRef(null);
     try {
-      const [data, customFields, bugs, tags] = await Promise.all([
-        getTestCase(projectId, testcaseId),
-        getCustomFieldValues(projectId, testcaseId).catch(() => []),
-        listBugs(projectId, { testcaseId }).catch(() => []),
-        getTestCaseTags(projectId, testcaseId).catch(() => []),
+      const data = await getTestCase(projectId, testcaseId);
+      if (!isCurrent()) return;
+      const canonicalId = String(data.id);
+      const [customFields, bugs, tags] = await Promise.all([
+        getCustomFieldValues(projectId, canonicalId).catch(() => []),
+        listBugs(projectId, { testcaseId: canonicalId }).catch(() => []),
+        getTestCaseTags(projectId, canonicalId).catch(() => []),
       ]);
+      if (!isCurrent()) return;
+      setPanelTestcaseId(canonicalId);
+      requestedCase.current = `${projectId}:${canonicalId}`;
+      const query = new URLSearchParams(window.location.search);
+      if (query.get("caseId") !== canonicalId) {
+        query.set("caseId", canonicalId);
+        router.replace(`${window.location.pathname}?${query}`, { scroll: false });
+      }
       fillFormFromTestCase(data);
       setPanelCustomFields(customFields);
       setCustomFieldValues(Object.fromEntries(customFields.map((f) => [f.id, f.value])));
       setPanelBugs(bugs);
       setPanelTagIds(tags.map((t) => t.id));
     } catch {
-      setPanelError("Failed to load test case details.");
+      if (isCurrent()) setPanelError("Failed to load test case details.");
     } finally {
-      setPanelLoading(false);
+      if (isCurrent()) setPanelLoading(false);
     }
   }
 
   function closePanel() {
+    panelRead.current.generation++;
+    clearCaseQuery();
+    setPanelLoading(false);
     setPanelMode("closed");
     setPanelTestcaseId(null);
     setPanelError(null);
     setPanelEditRevision(null);
     setSelectedSourceRef(null);
   }
+
+  function clearCaseQuery() {
+    requestedCase.current = null;
+    const query = new URLSearchParams(window.location.search);
+    if (query.has("caseId")) {
+      query.delete("caseId");
+      router.replace(`${window.location.pathname}${query.size ? `?${query}` : ""}`, { scroll: false });
+    }
+  }
+
+  loadRequestedCase.current = openViewPanel;
+  useEffect(() => {
+    const state = panelRead.current;
+    return () => { state.generation++; };
+  }, [projectId]);
+  useEffect(() => {
+    if (requestedCaseId === null) return;
+    const key = `${projectId}:${requestedCaseId}`;
+    if (requestedCase.current === key) return;
+    requestedCase.current = key;
+    void loadRequestedCase.current?.(requestedCaseId);
+  }, [projectId, requestedCaseId]);
 
   function clearSuiteFilters() {
     setSuiteSearch("");
@@ -2473,6 +2524,12 @@ export default function TestCasesPage() {
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
+                {panelMode === "edit" && panelTestcaseId && panelEditRevision && !panelLoading && !panelSaving && (
+                  <a href={`/projects/${projectId}/agents/zyra/changes?caseId=${encodeURIComponent(panelTestcaseId)}`}
+                    target="_blank" rel="noopener noreferrer" className="text-xs underline">
+                    Inspect saved case model draft (new tab)
+                  </a>
+                )}
                 <button
                   type="button"
                   aria-label="Close panel"
