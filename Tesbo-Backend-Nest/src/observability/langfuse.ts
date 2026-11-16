@@ -110,6 +110,12 @@ export async function startLangfuse(): Promise<void> {
     processor = spanProcessor as unknown as { forceFlush: () => Promise<void> };
     started = true;
     logger.log(`Tracing on → ${config.baseUrl} (environment: ${config.environment}).`);
+
+    // Best-effort: seed model prices for common catalog models so cost aggregates are non-zero
+    // where the instance lacks definitions (docs/langfuse-observability-plan.md §3.5). Never throws.
+    void import("./langfuse-model-prices")
+      .then(({ seedLangfuseModelPrices }) => seedLangfuseModelPrices(config))
+      .catch((err) => logger.warn(`Model price seeding skipped: ${err instanceof Error ? err.message : err}`));
   } catch (err) {
     logger.warn(`Tracing failed to start, continuing without it: ${err instanceof Error ? err.message : err}`);
     started = false;

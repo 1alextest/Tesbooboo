@@ -107,7 +107,7 @@ export class SetupService {
     await client.query("INSERT INTO platform_admins (user_id, role, granted_by) VALUES ($1, 'owner', $1)", [userId]);
   }
 
-  // eslint-disable-next-line max-lines-per-function
+   
   private async insertDemoProject(client: PoolClient, organizationId: string, userId: string): Promise<string> {
     const project = await client.query<{ id: string }>(
       `

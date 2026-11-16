@@ -311,7 +311,8 @@ export function buildMcpTools(): McpTool[] {
         // updateTestCase() takes no project argument of its own — it derives the project from the
         // row it finds by id — so the tool must check project ownership itself before calling it.
         await requireProjectOwnedRow(ctx, "testcases", testcaseId, "Test case");
-        const { testcaseId: _ignored, ...rest } = args;
+        const rest = { ...args } as Record<string, unknown>;
+        delete rest.testcaseId;
         // Same step-synonym tolerance as create_testcase — see its handler comment.
         const body = canonicalizeSeverity(
           Array.isArray(rest.steps) ? { ...rest, steps: JSON.stringify(ctx.legacy.safeSteps(rest.steps)) } : rest
@@ -1041,7 +1042,8 @@ export function buildMcpTools(): McpTool[] {
       handler: async (args, ctx) => {
         const executionId = requireString(args, "executionId");
         const { cycleId } = await requireExecutionOwner(ctx, executionId);
-        const { executionId: _ignored, ...body } = args;
+        const body = { ...args } as Record<string, unknown>;
+        delete body.executionId;
         // Same reasoning as record_execution_result: updateExecution requires a real user id.
         await ctx.legacy.updateExecution(executionId, ctx.userId, body);
         return (await ctx.legacy.executions(cycleId)).find((e) => e.id === executionId);
@@ -1090,7 +1092,8 @@ export function buildMcpTools(): McpTool[] {
           try {
             if (!executionId.trim()) throw new Error('"executionId" is required and must be a non-empty string');
             await requireExecutionOwner(ctx, executionId);
-            const { executionId: _ignored, ...body } = item;
+            const body = { ...item } as Record<string, unknown>;
+            delete body.executionId;
             await ctx.legacy.updateExecution(executionId, ctx.userId, body);
             outcomes.push({ index, executionId, ok: true });
           } catch (err) {
@@ -1222,7 +1225,8 @@ export function buildMcpTools(): McpTool[] {
         // it finds by id (requireBugAccess) — so the tool must check project ownership itself
         // before calling it, same as update_testcase/update_suite.
         await requireProjectOwnedRow(ctx, "bugs", bugId, "Bug");
-        const { bugId: _ignored, ...body } = args;
+        const body = { ...args } as Record<string, unknown>;
+        delete body.bugId;
         return ctx.legacy.updateBug(ctx.userId, bugId, body);
       }
     },

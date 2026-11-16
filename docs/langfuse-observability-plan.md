@@ -1,13 +1,14 @@
 # Langfuse integration plan — full traceability for Zyra and every other model call
 
-Status: **Phase 1 shipped, partially.** `src/observability/` (`langfuse.ts`, `ai-trace.ts`) exists and
+Status: **Phase 1 shipped, partially.** `src/observability/` (`langfuse.ts`, `ai-trace.ts`, `langfuse-model-prices.ts`) exists and
 is wired into `buildZyraChatDecision`: session/user identity, Jira context, knowledge context,
 existing-coverage, the router call, the generator call (`generateZyraChatTestcasesWithAi`), and a
-`reply-reconciliation` guardrail span are all traced today. **Not yet done**, still matching this
-doc's original Phase 1–4 scope below: model-price seeding (§3.5), the remaining call sites in §1.1
-(#2, #3, #6–9), scores/evals (Phase 3), and dashboards/alerts (Phase 4). This header was stale for a
-while — it read "no product code has been changed" after Phase 1's module had already shipped; keep
-it in sync with reality going forward rather than treating this doc as a proposal once code exists.
+`reply-reconciliation` guardrail span are all traced today. Best-effort model-price seeding for
+common catalog models is implemented at startup (§3.5). **Not yet done**, still matching this doc's
+original Phase 1–4 scope below: the remaining call sites in §1.1 (#2, #3, #6–9), scores/evals
+(Phase 3), dashboards/alerts (Phase 4), and §9 e2e coverage. This header was stale for a while —
+it read "no product code has been changed" after Phase 1's module had already shipped; keep it in
+sync with reality going forward rather than treating this doc as a proposal once code exists.
 Target instance: **self-hosted Langfuse OSS v4.17.0**, project `Tesbo Test Manager` (org `Tesbo`).
 
 Scope: end-to-end observability (traces, token/cost accounting, quality scores) over every LLM and
@@ -283,8 +284,11 @@ behaviour characterised, cost gap found. Findings are §0 and §7. No repo chang
 
 1. `src/observability/` per §3.2, registered globally, with the `NodeSDK` exporter guard. **Done.**
 2. `AppConfigService` additions (§6), inert when `LANGFUSE_ENABLED=false`. **Done.**
-3. Seed model-price definitions for the 8 unpriced models (§3.5). **Not done** — cost still computes
-   to zero for the models this catalog actually serves; still a required task, not optional.
+3. Seed model-price definitions for the 8 unpriced models (§3.5). **Done (best-effort)** —
+   `seedLangfuseModelPrices` posts known model definitions on startup (opt-out via
+   `LANGFUSE_SEED_MODEL_PRICES=false`), treating existing/conflicting definitions as non-fatal. Actual
+   cost accuracy still depends on the target instance accepting/retaining those definitions and on
+   keeping prices current.
 4. Instrument, in order: `sendZyraChatMessage` → `buildZyraChatDecision` →
    `finalizeZyraToolDecisionWithAi` → `startZyraChatPlan` / `continueZyraChatPlan` →
    `generateZyraWithProvider` → `applyZyraChatOperations`.
@@ -295,7 +299,9 @@ behaviour characterised, cost gap found. Findings are §0 and §7. No repo chang
    need its own trace, not a child of one that already ended), `applyZyraChatOperations` as its own
    `[tool]` span (its outcome is currently only visible via the reconciliation guardrail span's
    `appliedCount`/`proposedCount`, not as a distinct observation).
-5. Shutdown flush in `main.ts` (§8). Not verified as part of this pass — check before relying on it.
+5. Shutdown flush in `main.ts` (§8). **Implemented** — `main.ts` registers `SIGTERM`/`SIGINT` handlers
+   that call `stopLangfuse()` (which force-flushes then shuts down the SDK). Not yet validated in a
+   live traced runtime session.
 6. e2e coverage per §9 (local capture stub against the real HTTP stack, fail-closed base URL,
    Langfuse-unreachable failure isolation, etc.): **still not written, not run.** What this pass did
    add is `src/observability/ai-trace.spec.ts` — previously nonexistent (§3.2 named

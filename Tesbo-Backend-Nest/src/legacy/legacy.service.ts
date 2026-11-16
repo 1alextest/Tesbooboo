@@ -44,8 +44,7 @@ import {
   markdownToNotionRichText,
   notionPageTitle,
   notionPropertiesMarkdown,
-  notionTicketFields,
-  renderNotionProperties
+  notionTicketFields
 } from "../integration-sync/notion-render";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import { RequestCacheService } from "../request-cache/request-cache.service";
@@ -4555,7 +4554,7 @@ export class LegacyService implements OnModuleInit {
       total = Number(counted.rows[0]?.n || 0);
     }
     // total_count is transport for the header, not part of a test case.
-    return { rows: res.rows.map(({ total_count, ...row }) => toCamel(row)), total };
+    return { rows: res.rows.map(({ total_count: _totalCount, ...row }) => toCamel(row)), total };
   }
 
   /**
@@ -8771,7 +8770,7 @@ export class LegacyService implements OnModuleInit {
   static displayFileName(originalName: string, max = 255): string {
     const base = path
       .basename(String(originalName ?? "").replace(/\\/g, "/"))
-      // eslint-disable-next-line no-control-regex
+       
       .replace(/[\u0000-\u001f\u007f]/g, "")
       .trim();
     if (!base || base === "." || base === "..") return "upload";
@@ -15486,7 +15485,7 @@ export class LegacyService implements OnModuleInit {
       // cleared now the new reply carries it, so the original message reads as its first attempt again.
       await this.db.query("UPDATE zyra_chat_messages SET status = 'resumed', trace = NULL WHERE id = $1 AND status = 'resuming'", [messageId]);
       onSettled?.({ ok: true, payload: { message: item, session: await this.zyraChatSession(projectId, userId, sessionId) } });
-    } catch (err) {
+    } catch {
       // Anything that throws here (not a timeout — those are caught inside buildZyraChatDecision and
       // returned as another timed-out decision, not thrown) leaves this checkpoint resumable again
       // rather than stranding it in 'resuming' forever. Still counts toward the cap: the user's
@@ -17554,7 +17553,8 @@ export class LegacyService implements OnModuleInit {
         // A chunk numbers its scenarios 1..size; renumber against the whole batch. A number outside
         // the chunk is dropped, so the batch outcome counts it as unmapped rather than misattributing it.
         const scenario = typeof draft.scenario === "number" && draft.scenario >= 1 && draft.scenario <= size ? draft.scenario + offset : undefined;
-        const { scenario: _drop, ...rest } = draft;
+        const rest = { ...(draft as Record<string, unknown>) };
+        delete rest.scenario;
         drafts.push(scenario === undefined ? rest : { ...rest, scenario });
       }
       // Kept aligned with this chunk's drafts, so a later chunk's matches stay at its own drafts' indexes.
@@ -23302,7 +23302,6 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // matter less here, but they are kept correct anyway.
   private detectZyraChatIntent(message: string): ZyraChatIntent {
     const lower = message.toLowerCase();
-    const jiraWords = /\b(jira|ticket|tickets|story|stories|issue|issues)\b/.test(lower);
     const testcaseWords = /\b(testcase|test case|testcases|test cases|case|cases|coverage)\b/.test(lower);
     const createWords = /\b(creat|generat|draft|prepar|author)\w*\b|\b(add|adds|added|adding|write|writes|writing|wrote|make|makes|making|new)\b/.test(lower);
     const updateWords = /\b(updat|chang|revis|edit|modif|improv)\w*\b|\b(mark|marks|marked)\b/.test(lower);

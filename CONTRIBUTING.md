@@ -6,14 +6,17 @@ Tesbo Test Manager is exclusively developed and maintained by QAble Testlab.
 
 ## Development
 
-Tesbo Test Manager is a monorepo with three main services:
+Tesbo Test Manager is a monorepo with these main areas:
 
 - `Tesbo-Frontend/` - Next.js frontend
-- `Tesbo-Backend/` - Java 17 backend
+- `Tesbo-Backend-Nest/` - NestJS/TypeScript API
+- `e2e/` - Playwright end-to-end suite (API + UI)
+- `sdk/playwright-reporter/` - Playwright reporter SDK
 
 Before opening a pull request, please run the relevant checks for the area you changed:
 
 ```bash
+# Frontend
 cd Tesbo-Frontend
 npm install
 npm run lint
@@ -21,9 +24,22 @@ npm run build
 ```
 
 ```bash
-cd Tesbo-Backend
-mvn test
+# Backend
+cd Tesbo-Backend-Nest
+npm install
+npm run lint
+npm run typecheck
+npm test
 ```
+
+```bash
+# E2E (impacted specs only; follow CLAUDE.md / repo test workflow)
+cd e2e
+npm install
+npx playwright test --list
+```
+
+For behavior changes, follow the repository's end-to-end testing and database-safety rules in [CLAUDE.md](CLAUDE.md).
 
 ## Pull Requests
 
