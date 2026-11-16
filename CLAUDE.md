@@ -8,6 +8,23 @@ The compose defaults of `:1010`/`:1011` belong to the open-source stack, not thi
 
 ---
 
+## Engineering principles and scope → AGENTS.md
+
+[AGENTS.md](AGENTS.md) is the canonical owner of the shared engineering principles: reuse-first and
+capability discovery, upstream/downstream mapping, one authoritative owner per fact, truthful failures,
+authorization boundaries, boundary-level testing, delivery-versus-verification, right-sizing,
+findings-without-scope-creep, preventive lessons, dependency evaluation and application neutrality.
+Read it before design or implementation work.
+
+The detailed scope classification (coupled / defect on path / adjacent / new initiative), the
+no-unsanctioned-pivot rule and the red-run rules are in
+[docs/agent-scope-discipline.md](docs/agent-scope-discipline.md).
+
+This file owns the repo-specific mandates that follow: the database rule, the Basecamp flow and the
+e2e coverage mandate. Do not duplicate the shared principles here.
+
+---
+
 ## MANDATORY: the database is always the `DATABASE_URL` in the repo-root `.env`
 
 **Never point anything at a local Postgres, for any reason.** This covers the backend, the migrator,
