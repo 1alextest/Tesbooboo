@@ -278,6 +278,62 @@ test.describe("zyra / agents (UI)", () => {
     await expect(qa.getByTestId("zyra-source-binding")).toHaveCount(0);
   });
 
+  test("source binding pending save preserves submitted fields and recovers from native refusal", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId;
+    const before = Number(scalar(`SELECT COUNT(*)::int FROM project_source_bindings
+      WHERE project_id=${literal(projectId)};`));
+    const page = await open(browser, "/agents/zyra/changes", "owner");
+    const settings = page.getByTestId("zyra-source-binding");
+    await settings.locator("summary").click();
+    const repository = settings.getByLabel("Source repository identity");
+    const checkout = settings.getByLabel("Approved checkout key");
+    const ref = settings.getByLabel("Source Git ref");
+    const prefixes = settings.getByLabel("Source selection prefixes");
+    const enabled = settings.getByRole("checkbox", { name: "Enable configured source capture" });
+    await repository.fill("org/repo");
+    await checkout.fill("not-approved");
+    await ref.fill("development");
+    await prefixes.fill("src");
+    await enabled.check();
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const intercepted = new Promise<void>(resolve => { started = resolve; });
+    let attempts = 0;
+    await page.route(`**/api/projects/${projectId}/agents/zyra/changes/source-binding`, async route => {
+      if (route.request().method() !== "POST") return route.continue();
+      attempts++;
+      // Exercise the genuine native refusal. Only response timing is controlled;
+      // no approved checkout or successful persistence is fabricated.
+      const response = await route.fetch();
+      expect(response.status()).toBe(400);
+      expect(route.request().postDataJSON()).toEqual({ repositoryId: "org/repo",
+        checkoutKey: "not-approved", refName: "development", selectionPrefixes: ["src"], enabled: true });
+      started();
+      await gate;
+      await route.fulfill({ response });
+    });
+    try {
+      await settings.getByRole("button", { name: "Save source binding", exact: true }).dblclick();
+      await intercepted;
+      await expect(settings.getByRole("button", { name: "Saving source binding…" })).toBeDisabled();
+      for (const input of [repository, checkout, ref, prefixes, enabled]) await expect(input).toBeDisabled();
+      expect(attempts).toBe(1);
+      release();
+      await expect(settings.getByRole("alert")).toContainText("administrator-approved checkout");
+      for (const input of [repository, checkout, ref, prefixes, enabled]) await expect(input).toBeEnabled();
+      await expect(repository).toHaveValue("org/repo");
+      await expect(checkout).toHaveValue("not-approved");
+      await expect(ref).toHaveValue("development");
+      await expect(prefixes).toHaveValue("src");
+      await expect(enabled).toBeChecked();
+      await settings.getByRole("button", { name: "Save source binding", exact: true }).click();
+      await expect.poll(() => attempts).toBe(2);
+      await expect(settings.getByRole("button", { name: "Save source binding", exact: true })).toBeEnabled();
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM project_source_bindings
+        WHERE project_id=${literal(projectId)};`))).toBe(before);
+    } finally { release(); await page.unrouteAll({ behavior: "wait" }); }
+  });
+
   test("change history ignores late pagination replies and retains the latest authorized page", async ({ browser }) => {
     const projectId = tenant!.mainProjectId, stamp = Date.now().toString();
     // Real committed baseline rows, not invented case/run/execution records. Only the
