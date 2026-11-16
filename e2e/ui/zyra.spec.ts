@@ -100,6 +100,95 @@ test.describe("zyra / agents (UI)", () => {
     return { page, panel, editor: panel.getByLabel("Draft model JSON", { exact: true }) };
   }
 
+  test("model draft case context round trip retains the native case and unsaved editor", async ({ browser }, testInfo) => {
+    const projectId = tenant!.mainProjectId;
+    const created = await api.post(`/api/projects/${projectId}/testcases`, { data: {
+      title: `E2E model context ${Date.now()}`, description: "Saved description", preconditions: "Saved precondition",
+      postconditions: "Saved postcondition", steps: [{ action: "Saved action", expectedResult: "Saved expectation" }]
+    } });
+    expect(created.ok()).toBeTruthy(); const tc = await created.json();
+    const snapshot = () => scalar(`SELECT to_jsonb(t)::text FROM testcases t WHERE id=${literal(tc.id)};`);
+    const before = snapshot(), records = modelUiRecords(projectId);
+    try {
+      // The compatibility detail route must retain the readable case reference.
+      const editorPage = await open(browser, `/testcases/${tc.externalId}`, "qa");
+      const edit = editorPage.locator("aside").filter({ has: editorPage.locator("#panel-form-global") });
+      await expect(edit.getByRole("heading", { name: tc.title, exact: true })).toBeVisible();
+      const title = edit.locator('input[required]');
+      await title.fill("Unsaved local title");
+      const link = edit.getByRole("link", { name: "Inspect saved case model draft (new tab)", exact: true });
+      await expect(link).toHaveAttribute("target", "_blank");
+      const opened = editorPage.context().waitForEvent("page"); await link.click();
+      const inspector = await opened;
+      const context = inspector.getByRole("region", { name: "Saved test case context", exact: true });
+      await expect(context.getByRole("heading", { name: `${tc.externalId} · ${tc.title}`, exact: true })).toBeVisible();
+      await expect(context).toContainText("unsaved edits in another tab are not included");
+      await expect(context).toContainText("does not map or approve the model");
+      await context.getByText("Inspect saved case content", { exact: true }).click();
+      await expect(context).toContainText("Saved action"); await expect(context).toContainText("Saved expectation");
+      await expect(context).toContainText("Saved postcondition");
+      await expect(title).toHaveValue("Unsaved local title");
+      const preview = inspector.getByTestId("model-draft-preview"); await preview.locator("summary").click();
+      await expect(preview.getByLabel("Draft model JSON", { exact: true })).toHaveValue("");
+      await preview.getByRole("button", { name: "Load example draft" }).click();
+      await preview.getByRole("button", { name: "Preview draft", exact: true }).click();
+      await expect(preview.getByRole("region", { name: "Draft state graph", exact: true })).toBeVisible();
+      await context.getByRole("button", { name: "Refresh saved case context", exact: true }).click();
+      await expect(context.getByRole("heading", { name: `${tc.externalId} · ${tc.title}`, exact: true })).toBeVisible();
+      await expect(preview.getByRole("region", { name: "Draft state graph", exact: true })).toBeVisible();
+      await testInfo.attach("model-case-context", { body: await context.screenshot(), contentType: "image/png" });
+      await context.getByRole("link", { name: "Return to saved test case", exact: true }).click();
+      await expect(inspector.locator("aside").filter({ has: inspector.locator("#panel-form-global") })
+        .getByRole("heading", { name: tc.title, exact: true })).toBeVisible();
+      await expect(title).toHaveValue("Unsaved local title");
+      expect(snapshot()).toBe(before); expect(modelUiRecords(projectId)).toBe(records);
+    } finally { await api.delete(`/api/projects/${projectId}/testcases/${tc.id}`, { failOnStatusCode: false }); }
+  });
+
+  test("model draft case context refuses foreign, missing and malformed references without leaking content", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, other = tenant!.secondProjectId;
+    const created = await api.post(`/api/projects/${other}/testcases`, { data: { title: `Foreign model case ${Date.now()}` } });
+    expect(created.ok()).toBeTruthy(); const tc = await created.json();
+    try {
+      const page = await open(browser, `/agents/zyra/changes?caseId=${tc.id}`, "qa");
+      const context = page.getByRole("region", { name: "Saved test case context", exact: true });
+      await expect(context.getByRole("alert")).toContainText("unavailable in this project");
+      await expect(context).not.toContainText(tc.title);
+      await expect(context.getByRole("link", { name: "Return to saved test case" })).toHaveCount(0);
+      for (const ref of ["missing-case-reference", "<svg/onload=alert(1)>", ""]) {
+        await page.goto(`${env.webBaseUrl}/projects/${projectId}/agents/zyra/changes?caseId=${encodeURIComponent(ref)}`);
+        await expect(context.getByRole("alert")).toContainText("unavailable in this project");
+        await expect(context).not.toContainText(tc.title);
+      }
+    } finally { await api.delete(`/api/projects/${other}/testcases/${tc.id}`, { failOnStatusCode: false }); }
+  });
+
+  test("model draft case context late case reads cannot overwrite a newly opened native create panel", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId;
+    const created = await api.post(`/api/projects/${projectId}/testcases`, { data: { title: `Held saved case ${Date.now()}` } });
+    expect(created.ok()).toBeTruthy(); const tc = await created.json();
+    const page = await open(browser, "/testcases", "qa");
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(r => { release = r; }), held = new Promise<void>(r => { started = r; });
+    await page.route(`**/api/projects/${projectId}/testcases/${tc.id}`, async route => {
+      const response = await route.fetch(); started(); await gate; await route.fulfill({ response });
+    });
+    try {
+      await page.getByRole("button", { name: tc.title, exact: true }).click(); await held;
+      await page.locator("aside").getByRole("button", { name: "Close panel", exact: true }).click();
+      await page.getByRole("button", { name: "Add test case", exact: true }).first().click();
+      const title = page.getByPlaceholder("Describe what this test case validates");
+      await title.fill("New unsaved case");
+      const response = page.waitForResponse(r => r.url().endsWith(`/testcases/${tc.id}`) && r.request().method() === "GET");
+      release(); await (await response).finished();
+      // Let the browser process the completed native reply before inspecting the new form.
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await expect(title).toHaveValue("New unsaved case");
+      await expect(page.getByRole("link", { name: "Inspect saved case model draft (new tab)" })).toHaveCount(0);
+    } finally { release(); await page.unrouteAll({ behavior: "wait" });
+      await api.delete(`/api/projects/${projectId}/testcases/${tc.id}`, { failOnStatusCode: false }); }
+  });
+
   test("model draft preview UI inspects real drafts with honest diagnostics, keyboard access and no saved records", async ({ browser }, testInfo) => {
     const projectId = tenant!.mainProjectId, before = modelUiRecords(projectId);
     const { page, panel, editor } = await openModelUi(browser);
