@@ -172,7 +172,7 @@ export default function ZyraChangeReviewPage() {
           {capturing ? "Capturing…" : "Capture configured source"}
         </button>
       </div>
-      <SourceBindingSettings projectId={projectId} />
+      <SourceBindingSettings key={projectId} projectId={projectId} />
       <ModelDraftPreview key={projectId} projectId={projectId} />
       <section aria-label="Manual QA verification actions" className="rounded-lg border border-[var(--border)] p-4 text-sm">
         <h2 className="font-semibold">Continue verification in existing Tesbo records</h2>

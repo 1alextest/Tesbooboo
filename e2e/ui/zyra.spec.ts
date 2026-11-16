@@ -311,7 +311,7 @@ test.describe("zyra / agents (UI)", () => {
     await expect(qa.getByTestId("zyra-source-binding")).toHaveCount(0);
   });
 
-  test("source binding pending save preserves submitted fields and recovers from native refusal", async ({ browser }) => {
+  test("source binding pending save preserves submitted fields and recovers from native refusal", async ({ browser }, testInfo) => {
     const projectId = tenant!.mainProjectId;
     const before = Number(scalar(`SELECT COUNT(*)::int FROM project_source_bindings
       WHERE project_id=${literal(projectId)};`));
@@ -350,6 +350,7 @@ test.describe("zyra / agents (UI)", () => {
       await intercepted;
       await expect(settings.getByRole("button", { name: "Saving source binding…" })).toBeDisabled();
       for (const input of [repository, checkout, ref, prefixes, enabled]) await expect(input).toBeDisabled();
+      await testInfo.attach("source-binding-pending-save", { body: await settings.screenshot(), contentType: "image/png" });
       expect(attempts).toBe(1);
       release();
       await expect(settings.getByRole("alert")).toContainText("administrator-approved checkout");
@@ -560,7 +561,8 @@ test.describe("zyra / agents (UI)", () => {
     await expect(page.getByText("No committed graph observations are available for this project.")).toBeVisible();
     await expect(page.getByText(/no case is failed, executed or approved/i)).toBeVisible();
     await page.getByRole("button", { name: "Capture configured source" }).click();
-    await expect(page.getByRole("alert")).toBeVisible();
+    // Next also exposes a route-announcer alert; assert the native refusal itself.
+    await expect(page.getByText("Project source binding is not enabled or configured", { exact: true })).toBeVisible();
     // No approved checkout exists in this disposable test tenant; don't
     // fabricate one or claim capture success.
     await expect(page.getByText("No committed graph observations are available for this project.")).toBeVisible();

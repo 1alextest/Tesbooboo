@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   getZyraGraphSourceBinding, setZyraGraphSourceBinding,
   type GraphSourceBinding
@@ -23,11 +23,18 @@ export function SourceBindingSettings({ projectId }: { projectId: string }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const lifetime = useRef<{ generation: number; attempt: object | null }>({ generation: 0, attempt: null });
 
   useEffect(() => {
     let alive = true;
+    const state = lifetime.current;
+    state.generation++;
+    state.attempt = null;
     setLoading(true);
     setAuthorized(false);
+    setSaving(false);
+    setNotice(null);
+    setError(null);
     void getZyraGraphSourceBinding(projectId).then((response) => {
       if (!alive) return;
       setAuthorized(true);
@@ -47,7 +54,7 @@ export function SourceBindingSettings({ projectId }: { projectId: string }) {
         setError(message);
       }
     }).finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
+    return () => { alive = false; state.generation++; };
   }, [projectId]);
 
   if (loading) return null;
@@ -58,6 +65,14 @@ export function SourceBindingSettings({ projectId }: { projectId: string }) {
   }
 
   async function save() {
+    // Own one submitted snapshot until its response settles. A second event
+    // can arrive before React commits the disabled state.
+    const state = lifetime.current;
+    if (state.attempt) return;
+    const generation = state.generation;
+    const attempt = {};
+    state.attempt = attempt;
+    const isCurrent = () => state.generation === generation && state.attempt === attempt;
     setSaving(true);
     setNotice(null);
     setError(null);
@@ -69,6 +84,7 @@ export function SourceBindingSettings({ projectId }: { projectId: string }) {
           : []
       };
       const response = await setZyraGraphSourceBinding(projectId, data);
+      if (!isCurrent()) return;
       setConfigured(response.configured);
       if (response.binding) {
         setForm(response.binding);
@@ -78,14 +94,19 @@ export function SourceBindingSettings({ projectId }: { projectId: string }) {
         ? "Approved source binding saved. Capture still requires a valid server checkout."
         : "Source binding saved as disabled; graph capture is unavailable until enabled.");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Source binding could not be saved");
-    } finally { setSaving(false); }
+      if (isCurrent()) setError(cause instanceof Error ? cause.message : "Source binding could not be saved");
+    } finally {
+      if (isCurrent()) {
+        state.attempt = null;
+        setSaving(false);
+      }
+    }
   }
 
   return (
     <details className="rounded-lg border border-[var(--border)] p-4 text-sm" data-testid="zyra-source-binding">
       <summary className="cursor-pointer font-semibold">Project source binding (owners)</summary>
-      <div className="mt-3 space-y-3">
+      <fieldset disabled={saving} aria-label="Project source binding settings" className="mt-3 min-w-0 space-y-3">
         <p className="text-[var(--muted)]">
           {configured ? "A project source binding exists." : "No project source binding has been configured."}
           {" "}Only an approved server checkout key can be used. Filesystem roots and credentials
@@ -126,7 +147,7 @@ export function SourceBindingSettings({ projectId }: { projectId: string }) {
           className="rounded border border-[var(--border)] px-4 py-2 disabled:opacity-60">
           {saving ? "Saving source binding…" : "Save source binding"}
         </button>
-      </div>
+      </fieldset>
     </details>
   );
 }
