@@ -9,7 +9,7 @@ import { EmailService } from "../auth/email.service";
 import { PasswordService } from "../auth/password.service";
 import { AppConfigService } from "../config/app-config.service";
 import { DatabaseService } from "../database/database.service";
-import { endZyraTurn, recordExistingCoverage, recordGeneration, recordJiraContext, recordKnowledgeContext, recordReconciliation, startZyraTurn, type TurnHandle } from "../observability/ai-trace";
+import { endZyraTurn, recordExistingCoverage, recordGeneration, recordJiraContext, recordKnowledgeContext, recordReconciliation, recordStandaloneGeneration, startZyraTurn, type TurnHandle } from "../observability/ai-trace";
 import { StorageService } from "../storage/storage.service";
 import { encryptSecret, decryptSecret } from "../common/crypto.util";
 import { externallyReachableBaseUrl } from "../common/external-url.util";
@@ -20405,7 +20405,14 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // Plain-text completion for internal note-taking (memory summarization) — unlike
   // zyraChatWithOpenAi/zyraChatWithAnthropic this does not force a JSON response shape,
   // since the caller wants a short prose/bullet answer, not a structured chat decision.
-  private async summarizeForZyraMemory(provider: string, model: string, key: Body, prompt: string): Promise<string> {
+  private async summarizeForZyraMemory(
+    provider: string,
+    model: string,
+    key: Body,
+    prompt: string,
+    traceCtx?: { projectId?: string; userId?: string | null }
+  ): Promise<string> {
+    const traceSeedBase = `zyra:memory-summary:${traceCtx?.projectId || "unknown"}:${Date.now()}`;
     try {
       if (providerWire(provider) === "anthropic") {
         const chatUrl = normalizeAnthropicMessagesUrlFor(provider, key.base_url);
@@ -20419,7 +20426,23 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           if (!res.ok) continue;
           const data = await res.json() as Body;
           const text = normalizeJsonArray(data.content).map((item) => item?.text || "").join("\n").trim();
-          if (text) return text;
+          if (text) {
+            void recordStandaloneGeneration({
+              traceSeed: `${traceSeedBase}:${candidate}`,
+              name: "zyra.memory.summarize",
+              provider,
+              model: candidate,
+              input: { prompt },
+              output: text,
+              usage: data.usage ? {
+                input: Number(data.usage.input_tokens || 0),
+                output: Number(data.usage.output_tokens || 0),
+                cached: Number(data.usage.cache_read_input_tokens || 0) || undefined
+              } : undefined,
+              metadata: { projectId: String(traceCtx?.projectId || ""), userId: String(traceCtx?.userId || "") }
+            });
+            return text;
+          }
         }
         return "";
       }
@@ -20431,8 +20454,34 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       });
       if (!res.ok) return "";
       const data = await res.json() as Body;
-      return String(data.choices?.[0]?.message?.content || "").trim();
-    } catch {
+      const text = String(data.choices?.[0]?.message?.content || "").trim();
+      if (text) {
+        void recordStandaloneGeneration({
+          traceSeed: `${traceSeedBase}:${model}`,
+          name: "zyra.memory.summarize",
+          provider,
+          model,
+          input: { prompt },
+          output: text,
+          usage: data.usage ? {
+            input: Number(data.usage.prompt_tokens || 0),
+            output: Number(data.usage.completion_tokens || 0),
+            cached: Number(data.usage.prompt_tokens_details?.cached_tokens || 0) || undefined
+          } : undefined,
+          metadata: { projectId: String(traceCtx?.projectId || ""), userId: String(traceCtx?.userId || "") }
+        });
+      }
+      return text;
+    } catch (err) {
+      void recordStandaloneGeneration({
+        traceSeed: traceSeedBase,
+        name: "zyra.memory.summarize",
+        provider,
+        model,
+        input: { prompt },
+        errorMessage: err instanceof Error ? err.message : String(err),
+        metadata: { projectId: String(traceCtx?.projectId || ""), userId: String(traceCtx?.userId || "") }
+      });
       return "";
     }
   }
@@ -20464,7 +20513,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       `User: ${params.userMessage}`,
       `Result: ${params.outcome}`
     ].join("\n");
-    const summary = (await this.summarizeForZyraMemory(params.provider, params.model, params.key, prompt))
+    const summary = (await this.summarizeForZyraMemory(params.provider, params.model, params.key, prompt, { projectId: params.projectId, userId: params.userId }))
       .split("\n").map((line) => line.trim()).filter(Boolean).slice(0, 6).join("\n");
     const entry = summary || `- ${params.userMessage.slice(0, 200)}\n- ${params.outcome.slice(0, 200)}`;
     await this.rememberZyraMemory(params.projectId, params.userId, entry);
