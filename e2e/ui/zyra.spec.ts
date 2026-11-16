@@ -165,7 +165,9 @@ test.describe("zyra / agents (UI)", () => {
       })).toBeVisible();
       await expect(context).toContainText("This reference does not map or approve the model");
       await context.getByRole("link", { name: "Return to saved test case" }).click();
-      await expect(page.locator("aside").getByRole("heading", { name: tc.title, exact: true })).toBeVisible();
+      await expect(page.locator("aside").filter({
+        has: page.locator("#panel-form-global")
+      }).getByRole("heading", { name: tc.title, exact: true })).toBeVisible();
     } finally {
       await api.delete(`/api/projects/${projectId}/testcases/${tc.id}`, { failOnStatusCode: false });
     }
