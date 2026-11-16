@@ -14,7 +14,10 @@ function fieldControl(page: Page, label: string): Locator {
   );
 }
 
-test("stale editor save retains unsaved Notes until an explicit reload and review", async ({ page, request }) => {
+test("stale editor save retains unsaved Notes until an explicit reload and review", async ({ page }) => {
+  // UI project's default request context points at the web host; this test
+  // needs the real API and the same authorized session used by the browser.
+  const request = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
   const title = `E2E conflicting Notes ${Date.now()}`;
   const createdResponse = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
     data: { title, attachments: "Original Notes" }
@@ -54,6 +57,7 @@ test("stale editor save retains unsaved Notes until an explicit reload and revie
     expect(saved.id).toBe(created.id);
   } finally {
     await request.delete(url, { failOnStatusCode: false });
+    await request.dispose();
   }
 });
 
@@ -559,7 +563,9 @@ test.describe("suite name validation and error display (UI)", () => {
 
       await page.goto(`/projects/${ctx.projectId}/testcases`);
       await page.getByRole("button", { name: suiteName, exact: true }).hover();
-      await page.getByTitle("Rename suite").click();
+      // Parent and child both expose this action. Scope to the selected child
+      // suite's row so the test cannot rename a different suite.
+      await childRow.locator("..").getByTitle("Rename suite").click();
 
       const nameInput = page.getByPlaceholder("Enter suite name");
       await expect(nameInput).toHaveValue(suiteName);
@@ -1073,7 +1079,12 @@ test.describe("test case repository table and detail panel — Context column", 
       await page.locator("label", { hasText: "Context" }).locator('input[type="checkbox"]').click();
       await columnsButton.click();
 
-      await page.getByRole("button", { name: "Context used (1)" }).click();
+      // Multiple matching badges can exist outside the filtered row. Target
+      // the citation of THIS saved case, not an unrelated row or drawer.
+      const caseRow = page.getByRole("row").filter({
+        has: page.getByRole("button", { name: `${marker} with citation`, exact: true })
+      });
+      await caseRow.getByRole("button", { name: "Context used (1)" }).click();
       await page.getByRole("button", { name: cited.title, exact: false }).click();
 
       const drawer = page.locator('div[role="presentation"]').last();
@@ -1215,10 +1226,10 @@ test.describe("Not set priority and the added Type / Automation Type values", ()
     let cycleId = "";
     try {
       const notSet = await (
-        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker NotSet ${stamp}`, priority: "Not set", type: "Exploratory" } })
+        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker NotSet ${stamp}`, priority: "Not set", type: "Exploratory", status: "Approved" } })
       ).json();
       const p1 = await (
-        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker P1 ${stamp}`, priority: "P1" } })
+        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker P1 ${stamp}`, priority: "P1", status: "Approved" } })
       ).json();
       caseIds.push(notSet.id, p1.id);
       const cycle = await (
