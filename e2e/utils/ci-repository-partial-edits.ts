@@ -46,7 +46,7 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
   // Keep EVERY raw history row and require its prefix to survive. Count an additional row as
   // bookkeeping only when adjacent snapshots/live content agree on ALL non-bookkeeping fields.
   // In particular, suite/owner/status/body/attribution/search-vector are never excluded.
-  const domain = (row: Record<string, unknown>) => Object.fromEntries(Object.entries(row).filter(([key]) => !["embedding_status", "embedding_content_hash", "updated_at"].includes(key)));
+  const domain = (row: Record<string, unknown>) => Object.fromEntries(Object.entries(row).filter(([key]) => !["embedding_status", "embedding_content_hash", "embedding_queued_at", "updated_at"].includes(key)));
   function expectHistory(before: Awaited<ReturnType<typeof caseState>>, after: Awaited<ReturnType<typeof caseState>>, changes: number, actor?: string) {
     expect(after.versions.slice(0, before.versions.length)).toEqual(before.versions);
     expect(after.versions.map((version) => version.version)).toEqual(after.versions.map((_, index) => index + 1));

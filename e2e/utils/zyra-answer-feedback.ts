@@ -50,12 +50,11 @@ export async function seedAnswerRepository(request: APIRequestContext, base: str
   } });
   expect(created.status(), await created.text()).toBe(201);
   const caseId = (await created.json()).id;
-  // Same queued->pending + prior queued-version boundary established by the review-close smoke.
+  // Same queued->pending boundary established by the review-close smoke. V148 no longer records
+  // the transient queued state in testcase_versions, so embedding_queued_at is the durable signal.
   await expect.poll(async () => {
     const snapshot = await state();
-    return snapshot.cases.some((row) => row.id === caseId && row.embedding_status === "pending") &&
-      snapshot.history.some((version) => version.testcase_id === caseId &&
-        (version.snapshot as Record<string, unknown>)?.embedding_status === "queued");
+    return snapshot.cases.some((row) => row.id === caseId && row.embedding_status === "pending" && row.embedding_queued_at != null);
   }, { message: "keyless fixture embedding bookkeeping must finish before the immutable baseline" }).toBe(true);
 }
 
