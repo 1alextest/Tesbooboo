@@ -381,6 +381,47 @@ export function recordGeneration(
  * turn. It lands under the same trace either way; a viewer sees it start after the root span's own
  * end time, which is a cosmetic ordering quirk, not a correctness one.
  */
+/**
+ * Record a generation that is not part of an interactive Zyra turn (e.g. integration sync decision
+ * summaries, background jobs). Creates/joins a trace by deterministic seed, never throws.
+ */
+export async function recordStandaloneGeneration(ctx: {
+  traceSeed: string;
+  name: string;
+  provider: string;
+  model: string;
+  input?: unknown;
+  output?: unknown;
+  usage?: { input?: number; output?: number; cached?: number };
+  errorMessage?: string;
+  metadata?: Record<string, string>;
+}): Promise<void> {
+  if (!isTracingEnabled()) return;
+  try {
+    const { startObservation, createTraceId } = await import("@langfuse/tracing");
+    const traceId = await createTraceId(ctx.traceSeed);
+    const span = startObservation(
+      ctx.name,
+      {
+        model: ctx.model,
+        input: ctx.input,
+        output: ctx.errorMessage ? { error: ctx.errorMessage, ...(ctx.output !== undefined ? { output: ctx.output } : {}) } : ctx.output,
+        ...(ctx.usage ? { usageDetails: { input: ctx.usage.input ?? 0, output: ctx.usage.output ?? 0 } } : {}),
+        metadata: {
+          provider: ctx.provider,
+          ...(ctx.usage?.cached ? { cachedInputTokens: String(ctx.usage.cached) } : {}),
+          ...(ctx.metadata || {})
+        },
+        ...(ctx.errorMessage ? { level: "ERROR", statusMessage: shorten(ctx.errorMessage) } : {})
+      },
+      { asType: "generation", parentSpanContext: { traceId, spanId: "0000000000000001", traceFlags: 1 } }
+    ) as unknown as Observation;
+    span.end();
+  } catch (err) {
+    logger.warn(`recordStandaloneGeneration failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 export async function recordReconciliation(
   ctx: { messageId: string; sessionId: string; projectId: string; userId?: string | null },
   data: {
