@@ -8,7 +8,11 @@ import { parseSteps } from "@/lib/reviewBoard";
 /** A current native case read, never a model mapping, snapshot or requirements oracle. */
 export function ModelCaseContext({ projectId, caseRef }: { projectId: string; caseRef: string }) {
   const [record, setRecord] = useState<Record<string, unknown> | null>(null);
-  const validRef = /^[A-Za-z0-9_-]{1,100}$/.test(caseRef);
+  // Native case IDs may include punctuation (for example QA.CASE-12).
+  // Enforce the real no-whitespace/controls contract, not an invented narrower
+  // alias vocabulary. getTestCase URL-encodes the reference and scopes it by project.
+  const validRef = caseRef.length > 0 && caseRef.length <= 100 &&
+    !/[\s\u0000-\u001f\u007f]/.test(caseRef);
   const [error, setError] = useState(!validRef);
   const [retry, setRetry] = useState(0);
   useEffect(() => {

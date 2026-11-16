@@ -145,6 +145,32 @@ test.describe("zyra / agents (UI)", () => {
     } finally { await api.delete(`/api/projects/${projectId}/testcases/${tc.id}`, { failOnStatusCode: false }); }
   });
 
+  test("model draft case context resolves a canonical punctuation-bearing case ID", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId;
+    const created = await api.post(`/api/projects/${projectId}/testcases`, {
+      data: { title: `Model context punctuated ID ${Date.now()}` }
+    });
+    expect(created.ok()).toBeTruthy();
+    const tc = await created.json();
+    const externalId = `QA.CASE-${Date.now().toString().slice(-8)}`;
+    try {
+      const updated = await api.put(`/api/projects/${projectId}/testcases/${tc.id}`, {
+        data: { externalId }, failOnStatusCode: false
+      });
+      expect(updated.ok(), await updated.text()).toBeTruthy();
+      const page = await open(browser, `/agents/zyra/changes?caseId=${encodeURIComponent(externalId)}`, "qa");
+      const context = page.getByRole("region", { name: "Saved test case context", exact: true });
+      await expect(context.getByRole("heading", {
+        name: `${externalId} · ${tc.title}`, exact: true
+      })).toBeVisible();
+      await expect(context).toContainText("This reference does not map or approve the model");
+      await context.getByRole("link", { name: "Return to saved test case" }).click();
+      await expect(page.locator("aside").getByRole("heading", { name: tc.title, exact: true })).toBeVisible();
+    } finally {
+      await api.delete(`/api/projects/${projectId}/testcases/${tc.id}`, { failOnStatusCode: false });
+    }
+  });
+
   test("model draft case context refuses foreign, missing and malformed references without leaking content", async ({ browser }) => {
     const projectId = tenant!.mainProjectId, other = tenant!.secondProjectId;
     const created = await api.post(`/api/projects/${other}/testcases`, { data: { title: `Foreign model case ${Date.now()}` } });
