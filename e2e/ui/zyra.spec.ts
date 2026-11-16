@@ -178,11 +178,14 @@ test.describe("zyra / agents (UI)", () => {
       await page.locator("aside").getByRole("button", { name: "Close panel", exact: true }).click();
       await page.getByRole("button", { name: "Add test case", exact: true }).first().click();
       const title = page.getByPlaceholder("Describe what this test case validates");
-      await title.fill("New unsaved case");
+      const editableWhilePending = await title.isVisible();
       const response = page.waitForResponse(r => r.url().endsWith(`/testcases/${tc.id}`) && r.request().method() === "GET");
       release(); await (await response).finished();
       // Let the browser process the completed native reply before inspecting the new form.
       await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await expect(title).toHaveValue("");
+      expect(editableWhilePending).toBe(true);
+      await title.fill("New unsaved case");
       await expect(title).toHaveValue("New unsaved case");
       await expect(page.getByRole("link", { name: "Inspect saved case model draft (new tab)" })).toHaveCount(0);
     } finally { release(); await page.unrouteAll({ behavior: "wait" });
