@@ -9,7 +9,10 @@ finalizer (`finalizeZyraToolDecisionWithAi`), scenario planner/top-up (`planZyra
 Zyra memory summarization (`summarizeForZyraMemory`), knowledge-base transcription
 (`transcribeKnowledgeFile`), and integration-sync decision summaries
 (`IntegrationSyncDecisions.summarize`) now emit standalone Langfuse generations with usage/error
-metadata where available. RAG ingestion/testcase embedding jobs are traced via `embedding-trace.ts`,
+metadata where available. Provider usage parsing now carries cached input tokens (OpenAI
+`prompt_tokens_details.cached_tokens`, Anthropic cache read/create counts) through the router,
+scenario planner/top-up, tool finalizer and memory-summary generations. RAG ingestion/testcase
+embedding jobs and the one-off testcase backfill are traced via `embedding-trace.ts`,
 background `continueZyraChatPlan` batch generation emits standalone traces, and the interactive
 `applyZyraChatOperations` call records a `zyra.apply_operations` tool span. **Still open:** background
 batch traces are standalone (not attached to the originating conversation trace), broader usage
@@ -320,12 +323,13 @@ behaviour characterised, cost gap found. Findings are §0 and §7. No repo chang
    throws when tracing is off or the SDK itself throws. This proves ai-trace.ts's own behavior
    correctly; it does not prove the real SDK/network path, which is what §9's e2e list is for.
 
-### Phase 2 — Remaining call sites (~1 day)
+### Phase 2 — Remaining call sites (shipped)
 
-`summarizeForZyraMemory`, `transcribeKnowledgeFile`, `embedTexts` (inside `RagEmbeddingProcessor`),
-`integration-sync-decisions`. Extend usage parsing to the sites that lack it (`zyraJsonCompletion`,
-`zyraChatWith*`, `summarizeForZyraMemory`) so cost is complete rather than partial. BullMQ processors
-flush per job.
+`summarizeForZyraMemory`, `transcribeKnowledgeFile`, `embedTexts` (inside `RagEmbeddingProcessor`
+and the one-off testcase backfill) and `integration-sync-decisions` are traced. Usage parsing now
+keeps real provider usage, including cached input tokens, for `zyraJsonCompletion`, `zyraChatWith*`,
+`summarizeForZyraMemory`, the scenario planner/top-up and the tool-decision finalizer. BullMQ
+processors flush per job.
 
 ### Phase 3 — Scores and evals (~1–1.5 days)
 
@@ -373,7 +377,8 @@ traceIdFor(generationTask) = await createTraceId(taskId)          // ai_generati
 
 Same id every time, from data we already store. A support report maps to its trace by computing the
 id — no column, no backfill, and it works for rows written before the feature shipped. Background
-plan resumption reattaches the same way, seeding from the originating message id.
+plan resumption currently emits standalone traces seeded per batch (`zyra:plan-batch:...`);
+reattaching them to the originating message id is still open (see the status header).
 
 This also removes the migration from scope, which shrinks the e2e surface (§9) and the review risk.
 
@@ -548,7 +553,7 @@ Selection announced with `--list` counts, run at `--workers=10` in its own Termi
 |---|---|
 | 0 — spike | ✅ done |
 | 1 — module + Zyra chat path + model prices + e2e | 2–3 d |
-| 2 — remaining call sites + complete usage parsing | 1 d |
+| 2 — remaining call sites + complete usage parsing | ✅ done |
 | 3 — scores and evals | 1–1.5 d |
 | 4 — dashboards and alerts | 0.5 d |
 | 5 — prompt management | deferred |

@@ -16134,6 +16134,9 @@ export class LegacyService implements OnModuleInit {
           output: raw,
           rawOutput: raw.__rawCompletion,
           salvaged: true,
+          usage: raw.__zyraUsage
+            ? { input: Number(raw.__zyraUsage.input || 0), output: Number(raw.__zyraUsage.output || 0), cached: Number(raw.__zyraUsage.cached || 0) || undefined }
+            : undefined,
           errorMessage: "Router JSON unparseable; only reply/reasoningSummary salvaged. Retrying once."
         });
         onStage?.("routing", { attempts: 2 }, "update");
@@ -16150,6 +16153,9 @@ export class LegacyService implements OnModuleInit {
           output: raw,
           rawOutput: raw.__rawCompletion,
           salvaged: true,
+          usage: raw.__zyraUsage
+            ? { input: Number(raw.__zyraUsage.input || 0), output: Number(raw.__zyraUsage.output || 0), cached: Number(raw.__zyraUsage.cached || 0) || undefined }
+            : undefined,
           errorMessage: "Router JSON unparseable on retry too; returning an honest failure instead of the salvaged narrative."
         });
         await this.logProjectActivity(projectId, userId, "zyra_chat_ai_failed", "zyra_chat", sessionId, "Zyra chat", { stage: "routing_salvaged" });
@@ -16170,7 +16176,15 @@ export class LegacyService implements OnModuleInit {
         input: { message, context },
         output: raw,
         salvaged: false,
-        usage: { input: estimateTokens(context) + estimateTokens(message), output: estimateTokens(JSON.stringify(raw ?? "")) }
+        // Real provider usage now that both wire paths attach it to __zyraUsage; the previous
+        // estimateTokens() guess is only a fallback for a provider that omitted usage entirely.
+        usage: raw.__zyraUsage
+          ? {
+              input: Number(raw.__zyraUsage.input || 0),
+              output: Number(raw.__zyraUsage.output || 0),
+              cached: Number(raw.__zyraUsage.cached || 0) || undefined
+            }
+          : { input: estimateTokens(context) + estimateTokens(message), output: estimateTokens(JSON.stringify(raw ?? "")) }
       });
       endZyraTurn(trace, {
         reply: String(raw.reply || ""),
@@ -22615,7 +22629,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       const cached = Number(usage.cache_read_input_tokens || 0) + Number(usage.cache_creation_input_tokens || 0);
       const input = Number(usage.input_tokens || 0) + cached;
       const output = Number(usage.output_tokens || 0);
-      return { ...parsed, __zyraUsage: { input, output, total: input + output } };
+      return { ...parsed, __zyraUsage: { input, output, total: input + output, ...(cached ? { cached } : {}) } };
     }
     const headers = this.providerAuthHeaders(provider, String(key.api_key || ""), key.auth_header_name, key.auth_scheme);
     const res = await fetch(providerChatUrl(provider, key.base_url, model), {
@@ -22642,7 +22656,16 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const parsed = this.parseModelJson(content, []);
     if (!parsed) throw new Error("OpenAI returned no parseable JSON.");
     const usage = data.usage || {};
-    return { ...parsed, __zyraUsage: { input: Number(usage.prompt_tokens || 0), output: Number(usage.completion_tokens || 0), total: Number(usage.total_tokens || 0) } };
+    const cached = Number(usage.prompt_tokens_details?.cached_tokens || 0);
+    return {
+      ...parsed,
+      __zyraUsage: {
+        input: Number(usage.prompt_tokens || 0),
+        output: Number(usage.completion_tokens || 0),
+        total: Number(usage.total_tokens || 0),
+        ...(cached ? { cached } : {})
+      }
+    };
   }
 
   // Plans a todo list of distinct scenarios to cover for an exhaustive ("all possible cases")
@@ -22697,7 +22720,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       model: params.model,
       input: { system: systemPrompt, user: userPrompt, maxScenarios: params.maxScenarios },
       output: { scenarios: normalizeJsonArray(parsed.scenarios).slice(0, 20) },
-      usage: parsed.__zyraUsage ? { input: Number(parsed.__zyraUsage.input || 0), output: Number(parsed.__zyraUsage.output || 0) } : undefined,
+      usage: parsed.__zyraUsage ? { input: Number(parsed.__zyraUsage.input || 0), output: Number(parsed.__zyraUsage.output || 0), cached: Number(parsed.__zyraUsage.cached || 0) || undefined } : undefined,
       metadata: { projectId: params.projectId }
     });
     const scenarios = LegacyService.mergeZyraScenarios([], parsed.scenarios, params.maxScenarios);
@@ -22739,7 +22762,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           model: params.model,
           input: { system: systemPrompt, user: topUpPrompt, existingCount: scenarios.length, maxScenarios: params.maxScenarios },
           output: { scenarios: normalizeJsonArray(more.scenarios).slice(0, 20) },
-          usage: more.__zyraUsage ? { input: Number(more.__zyraUsage.input || 0), output: Number(more.__zyraUsage.output || 0) } : undefined,
+          usage: more.__zyraUsage ? { input: Number(more.__zyraUsage.input || 0), output: Number(more.__zyraUsage.output || 0), cached: Number(more.__zyraUsage.cached || 0) || undefined } : undefined,
           metadata: { projectId: params.projectId }
         });
         return LegacyService.mergeZyraScenarios(scenarios, more.scenarios, params.maxScenarios);
@@ -23030,7 +23053,16 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     // Real provider usage, not the estimateTokens() guess callers used to fall back to — this was
     // sitting right here in the response and being thrown away.
     const usage = data.usage || {};
-    const zyraUsage = { input: Number(usage.prompt_tokens || 0), output: Number(usage.completion_tokens || 0), total: Number(usage.total_tokens || 0) };
+    // prompt_tokens already includes cached tokens; cached_tokens is carried separately so a
+    // Langfuse trace can show how much of the prompt was served from cache instead of folding it
+    // invisibly into `input` (which is all the pre-existing token-usage row ever recorded).
+    const cached = Number(usage.prompt_tokens_details?.cached_tokens || 0);
+    const zyraUsage = {
+      input: Number(usage.prompt_tokens || 0),
+      output: Number(usage.completion_tokens || 0),
+      total: Number(usage.total_tokens || 0),
+      ...(cached ? { cached } : {})
+    };
     const parsed = this.parseModelJson(content);
     // __rawCompletion: the literal, unparsed provider text — never derived from `parsed`/`content`
     // downstream, so a trace can show exactly what the provider sent even when parsing recovered
@@ -23094,7 +23126,15 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // sitting right here in the response and being thrown away.
       const usage = data.usage || {};
       const cached = Number(usage.cache_read_input_tokens || 0) + Number(usage.cache_creation_input_tokens || 0);
-      const zyraUsage = { input: Number(usage.input_tokens || 0) + cached, output: Number(usage.output_tokens || 0), total: 0 };
+      const zyraUsage = {
+        input: Number(usage.input_tokens || 0) + cached,
+        output: Number(usage.output_tokens || 0),
+        total: 0,
+        // Anthropic reports cache reads/creations outside input_tokens; unlike OpenAI's
+        // prompt_tokens (which already includes them) they are added into `input` above for the
+        // token-usage row, but still surfaced separately for Langfuse's cachedInputTokens.
+        ...(cached ? { cached } : {})
+      };
       zyraUsage.total = zyraUsage.input + zyraUsage.output;
       const parsed = this.parseModelJson(rawText || "{}");
       // __rawCompletion — see the identical comment in zyraChatWithOpenAi above.
