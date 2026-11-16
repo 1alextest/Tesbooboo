@@ -4741,7 +4741,9 @@ export class LegacyService implements OnModuleInit {
       values
     );
     let total = Number(res.rows[0]?.total_count || 0);
-    if (res.rows.length === 0 && offset > 0) {
+    if (res.rows.length === 0 && (offset > 0 || limit === 0)) {
+      // The window COUNT rides on returned rows. Empty offset pages and LIMIT 0
+      // must still report the real filtered total, not silently rewrite it to zero.
       // total_count rides on the returned rows, so a page past the end reports 0 — which a client
       // paging through (or one whose last page was just emptied by a delete) would read as "no
       // matches at all". Ask for the real count so it can step back to the last page that exists.
