@@ -693,6 +693,44 @@ describe("LegacyService#connectLinearTeams — concurrent save race", () => {
 // every synced ticket the moment a workspace disconnected. It's now a soft disconnect: the row is
 // marked disconnected_at + credentials cleared, and every mapping it fed is disabled, but nothing
 // is ever deleted.
+describe("LegacyService#startIntegrationSync — plan entitlement", () => {
+  function syncFixture(assertIntegrationAllowed: jest.Mock) {
+    const startRun = jest.fn().mockResolvedValue({ run: { id: "run-1" }, alreadyRunning: false });
+    const { db, query } = makeDb([
+      { match: "jira_project_key", rows: [{ remote_key: "ABC" }] }
+    ]);
+    const svc = makeLegacy(db, { startRun } as never, { assertIntegrationAllowed } as never);
+    jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({} as never);
+    jest.spyOn(svc as unknown as { projectOrganizationId: () => Promise<string> }, "projectOrganizationId")
+      .mockResolvedValue("org-1");
+    jest.spyOn(svc as unknown as { getIntegrationConnection: () => Promise<unknown> }, "getIntegrationConnection")
+      .mockResolvedValue({ provider: "jira" });
+    jest.spyOn(svc as unknown as { logProjectActivity: () => Promise<void> }, "logProjectActivity")
+      .mockResolvedValue(undefined);
+    return { svc, startRun, query };
+  }
+
+  it("refuses a manual sync the plan disallows, before a run starts", async () => {
+    const assertIntegrationAllowed = jest.fn().mockRejectedValue(
+      new ForbiddenException({ error: "Linear is a Pro plan integration." })
+    );
+    const { svc, startRun } = syncFixture(assertIntegrationAllowed);
+    await expect(svc.syncLinear("user-1", "proj-1")).rejects.toMatchObject({ status: 403 });
+    expect(assertIntegrationAllowed).toHaveBeenCalledWith("org-1", "linear");
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
+  it("still starts a manual sync the plan permits", async () => {
+    const assertIntegrationAllowed = jest.fn().mockResolvedValue(undefined);
+    const { svc, startRun } = syncFixture(assertIntegrationAllowed);
+    await expect(svc.syncJira("user-1", "proj-1")).resolves.toMatchObject({
+      alreadyRunning: false, run: { id: "run-1" }
+    });
+    expect(assertIntegrationAllowed).toHaveBeenCalledWith("org-1", "jira");
+    expect(startRun).toHaveBeenCalledWith("org-1", "proj-1", "jira", "user-1", "ABC");
+  });
+});
+
 describe("LegacyService#integrationDisconnect", () => {
   it("fails any active sync run before soft-disconnecting, and never issues a DELETE", async () => {
     const order: string[] = [];

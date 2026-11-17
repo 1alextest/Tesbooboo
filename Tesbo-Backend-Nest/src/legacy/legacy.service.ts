@@ -13557,6 +13557,10 @@ export class LegacyService implements OnModuleInit {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const organizationId = await this.projectOrganizationId(projectId);
+    // Same entitlement decision the nightly scheduler makes (integration-sync.service.ts). A
+    // Pro-only integration that stays connected after a downgrade must not keep syncing through
+    // the manual button while the scheduler silently skips it.
+    await this.planLimits.assertIntegrationAllowed(organizationId, provider);
     const label = TICKET_PROVIDER_LABELS[provider];
 
     const connection = await this.getIntegrationConnection(organizationId, provider, false);
