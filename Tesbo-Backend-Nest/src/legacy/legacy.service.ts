@@ -10289,6 +10289,36 @@ export class LegacyService implements OnModuleInit {
     });
   }
 
+  /**
+   * Per-run status buckets for `GET /cycles/:cycleId/report/summary`. Uses the same
+   * EXECUTION_BUCKET_COUNTS definition as the project overview so the run summary and the
+   * pass-rate trend cannot disagree. Previously this endpoint returned a hard-coded all-zero
+   * object for every run, which external callers had no way to distinguish from a real empty run.
+   */
+  async cycleReportSummaryForUser(userId: string | null | undefined, cycleId: string) {
+    await this.requireCycleAccess(userId, cycleId);
+    const res = await this.db.query<{
+      total_cases: number; passed: number; failed: number; blocked: number; skipped: number; untested: number;
+    }>(
+      `SELECT ${LegacyService.EXECUTION_BUCKET_COUNTS}
+         FROM cycles c
+         LEFT JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.deleted_at IS NULL
+         LEFT JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
+        WHERE c.id = $1 AND c.deleted_at IS NULL
+        GROUP BY c.id`,
+      [cycleId]
+    );
+    const row = res.rows[0];
+    return {
+      total: Number(row?.total_cases ?? 0),
+      passed: Number(row?.passed ?? 0),
+      failed: Number(row?.failed ?? 0),
+      blocked: Number(row?.blocked ?? 0),
+      skipped: Number(row?.skipped ?? 0),
+      untested: Number(row?.untested ?? 0)
+    };
+  }
+
   async reportsOverview(projectId: string) {
     // The Reports page requests overview and insights at the same moment and they share four of these
     // reads; dedupe() lets the second request ride on the first one's in-flight query.

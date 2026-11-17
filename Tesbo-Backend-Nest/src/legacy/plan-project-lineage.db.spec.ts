@@ -733,7 +733,7 @@ const url = process.env.DATABASE_URL ?? "";
         "Evidence download": () => ({ path: `/api/cycles/${restRun}/executions/${restExecution}/attachments/${restAttachment}/download`, expected: retainedTrace.toString() }),
         "Trace link": () => ({ path: `/api/cycles/${restRun}/executions/${restExecution}/attachments/${restAttachment}/trace-link`, expected: expect.objectContaining({ token: expect.any(String), expiresAt: expect.any(String) }) }),
         "CSV export": () => ({ path: `/api/cycles/${restRun}/export/csv`, expected: expect.stringContaining("Retained REST result") }),
-        "Summary stub": () => ({ path: `/api/cycles/${restRun}/report/summary`, expected: { total: 0, passed: 0, failed: 0, blocked: 0, skipped: 0, untested: 0 } })
+        "Run summary": () => ({ path: `/api/cycles/${restRun}/report/summary`, expected: { total: 1, passed: 1, failed: 0, blocked: 0, skipped: 0, untested: 0 } })
       };
       it.each(Object.keys(restReads) as Array<keyof typeof restReads>)("retains the locked %s read and all stored history", async (name) => {
         const before = await businessState(), input = restReads[name](), response = await rest({ method: "GET", path: input.path });

@@ -148,7 +148,9 @@ async function buildFixture(api: APIRequestContext, projectId: string): Promise<
       title: "Search fails once in six runs",
       suiteId: alphaSuiteId,
       priority: "P2",
-      status: "Draft",
+      // Temporarily Approved so the run-add boundary accepts it; restored to Draft after the
+      // runs are built (repository-summary asserts the final status distribution).
+      status: "Approved",
     }),
     untestedP1: await seedTestCase(api, projectId, {
       title: "Payment refund has never been run",
@@ -166,7 +168,8 @@ async function buildFixture(api: APIRequestContext, projectId: string): Promise<
       title: "Legacy case authored six weeks ago",
       suiteId: alphaSuiteId,
       priority: "P2",
-      status: "Deprecated",
+      // Temporarily Approved for the run-add boundary; restored to Deprecated below.
+      status: "Approved",
       createdDaysAgo: 40,
     }),
   };
@@ -219,6 +222,13 @@ async function buildFixture(api: APIRequestContext, projectId: string): Promise<
   }
   setExecutionResults(results);
 
+  // Native runs only accept Approved cases, so the two cases that must be executed were created
+  // Approved above. Restore the statuses the repository-summary assertions describe.
+  for (const [caseId, status] of [[cases.lowFlake.id, "Draft"], [cases.old.id, "Deprecated"]] as const) {
+    const restored = await api.put(`/api/projects/${projectId}/testcases/${caseId}`, { data: { status } });
+    if (!restored.ok()) throw new Error(`Could not restore fixture status: ${await restored.text()}`);
+  }
+
   const failedFlakyRun = runs[5];
   const failedFlakyExecutions = await listRunExecutions(api, failedFlakyRun.id);
   const failedFlakyExecution = failedFlakyExecutions.find((e) => e.testcaseId === cases.flaky.id)!;
@@ -255,7 +265,7 @@ test.beforeAll(async () => {
   asQa = await loginAs(tenant.qa);
   anon = await anonymousContext();
 
-  const projectId = await seedProject(asOwner, `E2E ${Date.now()} Reports Fixture`);
+  const projectId = await seedProject(asOwner, `E2E Rpt Fixture ${Date.now()}`);
   // The QA engineer is a legitimate member of the fixture project, so the role axis can assert both
   // directions: a project member may read reports, a workspace member without access may not.
   setProjectRole(projectId, tenant.qa.userId, "qa_engineer");
@@ -273,7 +283,7 @@ test.beforeEach(() => {
 
 /** An empty project, for the "no history at all" branch of every endpoint. Purged by the caller. */
 async function withEmptyProject(fn: (projectId: string) => Promise<void>): Promise<void> {
-  const projectId = await seedProject(asOwner, `E2E ${Date.now()} Reports Empty`);
+  const projectId = await seedProject(asOwner, `E2E Rpt Empty ${Date.now()}`);
   try {
     await fn(projectId);
   } finally {
@@ -418,8 +428,8 @@ test.describe("execution status breakdown and percentages", () => {
     expect(Object.keys(before.executionStatus)).toEqual(EXECUTION_STATUS_ORDER);
     expect(sumOf(before.executionStatus)).toBe(before.executionTotal);
 
-    const projectA = await seedProject(asOwner, `E2E ${Date.now()} Reports Workspace A`);
-    const projectB = await seedProject(asOwner, `E2E ${Date.now()} Reports Workspace B`);
+    const projectA = await seedProject(asOwner, `E2E Rpt A ${Date.now()}`);
+    const projectB = await seedProject(asOwner, `E2E Rpt B ${Date.now()}`);
     try {
       const a = await seedRunWithStatuses(projectA, ["Passed", "Passed"]);
       const b = await seedRunWithStatuses(projectB, ["Failed", "Blocked", "Retest"]);
@@ -1311,27 +1321,25 @@ test.describe("reports exclude cases removed from a run (hard-delete remediation
 });
 
 test.describe("the per-run report summary endpoint", () => {
-  test("RPT-A-47 returns a hardcoded all-zero summary regardless of the run's real results", { tag: '@tesbo.testId("TES-TC-507")' }, async () => {
-    // KNOWN STUB (documented, not test.fail()): legacy.controller.ts's cycleSummary() takes no
-    // parameters at all and returns a fixed object. Run 6 below really does hold three results, so
-    // if this endpoint ever starts reporting them this assertion is the thing that notices. It has
-    // no frontend consumer today — recorded as a finding rather than a red test.
+  test("RPT-A-47 reports the run's real status buckets, matching the project overview", { tag: '@tesbo.testId("TES-TC-507")' }, async () => {
+    // Run 6 holds three executions: flaky (Failed), stable (Passed), low-flake (Failed).
     const run = fixture.runs[5];
     const res = await asOwner.get(`/api/cycles/${run.id}/report/summary`);
     expect(res.status()).toBe(200);
-    expect(await res.json()).toEqual({ total: 0, passed: 0, failed: 0, blocked: 0, skipped: 0, untested: 0 });
+    expect(await res.json()).toEqual({ total: 3, passed: 1, failed: 2, blocked: 0, skipped: 0, untested: 0 });
 
     const overview = await getJson(asOwner, `/api/projects/${fixture.projectId}/reports/overview`);
     const realRun = overview.passRateTrend.find((p: any) => p.name === run.name);
     expect(realRun.executed).toBe(3);
+    expect(realRun.passed).toBe(1);
+    expect(realRun.failed).toBe(2);
   });
 
-  test("RPT-A-48 answers the same zeros for a run id that doesn't exist", { tag: '@tesbo.testId("TES-TC-508")' }, async () => {
+  test("RPT-A-48 answers 404 for a run id that doesn't exist", { tag: '@tesbo.testId("TES-TC-508")' }, async () => {
     const res = await asOwner.get("/api/cycles/00000000-0000-0000-0000-000000000000/report/summary", {
       failOnStatusCode: false,
     });
-    expect(res.status()).toBe(200);
-    expect((await res.json()).total).toBe(0);
+    expect(res.status()).toBe(404);
   });
 });
 
@@ -1468,7 +1476,7 @@ test.describe("report export", () => {
     // exact aggregates over fixture.projectId, and an extra test case — even a deleted one — is
     // exactly the kind of contamination this file's header warns about.
     const nasty = `E2E Export "quoted", comma\nand newline ${Date.now()}`;
-    const projectId = await seedProject(asOwner, `E2E Export Quoting ${Date.now()}`);
+    const projectId = await seedProject(asOwner, `E2E Rpt Quote ${Date.now()}`);
     try {
       await seedTestCase(asOwner, projectId, { title: nasty, priority: "P3" });
       const res = await asOwner.get(`/api/projects/${projectId}/reports/export/csv?view=matrix`);
@@ -1679,7 +1687,7 @@ test.describe("report export", () => {
   }
 
   test("RPT-A-71 an empty project's Russian exports still carry Russian header rows", async () => {
-    const emptyId = await seedProject(asOwner, `E2E Export RU Empty ${Date.now()}`);
+    const emptyId = await seedProject(asOwner, `E2E Rpt RU ${Date.now()}`);
     try {
       const res = await asOwner.get(`/api/projects/${emptyId}/reports/export/csv?view=matrix`, { headers: RU });
       expect(res.status()).toBe(200);
@@ -1694,7 +1702,7 @@ test.describe("report export", () => {
   test("RPT-A-64 an empty project exports headers and no rows", { tag: '@tesbo.testId("TES-TC-1207")' }, async () => {
     // The empty-result edge: a brand new project has no runs, no cases and no bugs, and every view
     // still has to produce a file a spreadsheet can open.
-    const emptyId = await seedProject(asOwner, `E2E Export Empty ${Date.now()}`);
+    const emptyId = await seedProject(asOwner, `E2E Rpt Export ${Date.now()}`);
     try {
       for (const view of EXPORT_VIEWS) {
         const res = await asOwner.get(
