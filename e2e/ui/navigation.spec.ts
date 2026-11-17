@@ -1194,36 +1194,68 @@ test.describe("top bar — notifications", () => {
   test("NOTIF-UI-11 each Phase 1 link type resolves to its detail page", async ({ page }) => {
     test.skip(!dbControlAvailable(), "needs psql access to seed a real notification row");
     const pid = tenant!.projectId;
-    const cases: Array<{ title: string; type: string; id: string; url: RegExp }> = [
-      { title: "Link members", type: "workspace_members", id: pid, url: /\/settings\?tab=members$/ },
-      { title: "Link projects", type: "projects_list", id: pid, url: /\/projects$/ },
+    const api = await screensApi();
+    let projectKey: string;
+    try {
+      const response = await api.get(`/api/projects/${pid}`);
+      expect(response.ok(), await response.text()).toBeTruthy();
+      const project = await response.json();
+      expect(project.id).toBe(pid);
+      expect(typeof project.key).toBe("string");
+      expect(project.key.trim()).not.toBe("");
+      projectKey = project.key;
+    } finally {
+      await api.dispose();
+    }
+    // UUID links are still supported, but RouteParamsProvider rewrites them to
+    // this project's exact key. Never accept an arbitrary project/path wildcard.
+    const projectPaths = (suffix: string) => [
+      `/projects/${pid}${suffix}`,
+      `/projects/${encodeURIComponent(projectKey)}${suffix}`,
+    ];
+    const cases: Array<{ title: string; type: string; id: string; paths: string[] }> = [
+      { title: "Link members", type: "workspace_members", id: pid, paths: ["/settings?tab=members"] },
+      { title: "Link projects", type: "projects_list", id: pid, paths: ["/projects"] },
       // The invite page itself shows "invalid" for a made-up token but stays on its URL.
-      { title: "Link invitation", type: "invitation", id: "a".repeat(64), url: new RegExp(`/invite/${"a".repeat(64)}$`) },
-      { title: "Link project members", type: "project_members", id: pid, url: new RegExp(`/projects/${pid}/members$`) },
-      { title: "Link run", type: "test_run", id: `${pid}:00000000-0000-4000-8000-000000000001`, url: new RegExp(`/projects/${pid}/cycles/00000000-0000-4000-8000-000000000001$`) },
-      { title: "Link jira sync", type: "project_integration", id: `${pid}:jira`, url: new RegExp(`/projects/${pid}/settings/integrations/jira$`) },
-      { title: "Link linear sync", type: "project_integration", id: `${pid}:linear`, url: new RegExp(`/projects/${pid}/settings/integrations/linear$`) },
-      { title: "Link notion sync", type: "project_integration", id: `${pid}:notion`, url: new RegExp(`/projects/${pid}/settings/integrations/notion$`) },
-      { title: "Link requirements", type: "requirements", id: pid, url: new RegExp(`/projects/${pid}/requirements$`) },
-      { title: "Link zyra chat", type: "zyra_chat", id: pid, url: new RegExp(`/projects/${pid}/agents/zyra$`) },
-      { title: "Link kb list", type: "knowledge_base", id: pid, url: new RegExp(`/projects/${pid}/knowledge-base$`) },
-      { title: "Link integrations", type: "integrations_settings", id: pid, url: /\/settings\?tab=integrations$/ },
-      { title: "Link zyra task", type: "zyra_task", id: `${pid}:00000000-0000-4000-8000-000000000004`, url: new RegExp(`/projects/${pid}/agents/tasks/00000000-0000-4000-8000-000000000004$`) },
-      { title: "Link test case", type: "testcase", id: `${pid}:00000000-0000-4000-8000-000000000005`, url: new RegExp(`/projects/${pid}/testcases/00000000-0000-4000-8000-000000000005$`) },
-      { title: "Link kb doc", type: "knowledge_document", id: `${pid}:00000000-0000-4000-8000-000000000003`, url: new RegExp(`/projects/${pid}/knowledge-base/documents/00000000-0000-4000-8000-000000000003$`) },
-      { title: "Link bug", type: "bug", id: `${pid}:00000000-0000-4000-8000-000000000002`, url: new RegExp(`/projects/${pid}/bugs/00000000-0000-4000-8000-000000000002$`) },
+      { title: "Link invitation", type: "invitation", id: "a".repeat(64), paths: [`/invite/${"a".repeat(64)}`] },
+      // /members is an intentional alias of the members settings tab.
+      { title: "Link project members", type: "project_members", id: pid, paths: projectPaths("/settings?tab=members") },
+      { title: "Link run", type: "test_run", id: `${pid}:00000000-0000-4000-8000-000000000001`, paths: projectPaths("/cycles/00000000-0000-4000-8000-000000000001") },
+      { title: "Link jira sync", type: "project_integration", id: `${pid}:jira`, paths: projectPaths("/settings/integrations/jira") },
+      { title: "Link linear sync", type: "project_integration", id: `${pid}:linear`, paths: projectPaths("/settings/integrations/linear") },
+      { title: "Link notion sync", type: "project_integration", id: `${pid}:notion`, paths: projectPaths("/settings/integrations/notion") },
+      { title: "Link requirements", type: "requirements", id: pid, paths: projectPaths("/requirements") },
+      { title: "Link zyra chat", type: "zyra_chat", id: pid, paths: projectPaths("/agents/zyra") },
+      { title: "Link kb list", type: "knowledge_base", id: pid, paths: projectPaths("/knowledge-base") },
+      { title: "Link integrations", type: "integrations_settings", id: pid, paths: ["/settings?tab=integrations"] },
+      { title: "Link zyra task", type: "zyra_task", id: `${pid}:00000000-0000-4000-8000-000000000004`, paths: projectPaths("/agents/tasks/00000000-0000-4000-8000-000000000004") },
+      { title: "Link test case", type: "testcase", id: `${pid}:00000000-0000-4000-8000-000000000005`, paths: projectPaths("/testcases/00000000-0000-4000-8000-000000000005") },
+      { title: "Link kb doc", type: "knowledge_document", id: `${pid}:00000000-0000-4000-8000-000000000003`, paths: projectPaths("/knowledge-base/documents/00000000-0000-4000-8000-000000000003") },
+      { title: "Link bug", type: "bug", id: `${pid}:00000000-0000-4000-8000-000000000002`, paths: projectPaths("/bugs/00000000-0000-4000-8000-000000000002") },
     ];
     const stamp = Date.now();
     const ids = cases.map((c) => seedNotification({ title: `${c.title} ${stamp}`, linkEntityType: c.type, linkEntityId: c.id }));
+    const applicationOrigin = new URL(page.url()).origin;
     try {
-      for (const c of cases) {
+      for (const [index, c] of cases.entries()) {
         await page.goto("/projects");
         await bell(page).click();
         const item = panel(page).getByRole("menuitem", { name: new RegExp(`${c.title} ${stamp}`) });
         // A real <button>: a link type the frontend does not know would render as an inert <div>.
         expect(await item.evaluate((el) => el.tagName), `${c.type} should be clickable`).toBe("BUTTON");
         await item.click();
-        await expect(page, `${c.type} navigated somewhere unexpected`).toHaveURL(c.url);
+        await expect(page, `${c.type} navigated somewhere unexpected`).toHaveURL(
+          (url) => url.origin === applicationOrigin && !url.hash && c.paths.includes(`${url.pathname}${url.search}`),
+        );
+        if (c.type === "project_members") {
+          await expect(page.getByRole("heading", { name: "Project members", exact: true })).toBeVisible();
+        }
+        // TopBar dispatches mark-read asynchronously. Observe the persisted row,
+        // not merely the address bar changing or its optimistic unread badge.
+        await expect.poll(
+          () => scalar(`SELECT read_at::text FROM notifications WHERE id = ${literal(ids[index])};`),
+          { message: `${c.type} should persist its read state` },
+        ).toBeTruthy();
       }
     } finally {
       ids.forEach(deleteNotification);

@@ -248,6 +248,23 @@ tests. The additional incomplete-URL refusal was reproduced against the prior
 guard without constructing a pool; all 24 expanded migrator tests, typecheck
 and frozen lint then passed.
 
+CI evidence for `85fbc521285e752c0735eb6f3a4315b83235fb53`:
+the clean merge-test checkout `5a575db4d7bffef0ea2a0214bd9af04d1bd3ef7b`
+has parents development `5280d939` and that implementation head. Downloaded
+reports/receipts revalidate 98 Review Board, 539 migrated-database, 275 API/MCP,
+72 concurrency and 279 authorization tests with zero skipped/todo in those
+explicit selections. The manifest hash matches the committed blob. These
+selections overlap; the broad optional backend run still reports its skips.
+
+That head had 26 passing checks and one failed smoke check:
+`NOTIF-UI-11` expected `/projects/<uuid>/members`, although the existing members
+page intentionally redirects to `settings?tab=members` and the route provider
+canonicalizes UUIDs to project keys. The retained browser artifact shows the
+correct Project members screen (notification selection: 51 passed / 1 failed
+of 52). The coupled test correction preserves all 16 link cases, uses exact
+same-project UUID/key destinations, and adds members-content/persisted-read
+assertions. Its new-head runtime result must be verified separately.
+
 `architecture-quality` retains dependency, clone, policy and impact evidence under
 `reports/quality/`. Existing job names and result semantics stay intact; there is
 no synthetic aggregate that can pass after missing, cancelled or failed checks.
@@ -280,6 +297,42 @@ an owner decision, not fixed by adding another schedule.
 | Performance/query/bundle/memory budgets | Existing k6/smoke tooling; first repair benchmark authorization and measure a real baseline |
 | Flake detection | Existing tests under repetition/order/concurrency; never hide failures by automatic retirement |
 | SBOMs and release provenance | Existing package/container release owners; no release is performed here |
+
+### Identity-level lint: audited, not yet authorized calibration
+
+The next read-only audit confirmed the same-count replacement and stale-retirement
+gaps in `check-lint-baseline.mjs`. Native ESLint bulk suppressions are also
+file/rule/count based, not occurrence identities:
+[official contract](https://eslint.org/blog/2025/04/introducing-bulk-suppressions/).
+Do not replace one count ledger with another or add a second parser/analyzer.
+
+Recommended extension: reuse each installed ESLint/configuration and its public
+`SourceCode` AST/tokens through a capture-only rule; extend the existing runner,
+two baseline files and policy validator. Versioned syntactic occurrence identities
+would bind file/rule, lexical owner, executable-unit tokens and diagnostic
+position within that unit, excluding absolute line numbers. Require actual
+findings = current inventory, with current inventory a multiset subset of the
+trusted target's inventory. Fixing debt must retire its allowance; new identities
+cannot self-authorize. Preserve full target discovery, rules, severities, warnings
+and current inline-config behavior; reject empty/partial/fatal reports and
+unexpected bulk suppressions. This is conservative syntax matching, not proof
+of semantic equivalence. Unrelated edits inside the same executable unit can
+invalidate an identity; no automatic reanchoring or fuzzy approval is proposed.
+
+Actual locked producers are backend ESLint 9.39.4 / TypeScript ESLint 8.59.4 and
+frontend ESLint 9.39.2 / Next config 16.3.3 / TypeScript ESLint 8.55.0 /
+React Hooks 7.0.1. Hooks compiler diagnostics can omit `messageId` and embed
+moving code frames in `message`; raw-message hashing cannot be the identity
+contract. Use version-pinned public APIs, no dependency upgrade in this scope.
+
+**Calibration gate remains open:** the owner must select an immutable integration
+revision and approve the conservative identity/reanchoring boundary; independently
+reproduce unchanged full lint at that revision and calibrate observed occurrences,
+not transferable count capacity. Reconcile PR #103's separate lint cleanup first;
+do not duplicate its product edits. Define trusted target-tip, stale-branch and
+manual-dispatch authority before enabling the policy. No seed was generated from
+PR HEAD and no baseline was expanded. Existing nine backend/thirteen frontend
+allowances are inventory budgets, not proof of 22 current errors.
 
 Product verification still follows `CLAUDE.md`: exact impacted selection,
 explicit execution approval, correct build/environment, and honest reporting of
