@@ -2308,8 +2308,19 @@ export class LegacyController {
   // anywhere in this codebase, so both routes were honest stubs (empty list, always-404 read) rather
   // than faking success — see LegacyService.notifyProjectMembers' own comment for the full history.
   @Get("/api/notifications")
-  async notifications(@Req() req: AuthenticatedRequest) {
-    return this.legacy.notificationsForUser(req.userId);
+  async notifications(
+    @Req() req: AuthenticatedRequest,
+    @Query("limit") limit?: unknown,
+    @Query("beforeId") beforeId?: unknown
+  ) {
+    return this.legacy.notificationsForUser(req.userId, { limit, beforeId });
+  }
+
+  // The badge counts every unread row, not only those in the first page. Keeping it a separate
+  // route means a focus refresh never has to re-fetch (or clobber) an expanded list.
+  @Get("/api/notifications/unread-count")
+  async unreadNotificationCount(@Req() req: AuthenticatedRequest) {
+    return this.legacy.unreadNotificationCount(req.userId);
   }
 
   // Declared before the `:id/read` route below; the two never overlap (this one is a single fixed

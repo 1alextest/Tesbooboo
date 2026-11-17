@@ -788,8 +788,23 @@ export interface AppNotification {
   created_at: string;
 }
 
-export async function listNotifications(): Promise<AppNotification[]> {
-  return api<AppNotification[]>("/api/notifications");
+export type NotificationPageOptions = {
+  limit?: number;
+  /** The last row of the previous page; its timestamp is resolved server-side at storage precision. */
+  beforeId?: string;
+};
+
+export async function listNotifications(options?: NotificationPageOptions): Promise<AppNotification[]> {
+  const params = new URLSearchParams();
+  if (options?.limit !== undefined) params.set("limit", String(options.limit));
+  if (options?.beforeId) params.set("beforeId", options.beforeId);
+  const query = params.toString();
+  return api<AppNotification[]>(`/api/notifications${query ? `?${query}` : ""}`);
+}
+
+/** Every unread row, not only the first page; the bell's count does not depend on what is loaded. */
+export async function getUnreadNotificationCount(): Promise<{ unread: number }> {
+  return api<{ unread: number }>("/api/notifications/unread-count");
 }
 
 export async function markAllNotificationsRead(): Promise<void> {

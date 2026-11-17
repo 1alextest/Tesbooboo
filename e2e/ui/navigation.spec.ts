@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { dbControlAvailable, exec, literal, scalar } from "../utils/psql";
+import { dbControlAvailable, exec, execMany, literal, scalar } from "../utils/psql";
 import {
   addProjectMember,
   createBug,
@@ -905,7 +905,9 @@ test.describe("top bar — notifications", () => {
     let attempt = 0;
     await page.route((url) => url.pathname === "/api/notifications", (route) => {
       attempt += 1;
-      if (attempt === 1) return route.abort("failed");
+      // The transport retries a failed GET once automatically; failing only attempt 1 lets that
+      // retry succeed, so no error UI ever appears. Fail both until the explicit Try again.
+      if (attempt <= 2) return route.abort("failed");
       return route.continue();
     });
 
@@ -1079,6 +1081,40 @@ test.describe("top bar — notifications", () => {
     }
   });
 
+  test("NOTIF-UI-16 the panel pages older rows in instead of losing everything past the first 50", async ({ page }) => {
+    test.skip(!dbControlAvailable(), "needs psql access to seed real notification rows");
+    const stamp = Date.now();
+    const userId = scalar(`SELECT id FROM users WHERE email = ${literal(tenant!.email)};`);
+    const ids = Array.from({ length: 51 }, () => crypto.randomUUID());
+    execMany(
+      ids.map(
+        (id, index) =>
+          `INSERT INTO notifications (id, user_id, type, title, body, link_entity_type, link_entity_id) VALUES (` +
+          `${literal(id)}, ${literal(userId)}, 'zyra_archive_sweep', ` +
+          `${literal(`Page ${String(index + 1).padStart(2, "0")} ${stamp}`)}, 'Paged fixture.', ` +
+          `'project', ${literal(tenant!.projectId)});`
+      )
+    );
+    const seeded = panel(page).getByRole("menuitem", { name: new RegExp(`Page \\d{2} ${stamp}`) });
+    try {
+      await page.reload();
+      await bell(page).click();
+      await expect(seeded).toHaveCount(50);
+      const loadMore = panel(page).getByRole("button", { name: "Load more" });
+      await expect(loadMore).toBeVisible();
+      await loadMore.click();
+      await expect(seeded).toHaveCount(51);
+      await expect(loadMore).toBeHidden();
+      // A second open re-reads the first page only; the extra row is reachable again, never lost.
+      await bell(page).click();
+      await bell(page).click();
+      await expect(seeded).toHaveCount(50);
+      await expect(loadMore).toBeVisible();
+    } finally {
+      exec(`DELETE FROM notifications WHERE id IN (${ids.map(literal).join(", ")});`);
+    }
+  });
+
   test("NOTIF-UI-15 Mark all as read is visible even when everything is already read, but disabled", async ({ page }) => {
     test.skip(!dbControlAvailable(), "needs psql access to seed a real notification row");
     const id = seedNotification({ title: `Already read ${Date.now()}`, linkEntityType: "project", linkEntityId: tenant!.projectId });
@@ -1159,7 +1195,7 @@ test.describe("top bar — notifications", () => {
     test.skip(!dbControlAvailable(), "needs psql access to seed a real notification row");
     const pid = tenant!.projectId;
     const cases: Array<{ title: string; type: string; id: string; url: RegExp }> = [
-      { title: "Link members", type: "workspace_members", id: pid, url: /\/settings\/members$/ },
+      { title: "Link members", type: "workspace_members", id: pid, url: /\/settings\?tab=members$/ },
       { title: "Link projects", type: "projects_list", id: pid, url: /\/projects$/ },
       // The invite page itself shows "invalid" for a made-up token but stays on its URL.
       { title: "Link invitation", type: "invitation", id: "a".repeat(64), url: new RegExp(`/invite/${"a".repeat(64)}$`) },
@@ -1171,7 +1207,7 @@ test.describe("top bar — notifications", () => {
       { title: "Link requirements", type: "requirements", id: pid, url: new RegExp(`/projects/${pid}/requirements$`) },
       { title: "Link zyra chat", type: "zyra_chat", id: pid, url: new RegExp(`/projects/${pid}/agents/zyra$`) },
       { title: "Link kb list", type: "knowledge_base", id: pid, url: new RegExp(`/projects/${pid}/knowledge-base$`) },
-      { title: "Link integrations", type: "integrations_settings", id: pid, url: /\/settings\/integrations$/ },
+      { title: "Link integrations", type: "integrations_settings", id: pid, url: /\/settings\?tab=integrations$/ },
       { title: "Link zyra task", type: "zyra_task", id: `${pid}:00000000-0000-4000-8000-000000000004`, url: new RegExp(`/projects/${pid}/agents/tasks/00000000-0000-4000-8000-000000000004$`) },
       { title: "Link test case", type: "testcase", id: `${pid}:00000000-0000-4000-8000-000000000005`, url: new RegExp(`/projects/${pid}/testcases/00000000-0000-4000-8000-000000000005$`) },
       { title: "Link kb doc", type: "knowledge_document", id: `${pid}:00000000-0000-4000-8000-000000000003`, url: new RegExp(`/projects/${pid}/knowledge-base/documents/00000000-0000-4000-8000-000000000003$`) },

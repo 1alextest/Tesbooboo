@@ -117,6 +117,16 @@ jobs:
           # their green runs proved nothing.
           npx playwright test -c playwright.config.ts api/testcases.spec.ts ui/testcases.spec.ts --workers=10 --output=test-results-testcases --list
           npx playwright test -c playwright.config.ts api/testcases.spec.ts ui/testcases.spec.ts --workers=10 --output=test-results-testcases
+      - name: Verify notification paging and unread counts
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-notifications
+        run: |
+          # Neither file was referenced by any workflow before this step, so their green runs
+          # proved nothing. -g "NOTIF-" selects the notification route and dropdown tests only;
+          # ui/navigation.spec.ts carries many unrelated navigation journeys.
+          npx playwright test -c playwright.config.ts api/notifications.spec.ts ui/navigation.spec.ts --workers=10 --output=test-results-notifications -g "NOTIF-" --list
+          npx playwright test -c playwright.config.ts api/notifications.spec.ts ui/navigation.spec.ts --workers=10 --output=test-results-notifications -g "NOTIF-"
       - name: Verify persisted Model Studio revisions and mappings
         working-directory: e2e
         env:
