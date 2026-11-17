@@ -19,6 +19,8 @@ import { ProjectSourceBindingManagement } from "./project-source-binding.managem
 import { GraphChangeReviewController } from "./graph-change-review.controller";
 import { ModelStudioPreview } from "./model-studio-preview";
 import { ModelStudioPreviewController } from "./model-studio-preview.controller";
+import { ModelStudioRepository } from "./model-studio-repository";
+import { ModelStudioModelsController } from "./model-studio-models.controller";
 
 /** Server-admin configuration only. No filesystem root comes from REST/MCP. */
 export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistry {
@@ -48,10 +50,11 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
 
 @Module({
   imports: [LegacyModule, BullModule.registerQueue({ name: GRAPH_QA_RECOVERY_QUEUE })],
-  controllers: [GraphChangeReviewController, ModelStudioPreviewController],
+  controllers: [GraphChangeReviewController, ModelStudioPreviewController, ModelStudioModelsController],
   providers: [
     CurrentCacheGraphReader,
     ModelStudioPreview,
+    ModelStudioRepository,
     CurrentCacheGraphHistory,
     GraphChangeReviewDelivery,
     GraphReviewRunLinks,

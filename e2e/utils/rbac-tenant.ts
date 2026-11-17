@@ -63,6 +63,9 @@ export type RbacTenantKind =
   | "run-approval"
   // Isolated human+MCP machine token lifecycle; never use a real customer project.
   | "mcp-lifecycle"
+  // Persisted Model Studio revisions/mappings. Own tenant so model drafts and links never touch
+  // an existing project's graph history or canonical cases.
+  | "model-studio"
   // Wave 8 — integrations (Jira / Linear), authorization and validation layer
   | "integrations"
   // Wave 9 — Zyra, AI keys, MCP
