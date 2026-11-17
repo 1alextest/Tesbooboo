@@ -1140,6 +1140,58 @@ describe("McpService", () => {
         title: "Last", postconditions: ""
       });
     });
+
+    it.each([null, 8, true, [], {}, ["bad"]])("refuses invalid postconditions %p before any create or update writer", async (postconditions) => {
+      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      for (const [name, payload] of [
+        ["create_testcase", { title: "Draft", postconditions }],
+        ["update_testcase", { testcaseId: "tc-1", postconditions }]
+      ] as const) {
+        const res: any = await svc.handleRequest(rpc("tools/call", { name, arguments: payload }), principal(), "proj-1");
+        expect(res.error.code).toBe(RpcCode.ToolExecutionError);
+        expect(res.error.message).toMatch(/postconditions/i);
+      }
+      expect((legacy as any).createTestCase).not.toHaveBeenCalled();
+      expect((legacy as any).updateTestCase).not.toHaveBeenCalled();
+    });
+
+    it("preserves omitted postconditions and passes replacement or explicit empty clear through update", async () => {
+      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      for (const payload of [{ title: "Reworded" }, { postconditions: "Final state" }, { postconditions: "" }]) {
+        const res: any = await svc.handleRequest(rpc("tools/call", {
+          name: "update_testcase", arguments: { testcaseId: "tc-1", ...payload }
+        }), principal(), "proj-1");
+        expect(res.result.isError).toBe(false);
+        expect((legacy as any).updateTestCase).toHaveBeenLastCalledWith("tc-1", "mcp-actor-1", payload);
+      }
+      expect((legacy as any).updateTestCase).toHaveBeenCalledTimes(3);
+    });
+
+    it("isolates invalid bulk postconditions while preserving order and later valid entries", async () => {
+      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      const res: any = await svc.handleRequest(rpc("tools/call", {
+        name: "bulk_create_testcases",
+        arguments: { testcases: [
+          { title: "First", postconditions: "No side effects" },
+          { title: "Invalid", postconditions: null },
+          { title: "Last", postconditions: "" }
+        ] }
+      }), principal(), "proj-1");
+      const body = JSON.parse(res.result.content[0].text);
+      expect(body.succeeded).toBe(2);
+      expect(body.failed).toBe(1);
+      expect(body.results[1].error).toMatch(/postconditions/i);
+      expect((legacy as any).createTestCase).toHaveBeenCalledTimes(2);
+      expect((legacy as any).createTestCase).toHaveBeenNthCalledWith(2, "proj-1", "mcp-actor-1", {
+        title: "Last", postconditions: ""
+      });
+    });
   });
 
   describe("committed QA graph changes via read-only MCP", () => {
@@ -1650,7 +1702,8 @@ describe("McpService", () => {
         suiteId: undefined,
         status: undefined,
         ownerId: undefined,
-        automationStatus: undefined
+        automationStatus: undefined,
+        severity: undefined
       });
       const body = JSON.parse(res.result.content[0].text);
       expect(body.total).toBe(3);
@@ -1661,6 +1714,40 @@ describe("McpService", () => {
         ok: false,
         error: "Test case not found in this project"
       });
+    });
+
+    it("advertises and applies canonical severity through bulk update", async () => {
+      const { db } = makeDb({ ownedTestcaseIds: ["tc-1", "tc-2"] });
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      const catalog: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
+      const tool = catalog.result.tools.find((entry: any) => entry.name === "bulk_update_testcases");
+      expect(tool.inputSchema.properties.severity.type).toBe("string");
+
+      const res: any = await svc.handleRequest(
+        rpc("tools/call", { name: "bulk_update_testcases", arguments: { testcaseIds: ["tc-1", "tc-2"], severity: "critical" } }),
+        principal({ userId: "user-7" }),
+        "proj-1"
+      );
+      expect(res.result.isError).toBe(false);
+      expect((legacy as any).bulkUpdateTestCases).toHaveBeenCalledWith("proj-1", "user-7", {
+        testcaseIds: ["tc-1", "tc-2"],
+        priority: undefined,
+        suiteId: undefined,
+        status: undefined,
+        ownerId: undefined,
+        automationStatus: undefined,
+        severity: "Critical"
+      });
+
+      const invalid: any = await svc.handleRequest(
+        rpc("tools/call", { name: "bulk_update_testcases", arguments: { testcaseIds: ["tc-1"], severity: "not-a-severity" } }),
+        principal({ userId: "user-7" }),
+        "proj-1"
+      );
+      expect(invalid.error.code).toBe(RpcCode.ToolExecutionError);
+      expect(invalid.error.message).toMatch(/severity/i);
+      expect((legacy as any).bulkUpdateTestCases).toHaveBeenCalledTimes(1);
     });
 
     it("deduplicates repeated ids in the input before applying and reporting", async () => {

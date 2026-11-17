@@ -51,13 +51,17 @@ const SEVERITY_SCHEMA = {
   description: `One of ${BUG_SEVERITIES.join(", ")} (matched case-insensitively). Omit to leave severity unset.`
 };
 
-/** The existing testcases.attachments TEXT field is displayed as Notes in the editor.
- * MCP schemas are advisory, so a malformed supplied value must be rejected
- * before the legacy writer; omission must pass through without stale reads.
+/** The existing testcases.attachments TEXT field is displayed as Notes in the editor, and
+ * testcases.postconditions is the existing expected-final-state field. MCP schemas are advisory,
+ * so a malformed supplied value must be rejected before the legacy writer; omission must pass
+ * through without stale reads or a fabricated default. null is not a clear: pass "" to clear.
  */
-function validateTestcaseNotes(body: Record<string, unknown>): void {
+function validateTestcaseTextFields(body: Record<string, unknown>): void {
   if (Object.prototype.hasOwnProperty.call(body, "attachments") && typeof body.attachments !== "string") {
     throw new McpError(RpcCode.ToolExecutionError, '"attachments" (Notes) must be a string; omit to preserve Notes, or pass "" to clear');
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "postconditions") && typeof body.postconditions !== "string") {
+    throw new McpError(RpcCode.ToolExecutionError, '"postconditions" must be a string; omit to preserve the existing value, or pass "" to clear');
   }
 }
 
@@ -307,7 +311,7 @@ export function buildMcpTools(): McpTool[] {
           suiteId: { type: "string" },
           description: { type: "string" },
           preconditions: { type: "string" },
-          postconditions: { type: "string", description: "Expected state after the test; distinct from each step expectedResult." },
+          postconditions: { type: "string", description: "Expected state after the test; omit or pass an empty string for none. Distinct from each step expectedResult; null is invalid." },
           steps: {
             type: "array",
             items: {
@@ -333,7 +337,7 @@ export function buildMcpTools(): McpTool[] {
       },
       handler: async (args, ctx) => {
         requireString(args, "title");
-        validateTestcaseNotes(args);
+        validateTestcaseTextFields(args);
         // An MCP caller gets no schema enforcement (inputSchema is advisory only — see
         // mcp.service.ts), so its `steps` can drift onto synonym keys the editor doesn't read
         // (e.g. "expected" instead of "expectedResult") exactly the way Zyra's chat/task-board
@@ -365,7 +369,7 @@ export function buildMcpTools(): McpTool[] {
           title: { type: "string" },
           description: { type: "string" },
           preconditions: { type: "string" },
-          postconditions: { type: "string" },
+          postconditions: { type: "string", description: "Expected state after the test. Omit to preserve, pass a string to replace, or pass an empty string to clear; null is invalid." },
           steps: {
             type: "array",
             items: {
@@ -393,7 +397,7 @@ export function buildMcpTools(): McpTool[] {
       },
       handler: async (args, ctx) => {
         const testcaseId = requireString(args, "testcaseId");
-        validateTestcaseNotes(args);
+        validateTestcaseTextFields(args);
         expectedTestcaseRevision(args.expectedRevision);
         // updateTestCase() takes no project argument of its own — it derives the project from the
         // row it finds by id — so the tool must check project ownership itself before calling it.
@@ -479,7 +483,7 @@ export function buildMcpTools(): McpTool[] {
                 suiteId: { type: "string" },
                 description: { type: "string" },
                 preconditions: { type: "string" },
-                postconditions: { type: "string", description: "Expected state after the test; not per-step expectedResult." },
+                postconditions: { type: "string", description: "Expected state after the test; omit or pass an empty string for none. Not per-step expectedResult; null is invalid." },
                 steps: {
                   type: "array",
                   items: {
@@ -520,7 +524,7 @@ export function buildMcpTools(): McpTool[] {
         for (let index = 0; index < items.length; index++) {
           const item = (items[index] || {}) as Record<string, unknown>;
           try {
-            validateTestcaseNotes(item);
+            validateTestcaseTextFields(item);
             if (typeof item.title !== "string" || item.title.trim() === "") {
               throw new Error('"title" is required and must be a non-empty string');
             }
@@ -543,7 +547,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "bulk_update_testcases",
       description:
-        `Apply the same field changes to many test cases in the token's project in one call — the same underlying bulk-update path the app's own multi-select repository actions use. Required: testcaseIds (array, up to ${LegacyService.MAX_BULK_TESTCASES}). Optional: priority, suiteId (pass "none" to clear it), status, ownerId, automationStatus — unlike update_testcase, only these five fields are bulk-writable; title/description/steps/etc. are not. Every id is validated against the token's project first: ids that don't exist, belong to another project, or are already archived-deleted are reported as failed in the results array and are never touched, while every valid id receives the same update in a single statement. Duplicate ids in the input are deduplicated before applying.`,
+        `Apply the same field changes to many test cases in the token's project in one call — the same underlying bulk-update path the app's own multi-select repository actions use. Required: testcaseIds (array, up to ${LegacyService.MAX_BULK_TESTCASES}). Optional: priority, suiteId (pass "none" to clear it), status, ownerId, automationStatus, severity — unlike update_testcase, only these six fields are bulk-writable; title/description/steps/etc. are not. Every id is validated against the token's project first: ids that don't exist, belong to another project, or are already archived-deleted are reported as failed in the results array and are never touched, while every valid id receives the same update atomically in a single statement (a failure in that statement is a call-level error, not a per-item result). Duplicate ids in the input are deduplicated before applying.`,
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -553,7 +557,8 @@ export function buildMcpTools(): McpTool[] {
           suiteId: { type: "string" },
           status: { type: "string" },
           ownerId: { type: "string" },
-          automationStatus: { type: "string" }
+          automationStatus: { type: "string" },
+          severity: SEVERITY_SCHEMA
         },
         required: ["testcaseIds"],
         additionalProperties: false
@@ -571,13 +576,15 @@ export function buildMcpTools(): McpTool[] {
         if (validIds.length > 0) {
           // bulkUpdateTestCases requires a real, org-access-checkable user (it runs
           // requireProjectAccess internally) — same reasoning as update_suite/update_bug.
+          const severity = canonicalizeSeverity({ severity: args.severity }).severity;
           await ctx.legacy.bulkUpdateTestCases(ctx.projectId, ctx.userId, {
             testcaseIds: validIds,
             priority: args.priority,
             suiteId: args.suiteId,
             status: args.status,
             ownerId: args.ownerId,
-            automationStatus: args.automationStatus
+            automationStatus: args.automationStatus,
+            severity
           });
         }
         const results = [
