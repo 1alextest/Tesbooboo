@@ -1814,6 +1814,65 @@ export class LegacyService implements OnModuleInit {
     return { ok: true };
   }
 
+  // --- Exact-revision test-case approval ------------------------------------
+  // The receipt records the revision the reviewer actually saw. The status transition rechecks
+  // the same CAS hash inside its transaction, so content changed between review and approval is a
+  // 409 that writes nothing — not a silent approval of the newer payload.
+  async approveTestCaseForUser(userId: string | null | undefined, projectId: string, testcaseId: string, body: Body) {
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(testcaseId)) throw new NotFoundException({ error: "Test case not found" });
+    const revision = expectedTestcaseRevision(body?.expectedRevision);
+    if (!revision) throw new BadRequestException({ error: "expectedRevision is required to approve a test case" });
+    const result = await this.db.transaction(async (client) => {
+      const updated = await client.query(
+        `UPDATE testcases SET status = 'Approved', updated_by = $2, updated_at = now()
+         WHERE id = $1 AND project_id = $4 AND deleted_at IS NULL
+           AND ${TESTCASE_EDIT_REVISION_SQL} = $3
+         RETURNING *`,
+        [testcaseId, uid, revision, projectId]
+      );
+      if (!updated.rows[0]) {
+        const exists = await client.query(
+          "SELECT id FROM testcases WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL",
+          [testcaseId, projectId]
+        );
+        if (!exists.rows[0]) throw new NotFoundException({ error: "Test case not found" });
+        throw new ConflictException({
+          code: "TESTCASE_APPROVAL_CONFLICT",
+          error: "The test case changed since this revision was reviewed; reload before approving"
+        });
+      }
+      const receipt = await client.query(
+        `INSERT INTO testcase_approval_receipts (project_id, testcase_id, approved_revision, actor_id)
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT (testcase_id, approved_revision) DO NOTHING
+         RETURNING *`,
+        [projectId, testcaseId, revision, uid]
+      );
+      return { testcase: updated.rows[0], receipt: receipt.rows[0] ?? null };
+    });
+    await this.logProjectActivity(projectId, uid, "testcase_approved", "testcase", testcaseId, `${result.testcase.external_id} - ${result.testcase.title}`, {
+      after: toCamel(result.testcase)
+    });
+    await this.testcasesListCache.invalidate(projectId);
+    this.enqueueTestcaseEmbedding(projectId, testcaseId, "updated");
+    return { testcase: toCamel(result.testcase), receipt: result.receipt ? toCamel(result.receipt) : null };
+  }
+
+  async listTestCaseApprovalsForUser(userId: string | null | undefined, projectId: string, testcaseId: string) {
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(testcaseId)) throw new NotFoundException({ error: "Test case not found" });
+    const exists = await this.db.query("SELECT id FROM testcases WHERE id = $1 AND project_id = $2", [testcaseId, projectId]);
+    if (!exists.rows[0]) throw new NotFoundException({ error: "Test case not found" });
+    const res = await this.db.query(
+      "SELECT * FROM testcase_approval_receipts WHERE testcase_id = $1 AND project_id = $2 ORDER BY created_at DESC",
+      [testcaseId, projectId]
+    );
+    return res.rows.map(toCamel);
+  }
+
   private enqueueEmbedding(organizationId: string, projectId: string, sourceType: "document" | "file", sourceId: string, reason: "created" | "updated" | "transcribed"): void {
     void this.ragIngestion.enqueueEmbedding({ organizationId, projectId, sourceType, sourceId, reason }).catch(() => undefined);
   }
