@@ -20,6 +20,44 @@ const MODEL = {
   ]
 };
 
+test("a mapping whose case changed since acceptance is reported for review, not rewritten", async ({ page }) => {
+  const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  const name = `E2E stale mapping model ${Date.now()}`;
+  let modelId = "";
+  let caseId = "";
+  try {
+    const created = await api.post(`/api/projects/${ctx.projectId}/model-studio/models`, { data: { name, model: MODEL } });
+    expect(created.status(), await created.text()).toBe(201);
+    const model = await created.json();
+    modelId = model.id;
+
+    const createdCase = await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E stale mapping case ${Date.now()}` } });
+    expect(createdCase.status(), await createdCase.text()).toBe(201);
+    caseId = (await createdCase.json()).id;
+    const caseRevision = (await (await api.get(`/api/projects/${ctx.projectId}/testcases/${caseId}`)).json()).editRevision;
+
+    const linked = await api.post(
+      `/api/projects/${ctx.projectId}/model-studio/models/${modelId}/revisions/${model.latestRevision.id}/links`,
+      { data: { testcaseId: caseId, elementIds: ["finish"], testcaseRevision: caseRevision } }
+    );
+    expect(linked.status(), await linked.text()).toBe(201);
+
+    const edited = await api.put(`/api/projects/${ctx.projectId}/testcases/${caseId}`, { data: { title: `E2E stale mapping case edited ${Date.now()}` } });
+    expect(edited.ok(), await edited.text()).toBeTruthy();
+
+    await page.goto(`/projects/${ctx.projectId}/model-studio`);
+    await page.getByRole("button", { name, exact: false }).click();
+    const mappings = page.getByRole("region", { name: "Case mappings" });
+    await expect(mappings).toContainText("1 linked");
+    await expect(mappings.getByRole("status")).toContainText("1 case has changed since the mapping was accepted");
+    await expect(mappings.getByRole("status")).toContainText("never rewrites a case, link or history");
+  } finally {
+    if (caseId) await api.delete(`/api/projects/${ctx.projectId}/testcases/${caseId}`, { failOnStatusCode: false });
+    if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(ctx.projectId)};`);
+    await api.dispose();
+  }
+});
+
 test("a persisted model revision renders as a graph and accessible tables", async ({ page }) => {
   const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
   const name = `E2E studio model ${Date.now()}`;
@@ -37,7 +75,10 @@ test("a persisted model revision renders as a graph and accessible tables", asyn
     await expect(page.getByRole("region", { name: "Draft state graph" })).toBeVisible();
     await expect(page.getByRole("table", { name: "States" })).toContainText("start");
     await expect(page.getByRole("table", { name: "Transitions" })).toContainText("finish");
-    await expect(page.getByRole("region", { name: "Case mappings" })).toContainText("0 linked");
+    const mappings = page.getByRole("region", { name: "Case mappings" });
+    await expect(mappings).toContainText("0 linked");
+    // A clean latest revision (no links at all) must not render a staleness warning.
+    await expect(mappings.getByRole("status")).toHaveCount(0);
   } finally {
     if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(ctx.projectId)};`);
     await api.dispose();

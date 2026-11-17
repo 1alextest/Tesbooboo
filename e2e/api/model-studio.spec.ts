@@ -76,20 +76,84 @@ test.describe("persisted Model Studio revisions and mappings", () => {
       const createdCase = await owner.post(`/api/projects/${projectId}/testcases`, { data: { title: `E2E model case ${Date.now()}` } });
       expect(createdCase.status(), await createdCase.text()).toBe(201);
       caseId = (await createdCase.json()).id;
+      const caseRevision = (await (await owner.get(`/api/projects/${projectId}/testcases/${caseId}`)).json()).editRevision;
+      expect(caseRevision).toMatch(/^[a-f0-9]{64}$/);
 
-      const linkBody = { testcaseId: caseId, elementIds: ["start", "finish"] };
+      const linkBody = { testcaseId: caseId, elementIds: ["start", "finish"], testcaseRevision: caseRevision };
       const linked = await owner.post(`${base}/${modelId}/revisions/${second.id}/links`, { data: linkBody });
       expect(linked.status(), await linked.text()).toBe(201);
       const link = await linked.json();
-      expect(link).toMatchObject({ coverageAssertion: "none", executionAssertion: "none" });
+      expect(link).toMatchObject({ coverageAssertion: "none", executionAssertion: "none", testcaseRevision: caseRevision });
       const duplicate = await owner.post(`${base}/${modelId}/revisions/${second.id}/links`, { data: linkBody });
       expect(duplicate.status()).toBe(201);
       expect((await duplicate.json()).id).toBe(link.id);
+      // A second link for the same case on the same revision, with no recorded case revision.
+      const noRevision = await owner.post(`${base}/${modelId}/revisions/${second.id}/links`, {
+        data: { testcaseId: caseId, elementIds: ["retry"] }
+      });
+      expect(noRevision.status(), await noRevision.text()).toBe(201);
 
       const coverage = await (await owner.get(`${base}/${modelId}/coverage`)).json();
       expect(coverage).toMatchObject({ coverageAssertion: "none", executionAssertion: "none" });
       expect(coverage.elements.find((element: { id: string }) => element.id === "start").linkedCases).toBe(1);
       expect(coverage.elements.find((element: { id: string }) => element.id === "done").linkedCases).toBe(0);
+      expect(coverage.mappingStaleness).toMatchObject({
+        supersededRevisions: [],
+        testcasesChangedSinceLink: 0,
+        testcasesWithoutRecordedRevision: 1,
+        deletedTestcases: 0
+      });
+
+      // Editing the case changes its basis without deleting the mapping. The recorded revision is
+      // compared to the current one; staleness is reported, never applied to the case or link.
+      const edited = await owner.put(`/api/projects/${projectId}/testcases/${caseId}`, { data: { title: `E2E model case edited ${Date.now()}` } });
+      expect(edited.ok(), await edited.text()).toBeTruthy();
+      const changed = await (await owner.get(`${base}/${modelId}/coverage`)).json();
+      expect(changed.mappingStaleness).toMatchObject({
+        supersededRevisions: [],
+        testcasesChangedSinceLink: 1,
+        testcasesWithoutRecordedRevision: 1
+      });
+
+      // A later model revision does not rewrite earlier mappings: they remain stored and are
+      // reported as superseded instead of silently becoming "no mapping" on the latest revision.
+      const thirdModel = {
+        ...secondModel,
+        states: [...secondModel.states, { id: "cancelled", label: "Cancelled" }],
+        transitions: [...secondModel.transitions, { id: "cancel_edge", from: "start", to: "cancelled", action: "Cancel", expectedObservation: "The flow stops" }]
+      };
+      const savedThird = await owner.post(`${base}/${modelId}/revisions`, { data: { baseRevisionId: second.id, model: thirdModel } });
+      expect(savedThird.status(), await savedThird.text()).toBe(201);
+      const third = await savedThird.json();
+      const supersededCoverage = await (await owner.get(`${base}/${modelId}/coverage`)).json();
+      expect(supersededCoverage.revisionId).toBe(third.id);
+      expect(supersededCoverage.elements.every((element: { linkedCases: number }) => element.linkedCases === 0)).toBe(true);
+      expect(supersededCoverage.mappingStaleness.supersededRevisions).toEqual([
+        expect.objectContaining({ modelRevisionId: second.id, revisionNumber: 2, linkedCases: 1, sameContentAsLatest: false })
+      ]);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM mbt_model_case_links
+        WHERE model_revision_id = ${literal(second.id)} AND project_id = ${literal(projectId)};`))).toBe(2);
+
+      // A soft-deleted case keeps its link row but stops contributing to current coverage; it is
+      // reported as a deleted mapping instead of quietly inflating an element count.
+      const deletedCase = await owner.post(`/api/projects/${projectId}/testcases`, { data: { title: `E2E deleted mapped case ${Date.now()}` } });
+      expect(deletedCase.status(), await deletedCase.text()).toBe(201);
+      const deletedCaseId = (await deletedCase.json()).id;
+      const deletedRevision = (await (await owner.get(`/api/projects/${projectId}/testcases/${deletedCaseId}`)).json()).editRevision;
+      const deletedLink = await owner.post(`${base}/${modelId}/revisions/${third.id}/links`, {
+        data: { testcaseId: deletedCaseId, elementIds: ["cancel_edge"], testcaseRevision: deletedRevision }
+      });
+      expect(deletedLink.status(), await deletedLink.text()).toBe(201);
+      expect((await owner.delete(`/api/projects/${projectId}/testcases/${deletedCaseId}`)).ok()).toBe(true);
+      const afterDelete = await (await owner.get(`${base}/${modelId}/coverage`)).json();
+      expect(afterDelete.elements.find((element: { id: string }) => element.id === "cancel_edge").linkedCases).toBe(0);
+      expect(afterDelete.mappingStaleness).toMatchObject({
+        testcasesChangedSinceLink: 0,
+        testcasesWithoutRecordedRevision: 0,
+        deletedTestcases: 1
+      });
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM mbt_model_case_links l
+        WHERE l.testcase_id = ${literal(deletedCaseId)} AND l.model_revision_id = ${literal(third.id)};`))).toBe(1);
 
       // A member can read the project's models; a non-member/non-project URL cannot.
       expect((await qa.get(`${base}/${modelId}`)).status()).toBe(200);

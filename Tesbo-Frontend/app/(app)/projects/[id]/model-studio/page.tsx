@@ -19,6 +19,40 @@ import { formatDate } from "@/lib/date";
  * shows model identity, immutable revisions, the structural graph, and explicit case mappings.
  * It does not create, approve, activate, generate or execute anything; a mapping is not coverage.
  */
+/**
+ * Staleness is a review cue, not a status change: nothing here rewrites the case, the link or its
+ * history. Superseded revisions are reported per revision so the counts cannot be mistaken for a
+ * total across revisions (one case may be mapped on more than one older revision).
+ */
+function MappingStalenessNote({ staleness }: { staleness: ModelStudioCoverage["mappingStaleness"] }) {
+  const parts: string[] = [];
+  if (staleness.supersededRevisions.length) {
+    const revisions = staleness.supersededRevisions
+      .map((row) => `rev ${row.revisionNumber} (${row.linkedCases} ${row.linkedCases === 1 ? "case" : "cases"}${row.sameContentAsLatest ? ", same content" : ""})`)
+      .join(", ");
+    parts.push(`mappings target older model revisions: ${revisions}`);
+  }
+  if (staleness.testcasesChangedSinceLink) {
+    parts.push(
+      `${staleness.testcasesChangedSinceLink} ${staleness.testcasesChangedSinceLink === 1 ? "case has" : "cases have"} changed since the mapping was accepted`
+    );
+  }
+  if (staleness.testcasesWithoutRecordedRevision) {
+    parts.push(
+      `${staleness.testcasesWithoutRecordedRevision} ${staleness.testcasesWithoutRecordedRevision === 1 ? "mapping has" : "mappings have"} no recorded case revision`
+    );
+  }
+  if (staleness.deletedTestcases) {
+    parts.push(`${staleness.deletedTestcases} mapped ${staleness.deletedTestcases === 1 ? "case is" : "cases are"} deleted`);
+  }
+  if (!parts.length) return null;
+  return (
+    <p role="status" className="mt-2 rounded border border-[var(--warning)] bg-[var(--warning-soft)] p-2 text-[11.5px] text-[var(--warning-foreground)]">
+      Review the mapping basis: {parts.join("; ")}. {staleness.note}
+    </p>
+  );
+}
+
 export default function ModelStudioPage() {
   const params = useParams();
   const projectId = params.id as string;
@@ -229,14 +263,17 @@ export default function ModelStudioPage() {
                   A linked case is an accepted mapping, not execution or verified coverage.
                 </p>
                 {currentCoverage ? (
-                  <ul className="mt-2 grid gap-1 text-[12px] sm:grid-cols-2">
-                    {currentCoverage.elements.map((element) => (
-                      <li key={element.id} className="flex justify-between gap-3 border-b border-[var(--border)] py-1">
-                        <span className="font-mono">{element.id}</span>
-                        <span>{element.linkedCases} linked</span>
-                      </li>
-                    ))}
-                  </ul>
+                  <>
+                    <ul className="mt-2 grid gap-1 text-[12px] sm:grid-cols-2">
+                      {currentCoverage.elements.map((element) => (
+                        <li key={element.id} className="flex justify-between gap-3 border-b border-[var(--border)] py-1">
+                          <span className="font-mono">{element.id}</span>
+                          <span>{element.linkedCases} linked</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <MappingStalenessNote staleness={currentCoverage.mappingStaleness} />
+                  </>
                 ) : (
                   <p className="mt-2 text-[12px] text-[var(--muted)]">Coverage is unavailable.</p>
                 )}
