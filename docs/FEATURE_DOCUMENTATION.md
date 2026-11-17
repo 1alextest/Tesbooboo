@@ -3045,9 +3045,9 @@ rows in an existing deployment are preserved rather than destroyed.
   `connectedProjects` (every Tesbo project currently mapped to this connection, with name/key).
   Not owner-gated.
 
-**Known gap worth testing:** `planLimits.assertIntegrationAllowed` runs in the *callback* but not in
-*auth-url*, so a workspace whose plan disallows integrations can click Connect, complete the
-provider's consent screen, and only then be rejected. Fail-late rather than fail-fast.
+**Plan gate:** `planLimits.assertIntegrationAllowed` now runs in both *auth-url* and the *callback*.
+Previously only the callback checked it, so a workspace whose plan disallowed an integration could
+click Connect, complete the provider's consent screen, and only then be rejected.
 
 **Key files:**
 - Backend controller: `Tesbo-Backend-Nest/src/legacy/legacy.controller.ts`

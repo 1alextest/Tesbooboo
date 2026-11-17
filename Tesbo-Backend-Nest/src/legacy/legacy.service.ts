@@ -13098,6 +13098,10 @@ export class LegacyService implements OnModuleInit {
     const p = assertIntegrationProvider(provider);
     const workspace = await this.workspace(userId);
     if (this.normalizeRole(workspace.role) !== "owner") throw new ForbiddenException({ error: "Only the workspace owner can manage integrations" });
+    // Same entitlement gate as the callback, but before the provider consent screen. Without it a
+    // Launch workspace could authorize a Pro-only integration, complete the provider flow and only
+    // then be refused — a fail-late path with credentials already exchanged at the provider.
+    await this.planLimits.assertIntegrationAllowed(workspace.id, p);
     const { clientId, redirectUri } = this.integrationOAuthConfig(p);
     const state = signOAuthState(p, workspace.id);
     if (p === "jira") {
