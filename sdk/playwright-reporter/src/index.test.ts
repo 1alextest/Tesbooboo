@@ -241,6 +241,26 @@ test("confirmed close retains success logging and drains results before sending 
   });
 });
 
+test("a retried test contributes one final result to the close summary, not one per attempt", async () => {
+  await withIngest("accepted", async (baseUrl, calls) => {
+    const reporter = new TesboReporter({ baseUrl, projectId: PROJECT, token: TOKEN, retries: 1, timeoutMs: 1_000, attachEvidence: "never" });
+    const tagged = linkedTest();
+    const suite = { allTests: () => [tagged] } as unknown as Suite;
+    const logs = await captureLogs(async () => {
+      await reporter.onBegin(fakeConfig, suite);
+      // Playwright reports each attempt; the ingest upserts on (run, case), so only the last stands.
+      reporter.onTestEnd(tagged, { status: "failed", duration: 1, retry: 0, attachments: [] } as unknown as TestResult);
+      reporter.onTestEnd(tagged, { status: "passed", duration: 1, retry: 1, attachments: [] } as unknown as TestResult);
+      await reporter.onEnd({ status: "passed" } as FullResult);
+    });
+    const results = calls.filter((call) => call.url.endsWith("/results"));
+    assert.equal(results.length, 2, "both attempts are still submitted, so the last upserts over the first");
+    assert.deepEqual(results.map((call) => (call.body as { retryCount: number }).retryCount), [0, 1]);
+    assert.deepEqual(calls[calls.length - 1].body, { status: "completed", summary: { total: 1, passed: 1, failed: 0, skipped: 0 } });
+    assert.match(logs, /run .* closed \(completed\): 1 passed, 0 failed, 0 skipped/);
+  });
+});
+
 for (const status of ["interrupted", "timedout"] as const) {
   test(`${status} confirms incomplete closure when acknowledged`, async () => {
     await withIngest("accepted", async (baseUrl, calls) => {
