@@ -1208,6 +1208,36 @@ test.describe("cross-endpoint consistency", () => {
   });
 });
 
+test.describe("requirement matrix bug provenance", () => {
+  test("RPT-A-72 the matrix reads bug_links, so a bug linked to another run stays visible", async () => {
+    await withEmptyProject(async (projectId) => {
+      const suiteId = await seedSuite(asOwner, projectId, "E2E BugLink Matrix Suite");
+      const testcase = await seedTestCase(asOwner, projectId, {
+        title: "E2E BugLink Matrix Case",
+        suiteId,
+        status: "Approved",
+      });
+      const runA = await seedRun(asOwner, projectId, { name: "E2E BugLink Matrix Run A" });
+      const runB = await seedRun(asOwner, projectId, { name: "E2E BugLink Matrix Run B" });
+      await addRunCases(asOwner, runA.id, [testcase.id]);
+      await addRunCases(asOwner, runB.id, [testcase.id]);
+      // Created without a link, so bugs.execution_id stays null; both links exist only in bug_links.
+      const bugId = await seedBug(asOwner, projectId, { title: "E2E BugLink Matrix Bug" });
+      for (const run of [runA, runB]) {
+        const linked = await asOwner.post(`/api/bugs/${bugId}/links`, {
+          data: { testcaseId: testcase.id, cycleId: run.id },
+        });
+        expect(linked.ok(), `linking the bug to ${run.id} — ${await linked.text()}`).toBeTruthy();
+      }
+
+      const matrix = await getJson(asOwner, `/api/projects/${projectId}/reports/requirement-matrix`);
+      const rows = matrix.rows.filter((row: { testcaseId: string }) => row.testcaseId === testcase.id);
+      expect(rows.map((row: { runId: string }) => row.runId).sort()).toEqual([runA.id, runB.id].sort());
+      for (const row of rows) expect(row.bugId).toBe(bugId);
+    });
+  });
+});
+
 /*
  * Hard-delete remediation Phase 2. V111 made `cycles`/`cycle_items` soft-deletable (Phase 1), but
  * five of the reports layer's own read sites — executionReport, requirementMatrix, coverageBySuite,
