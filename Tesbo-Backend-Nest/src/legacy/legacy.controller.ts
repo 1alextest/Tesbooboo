@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   MessageEvent,
   NotImplementedException,
   Param,
@@ -598,6 +599,26 @@ export class LegacyController {
     @Body() body: Record<string, any>
   ) {
     return this.legacy.updateTestCaseForUser(req.userId, projectId, testcaseId, body);
+  }
+
+  @Post("/api/projects/:projectId/testcases/:testcaseId/approve")
+  @HttpCode(200)
+  approveTestCase(
+    @Req() req: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("testcaseId") testcaseId: string,
+    @Body() body: Record<string, any>
+  ) {
+    return this.legacy.approveTestCaseForUser(req.userId, projectId, testcaseId, body);
+  }
+
+  @Get("/api/projects/:projectId/testcases/:testcaseId/approvals")
+  listTestCaseApprovals(
+    @Req() req: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("testcaseId") testcaseId: string
+  ) {
+    return this.legacy.listTestCaseApprovalsForUser(req.userId, projectId, testcaseId);
   }
 
   @Delete("/api/projects/:projectId/testcases/:testcaseId")

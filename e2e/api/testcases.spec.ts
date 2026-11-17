@@ -2497,3 +2497,47 @@ test.describe("saved test-case views", () => {
     }
   });
 });
+
+test.describe("exact-revision approval", () => {
+  test("approves the reviewed revision, refuses a changed revision, and records a receipt", async ({ request }) => {
+    const created = await createCase(request, { title: `E2E approval ${Date.now()}` });
+    const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
+    try {
+      const initial = await (await request.get(url)).json();
+      expect(initial.status).toBe("Draft");
+
+      const approved = await request.post(`${url}/approve`, { data: { expectedRevision: initial.editRevision } });
+      expect(approved.status(), await approved.text()).toBe(200);
+      const body = await approved.json();
+      expect(body.testcase).toMatchObject({ id: created.id, status: "Approved" });
+      expect(body.receipt).toMatchObject({ testcaseId: created.id, approvedRevision: initial.editRevision });
+
+      const receipts = await (await request.get(`${url}/approvals`)).json();
+      expect(receipts.map((receipt: { approvedRevision: string }) => receipt.approvedRevision)).toContain(initial.editRevision);
+
+      // A change after the review makes the previously reviewed revision stale.
+      expect((await request.put(url, { data: { description: "changed after review" } })).ok()).toBeTruthy();
+      const stale = await request.post(`${url}/approve`, { data: { expectedRevision: initial.editRevision }, failOnStatusCode: false });
+      expect(stale.status()).toBe(409);
+      expect((await stale.json()).code).toBe("TESTCASE_APPROVAL_CONFLICT");
+      expect(await (await request.get(`${url}/approvals`)).json()).toHaveLength(receipts.length);
+      expect((await (await request.get(url)).json()).status).toBe("Approved");
+
+      expect((await request.post(`${url}/approve`, { data: {}, failOnStatusCode: false })).status()).toBe(400);
+      expect((await request.post(`${url}/approve`, { data: { expectedRevision: "nope" }, failOnStatusCode: false })).status()).toBe(400);
+
+      const asB = await newRequestContext.newContext({
+        baseURL: env.apiBaseUrl,
+        storageState: path.join(__dirname, "../.auth/state-b.json")
+      });
+      try {
+        const current = await (await request.get(url)).json();
+        expect((await asB.post(`${url}/approve`, { data: { expectedRevision: current.editRevision }, failOnStatusCode: false })).status()).toBe(404);
+      } finally {
+        await asB.dispose();
+      }
+    } finally {
+      await deleteCase(request, created.id);
+    }
+  });
+});
