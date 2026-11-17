@@ -3,16 +3,12 @@ import { test } from "node:test";
 import type { FullConfig, Suite } from "@playwright/test/reporter";
 import TesboReporter, { TesboClient } from "./index";
 import { ENV_BASE_URL, ENV_PROJECT_ID, ENV_TOKEN } from "./config";
-import { createServer, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
-import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { FullResult, TestCase, TestResult } from "@playwright/test/reporter";
+import { PROJECT, TOKEN, RUN, CASE, withIngest, runPlaywrightFixture } from "../test-support/reporter.cjs";
 
-const PROJECT = "41dba2a2-a60b-4917-8d63-9f8a86986703";
-const TOKEN = "tsbo_f89c09aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const BASE = "https://api-app-stage.tesbo.io";
 
 /** Minimal stand-ins: every assertion below is reached before the suite or config is inspected. */
@@ -168,69 +164,6 @@ test("strict mode fails an untagged suite even when the config is complete", asy
     await assert.rejects(() => reporter.onBegin(fakeConfig, suite), /strict mode/);
   });
 });
-
-/* Actual loopback HTTP, not mocked fetch or a real Tesbo/PostgreSQL installation. */
-const RUN = "55555555-5555-4555-8555-555555555555";
-const CASE = "CLOSE-TC-1";
-type CloseFixture = "accepted" | "minimal" | "mismatch" | "denied" | "unavailable" | "disconnect" | "timeout" | "lost-ack" |
-  "invalid-json" | "empty" | "null" | "array" | "wrong-run" | "missing-mismatch" | "invalid-mismatch" |
-  "invalid-pair" | "invalid-status" | "invalid-already" | "reported-incomplete" | "null-status" |
-  "already-incomplete" | "already-unknown" | "already-null-status" | "retry-then-accepted" | "unknown-result";
-
-async function withIngest(
-  outcome: CloseFixture,
-  body: (baseUrl: string, calls: Array<{ method: string; url: string; body: Record<string, unknown> }>, fixture: { closureApplied: boolean }) => Promise<void>
-) {
-  const calls: Array<{ method: string; url: string; body: Record<string, unknown> }> = [];
-  const fixture = { closureApplied: false };
-  const json = (res: ServerResponse, status: number, value: unknown) => {
-    res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(value));
-  };
-  const server = createServer(async (req, res) => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of req) chunks.push(Buffer.from(chunk));
-    const parsed = chunks.length && req.headers["content-type"]?.includes("application/json")
-      ? JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown> : {};
-    calls.push({ method: req.method ?? "", url: req.url ?? "", body: parsed });
-    if (req.headers.authorization !== `Bearer ${TOKEN}`) { json(res, 403, { error: "Fixture token required" }); return; }
-    if (req.url?.endsWith("/cases/resolve")) { json(res, 200, { known: [{ caseId: CASE }], unknown: [] }); return; }
-    if (req.url?.endsWith("/runs")) { json(res, 201, { runId: RUN, reused: false }); return; }
-    if (req.url?.endsWith("/evidence")) { json(res, 200, { total: 0, skipped: "quota" }); return; }
-    if (req.url?.endsWith("/results")) {
-      json(res, outcome === "unknown-result" ? 404 : 200, outcome === "unknown-result" ? { error: "Fixture case disappeared" } : { executionId: "fixture", status: "Passed", retryCount: 0 }); return;
-    }
-    if (!req.url?.endsWith("/close")) { json(res, 404, { error: "Unexpected fixture route" }); return; }
-    if (outcome === "denied" || outcome === "unavailable" || outcome === "unknown-result" ||
-        outcome === "retry-then-accepted" && calls.filter((call) => call.url.endsWith("/close")).length === 1) {
-      json(res, outcome === "denied" ? 403 : 503, { error: "Fixture closure unavailable" }); return;
-    }
-    if (outcome === "disconnect") { req.socket.destroy(); return; }
-    if (outcome === "lost-ack") { fixture.closureApplied = true; req.socket.destroy(); return; }
-    if (outcome === "timeout") return; // Real AbortController deadline; cleanup closes the socket.
-    if (outcome === "invalid-json") { res.writeHead(200, { "content-type": "application/json" }); res.end("not-json"); return; }
-    if (outcome === "empty" || outcome === "null") { json(res, 200, outcome === "empty" ? {} : null); return; }
-    if (outcome === "array") { json(res, 200, []); return; }
-    if (outcome === "missing-mismatch") { json(res, 200, { runId: RUN }); return; }
-    if (outcome === "minimal" || outcome === "already-unknown") {
-      json(res, 200, { runId: RUN, mismatch: null, ...(outcome === "already-unknown" ? { alreadyClosed: true } : {}) }); return;
-    }
-    fixture.closureApplied = true;
-    json(res, 200, {
-      runId: outcome === "wrong-run" ? PROJECT : RUN,
-      mismatch: outcome === "invalid-mismatch" ? "not-a-summary" : outcome === "invalid-pair" ? { total: { reported: "1", stored: 0 } } : outcome === "mismatch" ? { total: { reported: 1, stored: 0 } } : null,
-      alreadyClosed: outcome === "invalid-already" ? "yes" : outcome === "already-incomplete" || outcome === "already-null-status",
-      closeStatus: outcome === "invalid-status" ? "not-a-close-status" : outcome === "already-incomplete" || outcome === "reported-incomplete" ? "incomplete" : outcome === "null-status" || outcome === "already-null-status" ? null : parsed.status
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  try {
-    await body(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, calls, fixture);
-  } finally {
-    const stopped = new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    server.closeAllConnections();
-    await stopped;
-  }
-}
 
 function linkedTest(): TestCase {
   return { tags: [`@tesbo.testId("${CASE}")`], annotations: [], titlePath: () => ["close fixture"] } as unknown as TestCase;
@@ -433,14 +366,12 @@ for (const outcome of ["denied", "null", "lost-ack"] as const) {
       await withIngest(outcome, async (baseUrl, calls) => {
         const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tesbo-reporter-close-"));
         try {
-          const config = path.join(dir, "playwright.config.cjs");
-          await fs.writeFile(config, `module.exports = { workers: 1, retries: 0, reporter: [["list"], [${JSON.stringify(path.resolve(__dirname, "../dist/index.js"))}, ${JSON.stringify({ baseUrl, projectId: PROJECT, token: TOKEN, retries: 1, timeoutMs: 1_000, attachEvidence: "never" })}]] };`);
-          await fs.writeFile(path.join(dir, "close.spec.cjs"), `const { test } = require(${JSON.stringify(require.resolve("@playwright/test"))}); test("close fixture", { tag: '@tesbo.testId("${CASE}")' }, () => { ${failingTest ? 'throw new Error("Expected fixture failure");' : ""} });`);
-          const result = await new Promise<{ code: number | string; output: string }>((resolve, reject) => {
-            execFile(process.execPath, [require.resolve("@playwright/test/cli"), "test", "-c", config], { cwd: dir, encoding: "utf8", timeout: 20_000 }, (error, stdout, stderr) => {
-              if (error && typeof error.code !== "number") { reject(error); return; }
-              resolve({ code: error?.code ?? 0, output: `${stdout}\n${stderr}` });
-            });
+          const result = await runPlaywrightFixture({
+            dir, failingTest,
+            reporter: path.resolve(__dirname, "../dist/index.js"),
+            playwrightCli: require.resolve("@playwright/test/cli"),
+            playwrightTest: require.resolve("@playwright/test"),
+            reporterOptions: { baseUrl, projectId: PROJECT, token: TOKEN, retries: 1, timeoutMs: 1_000, attachEvidence: "never" }
           });
           assert.equal(result.code, failingTest ? 1 : 0, result.output);
           assert.equal(calls.filter((call) => call.url.endsWith("/close")).length, 1, result.output);

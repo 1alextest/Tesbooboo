@@ -1,6 +1,18 @@
 {
+  "private": true,
   "license": "Apache-2.0",
+  "scripts": {
+    "test:quality": "node --test scripts/check-architecture.test.mjs scripts/check-quality-policy.test.mjs scripts/check-migrations.test.mjs scripts/test-impact.test.mjs scripts/check-duplication.test.mjs",
+    "quality:architecture": "node scripts/check-architecture.mjs",
+    "quality:duplication": "node scripts/check-duplication.mjs",
+    "quality:impact": "node scripts/test-impact.mjs"
+  },
   "dependencies": {
     "playwright": "^1.58.2"
+  },
+  "devDependencies": {
+    "dependency-cruiser": "18.8.0",
+    "jscpd": "5.4.3",
+    "typescript": "5.9.3"
   }
 }
