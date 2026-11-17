@@ -399,7 +399,7 @@ test.describe("the tail — api keys, activity, notifications, branding, admin",
     }
   });
 
-  test("TAI-A-21 the customers summary is the total of the rows it returns", async () => {
+  test("TAI-A-23 the customers summary is the total of the rows it returns", async () => {
     const stamp = Date.now();
     const ownerEmail = `e2e-admin-summary-${stamp}@tesbo.invalid`;
     const ownerUser = seedFixtureUser(ownerEmail, "E2E Admin Summary");
@@ -518,7 +518,7 @@ test.describe("the tail — api keys, activity, notifications, branding, admin",
 
   // ─── Linked issue keys ────────────────────────────────────────────────────
 
-  test("TAI-A-20 the linked-issue-key aggregates answer a member and refuse everyone else", { tag: '@tesbo.testId("TES-TC-550")' }, async () => {
+  test("TAI-A-22 the linked-issue-key aggregates answer a member and refuse everyone else", { tag: '@tesbo.testId("TES-TC-550")' }, async () => {
     for (const path of ["/testcases/linked-jira-keys", "/testcases/linked-linear-keys"]) {
       const res = await asOwner.get(url(path), { failOnStatusCode: false });
       expect(res.status(), `${path} — ${await res.text()}`).toBe(200);
