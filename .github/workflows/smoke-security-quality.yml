@@ -94,16 +94,6 @@ jobs:
           curl -fsS http://127.0.0.1:7000/health
           curl -fsS http://127.0.0.1:3000/login >/dev/null
           npx playwright test -c playwright.ci-smoke.config.ts --output=test-results-smoke
-      - name: Verify native testcase API and repository editor impact set
-        working-directory: e2e
-        env:
-          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-testcases
-        run: |
-          # Phase 3/6 classification, saved views, exact-revision approval and the repository
-          # editor live in these two files. They were previously absent from every workflow, so
-          # their green runs proved nothing. Run them explicitly on the isolated stack.
-          npx playwright test -c playwright.config.ts api/testcases.spec.ts ui/testcases.spec.ts --workers=10 --output=test-results-testcases --list
-          npx playwright test -c playwright.config.ts api/testcases.spec.ts ui/testcases.spec.ts --workers=10 --output=test-results-testcases
       - name: Verify model draft preview and existing graph/source/QA handoff E2E
         working-directory: e2e
         env:
@@ -115,6 +105,18 @@ jobs:
           selection='source binding pending save|graph change history is project scoped|source binding setup is owner-only|model draft preview|change history ignores late pagination replies|change review refuses duplicate source capture|change review discards late source-capture feedback|change review serializes native notification retries|Zyra opens native change review|owner can inspect root-free source setup|graph review links an explicitly nominated case'
           npx playwright test -c playwright.config.ts api/zyra.spec.ts ui/zyra.spec.ts --workers=10 -g "$selection" --list
           npx playwright test -c playwright.config.ts api/zyra.spec.ts ui/zyra.spec.ts --workers=10 --output=test-results-zyra -g "$selection"
+      - name: Verify native testcase API and repository editor impact set
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-testcases
+        run: |
+          # Runs AFTER the Zyra step: these spec files read .auth/context.json at module load, and
+          # only a real run's global setup provisions it — a --list before that fails with ENOENT.
+          # Phase 3/6 classification, saved views, exact-revision approval and the repository
+          # editor live in these two files; they were previously absent from every workflow, so
+          # their green runs proved nothing.
+          npx playwright test -c playwright.config.ts api/testcases.spec.ts ui/testcases.spec.ts --workers=10 --output=test-results-testcases --list
+          npx playwright test -c playwright.config.ts api/testcases.spec.ts ui/testcases.spec.ts --workers=10 --output=test-results-testcases
       - name: Verify persisted Model Studio revisions and mappings
         working-directory: e2e
         env:
