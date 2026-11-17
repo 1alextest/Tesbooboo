@@ -1109,6 +1109,10 @@ test.describe("test case repository table and detail panel — Context column", 
 
       await page.goto(`/projects/${ctx.projectId}/testcases`);
       await page.getByPlaceholder("Search by ID, title, or type").fill(`${marker} with citation`);
+      // Search is debounced. Waiting for the cited case's row to disappear is load-bearing: if
+      // it is still rendered, the later getByRole("button", { name: cited.title }) resolves to
+      // that row's title button and opens its edit panel instead of the citation's drawer.
+      await expect(page.locator("table.tc-repo-table tbody tr")).toHaveCount(1);
       const columnsButton = page.getByRole("button", { name: "Columns" });
       await columnsButton.click();
       await page.locator("label", { hasText: "Context" }).locator('input[type="checkbox"]').click();

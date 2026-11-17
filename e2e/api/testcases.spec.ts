@@ -2146,7 +2146,10 @@ test.describe("editing a test case ID", () => {
       // The single ID-edit action contributes one historical snapshot even if
       // creation/other legitimate earlier mutations already generated versions.
       expect(snapshotCount() - baseline).toBe(1);
-      const latest = scalar(`SELECT snapshot->>'external_id' || ':' || snapshot->>'title'
+      // Parenthesise each extraction: ->> and || share "any other operator" precedence and
+      // associate left, so the bare chain parsed as ((snapshot->>'external_id') || ':' || snapshot)
+      // ->> 'title' — a text value on the left of ->>. This test had never run in CI.
+      const latest = scalar(`SELECT (snapshot->>'external_id') || ':' || (snapshot->>'title')
         FROM testcase_versions WHERE testcase_id = ${literal(tc.id)}
         ORDER BY version DESC LIMIT 1;`);
       expect(latest).toBe(`${tc.externalId}:E2E ID History ${p}`);
