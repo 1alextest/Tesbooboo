@@ -131,4 +131,14 @@ Point each domain to the corresponding droplet IP as a plain A record.
 ## Verification
 
 - Frontend: `https://app.example.com/`
-- Backend health: `https://api.example.com/health`
+- Backend health: `https://api.example.com/health` — `gitSha` must be the deployed commit, not `local`. The value is resolved from `GIT_SHA` (Jenkins/compose) or `RAILWAY_GIT_COMMIT_SHA` (a Railway deployment triggered from GitHub); see `Tesbo-Backend-Nest/src/build-provenance.ts`.
+- MCP catalog and field contracts, from a fresh protocol session (the token comes from the environment, never argv):
+
+  ```bash
+  TESBO_MCP_URL="https://api.example.com/api/projects/<projectId>/mcp" \
+  TESBO_MCP_TOKEN="<project token>" \
+  EXPECTED_GIT_SHA="<deployed commit>" \
+  node scripts/mcp-deploy-check.mjs
+  ```
+
+  It fails on a missing required tool or field, or a build mismatch, and warns when the build is unidentified. Tool count is informational: capabilities, not the number, are the requirement.
