@@ -4,6 +4,7 @@ import { expect, request as newRequestContext, test } from "@playwright/test";
 import { env } from "../utils/env";
 import { dbControlAvailable, literal, scalar } from "../utils/psql";
 import { testcaseEditState } from "../utils/testcase-edit-state";
+import { loginAs, provisionRbacTenant } from "../utils/rbac-tenant";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 
@@ -2379,6 +2380,97 @@ test.describe("repository paging", () => {
     } finally {
       await asB.dispose();
       await anon.dispose();
+    }
+  });
+});
+
+test.describe("authoring technique and review views", () => {
+  test("persist, filter, preserve on omission, clear explicitly and refuse unknown values", async ({ request }) => {
+    const stamp = Date.now();
+    const a = await createCase(request, { title: `E2E technique A ${stamp}`, technique: "state_testing", reviewViews: ["positive", "state"] });
+    const b = await createCase(request, { title: `E2E technique B ${stamp}`, technique: "boundary_value_analysis", reviewViews: ["negative"] });
+    const url = `/api/projects/${ctx.projectId}/testcases`;
+    try {
+      expect(await (await request.get(`${url}/${a.id}`)).json()).toMatchObject({ technique: "state_testing", reviewViews: ["positive", "state"] });
+
+      const byTechnique = await (await request.get(url, { params: { search: String(stamp), technique: "state_testing" } })).json();
+      expect(byTechnique.map((row: { id: string }) => row.id)).toEqual([a.id]);
+      const byView = await (await request.get(url, { params: { search: String(stamp), view: "negative" } })).json();
+      expect(byView.map((row: { id: string }) => row.id)).toEqual([b.id]);
+
+      const omitted = await request.put(`${url}/${a.id}`, { data: { description: "unrelated edit" } });
+      expect(omitted.ok(), await omitted.text()).toBeTruthy();
+      expect(await (await request.get(`${url}/${a.id}`)).json()).toMatchObject({ technique: "state_testing", reviewViews: ["positive", "state"] });
+
+      const cleared = await request.put(`${url}/${a.id}`, { data: { technique: "", reviewViews: [] } });
+      expect(cleared.ok(), await cleared.text()).toBeTruthy();
+      expect(await (await request.get(`${url}/${a.id}`)).json()).toMatchObject({ technique: null, reviewViews: [] });
+
+      for (const bad of [{ technique: "nope" }, { reviewViews: ["nope"] }, { reviewViews: "negative" }]) {
+        const res = await request.put(`${url}/${b.id}`, { data: bad, failOnStatusCode: false });
+        expect(res.status(), JSON.stringify(bad)).toBe(400);
+      }
+      expect(await (await request.get(`${url}/${b.id}`)).json()).toMatchObject({ technique: "boundary_value_analysis", reviewViews: ["negative"] });
+    } finally {
+      await deleteCase(request, a.id);
+      await deleteCase(request, b.id);
+    }
+  });
+});
+
+test.describe("saved test-case views", () => {
+  test("members save, share and delete filter views with creator/owner authorization", async () => {
+    const tenant = await provisionRbacTenant("mcp-lifecycle");
+    test.skip(!tenant, "requires direct SQL control for the disposable tenant");
+    const projectId = tenant!.mainProjectId;
+    const owner = await loginAs(tenant!.owner);
+    const qa = await loginAs(tenant!.qa);
+    const created: string[] = [];
+    try {
+      const sharedRes = await owner.post(`/api/projects/${projectId}/testcase-views`, {
+        data: { name: `E2E shared view ${Date.now()}`, filters: { priority: "P1", search: "login" }, isShared: true }
+      });
+      expect(sharedRes.status(), await sharedRes.text()).toBe(201);
+      const shared = await sharedRes.json();
+      created.push(shared.id);
+      expect(shared).toMatchObject({ projectId, isShared: true, name: expect.any(String), filters: { priority: "P1", search: "login" } });
+
+      const qaList = await (await qa.get(`/api/projects/${projectId}/testcase-views`)).json();
+      expect(qaList.map((view: { id: string }) => view.id)).toContain(shared.id);
+
+      const privateRes = await qa.post(`/api/projects/${projectId}/testcase-views`, {
+        data: { name: `E2E qa view ${Date.now()}`, filters: { view: "negative" } }
+      });
+      expect(privateRes.status()).toBe(201);
+      const qaPrivate = await privateRes.json();
+      created.push(qaPrivate.id);
+      const ownerList = await (await owner.get(`/api/projects/${projectId}/testcase-views`)).json();
+      expect(ownerList.map((view: { id: string }) => view.id)).not.toContain(qaPrivate.id);
+
+      expect((await qa.patch(`/api/projects/${projectId}/testcase-views/${shared.id}`, { data: { name: "hijack" } })).status()).toBe(403);
+      const ownerEdit = await owner.patch(`/api/projects/${projectId}/testcase-views/${shared.id}`, { data: { name: `${shared.name} edited` } });
+      expect(ownerEdit.ok(), await ownerEdit.text()).toBeTruthy();
+
+      // QA is not a member of the tenant's second project.
+      expect((await qa.get(`/api/projects/${tenant!.secondProjectId}/testcase-views`)).status()).toBe(404);
+
+      expect((await qa.delete(`/api/projects/${projectId}/testcase-views/${qaPrivate.id}`)).ok()).toBeTruthy();
+      created.splice(created.indexOf(qaPrivate.id), 1);
+      expect((await owner.delete(`/api/projects/${projectId}/testcase-views/${shared.id}`)).ok()).toBeTruthy();
+      created.splice(created.indexOf(shared.id), 1);
+
+      for (const bad of [
+        { name: "", filters: {} },
+        { name: "bad", filters: { unknown: "x" } },
+        { name: "bad", filters: [] },
+        { name: "x".repeat(81), filters: {} }
+      ]) {
+        const res = await owner.post(`/api/projects/${projectId}/testcase-views`, { data: bad, failOnStatusCode: false });
+        expect(res.status(), JSON.stringify(bad)).toBe(400);
+      }
+    } finally {
+      for (const id of created) await owner.delete(`/api/projects/${projectId}/testcase-views/${id}`, { failOnStatusCode: false });
+      await Promise.all([owner.dispose(), qa.dispose()]);
     }
   });
 });
