@@ -138,7 +138,42 @@ describe("notificationsForUser", () => {
     // Returned RAW (snake_case), not toCamel'd — matches the frontend's existing AppNotification
     // type, which was already written expecting link_entity_type/link_entity_id.
     expect(list[0]).toMatchObject({ link_entity_type: "zyra_task_board", link_entity_id: PROJECT_ID });
-    const params = dbQuery.mock.calls[0][1] as unknown[];
+    const [sql, params] = dbQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("ORDER BY n.created_at DESC, n.id DESC");
+    expect(sql).toContain("(n.created_at, n.id) < (c.created_at, c.id)");
+    expect(sql).toContain("WITH cursor AS MATERIALIZED");
+    expect(params).toEqual([USER_ID, null, 50]);
+  });
+
+  it("resolves the cursor timestamp in SQL and passes the id as a parameter, never as SQL", async () => {
+    const { svc, dbQuery } = makeLegacy();
+    dbQuery.mockResolvedValueOnce({ rows: [] });
+    const cursorId = "00000000-0000-4000-8000-0000000000bb";
+    await svc.notificationsForUser(USER_ID, { limit: "10", beforeId: cursorId });
+    const [sql, params] = dbQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).not.toContain(cursorId);
+    expect(params).toEqual([USER_ID, cursorId, 10]);
+  });
+
+  it.each([
+    ["limit 0", { limit: "0" }],
+    ["limit above the bound", { limit: "101" }],
+    ["non-numeric limit", { limit: "abc" }],
+    ["array limit from the query parser", { limit: ["25"] }],
+    ["a malformed cursor id", { beforeId: "not-a-uuid" }],
+    ["an array cursor from the query parser", { beforeId: ["00000000-0000-4000-8000-0000000000bb"] }]
+  ])("refuses %s instead of coercing it", async (_label, query) => {
+    const { svc, dbQuery } = makeLegacy();
+    await expect(svc.notificationsForUser(USER_ID, query)).rejects.toThrow();
+    expect(dbQuery).not.toHaveBeenCalled();
+  });
+
+  it("unreadNotificationCount counts only the caller's unread rows", async () => {
+    const { svc, dbQuery } = makeLegacy();
+    dbQuery.mockResolvedValueOnce({ rows: [{ unread: 3 }] });
+    await expect(svc.unreadNotificationCount(USER_ID)).resolves.toEqual({ unread: 3 });
+    const [sql, params] = dbQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("read_at IS NULL");
     expect(params).toEqual([USER_ID]);
   });
 

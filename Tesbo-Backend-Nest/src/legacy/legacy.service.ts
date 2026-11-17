@@ -22297,20 +22297,69 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     }
   }
 
-  /** Newest first, capped at 50 — this list has never had real volume to page through, and the
-   *  dropdown it feeds (TopBar.tsx) has no pagination UI to hand a cursor to. Deliberately NOT run
-   *  through toCamel: the frontend's AppNotification type already expects the raw column names
-   *  (link_entity_type/link_entity_id) — it was written against this table's real shape before this
-   *  method existed to serve it, and matching that is what lets the existing UI start working with
-   *  no frontend change. */
-  async notificationsForUser(userId: string | null | undefined): Promise<Body[]> {
+  /** Newest first. The first page is 50; older rows are reached with the last row's `beforeId`,
+   *  so a busy inbox is no longer silently truncated. The cursor's timestamp is resolved in SQL
+   *  from the stored row: PostgreSQL keeps microseconds, but the JSON `created_at` is a JS Date at
+   *  millisecond precision, so a caller-supplied timestamp used as a cursor skips every row that
+   *  shares the boundary millisecond. The `(created_at, id)` pair is stable across ties; the
+   *  previous `created_at DESC` alone had no defined order for equal timestamps. An unknown or
+   *  foreign cursor yields an empty page rather than another user's position.
+   *
+   *  Deliberately NOT run through toCamel: the frontend's AppNotification type already expects the
+   *  raw column names (link_entity_type/link_entity_id) — it was written against this table's real
+   *  shape before this method existed to serve it, and matching that is what lets the existing UI
+   *  start working with no frontend change. */
+  async notificationsForUser(userId: string | null | undefined, query: Body = {}): Promise<Body[]> {
     const uid = this.requireSession(userId);
+    const limit = this.notificationPageLimit(query.limit);
+    const beforeId = this.notificationCursorId(query.beforeId);
     const res = await this.db.query(
-      `SELECT id, type, title, body, link_entity_type, link_entity_id, read_at, created_at
-       FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
-      [uid]
+      `WITH cursor AS MATERIALIZED (
+         SELECT created_at, id FROM notifications
+          WHERE $2::uuid IS NOT NULL AND id = $2::uuid AND user_id = $1
+       )
+       SELECT n.id, n.type, n.title, n.body, n.link_entity_type, n.link_entity_id, n.read_at, n.created_at
+       FROM notifications n LEFT JOIN cursor c ON TRUE
+       WHERE n.user_id = $1
+         AND ($2::uuid IS NULL OR (n.created_at, n.id) < (c.created_at, c.id))
+       ORDER BY n.created_at DESC, n.id DESC LIMIT $3`,
+      [uid, beforeId, limit]
     );
     return res.rows;
+  }
+
+  /** Every unread row of the caller — the badge's source of truth, independent of paging. */
+  async unreadNotificationCount(userId: string | null | undefined): Promise<{ unread: number }> {
+    const uid = this.requireSession(userId);
+    const res = await this.db.query<{ unread: number }>(
+      "SELECT COUNT(*)::int AS unread FROM notifications WHERE user_id = $1 AND read_at IS NULL",
+      [uid]
+    );
+    return { unread: Number(res.rows[0]?.unread ?? 0) };
+  }
+
+  private notificationPageLimit(raw: unknown): number {
+    if (raw === undefined) return 50;
+    // A query parser can turn `limit[]=...` into an array; refuse anything but a plain integer
+    // string rather than coercing it.
+    if (typeof raw !== "string" || !/^[0-9]+$/.test(raw)) {
+      throw new BadRequestException({ error: "limit must be an integer between 1 and 100" });
+    }
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 1 || value > 100) {
+      throw new BadRequestException({ error: "limit must be an integer between 1 and 100" });
+    }
+    return value;
+  }
+
+  private notificationCursorId(raw: unknown): string | null {
+    if (raw === undefined) return null;
+    // A query parser can produce arrays/objects; refuse anything but one valid id.
+    if (typeof raw !== "string" || !isUuid(raw)) {
+      throw new BadRequestException({ error: "beforeId must be a notification id" });
+    }
+    // A caller-supplied cursor is a value, never SQL; the cast in the query validates it.
+    return raw;
   }
 
   /**

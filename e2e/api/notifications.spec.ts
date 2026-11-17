@@ -1,6 +1,6 @@
 import { expect, request, test, type APIRequestContext } from "@playwright/test";
 import { env, testAddress } from "../utils/env";
-import { exec, literal, scalar } from "../utils/psql";
+import { exec, execMany, literal, scalar } from "../utils/psql";
 import {
   clearInvitations,
   detachUserByEmail,
@@ -214,6 +214,72 @@ test.describe("notifications — real rows", () => {
     }
   });
 
+  test("NOTIF-A-11 older notifications stay reachable through the (created_at, id) cursor, without duplicates", async () => {
+    const stamp = `NOTIF page ${Date.now()} `;
+    const ids = Array.from({ length: 25 }, () => crypto.randomUUID());
+    execMany(
+      ids.map(
+        (id, index) =>
+          `INSERT INTO notifications (id, user_id, type, title, body) VALUES (` +
+          `${literal(id)}, ${literal(tenant!.owner.userId)}, 'zyra_archive_sweep', ` +
+          `${literal(stamp + String(index).padStart(2, "0"))}, NULL);`
+      )
+    );
+    try {
+      const seen: string[] = [];
+      let beforeId: string | null = null;
+      for (let page = 0; page < 10; page += 1) {
+        const query = new URLSearchParams({ limit: "10" });
+        if (beforeId) query.set("beforeId", beforeId);
+        const res = await asOwner.get(`/api/notifications?${query.toString()}`);
+        expect(res.status(), await res.text()).toBe(200);
+        const rows = (await res.json()) as Array<{ id: string }>;
+        expect(rows.length, `page ${page} exceeds the requested limit`).toBeLessThanOrEqual(10);
+        if (rows.length === 0) break;
+        seen.push(...rows.map((row) => row.id));
+        beforeId = rows[rows.length - 1].id;
+      }
+      expect(new Set(seen).size, "a page repeated a row already returned").toBe(seen.length);
+      for (const id of ids) expect(seen, `seeded row ${id} was never reachable`).toContain(id);
+    } finally {
+      exec(`DELETE FROM notifications WHERE id IN (${ids.map(literal).join(", ")});`);
+    }
+  });
+
+  test("NOTIF-A-12 the unread count covers every unread row and clears on read-all", async () => {
+    const mine = [seedNotification(tenant!.owner.userId, tenant!.mainProjectId), seedNotification(tenant!.owner.userId, tenant!.mainProjectId)];
+    try {
+      const countRes = await asOwner.get("/api/notifications/unread-count", { failOnStatusCode: false });
+      expect(countRes.status(), await countRes.text()).toBe(200);
+      const before = (await countRes.json()).unread as number;
+      expect(before).toBeGreaterThanOrEqual(mine.length);
+      const list = (await (await asOwner.get("/api/notifications")).json()) as Array<{ read_at: string | null }>;
+      expect(before, "the badge count must match the caller's unread rows").toBe(list.filter((n) => !n.read_at).length);
+
+      expect((await asOwner.post("/api/notifications/read-all")).status()).toBe(201);
+      expect((await (await asOwner.get("/api/notifications/unread-count")).json()).unread).toBe(0);
+    } finally {
+      mine.forEach(deleteNotification);
+    }
+  });
+
+  test("NOTIF-A-13 malformed paging input is refused rather than coerced", async () => {
+    for (const query of [
+      "limit=0",
+      "limit=101",
+      "limit=abc",
+      "limit[]=25",
+      "beforeId=not-a-uuid",
+      `beforeId[]=${crypto.randomUUID()}`,
+    ]) {
+      const res = await asOwner.get(`/api/notifications?${query}`, { failOnStatusCode: false });
+      expect(res.status(), `${query} — ${await res.text()}`).toBe(400);
+    }
+    const one = await asOwner.get("/api/notifications?limit=1", { failOnStatusCode: false });
+    expect(one.status(), await one.text()).toBe(200);
+    expect(((await one.json()) as unknown[]).length).toBeLessThanOrEqual(1);
+  });
+
   test("NOTIF-A-08 a teammate in the same workspace does not see another member's notification", { tag: '@tesbo.testId("TES-TC-1358")' }, async () => {
     const id = seedNotification(tenant!.owner.userId, tenant!.mainProjectId);
     try {
@@ -306,6 +372,13 @@ test.describe("notifications — Phase 1 matrix", () => {
 
   const stamp = (label: string) => `E2E Notif ${label} ${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
+  /** Knowledge documents live in a folder; the create route requires one. */
+  async function knowledgeFolderId(): Promise<string> {
+    const res = await asOwner.get(`/api/projects/${tenant!.mainProjectId}/knowledge-base/folders/tree`);
+    expect(res.ok(), await res.text()).toBeTruthy();
+    return (await res.json()).id as string;
+  }
+
   async function inbox(api: APIRequestContext): Promise<Row[]> {
     const res = await api.get("/api/notifications");
     expect(res.status(), await res.text()).toBe(200);
@@ -332,6 +405,8 @@ test.describe("notifications — Phase 1 matrix", () => {
       const tc = await res.json();
       testcaseIds.push(tc.id);
       tcIds.push(tc.externalId);
+      // Native test runs only accept Approved cases (the canonical add boundary enforces it).
+      exec(`UPDATE testcases SET status='Approved' WHERE id=${literal(tc.id)};`);
     }
     const cycleName = stamp("run");
     // ownerId: the run owner is one of the two recipients of a failed / blocked case.
@@ -584,7 +659,10 @@ test.describe("notifications — Phase 1 matrix", () => {
 
   test("NOTIF-P1-09d a reply to a knowledge base comment notifies its author and opens the document", async () => {
     const created = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/knowledge-base/documents`, {
-      data: { title: stamp("kb doc"), contentText: "Body", contentHtml: "<p>Body</p>", documentType: "general" },
+      data: {
+        folderId: await knowledgeFolderId(),
+        title: stamp("kb doc"), contentText: "Body", contentHtml: "<p>Body</p>", documentType: "general"
+      },
       failOnStatusCode: false,
     });
     expect(created.ok(), `creating a document — ${await created.text()}`).toBeTruthy();
@@ -757,7 +835,7 @@ test.describe("notifications — Phase 1 matrix", () => {
   test("NOTIF-P2-01 editing or deleting a KB document tells its creator and commenters — not the actor — and edits are limited to one an hour", async () => {
     const title = stamp("kb");
     const created = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/knowledge-base/documents`, {
-      data: { title, contentText: "v1", contentHtml: "<p>v1</p>", documentType: "general" },
+      data: { folderId: await knowledgeFolderId(), title, contentText: "v1", contentHtml: "<p>v1</p>", documentType: "general" },
       failOnStatusCode: false,
     });
     expect(created.ok(), `creating a document — ${await created.text()}`).toBeTruthy();
