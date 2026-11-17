@@ -1577,3 +1577,63 @@ test.describe("Add suite opens the newly created suite", () => {
     }
   });
 });
+
+test.describe("saved repository views (UI)", () => {
+  test("a saved view captures the current filters, can be applied again and deleted", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const name = `E2E saved view ${Date.now()}`;
+    try {
+      await page.goto(`/projects/${ctx.projectId}/testcases`);
+      const technique = page.getByLabel("Filter by technique");
+      const reviewView = page.getByLabel("Filter by review view");
+      const views = page.getByLabel("Saved views");
+
+      await technique.selectOption("state_testing");
+      await expect(technique).toHaveValue("state_testing");
+
+      page.once("dialog", (dialog) => dialog.accept(name));
+      await page.getByRole("button", { name: "Save view" }).click();
+      await expect(views.locator("option", { hasText: name })).toHaveCount(1);
+
+      // Move the filters away, then apply the saved view and confirm they are restored.
+      await views.selectOption("");
+      await reviewView.selectOption("negative");
+      await views.selectOption({ label: name });
+      await expect(technique).toHaveValue("state_testing");
+      await expect(reviewView).toHaveValue("all");
+
+      page.once("dialog", (dialog) => dialog.accept());
+      await page.getByRole("button", { name: "Delete view" }).click();
+      await expect(views.locator("option", { hasText: name })).toHaveCount(0);
+    } finally {
+      const remaining = await (await api.get(`/api/projects/${ctx.projectId}/testcase-views`)).json();
+      const leftover = remaining.find((view: { name: string }) => view.name === name);
+      if (leftover) await api.delete(`/api/projects/${ctx.projectId}/testcase-views/${leftover.id}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
+  test("the editor persists technique and review views through the existing save path", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const title = `E2E classification ${Date.now()}`;
+    let createdId = "";
+    try {
+      await page.goto(`/projects/${ctx.projectId}/testcases`);
+      await page.getByRole("button", { name: "Add test case" }).first().click();
+      const panel = page.locator("aside");
+      await panel.getByPlaceholder("Describe what this test case validates").fill(title);
+      await fieldControl(page, "Technique").selectOption("state_testing");
+      await panel.getByRole("checkbox", { name: "Negative" }).check();
+      await panel.getByRole("button", { name: "Create", exact: true }).click();
+      await expect(panel.getByText("Test case created successfully.")).toBeVisible();
+
+      const list = await (await api.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: title } })).json();
+      const saved = list.find((row: { title: string }) => row.title === title);
+      expect(saved).toMatchObject({ technique: "state_testing", reviewViews: ["negative"] });
+      createdId = saved.id;
+    } finally {
+      if (createdId) await api.delete(`/api/projects/${ctx.projectId}/testcases/${createdId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+});

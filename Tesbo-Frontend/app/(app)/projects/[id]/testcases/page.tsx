@@ -56,6 +56,7 @@ import {
   type ZyraSourceRef,
   notionPageKey,
 } from "@/lib/api";
+import { createSavedView, deleteSavedView, listSavedViews, type SavedTestCaseView } from "@/lib/api";
 import { ZyraContextDrawer } from "@/components/agents/ZyraContextDrawer";
 
 // Same 5-entry map as ZyraCitationsList/ZyraCitationsBadge — kept local rather than importing from
@@ -123,6 +124,19 @@ const TESTCASE_TYPES = [
   "Acceptance", "Usability", "Compatibility", "Exploratory", "Other",
 ];
 const TESTCASE_AUTOMATION_TYPES = ["Automated", "Not Automated", "To Be Automated", "Can't Automate"];
+// Mirrors the backend's finite review vocabulary. A view is an authoring lens, not execution status.
+const TESTCASE_TECHNIQUES = [
+  "equivalence_partitioning", "boundary_value_analysis", "decision_table", "state_testing",
+  "use_case_testing", "pairwise_testing", "error_guessing", "security_perspective", "general",
+] as const;
+const TESTCASE_REVIEW_VIEWS = [
+  { value: "positive", label: "Positive" },
+  { value: "negative", label: "Negative" },
+  { value: "end_to_end", label: "End to End" },
+  { value: "state", label: "State" },
+  { value: "upstream_downstream", label: "Upstream & Downstream" },
+  { value: "ux_ui_functionality", label: "UX/UI Functionality" },
+] as const;
 /* Matches SUITE_TEXT_MAX_LENGTH in legacy.service.ts: the most a suite description / preconditions may hold. */
 const SUITE_TEXT_MAX_LENGTH = 20000;
 /* Create-form-only sentinel for an unselected Suite: "" is already the real "No suite" value
@@ -413,6 +427,8 @@ export default function TestCasesPage() {
   const [automationStatus, setAutomationStatus] = useState("Not Automated");
   const [component, setComponent] = useState("");
   const [severity, setSeverity] = useState("");
+  const [technique, setTechnique] = useState("");
+  const [reviewViews, setReviewViews] = useState<string[]>([]);
   const [suiteId, setSuiteId] = useState("");
   const [testcaseIdPrefix, setTestcaseIdPrefix] = useState(defaultTestcaseIdPrefix);
   const [panelJiraIssueKey, setPanelJiraIssueKey] = useState("");
@@ -476,6 +492,10 @@ export default function TestCasesPage() {
   const [suitePriorityFilter, setSuitePriorityFilter] = useState("all");
   const [suiteTypeFilter, setSuiteTypeFilter] = useState("all");
   const [suiteAutomationFilter, setSuiteAutomationFilter] = useState("all");
+  const [suiteTechniqueFilter, setSuiteTechniqueFilter] = useState("all");
+  const [suiteViewFilter, setSuiteViewFilter] = useState("all");
+  const [savedViews, setSavedViews] = useState<SavedTestCaseView[]>([]);
+  const [activeSavedViewId, setActiveSavedViewId] = useState("");
   const [customFieldFilters, setCustomFieldFilters] = useState<CustomFieldFilterCondition[]>([]);
   // Custom tag ids for the toolbar's Tags filter — a case matches when it carries any of them.
   const [suiteTagFilter, setSuiteTagFilter] = useState<string[]>([]);
@@ -693,6 +713,8 @@ export default function TestCasesPage() {
     suitePriorityFilter !== "all",
     suiteTypeFilter !== "all",
     suiteAutomationFilter !== "all",
+    suiteTechniqueFilter !== "all",
+    suiteViewFilter !== "all",
     activeJiraIssueKey !== "",
     customFieldFilters.length > 0,
     suiteTagFilter.length > 0,
@@ -784,6 +806,8 @@ export default function TestCasesPage() {
     suitePriorityFilter,
     suiteTypeFilter,
     suiteAutomationFilter,
+    suiteTechniqueFilter,
+    suiteViewFilter,
     activeJiraIssueKey,
     activeLinearIssueKey,
     activeNotionPageId,
@@ -825,6 +849,8 @@ export default function TestCasesPage() {
         priority: suitePriorityFilter === "all" ? undefined : suitePriorityFilter,
         type: suiteTypeFilter === "all" ? undefined : suiteTypeFilter,
         automationStatus: suiteAutomationFilter === "all" ? undefined : suiteAutomationFilter,
+        technique: suiteTechniqueFilter === "all" ? undefined : suiteTechniqueFilter,
+        view: suiteViewFilter === "all" ? undefined : suiteViewFilter,
         jiraIssueKey: activeJiraIssueKey || undefined,
         linearIssueKey: activeLinearIssueKey || undefined,
         notionPageId: activeNotionPageId || undefined,
@@ -863,6 +889,8 @@ export default function TestCasesPage() {
     suiteStatusFilter,
     suiteTypeFilter,
     suiteAutomationFilter,
+    suiteTechniqueFilter,
+    suiteViewFilter,
     activeJiraIssueKey,
     activeLinearIssueKey,
     activeNotionPageId,
@@ -894,6 +922,8 @@ export default function TestCasesPage() {
       priority: suitePriorityFilter === "all" ? undefined : suitePriorityFilter,
       type: suiteTypeFilter === "all" ? undefined : suiteTypeFilter,
       automationStatus: suiteAutomationFilter === "all" ? undefined : suiteAutomationFilter,
+        technique: suiteTechniqueFilter === "all" ? undefined : suiteTechniqueFilter,
+        view: suiteViewFilter === "all" ? undefined : suiteViewFilter,
       jiraIssueKey: activeJiraIssueKey || undefined,
       linearIssueKey: activeLinearIssueKey || undefined,
       notionPageId: activeNotionPageId || undefined,
@@ -910,6 +940,8 @@ export default function TestCasesPage() {
       suitePriorityFilter,
       suiteTypeFilter,
       suiteAutomationFilter,
+      suiteTechniqueFilter,
+      suiteViewFilter,
       activeJiraIssueKey,
       activeLinearIssueKey,
       activeNotionPageId,
@@ -969,6 +1001,8 @@ export default function TestCasesPage() {
     setAutomationStatus((data.automationStatus as string) ?? "");
     setComponent((data.component as string) ?? "");
     setSeverity((data.severity as string) ?? "");
+    setTechnique(typeof data.technique === "string" ? data.technique : "");
+    setReviewViews(Array.isArray(data.reviewViews) ? data.reviewViews.map(String) : []);
     // `formSuiteId` (the suite the list view happens to be filtered on) belongs to the CREATE
     // form's default, not this one — this always has a real fetched value, so an unfiled case
     // (data.suiteId === null) must show/stay "No suite", not silently adopt whatever suite the
@@ -998,6 +1032,8 @@ export default function TestCasesPage() {
     setAutomationStatus("");
     setComponent("");
     setSeverity("");
+    setTechnique("");
+    setReviewViews([]);
     setSuiteId(defaultSuiteId ?? formSuiteId ?? UNSELECTED_SUITE_ID);
     setTestcaseIdPrefix(defaultTestcaseIdPrefix);
     setPanelJiraIssueKey("");
@@ -1075,12 +1111,76 @@ export default function TestCasesPage() {
     setSelectedSourceRef(null);
   }
 
+  useEffect(() => {
+    let cancelled = false;
+    void listSavedViews(projectId)
+      .then((views) => { if (!cancelled) setSavedViews(views); })
+      .catch(() => { if (!cancelled) setSavedViews([]); });
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  function currentFilterSnapshot(): Record<string, unknown> {
+    const filters: Record<string, unknown> = {};
+    if (suiteSearch.trim()) filters.search = suiteSearch.trim();
+    if (suiteStatusFilter !== "all") filters.status = suiteStatusFilter;
+    if (suitePriorityFilter !== "all") filters.priority = suitePriorityFilter;
+    if (suiteTypeFilter !== "all") filters.type = suiteTypeFilter;
+    if (suiteAutomationFilter !== "all") filters.automationStatus = suiteAutomationFilter;
+    if (suiteTechniqueFilter !== "all") filters.technique = suiteTechniqueFilter;
+    if (suiteViewFilter !== "all") filters.view = suiteViewFilter;
+    return filters;
+  }
+
+  function applySavedView(viewId: string) {
+    setActiveSavedViewId(viewId);
+    if (!viewId) return;
+    const view = savedViews.find((entry) => entry.id === viewId);
+    if (!view) return;
+    const filters = view.filters || {};
+    setSuiteSearch(String(filters.search ?? ""));
+    setSuiteStatusFilter(String(filters.status ?? "all"));
+    setSuitePriorityFilter(String(filters.priority ?? "all"));
+    setSuiteTypeFilter(String(filters.type ?? "all"));
+    setSuiteAutomationFilter(String(filters.automationStatus ?? "all"));
+    setSuiteTechniqueFilter(String(filters.technique ?? "all"));
+    setSuiteViewFilter(String(filters.view ?? "all"));
+    setSuiteCasesPage(1);
+  }
+
+  async function saveCurrentView() {
+    const name = window.prompt("Name this view", "");
+    if (!name || !name.trim()) return;
+    try {
+      const created = await createSavedView(projectId, { name: name.trim(), filters: currentFilterSnapshot() });
+      setSavedViews((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setActiveSavedViewId(created.id);
+    } catch (err) {
+      setSuiteCasesError(err instanceof Error ? err.message : "Failed to save view.");
+    }
+  }
+
+  async function deleteActiveView() {
+    if (!activeSavedViewId) return;
+    const view = savedViews.find((entry) => entry.id === activeSavedViewId);
+    if (!view || !window.confirm(`Delete the view "${view.name}"?`)) return;
+    try {
+      await deleteSavedView(projectId, view.id);
+      setSavedViews((prev) => prev.filter((entry) => entry.id !== view.id));
+      setActiveSavedViewId("");
+    } catch (err) {
+      setSuiteCasesError(err instanceof Error ? err.message : "Failed to delete view.");
+    }
+  }
+
   function clearSuiteFilters() {
     setSuiteSearch("");
     setSuiteStatusFilter("all");
     setSuitePriorityFilter("all");
     setSuiteTypeFilter("all");
     setSuiteAutomationFilter("all");
+    setSuiteTechniqueFilter("all");
+    setSuiteViewFilter("all");
+    setActiveSavedViewId("");
     setCustomFieldFilters([]);
     setSuiteTagFilter([]);
     setSuiteCasesPage(1);
@@ -1166,6 +1266,8 @@ export default function TestCasesPage() {
           priority: suitePriorityFilter === "all" ? undefined : suitePriorityFilter,
           type: suiteTypeFilter === "all" ? undefined : suiteTypeFilter,
           automationStatus: suiteAutomationFilter === "all" ? undefined : suiteAutomationFilter,
+        technique: suiteTechniqueFilter === "all" ? undefined : suiteTechniqueFilter,
+        view: suiteViewFilter === "all" ? undefined : suiteViewFilter,
           jiraIssueKey: activeJiraIssueKey || undefined,
           linearIssueKey: activeLinearIssueKey || undefined,
           notionPageId: activeNotionPageId || undefined,
@@ -1548,6 +1650,8 @@ export default function TestCasesPage() {
           automationStatus,
           component,
           severity,
+          technique: technique || undefined,
+          reviewViews,
           testcaseIdPrefix,
           customFieldValues,
           customTagIds: selectedTagIds,
@@ -1594,6 +1698,8 @@ export default function TestCasesPage() {
           automationStatus,
           component,
           severity,
+          technique: technique || null,
+          reviewViews,
           customFieldValues,
           customTagIds: panelTagIds,
         });
@@ -2219,6 +2325,55 @@ export default function TestCasesPage() {
                         <option key={option} value={option}>{option}</option>
                       ))}
                     </select>
+                    <select
+                      value={suiteTechniqueFilter}
+                      onChange={(e) => setSuiteTechniqueFilter(e.target.value)}
+                      aria-label="Filter by technique"
+                      className="h-[30px] rounded-[6px] border border-[var(--border)] bg-[var(--background)] px-2.5 text-[12px] text-[var(--ink-600)] outline-none"
+                    >
+                      <option value="all">All techniques</option>
+                      {TESTCASE_TECHNIQUES.map((option) => (
+                        <option key={option} value={option}>{option.split("_").join(" ")}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={suiteViewFilter}
+                      onChange={(e) => setSuiteViewFilter(e.target.value)}
+                      aria-label="Filter by review view"
+                      className="h-[30px] rounded-[6px] border border-[var(--border)] bg-[var(--background)] px-2.5 text-[12px] text-[var(--ink-600)] outline-none"
+                    >
+                      <option value="all">All review views</option>
+                      {TESTCASE_REVIEW_VIEWS.map((view) => (
+                        <option key={view.value} value={view.value}>{view.label}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={activeSavedViewId}
+                      onChange={(e) => applySavedView(e.target.value)}
+                      aria-label="Saved views"
+                      className="h-[30px] rounded-[6px] border border-[var(--border)] bg-[var(--background)] px-2.5 text-[12px] text-[var(--ink-600)] outline-none"
+                    >
+                      <option value="">Saved views…</option>
+                      {savedViews.map((view) => (
+                        <option key={view.id} value={view.id}>{view.name}{view.isShared ? " (shared)" : ""}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={saveCurrentView}
+                      className="h-[30px] shrink-0 rounded-[6px] border border-[var(--border)] px-2.5 text-[12px] font-medium text-[var(--ink-600)] hover:bg-[var(--ink-100)]"
+                    >
+                      Save view
+                    </button>
+                    {activeSavedViewId && (
+                      <button
+                        type="button"
+                        onClick={deleteActiveView}
+                        className="h-[30px] shrink-0 rounded-[6px] border border-[var(--border)] px-2.5 text-[12px] font-medium text-[var(--error-foreground)] hover:bg-[var(--surface-secondary)]"
+                      >
+                        Delete view
+                      </button>
+                    )}
                     <CustomFieldFilterPopover
                       definitions={customFieldDefinitions}
                       conditions={customFieldFilters}
@@ -2629,6 +2784,28 @@ export default function TestCasesPage() {
                             {TESTCASE_SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
                           </Select>
                         </Field>
+                        <Field>
+                          <FieldLabel>Technique</FieldLabel>
+                          <Select value={technique} onChange={(e) => setTechnique(e.target.value)}>
+                            <option value="">Not classified</option>
+                            {TESTCASE_TECHNIQUES.map((t) => <option key={t} value={t}>{t.split("_").join(" ")}</option>)}
+                          </Select>
+                        </Field>
+                        <Field className="col-span-3">
+                          <FieldLabel>Review views</FieldLabel>
+                          <div className="flex flex-wrap gap-3">
+                            {TESTCASE_REVIEW_VIEWS.map((view) => (
+                              <label key={view.value} className="flex items-center gap-1.5 text-[12px] text-[var(--foreground)]">
+                                <input
+                                  type="checkbox"
+                                  checked={reviewViews.includes(view.value)}
+                                  onChange={(e) => setReviewViews((prev) => e.target.checked ? [...prev, view.value] : prev.filter((v) => v !== view.value))}
+                                />
+                                {view.label}
+                              </label>
+                            ))}
+                          </div>
+                        </Field>
                       </div>
                       <Field>
                         <FieldLabel>Preconditions</FieldLabel>
@@ -2775,6 +2952,28 @@ export default function TestCasesPage() {
                                 <option value="">Select</option>
                                 {TESTCASE_SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
                               </Select>
+                            </Field>
+                            <Field>
+                              <FieldLabel>Technique</FieldLabel>
+                              <Select value={technique} onChange={(e) => setTechnique(e.target.value)}>
+                                <option value="">Not classified</option>
+                                {TESTCASE_TECHNIQUES.map((t) => <option key={t} value={t}>{t.split("_").join(" ")}</option>)}
+                              </Select>
+                            </Field>
+                            <Field className="col-span-2 sm:col-span-3">
+                              <FieldLabel>Review views</FieldLabel>
+                              <div className="flex flex-wrap gap-3">
+                                {TESTCASE_REVIEW_VIEWS.map((view) => (
+                                  <label key={view.value} className="flex items-center gap-1.5 text-[12px] text-[var(--foreground)]">
+                                    <input
+                                      type="checkbox"
+                                      checked={reviewViews.includes(view.value)}
+                                      onChange={(e) => setReviewViews((prev) => e.target.checked ? [...prev, view.value] : prev.filter((v) => v !== view.value))}
+                                    />
+                                    {view.label}
+                                  </label>
+                                ))}
+                              </div>
                             </Field>
                           </div>
                           <Field>

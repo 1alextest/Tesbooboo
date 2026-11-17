@@ -1626,6 +1626,8 @@ export async function listTestCases(
     priority?: string;
     type?: string;
     automationStatus?: string;
+    technique?: string;
+    view?: string;
     jiraIssueKey?: string;
     linearIssueKey?: string;
     notionPageId?: string;
@@ -1715,6 +1717,34 @@ export async function bulkUpdateTestCases(projectId: string, data: { testcaseIds
 
 export async function bulkDeleteTestCases(projectId: string, data: { testcaseIds: string[] }): Promise<void> {
   await api(`/api/projects/${projectId}/testcases/bulk-delete`, { method: "POST", body: data });
+}
+
+// Saved test-case views -----------------------------------------------------------
+
+export interface SavedTestCaseView {
+  id: string;
+  projectId: string;
+  createdBy: string | null;
+  name: string;
+  filters: Record<string, unknown>;
+  isShared: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listSavedViews(projectId: string): Promise<SavedTestCaseView[]> {
+  return api(`/api/projects/${projectId}/testcase-views`);
+}
+
+export async function createSavedView(
+  projectId: string,
+  data: { name: string; filters: Record<string, unknown>; isShared?: boolean }
+): Promise<SavedTestCaseView> {
+  return api(`/api/projects/${projectId}/testcase-views`, { method: "POST", body: data });
+}
+
+export async function deleteSavedView(projectId: string, viewId: string): Promise<{ ok: boolean }> {
+  return api(`/api/projects/${projectId}/testcase-views/${viewId}`, { method: "DELETE" });
 }
 
 // Custom fields (Pro plan feature) ------------------------------------------------
