@@ -51,6 +51,13 @@ authentication bug and is not one.
   write as a production write, and keep destructive fixtures inside the disposable tenants the suite
   provisions for that purpose.
 
+**CI-only boundary:** the approved quality workflows use fresh job-owned PostgreSQL services on
+GitHub-hosted runners, never the workstation or shared `.env` database. The behavioral workflow's
+`tesbo_ci` and Review Board's separate `rb_test_ci`/Redis `56379` fixtures are disposable and destroyed
+with their jobs. Required-suite preflight refuses a workstation/self-hosted runner, a remote or
+misnamed database, changed Redis port, or target override before migration/execution. This does not
+authorize running those fixtures locally, changing production migration history, or deploying.
+
 ---
 
 ## MANDATORY: bug-fix work follows the Basecamp flow

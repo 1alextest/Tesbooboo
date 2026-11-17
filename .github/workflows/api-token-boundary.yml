@@ -7,6 +7,9 @@ on:
       - "Tesbo-Backend-Nest/src/mcp/**"
       - "Tesbo-Backend-Nest/src/app.module.ts"
       - ".github/workflows/api-token-boundary.yml"
+      - ".github/test-impact.json"
+      - "scripts/required-backend-tests*.mjs"
+      - "scripts/test-impact.mjs"
   workflow_dispatch:
 
 permissions:
@@ -21,6 +24,8 @@ jobs:
         working-directory: Tesbo-Backend-Nest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
@@ -30,4 +35,12 @@ jobs:
       - name: TypeScript typecheck
         run: npm run typecheck
       - name: Focused unit and HTTP regressions
-        run: npm test -- --runTestsByPath src/auth/api-token.service.spec.ts src/auth/api-token-rest.guard.spec.ts src/auth/api-token-rest.integration.spec.ts src/auth/auth.middleware.spec.ts src/mcp/mcp.service.spec.ts
+        run: node ../scripts/required-backend-tests.mjs authorization
+      - name: Retain required-suite execution evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: authorization-execution
+          path: reports/quality/required-backend/
+          if-no-files-found: error
+          retention-days: 14

@@ -78,7 +78,8 @@ test("shared legacy service is explicitly broad, never a Zyra-only selection", (
   assert.equal(result.owningDomains.length, Object.keys(config.domains).length);
   for (const domain of ["identity", "membership", "entitlements", "testcases", "plans", "executions", "mcp", "automation", "reports", "knowledge", "model-studio"]) hasDomain(result, domain);
   assert.ok(result.rationale.some(item => item.rule === "legacy-shared-owner"));
-  assert.equal(result.status, "review-required", "Broad legacy selection must expose the Review Board evidence gap.");
+  assert.ok(result.requiredChecks.some(check => check.id === "review-board-integration"),
+    "Broad legacy selection must require actual accounted Review Board execution.");
 });
 
 test("new auth/session/tenant role files add shared isolation and billing coverage", () => {
@@ -129,13 +130,47 @@ test("workers, MCP, SDK, reports and current-development graph/model paths have 
   }
 });
 
-test("Review Board selections explicitly expose DB/Redis opt-in CI skips", () => {
+test("Review Board selections require the dedicated accounted DB/Redis lane, never claim execution from configuration", () => {
   const result = plan(["Tesbo-Backend-Nest/src/review-board/review-board.processor.ts"]);
-  assert.equal(result.status, "review-required");
+  assert.equal(result.status, "selection-only");
   assert.ok(result.requiredChecks.some(check => check.id === "api-mcp-contracts"));
   assert.ok(result.requiredChecks.some(check => check.id === "transactional-concurrency"));
-  assert.ok(result.diagnostics.some(item => item.code === "DOMAIN_EVIDENCE_GAP" && /DATABASE_URL/.test(item.message) && /REDIS_URL/.test(item.message)));
+  const check = result.requiredChecks.find(check => check.id === "review-board-integration");
+  assert.equal(check.requiredBackendSuites.length, 2);
+  assert.ok(check.requiredBackendSuites.every(suite => check.evidence.includes(suite)));
+  assert.equal(result.verification.status, "not-run");
+  assert.match(check.description, /PostgreSQL rb_test_ci and Redis 56379/);
+  assert.match(result.domains.find(domain => domain.id === "review-board").description, /not deployed auth\/cache proof/);
   hasSpec(result, "e2e/ci-smoke.spec.ts");
+});
+
+test("required backend suite declarations reject empty, duplicate, unsafe and untracked selections", () => {
+  for (const suites of [[], ["e2e/api/auth.spec.ts"], ["Tesbo-Backend-Nest/src/missing.spec.ts"],
+    ["Tesbo-Backend-Nest/src/auth/api-token.service.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token.service.spec.ts"],
+    ["Tesbo-Backend-Nest/src/../auth/api-token.service.spec.ts"]]) {
+    const invalid = clone(config);
+    invalid.checks.authorization.requiredBackendSuites = suites;
+    assert.throws(() => validateConfig(invalid, availablePaths), /suite|evidence|escapes/i);
+  }
+});
+
+test("a real unresolved domain gap still blocks selection even with an executable job declared", () => {
+  const unresolved = clone(config);
+  unresolved.domains["review-board"].review = ["Unresolved fixture provenance requires review."];
+  const result = plan(["Tesbo-Backend-Nest/src/review-board/review-board.processor.ts"], { config: unresolved });
+  assert.equal(result.status, "review-required");
+  assert.ok(result.diagnostics.some(item => item.code === "DOMAIN_EVIDENCE_GAP"));
+});
+
+test("CLI shared-database selection requires Review Board execution without confusing an obligation with a mapping gap", () => {
+  const result = cli(["--path", "Tesbo-Backend-Nest/src/database/migrate.ts"]);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.status, "selection-only");
+  assert.equal(output.verification.status, "not-run");
+  assert.equal(output.verification.executedTestCount, null);
+  assert.ok(output.requiredChecks.some(check => check.id === "review-board-integration"));
+  assert.deepEqual(output.unmappedPaths, []);
 });
 
 test("unknown product paths fail review even if a shared-risk pattern adds many tests", () => {

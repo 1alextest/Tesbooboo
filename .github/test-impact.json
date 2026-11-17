@@ -6,13 +6,13 @@
       "workflow": ".github/workflows/core-quality.yml",
       "job": "architecture-quality",
       "description": "Root quality-tool tests and dependency security, dependency graph/boundaries, frozen lint policy, new production duplication and static impact evidence. No runtime test proof is implied.",
-      "evidence": ["package.json", ".dependency-cruiser.cjs", ".jscpd.json", ".github/test-impact.json", "scripts/check-architecture.mjs", "scripts/check-architecture.test.mjs", "scripts/check-duplication.mjs", "scripts/check-duplication.test.mjs", "scripts/check-quality-policy.mjs", "scripts/check-quality-policy.test.mjs", "scripts/git-quality.mjs", "scripts/test-impact.mjs", "scripts/test-impact.test.mjs"]
+      "evidence": ["package.json", ".dependency-cruiser.cjs", ".jscpd.json", ".github/test-impact.json", "scripts/check-architecture.mjs", "scripts/check-architecture.test.mjs", "scripts/check-duplication.mjs", "scripts/check-duplication.test.mjs", "scripts/check-quality-policy.mjs", "scripts/check-quality-policy.test.mjs", "scripts/git-quality.mjs", "scripts/test-impact.mjs", "scripts/test-impact.test.mjs", "scripts/required-backend-tests.mjs", "scripts/required-backend-tests.test.mjs"]
     },
     "backend-quality": {
       "workflow": ".github/workflows/core-quality.yml",
       "job": "backend-quality",
       "description": "Backend typecheck, lint baseline, dependency security, build and existing Jest regressions.",
-      "evidence": ["Tesbo-Backend-Nest/package.json", "Tesbo-Backend-Nest/jest.config.js", "scripts/backend-toolchain-security.test.mjs"]
+      "evidence": ["Tesbo-Backend-Nest/package.json", "Tesbo-Backend-Nest/jest.config.js", "scripts/backend-toolchain-security.test.mjs", "scripts/required-backend-tests.jest.test.mjs"]
     },
     "frontend-quality": {
       "workflow": ".github/workflows/core-quality.yml",
@@ -30,25 +30,36 @@
       "workflow": ".github/workflows/behavioral-quality.yml",
       "job": "database-integrity",
       "description": "Migrated disposable CI database, migration idempotence, schema/audit invariants and database regressions. Selection does not authorize any database run.",
-      "evidence": ["Tesbo-Backend-Nest/scripts/ci/check-db-integrity.cjs", "Tesbo-Backend-Nest/src/legacy/execution-attribution.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/run-status-atomic.db.spec.ts", "Tesbo-Backend-Nest/src/automation/automation-closure.db.spec.ts", "Tesbo-Backend-Nest/src/automation/automation-retry-ordering.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/knowledge-document-writes.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/repository-partial-edits.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/bug-metadata-writes.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/plan-project-lineage.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/approved-run-cases.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/suite-project-isolation.db.spec.ts", "Tesbo-Backend-Nest/src/behavior-graph/current-cache-schema.db.spec.ts", "Tesbo-Backend-Nest/src/behavior-graph/current-cache-graph.reader.db.spec.ts", "Tesbo-Backend-Nest/src/behavior-graph/current-cache-graph.auth.db.spec.ts", "Tesbo-Backend-Nest/src/behavior-graph/current-cache-provider-identity.db.spec.ts", "Tesbo-Backend-Nest/src/behavior-graph/current-cache-graph.history.db.spec.ts"]
+      "evidence": ["Tesbo-Backend-Nest/scripts/ci/check-db-integrity.cjs"],
+      "requiredBackendSuites": ["Tesbo-Backend-Nest/src/legacy/execution-attribution.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/run-status-atomic.db.spec.ts", "Tesbo-Backend-Nest/src/automation/automation-closure.db.spec.ts", "Tesbo-Backend-Nest/src/automation/automation-retry-ordering.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/knowledge-document-writes.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/repository-partial-edits.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/bug-metadata-writes.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/plan-project-lineage.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/approved-run-cases.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/suite-project-isolation.db.spec.ts", "Tesbo-Backend-Nest/src/behavior-graph/current-cache-schema.db.spec.ts", "Tesbo-Backend-Nest/src/behavior-graph/current-cache-graph.reader.db.spec.ts", "Tesbo-Backend-Nest/src/behavior-graph/current-cache-graph.auth.db.spec.ts", "Tesbo-Backend-Nest/src/behavior-graph/current-cache-provider-identity.db.spec.ts", "Tesbo-Backend-Nest/src/behavior-graph/current-cache-graph.history.db.spec.ts"]
     },
     "api-mcp-contracts": {
       "workflow": ".github/workflows/behavioral-quality.yml",
       "job": "api-mcp-contracts",
-      "description": "Nest HTTP bearer/REST and MCP contracts. Review Board HTTP suite in this job is opt-in and skips without its dedicated DB/Redis variables.",
-      "evidence": ["Tesbo-Backend-Nest/src/auth/api-token-rest.integration.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token-rest.guard.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token.service.spec.ts", "Tesbo-Backend-Nest/src/mcp/mcp.service.spec.ts", "Tesbo-Backend-Nest/src/review-board/review-board.http.integration.spec.ts"]
+      "description": "Nest HTTP bearer/REST and MCP contracts with strict required-suite execution accounting.",
+      "evidence": [],
+      "requiredBackendSuites": ["Tesbo-Backend-Nest/src/auth/api-token-rest.integration.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token-rest.guard.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token.service.spec.ts", "Tesbo-Backend-Nest/src/mcp/mcp.service.spec.ts"]
     },
     "transactional-concurrency": {
       "workflow": ".github/workflows/behavioral-quality.yml",
       "job": "transactional-concurrency",
-      "description": "Concurrent transitions, Zyra traces and integration sync. Review Board integration suite skips without its dedicated database variable.",
-      "evidence": ["Tesbo-Backend-Nest/src/legacy/zyra-plan-concurrency.spec.ts", "Tesbo-Backend-Nest/src/legacy/zyra-turn-trace.spec.ts", "Tesbo-Backend-Nest/src/integration-sync/integration-sync.processor.spec.ts", "Tesbo-Backend-Nest/src/review-board/review-board.integration.spec.ts"]
+      "description": "Concurrent transitions, Zyra traces and integration sync with strict required-suite execution accounting.",
+      "evidence": [],
+      "requiredBackendSuites": ["Tesbo-Backend-Nest/src/legacy/zyra-plan-concurrency.spec.ts", "Tesbo-Backend-Nest/src/legacy/zyra-turn-trace.spec.ts", "Tesbo-Backend-Nest/src/integration-sync/integration-sync.processor.spec.ts"]
+    },
+    "review-board-integration": {
+      "workflow": ".github/workflows/behavioral-quality.yml",
+      "job": "review-board-integration",
+      "description": "Both Review Board suites, in-band on job-owned migrated PostgreSQL rb_test_ci and Redis 56379, with strict execution accounting. Configuration is not execution evidence.",
+      "evidence": [],
+      "requiredBackendSuites": ["Tesbo-Backend-Nest/src/review-board/review-board.integration.spec.ts", "Tesbo-Backend-Nest/src/review-board/review-board.http.integration.spec.ts"]
     },
     "authorization": {
       "workflow": ".github/workflows/api-token-boundary.yml",
       "job": "authorization",
       "description": "API token authorization boundary. Path-filtered CI must actually schedule this check when required.",
-      "evidence": ["Tesbo-Backend-Nest/src/auth/auth.middleware.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token.service.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token-rest.guard.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token-rest.integration.spec.ts", "Tesbo-Backend-Nest/src/mcp/mcp.service.spec.ts"]
+      "evidence": [],
+      "requiredBackendSuites": ["Tesbo-Backend-Nest/src/auth/auth.middleware.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token.service.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token-rest.guard.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token-rest.integration.spec.ts", "Tesbo-Backend-Nest/src/mcp/mcp.service.spec.ts"]
     },
     "playwright-smoke": {
       "workflow": ".github/workflows/smoke-security-quality.yml",
@@ -148,10 +159,9 @@
       "checks": ["backend-quality", "frontend-quality", "transactional-concurrency", "playwright-smoke"]
     },
     "review-board": {
-      "description": "Duplicate review service, HTTP adapter, BullMQ processor and native review UI.",
+      "description": "Duplicate review service, HTTP adapter, BullMQ processor and native review UI. Require exact-revision review-board-integration receipts, not smoke/UI selection alone. Backend fixtures substitute auth/cache collaborators; they are not deployed auth/cache proof.",
       "specs": ["e2e/ci-smoke.spec.ts", "e2e/ui/zyra.spec.ts", "e2e/api/testcases.spec.ts"],
-      "checks": ["backend-quality", "frontend-quality", "api-mcp-contracts", "transactional-concurrency", "playwright-smoke"],
-      "review": ["Review required: review-board.integration.spec.ts needs REVIEW_BOARD_TEST_DATABASE_URL; review-board.http.integration.spec.ts also needs REVIEW_BOARD_TEST_REDIS_URL. Existing behavioral CI jobs omit these and silently skip those suites. Smoke/UI selection is not proof those runtime suites ran; arrange separately authorized evidence without weakening guards."]
+      "checks": ["backend-quality", "frontend-quality", "api-mcp-contracts", "transactional-concurrency", "review-board-integration", "playwright-smoke"]
     },
     "model-studio": {
       "description": "Behavior graph/source binding, pinned source, comparison, review receipts, persisted models and recovery worker.",
