@@ -1350,6 +1350,59 @@ test.describe("reports exclude cases removed from a run (hard-delete remediation
   });
 });
 
+test.describe("reports exclude directly soft-deleted executions", () => {
+  test("RPT-A-73 a soft-deleted execution stops counting as settled for untested-P1 and flaky reads", async () => {
+    await withEmptyProject(async (projectId) => {
+      const p1 = await seedTestCase(asOwner, projectId, {
+        title: "E2E Soft-Deleted Execution P1",
+        priority: "P1",
+        status: "Approved",
+      });
+      const p2 = await seedTestCase(asOwner, projectId, {
+        title: "E2E Soft-Deleted Execution P2",
+        priority: "P2",
+        status: "Approved",
+      });
+      const runA = await seedRun(asOwner, projectId, { name: "E2E Soft-Deleted Run A" });
+      const runB = await seedRun(asOwner, projectId, { name: "E2E Soft-Deleted Run B" });
+      await addRunCases(asOwner, runA.id, [p1.id, p2.id]);
+      await addRunCases(asOwner, runB.id, [p2.id]);
+      const execution = async (runId: string, testcaseId: string) =>
+        (await listRunExecutions(asOwner, runId)).find((e) => e.testcaseId === testcaseId)!;
+      const p1Execution = await execution(runA.id, p1.id);
+      const p2Passed = await execution(runA.id, p2.id);
+      const p2Failed = await execution(runB.id, p2.id);
+      for (const [runId, exec, status] of [
+        [runA.id, p1Execution, "Passed"],
+        [runA.id, p2Passed, "Passed"],
+        [runB.id, p2Failed, "Failed"],
+      ] as const) {
+        const patched = await asOwner.patch(`/api/cycles/${runId}/executions/${exec.id}`, { data: { status } });
+        expect(patched.ok(), await patched.text()).toBeTruthy();
+      }
+
+      const before = await getJson(asOwner, `/api/projects/${projectId}/reports/insights`);
+      expect(before.untestedP1Count, "the P1 case has a settled result").toBe(0);
+      expect(
+        before.flakyTests.some((f: { testcaseId: string }) => f.testcaseId === p2.id),
+        "the P2 case has two different settled results",
+      ).toBe(true);
+
+      // Direct execution soft-delete: the cycle item and the run stay active, so only the missing
+      // `e.deleted_at IS NULL` predicate can keep these rows out of the reads.
+      softDeleteExecution(p1Execution.id);
+      softDeleteExecution(p2Failed.id);
+
+      const after = await getJson(asOwner, `/api/projects/${projectId}/reports/insights`);
+      expect(after.untestedP1Count, "the P1 case has no live settled result").toBe(1);
+      expect(
+        after.flakyTests.some((f: { testcaseId: string }) => f.testcaseId === p2.id),
+        "one live result cannot flip between statuses",
+      ).toBe(false);
+    });
+  });
+});
+
 test.describe("the per-run report summary endpoint", () => {
   test("RPT-A-47 reports the run's real status buckets, matching the project overview", { tag: '@tesbo.testId("TES-TC-507")' }, async () => {
     // Run 6 holds three executions: flaky (Failed), stable (Passed), low-flake (Failed).
