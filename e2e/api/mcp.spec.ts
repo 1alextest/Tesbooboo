@@ -264,6 +264,72 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
   }
 });
 
+test("write-scoped project tokens require an owner/manager and carry explicit target identity", async () => {
+  const tenant = await provisionRbacTenant("mcp-lifecycle");
+  test.skip(!tenant, "requires direct SQL control for the disposable tenant");
+  const projectId = tenant!.mainProjectId;
+  const owner = await loginAs(tenant!.owner);
+  const manager = await loginAs(tenant!.manager);
+  const qa = await loginAs(tenant!.qa);
+  const issued: Array<{ id: string; token: string; projectId: string; projectName: string; organizationId: string; mcpPath: string }> = [];
+  const issue = async (who: APIRequestContext, scopes: string[]) => {
+    const res = await who.post(`/api/projects/${projectId}/apikeys`, {
+      data: { name: `E2E role gate ${Date.now()} ${Math.random().toString(36).slice(2, 8)}`, scopes }
+    });
+    const body = await res.json().catch(() => null);
+    if (res.ok()) issued.push(body);
+    return { status: res.status(), body };
+  };
+  try {
+    const ownerWrite = await issue(owner, ["read", "write"]);
+    expect(ownerWrite.status).toBe(201);
+    const ownerToken = issued.at(-1)!;
+    // The one-time secret names the project, workspace and MCP target explicitly.
+    expect(ownerToken).toMatchObject({
+      projectId,
+      projectName: expect.any(String),
+      organizationId: tenant!.organizationId,
+      mcpPath: `/api/projects/${projectId}/mcp`
+    });
+    expect(ownerToken.token).toMatch(/^tsbo_/);
+
+    expect((await issue(manager, ["read", "write"])).status).toBe(201);
+    const qaWrite = await issue(qa, ["read", "write"]);
+    expect(qaWrite.status).toBe(403);
+    expect(JSON.stringify(qaWrite.body)).toMatch(/owners and managers/i);
+    expect((await issue(qa, ["read"])).status).toBe(201);
+    const qaReadToken = issued.at(-1)!;
+
+    // The read-only token can discover the project but is refused a write at the MCP scope guard.
+    const machine = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
+    try {
+      const call = async (name: string, args: Record<string, unknown>) => {
+        const res = await machine.post("/api/mcp", {
+          headers: { Authorization: `Bearer ${qaReadToken.token}` },
+          data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }
+        });
+        expect(res.ok(), `${name}: ${res.status()} ${await res.text()}`).toBeTruthy();
+        return res.json();
+      };
+      const listed = await call("list_projects", {});
+      expect(listed.result.isError).toBe(false);
+      expect(JSON.parse(listed.result.content[0].text).projects.map((p: { id: string }) => p.id)).toEqual([projectId]);
+      const denied = await call("create_testcase", { title: "Read token must not write" });
+      expect(denied.error?.code).toBe(-32002);
+    } finally {
+      await machine.dispose();
+    }
+
+    // A member cannot disable the owner's write credential; the owner can.
+    expect((await qa.delete(`/api/projects/${projectId}/apikeys/${ownerToken.id}`)).status()).toBe(403);
+    expect((await owner.delete(`/api/projects/${projectId}/apikeys/${ownerToken.id}`)).ok()).toBeTruthy();
+    issued.splice(issued.indexOf(ownerToken), 1);
+  } finally {
+    for (const token of issued) await owner.delete(`/api/projects/${projectId}/apikeys/${token.id}`, { failOnStatusCode: false });
+    await Promise.all([owner.dispose(), manager.dispose(), qa.dispose()]);
+  }
+});
+
 test("MCP revision preconditions refuse stale and malformed edits without overwriting human Notes", async ({ request }) => {
   const created = await createCase(request, { attachments: "Original Notes" });
   const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
