@@ -4520,7 +4520,7 @@ test.describe("zyra / agents (UI)", () => {
         await verifyZyraReviewCloseFeedback({
           page, request: api, taskUrl: `${requestBase}/agents/zyra/tasks/${taskId}`, language, saveFirst,
           settleSavedCases: async (ids) => {
-            // Embedding bookkeeping no longer writes testcase_versions (V148 excludes it), so the
+            // Embedding bookkeeping no longer writes testcase_versions (V150 excludes it), so the
             // durable "the enqueue happened, and the keyless worker put it back to pending" signal
             // is embedding_queued_at, which the enqueue sets and the worker never clears.
             await expect.poll(() => Number(scalar(`SELECT COUNT(*) FROM testcases t

@@ -50,7 +50,7 @@ export async function verifyCiZyraReviewFeedback(page: Page, api: string, web: s
             await verifyZyraReviewCloseFeedback({
               page, request: page.request, taskUrl, language, saveFirst, repositorySnapshot,
               settleSavedCases: async (ids) => {
-                // V148 stops embedding bookkeeping from writing testcase_versions, so the durable
+                // V150 stops embedding bookkeeping from writing testcase_versions, so the durable
                 // "the enqueue happened and the keyless worker returned it to pending" signal is
                 // embedding_queued_at (set by the enqueue, never cleared by the worker).
                 await expect.poll(async () => (await db.query(`SELECT COUNT(*)::int AS settled FROM testcases t
