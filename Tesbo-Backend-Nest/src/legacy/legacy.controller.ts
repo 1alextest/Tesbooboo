@@ -504,6 +504,31 @@ export class LegacyController {
     return this.legacy.revokeApiKey(req.userId, id, keyId);
   }
 
+  @Get("/api/projects/:projectId/testcase-views")
+  listSavedViews(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
+    return this.legacy.listSavedViews(req.userId, projectId);
+  }
+
+  @Post("/api/projects/:projectId/testcase-views")
+  createSavedView(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.createSavedView(req.userId, projectId, body);
+  }
+
+  @Patch("/api/projects/:projectId/testcase-views/:viewId")
+  updateSavedView(
+    @Req() req: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("viewId") viewId: string,
+    @Body() body: Record<string, any>
+  ) {
+    return this.legacy.updateSavedView(req.userId, projectId, viewId, body);
+  }
+
+  @Delete("/api/projects/:projectId/testcase-views/:viewId")
+  deleteSavedView(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("viewId") viewId: string) {
+    return this.legacy.deleteSavedView(req.userId, projectId, viewId);
+  }
+
   @Get("/api/projects/:projectId/suites")
   listSuites(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
     return this.legacy.listSuitesForUser(req.userId, projectId);

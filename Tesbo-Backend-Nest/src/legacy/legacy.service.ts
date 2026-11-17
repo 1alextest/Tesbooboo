@@ -264,6 +264,50 @@ const ZYRA_TECHNIQUES = [
 ] as const;
 type ZyraTechnique = typeof ZYRA_TECHNIQUES[number];
 
+/** The authoring techniques a canonical test case can be classified with — the same vocabulary. */
+export const TESTCASE_TECHNIQUES = ZYRA_TECHNIQUES;
+
+/**
+ * Cross-cutting review lenses a case can belong to. These are filters, not a hierarchy and not an
+ * execution result: a link or view never proves the case ran or passed.
+ */
+export const TESTCASE_REVIEW_VIEWS = [
+  "positive",
+  "negative",
+  "end_to_end",
+  "state",
+  "upstream_downstream",
+  "ux_ui_functionality"
+] as const;
+export type TestcaseReviewView = typeof TESTCASE_REVIEW_VIEWS[number];
+
+/** A technique is optional; null/"" clears it. Unknown values fail instead of silently widening. */
+function normalizeTestcaseTechnique(raw: unknown): string | null {
+  if (raw === undefined || raw === null) return null;
+  const value = String(raw).trim().toLowerCase();
+  if (!value) return null;
+  if (!(TESTCASE_TECHNIQUES as readonly string[]).includes(value)) {
+    throw new BadRequestException({ error: `technique must be one of ${TESTCASE_TECHNIQUES.join(", ")}` });
+  }
+  return value;
+}
+
+/** An absent array means "not provided"; null is invalid; [] is the explicit clear. */
+function normalizeTestcaseReviewViews(raw: unknown): string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new BadRequestException({ error: "reviewViews must be an array of view names" });
+  }
+  const views = [...new Set(raw.map((value) => String(value ?? "").trim().toLowerCase()).filter(Boolean))];
+  const unknown = views.filter((value) => !(TESTCASE_REVIEW_VIEWS as readonly string[]).includes(value));
+  if (unknown.length) {
+    throw new BadRequestException({
+      error: `reviewViews must be one of ${TESTCASE_REVIEW_VIEWS.join(", ")}; unknown: ${unknown.join(", ")}`
+    });
+  }
+  return views;
+}
+
 /** Frontend treats this path as "no custom logo" and renders the theme-aware lockup. */
 const DEFAULT_BRAND_LOGO_URL = "/brand/tesbo-logo-horizontal.svg";
 
@@ -1636,6 +1680,108 @@ export class LegacyService implements OnModuleInit {
     if (!isUuid(keyId)) throw new NotFoundException({ error: "API key not found" });
     const removed = await this.apiTokens.revokeToken(projectId, keyId);
     if (!removed) throw new NotFoundException({ error: "API key not found" });
+    return { ok: true };
+  }
+
+  // --- Saved repository views ----------------------------------------------
+  // A view stores the repository's existing filter query, not a copy of any case, so applying one
+  // cannot diverge from the rows it names. A link or view is never execution or coverage evidence.
+  private static readonly SAVED_VIEW_FILTER_KEYS = new Set([
+    "search", "suiteId", "includeDescendants", "status", "priority", "type", "automationStatus",
+    "technique", "view", "jiraIssueKey", "linearIssueKey", "notionPageId", "customTagIds", "sortBy", "sortDir"
+  ]);
+
+  private static normalizeSavedViewFilters(raw: unknown): Body {
+    if (raw === undefined || raw === null) return {};
+    if (typeof raw !== "object" || Array.isArray(raw)) {
+      throw new BadRequestException({ error: "filters must be an object" });
+    }
+    const filters: Body = {};
+    for (const [key, value] of Object.entries(raw as Body)) {
+      if (!LegacyService.SAVED_VIEW_FILTER_KEYS.has(key)) {
+        throw new BadRequestException({ error: `filters.${key} is not a supported repository filter` });
+      }
+      if (value === undefined || value === null) continue;
+      if (typeof value === "string" || typeof value === "boolean" || typeof value === "number") {
+        filters[key] = value;
+        continue;
+      }
+      if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+        filters[key] = value;
+        continue;
+      }
+      throw new BadRequestException({ error: `filters.${key} must be a string, number, boolean or string array` });
+    }
+    if (JSON.stringify(filters).length > 8192) {
+      throw new BadRequestException({ error: "filters are too large" });
+    }
+    return filters;
+  }
+
+  private static savedViewName(raw: unknown, fallback?: string): string {
+    if (raw === undefined && fallback !== undefined) return fallback;
+    const name = String(raw ?? "").trim();
+    if (!name) throw new BadRequestException({ error: "name is required" });
+    if (name.length > 80) throw new BadRequestException({ error: "name must be 80 characters or fewer" });
+    return name;
+  }
+
+  async listSavedViews(userId: string | null | undefined, projectId: string) {
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    const res = await this.db.query(
+      `SELECT * FROM saved_testcase_views
+       WHERE project_id = $1 AND (is_shared = true OR created_by = $2)
+       ORDER BY lower(name), id`,
+      [projectId, uid]
+    );
+    return res.rows.map(toCamel);
+  }
+
+  async createSavedView(userId: string | null | undefined, projectId: string, body: Body) {
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    const name = LegacyService.savedViewName(body?.name);
+    const filters = LegacyService.normalizeSavedViewFilters(body?.filters);
+    const res = await this.db.query(
+      `INSERT INTO saved_testcase_views (project_id, created_by, name, filters, is_shared)
+       VALUES ($1,$2,$3,$4::jsonb,$5) RETURNING *`,
+      [projectId, uid, name, JSON.stringify(filters), body?.isShared === true]
+    );
+    return toCamel(res.rows[0]);
+  }
+
+  private async savedViewForWrite(uid: string, projectId: string, viewId: string) {
+    if (!isUuid(viewId)) throw new NotFoundException({ error: "Saved view not found" });
+    const res = await this.db.query("SELECT * FROM saved_testcase_views WHERE id = $1 AND project_id = $2", [viewId, projectId]);
+    const row = res.rows[0];
+    if (!row) throw new NotFoundException({ error: "Saved view not found" });
+    const project = await this.requireProjectAccess(uid, projectId);
+    const role = this.normalizeRole(String(project.caller_role || ""));
+    if (row.created_by !== uid && role !== "owner" && role !== "manager") {
+      throw new ForbiddenException({ error: "Only the view's creator, a project owner or a manager can change this view" });
+    }
+    return row;
+  }
+
+  async updateSavedView(userId: string | null | undefined, projectId: string, viewId: string, body: Body) {
+    const uid = this.requireUser(userId);
+    const current = await this.savedViewForWrite(uid, projectId, viewId);
+    const name = LegacyService.savedViewName(body?.name, current.name);
+    const filters = body?.filters === undefined ? current.filters : LegacyService.normalizeSavedViewFilters(body.filters);
+    const isShared = body?.isShared === undefined ? current.is_shared : body.isShared === true;
+    const res = await this.db.query(
+      `UPDATE saved_testcase_views SET name = $3, filters = $4::jsonb, is_shared = $5, updated_at = now()
+       WHERE id = $1 AND project_id = $2 RETURNING *`,
+      [viewId, projectId, name, JSON.stringify(filters), isShared]
+    );
+    return toCamel(res.rows[0]);
+  }
+
+  async deleteSavedView(userId: string | null | undefined, projectId: string, viewId: string) {
+    const uid = this.requireUser(userId);
+    await this.savedViewForWrite(uid, projectId, viewId);
+    await this.db.query("DELETE FROM saved_testcase_views WHERE id = $1 AND project_id = $2", [viewId, projectId]);
     return { ok: true };
   }
 
@@ -4273,6 +4419,8 @@ export class LegacyService implements OnModuleInit {
       !query.jiraIssueKey &&
       !query.linearIssueKey &&
       !query.notionPageId &&
+      !query.technique &&
+      !query.view &&
       !query.search &&
       !query.customFieldFilters &&
       // The cache key is (project, limit, offset) with no sort in it: a sorted page would be answered
@@ -4408,6 +4556,19 @@ export class LegacyService implements OnModuleInit {
         );
       }
     }
+    if (query.technique) {
+      const technique = normalizeTestcaseTechnique(query.technique);
+      values.push(technique);
+      filters.push(`testcases.technique = $${values.length}`);
+    }
+    if (query.view) {
+      const view = String(query.view).trim().toLowerCase();
+      if (!(TESTCASE_REVIEW_VIEWS as readonly string[]).includes(view)) {
+        throw new BadRequestException({ error: `view must be one of ${TESTCASE_REVIEW_VIEWS.join(", ")}` });
+      }
+      values.push(view);
+      filters.push(`$${values.length} = ANY(testcases.review_views)`);
+    }
     if (query.search) {
       values.push(`%${String(query.search).toLowerCase()}%`);
       const p = values.length;
@@ -4534,6 +4695,7 @@ export class LegacyService implements OnModuleInit {
               testcases.jira_url, testcases.linear_issue_key, testcases.linear_url,
               testcases.notion_page_id, testcases.notion_url,
               testcases.severity, testcases.component, testcases.source_refs,
+              testcases.technique, testcases.review_views,
               COALESCE(
                 (SELECT jsonb_object_agg(v.definition_id, v.value) FROM custom_field_values v WHERE v.testcase_id = testcases.id),
                 '{}'::jsonb
@@ -4932,8 +5094,8 @@ export class LegacyService implements OnModuleInit {
         priority, severity, type, automation_status, automation_repo, automation_path, automation_test_name,
         automation_framework, automation_tags, owner_id, component, status, jira_issue_key, jira_url,
         linear_issue_key, linear_url, attachments, created_by, updated_by, estimated_duration, source_refs,
-        notion_page_id, notion_url)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$27,$28,$29::jsonb,$30,$31)
+        notion_page_id, notion_url, technique, review_views)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$27,$28,$29::jsonb,$30,$31,$32,$33)
        RETURNING *`,
       [
         projectId,
@@ -4975,7 +5137,9 @@ export class LegacyService implements OnModuleInit {
         this.normalizeEstimatedDuration(body.estimatedDuration),
         JSON.stringify(LegacyService.sanitizeSourceRefsInput(body.sourceRefs)),
         body.notionPageId || null,
-        body.notionUrl || null
+        body.notionUrl || null,
+        normalizeTestcaseTechnique(body.technique),
+        normalizeTestcaseReviewViews(body.reviewViews)
       ]
     );
     const row = res.rows[0];
@@ -5748,7 +5912,10 @@ export class LegacyService implements OnModuleInit {
        notion_url=CASE WHEN $33::boolean THEN NULL ELSE COALESCE($32,notion_url) END,
        attachments=COALESCE($25,attachments), updated_by=$26,
        estimated_duration=COALESCE($27,estimated_duration),
-       source_refs=COALESCE($28::jsonb,source_refs), external_id=COALESCE($34,external_id), updated_at=now()
+       source_refs=COALESCE($28::jsonb,source_refs), external_id=COALESCE($34,external_id),
+       technique=CASE WHEN $38::boolean THEN $39 ELSE technique END,
+       review_views=CASE WHEN $40::boolean THEN $41::text[] ELSE review_views END,
+       updated_at=now()
        WHERE id=$1 AND deleted_at IS NULL
          AND ($37::text IS NULL OR ${TESTCASE_EDIT_REVISION_SQL} = $37::text)
        RETURNING *`,
@@ -5793,7 +5960,11 @@ export class LegacyService implements OnModuleInit {
         newExternalId,
         body.suiteId !== undefined,
         body.ownerId !== undefined,
-        expectedRevision
+        expectedRevision,
+        body.technique !== undefined,
+        body.technique === undefined ? null : normalizeTestcaseTechnique(body.technique),
+        body.reviewViews !== undefined,
+        body.reviewViews === undefined ? null : normalizeTestcaseReviewViews(body.reviewViews)
       ]
     );
     const row = res.rows[0];

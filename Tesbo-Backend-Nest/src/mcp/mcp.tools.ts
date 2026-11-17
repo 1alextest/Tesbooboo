@@ -1,6 +1,6 @@
 import { HttpException } from "@nestjs/common";
 import { DRAFT_MODEL_PREVIEW_INPUT_SCHEMA } from "../behavior-graph/model-studio-preview.core";
-import { BUG_SEVERITIES, LegacyService } from "../legacy/legacy.service";
+import { BUG_SEVERITIES, LegacyService, TESTCASE_REVIEW_VIEWS, TESTCASE_TECHNIQUES } from "../legacy/legacy.service";
 import { expectedTestcaseRevision } from "../legacy/testcase-edit-revision";
 import { CurrentCacheGraphReader } from "../behavior-graph/current-cache-graph.reader";
 import { CurrentCacheGraphHistory } from "../behavior-graph/current-cache-graph.history";
@@ -326,7 +326,9 @@ export function buildMcpTools(): McpTool[] {
           type: { type: "string" },
           automationStatus: { type: "string" },
           component: { type: "string" },
-          status: { type: "string" }
+          status: { type: "string" },
+          technique: { type: "string", enum: [...TESTCASE_TECHNIQUES], description: "Authoring technique used to design the case." },
+          reviewViews: { type: "array", items: { type: "string", enum: [...TESTCASE_REVIEW_VIEWS] }, description: "Cross-cutting review lenses; a view is not execution or coverage." }
         },
         required: ["title"],
         additionalProperties: true
@@ -386,7 +388,9 @@ export function buildMcpTools(): McpTool[] {
           component: { type: "string" },
           status: { type: "string" },
           estimatedDuration: { type: "string" },
-          customFieldValues: { type: "object" }
+          customFieldValues: { type: "object" },
+          technique: { type: "string", enum: [...TESTCASE_TECHNIQUES], description: "Authoring technique used to design the case. Omit to preserve; null or an empty string clears." },
+          reviewViews: { type: "array", items: { type: "string", enum: [...TESTCASE_REVIEW_VIEWS] }, description: "Cross-cutting review lenses. Omit to preserve, [] to clear; a view is not execution or coverage." }
         },
         required: ["testcaseId"],
         additionalProperties: true
@@ -498,7 +502,9 @@ export function buildMcpTools(): McpTool[] {
                 type: { type: "string" },
                 automationStatus: { type: "string" },
                 component: { type: "string" },
-                status: { type: "string" }
+                status: { type: "string" },
+                technique: { type: "string", enum: [...TESTCASE_TECHNIQUES], description: "Authoring technique used to design the case." },
+                reviewViews: { type: "array", items: { type: "string", enum: [...TESTCASE_REVIEW_VIEWS] }, description: "Cross-cutting review lenses; a view is not execution or coverage." }
               },
               required: ["title"]
             }
