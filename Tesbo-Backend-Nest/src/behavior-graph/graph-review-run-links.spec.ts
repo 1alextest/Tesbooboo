@@ -14,7 +14,8 @@ function setup(eligible = 1, newlyLinked = 1) {
     fn({ query }));
   const db = { transaction, query } as never;
   const legacy = { requireProjectAccess: jest.fn().mockResolvedValue({ id: PROJECT }) };
-  return { svc: new GraphReviewRunLinks(db, legacy as never), query, transaction, legacy };
+  const storage = { verify: jest.fn() };
+  return { svc: new GraphReviewRunLinks(db, legacy as never, storage as never), query, transaction, legacy, storage };
 }
 
 describe("committed graph review → native run/case relationships", () => {
@@ -119,6 +120,52 @@ describe("committed graph review → native run/case relationships", () => {
         defectKey: "BUG-17" }
     });
     expect(JSON.stringify(result)).not.toContain("approved");
+    expect(JSON.stringify(result)).not.toContain("verified");
+  });
+
+  it("does not read storage or claim byte checks unless verification is requested", async () => {
+    const { svc, query, storage } = setup();
+    query.mockResolvedValueOnce({ rows: [{ allowed: true, links: [{
+      runId: RUN, caseId: CASE, linkedAt: "2026-11-15T00:00:00Z",
+      runName: "Human QA review", runStatus: "Planning", caseStillInRun: true,
+      execution: { id: "00000000-0000-4000-8000-000000000005", status: "Failed",
+        executedAt: null, executedAfterHandoff: false, actualResultRecorded: false,
+        defectKey: null, evidenceFileCount: 1, evidenceAddedAfterHandoffCount: 0 }
+    }] }] });
+    const result = await svc.listForUser(USER, PROJECT, HISTORY);
+    expect(result.links[0].execution?.evidenceBytes).toBeUndefined();
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(storage.verify).not.toHaveBeenCalled();
+  });
+
+  it("reports readable, missing and byte-mismatched evidence only when asked", async () => {
+    const executionId = "00000000-0000-4000-8000-000000000005";
+    const { svc, query, storage } = setup();
+    query.mockResolvedValueOnce({ rows: [{ allowed: true, links: [{
+      runId: RUN, caseId: CASE, linkedAt: "2026-11-15T00:00:00Z",
+      runName: "Human QA review", runStatus: "Planning", caseStillInRun: true,
+      execution: { id: executionId, status: "Failed", executedAt: null,
+        executedAfterHandoff: false, actualResultRecorded: false, defectKey: null,
+        evidenceFileCount: 3, evidenceAddedAfterHandoffCount: 0 }
+    }] }] });
+    query.mockResolvedValueOnce({ rows: [
+      { entity_id: executionId, storage_path: "evidence/a", file_size: "10" },
+      { entity_id: executionId, storage_path: "evidence/b", file_size: "10" },
+      { entity_id: executionId, storage_path: "evidence/c", file_size: null }
+    ] });
+    storage.verify
+      .mockResolvedValueOnce({ available: true, bytes: 10, byteMismatch: false })
+      .mockResolvedValueOnce({ available: true, bytes: 7, byteMismatch: true })
+      .mockResolvedValueOnce({ available: false, bytes: null, byteMismatch: false });
+
+    const result = await svc.listForUser(USER, PROJECT, HISTORY, { verifyEvidenceBytes: true });
+
+    expect(result.links[0].execution?.evidenceBytes).toMatchObject({
+      checked: 3, available: 2, unavailable: 1, byteMismatch: 1, truncated: false
+    });
+    expect(storage.verify).toHaveBeenNthCalledWith(1, "evidence/a", 10);
+    expect(storage.verify).toHaveBeenNthCalledWith(3, "evidence/c", null);
+    // Verification is storage truth, not content review or approval.
     expect(JSON.stringify(result)).not.toContain("verified");
   });
 

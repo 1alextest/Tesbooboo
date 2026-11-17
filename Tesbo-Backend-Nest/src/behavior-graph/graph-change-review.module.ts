@@ -3,6 +3,7 @@ import type { Queue } from "bullmq";
 import { Logger, Module, OnModuleInit } from "@nestjs/common";
 import { AppConfigService } from "../config/app-config.service";
 import { LegacyModule } from "../legacy/legacy.module";
+import { StorageModule } from "../storage/storage.module";
 import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
 import { GraphReviewRunLinks } from "./graph-review-run-links";
 import { GraphChangeReviewRecovery } from "./graph-change-review.recovery";
@@ -49,7 +50,7 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
 }
 
 @Module({
-  imports: [LegacyModule, BullModule.registerQueue({ name: GRAPH_QA_RECOVERY_QUEUE })],
+  imports: [LegacyModule, StorageModule, BullModule.registerQueue({ name: GRAPH_QA_RECOVERY_QUEUE })],
   controllers: [GraphChangeReviewController, ModelStudioPreviewController, ModelStudioModelsController],
   providers: [
     CurrentCacheGraphReader,

@@ -827,6 +827,12 @@ test.describe("zyra / agents (UI)", () => {
       await expect(handoffs).toContainText("1 added after handoff");
       await expect(handoffs).toContainText("recorded after handoff; build provenance not verified");
       await expect(handoffs).toContainText("defect reference: BUG-17");
+      // Metadata row exists, but no object was ever stored at that path. Explicit byte
+      // verification must report it unavailable rather than letting the count imply evidence.
+      await reopened.getByRole("button", { name: "Verify evidence bytes" }).click();
+      await expect(handoffs).toContainText(
+        "evidence bytes: 0 of 1 readable; 1 unavailable; availability is not content review"
+      );
       await expect(handoffs.getByRole("link", { name: "Open native execution" }))
         .toHaveAttribute("href",
           "/projects/" + projectId + "/cycles/" + createdRunId +

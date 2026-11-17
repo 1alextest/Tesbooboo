@@ -1,7 +1,20 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
+import { StorageService } from "../storage/storage.service";
 import { summarizeQaVerificationGaps, type QaVerificationGaps } from "./qa-verification-gaps";
+
+/** Opt-in, because each check costs one storage HEAD/stat per attachment. */
+export interface QaEvidenceByteCheck {
+  checked: number;
+  available: number;
+  unavailable: number;
+  byteMismatch: number;
+  truncated: boolean;
+  note: string;
+}
+
+const MAX_EVIDENCE_BYTE_CHECKS = 100;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HISTORY_ID = /^[1-9][0-9]{0,18}$/;
@@ -19,6 +32,8 @@ export interface QaRunCaseExecution {
   /** Count of active native attachment metadata, not verification of stored file bytes. */
   evidenceFileCount: number;
   evidenceAddedAfterHandoffCount: number;
+  /** Present only when the caller asked for byte verification. */
+  evidenceBytes?: QaEvidenceByteCheck;
 }
 
 /** Compare an internally pinned source commit to the commit REPORTED by a run.
@@ -52,7 +67,8 @@ export interface QaRunCaseLink {
 export class GraphReviewRunLinks {
   constructor(
     private readonly db: DatabaseService,
-    private readonly legacy: LegacyService
+    private readonly legacy: LegacyService,
+    private readonly storage: StorageService
   ) {}
 
   private validHistory(id: string): void {
@@ -61,7 +77,8 @@ export class GraphReviewRunLinks {
     }
   }
 
-  async listForUser(userId: string | null | undefined, projectId: string, historyId: string):
+  async listForUser(userId: string | null | undefined, projectId: string, historyId: string,
+    options: { verifyEvidenceBytes?: boolean } = {}):
     Promise<{ links: QaRunCaseLink[]; summary: QaVerificationGaps }> {
     if (!userId) throw new ForbiddenException({ error: "Project membership required" });
     this.validHistory(historyId);
@@ -148,8 +165,45 @@ export class GraphReviewRunLinks {
     );
     const row = result.rows[0];
     if (!row?.allowed) throw new NotFoundException({ error: "Committed change review not found" });
+    if (options.verifyEvidenceBytes) await this.annotateEvidenceBytes(row.links, projectId);
     return { links: row.links,
       summary: summarizeQaVerificationGaps(projectId, row.review_receipt, row.links) };
+  }
+
+  /**
+   * Metadata rows prove a row exists, not that its object is readable. This resolves each active
+   * attachment once (bounded) and reports what the storage backend actually answered. It never
+   * changes an attachment, an execution, a case or a result; verification is not content review.
+   */
+  private async annotateEvidenceBytes(links: QaRunCaseLink[], projectId: string): Promise<void> {
+    const executionIds = [...new Set(links.flatMap((link) => link.execution ? [link.execution.id] : []))];
+    if (!executionIds.length) return;
+    const attachments = await this.db.query<{ entity_id: string; storage_path: string; file_size: string | null }>(
+      `SELECT entity_id, storage_path, file_size FROM attachments
+       WHERE project_id = $1 AND entity_type = 'execution' AND entity_id = ANY($2::uuid[])
+         AND deleted_at IS NULL
+       ORDER BY created_at, id`,
+      [projectId, executionIds]
+    );
+    const checkedRows = attachments.rows.slice(0, MAX_EVIDENCE_BYTE_CHECKS);
+    const truncated = attachments.rows.length > checkedRows.length;
+    const checks = await Promise.all(checkedRows.map(async (row) => ({
+      executionId: String(row.entity_id),
+      check: await this.storage.verify(row.storage_path, row.file_size == null ? null : Number(row.file_size))
+    })));
+    for (const link of links) {
+      const execution = link.execution;
+      if (!execution) continue;
+      const mine = checks.filter((entry) => entry.executionId === execution.id).map((entry) => entry.check);
+      execution.evidenceBytes = {
+        checked: mine.length,
+        available: mine.filter((check) => check.available).length,
+        unavailable: mine.filter((check) => !check.available).length,
+        byteMismatch: mine.filter((check) => check.byteMismatch).length,
+        truncated,
+        note: "Storage availability and recorded size only; does not prove the evidence supports the result."
+      };
+    }
   }
 
   async linkForUser(

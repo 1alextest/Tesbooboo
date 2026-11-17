@@ -4658,6 +4658,15 @@ export type GraphReviewRunExecutionObservation = {
   /** Native active attachment metadata count, not verified stored bytes. */
   evidenceFileCount: number;
   evidenceAddedAfterHandoffCount: number;
+  /** Present only when byte verification was explicitly requested. */
+  evidenceBytes?: {
+    checked: number;
+    available: number;
+    unavailable: number;
+    byteMismatch: number;
+    truncated: boolean;
+    note: string;
+  };
 };
 export type GraphReviewRunCaseLink = {
   /** Machine/human supplied CI commit compared with server-pinned Git. Not deployed-build proof. */
@@ -4692,9 +4701,10 @@ export type QaVerificationGapSummary = {
   approvalAssertion: "none";
 };
 export async function listZyraGraphReviewRunLinks(
-  projectId: string, historyId: string
+  projectId: string, historyId: string, options?: { verifyEvidenceBytes?: boolean }
 ): Promise<{ links: GraphReviewRunCaseLink[]; summary: QaVerificationGapSummary }> {
-  return api(`/api/projects/${projectId}/agents/zyra/changes/${historyId}/runs`);
+  const query = options?.verifyEvidenceBytes ? "?verifyEvidenceBytes=true" : "";
+  return api(`/api/projects/${projectId}/agents/zyra/changes/${historyId}/runs${query}`);
 }
 export async function linkZyraGraphReviewRunCases(
   projectId: string, historyId: string, runId: string, testcaseIds: string[]

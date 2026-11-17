@@ -51,9 +51,17 @@ export class GraphChangeReviewController {
   listLinkedRuns(
     @Req() request: AuthenticatedRequest,
     @Param("projectId") projectId: string,
-    @Param("historyId") historyId: string
+    @Param("historyId") historyId: string,
+    @Query("verifyEvidenceBytes") verifyEvidenceBytes?: unknown
   ) {
-    return this.runLinks.listForUser(request.userId, projectId, historyId);
+    // Opt-in and strict: each check costs a storage HEAD/stat, so a typo must not silently
+    // enable or disable it. Only the literal "true" turns verification on.
+    if (verifyEvidenceBytes !== undefined && verifyEvidenceBytes !== "true" && verifyEvidenceBytes !== "false") {
+      throw new BadRequestException({ error: "verifyEvidenceBytes must be true or false" });
+    }
+    return this.runLinks.listForUser(request.userId, projectId, historyId, {
+      verifyEvidenceBytes: verifyEvidenceBytes === "true"
+    });
   }
 
   @Post(":historyId/runs/:cycleId/link")
