@@ -38,6 +38,8 @@ jobs:
           cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm run build
+      - name: Refuse any target other than this job's disposable fixture
+        run: node ../scripts/required-backend-tests.mjs --preflight database-integrity
       - name: Apply all migrations
         run: npm run migrate
       - name: Prove migration runner is idempotent
@@ -45,7 +47,15 @@ jobs:
       - name: Validate schema invariants and real audit triggers
         run: node scripts/ci/check-db-integrity.cjs
       - name: Verify execution, document, repository, bug and Plan lineage on migrated PostgreSQL
-        run: npm test -- --runTestsByPath src/legacy/execution-attribution.db.spec.ts src/legacy/run-status-atomic.db.spec.ts src/automation/automation-retry-ordering.db.spec.ts src/automation/automation-closure.db.spec.ts src/legacy/knowledge-document-writes.db.spec.ts src/legacy/repository-partial-edits.db.spec.ts src/legacy/bug-metadata-writes.db.spec.ts src/legacy/plan-project-lineage.db.spec.ts src/legacy/approved-run-cases.db.spec.ts src/legacy/suite-project-isolation.db.spec.ts src/behavior-graph/current-cache-schema.db.spec.ts src/behavior-graph/current-cache-graph.reader.db.spec.ts src/behavior-graph/current-cache-graph.auth.db.spec.ts src/behavior-graph/current-cache-provider-identity.db.spec.ts src/behavior-graph/current-cache-graph.history.db.spec.ts
+        run: node ../scripts/required-backend-tests.mjs database-integrity
+      - name: Retain required-suite execution evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: database-integrity-execution
+          path: reports/quality/required-backend/
+          if-no-files-found: error
+          retention-days: 14
 
   api-mcp-contracts:
     name: api-mcp-contracts
@@ -65,7 +75,15 @@ jobs:
           cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
       - run: npm ci --ignore-scripts
       - name: Exercise real Nest HTTP auth and MCP service contracts
-        run: npm test -- --runTestsByPath src/auth/api-token-rest.integration.spec.ts src/auth/api-token-rest.guard.spec.ts src/auth/api-token.service.spec.ts src/mcp/mcp.service.spec.ts src/review-board/review-board.http.integration.spec.ts
+        run: node ../scripts/required-backend-tests.mjs api-mcp-contracts
+      - name: Retain required-suite execution evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: api-mcp-contracts-execution
+          path: reports/quality/required-backend/
+          if-no-files-found: error
+          retention-days: 14
 
   transactional-concurrency:
     name: transactional-concurrency
@@ -85,4 +103,67 @@ jobs:
           cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
       - run: npm ci --ignore-scripts
       - name: Deterministic concurrent transitions and data-integrity regressions
-        run: npm test -- --runTestsByPath src/legacy/zyra-plan-concurrency.spec.ts src/legacy/zyra-turn-trace.spec.ts src/integration-sync/integration-sync.processor.spec.ts src/review-board/review-board.integration.spec.ts
+        run: node ../scripts/required-backend-tests.mjs transactional-concurrency
+      - name: Retain required-suite execution evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: transactional-concurrency-execution
+          path: reports/quality/required-backend/
+          if-no-files-found: error
+          retention-days: 14
+
+  review-board-integration:
+    name: review-board-integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rb_test_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d rb_test_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+      redis:
+        image: redis:7-alpine
+        ports: ["56379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+    defaults:
+      run:
+        working-directory: Tesbo-Backend-Nest
+    env:
+      # Disposable service credentials only; never load shared application .env.
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/rb_test_ci
+      REVIEW_BOARD_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/rb_test_ci
+      REVIEW_BOARD_TEST_REDIS_URL: redis://127.0.0.1:56379
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Refuse any target other than this job's disposable fixtures
+        run: node ../scripts/required-backend-tests.mjs --preflight review-board-integration
+      - name: Apply the existing full migration chain
+        run: npm run migrate
+      - name: Execute both Review Board suites in-band with no skips
+        run: node ../scripts/required-backend-tests.mjs review-board-integration
+      - name: Retain required-suite execution evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: review-board-integration-execution
+          path: reports/quality/required-backend/
+          if-no-files-found: error
+          retention-days: 14

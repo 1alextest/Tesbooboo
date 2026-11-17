@@ -97,7 +97,7 @@ jobs:
           retention-days: 14
           path: Tesbo-Backend-Nest/backend-audit-all.json
       - name: Backend development-tool security and CLI compatibility regressions
-        run: node --test ../scripts/backend-toolchain-security.test.mjs
+        run: node --test ../scripts/backend-toolchain-security.test.mjs ../scripts/required-backend-tests.jest.test.mjs
       - name: Backend production compilation
         run: npm run build
       - name: Backend unit and integration regressions

@@ -100,13 +100,23 @@ export function validateConfig(config, availablePaths) {
   const id = value => requireInput(/^[a-z][a-z0-9-]*$/.test(value), `Invalid mapping identifier: ${value}`);
   for (const [key, check] of Object.entries(config.checks)) {
     id(key);
-    fields(check, ["workflow", "job", "description", "evidence"], `Check ${key}`);
+    fields(check, ["workflow", "job", "description", "evidence", "requiredBackendSuites"], `Check ${key}`);
     text(check.description, `Check ${key} description`);
     text(check.job, `Check ${key} job`);
     requireInput(/^\.github\/workflows\/[^/]+\.ya?ml$/.test(check.workflow), `Invalid workflow for ${key}.`);
     evidencePath(check.workflow);
     strings(check.evidence, `Check ${key} evidence`);
     check.evidence.forEach(evidencePath);
+    if (check.requiredBackendSuites !== undefined) {
+      strings(check.requiredBackendSuites, `Check ${key} requiredBackendSuites`, true);
+      requireInput(new Set(check.requiredBackendSuites).size === check.requiredBackendSuites.length,
+        `Check ${key} has duplicate required backend suites.`);
+      for (const suite of check.requiredBackendSuites) {
+        requireInput(/^Tesbo-Backend-Nest\/src\/.+\.spec\.ts$/.test(suite),
+          `Check ${key} has an invalid required backend suite: ${suite}`);
+        evidencePath(suite);
+      }
+    }
   }
   const checkRefs = (refs, label) => {
     strings(refs, label);
@@ -311,7 +321,8 @@ export function planImpact({ changedPaths, config, availablePaths, graph, verifi
     diagnostics.push({ code: "GRAPH_PATH_NOT_PRESENT", path: filename,
       message: "Review required: changed module is absent from the supplied graph (possibly new, deleted or stale); consumer closure is incomplete." });
   }
-  const requiredChecks = sorted(required).map(id => ({ id, ...config.checks[id], evidence: sorted(config.checks[id].evidence) }));
+  const requiredChecks = sorted(required).map(id => ({ id, ...config.checks[id],
+    evidence: sorted([...config.checks[id].evidence, ...(config.checks[id].requiredBackendSuites ?? [])]) }));
   const checkSpecs = sorted(requiredChecks.flatMap(check => check.evidence).filter(filename => /\.(?:spec|test)\.[cm]?[jt]sx?$/.test(filename)));
   return {
     version: 1,

@@ -134,6 +134,13 @@ Review Board has backend integration coverage, but no matching product E2E
 owner was found in the initial audit. Do not invent a spec filename to make the
 mapping look complete.
 
+The follow-up source audit located the existing Review Board browser/worker
+helper under `e2e/utils/ci-review-board-ui.ts`; it remains part of the existing
+smoke owner, not a new E2E project. Runtime evidence obligations belong in
+selected-check descriptions, not blocking `DOMAIN_EVIDENCE_GAP` messages once
+their infrastructure/accounting is wired. Genuine unresolved mapping or fixture
+gaps still block. Neither classification changes the planner's `not-run` verdict.
+
 ### Migration history
 
 The existing checker validates the current manifest and compares existing SQL
@@ -145,6 +152,58 @@ endings as a schema change.
 This is source-history protection, **not** proof of migration rollback, upgrade
 compatibility or the running database's checksums. The runtime migrator's
 historical-fork handling needs separately proven database regression work.
+
+The follow-up makes the existing runtime entrypoint import-safe and refuses
+missing/blank `DATABASE_URL` before reading migrations or constructing a pool.
+`src/database/migrate.spec.ts` checks configuration, pending selection, checksum
+decisions and transaction query ordering with mocks. These are not PostgreSQL
+rollback, concurrency or historical-upgrade evidence.
+
+Historical compatibility is deliberately unchanged: source shows V76 admin-plan
+SQL renamed to V77 (`d217ccd6` / `3ea87f27`), and V78 intentionally edited for an
+existing constraint (`36673f6f`). Synthetic identity fixtures do not establish
+deployed SHA-256 tuples. The broad same-filename and unknown-version allowances
+remain known limitations; narrowing them requires authorized migration-ledger
+and deployed-artifact evidence. Runtime raw-text hashing is not silently replaced
+by the source-history guard's CRLF-normalized contract.
+
+Adjacent source-only finding, not fixed here: `Dockerfile` removes npm from the
+runtime image while `docker-compose.yml` invokes the migrator through npm.
+Host-based CI does not reproduce that image-command path; inspect the built
+image and deployment command separately before any authorized rollout.
+
+### Required backend execution
+
+`.github/test-impact.json` now owns explicit `requiredBackendSuites` for the
+behavioral and authorization jobs. Generic evidence paths never authorize test
+execution. `scripts/required-backend-tests.mjs` validates this declaration,
+resolves installed backend Jest, checks exact `--listTests` discovery, then runs
+the same in-band selection with Jest's built-in JSON output. It fails on child
+failure/interruption, missing/duplicate/unexpected files, skips/todo, zero
+assertions, invalid/stale/partial reports and inconsistent aggregate counts.
+The broad backend-quality run retains its optional infrastructure suites.
+
+Both Review Board suites relocate together into `review-board-integration` in
+the existing behavioral workflow; other selections and job names stay intact.
+Fresh job-owned pgvector PostgreSQL `rb_test_ci` and Redis `56379` satisfy the
+existing guards unchanged. Preflight runs before the existing full migrator and
+refuses unsafe targets/overrides. This is GitHub-hosted CI only, not permission
+for any workstation database. The existing `tesbo_ci` lane remains separate.
+
+Each invocation has a fresh exclusive evidence directory under
+`reports/quality/required-backend/`: discovery, raw Jest JSON, and a receipt with
+check ID, invocation, checkout commit, tracked-worktree changes, manifest hash,
+child outcomes and validated execution counts. Failed/absent evidence does not
+become PASS because artifact upload succeeds. Jobs retain evidence with
+`always()` and missing-file errors. Pure malformed-report fixtures run in root
+quality; real installed-Jest positive/negative fixtures run in backend-quality.
+
+Review Board's integration fixtures substitute authentication/cache
+collaborators; its HTTP suite does exercise the real BullMQ worker. This does
+not prove deployed auth, application boot, cache behavior or browser journeys.
+Existing Playwright smoke is preserved, not replaced. Hosted services are
+disposable isolation, not an egress sandbox or automatic repository-ruleset
+enforcement.
 
 ### SDK publish boundary
 
@@ -160,6 +219,26 @@ credentials. Registry access is required for that installation; no live Tesbo,
 database, model provider or browser is used.
 
 ## Evidence and enforcement
+
+Foundation evidence: exact head `0c6d785056f2e0de28360e4f3821dbc06858e9f4`
+on PR #118 had **25/25 reported checks passing** on 17 November 2026, including
+Linux SDK, database-integrity and Playwright smoke. This records completed job
+results, not proof that each opt-in suite executed. Required-suite accounting is
+the next bounded review finding; older green results do not certify later edits.
+
+Follow-up local evidence (17 November 2026, Windows Node 24.14.0, worktree based
+on `0c6d7850` before the owner's concurrent merge of #118): 148 root
+quality tests, 22 real-Jest adapter fixtures and 18 no-DB migrator tests passed,
+with zero skipped harness tests. Explicit service-free selections accounted
+4 API/MCP files / 266 tests, 3 concurrency files / 72 tests and 5 authorization
+files / 270 tests; these overlapping selections are not a distinct-test total.
+Build, typecheck, frozen lint, actionlint, architecture, duplication and
+append-only history checks passed. The import regression failed on the original
+entrypoint before repair. No workstation database or deployed-stack E2E ran.
+Review Board and migrated-database claims require fresh exact-head CI receipts
+from the `chore/required-suite-execution` follow-up PR, not these local fixtures
+or the foundation's earlier green jobs. The follow-up was replayed without
+conflicts on development `5280d9398605cf6c29cc85429517e3b212603bdc`.
 
 `architecture-quality` retains dependency, clone, policy and impact evidence under
 `reports/quality/`. Existing job names and result semantics stay intact; there is
@@ -184,7 +263,7 @@ an owner decision, not fixed by adding another schedule.
 | Changed-code branch coverage | Existing Jest configuration; include unimported production files and retain machine-readable evidence |
 | Broader mutation effectiveness | Existing Stryker lane; triage survivors before expanding scope or raising the current gate |
 | Property-based invariants | Existing parser, ordering, context and Review Board tests; bounded reproducible seeds |
-| Required-suite execution accounting | Existing behavioral workflow; explicitly selected Review Board suites currently lack their dedicated infrastructure variables |
+| Wider execution accounting | Explicit behavioral/authorization selections are accounted above; broad optional Jest and product E2E need their own reviewed execution policies |
 | Migration upgrade/rollback/concurrent runners | Existing migrator and DB-integrity tests; separately approved isolated infrastructure/policy |
 | Runtime accessibility and keyboard/focus | Existing shared UI and isolated Playwright smoke, not a second E2E project |
 | Deterministic AI/network/export contracts | Existing fake provider, AI consistency and observability tests; strict request budgets and explicit host/egress configuration |
@@ -197,3 +276,16 @@ an owner decision, not fixed by adding another schedule.
 Product verification still follows `CLAUDE.md`: exact impacted selection,
 explicit execution approval, correct build/environment, and honest reporting of
 what actually ran. None of these static checks certifies system-wide correctness.
+
+### Session source and discovery limits
+
+The resume audit retrieved `00_README.md` and `06_IMPLEMENTATION_AGENT_BRIEF.md`
+from `origin/docs/qa-specs-product-direction-20261028`. The other six canonical
+specifications, the single application baseline and its Product Discovery Register
+were not available in this checkout. No substitute register or product amendment
+was created. Silent required-suite skips support the already-recorded execution
+accounting follow-up and the existing warning in
+`e2e-quality-report-2026-08-19.md`; they are not a new product initiative.
+Reconciliation into the canonical register remains blocked on access to that
+source. This CI increment does not claim acceptance of the larger orchestration
+specifications.
