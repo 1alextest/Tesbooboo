@@ -161,6 +161,16 @@ jobs:
           # authorization surface and the owner-only add/remove contract.
           npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-admin -g "TAI-A-15|TAI-A-20|TAI-A-21" --list
           npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-admin -g "TAI-A-15|TAI-A-20|TAI-A-21"
+      - name: Verify per-run report summary aggregation
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-reports
+        run: |
+          # api/reports.spec.ts was not referenced by any workflow, so its old zero-stub
+          # assertions had never actually run. Select only the per-run summary contract; the full
+          # report matrix builds eleven runs and is exercised elsewhere.
+          npx playwright test -c playwright.config.ts api/reports.spec.ts --workers=10 --output=test-results-reports -g "RPT-A-47|RPT-A-48" --list
+          npx playwright test -c playwright.config.ts api/reports.spec.ts --workers=10 --output=test-results-reports -g "RPT-A-47|RPT-A-48"
       - name: Verify persisted Model Studio revisions and mappings
         working-directory: e2e
         env:

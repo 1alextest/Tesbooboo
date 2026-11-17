@@ -986,7 +986,7 @@ the underlying test case library evolves.
 - Call `POST /cycles/from-cases` directly with a `testcaseIds` array (as its name implies) — confirm it creates an **empty** run, silently dropping the cases; this is a real trap for anyone integrating against the documented-sounding route name.
 - No auth/ownership check on `getCycle`/`listCycles`/`updateCycle`/`deleteCycle`/`addCycleTestCases`/`removeCycleTestCase` — same platform-wide IDOR gap as Plans (see Cross-Cutting section).
 - No activity-log entries for run create/update/delete/case-add/case-remove — only execution status changes and attachment uploads are journaled.
-- `GET /api/cycles/:cycleId/report/summary` (`cycleSummary()` in the controller) is a **hard-coded stub** returning `{ total: 0, passed: 0, failed: 0, blocked: 0, skipped: 0, untested: 0 }` regardless of the actual cycle — unused by the frontend (which computes its own stats client-side from `/executions`), but any external integration calling it will get permanently-zero data.
+- `GET /api/cycles/:cycleId/report/summary` returns the run's real status buckets, using the same `EXECUTION_BUCKET_COUNTS` definition as the project overview; a foreign or nonexistent run is a 404. (It previously returned a hard-coded all-zero object.)
 
 **Key files:**
 - Backend: `legacy.controller.ts` L348–392 (`/cycles` list/create/from-plan/from-cases, `/cycles/:cycleId` get/update/delete, `/testcases` add/remove), L568–575 (`/export/csv`), L587–590 (`/report/summary` stub); `legacy.service.ts` L1676–1790 (`listCycles`, `createCycle`, `getCycle`, `updateCycle`, `deleteCycle`, `addCycleTestCases`, `removeCycleTestCase`).
@@ -3612,7 +3612,7 @@ not a full test suite.
 | **Notifications** (bell icon) | `GET /api/notifications` hardcodes `[]`; mark-as-read is a no-op; the bell icon has no handler, no badge, no dropdown. |
 | **AI Script Review** (`/ai/review-script`) | Hardcoded `{status:"passed", summary:"", categories:[], validatedSteps:[]}` for any input; no frontend caller. |
 | **Tesbo Reports** (automated CI test-run ingestion, `/tesbo-reports/*`) | Six GET stubs return empty/static payloads; the frontend has a fully-typed client for ~20 more endpoints (ingestion, alerts, sharing, settings) that **no page or component calls** — the feature is unreachable from the UI in either direction. |
-| **`cycles/:cycleId/report/summary`** | Hardcoded all-zero response regardless of the real cycle; superseded by the Execution Report tab. |
+| **`cycles/:cycleId/report/summary`** | Real per-run status buckets from the shared execution-count definition; 404 for a foreign/missing run. |
 | **Knowledge Base v1** (`/knowledge-base/:itemId` legacy flat endpoints) | Superseded by the v2 folders/documents/files model; kept only for rollback safety; no frontend usage. |
 | **`POST /onboarding/org-and-project`** | Implemented backend + API client wrapper, but no UI calls it. |
 | **`generateAiTestCases()` / AI Generation History browsing** | Backend routes work, but no current screen calls the standalone generator or a history browser — the only path users actually take is via Zyra Tasks. |

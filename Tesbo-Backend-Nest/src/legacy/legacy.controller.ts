@@ -1246,13 +1246,11 @@ export class LegacyController {
     return this.legacy.projectDashboardSummary(req.userId, projectId);
   }
 
-  // Still a stub returning zeros, but no longer one that answers a caller who has no business
-  // knowing whether this run exists — an unauthorized caller now gets the same 404 as for a run
-  // that isn't there. (That it fabricates a zeroed summary at all is a separate, open problem.)
+  // Same status buckets the project overview uses, scoped to one run. Access is resolved inside
+  // the service, so an absent/foreign run is the same 404 as everywhere else.
   @Get("/api/cycles/:cycleId/report/summary")
   async cycleSummary(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string) {
-    await this.legacy.requireCycleAccessForUser(req.userId, cycleId);
-    return { total: 0, passed: 0, failed: 0, blocked: 0, skipped: 0, untested: 0 };
+    return this.legacy.cycleReportSummaryForUser(req.userId, cycleId);
   }
 
   @Get("/api/projects/:projectId/reports/execution")
