@@ -51,11 +51,69 @@ const SEVERITY_SCHEMA = {
   description: `One of ${BUG_SEVERITIES.join(", ")} (matched case-insensitively). Omit to leave severity unset.`
 };
 
+/** The editor's free-text duration estimate (testcases.estimated_duration, capped at 64 chars). */
+const ESTIMATED_DURATION_SCHEMA = {
+  type: "string",
+  description: "Free-text estimate shown in the editor, up to 64 characters (e.g. \"30m\", \"2h 30m\")."
+};
+
+/**
+ * Citations that informed the case (testcases.source_refs). The legacy writer validates and caps
+ * the list at 20 and drops malformed entries; advertising the shape is what lets a model supply
+ * resolvable references instead of omitting them.
+ */
+const SOURCE_REF_TYPES = ["knowledge_document", "knowledge_file", "jira_ticket", "testcase", "bug"] as const;
+const SOURCE_REFS_SCHEMA = {
+  type: "array",
+  maxItems: 20,
+  description: "Citations that informed this case: knowledge documents/files, Jira tickets, test cases or bugs.",
+  items: {
+    type: "object",
+    properties: {
+      type: { type: "string", enum: [...SOURCE_REF_TYPES] },
+      id: { type: "string" },
+      title: { type: "string" }
+    },
+    required: ["type", "id"]
+  }
+};
+
 /** The existing testcases.attachments TEXT field is displayed as Notes in the editor, and
  * testcases.postconditions is the existing expected-final-state field. MCP schemas are advisory,
  * so a malformed supplied value must be rejected before the legacy writer; omission must pass
  * through without stale reads or a fabricated default. null is not a clear: pass "" to clear.
  */
+/**
+ * The legacy sanitizer silently drops malformed citation entries. MCP callers get no schema
+ * enforcement, so a model could believe a citation was stored when it was discarded. Refuse a
+ * malformed list outright; a valid list still goes through the writer's own trim/cap.
+ */
+function validateTestcaseSourceRefs(body: Record<string, unknown>): void {
+  if (!Object.prototype.hasOwnProperty.call(body, "sourceRefs")) return;
+  const raw = body.sourceRefs;
+  if (!Array.isArray(raw)) {
+    throw new McpError(RpcCode.ToolExecutionError, '"sourceRefs" must be an array of {type, id, title}');
+  }
+  if (raw.length > 20) {
+    throw new McpError(RpcCode.ToolExecutionError, '"sourceRefs" is limited to 20 citations');
+  }
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new McpError(RpcCode.ToolExecutionError, '"sourceRefs" entries must be objects with type and id');
+    }
+    const { type, id, title } = entry as Record<string, unknown>;
+    if (typeof type !== "string" || !(SOURCE_REF_TYPES as readonly string[]).includes(type)) {
+      throw new McpError(RpcCode.ToolExecutionError, `"sourceRefs" type must be one of ${SOURCE_REF_TYPES.join(", ")}`);
+    }
+    if (typeof id !== "string" || !id.trim()) {
+      throw new McpError(RpcCode.ToolExecutionError, '"sourceRefs" entries require a non-empty id');
+    }
+    if (title !== undefined && typeof title !== "string") {
+      throw new McpError(RpcCode.ToolExecutionError, '"sourceRefs" title must be a string when provided');
+    }
+  }
+}
+
 function validateTestcaseTextFields(body: Record<string, unknown>): void {
   if (Object.prototype.hasOwnProperty.call(body, "attachments") && typeof body.attachments !== "string") {
     throw new McpError(RpcCode.ToolExecutionError, '"attachments" (Notes) must be a string; omit to preserve Notes, or pass "" to clear');
@@ -302,7 +360,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "create_testcase",
       description:
-        "Create a test case in the token's project. Required: title. Optional: suiteId, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult} — expectedResult belongs on the step it applies to, not in the overall description), testData, attachments (plain-text Notes in the editor; omit or pass an empty string to leave Notes empty), priority, severity, type, automationStatus, component, status. The write is attributed to the Tesbo MCP agent actor.",
+        "Create a test case in the token's project. Required: title. Optional: suiteId, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult} — expectedResult belongs on the step it applies to, not in the overall description), testData, attachments (plain-text Notes in the editor; omit or pass an empty string to leave Notes empty), priority, severity, type, automationStatus, component, status, estimatedDuration, sourceRefs (citations: array of {type, id, title}). The write is attributed to the Tesbo MCP agent actor.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -331,6 +389,8 @@ export function buildMcpTools(): McpTool[] {
           automationStatus: { type: "string" },
           component: { type: "string" },
           status: { type: "string" },
+          estimatedDuration: ESTIMATED_DURATION_SCHEMA,
+          sourceRefs: SOURCE_REFS_SCHEMA,
           technique: { type: "string", enum: [...TESTCASE_TECHNIQUES], description: "Authoring technique used to design the case." },
           reviewViews: { type: "array", items: { type: "string", enum: [...TESTCASE_REVIEW_VIEWS] }, description: "Cross-cutting review lenses; a view is not execution or coverage." }
         },
@@ -340,6 +400,7 @@ export function buildMcpTools(): McpTool[] {
       handler: async (args, ctx) => {
         requireString(args, "title");
         validateTestcaseTextFields(args);
+        validateTestcaseSourceRefs(args);
         // An MCP caller gets no schema enforcement (inputSchema is advisory only — see
         // mcp.service.ts), so its `steps` can drift onto synonym keys the editor doesn't read
         // (e.g. "expected" instead of "expectedResult") exactly the way Zyra's chat/task-board
@@ -359,7 +420,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "update_testcase",
       description:
-        "Update a test case in the token's project. Required: testcaseId. Optional: expectedRevision (editRevision from get_testcase; recommended to refuse stale row edits), externalId (the case's ID such as NAP-TC-12; must stay unique in the project, no spaces, up to 32 characters; past runs show the new ID), suiteId, title, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult}), testData, attachments (plain-text Notes; omit to preserve, string to replace, empty string to clear; null is invalid), priority, severity, type, automationStatus, component, status, estimatedDuration, customFieldValues. A revision conflict writes nothing; reread and review before trying again, never automatically overwrite. Omitting expectedRevision retains unconditional legacy edits. Only fields you pass are changed; omitted fields keep their current value. To archive or restore a test case, prefer archive_testcase/restore_testcase over setting status here directly. The write is attributed to the Tesbo MCP agent actor.",
+        "Update a test case in the token's project. Required: testcaseId. Optional: expectedRevision (editRevision from get_testcase; recommended to refuse stale row edits), externalId (the case's ID such as NAP-TC-12; must stay unique in the project, no spaces, up to 32 characters; past runs show the new ID), suiteId, title, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult}), testData, attachments (plain-text Notes; omit to preserve, string to replace, empty string to clear; null is invalid), priority, severity, type, automationStatus, component, status, estimatedDuration, sourceRefs (citations: array of {type, id, title}; omit to preserve, an array to replace), customFieldValues. A revision conflict writes nothing; reread and review before trying again, never automatically overwrite. Omitting expectedRevision retains unconditional legacy edits. Only fields you pass are changed; omitted fields keep their current value. To archive or restore a test case, prefer archive_testcase/restore_testcase over setting status here directly. The write is attributed to the Tesbo MCP agent actor.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -392,6 +453,7 @@ export function buildMcpTools(): McpTool[] {
           component: { type: "string" },
           status: { type: "string" },
           estimatedDuration: { type: "string" },
+          sourceRefs: SOURCE_REFS_SCHEMA,
           customFieldValues: { type: "object" },
           technique: { type: "string", enum: [...TESTCASE_TECHNIQUES], description: "Authoring technique used to design the case. Omit to preserve; null or an empty string clears." },
           reviewViews: { type: "array", items: { type: "string", enum: [...TESTCASE_REVIEW_VIEWS] }, description: "Cross-cutting review lenses. Omit to preserve, [] to clear; a view is not execution or coverage." }
@@ -402,6 +464,7 @@ export function buildMcpTools(): McpTool[] {
       handler: async (args, ctx) => {
         const testcaseId = requireString(args, "testcaseId");
         validateTestcaseTextFields(args);
+        validateTestcaseSourceRefs(args);
         expectedTestcaseRevision(args.expectedRevision);
         // updateTestCase() takes no project argument of its own — it derives the project from the
         // row it finds by id — so the tool must check project ownership itself before calling it.
@@ -473,7 +536,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "bulk_create_testcases",
       description:
-        `Create up to ${LegacyService.MAX_BULK_TESTCASES} test cases in the token's project in one call. Required: testcases (array; each item accepts the same fields as create_testcase — title required per item, plus optional suiteId, description, preconditions, postconditions, steps, testData, attachments (plain-text Notes), priority, severity, type, automationStatus, component, status). Each item is created independently through the same path create_testcase uses — one item failing (e.g. a missing title or a too-long field) does not stop the rest from being created. The response's results array reports every item's outcome by its index in the input array, so a partial batch never silently drops a failure. This deliberately does not use the app's own bulk-import path, which is all-or-nothing (one bad row rolls back the whole batch) — per-item isolation was required here instead.`,
+        `Create up to ${LegacyService.MAX_BULK_TESTCASES} test cases in the token's project in one call. Required: testcases (array; each item accepts the same fields as create_testcase — title required per item, plus optional suiteId, description, preconditions, postconditions, steps, testData, attachments (plain-text Notes), priority, severity, type, automationStatus, component, status, estimatedDuration, sourceRefs (citations: array of {type, id, title})). Each item is created independently through the same path create_testcase uses — one item failing (e.g. a missing title or a too-long field) does not stop the rest from being created. The response's results array reports every item's outcome by its index in the input array, so a partial batch never silently drops a failure. This deliberately does not use the app's own bulk-import path, which is all-or-nothing (one bad row rolls back the whole batch) — per-item isolation was required here instead.`,
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -507,6 +570,8 @@ export function buildMcpTools(): McpTool[] {
                 automationStatus: { type: "string" },
                 component: { type: "string" },
                 status: { type: "string" },
+                estimatedDuration: ESTIMATED_DURATION_SCHEMA,
+                sourceRefs: SOURCE_REFS_SCHEMA,
                 technique: { type: "string", enum: [...TESTCASE_TECHNIQUES], description: "Authoring technique used to design the case." },
                 reviewViews: { type: "array", items: { type: "string", enum: [...TESTCASE_REVIEW_VIEWS] }, description: "Cross-cutting review lenses; a view is not execution or coverage." }
               },
@@ -531,6 +596,7 @@ export function buildMcpTools(): McpTool[] {
           const item = (items[index] || {}) as Record<string, unknown>;
           try {
             validateTestcaseTextFields(item);
+            validateTestcaseSourceRefs(item);
             if (typeof item.title !== "string" || item.title.trim() === "") {
               throw new Error('"title" is required and must be a non-empty string');
             }

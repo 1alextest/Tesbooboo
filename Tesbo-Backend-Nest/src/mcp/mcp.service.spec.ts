@@ -213,6 +213,27 @@ describe("McpService", () => {
       expect(res.result).toEqual({});
     });
 
+    it("advertises the authoring fields the legacy writers already persist", async () => {
+      const { db } = makeDb();
+      const svc = new McpService(makeLegacy(), db, writableLimits);
+      const res: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
+      const tools = res.result.tools as Array<{ name: string; inputSchema: any }>;
+      const byName = new Map(tools.map((tool) => [tool.name, tool]));
+      const create = byName.get("create_testcase")!.inputSchema.properties;
+      const update = byName.get("update_testcase")!.inputSchema.properties;
+      const bulk = byName.get("bulk_create_testcases")!.inputSchema.properties.testcases.items.properties;
+      for (const field of ["attachments", "postconditions", "estimatedDuration", "sourceRefs"]) {
+        expect(create).toHaveProperty(field);
+        expect(bulk).toHaveProperty(field);
+      }
+      for (const field of ["attachments", "postconditions", "expectedRevision", "estimatedDuration", "sourceRefs"]) {
+        expect(update).toHaveProperty(field);
+      }
+      expect(create.sourceRefs.items.properties.type.enum).toEqual([
+        "knowledge_document", "knowledge_file", "jira_ticket", "testcase", "bug"
+      ]);
+    });
+
     it("tools/list returns every registered tool with a name, description and inputSchema", async () => {
       const { db } = makeDb();
       const svc = new McpService(makeLegacy(), db, writableLimits);
@@ -1190,6 +1211,73 @@ describe("McpService", () => {
       expect((legacy as any).createTestCase).toHaveBeenCalledTimes(2);
       expect((legacy as any).createTestCase).toHaveBeenNthCalledWith(2, "proj-1", "mcp-actor-1", {
         title: "Last", postconditions: ""
+      });
+    });
+  });
+
+  describe("authoring citations and duration estimates", () => {
+    const citation = { type: "testcase", id: "00000000-0000-4000-8000-000000000004", title: "Source case" };
+
+    it("passes sourceRefs and estimatedDuration through the existing writers", async () => {
+      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      const created = { title: "Cited", sourceRefs: [citation], estimatedDuration: "45m" };
+      const createRes: any = await svc.handleRequest(rpc("tools/call", {
+        name: "create_testcase", arguments: created
+      }), principal(), "proj-1");
+      expect(createRes.result.isError).toBe(false);
+      expect((legacy as any).createTestCase).toHaveBeenLastCalledWith("proj-1", "mcp-actor-1", created);
+
+      const updated = { sourceRefs: [citation], estimatedDuration: "1h" };
+      const updateRes: any = await svc.handleRequest(rpc("tools/call", {
+        name: "update_testcase", arguments: { testcaseId: "tc-1", ...updated }
+      }), principal(), "proj-1");
+      expect(updateRes.result.isError).toBe(false);
+      expect((legacy as any).updateTestCase).toHaveBeenLastCalledWith("tc-1", "mcp-actor-1", updated);
+    });
+
+    it.each([
+      ["a non-array", "not-an-array"],
+      ["null", null],
+      ["an unsupported type", [{ type: "unknown", id: "x" }]],
+      ["a blank id", [{ type: "testcase", id: " " }]],
+      ["a non-string title", [{ type: "testcase", id: "x", title: 7 }]],
+      ["more than 20 citations", Array.from({ length: 21 }, (_, index) => ({ type: "testcase", id: `x-${index}` }))]
+    ])("refuses %s before any writer runs", async (_label, sourceRefs) => {
+      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      for (const [name, payload] of [
+        ["create_testcase", { title: "Draft", sourceRefs }],
+        ["update_testcase", { testcaseId: "tc-1", sourceRefs }]
+      ] as const) {
+        const res: any = await svc.handleRequest(rpc("tools/call", { name, arguments: payload }), principal(), "proj-1");
+        expect(res.error.code).toBe(RpcCode.ToolExecutionError);
+        expect(res.error.message).toMatch(/sourceRefs/i);
+      }
+      expect((legacy as any).createTestCase).not.toHaveBeenCalled();
+      expect((legacy as any).updateTestCase).not.toHaveBeenCalled();
+    });
+
+    it("isolates an invalid citation entry in a bulk create without dropping valid items", async () => {
+      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
+      const legacy = makeLegacy();
+      const svc = new McpService(legacy, db, writableLimits);
+      const res: any = await svc.handleRequest(rpc("tools/call", {
+        name: "bulk_create_testcases",
+        arguments: { testcases: [
+          { title: "First", sourceRefs: [citation], estimatedDuration: "10m" },
+          { title: "Invalid", sourceRefs: "nope" },
+          { title: "Last" }
+        ] }
+      }), principal(), "proj-1");
+      const body = JSON.parse(res.result.content[0].text);
+      expect(body).toMatchObject({ total: 3, succeeded: 2, failed: 1 });
+      expect(body.results[1].error).toMatch(/sourceRefs/i);
+      expect((legacy as any).createTestCase).toHaveBeenCalledTimes(2);
+      expect((legacy as any).createTestCase).toHaveBeenNthCalledWith(1, "proj-1", "mcp-actor-1", {
+        title: "First", sourceRefs: [citation], estimatedDuration: "10m"
       });
     });
   });

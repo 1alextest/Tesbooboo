@@ -3,7 +3,9 @@ import test from "node:test";
 import { REQUIRED_TOOLS, catalogGaps, schemaGaps, summarize } from "./mcp-deploy-check.mjs";
 
 const text = { type: "string" };
-const caseFields = { title: text, attachments: text, postconditions: text };
+const citations = { type: "array" };
+const caseFields = { title: text, attachments: text, postconditions: text, estimatedDuration: text, sourceRefs: citations };
+const authoredFields = { ...caseFields, expectedRevision: text };
 
 function tool(name, properties = {}, nested = false) {
   // Clone per tool: tests mutate the returned schema to simulate a regression, and a shared
@@ -22,7 +24,7 @@ function validTools() {
     tool("list_projects"),
     tool("get_testcase", caseFields),
     tool("create_testcase", caseFields),
-    tool("update_testcase", caseFields),
+    tool("update_testcase", authoredFields),
     tool("bulk_create_testcases", caseFields, true),
     tool("list_qa_graph_changes"),
     tool("capture_qa_graph_change"),
@@ -46,6 +48,19 @@ test("catalog gaps identify missing tools, duplicates and unnamed entries", () =
 
   const unnamed = [...validTools(), { inputSchema: {} }];
   assert.match(catalogGaps(unnamed).errors.join("\n"), /without a name/);
+});
+
+test("schema gaps catch missing citations, estimates and revision guards", () => {
+  const tools = validTools().map((entry) => {
+    if (entry.name === "create_testcase") delete entry.inputSchema.properties.sourceRefs;
+    if (entry.name === "update_testcase") delete entry.inputSchema.properties.expectedRevision;
+    if (entry.name === "bulk_create_testcases") delete entry.inputSchema.properties.testcases.items.properties.estimatedDuration;
+    return entry;
+  });
+  const errors = schemaGaps(tools).errors.join("\n");
+  assert.match(errors, /create_testcase: missing field sourceRefs/);
+  assert.match(errors, /update_testcase: missing field expectedRevision/);
+  assert.match(errors, /bulk_create_testcases: missing field estimatedDuration/);
 });
 
 test("schema gaps catch missing Notes/Postconditions on single and bulk creates", () => {

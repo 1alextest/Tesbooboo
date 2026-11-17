@@ -215,21 +215,25 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
     const foreign = await rpc("tools/list", {}, `/api/projects/${tenant!.secondProjectId}/mcp`);
     expect(foreign.error?.code).toBe(-32001); // token cannot switch project via URL
 
+    const citation = { type: "jira_ticket", id: "E2E-123", title: "Disposable QA source ticket" };
     const created = await call("create_testcase", {
       title, description: "Disposable QA lifecycle proof", status: "Draft",
-      attachments: "Initial Notes", postconditions: "Environment unchanged"
+      attachments: "Initial Notes", postconditions: "Environment unchanged",
+      estimatedDuration: "45m", sourceRefs: [citation]
     });
     caseId = created.id;
     const original = await call("get_testcase", { testcaseId: caseId });
     expect(original).toMatchObject({
       id: caseId, title, status: "Draft", attachments: "Initial Notes",
-      postconditions: "Environment unchanged"
+      postconditions: "Environment unchanged", estimatedDuration: "45m",
+      sourceRefs: [citation]
     });
     expect(original.editRevision).toMatch(/^[a-f0-9]{64}$/);
 
     const amended = await call("update_testcase", {
       testcaseId: caseId, expectedRevision: original.editRevision,
       attachments: "Reviewed Notes", postconditions: "All fixtures cleaned",
+      estimatedDuration: "1h", sourceRefs: [{ type: "testcase", id: caseId, title: title }],
       description: "Verified by the connected machine over native MCP"
     });
     expect(amended.editRevision).not.toBe(original.editRevision);
@@ -237,8 +241,12 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
     expect(persisted.ok()).toBeTruthy();
     expect(await persisted.json()).toMatchObject({
       attachments: "Reviewed Notes", postconditions: "All fixtures cleaned",
+      estimatedDuration: "1h", sourceRefs: [{ type: "testcase", id: caseId }],
       description: "Verified by the connected machine over native MCP"
     });
+    // Malformed citations are refused, not silently dropped by the legacy sanitizer.
+    const badRefs = await rejected("update_testcase", { testcaseId: caseId, sourceRefs: [{ type: "nope", id: "x" }] });
+    expect(badRefs.message).toMatch(/sourceRefs/i);
     const stale = await rejected("update_testcase", {
       testcaseId: caseId, expectedRevision: original.editRevision, attachments: "Stale overwrite"
     });
@@ -553,6 +561,18 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
       expect(create?.inputSchema.properties?.attachments?.type, "create-time plain-text Notes").toBe("string");
       expect(update?.inputSchema.properties?.postconditions?.type, "update-time Postconditions").toBe("string");
       expect(update?.inputSchema.properties?.attachments?.type, "update-time plain-text Notes").toBe("string");
+      // Authoring fields the legacy writers persist but an older catalog stopped advertising.
+      expect(create?.inputSchema.properties?.estimatedDuration?.type, "create-time estimate").toBe("string");
+      expect(create?.inputSchema.properties?.sourceRefs?.type, "create-time citations").toBe("array");
+      expect(update?.inputSchema.properties?.estimatedDuration?.type, "update-time estimate").toBe("string");
+      expect(update?.inputSchema.properties?.sourceRefs?.type, "update-time citations").toBe("array");
+      expect(update?.inputSchema.properties?.expectedRevision?.type, "update-time revision guard").toBe("string");
+      const bulk = tools.find(t => t.name === "bulk_create_testcases") as {
+        inputSchema: { properties: { testcases: { items: { properties: Record<string, { type?: string }> } } } };
+      } | undefined;
+      const bulkProps = bulk?.inputSchema.properties.testcases.items.properties;
+      expect(bulkProps?.estimatedDuration?.type, "bulk create estimate").toBe("string");
+      expect(bulkProps?.sourceRefs?.type, "bulk create citations").toBe("array");
       const fingerprint = String(init.body.result.serverInfo.version).split(".").at(-1);
       expect(fingerprint).toMatch(/^[a-f0-9]{16}$/);
       expect(session).toMatch(new RegExp("^" + fingerprint + "\\."));
