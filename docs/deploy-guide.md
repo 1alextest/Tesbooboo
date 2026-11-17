@@ -141,4 +141,6 @@ Point each domain to the corresponding droplet IP as a plain A record.
   node scripts/mcp-deploy-check.mjs
   ```
 
-  It fails on a missing required tool or field, or a build mismatch, and warns when the build is unidentified. Tool count is informational: capabilities, not the number, are the requirement.
+  It fails on a missing required tool or authoring field, or a build mismatch, and warns when the build is unidentified. Required authoring fields are `attachments`, `postconditions`, `estimatedDuration` and `sourceRefs` on create/bulk create, plus `expectedRevision` on update.
+
+  It also recomputes the catalog fingerprint from the tools and initialize instructions the server actually returned, and fails when that differs from the fingerprint in `serverInfo.version` — the signal that a proxy, stale replica or cached catalog is serving a different tool set from the one the server claims. Tool count is informational: capabilities, not the number, are the requirement.

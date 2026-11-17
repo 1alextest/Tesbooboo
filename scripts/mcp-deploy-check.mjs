@@ -5,7 +5,9 @@
  * The recurring failure this exists for: a deployment can be stale while /health, client discovery
  * and a tool count all look plausible. This checks the things a client actually relies on — the
  * build the server reports, the required tool names and the required field schemas — against a
- * fresh protocol session, not against source or a cached client catalog.
+ * fresh protocol session, not against source or a cached client catalog. It also recomputes the
+ * catalog fingerprint from the tools actually returned and compares it with the fingerprint the
+ * same server reported at initialize, so a proxy or stale catalog cannot pass on version alone.
  *
  * Usage (token comes from the environment only, never argv):
  *
@@ -21,6 +23,7 @@
  * Exit code is 1 on any failed requirement. The token is never printed, and server error text is
  * redacted before it reaches the output.
  */
+import { createHash } from "node:crypto";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
@@ -43,6 +46,25 @@ const REQUIRED_FIELDS = [
   { tool: "update_testcase", path: ["properties"], fields: ["attachments", "postconditions", "expectedRevision", "estimatedDuration", "sourceRefs"] },
   { tool: "bulk_create_testcases", path: ["properties", "testcases", "items", "properties"], fields: ["attachments", "postconditions", "estimatedDuration", "sourceRefs"] }
 ];
+
+/**
+ * The same content hash McpService embeds in `serverInfo.version` as its session/tool-set
+ * fingerprint. Recomputing it from the tools the server actually returned catches the case a
+ * version string alone cannot: a proxy or cached/older catalog answering tools/list while the
+ * initialize response still reports a different build's fingerprint.
+ */
+export function catalogFingerprint(tools, instructions) {
+  if (!Array.isArray(tools)) return null;
+  const payload = tools.map((tool) => ({
+    name: tool?.name,
+    description: tool?.description,
+    inputSchema: tool?.inputSchema
+  }));
+  return createHash("sha256")
+    .update(JSON.stringify({ tools: payload, instructions }))
+    .digest("hex")
+    .slice(0, 16);
+}
 
 function shapeAt(schema, path) {
   let current = schema;
@@ -95,7 +117,7 @@ export function schemaGaps(tools) {
   return { errors };
 }
 
-export function summarize({ tools, serverVersion, health, expectedGitSha, expectedToolCount }) {
+export function summarize({ tools, instructions, serverVersion, health, expectedGitSha, expectedToolCount }) {
   const errors = [];
   const warnings = [];
   const catalog = catalogGaps(tools);
@@ -106,6 +128,19 @@ export function summarize({ tools, serverVersion, health, expectedGitSha, expect
     errors.push("initialize did not report serverInfo.version");
   } else if (/\+local\./.test(serverVersion)) {
     warnings.push("server reports an unidentified build (+local); set GIT_SHA or deploy from a GitHub trigger");
+  }
+
+  // Cross-check the catalog against the version the same server just reported. Only when both
+  // halves are available: an older server may omit instructions, and a missing tools/list is
+  // already an error above. No extra warning when unavailable, to keep the existing warning set.
+  const reportedFingerprint = typeof serverVersion === "string"
+    ? /\.([a-f0-9]{16})$/.exec(serverVersion)?.[1] ?? null
+    : null;
+  const computedFingerprint = typeof instructions === "string" ? catalogFingerprint(tools, instructions) : null;
+  if (reportedFingerprint && computedFingerprint && reportedFingerprint !== computedFingerprint) {
+    errors.push(
+      `tools/list catalog fingerprint ${computedFingerprint} does not match serverInfo.version ${reportedFingerprint}`
+    );
   }
 
   const reportedSha = health && typeof health.gitSha === "string" ? health.gitSha : null;
@@ -129,7 +164,11 @@ export function summarize({ tools, serverVersion, health, expectedGitSha, expect
     missingTools: catalog.errors.filter((e) => e.startsWith("missing tool:")).map((e) => e.slice("missing tool: ".length)),
     schemaErrors: schemas.errors,
     serverVersion: serverVersion || "",
-    reportedSha: reportedSha || ""
+    reportedSha: reportedSha || "",
+    catalogFingerprint: computedFingerprint || "",
+    fingerprintCheck: !computedFingerprint || !reportedFingerprint
+      ? "unavailable"
+      : computedFingerprint === reportedFingerprint ? "matches" : "mismatch"
   };
 }
 
@@ -196,6 +235,7 @@ async function main() {
 
     const result = summarize({
       tools,
+      instructions: initialized.json?.result?.instructions,
       serverVersion: initialized.json?.result?.serverInfo?.version,
       health,
       expectedGitSha,
@@ -206,6 +246,7 @@ async function main() {
     console.log(`  endpoint: ${new URL(endpoint).origin}${new URL(endpoint).pathname}`);
     console.log(`  server:   ${result.serverVersion}`);
     console.log(`  tools:    ${result.toolCount}`);
+    console.log(`  catalog:  ${result.catalogFingerprint || "unavailable"} (${result.fingerprintCheck})`);
     console.log(`  health:   ${result.reportedSha || "unavailable"}`);
     if (result.missingTools.length) console.log(`  missing:  ${result.missingTools.join(", ")}`);
     for (const warning of result.warnings) console.log(`  warning:  ${warning}`);
