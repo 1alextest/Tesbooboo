@@ -1,7 +1,8 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
-import { DraftPreviewError, previewDraftModel } from "./model-studio-preview.core";
+import { DraftPreviewError, previewDraftModel, type PreviewDefinition } from "./model-studio-preview.core";
+import { generateModelPaths, type GenerationStrategy } from "./model-studio-generator";
 
 type Body = Record<string, any>;
 
@@ -255,6 +256,50 @@ export class ModelStudioRepository {
       executionAssertion: "none",
       note: "A linked case is an accepted mapping, not execution or verified coverage."
     };
+  }
+
+  async generateForUser(
+    userId: string | null | undefined,
+    projectId: string,
+    modelId: string,
+    revisionId: string,
+    body: Body
+  ) {
+    await this.access(userId, projectId);
+    for (const value of [modelId, revisionId]) {
+      if (!UUID.test(value)) throw new NotFoundException({ error: "Model revision not found" });
+    }
+    const revision = await this.db.query(
+      "SELECT * FROM mbt_model_revisions WHERE id = $1 AND model_id = $2 AND project_id = $3",
+      [revisionId, modelId, projectId]
+    );
+    if (!revision.rows[0]) throw new NotFoundException({ error: "Model revision not found" });
+
+    const strategy = (body?.strategy === undefined ? "edge_coverage" : String(body.strategy)) as GenerationStrategy;
+    if (strategy !== "edge_coverage" && strategy !== "shortest_paths") {
+      throw new BadRequestException({ error: "strategy must be edge_coverage or shortest_paths" });
+    }
+    const maxPaths = body?.maxPaths === undefined ? 20 : Number(body.maxPaths);
+    if (!Number.isInteger(maxPaths) || maxPaths < 1 || maxPaths > 64) {
+      throw new BadRequestException({ error: "maxPaths must be an integer between 1 and 64" });
+    }
+    const maxDepth = body?.maxDepth === undefined ? 12 : Number(body.maxDepth);
+    if (!Number.isInteger(maxDepth) || maxDepth < 1 || maxDepth > 32) {
+      throw new BadRequestException({ error: "maxDepth must be an integer between 1 and 32" });
+    }
+    const seed = body?.seed === undefined ? String(revision.rows[0].id) : String(body.seed).trim();
+    if (!seed || seed.length > 128) {
+      throw new BadRequestException({ error: "seed must be a non-empty string of at most 128 characters" });
+    }
+
+    const generated = generateModelPaths({
+      definition: revision.rows[0].content as PreviewDefinition,
+      revisionId: revision.rows[0].id,
+      contentHash: revision.rows[0].content_hash,
+      options: { strategy, maxPaths, maxDepth, seed }
+    });
+    // Read-only: proposals are returned, never written to cases, tasks, runs or evidence.
+    return { ...generated, modelId, revisionId: revision.rows[0].id, contentHash: revision.rows[0].content_hash };
   }
 
   private linkView(row: Body) {

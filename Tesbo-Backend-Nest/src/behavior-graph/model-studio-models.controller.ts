@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Req } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Req } from "@nestjs/common";
 import type { AuthenticatedRequest } from "../common/request.types";
 import { ModelStudioRepository } from "./model-studio-repository";
 
@@ -60,5 +60,17 @@ export class ModelStudioModelsController {
   @Get(":modelId/coverage")
   coverage(@Req() request: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("modelId") modelId: string) {
     return this.models.coverageForUser(request.userId, projectId, modelId);
+  }
+
+  @Post(":modelId/revisions/:revisionId/generate")
+  @HttpCode(200)
+  generate(
+    @Req() request: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("modelId") modelId: string,
+    @Param("revisionId") revisionId: string,
+    @Body() body: Record<string, any>
+  ) {
+    return this.models.generateForUser(request.userId, projectId, modelId, revisionId, body);
   }
 }

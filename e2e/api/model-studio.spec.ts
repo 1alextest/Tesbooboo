@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { loginAs, provisionRbacTenant } from "../utils/rbac-tenant";
-import { exec, literal } from "../utils/psql";
+import { exec, literal, scalar } from "../utils/psql";
 
 const MODEL = {
   schemaVersion: "tesbo-fsm-draft/1",
@@ -87,6 +87,62 @@ test.describe("persisted Model Studio revisions and mappings", () => {
       if (caseId) await owner.delete(`/api/projects/${projectId}/testcases/${caseId}`, { failOnStatusCode: false });
       if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(projectId)};`);
       await Promise.all([owner.dispose(), qa.dispose()]);
+    }
+  });
+
+  test("bounded generation is deterministic, respects bounds and writes no case or run", async () => {
+    const tenant = await provisionRbacTenant("model-studio");
+    test.skip(!tenant, "requires direct SQL control for the disposable tenant");
+    const projectId = tenant!.mainProjectId;
+    const base = `/api/projects/${projectId}/model-studio/models`;
+    const owner = await loginAs(tenant!.owner);
+    let modelId = "";
+    try {
+      const created = await owner.post(base, { data: { name: `E2E generated model ${Date.now()}`, model: MODEL } });
+      expect(created.status(), await created.text()).toBe(201);
+      const model = await created.json();
+      modelId = model.id;
+      const revisionId = model.latestRevision.id;
+      const counts = () => ({
+        cases: Number(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id = ${literal(projectId)};`)),
+        runs: Number(scalar(`SELECT COUNT(*)::int FROM cycles WHERE project_id = ${literal(projectId)};`)),
+        executions: Number(scalar(`SELECT COUNT(*)::int FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id JOIN cycles c ON c.id=ci.cycle_id WHERE c.project_id = ${literal(projectId)};`))
+      });
+      const before = counts();
+      const body = { strategy: "edge_coverage", maxPaths: 10, maxDepth: 8, seed: "e2e-seed" };
+      const first = await owner.post(`${base}/${modelId}/revisions/${revisionId}/generate`, { data: body });
+      expect(first.status(), await first.text()).toBe(200);
+      const one = await first.json();
+      const two = await (await owner.post(`${base}/${modelId}/revisions/${revisionId}/generate`, { data: body })).json();
+      expect(two).toEqual(one);
+      expect(one).toMatchObject({
+        status: "PROPOSAL_ONLY",
+        coverageAssertion: "none",
+        executionAssertion: "none",
+        modelId,
+        revisionId,
+        generator: { id: "tesbo-fsm-bfs", version: "1" }
+      });
+      expect(one.paths.length).toBeGreaterThan(0);
+      expect(one.paths.every((path: { transitionIds: string[] }) => path.transitionIds.length <= 8)).toBe(true);
+      expect(counts()).toEqual(before);
+
+      const otherSeed = await (await owner.post(`${base}/${modelId}/revisions/${revisionId}/generate`, { data: { ...body, seed: "other-seed" } })).json();
+      expect(otherSeed.paths.map((path: { transitionIds: string[] }) => path.transitionIds)).toEqual(
+        one.paths.map((path: { transitionIds: string[] }) => path.transitionIds)
+      );
+      expect(otherSeed.paths.map((path: { digest: string }) => path.digest)).not.toEqual(
+        one.paths.map((path: { digest: string }) => path.digest)
+      );
+
+      expect((await owner.post(`${base}/${modelId}/revisions/${revisionId}/generate`, { data: { maxPaths: 0 } })).status()).toBe(400);
+      expect((await owner.post(`${base}/${modelId}/revisions/${revisionId}/generate`, { data: { strategy: "nope" } })).status()).toBe(400);
+      expect(
+        (await owner.post(`/api/projects/${tenant!.secondProjectId}/model-studio/models/${modelId}/revisions/${revisionId}/generate`, { data: body })).status()
+      ).toBe(404);
+    } finally {
+      if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(projectId)};`);
+      await owner.dispose();
     }
   });
 });
