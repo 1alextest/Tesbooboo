@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
+import { TESTCASE_EDIT_REVISION_SQL } from "../legacy/testcase-edit-revision";
 import { DraftPreviewError, previewDraftModel, type PreviewDefinition } from "./model-studio-preview.core";
 import { generateModelPaths, type GenerationStrategy } from "./model-studio-generator";
 
@@ -251,20 +252,76 @@ export class ModelStudioRepository {
     if (!revision.rows[0]) throw new NotFoundException({ error: "Model not found" });
     const content = revision.rows[0].content as { states: Array<{ id: string }>; transitions: Array<{ id: string }> };
     const ids = [...content.states.map((s) => s.id), ...content.transitions.map((t) => t.id)];
+    // A soft-deleted case no longer exists for the repository, so it must not keep contributing
+    // to current coverage. The link row is retained and reported as a deleted mapping below.
     const counts = await this.db.query(
-      `SELECT element_id, COUNT(DISTINCT testcase_id)::int AS cases
-       FROM mbt_model_case_links l, unnest(l.element_ids) AS element_id
-       WHERE l.model_revision_id = $1 AND l.project_id = $2
+      `SELECT element_id, COUNT(DISTINCT l.testcase_id)::int AS cases
+       FROM mbt_model_case_links l
+       JOIN testcases t ON t.id = l.testcase_id
+       CROSS JOIN unnest(l.element_ids) AS element_id
+       WHERE l.model_revision_id = $1 AND l.project_id = $2 AND t.deleted_at IS NULL
        GROUP BY element_id`,
       [revision.rows[0].id, projectId]
     );
     const byId = new Map<string, number>(counts.rows.map((row) => [String(row.element_id), Number(row.cases)]));
     const elements = ids.map((id) => ({ id, linkedCases: byId.get(id) ?? 0 }));
+
+    // A model revision is immutable, so a later revision does not rewrite earlier mappings. They
+    // simply stop contributing to the current revision's per-element counts. Report them instead
+    // of presenting the gap as "no mapping": superseded links are a changed basis for review, not
+    // coverage and not a reason to rewrite case history.
+    const superseded = await this.db.query(
+      `SELECT l.model_revision_id, r.revision_number, r.content_hash,
+              COUNT(DISTINCT l.testcase_id)::int AS cases
+       FROM mbt_model_case_links l
+       JOIN mbt_model_revisions r ON r.id = l.model_revision_id AND r.project_id = l.project_id
+       WHERE l.model_id = $1 AND l.project_id = $2 AND l.model_revision_id <> $3
+       GROUP BY l.model_revision_id, r.revision_number, r.content_hash
+       ORDER BY r.revision_number DESC`,
+      [modelId, projectId, revision.rows[0].id]
+    );
+    const latestLinks = await this.db.query(
+      `SELECT l.testcase_revision,
+              ${TESTCASE_EDIT_REVISION_SQL} AS current_revision
+       FROM mbt_model_case_links l
+       JOIN testcases ON testcases.id = l.testcase_id
+       WHERE l.model_revision_id = $1 AND l.project_id = $2 AND testcases.deleted_at IS NULL`,
+      [revision.rows[0].id, projectId]
+    );
+    // Deleted mappings are computed across every revision: deleting a case invalidates a mapping
+    // regardless of which model revision it targeted.
+    const deleted = await this.db.query(
+      `SELECT COUNT(DISTINCT l.testcase_id)::int AS cases
+       FROM mbt_model_case_links l
+       JOIN testcases t ON t.id = l.testcase_id
+       WHERE l.model_id = $1 AND l.project_id = $2 AND t.deleted_at IS NOT NULL`,
+      [modelId, projectId]
+    );
+    const latestHash = String(revision.rows[0].content_hash);
+    let testcasesChangedSinceLink = 0;
+    let testcasesWithoutRecordedRevision = 0;
+    for (const row of latestLinks.rows) {
+      if (row.testcase_revision == null) testcasesWithoutRecordedRevision += 1;
+      else if (String(row.testcase_revision) !== String(row.current_revision)) testcasesChangedSinceLink += 1;
+    }
+
     return {
       modelId,
       revisionId: revision.rows[0].id,
       elements,
       unlinkedElements: elements.filter((element) => element.linkedCases === 0).map((element) => element.id),
+      mappingStaleness: {
+        supersededRevisions: superseded.rows.map((row) => ({
+          modelRevisionId: row.model_revision_id,
+          revisionNumber: Number(row.revision_number),
+          linkedCases: Number(row.cases),
+          sameContentAsLatest: String(row.content_hash) === latestHash
+        })),
+        testcasesChangedSinceLink,
+        testcasesWithoutRecordedRevision,
+        deletedTestcases: Number(deleted.rows[0]?.cases ?? 0),
+        note: "Staleness reports a changed basis for review. It never rewrites a case, link or history."
+      },
       coverageAssertion: "none",
       executionAssertion: "none",
       note: "A linked case is an accepted mapping, not execution or verified coverage."

@@ -4758,6 +4758,18 @@ export type ModelStudioCoverage = {
   revisionId: string;
   elements: Array<{ id: string; linkedCases: number }>;
   unlinkedElements: string[];
+  mappingStaleness: {
+    supersededRevisions: Array<{
+      modelRevisionId: string;
+      revisionNumber: number;
+      linkedCases: number;
+      sameContentAsLatest: boolean;
+    }>;
+    testcasesChangedSinceLink: number;
+    testcasesWithoutRecordedRevision: number;
+    deletedTestcases: number;
+    note: string;
+  };
   coverageAssertion: "none";
   executionAssertion: "none";
   note: string;
