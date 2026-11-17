@@ -1,0 +1,275 @@
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException } from "@nestjs/common";
+import { DatabaseService } from "../database/database.service";
+import { LegacyService } from "../legacy/legacy.service";
+import { DraftPreviewError, previewDraftModel } from "./model-studio-preview.core";
+
+type Body = Record<string, any>;
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const HASH = /^[a-f0-9]{64}$/;
+
+/**
+ * Persisted Model Studio Phase A: expected-model identity, immutable draft revisions and explicit
+ * case links. This is deliberately not a second graph/approval/execution store:
+ *
+ *  - expected behavior lives here;
+ *  - observed source declarations remain graph_capture_history / source bindings;
+ *  - execution remains native cycles/executions/attachments.
+ *
+ * No approval, activation, generation or target execution route exists yet. A link is an accepted
+ * mapping between two artifacts, never execution or coverage evidence.
+ */
+@Injectable()
+export class ModelStudioRepository {
+  constructor(private readonly db: DatabaseService, private readonly legacy: LegacyService) {}
+
+  private async access(userId: string | null | undefined, projectId: string) {
+    if (!userId) throw new ForbiddenException({ error: "Project membership required" });
+    return this.legacy.requireProjectAccess(userId, projectId);
+  }
+
+  private validate(content: unknown) {
+    try {
+      return previewDraftModel(content);
+    } catch (error) {
+      if (!(error instanceof DraftPreviewError)) throw error;
+      const body = { code: error.code, error: error.message };
+      if (error.code === "UNSUPPORTED_SEMANTICS") throw new HttpException(body, 422);
+      throw new BadRequestException(body);
+    }
+  }
+
+  private modelView(model: Body, revision: Body | null, includeContent: boolean) {
+    return {
+      id: model.id,
+      projectId: model.project_id,
+      name: model.name,
+      createdAt: model.created_at,
+      latestRevision: revision ? this.revisionView(revision, includeContent) : null
+    };
+  }
+
+  private revisionView(row: Body, includeContent: boolean) {
+    return {
+      id: row.id,
+      modelId: row.model_id,
+      revisionNumber: row.revision_number,
+      parentRevisionId: row.parent_revision_id ?? null,
+      status: row.status,
+      contentHash: row.content_hash,
+      createdAt: row.created_at,
+      ...(includeContent ? { content: row.content } : {}),
+      authority: {
+        expectedBehavior: true,
+        observedSource: false,
+        executionEvidence: false,
+        approval: "NOT_APPROVED",
+        runtimeEvidence: "NONE"
+      }
+    };
+  }
+
+  async createModelForUser(userId: string | null | undefined, projectId: string, body: Body) {
+    await this.access(userId, projectId);
+    const name = String(body?.name ?? "").trim();
+    if (!name) throw new BadRequestException({ error: "name is required" });
+    if (name.length > 120) throw new BadRequestException({ error: "name must be 120 characters or fewer" });
+    const preview = this.validate(body?.model);
+    const result = await this.db.transaction(async (client) => {
+      const model = await client.query("INSERT INTO mbt_models (project_id, name, created_by) VALUES ($1,$2,$3) RETURNING *", [
+        projectId,
+        name,
+        userId
+      ]);
+      const revision = await client.query(
+        `INSERT INTO mbt_model_revisions (model_id, project_id, revision_number, content, content_hash, status, created_by)
+         VALUES ($1,$2,1,$3::jsonb,$4,'draft',$5) RETURNING *`,
+        [model.rows[0].id, projectId, JSON.stringify(preview.definition), preview.candidateDigest, userId]
+      );
+      return { model: model.rows[0], revision: revision.rows[0] };
+    });
+    return this.modelView(result.model, result.revision, true);
+  }
+
+  async listModelsForUser(userId: string | null | undefined, projectId: string) {
+    await this.access(userId, projectId);
+    const res = await this.db.query(
+      `SELECT m.*, r.id AS latest_revision_id, r.revision_number AS latest_revision_number,
+              r.parent_revision_id AS latest_parent_revision_id, r.status AS latest_status,
+              r.content_hash AS latest_content_hash, r.created_at AS latest_revision_created_at
+       FROM mbt_models m
+       LEFT JOIN LATERAL (
+         SELECT * FROM mbt_model_revisions r
+         WHERE r.model_id = m.id AND r.project_id = m.project_id
+         ORDER BY r.revision_number DESC LIMIT 1
+       ) r ON true
+       WHERE m.project_id = $1 AND m.archived_at IS NULL
+       ORDER BY m.created_at DESC`,
+      [projectId]
+    );
+    return res.rows.map((row) => {
+      const revision = row.latest_revision_id
+        ? {
+            id: row.latest_revision_id,
+            model_id: row.id,
+            revision_number: row.latest_revision_number,
+            parent_revision_id: row.latest_parent_revision_id,
+            status: row.latest_status,
+            content_hash: row.latest_content_hash,
+            created_at: row.latest_revision_created_at
+          }
+        : null;
+      return this.modelView(row, revision, false);
+    });
+  }
+
+  async getModelForUser(userId: string | null | undefined, projectId: string, modelId: string) {
+    await this.access(userId, projectId);
+    if (!UUID.test(modelId)) throw new NotFoundException({ error: "Model not found" });
+    const model = await this.db.query("SELECT * FROM mbt_models WHERE id = $1 AND project_id = $2 AND archived_at IS NULL", [modelId, projectId]);
+    if (!model.rows[0]) throw new NotFoundException({ error: "Model not found" });
+    const revisions = await this.db.query(
+      "SELECT * FROM mbt_model_revisions WHERE model_id = $1 AND project_id = $2 ORDER BY revision_number DESC",
+      [modelId, projectId]
+    );
+    return {
+      ...this.modelView(model.rows[0], revisions.rows[0] ?? null, true),
+      revisions: revisions.rows.map((row) => this.revisionView(row, true))
+    };
+  }
+
+  async saveRevisionForUser(userId: string | null | undefined, projectId: string, modelId: string, body: Body) {
+    await this.access(userId, projectId);
+    if (!UUID.test(modelId)) throw new NotFoundException({ error: "Model not found" });
+    const preview = this.validate(body?.model);
+    const baseRevisionId = body?.baseRevisionId;
+    if (baseRevisionId !== undefined && (typeof baseRevisionId !== "string" || !UUID.test(baseRevisionId))) {
+      throw new BadRequestException({ error: "baseRevisionId must be a revision id" });
+    }
+    const revision = await this.db.transaction(async (client) => {
+      const model = await client.query(
+        "SELECT * FROM mbt_models WHERE id = $1 AND project_id = $2 AND archived_at IS NULL FOR UPDATE",
+        [modelId, projectId]
+      );
+      if (!model.rows[0]) throw new NotFoundException({ error: "Model not found" });
+      const latest = await client.query(
+        "SELECT * FROM mbt_model_revisions WHERE model_id = $1 AND project_id = $2 ORDER BY revision_number DESC LIMIT 1",
+        [modelId, projectId]
+      );
+      const head = latest.rows[0];
+      if (baseRevisionId && head && head.id !== baseRevisionId) {
+        throw new ConflictException({ code: "STALE_BASE", error: "The model changed since this revision was loaded; reload before saving" });
+      }
+      const number = Number(head?.revision_number ?? 0) + 1;
+      const inserted = await client.query(
+        `INSERT INTO mbt_model_revisions (model_id, project_id, revision_number, parent_revision_id, content, content_hash, status, created_by)
+         VALUES ($1,$2,$3,$4,$5::jsonb,$6,'draft',$7) RETURNING *`,
+        [modelId, projectId, number, head?.id ?? null, JSON.stringify(preview.definition), preview.candidateDigest, userId]
+      );
+      return inserted.rows[0];
+    });
+    return this.revisionView(revision, true);
+  }
+
+  async linkCaseForUser(userId: string | null | undefined, projectId: string, modelId: string, revisionId: string, body: Body) {
+    await this.access(userId, projectId);
+    for (const value of [modelId, revisionId]) {
+      if (!UUID.test(value)) throw new NotFoundException({ error: "Model revision not found" });
+    }
+    const revision = await this.db.query(
+      "SELECT * FROM mbt_model_revisions WHERE id = $1 AND model_id = $2 AND project_id = $3",
+      [revisionId, modelId, projectId]
+    );
+    if (!revision.rows[0]) throw new NotFoundException({ error: "Model revision not found" });
+    const content = revision.rows[0].content as { states: Array<{ id: string }>; transitions: Array<{ id: string }> };
+    const elementIds = body?.elementIds;
+    if (!Array.isArray(elementIds) || !elementIds.length) {
+      throw new BadRequestException({ error: "elementIds must name at least one model element" });
+    }
+    const unique = [...new Set(elementIds.map((value: unknown) => String(value ?? "").trim()).filter(Boolean))];
+    const known = new Set([...content.states.map((s) => s.id), ...content.transitions.map((t) => t.id)]);
+    const unknown = unique.filter((id) => !known.has(id));
+    if (unknown.length) throw new BadRequestException({ error: `Unknown model element(s): ${unknown.join(", ")}` });
+
+    const testcaseId = String(body?.testcaseId ?? "");
+    if (!UUID.test(testcaseId)) throw new BadRequestException({ error: "testcaseId must be a test case id" });
+    const testcase = await this.db.query("SELECT id FROM testcases WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL", [testcaseId, projectId]);
+    if (!testcase.rows[0]) throw new NotFoundException({ error: "Test case not found" });
+    const testcaseRevision = body?.testcaseRevision;
+    if (testcaseRevision !== undefined && (typeof testcaseRevision !== "string" || !HASH.test(testcaseRevision))) {
+      throw new BadRequestException({ error: "testcaseRevision must be the case editRevision or omitted" });
+    }
+
+    const inserted = await this.db.query(
+      `INSERT INTO mbt_model_case_links (project_id, model_id, model_revision_id, testcase_id, testcase_revision, element_ids, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6::text[],$7)
+       ON CONFLICT (model_revision_id, testcase_id, element_ids) DO NOTHING
+       RETURNING *`,
+      [projectId, modelId, revisionId, testcaseId, testcaseRevision ?? null, unique, userId]
+    );
+    const row = inserted.rows[0] ?? (await this.db.query(
+      "SELECT * FROM mbt_model_case_links WHERE model_revision_id = $1 AND testcase_id = $2 AND element_ids = $3::text[]",
+      [revisionId, testcaseId, unique]
+    )).rows[0];
+    return this.linkView(row);
+  }
+
+  async unlinkCaseForUser(userId: string | null | undefined, projectId: string, modelId: string, revisionId: string, linkId: string) {
+    await this.access(userId, projectId);
+    if (![modelId, revisionId, linkId].every((value) => UUID.test(value))) {
+      throw new NotFoundException({ error: "Model link not found" });
+    }
+    const removed = await this.db.query(
+      "DELETE FROM mbt_model_case_links WHERE id = $1 AND model_id = $2 AND model_revision_id = $3 AND project_id = $4",
+      [linkId, modelId, revisionId, projectId]
+    );
+    if (!removed.rowCount) throw new NotFoundException({ error: "Model link not found" });
+    return { ok: true };
+  }
+
+  async coverageForUser(userId: string | null | undefined, projectId: string, modelId: string) {
+    await this.access(userId, projectId);
+    if (!UUID.test(modelId)) throw new NotFoundException({ error: "Model not found" });
+    const revision = await this.db.query(
+      "SELECT * FROM mbt_model_revisions WHERE model_id = $1 AND project_id = $2 ORDER BY revision_number DESC LIMIT 1",
+      [modelId, projectId]
+    );
+    if (!revision.rows[0]) throw new NotFoundException({ error: "Model not found" });
+    const content = revision.rows[0].content as { states: Array<{ id: string }>; transitions: Array<{ id: string }> };
+    const ids = [...content.states.map((s) => s.id), ...content.transitions.map((t) => t.id)];
+    const counts = await this.db.query(
+      `SELECT element_id, COUNT(DISTINCT testcase_id)::int AS cases
+       FROM mbt_model_case_links l, unnest(l.element_ids) AS element_id
+       WHERE l.model_revision_id = $1 AND l.project_id = $2
+       GROUP BY element_id`,
+      [revision.rows[0].id, projectId]
+    );
+    const byId = new Map<string, number>(counts.rows.map((row) => [String(row.element_id), Number(row.cases)]));
+    const elements = ids.map((id) => ({ id, linkedCases: byId.get(id) ?? 0 }));
+    return {
+      modelId,
+      revisionId: revision.rows[0].id,
+      elements,
+      unlinkedElements: elements.filter((element) => element.linkedCases === 0).map((element) => element.id),
+      coverageAssertion: "none",
+      executionAssertion: "none",
+      note: "A linked case is an accepted mapping, not execution or verified coverage."
+    };
+  }
+
+  private linkView(row: Body) {
+    if (!row) throw new NotFoundException({ error: "Model link not found" });
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      modelId: row.model_id,
+      modelRevisionId: row.model_revision_id,
+      testcaseId: row.testcase_id,
+      testcaseRevision: row.testcase_revision,
+      elementIds: row.element_ids,
+      createdAt: row.created_at,
+      coverageAssertion: "none",
+      executionAssertion: "none"
+    };
+  }
+}
