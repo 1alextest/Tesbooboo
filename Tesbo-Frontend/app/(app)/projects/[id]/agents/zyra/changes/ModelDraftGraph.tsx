@@ -1,10 +1,25 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import type { ModelDraftPreview } from "@/lib/model-draft-preview";
+/**
+ * The structural subset this schematic uses. A validated preview and a persisted revision's
+ * preview projection both satisfy it; the graph does not need model identity or authority fields.
+ */
+type GraphPreview = {
+  definition: { initialStateId: string };
+  states: Array<{ id: string; label: string; reachable: boolean }>;
+  transitions: Array<{
+    id: string;
+    from: string;
+    to: string;
+    action: string;
+    expectedObservation: string;
+    reachable: boolean;
+  }>;
+};
 
 /** Schematic presentation of the admitted native response; never a model interpreter. */
-export function ModelDraftGraph({ preview }: { preview: ModelDraftPreview }) {
+export function ModelDraftGraph({ preview }: { preview: GraphPreview }) {
   const id = useId().replace(/:/g, "");
   const [selected, setSelected] = useState(preview.transitions[0]?.id ?? "");
   const [actualSize, setActualSize] = useState(false);
