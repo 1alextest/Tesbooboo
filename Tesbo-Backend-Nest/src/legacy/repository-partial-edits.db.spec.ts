@@ -171,7 +171,7 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
 
   it("does not reject an unchanged authored row because of embedding bookkeeping or timestamp updates", async () => {
     const f = service(), initial = await f.svc.getTestCase(testcaseId);
-    await setup.query("UPDATE testcases SET embedding_status='ready', embedding_content_hash='worker-only', updated_at=now() WHERE id=$1", [testcaseId]);
+    await setup.query("UPDATE testcases SET embedding_status='ready', embedding_content_hash='worker-only', embedding_queued_at=now(), updated_at=now() WHERE id=$1", [testcaseId]);
     expect((await f.svc.getTestCase(testcaseId)).editRevision).toBe(initial.editRevision);
     await f.svc.updateTestCase(testcaseId, owner, { expectedRevision: initial.editRevision, attachments: "Actual authored Notes" });
     expect((await state()).row).toMatchObject({ attachments: "Actual authored Notes", embedding_status: "ready", embedding_content_hash: "worker-only" });

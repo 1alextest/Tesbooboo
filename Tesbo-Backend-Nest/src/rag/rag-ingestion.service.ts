@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { InjectQueue } from "@nestjs/bullmq";
 import { Injectable, Logger } from "@nestjs/common";
 import { Queue } from "bullmq";
@@ -19,16 +20,24 @@ export class RagIngestionService {
 
   async enqueueEmbedding(payload: EmbeddingJobPayload): Promise<void> {
     const table = payload.sourceType === "document" ? "knowledge_documents" : "knowledge_files";
-    await this.db
-      .query(`UPDATE ${table} SET embedding_status = 'queued' WHERE id = $1 AND project_id = $2`, [payload.sourceId, payload.projectId])
+    const queued = await this.db
+      .query<{ generation: string }>(
+        `UPDATE ${table} SET embedding_status = 'queued' WHERE id = $1 AND project_id = $2
+         RETURNING (extract(epoch FROM now()) * 1000)::bigint::text AS generation`,
+        [payload.sourceId, payload.projectId]
+      )
       .catch(() => undefined);
 
-    // Deterministic jobId dedupes concurrent enqueues for the same source while one is
-    // already waiting/active — BullMQ silently no-ops a duplicate add. BullMQ job IDs can't
-    // contain ":" (used internally as a Redis key delimiter), hence "-" here rather than the
-    // ":" used elsewhere in this codebase for composite keys.
+    // The jobId carries this write's generation (see the testcase counterpart below). A fixed
+    // jobId dedupes against EVERY job that still exists with that id — including completed jobs,
+    // which removeOnComplete retains. An edit after the first embedding therefore had its add
+    // silently dropped while the row was already marked 'queued', so the embedding never
+    // refreshed and the row never returned to 'pending'. A generation-scoped id still coalesces
+    // concurrent enqueues for the same write, but the next edit mints a new id and really runs.
+    // BullMQ job IDs can't contain ":" (used internally as a Redis key delimiter), hence "-".
+    const generation = queued?.rows[0]?.generation ?? randomUUID();
     await this.queue.add(RAG_EMBEDDING_JOB_NAME, payload, {
-      jobId: `${payload.sourceType}-${payload.sourceId}`,
+      jobId: `${payload.sourceType}-${payload.sourceId}-${generation}`,
       attempts: 3,
       backoff: { type: "exponential", delay: 5000 },
       removeOnComplete: { count: 1000 },
@@ -50,15 +59,23 @@ export class RagIngestionService {
   // created rows at embedding_status='pending' (the column default) until either widened into
   // this hook or covered by a future backfill decision.
   async enqueueTestcaseEmbedding(payload: TestcaseEmbeddingJobPayload): Promise<void> {
-    await this.db
-      .query(`UPDATE testcases SET embedding_status = 'queued' WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL`, [
-        payload.testcaseId,
-        payload.projectId
-      ])
+    const queued = await this.db
+      .query<{ generation: string }>(
+        `UPDATE testcases SET embedding_status = 'queued', embedding_queued_at = now()
+         WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL
+         RETURNING (extract(epoch FROM embedding_queued_at) * 1000)::bigint::text AS generation`,
+        [payload.testcaseId, payload.projectId]
+      )
       .catch(() => undefined);
 
+    // The enqueue timestamp doubles as the job-id generation. A fixed `testcase-<id>` jobId is
+    // deduped against the completed create-job that removeOnComplete still retains, so editing
+    // a case marked it 'queued' and then silently dropped the job: no refresh, and a row stuck
+    // out of 'pending' forever. Generation-scoping keeps concurrent enqueues for one write
+    // coalesced while letting the next edit enqueue a genuinely new job.
+    const generation = queued?.rows[0]?.generation ?? randomUUID();
     await this.queue.add(RAG_TESTCASE_EMBEDDING_JOB_NAME, payload, {
-      jobId: `testcase-${payload.testcaseId}`,
+      jobId: `testcase-${payload.testcaseId}-${generation}`,
       attempts: 3,
       backoff: { type: "exponential", delay: 5000 },
       removeOnComplete: { count: 1000 },
@@ -70,8 +87,9 @@ export class RagIngestionService {
 
   // Re-enqueues anything left in an in-progress status after a restart/crash — same
   // self-healing idiom as resumeInterruptedZyraChatPlans (legacy.service.ts). Safe to call
-  // repeatedly: the deterministic jobId above means re-enqueuing an already-queued source
-  // is a no-op.
+  // repeatedly: while a source's job is still waiting/active the same generation coalesces the
+  // duplicate add; once it has completed, a repeat mints a new generation and re-embeds rather
+  // than silently doing nothing (the failure mode a fixed jobId caused).
   async resumeInterruptedEmbeddings(): Promise<void> {
     const docs = await this.db
       .query<{ id: string; project_id: string; organization_id: string }>(

@@ -50,9 +50,11 @@ export async function verifyCiZyraReviewFeedback(page: Page, api: string, web: s
             await verifyZyraReviewCloseFeedback({
               page, request: page.request, taskUrl, language, saveFirst, repositorySnapshot,
               settleSavedCases: async (ids) => {
+                // V150 stops embedding bookkeeping from writing testcase_versions, so the durable
+                // "the enqueue happened and the keyless worker returned it to pending" signal is
+                // embedding_queued_at (set by the enqueue, never cleared by the worker).
                 await expect.poll(async () => (await db.query(`SELECT COUNT(*)::int AS settled FROM testcases t
-                  WHERE t.id=ANY($1::uuid[]) AND t.embedding_status='pending' AND EXISTS
-                    (SELECT 1 FROM testcase_versions v WHERE v.testcase_id=t.id AND v.snapshot->>'embedding_status'='queued')`, [ids])).rows[0].settled,
+                  WHERE t.id=ANY($1::uuid[]) AND t.embedding_status='pending' AND t.embedding_queued_at IS NOT NULL`, [ids])).rows[0].settled,
                 { message: "keyless save embedding bookkeeping must finish before the close baseline" }).toBe(ids.length);
               },
               capture: async (stage) => { await testInfo.attach(`zyra-${label}-${stage}`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" }); },

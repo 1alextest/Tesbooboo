@@ -7,7 +7,7 @@ import { BadRequestException } from "@nestjs/common";
 // This is an edit precondition, never an authorization credential or coverage of
 // independently stored custom-field/tag/relationship records.
 export const TESTCASE_EDIT_REVISION_SQL =
-  "encode(sha256(convert_to((to_jsonb(testcases) - 'embedding_status' - 'embedding_content_hash' - 'updated_at')::text, 'UTF8')), 'hex')";
+  "encode(sha256(convert_to((to_jsonb(testcases) - 'embedding_status' - 'embedding_content_hash' - 'embedding_queued_at' - 'updated_at')::text, 'UTF8')), 'hex')";
 
 export function expectedTestcaseRevision(raw: unknown): string | null {
   if (raw === undefined) return null;

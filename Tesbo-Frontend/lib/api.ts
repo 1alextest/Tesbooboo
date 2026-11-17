@@ -1,4 +1,4 @@
-import { requireModelDraftPreview, requireModelPreviewAvailability } from "./model-draft-preview";
+import { requireModelDraftPreview, requireModelPreviewAvailability, type ModelDraftPreview } from "./model-draft-preview";
 import { readStoredValue } from "./storage";
 import { EVIDENCE_MAX_FILES_PER_REQUEST } from "./validation";
 
@@ -1626,6 +1626,8 @@ export async function listTestCases(
     priority?: string;
     type?: string;
     automationStatus?: string;
+    technique?: string;
+    view?: string;
     jiraIssueKey?: string;
     linearIssueKey?: string;
     notionPageId?: string;
@@ -1715,6 +1717,34 @@ export async function bulkUpdateTestCases(projectId: string, data: { testcaseIds
 
 export async function bulkDeleteTestCases(projectId: string, data: { testcaseIds: string[] }): Promise<void> {
   await api(`/api/projects/${projectId}/testcases/bulk-delete`, { method: "POST", body: data });
+}
+
+// Saved test-case views -----------------------------------------------------------
+
+export interface SavedTestCaseView {
+  id: string;
+  projectId: string;
+  createdBy: string | null;
+  name: string;
+  filters: Record<string, unknown>;
+  isShared: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listSavedViews(projectId: string): Promise<SavedTestCaseView[]> {
+  return api(`/api/projects/${projectId}/testcase-views`);
+}
+
+export async function createSavedView(
+  projectId: string,
+  data: { name: string; filters: Record<string, unknown>; isShared?: boolean }
+): Promise<SavedTestCaseView> {
+  return api(`/api/projects/${projectId}/testcase-views`, { method: "POST", body: data });
+}
+
+export async function deleteSavedView(projectId: string, viewId: string): Promise<{ ok: boolean }> {
+  return api(`/api/projects/${projectId}/testcase-views/${viewId}`, { method: "DELETE" });
 }
 
 // Custom fields (Pro plan feature) ------------------------------------------------
@@ -4690,4 +4720,57 @@ export async function previewModelDraft(projectId: string, model: unknown, signa
     }
     throw cause;
   }
+}
+
+// Persisted Model Studio (Phase A) ------------------------------------------------
+
+export type ModelStudioRevision = {
+  id: string;
+  modelId: string;
+  revisionNumber: number;
+  parentRevisionId: string | null;
+  status: "draft" | "approved" | "retired";
+  contentHash: string;
+  createdAt: string;
+  content?: unknown;
+  preview?: (Omit<ModelDraftPreview, "modelId" | "modelRevisionId"> & { modelId: string; modelRevisionId: string }) | null;
+  authority: {
+    expectedBehavior: true;
+    observedSource: false;
+    executionEvidence: false;
+    approval: "NOT_APPROVED";
+    runtimeEvidence: "NONE";
+  };
+};
+
+export type ModelStudioModel = {
+  id: string;
+  projectId: string;
+  name: string;
+  createdAt: string;
+  latestRevision: ModelStudioRevision | null;
+};
+
+export type ModelStudioDetail = ModelStudioModel & { revisions: ModelStudioRevision[] };
+
+export type ModelStudioCoverage = {
+  modelId: string;
+  revisionId: string;
+  elements: Array<{ id: string; linkedCases: number }>;
+  unlinkedElements: string[];
+  coverageAssertion: "none";
+  executionAssertion: "none";
+  note: string;
+};
+
+export async function listModelStudioModels(projectId: string): Promise<ModelStudioModel[]> {
+  return api(`/api/projects/${projectId}/model-studio/models`);
+}
+
+export async function getModelStudioModel(projectId: string, modelId: string): Promise<ModelStudioDetail> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}`);
+}
+
+export async function getModelStudioCoverage(projectId: string, modelId: string): Promise<ModelStudioCoverage> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/coverage`);
 }

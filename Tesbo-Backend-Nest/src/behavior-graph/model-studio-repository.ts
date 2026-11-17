@@ -59,7 +59,7 @@ export class ModelStudioRepository {
       status: row.status,
       contentHash: row.content_hash,
       createdAt: row.created_at,
-      ...(includeContent ? { content: row.content } : {}),
+      ...(includeContent ? { content: row.content, preview: this.previewOrNull(row) } : {}),
       authority: {
         expectedBehavior: true,
         observedSource: false,
@@ -68,6 +68,19 @@ export class ModelStudioRepository {
         runtimeEvidence: "NONE"
       }
     };
+  }
+
+  /**
+   * The same projection the preview endpoint returns, recomputed from the persisted revision for
+   * display. The stored content was validated when it was saved, so this cannot fail for a normal
+   * row; a corrupt row yields null instead of breaking the detail read.
+   */
+  private previewOrNull(row: Body) {
+    try {
+      return { ...previewDraftModel(row.content), modelId: row.model_id, modelRevisionId: row.id };
+    } catch {
+      return null;
+    }
   }
 
   async createModelForUser(userId: string | null | undefined, projectId: string, body: Body) {

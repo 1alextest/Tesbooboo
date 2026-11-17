@@ -46,7 +46,7 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
   // Keep EVERY raw history row and require its prefix to survive. Count an additional row as
   // bookkeeping only when adjacent snapshots/live content agree on ALL non-bookkeeping fields.
   // In particular, suite/owner/status/body/attribution/search-vector are never excluded.
-  const domain = (row: Record<string, unknown>) => Object.fromEntries(Object.entries(row).filter(([key]) => !["embedding_status", "embedding_content_hash", "updated_at"].includes(key)));
+  const domain = (row: Record<string, unknown>) => Object.fromEntries(Object.entries(row).filter(([key]) => !["embedding_status", "embedding_content_hash", "embedding_queued_at", "updated_at"].includes(key)));
   function expectHistory(before: Awaited<ReturnType<typeof caseState>>, after: Awaited<ReturnType<typeof caseState>>, changes: number, actor?: string) {
     expect(after.versions.slice(0, before.versions.length)).toEqual(before.versions);
     expect(after.versions.map((version) => version.version)).toEqual(after.versions.map((_, index) => index + 1));
@@ -196,12 +196,15 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
       // an unconditional writer when its revision metadata is missing.
       await expect(panel().getByRole("button", { name: "Save changes", exact: true })).toBeEnabled();
       const caseUrl = `${base}/testcases/${selected.id}`;
+      // Fulfil every detail read during this step, including the transport's safe-read retry, with
+      // a body that omits the revision. Reusing the fetched response while overriding its JSON
+      // left the panel waiting for a read that never settled; an explicit body is unambiguous.
       await page.route(caseUrl, async (route) => {
         const response = await route.fetch();
         const body = await response.json();
         delete body.editRevision;
-        await route.fulfill({ response, json: body });
-      }, { times: 1 });
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+      });
       try {
         await page.goto(repo);
         await page.getByRole("button", { name: first.name, exact: true }).click();

@@ -14,7 +14,10 @@ function fieldControl(page: Page, label: string): Locator {
   );
 }
 
-test("stale editor save retains unsaved Notes until an explicit reload and review", async ({ page, request }) => {
+test("stale editor save retains unsaved Notes until an explicit reload and review", async ({ page }) => {
+  // UI project's default request context points at the web host; this test
+  // needs the real API and the same authorized session used by the browser.
+  const request = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
   const title = `E2E conflicting Notes ${Date.now()}`;
   const createdResponse = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
     data: { title, attachments: "Original Notes" }
@@ -54,6 +57,7 @@ test("stale editor save retains unsaved Notes until an explicit reload and revie
     expect(saved.id).toBe(created.id);
   } finally {
     await request.delete(url, { failOnStatusCode: false });
+    await request.dispose();
   }
 });
 
@@ -558,8 +562,9 @@ test.describe("suite name validation and error display (UI)", () => {
       suiteId = created.id;
 
       await page.goto(`/projects/${ctx.projectId}/testcases`);
-      await page.getByRole("button", { name: suiteName, exact: true }).hover();
-      await page.getByTitle("Rename suite").click();
+      const suiteRowButton = page.getByRole("button", { name: suiteName, exact: true });
+      await suiteRowButton.hover();
+      await suiteRowButton.locator("..").getByTitle("Rename suite").click();
 
       const nameInput = page.getByPlaceholder("Enter suite name");
       await expect(nameInput).toHaveValue(suiteName);
@@ -757,6 +762,24 @@ test.describe("test case detail — linked bugs", () => {
 // icon plus HTML5 drag-and-drop) so a user could reorder data columns. That reordering was
 // removed; only the per-column resize handle should remain.
 test.describe("test case repository table — column drag-and-drop removed", () => {
+  // The repository only renders its table once at least one case exists, and the CI project starts
+  // empty, so seed one instead of depending on whatever the shared project happened to contain.
+  let fixtureApi: import("@playwright/test").APIRequestContext;
+  let fixtureCaseId = "";
+
+  test.beforeAll(async ({ playwright }) => {
+    fixtureApi = await playwright.request.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const created = await (
+      await fixtureApi.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI table chrome fixture ${Date.now()}` } })
+    ).json();
+    fixtureCaseId = created.id;
+  });
+
+  test.afterAll(async () => {
+    if (fixtureCaseId) await fixtureApi.delete(`/api/projects/${ctx.projectId}/testcases/${fixtureCaseId}`, { failOnStatusCode: false });
+    if (fixtureApi) await fixtureApi.dispose();
+  });
+
   test("column headers are no longer draggable, and dragging one does not reorder columns", async ({ page }) => {
     await page.goto(`/projects/${ctx.projectId}/testcases`);
 
@@ -814,6 +837,24 @@ test.describe("test case repository table — column drag-and-drop removed", () 
 // can't: that a click reorders what's on screen, asks the server for the sort, and that the
 // refetch doesn't blank the table while in flight.
 test.describe("test case repository table — column sort", () => {
+  // The filter-refetch test below needs one existing row before it can observe the in-flight state;
+  // CI starts from an empty project, so seed one rather than relying on older tests' leftovers.
+  let fixtureApi: import("@playwright/test").APIRequestContext;
+  let fixtureCaseId = "";
+
+  test.beforeAll(async ({ playwright }) => {
+    fixtureApi = await playwright.request.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const created = await (
+      await fixtureApi.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI filter refetch fixture ${Date.now()}` } })
+    ).json();
+    fixtureCaseId = created.id;
+  });
+
+  test.afterAll(async () => {
+    if (fixtureCaseId) await fixtureApi.delete(`/api/projects/${ctx.projectId}/testcases/${fixtureCaseId}`, { failOnStatusCode: false });
+    if (fixtureApi) await fixtureApi.dispose();
+  });
+
   test("the Test case title header sorts the visible rows ascending, then descending on a second click", async ({ page }) => {
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
     const marker = `UI Sort Title ${Date.now()}`;
@@ -1068,12 +1109,23 @@ test.describe("test case repository table and detail panel — Context column", 
 
       await page.goto(`/projects/${ctx.projectId}/testcases`);
       await page.getByPlaceholder("Search by ID, title, or type").fill(`${marker} with citation`);
+      // Search is debounced. Waiting for the cited case's row to disappear is load-bearing: if
+      // it is still rendered, the later getByRole("button", { name: cited.title }) resolves to
+      // that row's title button and opens its edit panel instead of the citation's drawer.
+      await expect(page.locator("table.tc-repo-table tbody tr")).toHaveCount(1);
       const columnsButton = page.getByRole("button", { name: "Columns" });
       await columnsButton.click();
       await page.locator("label", { hasText: "Context" }).locator('input[type="checkbox"]').click();
       await columnsButton.click();
 
-      await page.getByRole("button", { name: "Context used (1)" }).click();
+      // Multiple matching badges can exist outside the filtered row. Target
+      // the citation of THIS saved case, not an unrelated row or drawer.
+      const caseRow = page.getByRole("row").filter({
+        has: page.getByRole("button", { name: `${marker} with citation`, exact: true })
+      });
+      // The row exposes both a focusable wrapper with role="button" and the real <button>, so the
+      // accessible name alone is ambiguous under strict mode. Scope to the button element.
+      await caseRow.locator("button", { hasText: "Context used (1)" }).click();
       await page.getByRole("button", { name: cited.title, exact: false }).click();
 
       const drawer = page.locator('div[role="presentation"]').last();
@@ -1215,10 +1267,10 @@ test.describe("Not set priority and the added Type / Automation Type values", ()
     let cycleId = "";
     try {
       const notSet = await (
-        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker NotSet ${stamp}`, priority: "Not set", type: "Exploratory" } })
+        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker NotSet ${stamp}`, priority: "Not set", type: "Exploratory", status: "Approved" } })
       ).json();
       const p1 = await (
-        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker P1 ${stamp}`, priority: "P1" } })
+        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker P1 ${stamp}`, priority: "P1", status: "Approved" } })
       ).json();
       caseIds.push(notSet.id, p1.id);
       const cycle = await (
@@ -1236,7 +1288,10 @@ test.describe("Not set priority and the added Type / Automation Type values", ()
       const typeOptions = await type.locator("option").allTextContents();
       for (const t of ["Sanity", "API", "UI", "Acceptance", "Usability", "Compatibility", "Exploratory", "Other"]) expect(typeOptions).toContain(t);
 
-      await page.getByPlaceholder("Search by title or ID…").fill(`UI picker ${stamp}`);
+      // The titles put a label between "UI picker" and the stamp ("UI picker NotSet <stamp>"), so
+      // the old marker was not a contiguous substring of either title and filtered both out. The
+      // stamp itself is unique and present in both.
+      await page.getByPlaceholder("Search by title or ID…").fill(String(stamp));
       await priority.selectOption("Not set");
       await expect(page.getByText(`UI picker NotSet ${stamp}`)).toBeVisible();
       await expect(page.getByText(`UI picker P1 ${stamp}`)).toHaveCount(0);
@@ -1316,7 +1371,8 @@ test.describe("suite description and preconditions in the repository", () => {
       await page.getByTestId(`suite-expand-${parentId}`).click();
       const childRow = page.getByRole("button", { name: new RegExp(childName) }).first();
       await childRow.hover();
-      await page.getByTitle("Rename suite").click();
+      // Parent and child both expose Rename; target the child row's action.
+      await childRow.locator("..").getByTitle("Rename suite").click();
 
       const description = page.getByPlaceholder("What does this suite cover?");
       const preconditions = page.getByPlaceholder("What must be true before running these test cases?");
@@ -1517,6 +1573,66 @@ test.describe("Add suite opens the newly created suite", () => {
     } finally {
       await page.unroute(createRoute);
       if (priorId) await api.delete(`/api/suites/${priorId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+});
+
+test.describe("saved repository views (UI)", () => {
+  test("a saved view captures the current filters, can be applied again and deleted", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const name = `E2E saved view ${Date.now()}`;
+    try {
+      await page.goto(`/projects/${ctx.projectId}/testcases`);
+      const technique = page.getByLabel("Filter by technique");
+      const reviewView = page.getByLabel("Filter by review view");
+      const views = page.getByLabel("Saved views");
+
+      await technique.selectOption("state_testing");
+      await expect(technique).toHaveValue("state_testing");
+
+      page.once("dialog", (dialog) => dialog.accept(name));
+      await page.getByRole("button", { name: "Save view" }).click();
+      await expect(views.locator("option", { hasText: name })).toHaveCount(1);
+
+      // Move the filters away, then apply the saved view and confirm they are restored.
+      await views.selectOption("");
+      await reviewView.selectOption("negative");
+      await views.selectOption({ label: name });
+      await expect(technique).toHaveValue("state_testing");
+      await expect(reviewView).toHaveValue("all");
+
+      page.once("dialog", (dialog) => dialog.accept());
+      await page.getByRole("button", { name: "Delete view" }).click();
+      await expect(views.locator("option", { hasText: name })).toHaveCount(0);
+    } finally {
+      const remaining = await (await api.get(`/api/projects/${ctx.projectId}/testcase-views`)).json();
+      const leftover = remaining.find((view: { name: string }) => view.name === name);
+      if (leftover) await api.delete(`/api/projects/${ctx.projectId}/testcase-views/${leftover.id}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
+  test("the editor persists technique and review views through the existing save path", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const title = `E2E classification ${Date.now()}`;
+    let createdId = "";
+    try {
+      await page.goto(`/projects/${ctx.projectId}/testcases`);
+      await page.getByRole("button", { name: "Add test case" }).first().click();
+      const panel = page.locator("aside");
+      await panel.getByPlaceholder("Describe what this test case validates").fill(title);
+      await fieldControl(page, "Technique").selectOption("state_testing");
+      await panel.getByRole("checkbox", { name: "Negative" }).check();
+      await panel.getByRole("button", { name: "Create", exact: true }).click();
+      await expect(panel.getByText("Test case created successfully.")).toBeVisible();
+
+      const list = await (await api.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: title } })).json();
+      const saved = list.find((row: { title: string }) => row.title === title);
+      expect(saved).toMatchObject({ technique: "state_testing", reviewViews: ["negative"] });
+      createdId = saved.id;
+    } finally {
+      if (createdId) await api.delete(`/api/projects/${ctx.projectId}/testcases/${createdId}`, { failOnStatusCode: false });
       await api.dispose();
     }
   });

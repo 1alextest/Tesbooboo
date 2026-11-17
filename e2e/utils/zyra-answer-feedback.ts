@@ -50,12 +50,19 @@ export async function seedAnswerRepository(request: APIRequestContext, base: str
   } });
   expect(created.status(), await created.text()).toBe(201);
   const caseId = (await created.json()).id;
-  // Same queued->pending + prior queued-version boundary established by the review-close smoke.
+  // A baseline with real history. Before V150 the embedding-status transitions created a version
+  // row here; that bookkeeping is now excluded, so seed one genuine authored revision and keep the
+  // assertion below meaningful: the answer turn must preserve existing history, not pass on an
+  // empty snapshot.
+  const edited = await request.put(`${base}/testcases/${caseId}`, {
+    data: { description: "An existing case, not output of this answer (authored baseline)" }
+  });
+  expect(edited.ok(), await edited.text()).toBeTruthy();
+  // Same queued->pending boundary established by the review-close smoke. V150 no longer records
+  // the transient queued state in testcase_versions, so embedding_queued_at is the durable signal.
   await expect.poll(async () => {
     const snapshot = await state();
-    return snapshot.cases.some((row) => row.id === caseId && row.embedding_status === "pending") &&
-      snapshot.history.some((version) => version.testcase_id === caseId &&
-        (version.snapshot as Record<string, unknown>)?.embedding_status === "queued");
+    return snapshot.cases.some((row) => row.id === caseId && row.embedding_status === "pending" && row.embedding_queued_at != null);
   }, { message: "keyless fixture embedding bookkeeping must finish before the immutable baseline" }).toBe(true);
 }
 

@@ -4520,9 +4520,11 @@ test.describe("zyra / agents (UI)", () => {
         await verifyZyraReviewCloseFeedback({
           page, request: api, taskUrl: `${requestBase}/agents/zyra/tasks/${taskId}`, language, saveFirst,
           settleSavedCases: async (ids) => {
+            // Embedding bookkeeping no longer writes testcase_versions (V150 excludes it), so the
+            // durable "the enqueue happened, and the keyless worker put it back to pending" signal
+            // is embedding_queued_at, which the enqueue sets and the worker never clears.
             await expect.poll(() => Number(scalar(`SELECT COUNT(*) FROM testcases t
-              WHERE t.id=ANY(ARRAY[${ids.map(literal).join(",")}]::uuid[]) AND t.embedding_status='pending' AND EXISTS
-                (SELECT 1 FROM testcase_versions v WHERE v.testcase_id=t.id AND v.snapshot->>'embedding_status'='queued');`)),
+              WHERE t.id=ANY(ARRAY[${ids.map(literal).join(",")}]::uuid[]) AND t.embedding_status='pending' AND t.embedding_queued_at IS NOT NULL;`)),
             { message: "keyless save embedding bookkeeping must finish before the close baseline" }).toBe(ids.length);
           },
           repositorySnapshot: async () => scalar(`SELECT jsonb_build_object(
