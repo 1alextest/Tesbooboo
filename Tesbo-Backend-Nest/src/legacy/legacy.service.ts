@@ -10211,7 +10211,7 @@ export class LegacyService implements OnModuleInit {
         WHERE t.project_id = $1 AND t.deleted_at IS NULL AND t.priority = 'P1'
           AND NOT EXISTS (
             SELECT 1 FROM cycle_items ci
-              JOIN executions e ON e.cycle_item_id = ci.id
+              JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
              WHERE ci.testcase_id = t.id AND ci.deleted_at IS NULL
                AND e.status IS NOT NULL AND e.status <> 'Untested'
           )`,
@@ -10243,7 +10243,7 @@ export class LegacyService implements OnModuleInit {
                   LAG(e.status) OVER (PARTITION BY ci.testcase_id ORDER BY c.created_at, c.id, ci.created_at, ci.id) AS prev
              FROM cycles c
              JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.deleted_at IS NULL
-             JOIN executions e ON e.cycle_item_id = ci.id
+             JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
             WHERE c.project_id = $1 AND c.deleted_at IS NULL
               AND e.status IS NOT NULL AND e.status <> 'Untested'
          ) s
@@ -10267,7 +10267,7 @@ export class LegacyService implements OnModuleInit {
               COALESCE(s.name, 'Unassigned') AS suite_name,
               e.status, c.name AS run_name
        FROM cycle_items ci
-       JOIN executions e ON e.cycle_item_id = ci.id
+       JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
        JOIN cycles c ON c.id = ci.cycle_id
        LEFT JOIN testcases t ON t.id = ci.testcase_id
        LEFT JOIN suites s ON s.id = COALESCE(ci.snapshot_suite_id, t.suite_id) AND s.deleted_at IS NULL

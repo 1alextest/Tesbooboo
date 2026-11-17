@@ -169,8 +169,8 @@ jobs:
           # api/reports.spec.ts was not referenced by any workflow, so its old zero-stub
           # assertions had never actually run. Select only the per-run summary contract; the full
           # report matrix builds eleven runs and is exercised elsewhere.
-          npx playwright test -c playwright.config.ts api/reports.spec.ts --workers=10 --output=test-results-reports -g "RPT-A-47|RPT-A-48" --list
-          npx playwright test -c playwright.config.ts api/reports.spec.ts --workers=10 --output=test-results-reports -g "RPT-A-47|RPT-A-48"
+          npx playwright test -c playwright.config.ts api/reports.spec.ts --workers=10 --output=test-results-reports -g "RPT-A-47|RPT-A-48|RPT-A-73" --list
+          npx playwright test -c playwright.config.ts api/reports.spec.ts --workers=10 --output=test-results-reports -g "RPT-A-47|RPT-A-48|RPT-A-73"
       - name: Verify requirement matrix bug provenance
         working-directory: e2e
         env:
