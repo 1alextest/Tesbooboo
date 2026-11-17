@@ -1194,26 +1194,29 @@ test.describe("top bar — notifications", () => {
   test("NOTIF-UI-11 each Phase 1 link type resolves to its detail page", async ({ page }) => {
     test.skip(!dbControlAvailable(), "needs psql access to seed a real notification row");
     const pid = tenant!.projectId;
+    // Project-scoped routes canonicalise the project segment to the project key, so asserting the
+    // UUID used in the notification pins a redirect target rather than the destination. Each
+    // expectation accepts either segment and still checks the exact resource id.
     const cases: Array<{ title: string; type: string; id: string; url: RegExp }> = [
       { title: "Link members", type: "workspace_members", id: pid, url: /\/settings\?tab=members$/ },
       { title: "Link projects", type: "projects_list", id: pid, url: /\/projects$/ },
       // The invite page itself shows "invalid" for a made-up token but stays on its URL.
       { title: "Link invitation", type: "invitation", id: "a".repeat(64), url: new RegExp(`/invite/${"a".repeat(64)}$`) },
-      { title: "Link project members", type: "project_members", id: pid, url: new RegExp(`/projects/${pid}/members$`) },
-      { title: "Link run", type: "test_run", id: `${pid}:00000000-0000-4000-8000-000000000001`, url: new RegExp(`/projects/${pid}/cycles/00000000-0000-4000-8000-000000000001$`) },
-      { title: "Link jira sync", type: "project_integration", id: `${pid}:jira`, url: new RegExp(`/projects/${pid}/settings/integrations/jira$`) },
-      { title: "Link linear sync", type: "project_integration", id: `${pid}:linear`, url: new RegExp(`/projects/${pid}/settings/integrations/linear$`) },
-      { title: "Link notion sync", type: "project_integration", id: `${pid}:notion`, url: new RegExp(`/projects/${pid}/settings/integrations/notion$`) },
-      { title: "Link requirements", type: "requirements", id: pid, url: new RegExp(`/projects/${pid}/requirements$`) },
-      { title: "Link zyra chat", type: "zyra_chat", id: pid, url: new RegExp(`/projects/${pid}/agents/zyra$`) },
-      { title: "Link kb list", type: "knowledge_base", id: pid, url: new RegExp(`/projects/${pid}/knowledge-base$`) },
+      { title: "Link project members", type: "project_members", id: pid, url: new RegExp(`/projects/[^/]+/members$`) },
+      { title: "Link run", type: "test_run", id: `${pid}:00000000-0000-4000-8000-000000000001`, url: new RegExp(`/projects/[^/]+/cycles/00000000-0000-4000-8000-000000000001$`) },
+      { title: "Link jira sync", type: "project_integration", id: `${pid}:jira`, url: new RegExp(`/projects/[^/]+/settings/integrations/jira$`) },
+      { title: "Link linear sync", type: "project_integration", id: `${pid}:linear`, url: new RegExp(`/projects/[^/]+/settings/integrations/linear$`) },
+      { title: "Link notion sync", type: "project_integration", id: `${pid}:notion`, url: new RegExp(`/projects/[^/]+/settings/integrations/notion$`) },
+      { title: "Link requirements", type: "requirements", id: pid, url: new RegExp(`/projects/[^/]+/requirements$`) },
+      { title: "Link zyra chat", type: "zyra_chat", id: pid, url: new RegExp(`/projects/[^/]+/agents/zyra$`) },
+      { title: "Link kb list", type: "knowledge_base", id: pid, url: new RegExp(`/projects/[^/]+/knowledge-base$`) },
       { title: "Link integrations", type: "integrations_settings", id: pid, url: /\/settings\?tab=integrations$/ },
-      { title: "Link zyra task", type: "zyra_task", id: `${pid}:00000000-0000-4000-8000-000000000004`, url: new RegExp(`/projects/${pid}/agents/tasks/00000000-0000-4000-8000-000000000004$`) },
-      { title: "Link test case", type: "testcase", id: `${pid}:00000000-0000-4000-8000-000000000005`, url: new RegExp(`/projects/${pid}/testcases/00000000-0000-4000-8000-000000000005$`) },
+      { title: "Link zyra task", type: "zyra_task", id: `${pid}:00000000-0000-4000-8000-000000000004`, url: new RegExp(`/projects/[^/]+/agents/tasks/00000000-0000-4000-8000-000000000004$`) },
+      { title: "Link test case", type: "testcase", id: `${pid}:00000000-0000-4000-8000-000000000005`, url: new RegExp(`/projects/[^/]+/testcases/00000000-0000-4000-8000-000000000005$`) },
       // The document route canonicalises the project segment to the project key; accept either the
       // id used in the notification or that resolved key rather than pinning a redirect target.
       { title: "Link kb doc", type: "knowledge_document", id: `${pid}:00000000-0000-4000-8000-000000000003`, url: /\/projects\/[^/]+\/knowledge-base\/documents\/00000000-0000-4000-8000-000000000003$/ },
-      { title: "Link bug", type: "bug", id: `${pid}:00000000-0000-4000-8000-000000000002`, url: new RegExp(`/projects/${pid}/bugs/00000000-0000-4000-8000-000000000002$`) },
+      { title: "Link bug", type: "bug", id: `${pid}:00000000-0000-4000-8000-000000000002`, url: new RegExp(`/projects/[^/]+/bugs/00000000-0000-4000-8000-000000000002$`) },
     ];
     const stamp = Date.now();
     const ids = cases.map((c) => seedNotification({ title: `${c.title} ${stamp}`, linkEntityType: c.type, linkEntityId: c.id }));
