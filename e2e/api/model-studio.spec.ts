@@ -39,6 +39,17 @@ test.describe("persisted Model Studio revisions and mappings", () => {
       const read = await (await owner.get(`${base}/${modelId}`)).json();
       expect(read.revisions).toHaveLength(1);
       expect(read.revisions[0].contentHash).toBe(first.contentHash);
+      expect(read.revisions[0].preview).toMatchObject({
+        modelId,
+        modelRevisionId: first.id,
+        definition: { initialStateId: "start" }
+      });
+      expect(read.revisions[0].preview.states).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "start", reachable: true }),
+          expect.objectContaining({ id: "done", reachable: true })
+        ])
+      );
 
       const secondModel = {
         ...MODEL,

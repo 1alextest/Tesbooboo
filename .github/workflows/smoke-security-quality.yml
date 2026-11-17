@@ -122,8 +122,8 @@ jobs:
         env:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-model-studio
         run: |
-          npx playwright test -c playwright.config.ts api/model-studio.spec.ts --workers=10 --output=test-results-model-studio --list
-          npx playwright test -c playwright.config.ts api/model-studio.spec.ts --workers=10 --output=test-results-model-studio
+          npx playwright test -c playwright.config.ts api/model-studio.spec.ts ui/model-studio.spec.ts --workers=10 --output=test-results-model-studio --list
+          npx playwright test -c playwright.config.ts api/model-studio.spec.ts ui/model-studio.spec.ts --workers=10 --output=test-results-model-studio
       - name: Verify fresh MCP catalog and canonical QA fields on isolated backend
         working-directory: e2e
         env:
