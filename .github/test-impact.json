@@ -1,0 +1,285 @@
+{
+  "version": 1,
+  "policy": "Starting point: CLAUDE.md impacted-area rules, corrected against development 677aafaa. Plans means Test Plans, not subscription entitlements. Broad selections are conservative review obligations, not proof of semantic coverage, execution, or an instruction to edit all affected areas.",
+  "checks": {
+    "architecture-quality": {
+      "workflow": ".github/workflows/core-quality.yml",
+      "job": "architecture-quality",
+      "description": "Root quality-tool tests and dependency security, dependency graph/boundaries, frozen lint policy, new production duplication and static impact evidence. No runtime test proof is implied.",
+      "evidence": ["package.json", ".dependency-cruiser.cjs", ".jscpd.json", ".github/test-impact.json", "scripts/check-architecture.mjs", "scripts/check-architecture.test.mjs", "scripts/check-duplication.mjs", "scripts/check-duplication.test.mjs", "scripts/check-quality-policy.mjs", "scripts/check-quality-policy.test.mjs", "scripts/git-quality.mjs", "scripts/test-impact.mjs", "scripts/test-impact.test.mjs"]
+    },
+    "backend-quality": {
+      "workflow": ".github/workflows/core-quality.yml",
+      "job": "backend-quality",
+      "description": "Backend typecheck, lint baseline, dependency security, build and existing Jest regressions.",
+      "evidence": ["Tesbo-Backend-Nest/package.json", "Tesbo-Backend-Nest/jest.config.js", "scripts/backend-toolchain-security.test.mjs"]
+    },
+    "frontend-quality": {
+      "workflow": ".github/workflows/core-quality.yml",
+      "job": "frontend-quality",
+      "description": "Frontend lint baseline, dependency security, typecheck, offline regressions and build.",
+      "evidence": ["Tesbo-Frontend/package.json", "scripts/frontend-content-security.test.mjs", "scripts/document-write-queue.test.mjs", "scripts/mcp-connection-check.test.mjs", "scripts/mcp-deploy-check.test.mjs"]
+    },
+    "sdk-quality": {
+      "workflow": ".github/workflows/core-quality.yml",
+      "job": "sdk-quality",
+      "description": "Reporter typecheck, build, existing SDK tests and packed/installed-tarball CommonJS, ESM and TypeScript consumer contracts.",
+      "evidence": ["sdk/playwright-reporter/package.json", "sdk/playwright-reporter/src/index.test.ts", "sdk/playwright-reporter/src/cli.test.ts", "sdk/playwright-reporter/src/config.test.ts", "sdk/playwright-reporter/scripts/package-consumer.cjs", "sdk/playwright-reporter/scripts/package-consumer.test.cjs", "sdk/playwright-reporter/test-support/consumer/consumer.cjs", "sdk/playwright-reporter/test-support/consumer/consumer.mjs", "sdk/playwright-reporter/test-support/consumer/consumer.cts", "sdk/playwright-reporter/test-support/consumer/consumer.mts"]
+    },
+    "database-integrity": {
+      "workflow": ".github/workflows/behavioral-quality.yml",
+      "job": "database-integrity",
+      "description": "Migrated disposable CI database, migration idempotence, schema/audit invariants and database regressions. Selection does not authorize any database run.",
+      "evidence": ["Tesbo-Backend-Nest/scripts/ci/check-db-integrity.cjs", "Tesbo-Backend-Nest/src/legacy/execution-attribution.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/run-status-atomic.db.spec.ts", "Tesbo-Backend-Nest/src/automation/automation-closure.db.spec.ts", "Tesbo-Backend-Nest/src/automation/automation-retry-ordering.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/knowledge-document-writes.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/repository-partial-edits.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/bug-metadata-writes.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/plan-project-lineage.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/approved-run-cases.db.spec.ts", "Tesbo-Backend-Nest/src/legacy/suite-project-isolation.db.spec.ts", "Tesbo-Backend-Nest/src/behavior-graph/current-cache-schema.db.spec.ts", "Tesbo-Backend-Nest/src/behavior-graph/current-cache-graph.reader.db.spec.ts", "Tesbo-Backend-Nest/src/behavior-graph/current-cache-graph.auth.db.spec.ts", "Tesbo-Backend-Nest/src/behavior-graph/current-cache-provider-identity.db.spec.ts", "Tesbo-Backend-Nest/src/behavior-graph/current-cache-graph.history.db.spec.ts"]
+    },
+    "api-mcp-contracts": {
+      "workflow": ".github/workflows/behavioral-quality.yml",
+      "job": "api-mcp-contracts",
+      "description": "Nest HTTP bearer/REST and MCP contracts. Review Board HTTP suite in this job is opt-in and skips without its dedicated DB/Redis variables.",
+      "evidence": ["Tesbo-Backend-Nest/src/auth/api-token-rest.integration.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token-rest.guard.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token.service.spec.ts", "Tesbo-Backend-Nest/src/mcp/mcp.service.spec.ts", "Tesbo-Backend-Nest/src/review-board/review-board.http.integration.spec.ts"]
+    },
+    "transactional-concurrency": {
+      "workflow": ".github/workflows/behavioral-quality.yml",
+      "job": "transactional-concurrency",
+      "description": "Concurrent transitions, Zyra traces and integration sync. Review Board integration suite skips without its dedicated database variable.",
+      "evidence": ["Tesbo-Backend-Nest/src/legacy/zyra-plan-concurrency.spec.ts", "Tesbo-Backend-Nest/src/legacy/zyra-turn-trace.spec.ts", "Tesbo-Backend-Nest/src/integration-sync/integration-sync.processor.spec.ts", "Tesbo-Backend-Nest/src/review-board/review-board.integration.spec.ts"]
+    },
+    "authorization": {
+      "workflow": ".github/workflows/api-token-boundary.yml",
+      "job": "authorization",
+      "description": "API token authorization boundary. Path-filtered CI must actually schedule this check when required.",
+      "evidence": ["Tesbo-Backend-Nest/src/auth/auth.middleware.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token.service.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token-rest.guard.spec.ts", "Tesbo-Backend-Nest/src/auth/api-token-rest.integration.spec.ts", "Tesbo-Backend-Nest/src/mcp/mcp.service.spec.ts"]
+    },
+    "playwright-smoke": {
+      "workflow": ".github/workflows/smoke-security-quality.yml",
+      "job": "playwright-smoke",
+      "description": "Isolated-stack CI smoke and workflow-selected native API/UI/MCP/reporter journeys. This job does not execute every spec selected by this planner.",
+      "evidence": ["e2e/ci-smoke.spec.ts", "e2e/playwright.ci-smoke.config.ts"]
+    },
+    "reporter-safety": {
+      "workflow": ".github/workflows/repository-secret-guard.yml",
+      "job": "reporter-safety",
+      "description": "Typecheck existing Playwright test sources with the reporter disabled, without importing runtime fixtures.",
+      "evidence": ["e2e/package.json", "e2e/tsconfig.json"]
+    },
+    "migration-names": {
+      "workflow": ".github/workflows/ci-hygiene.yml",
+      "job": "migration-names",
+      "description": "SQL migration numbering, non-empty migration guard and append-only history against the verified merge base.",
+      "evidence": ["scripts/check-migrations.mjs", "scripts/check-migrations.test.mjs"]
+    },
+    "workflow-lint": {
+      "workflow": ".github/workflows/ci-hygiene.yml",
+      "job": "workflow-lint",
+      "description": "Existing actionlint workflow validation.",
+      "evidence": []
+    },
+    "container-security": {
+      "workflow": ".github/workflows/smoke-security-quality.yml",
+      "job": "container-security",
+      "description": "Backend image build and existing container vulnerability gate.",
+      "evidence": ["Tesbo-Backend-Nest/Dockerfile"]
+    }
+  },
+  "domains": {
+    "test-harness": {
+      "description": "Shared E2E provisioning, utilities, fixtures, runner configuration and dependency graph affect every selected domain.",
+      "specs": ["e2e/ci-smoke.spec.ts"],
+      "checks": ["reporter-safety", "playwright-smoke"]
+    },
+    "database": {
+      "description": "Shared persistence, numbered migration runner, schema/transaction invariants and native reader/writer compatibility.",
+      "specs": ["e2e/api/health.spec.ts", "e2e/api/workspaces.spec.ts", "e2e/api/testcases.spec.ts", "e2e/api/executions.spec.ts", "e2e/ci-smoke.spec.ts"],
+      "checks": ["backend-quality", "database-integrity", "migration-names", "playwright-smoke"]
+    },
+    "identity": {
+      "description": "Sessions, signup, account recovery, bearer credentials and authorization.",
+      "specs": ["e2e/api/auth.spec.ts", "e2e/api/authorization.spec.ts", "e2e/api/rbac.spec.ts", "e2e/api/signup.spec.ts", "e2e/api/project-keys.spec.ts", "e2e/ui/auth.spec.ts", "e2e/ui/login-redirect.spec.ts", "e2e/ui/signup.spec.ts", "e2e/ui/account.spec.ts", "e2e/regression/ui/tickets-auth-forms.spec.ts", "e2e/regression/ui/tickets-account.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "authorization", "api-mcp-contracts", "playwright-smoke"]
+    },
+    "membership": {
+      "description": "Workspace/project identity, roles, invitations, access and tenant isolation.",
+      "specs": ["e2e/api/workspaces.spec.ts", "e2e/api/workspace-setup.spec.ts", "e2e/api/projects.spec.ts", "e2e/api/project-access.spec.ts", "e2e/api/invitations.spec.ts", "e2e/api/rbac.spec.ts", "e2e/api/authorization.spec.ts", "e2e/ui/members.spec.ts", "e2e/ui/projects.spec.ts", "e2e/ui/projects-list.spec.ts", "e2e/regression/ui/tickets-members.spec.ts", "e2e/regression/ui/tickets-project-settings.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "authorization", "api-mcp-contracts", "playwright-smoke"]
+    },
+    "entitlements": {
+      "description": "Subscription lifecycle, limits and project write locks. api/plans is retained from CLAUDE but is Test Plans coverage, not billing proof.",
+      "specs": ["e2e/api/billing-lifecycle.spec.ts", "e2e/api/billing.spec.ts", "e2e/ui/billing.spec.ts", "e2e/api/plans.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "api-mcp-contracts", "playwright-smoke"]
+    },
+    "testcases": {
+      "description": "Repository case authoring, revisions, filtering, bulk edits and suites.",
+      "specs": ["e2e/api/testcases.spec.ts", "e2e/api/suites.spec.ts", "e2e/ui/testcases.spec.ts", "e2e/ui/testcases-repository.spec.ts", "e2e/ui/testcases-pagination.spec.ts", "e2e/ui/list-pagination.spec.ts", "e2e/regression/api/tickets-suites.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "database-integrity", "playwright-smoke"]
+    },
+    "plans": {
+      "description": "Test Plan composition and Plan/Run/project lineage, not subscription plans.",
+      "specs": ["e2e/api/plans.spec.ts", "e2e/api/cycles.spec.ts", "e2e/ui/plans.spec.ts", "e2e/ui/cycles.spec.ts", "e2e/regression/ui/tickets-plans.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "database-integrity", "playwright-smoke"]
+    },
+    "executions": {
+      "description": "Runs, attribution, result transitions, approved case attachment and evidence.",
+      "specs": ["e2e/api/cycles.spec.ts", "e2e/api/executions.spec.ts", "e2e/api/execution-ops.spec.ts", "e2e/api/run-approval.spec.ts", "e2e/ui/cycles.spec.ts", "e2e/ui/executions.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "database-integrity", "transactional-concurrency", "playwright-smoke"]
+    },
+    "bugs": {
+      "description": "Bugs, case/run links, metadata, discussion and evidence.",
+      "specs": ["e2e/api/bugs.spec.ts", "e2e/api/executions.spec.ts", "e2e/api/attachments.spec.ts", "e2e/ui/bugs.spec.ts", "e2e/regression/ui/tickets-bugs.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "database-integrity", "playwright-smoke"]
+    },
+    "knowledge": {
+      "description": "Knowledge documents, history, comments, file extraction and original bytes.",
+      "specs": ["e2e/api/knowledge-base.spec.ts", "e2e/api/kb-comments.spec.ts", "e2e/api/kb-files.spec.ts", "e2e/ui/knowledge-base.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "database-integrity", "playwright-smoke"]
+    },
+    "rag": {
+      "description": "Embedding ingestion/index/retrieval and downstream Zyra context.",
+      "specs": ["e2e/api/kb-embeddings.spec.ts", "e2e/api/testcase-embeddings.spec.ts", "e2e/api/zyra.spec.ts", "e2e/api/zyra-chat-consistency.spec.ts", "e2e/ui/zyra.spec.ts"],
+      "checks": ["backend-quality", "transactional-concurrency", "playwright-smoke"]
+    },
+    "integrations": {
+      "description": "External requirements, provider mirrors, OAuth, sync queue and recovery.",
+      "specs": ["e2e/api/integrations.spec.ts", "e2e/api/knowledge-base.spec.ts", "e2e/ui/integrations.spec.ts", "e2e/ui/requirements.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "transactional-concurrency", "playwright-smoke"]
+    },
+    "zyra": {
+      "description": "Native assistant, staged generation, review, task state and archive worker.",
+      "specs": ["e2e/api/zyra.spec.ts", "e2e/api/zyra-chat-consistency.spec.ts", "e2e/ui/zyra.spec.ts", "e2e/regression/api/tickets-zyra.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "transactional-concurrency", "playwright-smoke"]
+    },
+    "review-board": {
+      "description": "Duplicate review service, HTTP adapter, BullMQ processor and native review UI.",
+      "specs": ["e2e/ci-smoke.spec.ts", "e2e/ui/zyra.spec.ts", "e2e/api/testcases.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "api-mcp-contracts", "transactional-concurrency", "playwright-smoke"],
+      "review": ["Review required: review-board.integration.spec.ts needs REVIEW_BOARD_TEST_DATABASE_URL; review-board.http.integration.spec.ts also needs REVIEW_BOARD_TEST_REDIS_URL. Existing behavioral CI jobs omit these and silently skip those suites. Smoke/UI selection is not proof those runtime suites ran; arrange separately authorized evidence without weakening guards."]
+    },
+    "model-studio": {
+      "description": "Behavior graph/source binding, pinned source, comparison, review receipts, persisted models and recovery worker.",
+      "specs": ["e2e/api/model-studio.spec.ts", "e2e/ui/model-studio.spec.ts", "e2e/api/zyra.spec.ts", "e2e/ui/zyra.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "database-integrity", "playwright-smoke"]
+    },
+    "rest": {
+      "description": "Shared REST transport, aliases, entity endpoints and authorization boundaries.",
+      "specs": ["e2e/api/transport.spec.ts", "e2e/api/route-resolve.spec.ts", "e2e/api/tail.spec.ts", "e2e/api/authorization.spec.ts", "e2e/api/rbac.spec.ts"],
+      "checks": ["backend-quality", "api-mcp-contracts", "authorization", "playwright-smoke"]
+    },
+    "mcp": {
+      "description": "MCP discovery, runtime schemas, project credentials and domain service dispatch.",
+      "specs": ["e2e/api/mcp.spec.ts", "e2e/api/project-keys.spec.ts", "e2e/api/authorization.spec.ts", "e2e/api/project-access.spec.ts", "e2e/api/transport.spec.ts"],
+      "checks": ["backend-quality", "authorization", "api-mcp-contracts", "playwright-smoke"]
+    },
+    "automation": {
+      "description": "Reporter ingest, retry ordering, close/result/evidence lifecycle and SDK compatibility.",
+      "specs": ["e2e/api/automation.spec.ts", "e2e/api/transport.spec.ts", "e2e/api/cycles.spec.ts", "e2e/api/executions.spec.ts", "e2e/api/attachments.spec.ts", "e2e/ci-smoke.spec.ts"],
+      "checks": ["backend-quality", "sdk-quality", "database-integrity", "playwright-smoke"]
+    },
+    "reports": {
+      "description": "Insights, public shared Run projections, exports, scheduled analytics and outbound report delivery.",
+      "specs": ["e2e/api/reports.spec.ts", "e2e/api/executions.spec.ts", "e2e/api/import-export.spec.ts", "e2e/ui/reports.spec.ts", "e2e/ui/shared-report.spec.ts", "e2e/regression/api/tickets-reports.spec.ts", "e2e/regression/ui/tickets-reports.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "transactional-concurrency", "playwright-smoke"]
+    },
+    "metadata": {
+      "description": "Custom field definitions/values, tags and filtering consumers.",
+      "specs": ["e2e/api/custom-fields.spec.ts", "e2e/api/custom-field-values.spec.ts", "e2e/api/custom-tags.spec.ts", "e2e/api/testcases.spec.ts", "e2e/ui/custom-fields.spec.ts", "e2e/ui/custom-tags.spec.ts", "e2e/ui/testcases.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "database-integrity", "playwright-smoke"]
+    },
+    "attachments": {
+      "description": "Storage, uploads/downloads, execution/Bug attachments and file consumers.",
+      "specs": ["e2e/api/attachments.spec.ts", "e2e/api/kb-files.spec.ts", "e2e/api/automation.spec.ts", "e2e/regression/api/tickets-attachments.spec.ts"],
+      "checks": ["backend-quality", "database-integrity", "playwright-smoke"]
+    },
+    "import-export": {
+      "description": "Case import, export and repository/file-format compatibility.",
+      "specs": ["e2e/api/import-export.spec.ts", "e2e/api/testcases.spec.ts", "e2e/ui/testcase-import.spec.ts", "e2e/ui/testcases.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "database-integrity", "playwright-smoke"]
+    },
+    "notifications": {
+      "description": "Activity/audit projections, notification writers and queued welcome/email delivery.",
+      "specs": ["e2e/api/activity.spec.ts", "e2e/api/notifications.spec.ts", "e2e/api/email-delivery.spec.ts", "e2e/api/invitations.spec.ts", "e2e/api/signup.spec.ts"],
+      "checks": ["backend-quality", "transactional-concurrency", "playwright-smoke"]
+    },
+    "onboarding": {
+      "description": "Workspace setup and onboarding.",
+      "specs": ["e2e/api/onboarding.spec.ts", "e2e/api/workspace-setup.spec.ts", "e2e/api/signup.spec.ts", "e2e/ui/signup.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "playwright-smoke"]
+    },
+    "frontend-shell": {
+      "description": "Shared UI/providers, navigation, dashboards, formatting, theme and frontend API consumers.",
+      "specs": ["e2e/api/projects.spec.ts", "e2e/ui/navigation.spec.ts", "e2e/ui/readable-urls.spec.ts", "e2e/ui/project-dashboard.spec.ts", "e2e/ui/date-time-format.spec.ts", "e2e/ui/theme.spec.ts", "e2e/ui/screens-sweep.spec.ts", "e2e/ui/full-scenario.spec.ts", "e2e/regression/ui/tickets-app-shell.spec.ts", "e2e/regression/ui/tickets-dashboards.spec.ts"],
+      "checks": ["frontend-quality", "playwright-smoke"]
+    },
+    "platform": {
+      "description": "Runtime boot, health, shared configuration and build provenance.",
+      "specs": ["e2e/api/health.spec.ts", "e2e/api/transport.spec.ts", "e2e/ci-smoke.spec.ts"],
+      "checks": ["backend-quality", "frontend-quality", "container-security", "playwright-smoke"]
+    }
+  },
+  "rules": [
+    {"id":"shared-e2e-harness","patterns":["e2e/global-setup.ts","e2e/utils/**","e2e/**/fixtures/**","e2e/**/fixtures.*","e2e/playwright*.config.*","e2e/package*.json"],"domains":["*"],"reason":"Shared E2E provisioning, utilities, fixtures, Playwright configuration and dependencies can invalidate every domain's test evidence; select the full configured cross-system impact set without collecting/importing fixtures."},
+    {"id":"legacy-shared-owner","patterns":["Tesbo-Backend-Nest/src/legacy/legacy.service.ts","Tesbo-Backend-Nest/src/legacy/legacy.controller.ts","Tesbo-Backend-Nest/src/legacy/legacy.module.ts","Tesbo-Backend-Nest/src/legacy/test-helpers/**"],"domains":["*"],"reason":"LegacyService owns many unrelated native domains and their REST/MCP/worker consumers; never map it to Zyra alone."},
+    {"id":"database-shared-owner","patterns":["Tesbo-Backend-Nest/migrations/**","Tesbo-Backend-Nest/src/database/**","Tesbo-Backend-Nest/scripts/ci/**"],"domains":["*"],"reason":"Schema, transactions and migrations can affect every reader/writer; static imports cannot establish table-level impact."},
+    {"id":"backend-auth","patterns":["Tesbo-Backend-Nest/src/auth/**","Tesbo-Backend-Nest/src/legacy/signup*"],"domains":["identity","membership","notifications","onboarding"],"reason":"Existing shared authentication, credentials, account and invitation owners."},
+    {"id":"backend-billing","patterns":["Tesbo-Backend-Nest/src/billing/**","Tesbo-Backend-Nest/src/plan-limits/**"],"domains":["entitlements"],"reason":"Billing lifecycle and project write locks; Test Plans alone cannot verify subscription entitlement."},
+    {"id":"backend-automation","patterns":["Tesbo-Backend-Nest/src/automation/**"],"domains":["automation","executions","attachments"],"reason":"Automation results, retries, closing and evidence reach native Runs and the optional reporter."},
+    {"id":"backend-mcp","patterns":["Tesbo-Backend-Nest/src/mcp/**"],"domains":["mcp","rest","identity","membership"],"reason":"MCP transport/tool schemas dispatch into shared native domain services."},
+    {"id":"backend-graph","patterns":["Tesbo-Backend-Nest/src/behavior-graph/**"],"domains":["model-studio","zyra","testcases","executions"],"reason":"Current development owns graph/source/model review and downstream linked cases/Runs here."},
+    {"id":"backend-review-board","patterns":["Tesbo-Backend-Nest/src/review-board/**"],"domains":["review-board","testcases","entitlements"],"reason":"Review Board processor, service, HTTP adapter and native review consumers need actual DB/Redis evidence."},
+    {"id":"backend-sync-worker","patterns":["Tesbo-Backend-Nest/src/integration-sync/**"],"domains":["integrations","knowledge","zyra","notifications"],"reason":"Provider sync is a worker/persistence/projection path, not only a REST integration."},
+    {"id":"backend-rag-worker","patterns":["Tesbo-Backend-Nest/src/rag/**"],"domains":["rag","knowledge","testcases","zyra"],"reason":"Embedding jobs derive searchable context from KB/cases and feed retrieval."},
+    {"id":"backend-report-worker","patterns":["Tesbo-Backend-Nest/src/analytics-report/**"],"domains":["reports","notifications"],"reason":"Scheduled report delivery consumes native metrics and has external retry/receipt implications."},
+    {"id":"backend-welcome-worker","patterns":["Tesbo-Backend-Nest/src/welcome-email/**"],"domains":["notifications","identity","onboarding"],"reason":"Queue-based welcome delivery depends on signup and account state."},
+    {"id":"backend-archive-worker","patterns":["Tesbo-Backend-Nest/src/zyra-archive-sweep/**"],"domains":["zyra","notifications"],"reason":"Background archive state is consumed by native assistant/task surfaces."},
+    {"id":"backend-kb-worker","patterns":["Tesbo-Backend-Nest/src/legacy/kb-*","Tesbo-Backend-Nest/src/legacy/knowledge-*"],"domains":["knowledge","rag"],"reason":"KB extraction/history and file workers affect document and retrieval consumers."},
+    {"id":"backend-zyra","patterns":["Tesbo-Backend-Nest/src/legacy/zyra-*"],"domains":["zyra","testcases","integrations","rag"],"reason":"Zyra helpers stage and publish through existing case/integration/KB owners."},
+    {"id":"backend-repository","patterns":["Tesbo-Backend-Nest/src/legacy/testcase-*","Tesbo-Backend-Nest/src/legacy/repository-*","Tesbo-Backend-Nest/src/legacy/suite-*"],"domains":["testcases","executions","mcp"],"reason":"Repository edits and suite ownership feed Run attachment and MCP reads/writes."},
+    {"id":"backend-run-plan","patterns":["Tesbo-Backend-Nest/src/legacy/execution-*","Tesbo-Backend-Nest/src/legacy/run-*","Tesbo-Backend-Nest/src/legacy/approved-run-*","Tesbo-Backend-Nest/src/legacy/plan-*","Tesbo-Backend-Nest/src/legacy/manual-evidence-*","Tesbo-Backend-Nest/src/legacy/history-import-*"],"domains":["plans","executions","automation","reports"],"reason":"Plan/Run lineage, approval, historical results and attribution have native/report/SDK consumers."},
+    {"id":"backend-bugs","patterns":["Tesbo-Backend-Nest/src/legacy/bug-*","Tesbo-Backend-Nest/src/legacy/ticket-comment-*"],"domains":["bugs","executions","reports"],"reason":"Bug links and metadata can affect executions and derived reports."},
+    {"id":"backend-integration-helpers","patterns":["Tesbo-Backend-Nest/src/legacy/*integration*"],"domains":["integrations","knowledge","zyra"],"reason":"Legacy tracker/connection helpers serve provider mirror and native assistant consumers."},
+    {"id":"backend-notifications","patterns":["Tesbo-Backend-Nest/src/audit/**","Tesbo-Backend-Nest/src/legacy/notification-*"],"domains":["notifications","reports"],"reason":"Activity/audit is consumed across notifications and report projections."},
+    {"id":"backend-membership","patterns":["Tesbo-Backend-Nest/src/legacy/team-*","Tesbo-Backend-Nest/src/legacy/multi-workspace*"],"domains":["membership","identity"],"reason":"Tenant/membership identity must retain cross-project denial coverage."},
+    {"id":"backend-metadata","patterns":["Tesbo-Backend-Nest/src/custom-fields/**","Tesbo-Backend-Nest/src/custom-tags/**"],"domains":["metadata","testcases","mcp"],"reason":"Custom definitions/values are shared case filters and transport contracts."},
+    {"id":"backend-storage","patterns":["Tesbo-Backend-Nest/src/storage/**"],"domains":["attachments","knowledge","automation","reports"],"reason":"Private bytes and evidence have multiple upload/download consumers."},
+    {"id":"backend-cache-common","patterns":["Tesbo-Backend-Nest/src/cache/**","Tesbo-Backend-Nest/src/request-cache/**","Tesbo-Backend-Nest/src/common/**"],"domains":["*"],"reason":"Shared cache, DTO, crypto and common helpers require conservative cross-domain selection without a table/contract dependency proof."},
+    {"id":"backend-platform","patterns":["Tesbo-Backend-Nest/src/config/**","Tesbo-Backend-Nest/src/admin/**","Tesbo-Backend-Nest/src/health/**","Tesbo-Backend-Nest/src/main.ts","Tesbo-Backend-Nest/src/app.module.ts","Tesbo-Backend-Nest/src/build-provenance*"],"domains":["platform","identity","rest","mcp"],"reason":"Boot/configuration, admin and health can alter exposed services and shared transport policy."},
+    {"id":"backend-setup","patterns":["Tesbo-Backend-Nest/src/setup/**"],"domains":["onboarding","membership"],"reason":"Setup provisions the workspace/project identity used by native journeys."},
+    {"id":"backend-observability","patterns":["Tesbo-Backend-Nest/src/observability/**"],"domains":["zyra","rag","platform"],"reason":"Tracing is shared by AI/embedding paths; graph closure may add callers, and selection is not tracing delivery proof."},
+    {"id":"backend-package-runtime","patterns":["Tesbo-Backend-Nest/package*.json","Tesbo-Backend-Nest/tsconfig*.json","Tesbo-Backend-Nest/*config.*","Tesbo-Backend-Nest/nest-cli.json","Tesbo-Backend-Nest/Dockerfile","Tesbo-Backend-Nest/.dockerignore","Tesbo-Backend-Nest/.env.example"],"domains":["*"],"reason":"Backend dependency/build/runtime configuration can affect all service entry points."},
+    {"id":"frontend-auth","patterns":["Tesbo-Frontend/app/login/**","Tesbo-Frontend/app/signup/**","Tesbo-Frontend/app/forgot-password/**","Tesbo-Frontend/app/reset-password/**","Tesbo-Frontend/app/verify-otp/**","Tesbo-Frontend/app/complete-profile/**","Tesbo-Frontend/app/invite/**","Tesbo-Frontend/app/(app)/account/**","Tesbo-Frontend/components/auth/**","Tesbo-Frontend/lib/useLogout.ts","Tesbo-Frontend/lib/redirect.ts"],"domains":["identity","membership"],"reason":"Auth/account screens exercise both browser and shared API/session outcomes."},
+    {"id":"frontend-membership","patterns":["Tesbo-Frontend/app/(app)/settings/members/**","Tesbo-Frontend/app/(app)/settings/project-access/**","Tesbo-Frontend/app/(app)/projects/[id]/members/**","Tesbo-Frontend/components/settings/MembersTab.tsx","Tesbo-Frontend/components/settings/AdminsTab.tsx","Tesbo-Frontend/components/WorkspaceSwitcher.tsx","Tesbo-Frontend/lib/workspaceRoles.ts"],"domains":["membership","identity"],"reason":"Workspace/project roles and switching must preserve tenant identity."},
+    {"id":"frontend-billing","patterns":["Tesbo-Frontend/components/PricingModal.tsx","Tesbo-Frontend/components/settings/BillingTab.tsx"],"domains":["entitlements"],"reason":"Subscription UI needs billing lifecycle/API and write-lock checks, not only Test Plans."},
+    {"id":"frontend-repository","patterns":["Tesbo-Frontend/app/(app)/projects/[id]/testcases/**","Tesbo-Frontend/app/(app)/projects/[id]/suites/**","Tesbo-Frontend/components/testcases/**","Tesbo-Frontend/components/TestCaseRunPicker.tsx","Tesbo-Frontend/lib/tsv.ts"],"domains":["testcases","executions","import-export"],"reason":"Existing repository/suite views send native case and Run requests."},
+    {"id":"frontend-plans","patterns":["Tesbo-Frontend/app/(app)/projects/[id]/plans/**","Tesbo-Frontend/components/testplans/**"],"domains":["plans","executions"],"reason":"These are Test Plans and Run lineage, not subscription plans."},
+    {"id":"frontend-runs","patterns":["Tesbo-Frontend/app/(app)/projects/[id]/cycles/**","Tesbo-Frontend/components/testruns/**","Tesbo-Frontend/components/ExecutionEvidencePanel.tsx","Tesbo-Frontend/components/AutomationResultMeta.tsx","Tesbo-Frontend/lib/executionMetrics.ts"],"domains":["executions","automation","attachments","bugs","reports"],"reason":"Native execution surfaces share result, evidence, Bug and reporting semantics."},
+    {"id":"frontend-bugs","patterns":["Tesbo-Frontend/app/(app)/projects/[id]/bugs/**","Tesbo-Frontend/components/bugs/**","Tesbo-Frontend/components/LogBugDialog.tsx","Tesbo-Frontend/components/BugEvidenceField.tsx","Tesbo-Frontend/components/SelfLoggedTrackerField.tsx","Tesbo-Frontend/components/TrackingDestinationField.tsx","Tesbo-Frontend/components/IssuePickerModal.tsx"],"domains":["bugs","executions","integrations"],"reason":"Bug submission/links must preserve persisted execution state and external tracker selection."},
+    {"id":"frontend-knowledge","patterns":["Tesbo-Frontend/app/(app)/projects/[id]/knowledge-base/**","Tesbo-Frontend/components/knowledge-base/**","Tesbo-Frontend/lib/knowledge-permissions.ts","Tesbo-Frontend/lib/documentWriteQueue.ts","Tesbo-Frontend/lib/fileViewer.ts","Tesbo-Frontend/lib/markdown.ts","Tesbo-Frontend/lib/commentMarkdown.ts"],"domains":["knowledge","rag"],"reason":"Document editing, history, file bytes and retrieval share the existing KB owner."},
+    {"id":"frontend-integrations","patterns":["Tesbo-Frontend/app/(app)/projects/[id]/requirements/**","Tesbo-Frontend/app/(app)/projects/[id]/settings/integrations/**","Tesbo-Frontend/app/(app)/settings/integrations/**","Tesbo-Frontend/app/integrations/**","Tesbo-Frontend/components/integrations/**","Tesbo-Frontend/components/settings/IntegrationsTab.tsx","Tesbo-Frontend/lib/useIntegrationOAuthConnect.ts"],"domains":["integrations","knowledge","zyra"],"reason":"Requirements/provider setup consumes sync and mirror state as well as HTTP responses."},
+    {"id":"frontend-agents","patterns":["Tesbo-Frontend/app/(app)/projects/[id]/agents/**","Tesbo-Frontend/components/agents/**","Tesbo-Frontend/lib/zyra*"],"domains":["zyra","testcases","integrations"],"reason":"Agent/chat/task/review UI uses native staged generation and publication flows."},
+    {"id":"frontend-review-board","patterns":["Tesbo-Frontend/components/agents/Review*","Tesbo-Frontend/lib/reviewBoard.ts"],"domains":["review-board","testcases"],"reason":"Duplicate review UI depends on review service/runtime worker evidence."},
+    {"id":"frontend-models","patterns":["Tesbo-Frontend/app/(app)/projects/[id]/agents/zyra/changes/**","Tesbo-Frontend/app/(app)/projects/[id]/model-studio/**","Tesbo-Frontend/lib/model-draft-preview.ts"],"domains":["model-studio","zyra","testcases","executions"],"reason":"Current graph/source binding and Model Studio UI have dedicated current-development specs."},
+    {"id":"frontend-reports","patterns":["Tesbo-Frontend/app/(app)/projects/[id]/reports/**","Tesbo-Frontend/app/share/**","Tesbo-Frontend/components/reports/**"],"domains":["reports","executions"],"reason":"Insights and public share are derived native data/permission projections."},
+    {"id":"frontend-metadata","patterns":["Tesbo-Frontend/app/(app)/projects/[id]/settings/custom-fields/**","Tesbo-Frontend/app/(app)/projects/[id]/settings/custom-tags/**","Tesbo-Frontend/components/customFields/**","Tesbo-Frontend/components/customTags/**","Tesbo-Frontend/components/TagInput.tsx"],"domains":["metadata","testcases"],"reason":"Definition/value UI changes affect case editing and API filters."},
+    {"id":"frontend-import","patterns":["Tesbo-Frontend/components/ImportTestCasesModal.tsx"],"domains":["import-export","testcases"],"reason":"The import modal is an existing case writer, not a separate test owner."},
+    {"id":"frontend-project-settings","patterns":["Tesbo-Frontend/app/(app)/projects/[id]/settings/page.tsx","Tesbo-Frontend/app/(app)/projects/[id]/settings/api-tokens/**","Tesbo-Frontend/app/(app)/settings/page.tsx","Tesbo-Frontend/components/settings/GeneralTab.tsx","Tesbo-Frontend/lib/mcpConnectionCheck.ts"],"domains":["membership","mcp","identity","entitlements"],"reason":"Settings/credential administration has shared identity, access and billing boundaries."},
+    {"id":"frontend-ai-settings","patterns":["Tesbo-Frontend/app/(app)/settings/ai-providers/**","Tesbo-Frontend/components/settings/AiProvidersTab.tsx"],"domains":["zyra","rag","membership","entitlements"],"reason":"Provider settings alter assistant/index behavior and workspace permissions."},
+    {"id":"frontend-activity","patterns":["Tesbo-Frontend/app/(app)/activity/**","Tesbo-Frontend/app/(app)/projects/[id]/activity/**","Tesbo-Frontend/components/activity/**"],"domains":["notifications","reports"],"reason":"Activity renders shared domain/audit projections."},
+    {"id":"frontend-onboarding","patterns":["Tesbo-Frontend/app/onboarding/**","Tesbo-Frontend/app/setup/**"],"domains":["onboarding","identity","membership"],"reason":"Setup UI must retain workspace/project provisioning behavior."},
+    {"id":"frontend-shared-shell","patterns":["Tesbo-Frontend/app/layout.tsx","Tesbo-Frontend/app/global-error.tsx","Tesbo-Frontend/app/globals.css","Tesbo-Frontend/app/page.tsx","Tesbo-Frontend/app/favicon.ico","Tesbo-Frontend/app/privacy-policy/**","Tesbo-Frontend/app/terms-and-conditions/**","Tesbo-Frontend/app/(app)/layout.tsx","Tesbo-Frontend/app/(app)/dashboard/**","Tesbo-Frontend/app/(app)/projects/page.tsx","Tesbo-Frontend/app/(app)/projects/layout.tsx","Tesbo-Frontend/app/(app)/projects/[id]/layout.tsx","Tesbo-Frontend/app/(app)/projects/[id]/page.tsx","Tesbo-Frontend/app/(app)/projects/[id]/dashboard/**","Tesbo-Frontend/components/ui/**","Tesbo-Frontend/components/workflows/**","Tesbo-Frontend/components/app/**","Tesbo-Frontend/components/project/**","Tesbo-Frontend/components/Sidebar.tsx","Tesbo-Frontend/components/TopBar*","Tesbo-Frontend/components/BrandLogo.tsx","Tesbo-Frontend/components/ProjectIconPicker.tsx","Tesbo-Frontend/components/ThemeToggle.tsx","Tesbo-Frontend/components/TraceViewerPanel.tsx","Tesbo-Frontend/components/BetterBugsWidget.tsx","Tesbo-Frontend/components/PostHogIdentify.tsx","Tesbo-Frontend/lib/api.ts","Tesbo-Frontend/lib/pageDataCache.ts","Tesbo-Frontend/lib/projectPrefetch.ts","Tesbo-Frontend/lib/storage.ts","Tesbo-Frontend/lib/routeParams.tsx","Tesbo-Frontend/lib/avatarColors.ts","Tesbo-Frontend/lib/branding.ts","Tesbo-Frontend/lib/countries.ts","Tesbo-Frontend/lib/date.ts","Tesbo-Frontend/lib/phone-dial-codes.ts","Tesbo-Frontend/lib/posthog.ts","Tesbo-Frontend/lib/sentry.ts","Tesbo-Frontend/lib/theme.ts","Tesbo-Frontend/lib/validation.ts"],"domains":["frontend-shell","membership","identity"],"reason":"Known shared frontend owners retain shell/browser and supporting API checks; new unknown modules still require review."},
+    {"id":"frontend-runtime","patterns":["Tesbo-Frontend/package*.json","Tesbo-Frontend/tsconfig*.json","Tesbo-Frontend/*config.*","Tesbo-Frontend/proxy.ts","Tesbo-Frontend/instrumentation*.ts","Tesbo-Frontend/Dockerfile","Tesbo-Frontend/.dockerignore","Tesbo-Frontend/public/**"],"domains":["*"],"reason":"Frontend runtime/dependency/proxy configuration and global assets affect shared routes."},
+    {"id":"sdk-reporter","patterns":["sdk/playwright-reporter/**"],"domains":["automation","executions","attachments","rest"],"reason":"The optional reporter publishes native results/evidence through automation APIs."},
+    {"id":"deployment-runtime","patterns":["docker-compose*.yml","docker.env.example","deploy/**","infra/**","Jenkinsfile*"],"domains":["*"],"reason":"Deployment/runtime wiring can affect backend, web, queues and SDK/transport compatibility."}
+  ],
+  "sharedRisks": [
+    {"id":"shared-schema-risk","patterns":["Tesbo-Backend-Nest/migrations/**","Tesbo-Backend-Nest/src/database/**","Tesbo-Backend-Nest/src/**/entities/**","Tesbo-Backend-Nest/src/**/*.entity.ts","Tesbo-Backend-Nest/src/**/*.dto.ts"],"domains":["*"],"reason":"Additive shared-schema/entity/DTO sweep; missing owning mappings still fail review."},
+    {"id":"shared-identity-risk","patterns":["Tesbo-Backend-Nest/src/auth/**","Tesbo-Backend-Nest/src/**/guards/**","Tesbo-Backend-Nest/src/**/*guard*","Tesbo-Backend-Nest/src/**/*session*","Tesbo-Backend-Nest/src/**/*token*","Tesbo-Backend-Nest/src/**/*membership*","Tesbo-Backend-Nest/src/**/*role*","Tesbo-Frontend/lib/workspaceRoles.ts","Tesbo-Frontend/lib/storage.ts","Tesbo-Frontend/lib/useLogout.ts","Tesbo-Frontend/proxy.ts"],"domains":["*"],"reason":"Shared identity/membership/session/guard changes can affect all tenant, API, MCP, worker and UI entrances."},
+    {"id":"shared-entitlement-risk","patterns":["Tesbo-Backend-Nest/src/plan-limits/**","Tesbo-Backend-Nest/src/billing/**","Tesbo-Backend-Nest/src/**/*entitlement*","Tesbo-Backend-Nest/src/**/*write-lock*","Tesbo-Frontend/components/settings/BillingTab.tsx","Tesbo-Frontend/components/PricingModal.tsx"],"domains":["*"],"reason":"Entitlement/read-only policy is additive across native writers, MCP, automation, workers and UI. Include billing-lifecycle; preserve CLAUDE Test Plans selection."},
+    {"id":"shared-frontend-api-risk","patterns":["Tesbo-Frontend/lib/api.ts","Tesbo-Frontend/lib/pageDataCache.ts","Tesbo-Frontend/lib/projectPrefetch.ts","Tesbo-Frontend/components/app/**","Tesbo-Frontend/components/project/**"],"domains":["*"],"reason":"The shared frontend API/provider/cache path reaches many unrelated screens and their backend endpoint contracts."},
+    {"id":"shared-startup-risk","changedOnly":true,"patterns":["Tesbo-Backend-Nest/src/main.ts","Tesbo-Backend-Nest/src/app.module.ts","Tesbo-Backend-Nest/src/config/**"],"domains":["*"],"reason":"Directly changed boot/policy configuration can alter every registered service, queue and adapter. A passive bootstrap consumer in the import graph alone is not a global registration change."}
+  ],
+  "nonProduct": [
+    {"id":"documentation","patterns":["docs/**","**/*.md","LICENSE","NOTICE","CODE_OF_CONDUCT.md","SECURITY.md","Tesbo-Frontend/visualguideline.txt"],"reason":"Documentation-only path classification; no product verification is claimed.","checks":[]},
+    {"id":"tooling","patterns":["scripts/**",".github/**",".agents/**",".claude/**",".codex/**",".qodo/**",".vscode/**","load/**","reports/quality/**",".dependency-cruiser.*",".jscpd.json","package.json","package-lock.json","skills-lock.json","sonar-project.properties","**/.gitignore","**/.gitattributes",".mcp.json"],"reason":"Repository tools/configuration are not a product execution pass; require their existing architecture/quality-policy checks separately.","checks":["architecture-quality"]},
+    {"id":"workflow-tooling","patterns":[".github/workflows/**"],"reason":"Workflow changes additionally require the existing workflow linter.","checks":["workflow-lint"]},
+    {"id":"e2e-specs-and-scripts","patterns":["e2e/**/*.spec.ts","e2e/scripts/**"],"reason":"Individual E2E specs and reporting scripts are test-only, not product verification. Require existing reporter-safety and smoke checks; shared setup/utils/fixtures/configuration are deliberately NOT exempt.","checks":["reporter-safety","playwright-smoke"]},
+    {"id":"sdk-test-support","patterns":["sdk/playwright-reporter/scripts/**","sdk/playwright-reporter/test-support/**","sdk/playwright-reporter/**/*.test.ts"],"reason":"Reporter tests, helper extraction and packed consumer fixtures are test-only. Require sdk-quality, including installed-tarball consumers; these are not production import-graph nodes.","checks":["sdk-quality"]}
+  ]
+}

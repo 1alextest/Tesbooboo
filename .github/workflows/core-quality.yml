@@ -14,6 +14,57 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  architecture-quality:
+    name: architecture-quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      QUALITY_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --ignore-scripts
+      - name: Root quality-tool dependency security
+        run: npm audit --audit-level=high
+      - name: Prove quality gates with positive and seeded-negative fixtures
+        run: npm run test:quality
+      - name: Analyze architecture and publish the shared dependency graph
+        run: npm run quality:architecture
+      - name: Reject lint-baseline inflation and identify policy-review changes
+        if: ${{ !cancelled() }}
+        run: node scripts/check-quality-policy.mjs --base "$QUALITY_BASE_REF"
+      - name: Reject new substantial production-code copies
+        if: ${{ !cancelled() }}
+        run: npm run quality:duplication -- --base "$QUALITY_BASE_REF"
+      - name: Map cross-system impact without skipping existing test lanes
+        if: ${{ !cancelled() }}
+        run: npm run quality:impact -- --base "$QUALITY_BASE_REF" --graph reports/quality/dependencies.json --output reports/quality/impact.json
+      - name: Publish the static impact plan for review
+        if: ${{ !cancelled() }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { formatMarkdown } from "./scripts/test-impact.mjs";
+          const summary = formatMarkdown(JSON.parse(fs.readFileSync("reports/quality/impact.json", "utf8")));
+          fs.writeFileSync("reports/quality/impact.md", summary);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+          NODE
+      - name: Retain architecture, reuse and impact evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: architecture-impact-evidence
+          if-no-files-found: error
+          retention-days: 14
+          path: reports/quality/
+
   backend-quality:
     name: backend-quality
     runs-on: ubuntu-24.04
@@ -105,3 +156,5 @@ jobs:
         run: npm run build
       - name: SDK tests
         run: npm test
+      - name: SDK installed-tarball consumer contracts
+        run: npm run test:package-consumer

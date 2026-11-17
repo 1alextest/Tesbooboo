@@ -42,6 +42,7 @@ jobs:
       fail-fast: false
       matrix:
         directory:
+          - .
           - Tesbo-Backend-Nest
           - Tesbo-Frontend
           - e2e
