@@ -28,6 +28,14 @@ jobs:
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s --health-timeout 5s --health-retries 15
+      review-board-redis:
+        # The Review Board HTTP suite deliberately refuses any Redis other than a disposable
+        # loopback instance on port 56379, so this job gives it its own throwaway container.
+        image: redis:7-alpine
+        ports: ["56379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 15
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tesbo_ci
       REDIS_URL: redis://localhost:6379
@@ -68,6 +76,23 @@ jobs:
           npm run build
           npm run migrate
           nohup node dist/main.js >/tmp/tesbo-backend.log 2>&1 &
+      - name: Prepare the disposable Review Board database
+        working-directory: Tesbo-Backend-Nest
+        run: |
+          # The Review Board integration suites refuse to run unless the database is loopback and
+          # named rb_test*; create and migrate it on this job's throwaway Postgres service.
+          node -e 'const {Client}=require("pg");(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});await c.connect();await c.query("CREATE DATABASE rb_test");await c.end();})().catch(e=>{console.error(e);process.exit(1)})'
+          RB_URL=$(node -e 'const u=new URL(process.env.DATABASE_URL);u.pathname="/rb_test";process.stdout.write(u.toString())')
+          DATABASE_URL="$RB_URL" npm run migrate
+      - name: Verify Review Board runtime evidence in the disposable stack
+        working-directory: Tesbo-Backend-Nest
+        env:
+          REVIEW_BOARD_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rb_test
+          REVIEW_BOARD_TEST_REDIS_URL: redis://localhost:56379
+        run: |
+          # These suites are the evidence the architecture policy previously reported as missing.
+          # Running them here closes the shared-identity review gap without skipping either suite.
+          npx jest --runInBand src/review-board/review-board.integration.spec.ts src/review-board/review-board.http.integration.spec.ts
       - name: Build isolated web application
         working-directory: Tesbo-Frontend
         run: |

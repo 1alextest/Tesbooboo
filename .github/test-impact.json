@@ -148,10 +148,9 @@
       "checks": ["backend-quality", "frontend-quality", "transactional-concurrency", "playwright-smoke"]
     },
     "review-board": {
-      "description": "Duplicate review service, HTTP adapter, BullMQ processor and native review UI.",
+      "description": "Duplicate review service, HTTP adapter, BullMQ processor and native review UI. Its Postgres/Redis integration suites run in the smoke workflow against the disposable rb_test database and Redis on port 56379.",
       "specs": ["e2e/ci-smoke.spec.ts", "e2e/ui/zyra.spec.ts", "e2e/api/testcases.spec.ts"],
-      "checks": ["backend-quality", "frontend-quality", "api-mcp-contracts", "transactional-concurrency", "playwright-smoke"],
-      "review": ["Review required: review-board.integration.spec.ts needs REVIEW_BOARD_TEST_DATABASE_URL; review-board.http.integration.spec.ts also needs REVIEW_BOARD_TEST_REDIS_URL. Existing behavioral CI jobs omit these and silently skip those suites. Smoke/UI selection is not proof those runtime suites ran; arrange separately authorized evidence without weakening guards."]
+      "checks": ["backend-quality", "frontend-quality", "api-mcp-contracts", "transactional-concurrency", "playwright-smoke"]
     },
     "model-studio": {
       "description": "Behavior graph/source binding, pinned source, comparison, review receipts, persisted models and recovery worker.",
