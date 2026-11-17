@@ -210,6 +210,22 @@ test.describe("persisted Model Studio revisions and mappings", () => {
         one.paths.map((path: { digest: string }) => path.digest)
       );
 
+      // Strategy and bounds are generation inputs too: the same transition sequence under a
+      // different strategy or limit must not reuse the digest.
+      const bounded = await (await owner.post(`${base}/${modelId}/revisions/${revisionId}/generate`, {
+        data: { ...body, maxPaths: 5 }
+      })).json();
+      expect(bounded.paths[0].transitionIds).toEqual(one.paths[0].transitionIds);
+      expect(bounded.paths[0].digest).not.toBe(one.paths[0].digest);
+
+      const shortest = await (await owner.post(`${base}/${modelId}/revisions/${revisionId}/generate`, {
+        data: { ...body, strategy: "shortest_paths" }
+      })).json();
+      const sameSequence = shortest.paths.find(
+        (path: { transitionIds: string[] }) => path.transitionIds.join(">") === one.paths[0].transitionIds.join(">")
+      );
+      expect(sameSequence?.digest, "strategy must be part of the replay digest").not.toBe(one.paths[0].digest);
+
       expect((await owner.post(`${base}/${modelId}/revisions/${revisionId}/generate`, { data: { maxPaths: 0 } })).status()).toBe(400);
       expect((await owner.post(`${base}/${modelId}/revisions/${revisionId}/generate`, { data: { strategy: "nope" } })).status()).toBe(400);
       expect(

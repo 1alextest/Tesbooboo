@@ -102,11 +102,27 @@ function shortestTo(
   return null;
 }
 
-function pathView(transitions: PreviewTransition[], context: { revisionId: string; contentHash: string; seed: string }): GeneratedPath {
+function pathView(
+  transitions: PreviewTransition[],
+  context: { revisionId: string; contentHash: string; seed: string; strategy: GenerationStrategy; maxPaths: number; maxDepth: number }
+): GeneratedPath {
   const transitionIds = transitions.map((transition) => transition.id);
   const stateIds = [transitions[0]?.from, ...transitions.map((transition) => transition.to)].filter(Boolean) as string[];
   const digest = createHash("sha256")
-    .update(JSON.stringify({ revisionId: context.revisionId, contentHash: context.contentHash, seed: context.seed, transitionIds }))
+    .update(
+      JSON.stringify({
+        revisionId: context.revisionId,
+        contentHash: context.contentHash,
+        seed: context.seed,
+        // MBT-C-04: strategy parameters and logical limits are part of the input digest. A digest
+        // that named only the seed could not distinguish the same sequence generated under a
+        // different strategy or bound.
+        strategy: context.strategy,
+        maxPaths: context.maxPaths,
+        maxDepth: context.maxDepth,
+        transitionIds
+      })
+    )
     .digest("hex");
   return { id: `path-${digest.slice(0, 16)}`, transitionIds, stateIds, digest };
 }
@@ -122,7 +138,14 @@ export function generateModelPaths(input: {
   const reachable = reachableStates(definition);
   const transitions = [...definition.transitions].sort(byId);
   const reachableTransitions = transitions.filter((transition) => reachable.has(transition.from));
-  const context = { revisionId, contentHash, seed: options.seed };
+  const context = {
+    revisionId,
+    contentHash,
+    seed: options.seed,
+    strategy: options.strategy,
+    maxPaths: options.maxPaths,
+    maxDepth: options.maxDepth
+  };
   const paths: GeneratedPath[] = [];
   const seen = new Set<string>();
   const add = (sequence: PreviewTransition[]) => {

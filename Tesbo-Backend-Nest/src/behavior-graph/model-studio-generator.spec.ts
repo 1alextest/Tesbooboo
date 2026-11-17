@@ -51,6 +51,18 @@ describe("generateModelPaths", () => {
     expect(shallow.forecast.uncoveredTransitionIds.length).toBeGreaterThan(0);
   });
 
+  it("includes strategy and logical bounds in the replay digest", () => {
+    const baseline = generateModelPaths({ ...base, options });
+    const bounded = generateModelPaths({ ...base, options: { ...options, maxPaths: 2 } });
+    expect(bounded.paths[0].transitionIds).toEqual(baseline.paths[0].transitionIds);
+    expect(bounded.paths[0].digest).not.toBe(baseline.paths[0].digest);
+
+    const shortest = generateModelPaths({ ...base, options: { ...options, strategy: "shortest_paths" } });
+    const shortestSingle = shortest.paths.find((path) => path.transitionIds.join(">") === "start_a")!;
+    const coverageSingle = baseline.paths.find((path) => path.transitionIds.join(">") === "start_a")!;
+    expect(shortestSingle.digest).not.toBe(coverageSingle.digest);
+  });
+
   it("supports shortest-path proposals and keeps the seed in the replay digest", () => {
     const shortest = generateModelPaths({ ...base, options: { ...options, strategy: "shortest_paths" } });
     expect(shortest.paths.map((path) => path.transitionIds)).toEqual([["start_a"], ["start_a", "a_b"], ["start_a", "a_c"]]);
