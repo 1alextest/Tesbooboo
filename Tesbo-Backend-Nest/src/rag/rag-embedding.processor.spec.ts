@@ -114,6 +114,9 @@ describe("RagEmbeddingProcessor.process — knowledge source (document/file)", (
     expect(tracedEmbeddingCallMock).not.toHaveBeenCalled();
     const statusUpdate = updateSpy.mock.calls.find((c) => String(c[0]).includes("embedding_status = $2"));
     expect(statusUpdate?.[1]).toEqual(["doc-1", "pending"]);
+    // Operational indexing state must not look like an authored edit: full-row document
+    // assertions compare updated_at, and a background attempt used to bump it by milliseconds.
+    expect(String(statusUpdate?.[0])).not.toContain("updated_at");
   });
 
   it("skips re-embedding (no API call) when the content hash has not changed since last time", async () => {
@@ -215,6 +218,20 @@ describe("RagEmbeddingProcessor.process — testcase", () => {
     expect(tracedEmbeddingCallMock).not.toHaveBeenCalled();
     const statusUpdate = (db.query as jest.Mock).mock.calls.find((c) => String(c[0]).includes("embedding_status = $2"));
     expect(statusUpdate?.[1]).toEqual(["tc-1", "pending"]);
+  });
+
+  it("records embedding progress without touching the authored updated_at", async () => {
+    resolveEmbeddingAllocationMock.mockResolvedValue({ allocation: FAKE_ALLOCATION, reason: "ok" });
+    tracedEmbeddingCallMock.mockResolvedValue([vector()]);
+    const db = makeDb({ source: { id: "tc-1", title: "Login works", description: "desc", steps: [], embedding_content_hash: null } });
+    const processor = new RagEmbeddingProcessor(db, chunking);
+    await processor.process(makeJob(RAG_TESTCASE_EMBEDDING_JOB_NAME, payload));
+
+    const statusWrites = (db.query as jest.Mock).mock.calls
+      .map((c) => String(c[0]))
+      .filter((sql) => sql.includes("embedding_status"));
+    expect(statusWrites.length).toBeGreaterThan(0);
+    for (const sql of statusWrites) expect(sql).not.toContain("updated_at");
   });
 
   it("skips re-embedding (no API call) when the content hash has not changed since last time", async () => {
