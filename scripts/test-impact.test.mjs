@@ -78,7 +78,10 @@ test("shared legacy service is explicitly broad, never a Zyra-only selection", (
   assert.equal(result.owningDomains.length, Object.keys(config.domains).length);
   for (const domain of ["identity", "membership", "entitlements", "testcases", "plans", "executions", "mcp", "automation", "reports", "knowledge", "model-studio"]) hasDomain(result, domain);
   assert.ok(result.rationale.some(item => item.rule === "legacy-shared-owner"));
-  assert.equal(result.status, "review-required", "Broad legacy selection must expose the Review Board evidence gap.");
+  // Broad, but a review obligation rather than a standing evidence gap: the Review Board's
+  // Postgres/Redis suites now run in the smoke workflow, so no DOMAIN_EVIDENCE_GAP is emitted.
+  assert.equal(result.status, "selection-only");
+  assert.ok(!result.diagnostics.some(item => item.code === "DOMAIN_EVIDENCE_GAP"));
 });
 
 test("new auth/session/tenant role files add shared isolation and billing coverage", () => {
@@ -129,12 +132,14 @@ test("workers, MCP, SDK, reports and current-development graph/model paths have 
   }
 });
 
-test("Review Board selections explicitly expose DB/Redis opt-in CI skips", () => {
+test("Review Board selections require its runtime checks without a standing evidence gap", () => {
   const result = plan(["Tesbo-Backend-Nest/src/review-board/review-board.processor.ts"]);
-  assert.equal(result.status, "review-required");
+  // The DB/Redis suites execute in the smoke workflow, so selecting this domain is a review and
+  // check obligation, not a review-required evidence gap.
+  assert.equal(result.status, "selection-only");
   assert.ok(result.requiredChecks.some(check => check.id === "api-mcp-contracts"));
   assert.ok(result.requiredChecks.some(check => check.id === "transactional-concurrency"));
-  assert.ok(result.diagnostics.some(item => item.code === "DOMAIN_EVIDENCE_GAP" && /DATABASE_URL/.test(item.message) && /REDIS_URL/.test(item.message)));
+  assert.ok(!result.diagnostics.some(item => item.code === "DOMAIN_EVIDENCE_GAP"));
   hasSpec(result, "e2e/ci-smoke.spec.ts");
 });
 
