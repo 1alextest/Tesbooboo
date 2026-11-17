@@ -124,9 +124,6 @@ const MAX_EVIDENCE_BYTES = 25 * 1024 * 1024;
 const ANSI_SGR = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
 
 interface Counters {
-  passed: number;
-  failed: number;
-  skipped: number;
   untagged: number;
   malformed: number;
   unknownCase: number;
@@ -142,10 +139,13 @@ export default class TesboReporter implements Reporter {
   private initialization: Promise<void> | null = null;
   private readonly pendingResults: Array<{ test: TestCase; result: TestResult }> = [];
   private readonly inFlight: Promise<unknown>[] = [];
+  /**
+   * Final outcome per Tesbo case, not per attempt. Playwright reports every retry through
+   * onTestEnd, while the ingest upserts one row per (run, case); the close summary must count
+   * cases so a fail-then-pass retry does not claim two results and a permanent mismatch.
+   */
+  private readonly finalOutcomes = new Map<string, TestResult["status"]>();
   private readonly counters: Counters = {
-    passed: 0,
-    failed: 0,
-    skipped: 0,
     untagged: 0,
     malformed: 0,
     unknownCase: 0,
@@ -313,9 +313,9 @@ export default class TesboReporter implements Reporter {
       return;
     }
 
-    if (result.status === "passed") this.counters.passed += 1;
-    else if (result.status === "skipped") this.counters.skipped += 1;
-    else this.counters.failed += 1;
+    // Last attempt stands. The counters below are derived from this map at close, never from
+    // per-attempt increments.
+    this.finalOutcomes.set(caseId, result.status);
 
     const client = this.client;
     const runId = this.runId;
@@ -418,14 +418,10 @@ export default class TesboReporter implements Reporter {
 
     const interrupted = result.status === "interrupted" || result.status === "timedout";
     const closeStatus = interrupted ? "incomplete" : "completed";
-    const closed = await this.client.closeRun(this.runId, closeStatus, {
-      total: this.counters.passed + this.counters.failed + this.counters.skipped,
-      passed: this.counters.passed,
-      failed: this.counters.failed,
-      skipped: this.counters.skipped
-    });
+    const summary = this.summaryCounts();
+    const closed = await this.client.closeRun(this.runId, closeStatus, summary);
 
-    const counts = `${this.counters.passed} passed, ${this.counters.failed} failed, ${this.counters.skipped} skipped`;
+    const counts = `${summary.passed} passed, ${summary.failed} failed, ${summary.skipped} skipped`;
     if (closed.ok) {
       const alreadyClosed = closed.data.alreadyClosed === true;
       // Older minimal acknowledgements confirm the requested close. An explicit null or an
@@ -459,6 +455,23 @@ export default class TesboReporter implements Reporter {
     if (closed.ok && closed.data.mismatch) {
       console.warn(`[tesbo] Tesbo's stored counts differ from this run's: ${JSON.stringify(closed.data.mismatch)}`);
     }
+  }
+
+  /**
+   * Case-level totals for the close summary. Playwright reports every attempt; the ingest stores
+   * one result per (run, case), so counting attempts invents extra failed rows and makes the
+   * server's reconciliation report a mismatch on every retried test.
+   */
+  private summaryCounts(): { total: number; passed: number; failed: number; skipped: number } {
+    let passed = 0;
+    let failed = 0;
+    let skipped = 0;
+    for (const status of this.finalOutcomes.values()) {
+      if (status === "passed") passed += 1;
+      else if (status === "skipped") skipped += 1;
+      else failed += 1; // failed / timedOut / interrupted are all non-passing results
+    }
+    return { total: passed + failed + skipped, passed, failed, skipped };
   }
 
   /** Card §3: "surfaced in the run summary as 'N tests not linked to Tesbo'". */
