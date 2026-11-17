@@ -155,6 +155,10 @@ historical-fork handling needs separately proven database regression work.
 
 The follow-up makes the existing runtime entrypoint import-safe and refuses
 missing/blank `DATABASE_URL` before reading migrations or constructing a pool.
+Incomplete/malformed URLs also refuse: `pg` accepts an empty-host
+`postgresql://` and would otherwise retain its connection defaults. Explicit
+PostgreSQL host/database and existing JDBC normalization are required; no
+connection was made to establish this parser behavior.
 `src/database/migrate.spec.ts` checks configuration, pending selection, checksum
 decisions and transaction query ordering with mocks. These are not PostgreSQL
 rollback, concurrency or historical-upgrade evidence.
@@ -239,6 +243,10 @@ Review Board and migrated-database claims require fresh exact-head CI receipts
 from the `chore/required-suite-execution` follow-up PR, not these local fixtures
 or the foundation's earlier green jobs. The follow-up was replayed without
 conflicts on development `5280d9398605cf6c29cc85429517e3b212603bdc`.
+Post-replay verification repeated 148 root tests and accounted 279 authorization
+tests. The additional incomplete-URL refusal was reproduced against the prior
+guard without constructing a pool; all 24 expanded migrator tests, typecheck
+and frozen lint then passed.
 
 `architecture-quality` retains dependency, clone, policy and impact evidence under
 `reports/quality/`. Existing job names and result semantics stay intact; there is

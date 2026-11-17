@@ -41,7 +41,7 @@ describe("migration CLI import safety", () => {
     const source = fs.readFileSync(path.join(__dirname, "migrate.ts"), "utf8");
     const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } });
     vm.runInNewContext(output.outputText, {
-      require: load, module: entryModule, exports: {},
+      require: load, module: entryModule, exports: {}, URL,
       process: { env, cwd: () => "/unused", exit: () => { effects.push("exit"); finish(); } },
       console: { error: effect("error"), log: effect("log"), warn: effect("warn") }
     });
@@ -100,6 +100,20 @@ describe("migration decisions without a database", () => {
     for (const url of ["postgresql://ci:5432/tesbo_ci", "postgres://ci:5432/rb_test_ci"]) {
       expect(normalizeDatabaseUrl(` jdbc:${url} `)).toBe(url);
       expect(configuredDatabaseUrl({ DATABASE_URL: ` ${url} ` })).toBe(url);
+    }
+  });
+
+  it.each(["postgresql://", "postgres://", "not-a-postgres-url", "mysql://fixture.invalid/db",
+    "postgresql://fixture.invalid", "postgresql://fixture.invalid/"])("refuses malformed/incomplete explicit configuration (%p) without a pool", async raw => {
+    const previous = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = raw;
+    try {
+      expect(() => configuredDatabaseUrl()).toThrow("must explicitly specify");
+      await expect(main()).rejects.toThrow("must explicitly specify");
+      expect(Pool).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previous;
     }
   });
 

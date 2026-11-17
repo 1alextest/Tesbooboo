@@ -183,7 +183,15 @@ export async function applyMigration(client: PoolClient, migration: MigrationFil
 export function configuredDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   const raw = env.DATABASE_URL;
   if (!raw?.trim()) throw new Error("DATABASE_URL is required; the migrator never defaults to a local database.");
-  return normalizeDatabaseUrl(raw);
+  const normalized = normalizeDatabaseUrl(raw);
+  let parsed: URL;
+  try { parsed = new URL(normalized); } catch {
+    throw new Error("DATABASE_URL must explicitly specify a PostgreSQL scheme, host and database.");
+  }
+  if (!["postgres:", "postgresql:"].includes(parsed.protocol) || !parsed.hostname || !parsed.pathname || parsed.pathname === "/") {
+    throw new Error("DATABASE_URL must explicitly specify a PostgreSQL scheme, host and database.");
+  }
+  return normalized;
 }
 
 export async function main() {
