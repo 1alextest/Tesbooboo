@@ -9859,11 +9859,19 @@ export class LegacyService implements OnModuleInit {
          b.title AS bug_title,
          b.status AS bug_status,
          b.external_url AS bug_url`;
+    // bug_links is the source of truth for a bug's links (updateBug/addBugLink only touch that
+    // table), while bugs.execution_id is the value captured when the bug was created and goes stale
+    // as soon as it is linked elsewhere. Joining the legacy column hid every bug linked to a second
+    // run from the matrix. A link may name only a case or a cycle, so both sides are optional but a
+    // present one must match this row.
     const joins = `LEFT JOIN suites s ON s.id = t.suite_id AND s.deleted_at IS NULL
        LEFT JOIN cycle_items ci ON ci.testcase_id = t.id AND ci.deleted_at IS NULL
        LEFT JOIN cycles c ON c.id = ci.cycle_id AND c.deleted_at IS NULL
        LEFT JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
-       LEFT JOIN bugs b ON b.execution_id = e.id AND b.deleted_at IS NULL`;
+       LEFT JOIN bug_links bl ON bl.deleted_at IS NULL AND bl.testcase_id = t.id
+         AND (bl.cycle_id IS NULL OR bl.cycle_id = c.id)
+         AND (bl.execution_id IS NULL OR bl.execution_id = e.id)
+       LEFT JOIN bugs b ON b.id = bl.bug_id AND b.deleted_at IS NULL`;
     const base = "t.project_id = $1 AND t.deleted_at IS NULL";
     const order = "ORDER BY t.external_id, t.id, c.created_at DESC NULLS LAST";
     const params: unknown[] = [projectId];

@@ -171,6 +171,15 @@ jobs:
           # report matrix builds eleven runs and is exercised elsewhere.
           npx playwright test -c playwright.config.ts api/reports.spec.ts --workers=10 --output=test-results-reports -g "RPT-A-47|RPT-A-48" --list
           npx playwright test -c playwright.config.ts api/reports.spec.ts --workers=10 --output=test-results-reports -g "RPT-A-47|RPT-A-48"
+      - name: Verify requirement matrix bug provenance
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-matrix
+        run: |
+          # The matrix must read bug_links, the source of truth for a bug's links, rather than the
+          # stale bugs.execution_id captured at creation.
+          npx playwright test -c playwright.config.ts api/reports.spec.ts --workers=10 --output=test-results-matrix -g "RPT-A-72" --list
+          npx playwright test -c playwright.config.ts api/reports.spec.ts --workers=10 --output=test-results-matrix -g "RPT-A-72"
       - name: Verify persisted Model Studio revisions and mappings
         working-directory: e2e
         env:
