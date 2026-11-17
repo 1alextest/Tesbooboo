@@ -1210,7 +1210,9 @@ test.describe("top bar — notifications", () => {
       { title: "Link integrations", type: "integrations_settings", id: pid, url: /\/settings\?tab=integrations$/ },
       { title: "Link zyra task", type: "zyra_task", id: `${pid}:00000000-0000-4000-8000-000000000004`, url: new RegExp(`/projects/${pid}/agents/tasks/00000000-0000-4000-8000-000000000004$`) },
       { title: "Link test case", type: "testcase", id: `${pid}:00000000-0000-4000-8000-000000000005`, url: new RegExp(`/projects/${pid}/testcases/00000000-0000-4000-8000-000000000005$`) },
-      { title: "Link kb doc", type: "knowledge_document", id: `${pid}:00000000-0000-4000-8000-000000000003`, url: new RegExp(`/projects/${pid}/knowledge-base/documents/00000000-0000-4000-8000-000000000003$`) },
+      // The document route canonicalises the project segment to the project key; accept either the
+      // id used in the notification or that resolved key rather than pinning a redirect target.
+      { title: "Link kb doc", type: "knowledge_document", id: `${pid}:00000000-0000-4000-8000-000000000003`, url: /\/projects\/[^/]+\/knowledge-base\/documents\/00000000-0000-4000-8000-000000000003$/ },
       { title: "Link bug", type: "bug", id: `${pid}:00000000-0000-4000-8000-000000000002`, url: new RegExp(`/projects/${pid}/bugs/00000000-0000-4000-8000-000000000002$`) },
     ];
     const stamp = Date.now();
