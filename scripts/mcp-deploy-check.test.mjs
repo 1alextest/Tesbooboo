@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { REQUIRED_TOOLS, catalogGaps, schemaGaps, summarize } from "./mcp-deploy-check.mjs";
+import { REQUIRED_TOOLS, catalogFingerprint, catalogGaps, schemaGaps, summarize } from "./mcp-deploy-check.mjs";
 
 const text = { type: "string" };
 const citations = { type: "array" };
@@ -76,6 +76,48 @@ test("schema gaps catch missing Notes/Postconditions on single and bulk creates"
   const errors = schemaGaps(tools).errors.join("\n");
   assert.match(errors, /create_testcase: missing field postconditions/);
   assert.match(errors, /bulk_create_testcases: missing field attachments/);
+});
+
+test("a catalog matching the server's reported fingerprint passes", () => {
+  const tools = validTools();
+  const instructions = "Tesbo server instructions";
+  const result = summarize({
+    tools,
+    instructions,
+    serverVersion: `0.1.0+abc123.${catalogFingerprint(tools, instructions)}`,
+    health: { gitSha: "abc123" },
+    expectedGitSha: "abc123"
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.fingerprintCheck, "matches");
+});
+
+test("a catalog that does not match the reported fingerprint fails", () => {
+  const tools = validTools();
+  const instructions = "Tesbo server instructions";
+  const serverVersion = `0.1.0+abc123.${catalogFingerprint(tools, instructions)}`;
+  const tampered = JSON.parse(JSON.stringify(tools));
+  tampered[0].description = "changed after the server reported its version";
+  const result = summarize({
+    tools: tampered,
+    instructions,
+    serverVersion,
+    health: { gitSha: "abc123" },
+    expectedGitSha: "abc123"
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /catalog fingerprint .* does not match serverInfo.version/);
+  assert.equal(result.fingerprintCheck, "mismatch");
+});
+
+test("fingerprint comparison is skipped when the server omits instructions", () => {
+  const result = summarize({
+    tools: validTools(),
+    serverVersion: "0.1.0+abc123.0123456789abcdef",
+    health: { gitSha: "abc123" }
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.fingerprintCheck, "unavailable");
 });
 
 test("a matching build and catalog pass without warnings", () => {
