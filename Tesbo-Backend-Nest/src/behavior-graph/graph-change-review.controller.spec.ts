@@ -95,8 +95,26 @@ describe("Zyra graph change-review native contract", () => {
       .toEqual({ links: [] });
     expect(await controller.linkRunCases({ userId: USER } as never, PROJECT, "42", cycleId, body))
       .toMatchObject({ newlyLinked: 1, selected: 1 });
-    expect(runLinks.listForUser).toHaveBeenCalledWith(USER, PROJECT, "42");
+    expect(runLinks.listForUser).toHaveBeenCalledWith(USER, PROJECT, "42", { verifyEvidenceBytes: false });
     expect(runLinks.linkForUser).toHaveBeenCalledWith(USER, PROJECT, "42", cycleId, body);
+  });
+
+  it("passes byte verification through only on the literal true and refuses anything else", async () => {
+    const runLinks = { listForUser: jest.fn().mockResolvedValue({ links: [] }) };
+    const controller = new GraphChangeReviewController(
+      {} as never, {} as never, {} as never, {} as never, runLinks as never
+    );
+    await controller.listLinkedRuns({ userId: USER } as never, PROJECT, "42", "true");
+    await controller.listLinkedRuns({ userId: USER } as never, PROJECT, "42", "false");
+    expect(runLinks.listForUser).toHaveBeenNthCalledWith(1, USER, PROJECT, "42", { verifyEvidenceBytes: true });
+    expect(runLinks.listForUser).toHaveBeenNthCalledWith(2, USER, PROJECT, "42", { verifyEvidenceBytes: false });
+
+    for (const invalid of ["1", "TRUE", ["true"], { value: "true" }]) {
+      // The controller returns the service promise but validates before it, so the refusal is a
+      // synchronous throw (Nest renders it as 400 either way).
+      expect(() => controller.listLinkedRuns({ userId: USER } as never, PROJECT, "42", invalid)).toThrow();
+    }
+    expect(runLinks.listForUser).toHaveBeenCalledTimes(2);
   });
 
   it("retries only by calling the native committed notification service", async () => {

@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import * as fs from "fs";
 import * as path from "path";
@@ -65,6 +65,32 @@ export class StorageService {
   async exists(key: string): Promise<boolean> {
     if (this.s3) return true; // checked lazily via the signed URL request itself
     return fs.existsSync(this.localPath(key));
+  }
+
+  /**
+   * Actually reads the object's size, unlike exists()'s lazy S3 answer. Local storage stats the
+   * file; S3 issues a HEAD. `expectedBytes` (the metadata row's file_size, when present) is
+   * compared so a truncated/partial object is not reported as intact.
+   *
+   * Failure is reported, not thrown: a missing object is the answer this method exists to expose.
+   */
+  async verify(key: string, expectedBytes?: number | null): Promise<{ available: boolean; bytes: number | null; byteMismatch: boolean }> {
+    try {
+      let bytes: number | null = null;
+      if (this.s3) {
+        const res = await this.s3.send(new HeadObjectCommand({ Bucket: this.config.s3Bucket, Key: this.prefixedKey(key) }));
+        bytes = typeof res.ContentLength === "number" ? res.ContentLength : null;
+      } else {
+        bytes = (await fs.promises.stat(this.localPath(key))).size;
+      }
+      return {
+        available: true,
+        bytes,
+        byteMismatch: expectedBytes != null && bytes != null && Number(expectedBytes) !== bytes
+      };
+    } catch {
+      return { available: false, bytes: null, byteMismatch: false };
+    }
   }
 
   // Reads the full object into memory — used where the caller needs the raw bytes

@@ -30,6 +30,7 @@ export function ReviewCaseRunSetup({
   const [runsLoaded, setRunsLoaded] = useState(false);
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [loadingLinks, setLoadingLinks] = useState(false);
+  const [verifyingBytes, setVerifyingBytes] = useState(false);
   const [working, setWorking] = useState(false);
   // React state disables the button on render; this synchronous ref also
   // rejects a second event in the same render/commit window.
@@ -59,16 +60,23 @@ export function ReviewCaseRunSetup({
     }
   }
 
-  async function loadRecordedLinks() {
-    setLoadingLinks(true);
+  /**
+   * Verification is a separate, explicit action: it costs one storage HEAD/stat per attachment.
+   * A normal refresh deliberately drops it, so a previous check is never displayed as if it
+   * described newly recorded evidence.
+   */
+  async function loadRecordedLinks(verifyBytes = false) {
+    if (verifyBytes) setVerifyingBytes(true);
+    else setLoadingLinks(true);
     try {
-      const { links, summary } = await listZyraGraphReviewRunLinks(projectId, receiptId);
+      const { links, summary } = await listZyraGraphReviewRunLinks(projectId, receiptId, { verifyEvidenceBytes: verifyBytes });
       setRecordedLinks(links);
       setGapSummary(summary);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load recorded QA handoffs.");
     } finally {
-      setLoadingLinks(false);
+      if (verifyBytes) setVerifyingBytes(false);
+      else setLoadingLinks(false);
     }
   }
 
@@ -174,11 +182,18 @@ export function ReviewCaseRunSetup({
       <section aria-label="Persisted QA handoffs" className="mt-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-medium">Recorded QA run handoffs</h3>
-          <button type="button" disabled={loadingLinks}
-            onClick={() => void loadRecordedLinks()}
-            className="underline disabled:opacity-60">
-            Refresh recorded handoffs
-          </button>
+          <div className="flex items-center gap-3">
+            <button type="button" disabled={loadingLinks || verifyingBytes}
+              onClick={() => void loadRecordedLinks()}
+              className="underline disabled:opacity-60">
+              Refresh recorded handoffs
+            </button>
+            <button type="button" disabled={loadingLinks || verifyingBytes}
+              onClick={() => void loadRecordedLinks(true)}
+              className="underline disabled:opacity-60">
+              {verifyingBytes ? "Checking evidence bytes…" : "Verify evidence bytes"}
+            </button>
+          </div>
         </div>
         <p className="text-xs text-[var(--muted)]">
           A persisted handoff is evidence of human test selection, not passed tests,
@@ -217,6 +232,18 @@ export function ReviewCaseRunSetup({
                       {"; active evidence metadata: "}{link.execution.evidenceFileCount}
                       {" ("}{link.execution.evidenceAddedAfterHandoffCount}
                       {" added after handoff)"}
+                      {link.execution.evidenceBytes && (
+                        <span>
+                          {"; evidence bytes: "}{link.execution.evidenceBytes.available}
+                          {" of "}{link.execution.evidenceBytes.checked}{" readable"}
+                          {link.execution.evidenceBytes.unavailable > 0 &&
+                            `; ${link.execution.evidenceBytes.unavailable} unavailable`}
+                          {link.execution.evidenceBytes.byteMismatch > 0 &&
+                            `; ${link.execution.evidenceBytes.byteMismatch} size mismatch`}
+                          {link.execution.evidenceBytes.truncated && "; check truncated"}
+                          {"; availability is not content review"}
+                        </span>
+                      )}
                       {link.execution.executedAfterHandoff
                         ? "; recorded after handoff; build provenance not verified"
                         : "; earlier or undated execution; not evidence for this change"}

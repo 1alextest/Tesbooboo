@@ -373,7 +373,7 @@ const url = process.env.DATABASE_URL ?? "";
         [cycleId, caseId]
       );
       const db = new DatabaseService(pool);
-      const links = new GraphReviewRunLinks(db, makeLegacy(db));
+      const links = new GraphReviewRunLinks(db, makeLegacy(db), { verify: jest.fn() } as never);
       try {
         const created = await links.linkForUser(user, project, receiptId, cycleId, { testcaseIds: [caseId] });
         expect(created).toEqual({
