@@ -796,7 +796,9 @@ describe("test case writes carry the Notion link", () => {
     const insert = statements.find((s) => s.sql.includes("INSERT INTO testcases"))!;
     expect(insert.sql).toContain("notion_page_id, notion_url");
     expect(maxPlaceholder(insert.sql)).toBe(insert.params.length);
-    expect(insert.params.slice(-2)).toEqual([PAGE_ID, "https://www.notion.so/p"]);
+    // The authoring classification columns (technique, review_views) follow notion_url, so the
+    // Notion pair is no longer the tail. Assert the pair at its fixed position, not slice(-2).
+    expect(insert.params.slice(-4, -2)).toEqual([PAGE_ID, "https://www.notion.so/p"]);
   });
 
   it("update sets the link, and an explicit null or empty id clears both columns", async () => {
@@ -816,7 +818,10 @@ describe("test case writes carry the Notion link", () => {
       expect(update.sql).toContain("notion_url=CASE WHEN $33::boolean THEN NULL ELSE COALESCE($32,notion_url) END");
       expect(update.params.slice(30, 33)).toEqual([...link, clears]);
       expect(update.params[33]).toBeNull(); // $34: no external-id rename requested.
-      expect(update.params.slice(34)).toEqual([false, false, null]); // Suite/owner omitted; no edit-revision guard requested.
+      expect(update.params.slice(34, 37)).toEqual([false, false, null]); // Suite/owner omitted; no edit-revision guard requested.
+      // Authoring classification is appended after the pre-existing slots: presence flags and
+      // values for technique/reviewViews, both omitted here.
+      expect(update.params.slice(37)).toEqual([false, null, false, null]);
     }
   });
 
