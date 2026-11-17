@@ -32,7 +32,11 @@ jobs:
           cache-dependency-path: package-lock.json
       - run: npm ci --ignore-scripts
       - name: Root quality-tool dependency security
-        run: npm audit --audit-level=high
+        # Same high/critical threshold as npm audit, with one scoped, expiring exception in
+        # scripts/audit-exceptions.json for an advisory that has no patched release and sits in
+        # build/dev tooling (GHSA-fc5q-39xc-vjpf). Any advisory without a matching, unexpired
+        # exception still fails, as does a stale exception.
+        run: node scripts/audit-gate.mjs --dir . --scope root
       - name: Prove quality gates with positive and seeded-negative fixtures
         run: npm run test:quality
       - name: Analyze architecture and publish the shared dependency graph
@@ -87,7 +91,9 @@ jobs:
       - name: Backend lint (frozen legacy baseline; zero new errors)
         run: node ../scripts/check-lint-baseline.mjs backend
       - name: Backend production and development high/critical-advisory gate
-        run: npm audit --audit-level=high --json > backend-audit-all.json
+        # Writes the complete audit for the retained artifact while applying the same scoped
+        # exception policy as the other trees; only GHSA-fc5q-39xc-vjpf is waived here.
+        run: node ../scripts/audit-gate.mjs --dir . --scope backend --json-output backend-audit-all.json
       - name: Retain complete backend development and production audit
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -123,7 +129,9 @@ jobs:
       - name: Frontend lint (frozen legacy baseline; zero new errors)
         run: node ../scripts/check-lint-baseline.mjs frontend
       - name: Frontend production and development high/critical-advisory gate
-        run: npm audit --audit-level=high
+        # Same scoped exception policy; the frontend entry documents that the vulnerable package
+        # arrives through Sentry's build-time bundler plugin, not a runtime request path.
+        run: node ../scripts/audit-gate.mjs --dir . --scope frontend
       - name: Frontend TypeScript
         run: npx tsc --noEmit
       - name: Frontend content security, document-write and MCP diagnostic regressions
