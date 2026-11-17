@@ -12940,7 +12940,6 @@ export class LegacyService implements OnModuleInit {
 
   async adminCustomers(userId: string | null | undefined) {
     await this.requirePlatformAdmin(userId);
-    const summary = await this.analytics();
     const customers = await this.db.query(
       `SELECT o.id, o.name, o.slug, o.created_at,
               COUNT(DISTINCT om.user_id)::int AS member_count,
@@ -12954,21 +12953,29 @@ export class LegacyService implements OnModuleInit {
        LEFT JOIN testcases t ON t.project_id = p.id
        GROUP BY o.id ORDER BY o.created_at DESC`
     );
+    const rows = customers.rows.map((row) => {
+      const item: Body = toCamel(row);
+      const total = Number(item.testCaseCount || 0);
+      const automated = Number(item.automatedCount || 0);
+      return { ...item, automationCoverage: total ? Math.round((automated / total) * 100) : 0 };
+    });
+    // The summary is the totals of the rows above, not a second aggregate that can drift. Previously
+    // it reported the project count as the organization count and hardcoded the member/automated/
+    // coverage totals to zero, which is exactly what an operator would read as "nobody uses this".
+    const sum = (key: "memberCount" | "projectCount" | "testCaseCount" | "automatedCount") =>
+      rows.reduce((total, row) => total + Number((row as Body)[key] || 0), 0);
+    const totalTestCases = sum("testCaseCount");
+    const totalAutomated = sum("automatedCount");
     return {
       summary: {
-        totalOrganizations: summary.projectCount,
-        totalMembers: 0,
-        totalProjects: summary.projectCount,
-        totalTestCases: summary.testCaseCount,
-        totalAutomated: 0,
-        overallAutomationCoverage: 0
+        totalOrganizations: rows.length,
+        totalMembers: sum("memberCount"),
+        totalProjects: sum("projectCount"),
+        totalTestCases,
+        totalAutomated,
+        overallAutomationCoverage: totalTestCases ? Math.round((totalAutomated / totalTestCases) * 100) : 0
       },
-      customers: customers.rows.map((row) => {
-        const item = toCamel(row);
-        const total = Number(item.testCaseCount || 0);
-        const automated = Number(item.automatedCount || 0);
-        return { ...item, automationCoverage: total ? Math.round((automated / total) * 100) : 0 };
-      })
+      customers: rows
     };
   }
 

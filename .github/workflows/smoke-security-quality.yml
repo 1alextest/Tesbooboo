@@ -159,8 +159,8 @@ jobs:
         run: |
           # api/tail.spec.ts was not referenced by any workflow. Select only the superadmin
           # authorization surface and the owner-only add/remove contract.
-          npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-admin -g "TAI-A-15|TAI-A-20" --list
-          npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-admin -g "TAI-A-15|TAI-A-20"
+          npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-admin -g "TAI-A-15|TAI-A-20|TAI-A-21" --list
+          npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-admin -g "TAI-A-15|TAI-A-20|TAI-A-21"
       - name: Verify persisted Model Studio revisions and mappings
         working-directory: e2e
         env:
