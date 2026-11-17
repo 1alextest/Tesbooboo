@@ -131,7 +131,8 @@ Point each domain to the corresponding droplet IP as a plain A record.
 ## Verification
 
 - Frontend: `https://app.example.com/`
-- Backend health: `https://api.example.com/health` — `gitSha` must be the deployed commit, not `local`. The value is resolved from `GIT_SHA` (Jenkins/compose) or `RAILWAY_GIT_COMMIT_SHA` (a Railway deployment triggered from GitHub); see `Tesbo-Backend-Nest/src/build-provenance.ts`.
+- Backend health: `https://api.example.com/health` — `gitSha` must be the deployed commit, not `local`. The value is resolved from `RAILWAY_GIT_COMMIT_SHA` first (a Railway deployment triggered from GitHub; it describes the running deployment) and falls back to `GIT_SHA` (Jenkins/compose, or a `railway up` upload where the operator sets it), then `local`; see `Tesbo-Backend-Nest/src/build-provenance.ts`. A service-level `GIT_SHA` persists across Railway deploys, so it must never outrank the injected Railway value.
+- Railway deployments: the backend service redeploys from its connected GitHub branch whenever a service variable changes or someone presses Redeploy. A `railway up` upload is superseded by that next GitHub-triggered deployment, even though the upload may have been the newer code. Deploy from the connected branch when possible; when an upload is the only option, set `GIT_SHA` to the uploaded commit and do not change variables until the connected branch catches up.
 - MCP catalog and field contracts, from a fresh protocol session (the token comes from the environment, never argv):
 
   ```bash
