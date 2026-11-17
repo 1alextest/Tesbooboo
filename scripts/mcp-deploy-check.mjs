@@ -35,11 +35,13 @@ export const REQUIRED_TOOLS = [
   "preview_behavior_model_draft"
 ];
 
-/** Fields a deployment must advertise on the shape clients actually read/write. */
+/** Fields a deployment must advertise on the shape clients actually read/write. These are the
+ *  authoring fields the legacy writers already persist; an older catalog dropped several of them
+ *  from the schemas even though the handlers accepted them, so clients never supplied them. */
 const REQUIRED_FIELDS = [
-  { tool: "create_testcase", path: ["properties"], fields: ["attachments", "postconditions"] },
-  { tool: "update_testcase", path: ["properties"], fields: ["attachments", "postconditions"] },
-  { tool: "bulk_create_testcases", path: ["properties", "testcases", "items", "properties"], fields: ["attachments", "postconditions"] }
+  { tool: "create_testcase", path: ["properties"], fields: ["attachments", "postconditions", "estimatedDuration", "sourceRefs"] },
+  { tool: "update_testcase", path: ["properties"], fields: ["attachments", "postconditions", "expectedRevision", "estimatedDuration", "sourceRefs"] },
+  { tool: "bulk_create_testcases", path: ["properties", "testcases", "items", "properties"], fields: ["attachments", "postconditions", "estimatedDuration", "sourceRefs"] }
 ];
 
 function shapeAt(schema, path) {
