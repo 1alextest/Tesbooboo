@@ -399,6 +399,41 @@ test.describe("the tail — api keys, activity, notifications, branding, admin",
     }
   });
 
+  test("TAI-A-21 the customers summary is the total of the rows it returns", async () => {
+    const stamp = Date.now();
+    const ownerEmail = `e2e-admin-summary-${stamp}@tesbo.invalid`;
+    const ownerUser = seedFixtureUser(ownerEmail, "E2E Admin Summary");
+    exec(`INSERT INTO platform_admins (user_id, role) VALUES (${literal(ownerUser.userId)}, 'owner');`);
+    const api = await loginAs(ownerUser);
+    try {
+      const res = await api.get("/api/admin/customers");
+      expect(res.ok(), await res.text()).toBeTruthy();
+      const body = await res.json();
+      expect(body.customers.length).toBeGreaterThan(0);
+      const sum = (key: string) =>
+        body.customers.reduce((total: number, row: Record<string, unknown>) => total + Number(row[key] || 0), 0);
+      // The summary must be the totals of the same rows, not a second aggregate that can drift or a
+      // hardcoded zero block an operator would read as "nobody uses this install".
+      expect(body.summary).toMatchObject({
+        totalOrganizations: body.customers.length,
+        totalMembers: sum("memberCount"),
+        totalProjects: sum("projectCount"),
+        totalTestCases: sum("testCaseCount"),
+        totalAutomated: sum("automatedCount"),
+      });
+      expect(body.summary.totalMembers).toBeGreaterThan(0);
+      expect(body.summary.overallAutomationCoverage).toBe(
+        body.summary.totalTestCases
+          ? Math.round((body.summary.totalAutomated / body.summary.totalTestCases) * 100)
+          : 0,
+      );
+    } finally {
+      exec(`DELETE FROM platform_admins WHERE user_id = ${literal(ownerUser.userId)};`);
+      detachUserByEmail(ownerEmail);
+      await api.dispose();
+    }
+  });
+
   test("TAI-A-16 the setup probe reports that the install already has an admin, and refuses a second", { tag: '@tesbo.testId("TES-TC-546")' }, async () => {
     const status = await anon.get("/api/setup/status", { failOnStatusCode: false });
     // Deliberately public: the first-run wizard has to be able to ask before anyone can sign in.
