@@ -2471,6 +2471,21 @@ export class LegacyService implements OnModuleInit {
     return uid;
   }
 
+  /**
+   * Managing other platform admins is owner-only. requirePlatformAdmin is the read/administration
+   * baseline (any platform admin can view the surface); grant/revoke is narrower, matching the UI
+   * and the documented contract. Without this an ordinary admin could add credentials or remove the
+   * owner's access.
+   */
+  private async requirePlatformAdminOwner(userId?: string | null): Promise<string> {
+    const uid = this.requireUser(userId);
+    const result = await this.db.query<{ role: string }>("SELECT role FROM platform_admins WHERE user_id = $1 LIMIT 1", [uid]);
+    const role = result.rows[0]?.role;
+    if (!role) throw new ForbiddenException({ error: "Platform admin access required" });
+    if (role !== "owner") throw new ForbiddenException({ error: "Only a platform owner can manage platform admins" });
+    return uid;
+  }
+
   async logProjectActivity(projectId: string, actorId: string | null, action: string, entityType: string, entityId: string | null, entityName: string | null, diff: Body) {
     await this.db.query(
       `INSERT INTO audit_logs (project_id, actor_id, action, entity_type, entity_id, entity_name, diff, organization_id)
@@ -13016,19 +13031,30 @@ export class LegacyService implements OnModuleInit {
   }
 
   async addAdmin(userId: string | null | undefined, body: Body) {
-    const grantedBy = await this.requirePlatformAdmin(userId);
+    const grantedBy = await this.requirePlatformAdminOwner(userId);
     const email = String(body.email || "").trim().toLowerCase();
     if (!email) throw new BadRequestException({ error: "email is required" });
     const uid = await this.upsertUser(email);
+    // Adding an existing owner is a no-op that keeps their role. The previous unconditional
+    // `role = EXCLUDED.role` silently demoted the install owner to plain admin.
     const res = await this.db.query(
-      "INSERT INTO platform_admins (user_id, role, granted_by) VALUES ($1, 'admin', $2) ON CONFLICT (user_id) DO UPDATE SET role = EXCLUDED.role RETURNING id, user_id, role",
+      `INSERT INTO platform_admins (user_id, role, granted_by) VALUES ($1, 'admin', $2)
+       ON CONFLICT (user_id) DO UPDATE
+         SET role = CASE WHEN platform_admins.role = 'owner' THEN 'owner' ELSE EXCLUDED.role END
+       RETURNING id, user_id, role`,
       [uid, grantedBy]
     );
     return { ...toCamel(res.rows[0]), email };
   }
 
   async deleteAdmin(userId: string | null | undefined, adminId: string) {
-    await this.requirePlatformAdmin(userId);
+    await this.requirePlatformAdminOwner(userId);
+    if (!isUuid(adminId)) throw new NotFoundException({ error: "Platform admin not found" });
+    const target = await this.db.query<{ role: string }>("SELECT role FROM platform_admins WHERE id = $1", [adminId]);
+    if (!target.rows[0]) throw new NotFoundException({ error: "Platform admin not found" });
+    if (target.rows[0].role === "owner") {
+      throw new ForbiddenException({ error: "A platform owner cannot be removed here" });
+    }
     await this.db.query("DELETE FROM platform_admins WHERE id = $1 AND role <> 'owner'", [adminId]);
   }
 

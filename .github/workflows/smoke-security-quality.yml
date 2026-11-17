@@ -152,6 +152,15 @@ jobs:
           # ui/navigation.spec.ts carries many unrelated navigation journeys.
           npx playwright test -c playwright.config.ts api/notifications.spec.ts ui/navigation.spec.ts --workers=10 --output=test-results-notifications -g "NOTIF-" --list
           npx playwright test -c playwright.config.ts api/notifications.spec.ts ui/navigation.spec.ts --workers=10 --output=test-results-notifications -g "NOTIF-"
+      - name: Verify platform-admin owner-only management
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-admin
+        run: |
+          # api/tail.spec.ts was not referenced by any workflow. Select only the superadmin
+          # authorization surface and the owner-only add/remove contract.
+          npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-admin -g "TAI-A-15|TAI-A-20" --list
+          npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-admin -g "TAI-A-15|TAI-A-20"
       - name: Verify persisted Model Studio revisions and mappings
         working-directory: e2e
         env:

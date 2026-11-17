@@ -3385,8 +3385,8 @@ duplicate bug filing.
 - **Access gating**
   - Entire `/admin` area is client-gated: `AdminLayout` calls `authMe()` and redirects to `/projects` unless `isPlatformAdmin` is true on the session (`GET /api/auth/me`).
   - Every backend admin route independently re-checks membership in `platform_admins` (`requirePlatformAdmin` in `legacy.service.ts`, and `SuperAdminService.isPlatformAdmin` for the health controller) — the frontend gate is not the only line of defense.
-  - Two internal roles exist on `platform_admins.role`: `owner` and `admin`. Only `owner` can add/remove other admins; a plain `admin` can view but not manage (`AdminsTab.tsx` gates the add-form and remove-button on `role === "owner"`, but this is a UI-only check — worth testing that the backend also rejects a non-owner `admin` calling POST/DELETE `/api/admin/admins`, since `addAdmin`/`deleteAdmin` in `legacy.service.ts` only call `requirePlatformAdmin`, not an owner-specific check).
-  - `deleteAdmin` guards `role <> 'owner'` in its SQL `WHERE` clause, so an owner row can never be deleted through this endpoint (test: attempt to delete the seed owner and confirm no-op / still present).
+  - Two internal roles exist on `platform_admins.role`: `owner` and `admin`. Only `owner` can add/remove other admins. The backend enforces this with `requirePlatformAdminOwner` in `legacy.service.ts`; a plain `admin` can view but a POST/DELETE to `/api/admin/admins` is a 403. The UI gate on `role === "owner"` is a second line of defence, not the only one.
+  - `addAdmin` never demotes an existing owner (its `ON CONFLICT` update preserves `owner`), and `deleteAdmin` refuses an owner row with a 403 and a missing/malformed id with 404.
 - **System Health page** (`/admin`, default landing page)
   - Fetches `GET /api/admin/system/health`: reports database status + latency + latest applied migration filename, and email provider (Postmark) "configured" vs "not_configured" state. Overall `status` is `"degraded"` if any service reports an error.
   - Manual "Refresh" button and an "Auto-refresh (30s)" checkbox that polls on an interval.

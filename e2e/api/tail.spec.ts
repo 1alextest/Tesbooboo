@@ -2,9 +2,11 @@ import { expect, test, type APIRequestContext, type APIResponse } from "@playwri
 import { exec, literal, scalar } from "../utils/psql";
 import {
   anonymousContext,
+  detachUserByEmail,
   loginAs,
   provisionRbacTenant,
   rbacSuiteSkipReason,
+  seedFixtureUser,
   type RbacTenant,
 } from "../utils/rbac-tenant";
 
@@ -345,6 +347,56 @@ test.describe("the tail — api keys, activity, notifications, branding, admin",
     // would see the whole customer base.
     const customers = await asOwner.get("/api/admin/customers", { failOnStatusCode: false });
     expect(await customers.text()).not.toContain(tenant!.organizationId);
+  });
+
+  test("TAI-A-20 only a platform owner can grant or revoke platform admin access", async () => {
+    const stamp = Date.now();
+    const adminEmail = `e2e-platform-admin-${stamp}@tesbo.invalid`;
+    const ownerEmail = `e2e-platform-owner-${stamp}@tesbo.invalid`;
+    const targetEmail = `e2e-platform-target-${stamp}@tesbo.invalid`;
+    const adminUser = seedFixtureUser(adminEmail, "E2E Platform Admin");
+    const ownerUser = seedFixtureUser(ownerEmail, "E2E Platform Owner");
+    exec(
+      `INSERT INTO platform_admins (user_id, role) VALUES ` +
+        `(${literal(adminUser.userId)}, 'admin'), (${literal(ownerUser.userId)}, 'owner');`
+    );
+    const asAdmin = await loginAs(adminUser);
+    const asPlatformOwner = await loginAs(ownerUser);
+    try {
+      for (const [what, attempt] of [
+        ["add admin", () => asAdmin.post("/api/admin/admins", { data: { email: targetEmail }, failOnStatusCode: false })],
+        [
+          "remove admin",
+          () => asAdmin.delete("/api/admin/admins/11111111-1111-4111-8111-111111111111", { failOnStatusCode: false }),
+        ],
+      ] as Array<[string, () => Promise<APIResponse>]>) {
+        const res = await attempt();
+        expect(res.status(), `${what} by a non-owner admin — ${await res.text()}`).toBe(403);
+      }
+
+      const granted = await asPlatformOwner.post("/api/admin/admins", { data: { email: targetEmail } });
+      expect(granted.status(), await granted.text()).toBe(201);
+      const row = await granted.json();
+      expect(row).toMatchObject({ email: targetEmail, role: "admin" });
+      expect((await asPlatformOwner.delete(`/api/admin/admins/${row.id}`)).ok()).toBeTruthy();
+      expect(scalar(`SELECT COUNT(*)::int FROM platform_admins WHERE id = ${literal(row.id)};`)).toBe("0");
+
+      // Adding an existing owner is a no-op, and an owner can never be removed through this surface.
+      const demote = await asPlatformOwner.post("/api/admin/admins", { data: { email: ownerEmail } });
+      expect((await demote.json()).role).toBe("owner");
+      const ownerRowId = scalar(`SELECT id FROM platform_admins WHERE user_id = ${literal(ownerUser.userId)};`);
+      const removeOwner = await asPlatformOwner.delete(`/api/admin/admins/${ownerRowId}`, { failOnStatusCode: false });
+      expect(removeOwner.status(), await removeOwner.text()).toBe(403);
+      expect(scalar(`SELECT role FROM platform_admins WHERE user_id = ${literal(ownerUser.userId)};`)).toBe("owner");
+    } finally {
+      exec(
+        `DELETE FROM platform_admins WHERE user_id IN (${literal(adminUser.userId)}, ${literal(ownerUser.userId)});`
+      );
+      detachUserByEmail(adminEmail);
+      detachUserByEmail(ownerEmail);
+      detachUserByEmail(targetEmail);
+      await Promise.all([asAdmin.dispose(), asPlatformOwner.dispose()]);
+    }
   });
 
   test("TAI-A-16 the setup probe reports that the install already has an admin, and refuses a second", { tag: '@tesbo.testId("TES-TC-546")' }, async () => {
