@@ -1,12 +1,3 @@
 {
-  "exceptions": [
-    {
-      "id": "GHSA-fc5q-39xc-vjpf",
-      "package": "picomatch",
-      "scopes": ["root", "backend", "frontend"],
-      "reason": "No patched release exists (picomatch 4.0.7 is latest; GitHub reports first_patched_version: null, and the newest dependency-cruiser and @sentry/nextjs still pin it). Reached through build/dev tooling only: root dependency-cruiser and backend @nestjs-cli/ts-jest glob trusted repository paths; on the frontend it arrives through @sentry/nextjs -> @rollup/plugin-commonjs at build time. No runtime path passes untrusted patterns to picomatch.",
-      "expires": "2027-02-17",
-      "review": "Remove this entry as soon as a picomatch release above 4.0.7 exists; the gate fails a stale exception so it cannot be forgotten."
-    }
-  ]
+  "exceptions": []
 }

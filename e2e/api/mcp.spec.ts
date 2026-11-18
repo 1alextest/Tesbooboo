@@ -4,7 +4,7 @@ import { expect, test, request as newRequestContext, type APIRequestContext } fr
 import { env } from "../utils/env";
 import { testcaseEditState } from "../utils/testcase-edit-state";
 import { loginAs, provisionRbacTenant } from "../utils/rbac-tenant";
-import { literal, scalar } from "../utils/psql";
+import { exec, literal, scalar } from "../utils/psql";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 // Account B: a second, fully independent account/org/project (see global-setup.ts and
@@ -178,7 +178,7 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
       WHERE c.project_id=${literal(projectId)};`))
   });
   const prior = counts();
-  let tokenId: string | undefined, caseId: string | undefined;
+  let tokenId: string | undefined, caseId: string | undefined, modelId: string | undefined;
   try {
     const issue = await owner.post(`/api/projects/${projectId}/apikeys`, {
       data: { name: `E2E isolated MCP QA ${Date.now()}`, scopes: ["read", "write"] }
@@ -209,9 +209,18 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
     const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {} });
     expect(init.result.serverInfo.name).toBe("tesbo-mcp");
     const catalog = (await rpc("tools/list")).result.tools as Array<{ name: string }>;
-    expect(catalog).toHaveLength(53);
-    expect(new Set(catalog.map(item => item.name)).size).toBe(53);
+    expect(catalog).toHaveLength(58);
+    expect(new Set(catalog.map(item => item.name)).size).toBe(58);
     expect(catalog.map(item => item.name)).toContain("list_qa_graph_changes");
+    expect(catalog.map(item => item.name)).toEqual(
+      expect.arrayContaining([
+        "create_behavior_model",
+        "save_behavior_model_revision",
+        "link_behavior_model_case",
+        "get_behavior_model_coverage",
+        "archive_behavior_model",
+      ]),
+    );
     const foreign = await rpc("tools/list", {}, `/api/projects/${tenant!.secondProjectId}/mcp`);
     expect(foreign.error?.code).toBe(-32001); // token cannot switch project via URL
 
@@ -253,6 +262,60 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
     expect(stale.message).toMatch(/changed since it was loaded/);
     expect((await (await owner.get(caseUrl(caseId!))).json()).attachments).toBe("Reviewed Notes");
 
+    // Model Studio authoring runs through the same native owner as the REST routes. A mapping is an
+    // accepted relationship, never coverage or execution, and archive keeps the history.
+    const modelName = `E2E MCP model ${Date.now()}`;
+    const draft = {
+      schemaVersion: "tesbo-fsm-draft/1",
+      semantics: "SEQUENTIAL_FSM",
+      initialStateId: "start",
+      states: [
+        { id: "start", label: "Start" },
+        { id: "done", label: "Done" }
+      ],
+      transitions: [
+        { id: "finish", from: "start", to: "done", action: "Submit", expectedObservation: "Accepted" }
+      ]
+    };
+    const createdModel = await call("create_behavior_model", { name: modelName, model: draft });
+    modelId = createdModel.id;
+    expect(createdModel).toMatchObject({ name: modelName });
+    expect(createdModel.latestRevision).toMatchObject({ revisionNumber: 1, status: "draft" });
+    const nextDraft = {
+      ...draft,
+      states: [...draft.states, { id: "retry", label: "Retry" }],
+      transitions: [
+        ...draft.transitions,
+        { id: "retry_edge", from: "done", to: "start", action: "Retry", expectedObservation: "Restarts" }
+      ]
+    };
+    const savedRevision = await call("save_behavior_model_revision", {
+      modelId,
+      baseRevisionId: createdModel.latestRevision.id,
+      model: nextDraft
+    });
+    expect(savedRevision).toMatchObject({ revisionNumber: 2, parentRevisionId: createdModel.latestRevision.id });
+    const staleBase = await rejected("save_behavior_model_revision", {
+      modelId,
+      baseRevisionId: createdModel.latestRevision.id,
+      model: draft
+    });
+    expect(staleBase.message).toMatch(/changed since/i);
+    const mapping = await call("link_behavior_model_case", {
+      modelId,
+      revisionId: savedRevision.id,
+      testcaseId: caseId,
+      elementIds: ["start"],
+      testcaseRevision: amended.editRevision
+    });
+    expect(mapping).toMatchObject({ testcaseId: caseId, elementIds: ["start"], coverageAssertion: "none" });
+    const coverage = await call("get_behavior_model_coverage", { modelId });
+    expect(coverage).toMatchObject({ coverageAssertion: "none", executionAssertion: "none" });
+    expect(coverage.links.map((row: { testcaseId: string }) => row.testcaseId)).toContain(caseId);
+    expect((await call("archive_behavior_model", { modelId })).ok).toBe(true);
+    const archivedCoverage = await rejected("get_behavior_model_coverage", { modelId });
+    expect(archivedCoverage.message).toMatch(/not found/i);
+
     expect((await call("archive_testcase", { testcaseId: caseId })).status).toBe("Archived");
     expect((await call("get_testcase", { testcaseId: caseId })).postconditions).toBe("All fixtures cleaned");
     const hidden = await call("list_testcases", { search: title });
@@ -265,6 +328,7 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
     expect(noSource.message).toMatch(/source binding|not configured/i);
     expect(counts()).toEqual(prior); // no fake run/execution from source discovery or case edits
   } finally {
+    if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(projectId)};`);
     if (caseId) await owner.delete(caseUrl(caseId), { failOnStatusCode: false });
     if (tokenId) await owner.delete(`/api/projects/${projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
     await machine.dispose();
@@ -547,10 +611,19 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
       } }>;
       const names = tools.map(t => t.name);
       // Exact source/deployment contract. A 50-tool client cache is not proof
-      // that this server is current, nor can 53 source tools prove stage deployed.
-      expect(names, "freshly initialized deployed catalog").toHaveLength(53);
-      expect(new Set(names).size, "MCP names must be unique").toBe(53);
-      for (const name of ["list_qa_graph_changes", "capture_qa_graph_change", "preview_behavior_model_draft"]) {
+      // that this server is current, nor can 58 source tools prove stage deployed.
+      expect(names, "freshly initialized deployed catalog").toHaveLength(58);
+      expect(new Set(names).size, "MCP names must be unique").toBe(58);
+      for (const name of [
+        "list_qa_graph_changes",
+        "capture_qa_graph_change",
+        "preview_behavior_model_draft",
+        "create_behavior_model",
+        "save_behavior_model_revision",
+        "link_behavior_model_case",
+        "get_behavior_model_coverage",
+        "archive_behavior_model"
+      ]) {
         expect(names).toContain(name);
       }
       const create = tools.find(t => t.name === "create_testcase");

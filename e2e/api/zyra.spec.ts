@@ -291,7 +291,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       }
       const [read, write] = keys;
       const listed = await rpc(read.token, "tools/list");
-      expect(listed.result.tools).toHaveLength(53);
+      expect(listed.result.tools).toHaveLength(58);
       expect(listed.result.tools.find((tool: { name: string }) => tool.name === "preview_behavior_model_draft").inputSchema.additionalProperties).toBe(false);
       const params = { name: "preview_behavior_model_draft", arguments: { model: modelPreviewDraft() } };
       expect((await rpc(read.token, "tools/call", params)).error.code).toBe(-32002);
