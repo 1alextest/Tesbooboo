@@ -2702,25 +2702,6 @@ export interface ExecutionAutomationReport {
   updatedAt?: string;
 }
 
-export interface TestRunSchedule {
-  id: string;
-  projectId: string;
-  cycleId: string;
-  name: string;
-  enabled: boolean;
-  scheduleType: "one_time" | "recurring";
-  runAt: string | null;
-  intervalMinutes: number | null;
-  timezone: string;
-  nextRunAt: string | null;
-  lastRunAt: string | null;
-  lastStatus: string | null;
-  lastError: string | null;
-  createdBy: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export async function listTestRuns(projectId: string): Promise<TestRunListItem[]> {
   return api(`/api/projects/${projectId}/cycles`);
 }
@@ -2797,47 +2778,6 @@ export async function getAutomatedRunStatus(cycleId: string, runId: string): Pro
 
 export async function getLatestAutomatedRunStatus(cycleId: string): Promise<AutomatedRunLiveStatus> {
   return api<AutomatedRunLiveStatus>(`/api/cycles/${cycleId}/execute-automated/latest/status`);
-}
-
-export async function listTestRunSchedules(projectId: string): Promise<TestRunSchedule[]> {
-  return api<TestRunSchedule[]>(`/api/projects/${projectId}/cycles/schedules`);
-}
-
-export async function createTestRunSchedule(
-  projectId: string,
-  data: {
-    cycleId: string;
-    name: string;
-    scheduleType: "one_time" | "recurring";
-    runAt?: string;
-    intervalMinutes?: number;
-    timezone?: string;
-    enabled?: boolean;
-  }
-): Promise<TestRunSchedule> {
-  return api<TestRunSchedule>(`/api/projects/${projectId}/cycles/schedules`, {
-    method: "POST",
-    body: data,
-  });
-}
-
-export async function updateTestRunSchedule(
-  scheduleId: string,
-  data: {
-    cycleId?: string;
-    name?: string;
-    scheduleType?: "one_time" | "recurring";
-    runAt?: string;
-    intervalMinutes?: number;
-    timezone?: string;
-    enabled?: boolean;
-  }
-): Promise<void> {
-  await api(`/api/cycles/schedules/${scheduleId}`, { method: "PATCH", body: data });
-}
-
-export async function deleteTestRunSchedule(scheduleId: string): Promise<void> {
-  await api(`/api/cycles/schedules/${scheduleId}`, { method: "DELETE" });
 }
 
 // Sharing
