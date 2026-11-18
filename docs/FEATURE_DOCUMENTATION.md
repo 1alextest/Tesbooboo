@@ -1074,7 +1074,9 @@ new Test Run (a `cycles` row) cloned from the run it points at, with that run's 
 each occurrence keeps its own results instead of overwriting the scheduled run's executions.
 
 **Use cases:**
-- Schedule a nightly smoke-test run every 1440 minutes (24h).
+- Run a nightly smoke suite at 09:00 in the team's own timezone (and it stays 09:00 across DST).
+- Run on chosen weekdays at a fixed local time.
+- Run a fixed-interval schedule every 1440 minutes (an absolute interval, not a wall clock).
 - Schedule a one-time run for a specific release date/time in a given timezone.
 - Disable a schedule temporarily without deleting it; see the last outcome and any error.
 
@@ -1082,13 +1084,20 @@ each occurrence keeps its own results instead of overwriting the scheduled run's
 - `GET /api/projects/:projectId/cycles/schedules` lists the project's schedules with the scheduled
   run's name, next/last fire time, last status and last error.
 - `POST` and `PATCH` validate a bounded name, a Test Run from the same project, `scheduleType`
-  (`one_time` | `recurring`), an IANA timezone, a future one-time `runAt`, and a recurring interval
-  of 1–525600 minutes. A one-time schedule that already fired has `nextRunAt: null`; editing its
-  name cannot make it due again. `DELETE` removes the schedule.
+  (`one_time` | `recurring` | `daily` | `weekly`), an IANA timezone, a future one-time `runAt`, a
+  recurring interval of 1–525600 minutes, and — for local rules — a `localTime` in `HH:MM` plus, for
+  weekly, one or more days (`0`=Sunday .. `6`=Saturday). A one-time schedule that already fired has
+  `nextRunAt: null`; editing its name cannot make it due again. `DELETE` removes the schedule.
+- `daily`/`weekly` are true local wall-clock rules: the next instant is computed in the schedule's
+  timezone, so it follows DST instead of drifting by an hour. A local time that does not exist on the
+  spring-forward day is skipped to the next allowed day; an ambiguous fall-back time fires once.
 - The worker (`SchedulesService`) sweeps every 30 seconds by default. Claiming is one statement that
   marks the row running **and** advances `next_run_at` (`FOR UPDATE SKIP LOCKED`), so a crash cannot
-  fire the same occurrence twice. A claim older than 15 minutes is recovered as an interrupted run.
-  A one-time schedule disables itself after firing; recurring schedules continue; a failure records
+  fire the same occurrence twice. Fixed-interval and one-time rows advance in that statement; local
+  rules park a guard window there and write the computed local instant after the attempt, so a crash
+  can delay the next run but cannot double-fire it. A claim older than 15 minutes is recovered with
+  an error and, for local rules, the next occurrence recomputed.
+  A one-time schedule disables itself after firing; every other type continues; a failure records
   `lastStatus: "error"` and `lastError`.
 - Firing creates a Test Run named `<run> — scheduled <UTC instant>` through the same Approved-only
   case writer as every other run-creation path. The scheduled run's own executions are never
@@ -1098,14 +1107,16 @@ each occurrence keeps its own results instead of overwriting the scheduled run's
 - Environment: `SCHEDULES_WORKER_DISABLED=1` disables the worker; `SCHEDULE_SWEEP_INTERVAL_MS`
   changes the sweep interval.
 
-**Known limits:** the timezone is stored and validated, but recurrence is absolute minutes — a "daily
-at 09:00 local" schedule is a 1440-minute interval from its first fire, not a local wall-clock rule.
-There is no catch-up run for occurrences missed while the backend was down: a missed row fires once
-on restart and then continues.
+**Known limits:** `recurring` remains an absolute minute interval (no wall-clock anchor); use
+`daily`/`weekly` when local time matters. Occurrences missed while the backend was down are not
+replayed one by one: a due row fires once on recovery and then continues from its rule. A local time
+in a DST gap is skipped that day rather than shifted.
 
 **Coverage:** `e2e/api/execution-ops.spec.ts` EXO-A-07/08 (create/update/delete), EXO-A-08b (the worker
-fires a due schedule and creates the cloned run), EXO-A-09 (authorization), EXO-A-10/11/12/13
-(validation), plus `e2e/ui/cycles.spec.ts` for the form and `SWP-06` for the screen opening.
+fires a due schedule and creates the cloned run), EXO-A-14/15/16 (daily/weekly storage and validation),
+EXO-A-17 (a fired daily schedule re-arms at its local time and stays enabled), EXO-A-09
+(authorization), EXO-A-10/11/12/13 (validation), plus `e2e/ui/cycles.spec.ts` for the form (including
+the daily rule) and `SWP-06` for the screen opening. Unit tests pin the timezone/DST rule itself.
 
 **Edge cases worth testing when it changes:**
 - recurring with `intervalMinutes` at 0, negative, fractional or above the cap;
@@ -1116,9 +1127,10 @@ fires a due schedule and creates the cloned run), EXO-A-09 (authorization), EXO-
 
 **Key files:**
 - Backend: `Tesbo-Backend-Nest/src/schedules/` (`schedules.service.ts` with the worker and validated
-  writers, `schedules.controller.ts`, `schedules.module.ts`), plus
-  `LegacyService.createCycleFromScheduledRun`.
-- Schema: `Tesbo-Backend-Nest/migrations/V21_cycle_run_schedules.sql`.
+  writers, `local-time.ts` for the timezone/DST rule, `schedules.controller.ts`,
+  `schedules.module.ts`), plus `LegacyService.createCycleFromScheduledRun`.
+- Schema: `Tesbo-Backend-Nest/migrations/V21_cycle_run_schedules.sql` (the table) and
+  `V152_schedule_local_time.sql` (local rule columns and constraints).
 - Frontend: `Tesbo-Frontend/app/(app)/projects/[id]/cycles/schedule/page.tsx`, its client functions
   in `lib/api.ts`, and the Schedule action on the test-runs page.
 

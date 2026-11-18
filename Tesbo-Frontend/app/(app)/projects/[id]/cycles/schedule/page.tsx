@@ -15,7 +15,7 @@ import {
 } from "@/lib/api";
 import { Button, Input, Card, Field, FieldLabel, FieldError, Select } from "@/components/ui";
 import { PageHeader, StandardPageLayout, Breadcrumbs } from "@/components/workflows";
-import { validateScheduleRunAt } from "@/lib/validation";
+import { validateScheduleDays, validateScheduleLocalTime, validateScheduleRunAt } from "@/lib/validation";
 import { formatDateTime } from "@/lib/date";
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
@@ -46,6 +46,19 @@ function allTimezones(): string[] {
   return ["UTC"];
 }
 
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** A schedule's type as a person reads it: the local rule includes the zone it is local to. */
+function scheduleTypeLabel(schedule: TestRunSchedule): string {
+  if (schedule.scheduleType === "one_time") return "One-time";
+  if (schedule.scheduleType === "recurring") return `Every ${schedule.intervalMinutes}m`;
+  const time = schedule.localTime ?? "—";
+  if (schedule.scheduleType === "daily") return `Daily at ${time} (${schedule.timezone})`;
+  const days =
+    (schedule.daysOfWeek ?? []).map((day) => DAY_LABELS[day] ?? String(day)).join(", ") || "—";
+  return `Weekly ${days} at ${time} (${schedule.timezone})`;
+}
+
 export default function ScheduleRunsPage() {
   const params = useParams();
   const router = useRouter();
@@ -62,10 +75,14 @@ export default function ScheduleRunsPage() {
 
   const [name, setName] = useState("");
   const [cycleId, setCycleId] = useState("");
-  const [scheduleType, setScheduleType] = useState<"one_time" | "recurring">("one_time");
+  const [scheduleType, setScheduleType] = useState<"one_time" | "recurring" | "daily" | "weekly">("one_time");
   const [runAt, setRunAt] = useState("");
   const [runAtError, setRunAtError] = useState("");
   const [intervalMinutes, setIntervalMinutes] = useState(1440);
+  const [localTime, setLocalTime] = useState("09:00");
+  const [localTimeError, setLocalTimeError] = useState("");
+  const [daysOfWeek, setDaysOfWeek] = useState<number[]>([1]);
+  const [daysError, setDaysError] = useState("");
   const [timezone, setTimezone] = useState<string>(currentTimezone);
   // Computed once at mount: the option list itself doesn't change, only which one is selected.
   const [timezoneOptions] = useState<string[]>(() => {
@@ -112,7 +129,23 @@ export default function ScheduleRunsPage() {
         return;
       }
     }
+    if (scheduleType === "daily" || scheduleType === "weekly") {
+      const timeErr = validateScheduleLocalTime(localTime);
+      if (timeErr) {
+        setLocalTimeError(timeErr);
+        return;
+      }
+      if (scheduleType === "weekly") {
+        const daysErr = validateScheduleDays(daysOfWeek);
+        if (daysErr) {
+          setDaysError(daysErr);
+          return;
+        }
+      }
+    }
     setRunAtError("");
+    setLocalTimeError("");
+    setDaysError("");
     setSaving(true);
     try {
       await createTestRunSchedule(projectId, {
@@ -121,6 +154,8 @@ export default function ScheduleRunsPage() {
         scheduleType,
         runAt: scheduleType === "one_time" ? new Date(runAt).toISOString() : undefined,
         intervalMinutes: scheduleType === "recurring" ? intervalMinutes : undefined,
+        localTime: scheduleType === "daily" || scheduleType === "weekly" ? localTime : undefined,
+        daysOfWeek: scheduleType === "weekly" ? daysOfWeek : undefined,
         timezone,
         enabled: true,
       });
@@ -201,6 +236,7 @@ export default function ScheduleRunsPage() {
           <Field>
             <FieldLabel>Test Run</FieldLabel>
             <Select
+              aria-label="Test Run"
               value={cycleId}
               onChange={(e) => setCycleId(e.target.value)}
               required
@@ -216,11 +252,19 @@ export default function ScheduleRunsPage() {
           <Field>
             <FieldLabel>Schedule Type</FieldLabel>
             <Select
+              aria-label="Schedule Type"
               value={scheduleType}
-              onChange={(e) => setScheduleType(e.target.value as "one_time" | "recurring")}
+              onChange={(e) => {
+                setScheduleType(e.target.value as "one_time" | "recurring" | "daily" | "weekly");
+                setRunAtError("");
+                setLocalTimeError("");
+                setDaysError("");
+              }}
             >
               <option value="one_time">One-time</option>
-              <option value="recurring">Recurring</option>
+              <option value="recurring">Every N minutes</option>
+              <option value="daily">Daily at a local time</option>
+              <option value="weekly">Weekly on chosen days</option>
             </Select>
           </Field>
           <Field>
@@ -241,6 +285,7 @@ export default function ScheduleRunsPage() {
               <Field>
                 <FieldLabel>Run At</FieldLabel>
                 <Input
+                  aria-label="Run At"
                   type="datetime-local"
                   value={runAt}
                   min={toDatetimeLocalValue(new Date())}
@@ -253,11 +298,12 @@ export default function ScheduleRunsPage() {
                 {runAtError && <FieldError>{runAtError}</FieldError>}
               </Field>
             </div>
-          ) : (
+          ) : scheduleType === "recurring" ? (
             <div className="md:col-span-2">
               <Field>
                 <FieldLabel>Interval Minutes</FieldLabel>
                 <Input
+                  aria-label="Interval Minutes"
                   type="number"
                   min={1}
                   value={intervalMinutes}
@@ -265,6 +311,48 @@ export default function ScheduleRunsPage() {
                   required
                 />
               </Field>
+            </div>
+          ) : (
+            <div className="md:col-span-2 space-y-3">
+              <Field>
+                {/* The instant is resolved in the selected timezone, so DST is handled server-side. */}
+                <FieldLabel>Local time ({timezone})</FieldLabel>
+                <Input
+                  aria-label="Local time"
+                  type="time"
+                  value={localTime}
+                  onChange={(e) => {
+                    setLocalTime(e.target.value);
+                    setLocalTimeError(validateScheduleLocalTime(e.target.value));
+                  }}
+                  required
+                />
+                {localTimeError && <FieldError>{localTimeError}</FieldError>}
+              </Field>
+              {scheduleType === "weekly" && (
+                <Field>
+                  <FieldLabel>Days</FieldLabel>
+                  <div className="flex flex-wrap gap-3">
+                    {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((label, day) => (
+                      <label key={day} className="flex items-center gap-1 text-[12.5px]">
+                        <input
+                          type="checkbox"
+                          checked={daysOfWeek.includes(day)}
+                          onChange={(e) =>
+                            setDaysOfWeek((current) =>
+                              e.target.checked
+                                ? [...current, day].sort((a, b) => a - b)
+                                : current.filter((value) => value !== day)
+                            )
+                          }
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                  {daysError && <FieldError>{daysError}</FieldError>}
+                </Field>
+              )}
             </div>
           )}
           <div className="md:col-span-2 flex justify-end">
@@ -303,9 +391,7 @@ export default function ScheduleRunsPage() {
                     <tr key={s.id}>
                       <td className="px-4 py-3">{s.name}</td>
                       <td className="px-4 py-3">{run?.name ?? s.cycleId}</td>
-                      <td className="px-4 py-3">
-                        {s.scheduleType === "one_time" ? "One-time" : `Every ${s.intervalMinutes}m`}
-                      </td>
+                      <td className="px-4 py-3">{scheduleTypeLabel(s)}</td>
                       <td className="px-4 py-3">{s.nextRunAt ? formatDateTime(s.nextRunAt) : "—"}</td>
                       <td className="px-4 py-3">{s.lastStatus ?? "—"}</td>
                       <td className="px-4 py-3">

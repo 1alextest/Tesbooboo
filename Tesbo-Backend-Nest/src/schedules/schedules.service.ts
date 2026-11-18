@@ -10,9 +10,10 @@ import {
 } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
+import { nextLocalRunAt } from "./local-time";
 
 type Body = Record<string, any>;
-type ScheduleType = "one_time" | "recurring";
+type ScheduleType = "one_time" | "recurring" | "daily" | "weekly";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const SCHEDULE_NAME_MAX = 255;
@@ -21,19 +22,46 @@ const CLAIM_LIMIT = 5;
 const STUCK_AFTER_MINUTES = 15;
 const LAST_ERROR_MAX = 500;
 
-/** A schedule's first (or next) fire instant. Recurring schedules without a start fire one interval out. */
+/**
+ * A schedule's first (or next) fire instant. Recurring schedules without a start fire one interval
+ * out; daily/weekly rules are resolved in the schedule's own timezone (see local-time.ts).
+ */
 export function computeNextRunAt(
-  input: { scheduleType: ScheduleType; runAt: Date | null; intervalMinutes: number | null },
+  input: {
+    scheduleType: ScheduleType;
+    runAt: Date | null;
+    intervalMinutes: number | null;
+    /** Only read for daily/weekly; the service validates it before calling. */
+    timezone?: string;
+    localTime?: string | null;
+    daysOfWeek?: number[] | null;
+  },
   now: Date = new Date()
 ): Date {
   if (input.scheduleType === "one_time") {
     if (!input.runAt) throw new BadRequestException({ error: "Run At is required for a one-time schedule" });
     return input.runAt;
   }
-  if (!input.intervalMinutes || input.intervalMinutes < 1) {
-    throw new BadRequestException({ error: "Interval minutes must be at least 1" });
+  if (input.scheduleType === "recurring") {
+    if (!input.intervalMinutes || input.intervalMinutes < 1) {
+      throw new BadRequestException({ error: "Interval minutes must be at least 1" });
+    }
+    return input.runAt ?? new Date(now.getTime() + input.intervalMinutes * 60_000);
   }
-  return input.runAt ?? new Date(now.getTime() + input.intervalMinutes * 60_000);
+  if (!input.localTime) {
+    throw new BadRequestException({ error: "Local time is required for a daily or weekly schedule" });
+  }
+  if (input.scheduleType === "weekly" && !input.daysOfWeek?.length) {
+    throw new BadRequestException({ error: "Choose at least one day of the week" });
+  }
+  return nextLocalRunAt(
+    {
+      timezone: input.timezone ?? "UTC",
+      localTime: input.localTime,
+      daysOfWeek: input.scheduleType === "weekly" ? input.daysOfWeek ?? null : null
+    },
+    now
+  );
 }
 
 export function validateScheduleName(value: unknown): string {
@@ -82,10 +110,31 @@ export function validateScheduleInterval(value: unknown): number {
 }
 
 export function validateScheduleType(value: unknown): ScheduleType {
-  if (value !== "one_time" && value !== "recurring") {
-    throw new BadRequestException({ error: "Schedule type must be one_time or recurring" });
+  if (value !== "one_time" && value !== "recurring" && value !== "daily" && value !== "weekly") {
+    throw new BadRequestException({ error: "Schedule type must be one_time, recurring, daily or weekly" });
   }
   return value;
+}
+
+/** HH:MM in the schedule's timezone. The instant is resolved later; this only checks the wall clock. */
+export function validateLocalTime(value: unknown): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(text)) {
+    throw new BadRequestException({ error: "Local time must be HH:MM (24-hour)" });
+  }
+  return text;
+}
+
+/** 0=Sunday .. 6=Saturday, deduplicated and sorted. */
+export function validateDaysOfWeek(value: unknown): number[] {
+  if (!Array.isArray(value) || !value.length) {
+    throw new BadRequestException({ error: "Choose at least one day of the week" });
+  }
+  const days = [...new Set(value.map(Number))];
+  if (days.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) {
+    throw new BadRequestException({ error: "Days of the week must be integers from 0 (Sunday) to 6 (Saturday)" });
+  }
+  return days.sort((a, b) => a - b);
 }
 
 /**
@@ -144,6 +193,8 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
       runAt: iso(row.run_at),
       intervalMinutes: row.interval_minutes === null || row.interval_minutes === undefined ? null : Number(row.interval_minutes),
       timezone: row.timezone,
+      localTime: row.local_time ? String(row.local_time).slice(0, 5) : null,
+      daysOfWeek: Array.isArray(row.days_of_week) ? row.days_of_week.map(Number) : null,
       nextRunAt: iso(row.next_run_at),
       lastRunAt: iso(row.last_run_at),
       lastStatus: row.last_status ?? null,
@@ -182,22 +233,28 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
     const now = new Date();
     let runAt: Date | null = null;
     let intervalMinutes: number | null = null;
+    let localTime: string | null = null;
+    let daysOfWeek: number[] | null = null;
     if (scheduleType === "one_time") {
       runAt = parseScheduleRunAt(body?.runAt, now);
-    } else {
+    } else if (scheduleType === "recurring") {
       intervalMinutes = validateScheduleInterval(body?.intervalMinutes);
       if (body?.runAt !== undefined && body?.runAt !== null && body?.runAt !== "") {
         runAt = parseScheduleRunAt(body.runAt, now);
       }
+    } else {
+      localTime = validateLocalTime(body?.localTime);
+      daysOfWeek = scheduleType === "weekly" ? validateDaysOfWeek(body?.daysOfWeek) : null;
     }
-    const nextRunAt = computeNextRunAt({ scheduleType, runAt, intervalMinutes }, now);
+    const nextRunAt = computeNextRunAt({ scheduleType, runAt, intervalMinutes, timezone, localTime, daysOfWeek }, now);
     const enabled = body?.enabled !== false;
     const res = await this.db.query(
       `INSERT INTO cycle_run_schedules
-         (project_id, cycle_id, name, enabled, schedule_type, run_at, interval_minutes, timezone, next_run_at, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         (project_id, cycle_id, name, enabled, schedule_type, run_at, interval_minutes, timezone,
+          local_time, days_of_week, next_run_at, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        RETURNING *`,
-      [projectId, cycleId, name, enabled, scheduleType, runAt, intervalMinutes, timezone, nextRunAt, userId]
+      [projectId, cycleId, name, enabled, scheduleType, runAt, intervalMinutes, timezone, localTime, daysOfWeek, nextRunAt, userId]
     );
     const cycleRow = await this.db.query("SELECT name FROM cycles WHERE id = $1", [cycleId]);
     return this.view({ ...res.rows[0], cycle_name: cycleRow.rows[0]?.name ?? null, cycle_deleted: false });
@@ -214,18 +271,33 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
     const scheduleType: ScheduleType = body?.scheduleType === undefined ? row.schedule_type : validateScheduleType(body.scheduleType);
     const enabled = body?.enabled === undefined ? row.enabled === true : body.enabled !== false;
     const schedulingChanged =
-      body?.scheduleType !== undefined || body?.runAt !== undefined || body?.intervalMinutes !== undefined;
+      body?.scheduleType !== undefined ||
+      body?.runAt !== undefined ||
+      body?.intervalMinutes !== undefined ||
+      body?.localTime !== undefined ||
+      body?.daysOfWeek !== undefined;
     const enabling = enabled && row.enabled !== true;
 
     let runAt: Date | null = row.run_at ? new Date(row.run_at) : null;
     let intervalMinutes: number | null = row.interval_minutes === null ? null : Number(row.interval_minutes);
+    let localTime: string | null = row.local_time ? String(row.local_time).slice(0, 5) : null;
+    let daysOfWeek: number[] | null = Array.isArray(row.days_of_week) ? row.days_of_week.map(Number) : null;
     let nextRunAt: Date | null;
+    // A timezone edit changes the next instant for a local rule, but not for a fixed minute interval.
+    const mustRecompute =
+      schedulingChanged ||
+      enabling ||
+      (timezone !== row.timezone && (scheduleType === "daily" || scheduleType === "weekly"));
+    const recompute = () =>
+      computeNextRunAt({ scheduleType, runAt, intervalMinutes, timezone, localTime, daysOfWeek }, now);
 
     if (scheduleType === "one_time") {
       if (body?.runAt !== undefined) runAt = parseScheduleRunAt(body.runAt, now);
       if (!runAt) throw new BadRequestException({ error: "Run At is required for a one-time schedule" });
       intervalMinutes = null;
-      if (schedulingChanged || enabling) {
+      localTime = null;
+      daysOfWeek = null;
+      if (mustRecompute) {
         if (runAt.getTime() <= now.getTime()) {
           throw new BadRequestException({ error: "Date and time must be in future" });
         }
@@ -235,30 +307,44 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
         // make it due again.
         nextRunAt = row.next_run_at ? new Date(row.next_run_at) : null;
       }
-      if (row.schedule_type !== "one_time" && !body?.runAt) {
-        throw new BadRequestException({ error: "Run At is required for a one-time schedule" });
-      }
-    } else {
+    } else if (scheduleType === "recurring") {
       if (body?.intervalMinutes !== undefined) intervalMinutes = validateScheduleInterval(body.intervalMinutes);
       if (!intervalMinutes) throw new BadRequestException({ error: "Interval minutes are required for a recurring schedule" });
       if (body?.runAt !== undefined) {
         runAt = body.runAt === null || body.runAt === "" ? null : parseScheduleRunAt(body.runAt, now);
       }
-      nextRunAt =
-        schedulingChanged || enabling
-          ? computeNextRunAt({ scheduleType, runAt, intervalMinutes }, now)
-          : row.next_run_at
-            ? new Date(row.next_run_at)
-            : computeNextRunAt({ scheduleType, runAt: null, intervalMinutes }, now);
+      localTime = null;
+      daysOfWeek = null;
+      nextRunAt = mustRecompute
+        ? recompute()
+        : row.next_run_at
+          ? new Date(row.next_run_at)
+          : recompute();
+    } else {
+      if (body?.localTime !== undefined) localTime = validateLocalTime(body.localTime);
+      if (!localTime) throw new BadRequestException({ error: "Local time is required for a daily or weekly schedule" });
+      if (scheduleType === "weekly") {
+        if (body?.daysOfWeek !== undefined) daysOfWeek = validateDaysOfWeek(body.daysOfWeek);
+        if (!daysOfWeek?.length) throw new BadRequestException({ error: "Choose at least one day of the week" });
+      } else {
+        daysOfWeek = null;
+      }
+      runAt = null;
+      intervalMinutes = null;
+      nextRunAt = mustRecompute
+        ? recompute()
+        : row.next_run_at
+          ? new Date(row.next_run_at)
+          : recompute();
     }
 
     const res = await this.db.query(
       `UPDATE cycle_run_schedules
        SET name = $2, enabled = $3, schedule_type = $4, run_at = $5, interval_minutes = $6,
-           timezone = $7, next_run_at = $8, updated_at = now()
+           timezone = $7, local_time = $8, days_of_week = $9, next_run_at = $10, updated_at = now()
        WHERE id = $1
        RETURNING *`,
-      [scheduleId, name, enabled, scheduleType, runAt, intervalMinutes, timezone, nextRunAt]
+      [scheduleId, name, enabled, scheduleType, runAt, intervalMinutes, timezone, localTime, daysOfWeek, nextRunAt]
     );
     const cycleRow = await this.db.query("SELECT name, (deleted_at IS NOT NULL) AS deleted FROM cycles WHERE id = $1", [
       res.rows[0].cycle_id
@@ -293,17 +379,53 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async recoverInterrupted() {
-    const res = await this.db.query(
-      `UPDATE cycle_run_schedules
-       SET is_running = false,
-           last_status = 'error',
-           last_error = 'The scheduled run was interrupted before it finished.',
-           enabled = CASE WHEN schedule_type = 'one_time' THEN false ELSE enabled END,
-           updated_at = now()
+    const stuck = await this.db.query<Body>(
+      `SELECT id, schedule_type, timezone, local_time, days_of_week
+       FROM cycle_run_schedules
        WHERE is_running = true AND updated_at < now() - make_interval(mins => $1)`,
       [STUCK_AFTER_MINUTES]
     );
-    if (res.rowCount) this.logger.warn(`Recovered ${res.rowCount} interrupted schedule run(s).`);
+    for (const row of stuck.rows) {
+      await this.db.query(
+        `UPDATE cycle_run_schedules
+         SET is_running = false,
+             last_status = 'error',
+             last_error = 'The scheduled run was interrupted before it finished.',
+             enabled = CASE WHEN schedule_type = 'one_time' THEN false ELSE enabled END,
+             next_run_at = COALESCE($2::timestamptz, next_run_at),
+             updated_at = now()
+         WHERE id = $1`,
+        [row.id, this.nextLocalFor(row)]
+      );
+    }
+    if (stuck.rowCount) this.logger.warn(`Recovered ${stuck.rowCount} interrupted schedule run(s).`);
+  }
+
+  /**
+   * The next local occurrence for a daily/weekly row, or null for other types and on a rule error.
+   * Local rules cannot be advanced in the claim statement (the next instant needs the zone's
+   * calendar), so the claim parks a guard window and this fills in the real instant afterwards.
+   */
+  private nextLocalFor(row: Body): Date | null {
+    if (row.schedule_type !== "daily" && row.schedule_type !== "weekly") return null;
+    try {
+      return nextLocalRunAt(
+        {
+          timezone: String(row.timezone),
+          localTime: String(row.local_time).slice(0, 5),
+          daysOfWeek:
+            row.schedule_type === "weekly" && Array.isArray(row.days_of_week)
+              ? row.days_of_week.map(Number)
+              : null
+        },
+        new Date()
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Could not compute the next local occurrence for schedule ${row.id}: ${error instanceof Error ? error.message : error}`
+      );
+      return null;
+    }
   }
 
   /**
@@ -327,6 +449,10 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
            updated_at = now(),
            next_run_at = CASE
              WHEN s.schedule_type = 'recurring' THEN $1::timestamptz + make_interval(mins => s.interval_minutes)
+             -- Guard windows longer than the rule's maximum gap: the real local occurrence is
+             -- written after the attempt, and a crash cannot make the row due again in between.
+             WHEN s.schedule_type = 'daily' THEN $1::timestamptz + interval '25 hours'
+             WHEN s.schedule_type = 'weekly' THEN $1::timestamptz + interval '8 days'
              ELSE NULL
            END
        FROM due
@@ -339,6 +465,9 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
 
   private async runClaimed(row: Body) {
     const scheduledFor = row.due_at ? new Date(row.due_at) : new Date();
+    // The claim parked a guard window for local rules; write the real next occurrence for both the
+    // success and failure paths. Null (non-local types) leaves the claim's advancement untouched.
+    const nextLocal = this.nextLocalFor(row);
     try {
       await this.legacy.createCycleFromScheduledRun({
         projectId: row.project_id,
@@ -349,9 +478,10 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
         `UPDATE cycle_run_schedules
          SET is_running = false, last_run_at = now(), last_status = 'success', last_error = NULL,
              enabled = CASE WHEN schedule_type = 'one_time' THEN false ELSE enabled END,
+             next_run_at = COALESCE($2::timestamptz, next_run_at),
              updated_at = now()
          WHERE id = $1`,
-        [row.id]
+        [row.id, nextLocal]
       );
     } catch (error) {
       const message = (error instanceof Error ? error.message : String(error)).slice(0, LAST_ERROR_MAX);
@@ -360,9 +490,10 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
         `UPDATE cycle_run_schedules
          SET is_running = false, last_run_at = now(), last_status = 'error', last_error = $2,
              enabled = CASE WHEN schedule_type = 'one_time' THEN false ELSE enabled END,
+             next_run_at = COALESCE($3::timestamptz, next_run_at),
              updated_at = now()
          WHERE id = $1`,
-        [row.id, message]
+        [row.id, message, nextLocal]
       );
     }
   }
