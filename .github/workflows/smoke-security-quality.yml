@@ -190,6 +190,18 @@ jobs:
         run: |
           npx playwright test -c playwright.config.ts api/model-studio.spec.ts ui/model-studio.spec.ts --workers=10 --output=test-results-model-studio --list
           npx playwright test -c playwright.config.ts api/model-studio.spec.ts ui/model-studio.spec.ts --workers=10 --output=test-results-model-studio
+      - name: Verify knowledge base Trash and subtree restore
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-kb
+        run: |
+          # Neither KB spec was referenced by a workflow before this step. Trash adds a real UI path
+          # and folder restore now brings back the subtree deleted with it, so the delete/restore
+          # contract needs to run. Select the impacted tests only: the UI file also carries
+          # intentionally red editor-validation tests (KBU-25/26).
+          selection="KB-A-05|KB-A-07|KB-A-21|KB-A-50|KB-A-51|KB-A-52|KB-A-53|KBU-08|KBU-09|KBU-10|KBU-10b|KBU-24"
+          npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts ui/knowledge-base.spec.ts --workers=10 --output=test-results-kb -g "$selection" --list
+          npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts ui/knowledge-base.spec.ts --workers=10 --output=test-results-kb -g "$selection"
       - name: Verify fresh MCP catalog and canonical QA fields on isolated backend
         working-directory: e2e
         env:

@@ -4076,8 +4076,30 @@ export function deleteKnowledgeFolder(projectId: string, folderId: string): Prom
   return api(`/api/projects/${projectId}/knowledge-base/folders/${folderId}`, { method: "DELETE" });
 }
 
-export function restoreKnowledgeFolder(projectId: string, folderId: string): Promise<KnowledgeFolder> {
+export function restoreKnowledgeFolder(
+  projectId: string,
+  folderId: string
+): Promise<KnowledgeFolder & { restoredFolders?: number; restoredDocuments?: number }> {
   return api(`/api/projects/${projectId}/knowledge-base/folders/${folderId}/restore`, { method: "PATCH" });
+}
+
+interface KnowledgeTrashEntryBase {
+  id: string;
+  deletedAt: string;
+  /** False when the item cannot come back (parent still deleted, integration removal, file bytes gone). */
+  restorable: boolean;
+  unavailableReason: string | null;
+}
+
+export interface KnowledgeTrash {
+  folders: Array<KnowledgeTrashEntryBase & { name: string; parentFolderId: string | null; parentName: string | null }>;
+  documents: Array<KnowledgeTrashEntryBase & { title: string; folderId: string | null; folderName: string | null }>;
+  files: Array<KnowledgeTrashEntryBase & { name: string; folderId: string | null; folderName: string | null }>;
+  note: string;
+}
+
+export function getKnowledgeTrash(projectId: string): Promise<KnowledgeTrash> {
+  return api(`/api/projects/${projectId}/knowledge-base/trash`);
 }
 
 // Documents

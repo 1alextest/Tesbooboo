@@ -11307,6 +11307,99 @@ export class LegacyService implements OnModuleInit {
     );
   }
 
+  /**
+   * Everything the project has moved to Trash, with whether it can come back.
+   *
+   * Documents and folders are recoverable; uploaded files are not — deleting a file removes its
+   * bytes from storage (deleteKnowledgeFile), so restoring only the row would produce an item that
+   * lists correctly and 404s on download. Files are therefore listed with restorable:false instead
+   * of being hidden from the Trash that the delete confirmation promised.
+   */
+  async listKnowledgeTrash(projectId: string, userId: string | null | undefined) {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    const iso = (value: unknown) => (value ? new Date(value as string).toISOString() : null);
+    const folders = await this.db.query(
+      `SELECT f.id, f.name, f.parent_folder_id, f.deleted_at, f.deletion_reason, f.source_provider,
+              p.name AS parent_name, COALESCE(p.is_deleted, false) AS parent_deleted
+       FROM knowledge_folders f
+       LEFT JOIN knowledge_folders p ON p.id = f.parent_folder_id AND p.project_id = f.project_id
+       WHERE f.project_id = $1 AND f.is_deleted = true AND f.is_root = false
+       ORDER BY f.deleted_at DESC, f.name ASC`,
+      [projectId]
+    );
+    const documents = await this.db.query(
+      `SELECT d.id, d.title, d.folder_id, d.deleted_at,
+              f.name AS folder_name, COALESCE(f.is_deleted, false) AS folder_deleted,
+              f.deletion_reason AS folder_deletion_reason, f.source_provider AS folder_source_provider
+       FROM knowledge_documents d
+       LEFT JOIN knowledge_folders f ON f.id = d.folder_id AND f.project_id = d.project_id
+       WHERE d.project_id = $1 AND d.is_deleted = true
+       ORDER BY d.deleted_at DESC, d.title ASC`,
+      [projectId]
+    );
+    const files = await this.db.query(
+      `SELECT kf.id, kf.original_file_name, kf.folder_id, kf.deleted_at,
+              f.name AS folder_name, COALESCE(f.is_deleted, false) AS folder_deleted
+       FROM knowledge_files kf
+       LEFT JOIN knowledge_folders f ON f.id = kf.folder_id AND f.project_id = kf.project_id
+       WHERE kf.project_id = $1 AND kf.is_deleted = true
+       ORDER BY kf.deleted_at DESC, kf.original_file_name ASC`,
+      [projectId]
+    );
+    const disconnectedReason = (provider: string | null) => {
+      const providerName = PROVIDER_FOLDER_NAMES[provider || ""];
+      const disconnectedWhat = providerName ? `${providerName} was disconnected` : "the integration was disconnected";
+      return `This was removed when ${disconnectedWhat} and can't be restored. Reconnect and sync to create a new one.`;
+    };
+    const FILE_LOST = "File content is permanently removed from storage when a file is deleted, so it can't be restored.";
+    return {
+      folders: folders.rows.map((row) => {
+        const disconnected = row.deletion_reason === "integration_disconnect";
+        const blockedByParent = row.parent_deleted === true;
+        return {
+          id: row.id,
+          name: row.name,
+          parentFolderId: row.parent_folder_id ?? null,
+          parentName: row.parent_name ?? null,
+          deletedAt: iso(row.deleted_at),
+          restorable: !disconnected && !blockedByParent,
+          unavailableReason: disconnected
+            ? disconnectedReason(row.source_provider)
+            : blockedByParent
+              ? "Restore the containing folder first."
+              : null
+        };
+      }),
+      documents: documents.rows.map((row) => {
+        const folderDeleted = row.folder_deleted === true;
+        const disconnected = row.folder_deletion_reason === "integration_disconnect";
+        return {
+          id: row.id,
+          title: row.title,
+          folderId: row.folder_id ?? null,
+          folderName: row.folder_name ?? null,
+          deletedAt: iso(row.deleted_at),
+          restorable: !folderDeleted,
+          unavailableReason: !folderDeleted
+            ? null
+            : disconnected
+              ? disconnectedReason(row.folder_source_provider)
+              : "Restore the containing folder first."
+        };
+      }),
+      files: files.rows.map((row) => ({
+        id: row.id,
+        name: row.original_file_name,
+        folderId: row.folder_id ?? null,
+        folderName: row.folder_name ?? null,
+        deletedAt: iso(row.deleted_at),
+        restorable: false,
+        unavailableReason: FILE_LOST
+      })),
+      note: "Restoring a folder also restores the folders and documents deleted with it. Deleted files cannot be restored because their content is removed from storage."
+    };
+  }
+
   async deleteKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
@@ -11344,8 +11437,17 @@ export class LegacyService implements OnModuleInit {
     // Restore resolves nothing first (a deleted row is invisible to kbFolder), so the uuid guard
     // has to sit here rather than in the resolver.
     if (!isUuid(folderId)) throw new NotFoundException({ error: "Folder not found" });
-    const existing = await this.db.query<{ deletion_reason: string | null; source_provider: string | null }>(
-      "SELECT deletion_reason, source_provider FROM knowledge_folders WHERE id = $1 AND project_id = $2",
+    // deleted_at is read as text on purpose: node-postgres parses timestamptz to a JS Date, which
+    // truncates PostgreSQL's microseconds. Comparing the rounded value back to the stored row made
+    // every restore match zero rows. The text form round-trips exactly.
+    const existing = await this.db.query<{
+      name: string;
+      is_deleted: boolean;
+      deleted_at: string | null;
+      deletion_reason: string | null;
+      source_provider: string | null;
+    }>(
+      "SELECT name, is_deleted, deleted_at::text AS deleted_at, deletion_reason, source_provider FROM knowledge_folders WHERE id = $1 AND project_id = $2",
       [folderId, projectId]
     );
     if (!existing.rows[0]) throw new NotFoundException({ error: "Folder not found" });
@@ -11356,13 +11458,39 @@ export class LegacyService implements OnModuleInit {
         error: `This folder was removed when ${disconnectedWhat} and can't be restored. Reconnect and sync to create a new one.`
       });
     }
-    const res = await this.db.query(
-      "UPDATE knowledge_folders SET is_deleted = false, deleted_at = NULL, updated_by = $2, updated_at = now() WHERE id = $1 AND project_id = $3 RETURNING *",
-      [folderId, uid, projectId]
-    );
-    if (!res.rows[0]) throw new NotFoundException({ error: "Folder not found" });
-    await this.logProjectActivity(projectId, uid, "restored", "knowledge_folder", folderId, res.rows[0].name, {});
-    return toCamel(res.rows[0]);
+    // Restoring an active folder is a no-op, not an error: the Trash may be stale.
+    if (!existing.rows[0].is_deleted) {
+      const active = await this.db.query("SELECT * FROM knowledge_folders WHERE id = $1 AND project_id = $2", [folderId, projectId]);
+      return toCamel(active.rows[0]);
+    }
+
+    // Deleting a folder soft-deletes the whole subtree in one transaction, so every row it took
+    // down shares the folder's deleted_at. Restoring only the folder row (the old behaviour) left
+    // its documents and subfolders in Trash and produced an empty-looking folder.
+    const restored = await this.db.transaction(async (client) => {
+      const deletedAt = existing.rows[0].deleted_at;
+      const folders = await client.query(
+        `${LegacyService.DESCENDANTS_CTE}
+         UPDATE knowledge_folders SET is_deleted = false, deleted_at = NULL, updated_by = $2, updated_at = now()
+         WHERE id IN (SELECT id FROM descendants) AND project_id = $3 AND is_deleted = true AND deleted_at = $4::timestamptz
+         RETURNING id`,
+        [[folderId], uid, projectId, deletedAt]
+      );
+      // Files are deliberately not restored: deleteKnowledgeFolder and deleteKnowledgeFile remove
+      // their bytes from storage, so a restored row would list and then fail to download.
+      const documents = await client.query(
+        `${LegacyService.DESCENDANTS_CTE}
+         UPDATE knowledge_documents SET is_deleted = false, deleted_at = NULL, updated_by = $2, updated_at = now()
+         WHERE folder_id IN (SELECT id FROM descendants) AND project_id = $3 AND is_deleted = true AND deleted_at = $4::timestamptz
+         RETURNING id`,
+        [[folderId], uid, projectId, deletedAt]
+      );
+      const folder = await client.query("SELECT * FROM knowledge_folders WHERE id = $1 AND project_id = $2", [folderId, projectId]);
+      return { folder: folder.rows[0], folders: folders.rowCount ?? 0, documents: documents.rowCount ?? 0 };
+    });
+    if (!restored.folder) throw new NotFoundException({ error: "Folder not found" });
+    await this.logProjectActivity(projectId, uid, "restored", "knowledge_folder", folderId, restored.folder.name, {});
+    return { ...toCamel(restored.folder), restoredFolders: restored.folders, restoredDocuments: restored.documents };
   }
 
   // Bundles a folder (and every non-deleted subfolder beneath it) into a zip: documents as
@@ -12214,11 +12342,40 @@ export class LegacyService implements OnModuleInit {
     const role = await this.kbProjectRole(uid, projectId);
     this.kbRequireOwnerOrManager(role);
     if (!isUuid(documentId)) throw new NotFoundException({ error: "Document not found" });
-    const res = await this.db.query(
-      `UPDATE knowledge_documents SET is_deleted = false, deleted_at = NULL, updated_by = $2, updated_at = now()
-       WHERE id = $1 AND project_id = $3 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-      [documentId, uid, projectId]
+    const existing = await this.db.query(
+      `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents WHERE id = $1 AND project_id = $2`,
+      [documentId, projectId]
     );
+    const document = existing.rows[0];
+    if (!document) throw new NotFoundException({ error: "Document not found" });
+    // A document restored into a still-deleted folder would be invisible in every listing while
+    // looking restored. Deleting a folder and its contents together is one action; restoring the
+    // folder brings those documents back with it.
+    if (document.is_deleted && document.folder_id) {
+      const folder = await this.db.query<{ is_deleted: boolean; deletion_reason: string | null; source_provider: string | null }>(
+        "SELECT is_deleted, deletion_reason, source_provider FROM knowledge_folders WHERE id = $1 AND project_id = $2",
+        [document.folder_id, projectId]
+      );
+      const parent = folder.rows[0];
+      if (parent?.is_deleted) {
+        if (parent.deletion_reason === "integration_disconnect") {
+          const providerName = PROVIDER_FOLDER_NAMES[parent.source_provider || ""];
+          const disconnectedWhat = providerName ? `${providerName} was disconnected` : "the integration was disconnected";
+          throw new BadRequestException({
+            error: `This document was removed when ${disconnectedWhat} and can't be restored. Reconnect and sync to create a new one.`
+          });
+        }
+        throw new ConflictException({ error: "Restore the containing folder first" });
+      }
+    }
+    // Restoring an active document is a no-op, not an error: the Trash may be stale.
+    const res = document.is_deleted
+      ? await this.db.query(
+          `UPDATE knowledge_documents SET is_deleted = false, deleted_at = NULL, updated_by = $2, updated_at = now()
+           WHERE id = $1 AND project_id = $3 AND is_deleted = true RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+          [documentId, uid, projectId]
+        )
+      : existing;
     if (!res.rows[0]) throw new NotFoundException({ error: "Document not found" });
     await this.logProjectActivity(projectId, uid, "restored", "knowledge_document", documentId, res.rows[0].title, {});
     return toCamel(res.rows[0]);
