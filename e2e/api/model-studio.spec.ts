@@ -165,6 +165,59 @@ test.describe("persisted Model Studio revisions and mappings", () => {
     }
   });
 
+  test("archiving retires a model from every surface and keeps its mapping history", async () => {
+    const tenant = await provisionRbacTenant("model-studio");
+    test.skip(!tenant, "requires direct SQL control for the disposable tenant");
+    const projectId = tenant!.mainProjectId;
+    const base = `/api/projects/${projectId}/model-studio/models`;
+    const owner = await loginAs(tenant!.owner);
+    let modelId = "";
+    let caseId = "";
+    try {
+      const created = await owner.post(base, { data: { name: `E2E archived model ${Date.now()}`, model: MODEL } });
+      expect(created.status(), await created.text()).toBe(201);
+      const model = await created.json();
+      modelId = model.id;
+      const revisionId = model.latestRevision.id;
+
+      const createdCase = await owner.post(`/api/projects/${projectId}/testcases`, {
+        data: { title: `E2E archived model case ${Date.now()}` }
+      });
+      expect(createdCase.status(), await createdCase.text()).toBe(201);
+      caseId = (await createdCase.json()).id;
+      const caseRevision = (await (await owner.get(`/api/projects/${projectId}/testcases/${caseId}`)).json()).editRevision;
+      const linked = await owner.post(`${base}/${modelId}/revisions/${revisionId}/links`, {
+        data: { testcaseId: caseId, elementIds: ["finish"], testcaseRevision: caseRevision }
+      });
+      expect(linked.status(), await linked.text()).toBe(201);
+
+      // Archiving is a retirement of the whole model, not a delete of its history.
+      const archived = await owner.delete(`${base}/${modelId}`);
+      expect(archived.status(), await archived.text()).toBe(200);
+      expect(await archived.json()).toMatchObject({ ok: true, id: modelId });
+
+      const listed = await (await owner.get(base)).json();
+      expect(listed.map((row: { id: string }) => row.id)).not.toContain(modelId);
+      expect((await owner.get(`${base}/${modelId}`)).status()).toBe(404);
+      expect((await owner.get(`${base}/${modelId}/coverage`)).status()).toBe(404);
+      expect((await owner.post(`${base}/${modelId}/revisions`, { data: { model: MODEL } })).status()).toBe(404);
+      expect((await owner.post(`${base}/${modelId}/revisions/${revisionId}/generate`, { data: {} })).status()).toBe(404);
+      // A second archive must not report success for a model that was already retired.
+      expect((await owner.delete(`${base}/${modelId}`)).status()).toBe(404);
+      // A model id from another project cannot be archived through this project's URL.
+      expect((await owner.delete(`/api/projects/${tenant!.secondProjectId}/model-studio/models/${modelId}`)).status()).toBe(404);
+      // The link and revision rows survive archive: this is history, not a cascade delete.
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM mbt_model_case_links
+        WHERE model_id = ${literal(modelId)} AND project_id = ${literal(projectId)};`))).toBe(1);
+      expect(scalar(`SELECT (archived_at IS NOT NULL)::text FROM mbt_models
+        WHERE id = ${literal(modelId)} AND project_id = ${literal(projectId)};`)).toBe("true");
+    } finally {
+      if (caseId) await owner.delete(`/api/projects/${projectId}/testcases/${caseId}`, { failOnStatusCode: false });
+      if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(projectId)};`);
+      await owner.dispose();
+    }
+  });
+
   test("bounded generation is deterministic, respects bounds and writes no case or run", async () => {
     const tenant = await provisionRbacTenant("model-studio");
     test.skip(!tenant, "requires direct SQL control for the disposable tenant");

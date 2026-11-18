@@ -84,3 +84,27 @@ test("a persisted model revision renders as a graph and accessible tables", asyn
     await api.dispose();
   }
 });
+
+test("archiving a model in the studio removes it from the list and keeps its history", async ({ page }) => {
+  const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  const name = `E2E archive model ${Date.now()}`;
+  let modelId = "";
+  try {
+    const created = await api.post(`/api/projects/${ctx.projectId}/model-studio/models`, { data: { name, model: MODEL } });
+    expect(created.status(), await created.text()).toBe(201);
+    modelId = (await created.json()).id;
+
+    // Archive is confirmed before it retires the model; accept the dialog so the click proceeds.
+    page.on("dialog", (dialog) => dialog.accept());
+    await page.goto(`/projects/${ctx.projectId}/model-studio`);
+    await page.getByRole("button", { name, exact: false }).click();
+    // Exact: the model's own nav button is named "E2E archive model …" and would also match.
+    await page.getByRole("button", { name: "Archive model", exact: true }).click();
+
+    await expect(page.getByRole("button", { name, exact: false })).toHaveCount(0);
+    expect((await api.get(`/api/projects/${ctx.projectId}/model-studio/models/${modelId}`)).status()).toBe(404);
+  } finally {
+    if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(ctx.projectId)};`);
+    await api.dispose();
+  }
+});

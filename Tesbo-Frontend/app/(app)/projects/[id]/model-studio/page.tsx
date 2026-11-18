@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "@/lib/routeParams";
 import {
+  archiveModelStudioModel,
   getModelStudioCoverage,
   getModelStudioModel,
   listModelStudioModels,
@@ -62,6 +63,7 @@ export default function ModelStudioPage() {
   const [revisionId, setRevisionId] = useState("");
   const [coverage, setCoverage] = useState<ModelStudioCoverage | null>(null);
   const [loading, setLoading] = useState(true);
+  const [archiving, setArchiving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -112,6 +114,37 @@ export default function ModelStudioPage() {
   // Keyed to the current selection so a previous model's response cannot render under a new one.
   const currentDetail = detail && detail.id === selectedModelId ? detail : null;
   const currentCoverage = coverage && coverage.modelId === selectedModelId ? coverage : null;
+
+  /**
+   * Archiving retires the whole model, so it is confirmed and never implicit. Revisions and case
+   * mappings stay stored as history; only the list and detail surfaces stop offering the model.
+   */
+  async function archiveSelectedModel() {
+    if (!currentDetail) return;
+    const name = currentDetail.name;
+    if (
+      !window.confirm(
+        `Archive "${name}"? It will be removed from Model Studio; its revisions and case mappings remain stored as history.`
+      )
+    ) {
+      return;
+    }
+    setArchiving(true);
+    try {
+      await archiveModelStudioModel(projectId, currentDetail.id);
+      const remaining = models.filter((model) => model.id !== currentDetail.id);
+      setModels(remaining);
+      setSelectedModelId(remaining[0]?.id ?? "");
+      setDetail(null);
+      setCoverage(null);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not archive the model.");
+    } finally {
+      setArchiving(false);
+    }
+  }
+
   const revision: ModelStudioRevision | null =
     currentDetail?.revisions.find((row) => row.id === revisionId) ?? currentDetail?.revisions[0] ?? null;
   const preview = revision?.preview ?? null;
@@ -174,20 +207,30 @@ export default function ModelStudioPage() {
                     Expected model · Draft · Not approved · Runtime evidence: none
                   </p>
                 </div>
-                <label className="text-[12px] text-[var(--muted)]">
-                  Revision
-                  <select
-                    value={revision.id}
-                    onChange={(event) => setRevisionId(event.target.value)}
-                    className="ml-2 rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-[12px] text-[var(--foreground)]"
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => void archiveSelectedModel()}
+                    disabled={archiving}
+                    className="rounded border border-[var(--border)] px-2 py-1 text-[12px] text-[var(--error-foreground)] hover:bg-[var(--surface-secondary)] disabled:opacity-60"
                   >
-                    {currentDetail.revisions.map((row) => (
-                      <option key={row.id} value={row.id}>
-                        rev {row.revisionNumber} · {row.status}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    {archiving ? "Archiving…" : "Archive model"}
+                  </button>
+                  <label className="text-[12px] text-[var(--muted)]">
+                    Revision
+                    <select
+                      value={revision.id}
+                      onChange={(event) => setRevisionId(event.target.value)}
+                      className="ml-2 rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-[12px] text-[var(--foreground)]"
+                    >
+                      {currentDetail.revisions.map((row) => (
+                        <option key={row.id} value={row.id}>
+                          rev {row.revisionNumber} · {row.status}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
               </div>
 
               <dl className="grid gap-2 text-[12px] sm:grid-cols-2">

@@ -30,6 +30,18 @@ export class ModelStudioRepository {
     return this.legacy.requireProjectAccess(userId, projectId);
   }
 
+  /**
+   * An archived model is retired for every surface, not only the list. Reads and writes keyed by a
+   * revision id would otherwise keep answering for a model the project can no longer see.
+   */
+  private async requireActiveModel(modelId: string, projectId: string) {
+    const model = await this.db.query(
+      "SELECT id FROM mbt_models WHERE id = $1 AND project_id = $2 AND archived_at IS NULL",
+      [modelId, projectId]
+    );
+    if (!model.rows[0]) throw new NotFoundException({ error: "Model not found" });
+  }
+
   private validate(content: unknown) {
     try {
       return previewDraftModel(content);
@@ -104,6 +116,25 @@ export class ModelStudioRepository {
       return { model: model.rows[0], revision: revision.rows[0] };
     });
     return this.modelView(result.model, result.revision, true);
+  }
+
+  /**
+   * Retire a model. This is a soft archive: revisions and mappings stay stored as history, but the
+   * model disappears from the list, detail, coverage, link and generate surfaces. Archiving twice is
+   * a 404 rather than a silent success, so a caller cannot mistake an already-retired model for one
+   * it just retired.
+   */
+  async archiveModelForUser(userId: string | null | undefined, projectId: string, modelId: string) {
+    await this.access(userId, projectId);
+    if (!UUID.test(modelId)) throw new NotFoundException({ error: "Model not found" });
+    const archived = await this.db.query(
+      `UPDATE mbt_models SET archived_at = now()
+       WHERE id = $1 AND project_id = $2 AND archived_at IS NULL
+       RETURNING id, archived_at`,
+      [modelId, projectId]
+    );
+    if (!archived.rows[0]) throw new NotFoundException({ error: "Model not found" });
+    return { ok: true, id: archived.rows[0].id, archivedAt: archived.rows[0].archived_at };
   }
 
   async listModelsForUser(userId: string | null | undefined, projectId: string) {
@@ -191,6 +222,7 @@ export class ModelStudioRepository {
     for (const value of [modelId, revisionId]) {
       if (!UUID.test(value)) throw new NotFoundException({ error: "Model revision not found" });
     }
+    await this.requireActiveModel(modelId, projectId);
     const revision = await this.db.query(
       "SELECT * FROM mbt_model_revisions WHERE id = $1 AND model_id = $2 AND project_id = $3",
       [revisionId, modelId, projectId]
@@ -234,6 +266,7 @@ export class ModelStudioRepository {
     if (![modelId, revisionId, linkId].every((value) => UUID.test(value))) {
       throw new NotFoundException({ error: "Model link not found" });
     }
+    await this.requireActiveModel(modelId, projectId);
     const removed = await this.db.query(
       "DELETE FROM mbt_model_case_links WHERE id = $1 AND model_id = $2 AND model_revision_id = $3 AND project_id = $4",
       [linkId, modelId, revisionId, projectId]
@@ -245,6 +278,7 @@ export class ModelStudioRepository {
   async coverageForUser(userId: string | null | undefined, projectId: string, modelId: string) {
     await this.access(userId, projectId);
     if (!UUID.test(modelId)) throw new NotFoundException({ error: "Model not found" });
+    await this.requireActiveModel(modelId, projectId);
     const revision = await this.db.query(
       "SELECT * FROM mbt_model_revisions WHERE model_id = $1 AND project_id = $2 ORDER BY revision_number DESC LIMIT 1",
       [modelId, projectId]
@@ -339,6 +373,7 @@ export class ModelStudioRepository {
     for (const value of [modelId, revisionId]) {
       if (!UUID.test(value)) throw new NotFoundException({ error: "Model revision not found" });
     }
+    await this.requireActiveModel(modelId, projectId);
     const revision = await this.db.query(
       "SELECT * FROM mbt_model_revisions WHERE id = $1 AND model_id = $2 AND project_id = $3",
       [revisionId, modelId, projectId]
