@@ -712,7 +712,7 @@ across test plans, cycles/runs, and reporting.
   | `priority` (P0-P3, default P2) | Yes | Yes | No DB CHECK constraint — any string is technically insertable via direct API call, bypassing the fixed P0-P3 dropdown |
   | `severity` | **No** | Yes | API/import-only — no manual form field |
   | `type` (Functional/Regression/Smoke/.../Security, default Functional) | Yes | Yes | No DB CHECK constraint, arbitrary values possible via API |
-  | `status` (Draft/In Review/Approved/Deprecated/Archived, default Draft) | Yes | Yes | No DB CHECK constraint |
+  | `status` (Draft/In Review/Approved/Deprecated/Archived, default Draft) | Yes | Yes | No DB CHECK constraint. An `Uncertain` case status was considered and **not adopted**: a case status expresses authored intent, and outcome uncertainty belongs to execution results, not to the case. |
   | `component` | **No** | Yes | API/import-only |
   | `estimatedDuration` | Yes (form field exists) | Yes (mappable in import UI) | **Dead field end-to-end**: DB column exists (`estimated_duration VARCHAR(64)`), but `createTestCase`/`updateTestCase` in `legacy.service.ts` never include it in the INSERT/UPDATE column list, so anything typed here is silently discarded and never persisted, and the import flow's own `createTestCase()` call in `ImportTestCasesModal.tsx` also drops it from the payload. **High-value, easy-to-demonstrate bug for QA.** |
   | `attachments` | Yes, labeled **"Notes"** (free text) | **No** (not in `IMPORTABLE_FIELDS`) | Despite the name/DB column (`TEXT`), this is used purely as a free-text notes box in the UI, not file attachments (there is a separate, unrelated `attachments` *table* for entity file metadata that this feature does not use) |
