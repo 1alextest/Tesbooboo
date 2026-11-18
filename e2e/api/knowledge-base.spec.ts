@@ -665,6 +665,77 @@ test.describe("knowledge base v2 — folders and documents", () => {
     expect((await asOwner.get(kbUrl(`/documents/${doc.id}`))).status()).toBe(200);
   });
 
+  test("KB-A-50 the trash lists a deleted subtree and restores its contents with the folder", { tag: '@tesbo.testId("TES-TC-3031")' }, async () => {
+    const parent = await createFolder({ name: stamp("Trash parent") });
+    const child = await createFolder({ name: stamp("Trash child"), parentFolderId: parent.id });
+    const doc = await createDocument({ title: stamp("Trash doc"), folderId: child.id });
+    await asOwner.delete(kbUrl(`/folders/${parent.id}`), { failOnStatusCode: false });
+
+    const trashRes = await asOwner.get(kbUrl("/trash"), { failOnStatusCode: false });
+    expect(trashRes.status()).toBe(200);
+    const trash = await trashRes.json();
+    expect(trash.folders.find((f: any) => f.id === parent.id)).toMatchObject({ restorable: true });
+    // The child folder is inside the deleted parent: restoring it alone would leave it invisible.
+    expect(trash.folders.find((f: any) => f.id === child.id)).toMatchObject({ restorable: false });
+    expect(trash.documents.find((d: any) => d.id === doc.id)).toMatchObject({ restorable: false, folderId: child.id });
+
+    // Folders and documents deleted together come back together.
+    const restored = await asOwner.patch(kbUrl(`/folders/${parent.id}/restore`), { failOnStatusCode: false });
+    expect(restored.status(), await restored.text()).toBe(200);
+    expect(await restored.json()).toMatchObject({ isDeleted: false, restoredFolders: 2, restoredDocuments: 1 });
+    expect(isDeleted("knowledge_folders", child.id)).toBe(false);
+    expect(isDeleted("knowledge_documents", doc.id)).toBe(false);
+
+    const after = await (await asOwner.get(kbUrl("/trash"))).json();
+    expect(after.folders.map((f: any) => f.id)).not.toContain(parent.id);
+    expect(after.documents.map((d: any) => d.id)).not.toContain(doc.id);
+  });
+
+  test("KB-A-51 a document cannot be restored while its folder is deleted", { tag: '@tesbo.testId("TES-TC-3032")' }, async () => {
+    const folder = await createFolder({ name: stamp("Trash blocked folder") });
+    const doc = await createDocument({ title: stamp("Trash independent doc"), folderId: folder.id });
+    // Delete the document first, then the folder: the cascade skips an already-deleted document,
+    // so the two deletions have different instants and are restored separately.
+    await asOwner.delete(kbUrl(`/documents/${doc.id}`), { failOnStatusCode: false });
+    await asOwner.delete(kbUrl(`/folders/${folder.id}`), { failOnStatusCode: false });
+
+    const blocked = await asOwner.patch(kbUrl(`/documents/${doc.id}/restore`), { failOnStatusCode: false });
+    expect(blocked.status()).toBe(409);
+    expect(JSON.stringify(await blocked.json())).toContain("Restore the containing folder first");
+    expect(isDeleted("knowledge_documents", doc.id)).toBe(true);
+
+    const folderRes = await asOwner.patch(kbUrl(`/folders/${folder.id}/restore`), { failOnStatusCode: false });
+    expect(folderRes.status()).toBe(200);
+    // The earlier document deletion is not part of the folder's deletion instant.
+    expect(isDeleted("knowledge_documents", doc.id)).toBe(true);
+
+    const docRes = await asOwner.patch(kbUrl(`/documents/${doc.id}/restore`), { failOnStatusCode: false });
+    expect(docRes.status()).toBe(200);
+    expect(isDeleted("knowledge_documents", doc.id)).toBe(false);
+  });
+
+  test("KB-A-52 deleted files are listed in the trash but are not restorable", { tag: '@tesbo.testId("TES-TC-3033")' }, async () => {
+    const folder = await createFolder({ name: stamp("Trash files") });
+    // A file row is enough: restorability is decided by the delete policy, not by storage content.
+    const fileId = scalar(
+      "INSERT INTO knowledge_files (organization_id, project_id, folder_id, file_name, original_file_name, is_deleted, deleted_at) " +
+        `VALUES (${literal(tenant!.organizationId)}, ${literal(tenant!.mainProjectId)}, ${literal(folder.id)}, 'gone.txt', 'gone.txt', true, now()) RETURNING id;`,
+    );
+    const trash = await (await asOwner.get(kbUrl("/trash"))).json();
+    const entry = trash.files.find((f: any) => f.id === fileId);
+    expect(entry).toMatchObject({ restorable: false });
+    expect(entry.unavailableReason).toContain("permanently removed");
+  });
+
+  test("KB-A-53 the trash is project-scoped and refuses a caller with no session", { tag: '@tesbo.testId("TES-TC-3034")' }, async () => {
+    const folder = await createFolder({ name: stamp("Trash scoped") });
+    await asOwner.delete(kbUrl(`/folders/${folder.id}`), { failOnStatusCode: false });
+
+    const other = await (await asOwner.get(kbUrl("/trash", tenant!.secondProjectId))).json();
+    expect(other.folders.map((f: any) => f.id)).not.toContain(folder.id);
+    await expectUnauthenticated(await anon.get(kbUrl("/trash"), { failOnStatusCode: false }), "GET trash");
+  });
+
   test("KB-A-22 a document from another project is not reachable through this project's URL", { tag: '@tesbo.testId("TES-TC-354")' }, async () => {
     const created = await asOwner.post(kbUrl("/documents", tenant!.secondProjectId), {
       data: {

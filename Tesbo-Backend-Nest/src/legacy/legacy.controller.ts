@@ -1788,6 +1788,11 @@ export class LegacyController {
     return this.legacy.knowledgeBaseSummary(projectId, req.userId);
   }
 
+  @Get("/api/projects/:projectId/knowledge-base/trash")
+  getKnowledgeTrash(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
+    return this.legacy.listKnowledgeTrash(projectId, req.userId);
+  }
+
   @Get("/api/projects/:projectId/knowledge-base/folders/:folderId/export")
   async exportKnowledgeFolder(
     @Req() req: AuthenticatedRequest,

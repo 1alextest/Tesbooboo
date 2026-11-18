@@ -23,9 +23,9 @@ import {
  *   2. Delete goes through window.confirm(), a native dialog Playwright must be told to handle.
  *      Cancelling it must leave the row alone — a bug that would look identical to a working delete
  *      in any API test.
- *   3. There is no trash UI at all. Delete moves items to trash and the restore endpoints exist and
- *      are owner-or-manager gated, but nothing in the app can reach them. KBU-24 pins that gap so it
- *      stays a deliberate product decision rather than something nobody noticed.
+ *   3. Deleted items land on a separate Trash screen, and its Restore path is the only way back.
+ *      KBU-24 pins that the screen is reachable from the knowledge base and that restoring a folder
+ *      is what actually makes it appear again.
  *
  * Runs against its own disposable workspace ("kb-ui"). Every test starts from an empty knowledge
  * base — the summary counters are absolute numbers, so one leftover folder turns a correct product
@@ -499,7 +499,7 @@ test.describe("knowledge base (UI)", () => {
     await expect(row(page, name)).toHaveCount(0);
 
     // Soft delete, not a hard one: the row survives with is_deleted set, which is what makes the
-    // (UI-less) restore endpoint in KBU-24 meaningful.
+    // Trash restore in KBU-24 possible.
     await expect
       .poll(
         () =>
@@ -732,29 +732,33 @@ test.describe("knowledge base (UI)", () => {
     await expect(page.locator("body")).not.toContainText("Application error");
   });
 
-  // ─── The gap this suite is here to pin ─────────────────────────────────────
+  // ─── Trash ─────────────────────────────────────────────────────────────────
 
-  test("KBU-24 deleted items are unreachable from the UI — restore is API-only", { tag: '@tesbo.testId("TES-TC-1018")' }, async ({ browser }) => {
+  test("KBU-24 a deleted folder is restored from the Trash screen", { tag: '@tesbo.testId("TES-TC-1018")' }, async ({ browser }) => {
     const name = stamp("Trashed");
     const created = await api.post(kbUrl("/folders"), { data: { name, parentFolderId: rootFolderId } });
     const folderId = (await created.json()).id;
     await api.delete(kbUrl(`/folders/${folderId}`));
 
     const page = await openKb(browser);
-
-    // The row is gone from the browser...
+    // The row is gone from the knowledge base itself...
     await expect(row(page, name)).toHaveCount(0);
-    // ...and nothing on the screen offers a way back to it.
-    for (const label of [/^trash$/i, /deleted items/i, /restore/i]) {
-      await expect(
-        page.getByText(label),
-        `the KB screen offers no way to reach deleted items (${label})`,
-      ).toHaveCount(0);
-    }
 
-    // But the endpoint exists and works, which is what makes this a gap rather than a design.
-    const restored = await api.patch(kbUrl(`/folders/${folderId}/restore`));
-    expect(restored.status(), "restore works over the API — only the UI cannot reach it").toBe(200);
+    // ...but the screen offers a way to the deleted item.
+    await page.getByRole("link", { name: "Trash" }).click();
+    await page.waitForURL(/\/knowledge-base\/trash$/);
+    const folders = page.getByRole("region", { name: "Deleted folders" });
+    await expect(folders).toContainText(name);
+
+    await page.getByRole("button", { name: `Restore ${name}` }).click();
+    await expect(page.getByRole("status")).toContainText("Restored");
+    // The only trashed item is gone, so the screen switches to its empty state; assert the absence
+    // of the restore affordance rather than text inside a region that no longer exists.
+    await expect(page.getByRole("button", { name: `Restore ${name}` })).toHaveCount(0);
+    await expect(page.getByText("Trash is empty")).toBeVisible();
+
+    // And the folder is really back for the knowledge base, not just gone from the list.
+    expect((await api.get(kbUrl(`/folders/${folderId}`))).status()).toBe(200);
   });
   // ─── Blank documents (BetterBugs 6a7da01c) ─────────────────────────────────
   //
