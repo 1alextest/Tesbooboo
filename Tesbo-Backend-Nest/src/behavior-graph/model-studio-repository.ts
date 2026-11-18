@@ -322,6 +322,20 @@ export class ModelStudioRepository {
        WHERE l.model_revision_id = $1 AND l.project_id = $2 AND testcases.deleted_at IS NULL`,
       [revision.rows[0].id, projectId]
     );
+    // The mappings themselves, so the studio can list and unlink them. Deleted cases stay in the
+    // list (flagged) because the link row still exists and must remain removable; they no longer
+    // contribute to the per-element counts above.
+    const linkRows = await this.db.query(
+      `SELECT l.id, l.testcase_id, l.element_ids, l.testcase_revision, l.created_at,
+              testcases.title AS testcase_title, testcases.deleted_at IS NOT NULL AS testcase_deleted,
+              (l.testcase_revision IS NOT NULL
+               AND l.testcase_revision <> ${TESTCASE_EDIT_REVISION_SQL}) AS changed_since_link
+       FROM mbt_model_case_links l
+       LEFT JOIN testcases ON testcases.id = l.testcase_id
+       WHERE l.model_revision_id = $1 AND l.project_id = $2
+       ORDER BY l.created_at ASC`,
+      [revision.rows[0].id, projectId]
+    );
     // Deleted mappings are computed across every revision: deleting a case invalidates a mapping
     // regardless of which model revision it targeted.
     const deleted = await this.db.query(
@@ -343,6 +357,15 @@ export class ModelStudioRepository {
       modelId,
       revisionId: revision.rows[0].id,
       elements,
+      links: linkRows.rows.map((row) => ({
+        id: row.id,
+        testcaseId: row.testcase_id,
+        testcaseTitle: row.testcase_title ?? "Deleted test case",
+        elementIds: row.element_ids,
+        testcaseRevision: row.testcase_revision,
+        caseChangedSinceLink: row.testcase_revision !== null && row.changed_since_link === true,
+        caseDeleted: row.testcase_deleted === true
+      })),
       unlinkedElements: elements.filter((element) => element.linkedCases === 0).map((element) => element.id),
       mappingStaleness: {
         supersededRevisions: superseded.rows.map((row) => ({

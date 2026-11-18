@@ -4802,10 +4802,21 @@ export type ModelStudioModel = {
 
 export type ModelStudioDetail = ModelStudioModel & { revisions: ModelStudioRevision[] };
 
+export type ModelStudioLink = {
+  id: string;
+  testcaseId: string;
+  testcaseTitle: string;
+  elementIds: string[];
+  testcaseRevision: string | null;
+  caseChangedSinceLink: boolean;
+  caseDeleted: boolean;
+};
+
 export type ModelStudioCoverage = {
   modelId: string;
   revisionId: string;
   elements: Array<{ id: string; linkedCases: number }>;
+  links: ModelStudioLink[];
   unlinkedElements: string[];
   mappingStaleness: {
     supersededRevisions: Array<{
@@ -4842,4 +4853,43 @@ export async function archiveModelStudioModel(
   modelId: string
 ): Promise<{ ok: boolean; id: string; archivedAt: string }> {
   return api(`/api/projects/${projectId}/model-studio/models/${modelId}`, { method: "DELETE" });
+}
+
+export async function createModelStudioModel(
+  projectId: string,
+  data: { name: string; model: unknown }
+): Promise<ModelStudioModel> {
+  return api(`/api/projects/${projectId}/model-studio/models`, { method: "POST", body: data });
+}
+
+/** Saves the next immutable revision. `baseRevisionId` must be the current head or the server answers STALE_BASE. */
+export async function saveModelStudioRevision(
+  projectId: string,
+  modelId: string,
+  data: { baseRevisionId: string; model: unknown }
+): Promise<ModelStudioRevision> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions`, { method: "POST", body: data });
+}
+
+export async function linkModelStudioCase(
+  projectId: string,
+  modelId: string,
+  revisionId: string,
+  data: { testcaseId: string; elementIds: string[]; testcaseRevision?: string }
+): Promise<ModelStudioLink> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/links`, {
+    method: "POST",
+    body: data
+  });
+}
+
+export async function unlinkModelStudioCase(
+  projectId: string,
+  modelId: string,
+  revisionId: string,
+  linkId: string
+): Promise<{ ok: boolean }> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/links/${linkId}`, {
+    method: "DELETE"
+  });
 }
