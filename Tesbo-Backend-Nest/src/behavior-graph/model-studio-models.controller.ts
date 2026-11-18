@@ -3,8 +3,9 @@ import type { AuthenticatedRequest } from "../common/request.types";
 import { ModelStudioRepository } from "./model-studio-repository";
 
 /**
- * Persisted expected-model drafts and explicit mappings. No approval, activation, generation or
- * execution route: those remain later phases and separate owners.
+ * Persisted expected-model drafts and explicit mappings. Generation returns proposals only; there is
+ * no approval, activation or target-execution route — those remain later phases and separate owners.
+ * Archiving retires a model as a whole while keeping its revisions and mappings as history.
  */
 @Controller("/api/projects/:projectId/model-studio/models")
 export class ModelStudioModelsController {
@@ -23,6 +24,11 @@ export class ModelStudioModelsController {
   @Get(":modelId")
   get(@Req() request: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("modelId") modelId: string) {
     return this.models.getModelForUser(request.userId, projectId, modelId);
+  }
+
+  @Delete(":modelId")
+  archive(@Req() request: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("modelId") modelId: string) {
+    return this.models.archiveModelForUser(request.userId, projectId, modelId);
   }
 
   @Post(":modelId/revisions")

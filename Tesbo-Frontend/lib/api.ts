@@ -4811,3 +4811,11 @@ export async function getModelStudioModel(projectId: string, modelId: string): P
 export async function getModelStudioCoverage(projectId: string, modelId: string): Promise<ModelStudioCoverage> {
   return api(`/api/projects/${projectId}/model-studio/models/${modelId}/coverage`);
 }
+
+/** Retires a model from every surface; its revisions and mappings remain stored as history. */
+export async function archiveModelStudioModel(
+  projectId: string,
+  modelId: string
+): Promise<{ ok: boolean; id: string; archivedAt: string }> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}`, { method: "DELETE" });
+}
