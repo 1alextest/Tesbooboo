@@ -339,3 +339,8 @@ scheduler that does not exist yet), Project Settings storage/retention UI, rate 
 testing, and the pytest and JUnit/TestNG SDKs. The six `tesbo-reports/*` backend stubs are left
 standing with a comment marking them superseded — removing a route is a riskier change than deleting
 an uncalled client, and was not part of what was approved.
+
+**Decision (2026-11-18): keep the stubs standing.** They are now authenticated project reads that
+return empty/zero payloads, nothing in the frontend or SDK consumes them, and the e2e contract in
+`api/tail.spec.ts` pins their shape. Removing them is a reporter-version compatibility decision for
+the automation owner, not cleanup an agent should perform unilaterally.
