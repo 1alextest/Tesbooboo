@@ -913,11 +913,12 @@ export class LegacyController {
   }
 
   /*
-   * Scheduled runs are NOT IMPLEMENTED. There is no schedules table and no runner; these four routes
-   * were stubs that answered 2xx — createSchedule handed back `{ id: "local-schedule", ...body }`
-   * without storing anything, and the list, update and delete routes did nothing at all. A schedule
-   * the user created, was told about, and can never see again is worse than a feature that says it
-   * isn't there.
+   * Scheduled runs are NOT IMPLEMENTED. The cycle_run_schedules table exists (V21) with correct
+   * constraints, but nothing reads or writes it and there is no cron parser or runner; these four
+   * routes were stubs that answered 2xx — createSchedule handed back `{ id: "local-schedule",
+   * ...body }` without storing anything, and the list, update and delete routes did nothing at all.
+   * A schedule the user created, was told about, and can never see again is worse than a feature
+   * that says it isn't there, and the UI that offered the form was removed on 2026-11-18.
    *
    * Implementing it is a feature (a cron parser, a scheduler, a runner), not a bug fix, so it is left
    * out and recorded in docs/e2e-coverage-waves.md — see the red EXO-A-07/08/10 in

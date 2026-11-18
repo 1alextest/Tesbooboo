@@ -1069,41 +1069,49 @@ execution status across multiple executions at once.
 
 ### Recurring Run Scheduling
 
-**What it is:** A dedicated "Schedule Test Run" page where a user can define a one-time or
-recurring reminder/trigger tied to a specific run, with a fully-designed backing DB table
-(`cycle_run_schedules`) — but the controller endpoints backing it are **disconnected stubs that
-never touch that table.**
+**What it is:** A designed-but-unbuilt feature. A `cycle_run_schedules` table exists with correct
+constraints, and the API routes exist, but nothing schedules or executes a run. The "Schedule Test
+Run" screen that once invited users to build one was **removed on 2026-11-18**: a form whose only
+possible outcome is an error is a dead end.
 
-**Use cases (intended by the schema/UI, not actually delivered):**
-- Schedule a nightly smoke-test run reminder every 1440 minutes (24h).
+**Use cases (intended, not delivered):**
+- Schedule a nightly smoke-test run every 1440 minutes (24h).
 - Schedule a one-time run for a specific release date/time in a given timezone.
 - Disable a schedule temporarily without deleting it; see when it last ran and whether it errored.
 
-**Problem it solves:** Nothing today in production — the feature is fully modeled in the database
-and fully built in the UI, but the API layer connecting them is stubbed out, so **nothing persists**.
+**Current state (2026-11-18):**
+- `GET /api/projects/:projectId/cycles/schedules` returns `[]`. Nothing writes rows, so this is an
+  empty list rather than a false one.
+- `POST` validates a one-time `runAt` (rejects a past or malformed instant) and then answers **501
+  "Scheduled runs are not available yet"**. `PATCH` and `DELETE` answer 501 too. An earlier stub
+  returned a fake `"local-schedule"` id and silently did nothing; a schedule the user was told
+  about and could never see again is worse than an honest refusal.
+- The `cycle_run_schedules` table (V21) has the right constraints (`schedule_type`, a one-time /
+  recurring CHECK with `interval_minutes > 0`) but nothing reads or writes it, and there is no cron
+  parser or worker anywhere in the backend. A future implementation needs the table wired to the
+  routes plus a worker that creates native runs.
+- The schedule form, its client API functions and its validation helper were removed; the old
+  `/cycles/schedule` URL now redirects to the test-runs list, and that page no longer offers a
+  Schedule action.
 
-**Features & actions (as built in the UI, none of which actually work end-to-end):**
-- Schedule form: Name, Test Run (dropdown of the project's runs), Schedule Type (One-time / Recurring), Timezone (free text, default `"UTC"`), and conditionally either "Run At" (datetime-local) or "Interval Minutes" (numeric, default `1440`).
-- Schedule list table: Name, Run, Type ("One-time" or "Every {n}m"), Next Run, Last Status, Enable/Disable toggle, Delete — plus a `lastError` message shown under the row if present.
-- **Backend reality**:
-  - `GET /api/projects/:projectId/cycles/schedules` → `schedules() { return []; }` — **always returns an empty array**, ignoring `projectId` entirely.
-  - `POST /api/projects/:projectId/cycles/schedules` → `createSchedule(@Body() body) { return { id: "local-schedule", ...body }; }` — returns a fake object with a **hard-coded, non-unique id `"local-schedule"`** and never writes to the database. The UI's "New Schedule" form will appear to succeed (the promise resolves) and then immediately call `load()`, which re-fetches the (always-empty) list — **so a freshly created schedule vanishes from the table the instant it's created.**
-  - `PATCH /api/cycles/schedules/:scheduleId` → `updateSchedule() {}` and `DELETE /api/cycles/schedules/:scheduleId` → `deleteSchedule() {}` — both are literal no-ops (empty method bodies, no params bound), returning 200/empty regardless of input.
-  - The real table backing this, `cycle_run_schedules`, has non-trivial, correctly-designed constraints that nothing ever exercises: `schedule_type IN ('one_time','recurring')`, and a `CHECK` requiring `run_at IS NOT NULL` for one-time schedules and `interval_minutes IS NOT NULL AND interval_minutes > 0` for recurring ones. There is also no scheduler/cron worker anywhere in the backend that would actually *execute* a due schedule even if rows existed.
-- Net effect: this entire feature (nightly/one-time run scheduling) is **non-functional** in the current codebase — worth explicit regression coverage confirming it stays visibly broken (or is fixed) rather than silently trusted.
+**Coverage:**
+- `e2e/api/execution-ops.spec.ts` EXO-A-07/08 remain intentionally red: they describe the missing
+  feature (a created schedule listed, updated and deleted) and should turn green only when it is
+  built. They are not part of any workflow's passing selection.
+- `e2e/ui/cycles.spec.ts` pins that the test-runs page offers no Schedule affordance.
 
-**Edge cases / validation worth testing:**
-- Create a schedule, confirm it disappears from the list on next load (documenting the current broken state) — this should be the primary regression test until the feature is wired up.
-- Submit the create form with `scheduleType="recurring"` and `intervalMinutes=0` or negative — client `<input min={1}>` discourages it, but nothing server-side would reject it today anyway since the endpoint ignores the body.
-- Submit `scheduleType="one_time"` with no `runAt` — client has `required` on the datetime input; verify behavior of `new Date("").toISOString()` (produces `Invalid Date` → `"Invalid Date"` string) if a user bypasses the required attribute.
-- Toggle Enable/Disable and Delete on a schedule — both currently no-ops; confirm the UI doesn't falsely indicate success (it calls `load()` after, so the empty list will make the row disappear either way, masking the fact the underlying action did nothing).
-- Once implemented: verify a schedule's `cycleId` pointing at a deleted run is handled (FK is `ON DELETE CASCADE` at the DB level, so the schedule row would vanish with the run — confirm the "no scheduler" gap doesn't turn into a crash when a worker is eventually added).
+**Edge cases worth testing when it is built:**
+- one-time with a past or malformed `runAt` (already refused server-side before the 501);
+- recurring with `intervalMinutes` at 0 or negative (the DB CHECK requires > 0);
+- a schedule pointing at a run that is later deleted (the FK is `ON DELETE CASCADE`, so the
+  schedule row vanishes with the run);
+- two workers racing the same due schedule (claim/lease semantics).
 
 **Key files:**
-- Backend: `legacy.controller.ts` L430–444 (`schedules`, `createSchedule`, `updateSchedule`, `deleteSchedule` — all stubs).
-- Schema (unused): `Tesbo-Backend-Nest/migrations/V21_cycle_run_schedules.sql` (`cycle_run_schedules` table, full constraint set).
-- Frontend: `Tesbo-Frontend/app/(app)/projects/[id]/cycles/schedule/page.tsx` (complete CRUD UI against the stub endpoints).
-- API client: `lib/api.ts` L1524–1546 (`TestRunSchedule` type), L1612–1651 (`listTestRunSchedules`, `createTestRunSchedule`, `updateTestRunSchedule`, `deleteTestRunSchedule`).
+- Backend: `legacy.controller.ts` (`schedules`, `createSchedule`, `updateSchedule`,
+  `deleteSchedule` — list returns `[]`, the rest answer 501 after validating a one-time `runAt`).
+- Schema (unused): `Tesbo-Backend-Nest/migrations/V21_cycle_run_schedules.sql`.
+- Frontend: no schedule page or client functions remain; the test-runs page has no Schedule action.
 
 ---
 
