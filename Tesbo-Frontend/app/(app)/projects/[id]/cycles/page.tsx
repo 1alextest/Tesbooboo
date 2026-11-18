@@ -317,8 +317,13 @@ export default function TestRunsPage() {
           actions={
             canManageRuns ? (
               <div className="flex items-center gap-2">
-                {/* Scheduled runs are not implemented server-side (the API answers 501), so the
-                    screen was removed rather than offering a form that can only fail. */}
+                <Link
+                  href={`/projects/${projectId}/cycles/schedule`}
+                  className="inline-flex h-9 items-center gap-2 rounded-[6px] border border-[var(--ink-200)] px-4 text-[13px] font-medium text-[var(--ink-600)] transition-colors hover:bg-[var(--ink-100)]"
+                >
+                  <IconCalendarEvent size={15} stroke={1.75} />
+                  Schedule
+                </Link>
                 <Button
                   onClick={() => {
                     resetForm();

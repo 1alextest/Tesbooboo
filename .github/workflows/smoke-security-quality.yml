@@ -202,18 +202,18 @@ jobs:
           selection="KB-A-05|KB-A-07|KB-A-21|KB-A-50|KB-A-51|KB-A-52|KB-A-53|KBU-08|KBU-09|KBU-10|KBU-10b|KBU-24"
           npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts ui/knowledge-base.spec.ts --workers=10 --output=test-results-kb -g "$selection" --list
           npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts ui/knowledge-base.spec.ts --workers=10 --output=test-results-kb -g "$selection"
-      - name: Verify scheduled-run surface removal
+      - name: Verify scheduled runs end to end
         working-directory: e2e
         env:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-schedules
         run: |
-          # Scheduled runs are not implemented server-side (every route answers 501). The screen
-          # that offered the form was removed rather than left as a dead end; this pins that the
-          # affordance does not come back by accident. screens-sweep's SWP-06 covers the removed
-          # URL itself and was not referenced by any workflow before.
-          selection="Schedule Run|SWP-06"
-          npx playwright test -c playwright.config.ts ui/cycles.spec.ts ui/screens-sweep.spec.ts --workers=10 --output=test-results-schedules -g "$selection" --list
-          npx playwright test -c playwright.config.ts ui/cycles.spec.ts ui/screens-sweep.spec.ts --workers=10 --output=test-results-schedules -g "$selection"
+          # Schedules are persisted now and the backend worker creates a new Test Run per due
+          # occurrence (EXO-A-08b). The selection is by title fragment because the EXO-A-09/11
+          # numbers are shared with unrelated tests in that file; neither spec was referenced by
+          # any workflow before this step.
+          selection="a created schedule|a schedule is updated|a due schedule|the schedule routes refuse|a schedule needs a name|a one-time schedule refuses|a one-time schedule with a future|a recurring schedule needs no Run At|Schedule Run — the form|SWP-06"
+          npx playwright test -c playwright.config.ts api/execution-ops.spec.ts ui/cycles.spec.ts ui/screens-sweep.spec.ts --workers=10 --output=test-results-schedules -g "$selection" --list
+          npx playwright test -c playwright.config.ts api/execution-ops.spec.ts ui/cycles.spec.ts ui/screens-sweep.spec.ts --workers=10 --output=test-results-schedules -g "$selection"
       - name: Verify fresh MCP catalog and canonical QA fields on isolated backend
         working-directory: e2e
         env:

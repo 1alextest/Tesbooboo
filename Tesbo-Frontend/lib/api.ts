@@ -2702,6 +2702,28 @@ export interface ExecutionAutomationReport {
   updatedAt?: string;
 }
 
+export interface TestRunSchedule {
+  id: string;
+  projectId: string;
+  cycleId: string;
+  cycleName: string | null;
+  /** False when the scheduled Test Run has since been deleted; the schedule will not fire. */
+  cycleAvailable: boolean;
+  name: string;
+  enabled: boolean;
+  scheduleType: "one_time" | "recurring";
+  runAt: string | null;
+  intervalMinutes: number | null;
+  timezone: string;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastStatus: string | null;
+  lastError: string | null;
+  isRunning: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export async function listTestRuns(projectId: string): Promise<TestRunListItem[]> {
   return api(`/api/projects/${projectId}/cycles`);
 }
@@ -2778,6 +2800,46 @@ export async function getAutomatedRunStatus(cycleId: string, runId: string): Pro
 
 export async function getLatestAutomatedRunStatus(cycleId: string): Promise<AutomatedRunLiveStatus> {
   return api<AutomatedRunLiveStatus>(`/api/cycles/${cycleId}/execute-automated/latest/status`);
+}
+
+export async function listTestRunSchedules(projectId: string): Promise<TestRunSchedule[]> {
+  return api<TestRunSchedule[]>(`/api/projects/${projectId}/cycles/schedules`);
+}
+
+export async function createTestRunSchedule(
+  projectId: string,
+  data: {
+    cycleId: string;
+    name: string;
+    scheduleType: "one_time" | "recurring";
+    runAt?: string;
+    intervalMinutes?: number;
+    timezone?: string;
+    enabled?: boolean;
+  }
+): Promise<TestRunSchedule> {
+  return api<TestRunSchedule>(`/api/projects/${projectId}/cycles/schedules`, {
+    method: "POST",
+    body: data,
+  });
+}
+
+export async function updateTestRunSchedule(
+  scheduleId: string,
+  data: {
+    name?: string;
+    scheduleType?: "one_time" | "recurring";
+    runAt?: string | null;
+    intervalMinutes?: number;
+    timezone?: string;
+    enabled?: boolean;
+  }
+): Promise<TestRunSchedule> {
+  return api<TestRunSchedule>(`/api/cycles/schedules/${scheduleId}`, { method: "PATCH", body: data });
+}
+
+export async function deleteTestRunSchedule(scheduleId: string): Promise<{ success: boolean }> {
+  return api(`/api/cycles/schedules/${scheduleId}`, { method: "DELETE" });
 }
 
 // Sharing

@@ -6863,6 +6863,50 @@ export class LegacyService implements OnModuleInit {
   }
 
   /**
+   * A due schedule creates a new native Test Run cloned from the run it points at.
+   *
+   * It deliberately does not write into the scheduled run's own executions: a repeated nightly run
+   * must keep each occurrence's results, attachments and history. Only Approved cases are carried
+   * over, through the same insertApprovedCycleItems writer every other creation path uses, so a case
+   * demoted to Draft between occurrences is skipped rather than smuggled into a run.
+   *
+   * Unauthorized by caller by design: the schedule row's project was authorized when the schedule was
+   * created, and the worker has no session. Like createCycle, this is a system writer — route traffic
+   * never reaches it.
+   */
+  async createCycleFromScheduledRun(input: { projectId: string; cycleId: string; scheduledFor?: Date }) {
+    const source = await this.db.query<Body>(
+      "SELECT * FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL",
+      [input.cycleId, input.projectId]
+    );
+    const cycleRow = source.rows[0];
+    if (!cycleRow) throw new NotFoundException({ error: "Scheduled test run no longer exists" });
+    const cases = await this.db.query<{ testcase_id: string }>(
+      `SELECT DISTINCT ci.testcase_id FROM cycle_items ci
+       JOIN testcases t ON t.id = ci.testcase_id AND t.deleted_at IS NULL
+       WHERE ci.cycle_id = $1`,
+      [input.cycleId]
+    );
+    const stamp = (input.scheduledFor ?? new Date()).toISOString().slice(0, 16).replace("T", " ");
+    const base = String(cycleRow.name || "Test run");
+    const suffix = ` — scheduled ${stamp}Z`;
+    const name = `${base.slice(0, Math.max(1, CYCLE_NAME_MAX_LENGTH - suffix.length))}${suffix}`;
+    return this.db.transaction(async (client) => {
+      const created = await this.createCycle(input.projectId, {
+        planId: cycleRow.plan_id,
+        name,
+        description: cycleRow.description || "",
+        environment: cycleRow.environment,
+        buildVersion: cycleRow.build_version,
+        releaseName: cycleRow.release_name,
+        ownerId: cycleRow.owner_id
+      }, client);
+      await this.insertApprovedCycleItems(client, input.projectId, created.id, cases.rows.map((row) => String(row.testcase_id)));
+      return created;
+    });
+  }
+
+  /**
    * Resolves a run and confirms the caller may reach the project it belongs to.
    *
    * /api/cycles/* is addressed by cycle id with no project in the URL, so every handler here has to

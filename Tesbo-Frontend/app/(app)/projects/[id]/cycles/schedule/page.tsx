@@ -1,31 +1,340 @@
 "use client";
 
-import { useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useParams } from "@/lib/routeParams";
+import {
+  listTestRuns,
+  listTestRunSchedules,
+  createTestRunSchedule,
+  updateTestRunSchedule,
+  deleteTestRunSchedule,
+  type TestRunListItem,
+  type TestRunSchedule,
+} from "@/lib/api";
+import { Button, Input, Card, Field, FieldLabel, FieldError, Select } from "@/components/ui";
+import { PageHeader, StandardPageLayout, Breadcrumbs } from "@/components/workflows";
+import { validateScheduleRunAt } from "@/lib/validation";
+import { formatDateTime } from "@/lib/date";
+import { useAppData } from "@/components/app/AppDataProvider";
+import { useProjectData } from "@/components/project/ProjectDataProvider";
 
-/**
- * Scheduled runs are not implemented server-side: the schedule routes answer 501, the
- * cycle_run_schedules table is unused, and there is no runner. The create form that used to live
- * here could only end in "Scheduled runs are not available yet", so it has been removed.
- *
- * The URL still exists as a redirect rather than a 404: someone with the old page bookmarked (or a
- * stale tab open) should land on the test runs list, not on a missing page. The module also stays
- * in the static dependency graph, whose impact planner treats a deleted module as incomplete
- * consumer evidence requiring review.
- */
-export default function RemovedScheduleRunsPage() {
-  const router = useRouter();
+/** The browser's own local "now", formatted for a datetime-local input's value/min attribute. */
+function toDatetimeLocalValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function currentTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+/** Every IANA zone the browser knows about, for the dropdown. */
+function allTimezones(): string[] {
+  try {
+    const supportedValuesOf = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf;
+    const zones = supportedValuesOf?.("timeZone");
+    if (zones && zones.length > 0) return zones;
+  } catch {
+    // Intl.supportedValuesOf isn't available in every runtime — fall through to the fallback below.
+  }
+  return ["UTC"];
+}
+
+export default function ScheduleRunsPage() {
   const params = useParams();
+  const router = useRouter();
   const projectId = params.id as string;
+  const { currentUser } = useAppData();
+  const { project } = useProjectData();
+  const projectName = String(project.name || "");
+
+  const [runs, setRuns] = useState<TestRunListItem[]>([]);
+  const [schedules, setSchedules] = useState<TestRunSchedule[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [name, setName] = useState("");
+  const [cycleId, setCycleId] = useState("");
+  const [scheduleType, setScheduleType] = useState<"one_time" | "recurring">("one_time");
+  const [runAt, setRunAt] = useState("");
+  const [runAtError, setRunAtError] = useState("");
+  const [intervalMinutes, setIntervalMinutes] = useState(1440);
+  const [timezone, setTimezone] = useState<string>(currentTimezone);
+  // Computed once at mount: the option list itself doesn't change, only which one is selected.
+  const [timezoneOptions] = useState<string[]>(() => {
+    const zones = allTimezones();
+    const current = currentTimezone();
+    return zones.includes(current) ? zones : [current, ...zones];
+  });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [runList, scheduleList] = await Promise.all([
+        listTestRuns(projectId),
+        listTestRunSchedules(projectId),
+      ]);
+      setRuns(runList);
+      setSchedules(scheduleList);
+      if (!cycleId && runList.length > 0) {
+        setCycleId(runList[0].id);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load schedules");
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId, cycleId]);
 
   useEffect(() => {
-    router.replace(`/projects/${projectId}/cycles`);
-  }, [router, projectId]);
+    if (!currentUser) {
+      router.replace("/login");
+      return;
+    }
+    load();
+  }, [router, load, projectId, currentUser]);
+
+  async function onCreate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !cycleId) return;
+    setError(null);
+    if (scheduleType === "one_time") {
+      const runAtErr = validateScheduleRunAt(runAt);
+      if (runAtErr) {
+        setRunAtError(runAtErr);
+        return;
+      }
+    }
+    setRunAtError("");
+    setSaving(true);
+    try {
+      await createTestRunSchedule(projectId, {
+        cycleId,
+        name: name.trim(),
+        scheduleType,
+        runAt: scheduleType === "one_time" ? new Date(runAt).toISOString() : undefined,
+        intervalMinutes: scheduleType === "recurring" ? intervalMinutes : undefined,
+        timezone,
+        enabled: true,
+      });
+      setName("");
+      setRunAt("");
+      setIntervalMinutes(1440);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create schedule");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleEnabled(item: TestRunSchedule) {
+    try {
+      await updateTestRunSchedule(item.id, { enabled: !item.enabled });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update schedule");
+    }
+  }
+
+  async function removeSchedule(scheduleId: string) {
+    try {
+      await deleteTestRunSchedule(scheduleId);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete schedule");
+    }
+  }
 
   return (
-    <main className="p-5 text-[13px] text-[var(--muted)]">
-      Scheduled runs are not available yet. Returning to test runs…
-    </main>
+    <StandardPageLayout
+      header={
+        <PageHeader
+          title="Schedule Test Run"
+          subtitle="Create one-time or recurring reminders for planned test runs."
+          breadcrumb={
+            <Breadcrumbs
+              items={[
+                { label: "Projects", href: "/projects" },
+                { label: projectName || "Project", href: `/projects/${projectId}/dashboard` },
+                { label: "Test Runs", href: `/projects/${projectId}/cycles` },
+                { label: "Schedule" },
+              ]}
+            />
+          }
+          actions={
+            <Link
+              href={`/projects/${projectId}/cycles`}
+              className="inline-flex items-center justify-center h-10 rounded-xl px-4 text-sm font-medium border border-[var(--border)] bg-[var(--surface)] text-[var(--foreground)] hover:bg-[var(--surface-secondary)] transition-colors"
+            >
+              Back to Runs
+            </Link>
+          }
+        />
+      }
+    >
+      {error && (
+        <div className="rounded-lg border border-[var(--error)]/30 bg-[var(--error-soft)] px-4 py-2 text-sm text-[var(--error-foreground)]">
+          {error}
+        </div>
+      )}
+
+      <Card className="p-5">
+        <h2 className="text-lg font-semibold text-[var(--foreground)] mb-4">New Schedule</h2>
+        <form onSubmit={onCreate} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Field>
+            <FieldLabel>Schedule Name</FieldLabel>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Nightly Smoke"
+              required
+            />
+          </Field>
+          <Field>
+            <FieldLabel>Test Run</FieldLabel>
+            <Select
+              value={cycleId}
+              onChange={(e) => setCycleId(e.target.value)}
+              required
+            >
+              <option value="">Select a run</option>
+              {runs.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field>
+            <FieldLabel>Schedule Type</FieldLabel>
+            <Select
+              value={scheduleType}
+              onChange={(e) => setScheduleType(e.target.value as "one_time" | "recurring")}
+            >
+              <option value="one_time">One-time</option>
+              <option value="recurring">Recurring</option>
+            </Select>
+          </Field>
+          <Field>
+            <FieldLabel>Timezone</FieldLabel>
+            <Select
+              value={timezone}
+              onChange={(e) => setTimezone(e.target.value)}
+            >
+              {timezoneOptions.map((tz) => (
+                <option key={tz} value={tz}>
+                  {tz}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          {scheduleType === "one_time" ? (
+            <div className="md:col-span-2">
+              <Field>
+                <FieldLabel>Run At</FieldLabel>
+                <Input
+                  type="datetime-local"
+                  value={runAt}
+                  min={toDatetimeLocalValue(new Date())}
+                  onChange={(e) => {
+                    setRunAt(e.target.value);
+                    setRunAtError(validateScheduleRunAt(e.target.value));
+                  }}
+                  required
+                />
+                {runAtError && <FieldError>{runAtError}</FieldError>}
+              </Field>
+            </div>
+          ) : (
+            <div className="md:col-span-2">
+              <Field>
+                <FieldLabel>Interval Minutes</FieldLabel>
+                <Input
+                  type="number"
+                  min={1}
+                  value={intervalMinutes}
+                  onChange={(e) => setIntervalMinutes(Number(e.target.value))}
+                  required
+                />
+              </Field>
+            </div>
+          )}
+          <div className="md:col-span-2 flex justify-end">
+            <Button type="submit" disabled={saving}>
+              {saving ? "Saving..." : "Create Schedule"}
+            </Button>
+          </div>
+        </form>
+      </Card>
+
+      <Card className="overflow-hidden p-0">
+        <div className="px-5 py-3 border-b border-[var(--border-subtle)]">
+          <h2 className="font-semibold text-[var(--foreground)]">Existing Schedules</h2>
+        </div>
+        {loading ? (
+          <div className="p-5 text-sm text-[var(--muted)]">Loading...</div>
+        ) : schedules.length === 0 ? (
+          <div className="p-5 text-sm text-[var(--muted)]">No schedules created yet.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="tesbo-table">
+              <thead>
+                <tr>
+                  <th className="px-4 py-3">Name</th>
+                  <th className="px-4 py-3">Run</th>
+                  <th className="px-4 py-3">Type</th>
+                  <th className="px-4 py-3">Next Run</th>
+                  <th className="px-4 py-3">Last Status</th>
+                  <th className="px-4 py-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {schedules.map((s) => {
+                  const run = runs.find((r) => r.id === s.cycleId);
+                  return (
+                    <tr key={s.id}>
+                      <td className="px-4 py-3">{s.name}</td>
+                      <td className="px-4 py-3">{run?.name ?? s.cycleId}</td>
+                      <td className="px-4 py-3">
+                        {s.scheduleType === "one_time" ? "One-time" : `Every ${s.intervalMinutes}m`}
+                      </td>
+                      <td className="px-4 py-3">{s.nextRunAt ? formatDateTime(s.nextRunAt) : "—"}</td>
+                      <td className="px-4 py-3">{s.lastStatus ?? "—"}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => toggleEnabled(s)}
+                          >
+                            {s.enabled ? "Disable" : "Enable"}
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => removeSchedule(s.id)}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                        {s.lastError && <p className="text-xs text-[var(--error-foreground)] mt-1">{s.lastError}</p>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </StandardPageLayout>
   );
 }

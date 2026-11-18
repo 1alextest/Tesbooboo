@@ -17,6 +17,8 @@ import { McpController } from "../mcp/mcp.controller";
 import { McpService } from "../mcp/mcp.service";
 import { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
 import { ModelStudioPreviewController } from "../behavior-graph/model-studio-preview.controller";
+import { SchedulesController } from "../schedules/schedules.controller";
+import { SchedulesService } from "../schedules/schedules.service";
 import { AuthMiddleware } from "../auth/auth.middleware";
 import { ApiTokenService } from "../auth/api-token.service";
 import { ApiTokenRestGuard } from "../auth/api-token-rest.guard";
@@ -242,8 +244,12 @@ const url = process.env.DATABASE_URL ?? "";
       await setup.query("INSERT INTO knowledge_document_versions (document_id,version_number,title,content_text,created_by) VALUES ($1,1,'Prior native document','Keep prior content',$2)", [documentId, owner]);
       await setup.query("INSERT INTO attachments (project_id,entity_type,entity_id,file_name,content_type,file_size,storage_path,uploaded_by) VALUES ($1,'execution',$2,'keep.txt','text/plain',4,'ci/mcp-lock/keep',$3)", [locked, executionId, owner]);
       quota = jest.spyOn(limits, "assertProjectWritable");
+      // The schedule worker is not under test here (EXO-A-08b covers it); it must not sweep while this
+      // suite manipulates rows directly.
+      process.env.SCHEDULES_WORKER_DISABLED = "1";
       const module = await Test.createTestingModule({
-        controllers: [McpController, LegacyController, ModelStudioPreviewController], providers: [McpService, ModelStudioPreview,
+        controllers: [McpController, LegacyController, ModelStudioPreviewController, SchedulesController],
+        providers: [McpService, ModelStudioPreview, SchedulesService,
           { provide: DatabaseService, useValue: db }, { provide: LegacyService, useValue: legacy },
           { provide: PlanLimitsService, useValue: limits },
           { provide: ProjectLookupService, useValue: new ProjectLookupService(db, requestCache) },
@@ -671,7 +677,7 @@ const url = process.env.DATABASE_URL ?? "";
         for (const handler of restHandlers) expect(handler).not.toHaveBeenCalled();
         expect(storageQuota).not.toHaveBeenCalled(); expect(removeFile).not.toHaveBeenCalled(); expect(notifications).not.toHaveBeenCalled();
       });
-      it("accounts for every alias, without mistaking schedule stubs or missing frontend helpers for mutations", () => {
+      it("accounts for every alias, without mistaking missing frontend helpers for mutations", () => {
         const aliases = Object.getOwnPropertyNames(LegacyController.prototype).flatMap((name) => {
           const handler = Object.getOwnPropertyDescriptor(LegacyController.prototype, name)?.value;
           if (typeof handler !== "function") return [];
@@ -679,12 +685,14 @@ const url = process.env.DATABASE_URL ?? "";
           const method = Reflect.getMetadata(METHOD_METADATA, handler) as RequestMethod;
           return path && /^\/api\/(plans|cycles)\//.test(path) ? [{ path, method }] : [];
         });
-        const mutations = aliases.filter(({ path, method }) => method !== RequestMethod.GET && !path.startsWith("/api/cycles/schedules/"));
+        const mutations = aliases.filter(({ method }) => method !== RequestMethod.GET);
         const normalize = (input: RestInput) => `${input.method} ${input.path.replace(restPlan, ":planId").replace(restItem, ":itemId").replace(restRun, ":cycleId").replace(restExecution, ":executionId").replace(restCase, ":testcaseId")}`;
         expect(mutations.map(({ path, method }) => `${RequestMethod[method]} ${path}`).sort()).toEqual(Object.values(restWrites).map((input) => normalize(input())).sort());
-        expect(aliases).toHaveLength(28);
+        expect(aliases).toHaveLength(26);
         expect(aliases.filter(({ method }) => method === RequestMethod.GET)).toHaveLength(11);
-        expect(aliases.filter(({ path }) => path.startsWith("/api/cycles/schedules/"))).toHaveLength(2);
+        // Run schedules moved to SchedulesController when they stopped being stubs; their auth and
+        // contract are covered by e2e/api/execution-ops.spec.ts instead of this alias inventory.
+        expect(aliases.filter(({ path }) => path.startsWith("/api/cycles/schedules/"))).toHaveLength(0);
       });
       it.each(Object.keys(restWrites) as Array<keyof typeof restWrites>)("persists an authorized unlocked %s through the same HTTP writer", async (name) => {
         await setup.query("UPDATE organizations SET plan='pro' WHERE id=$1", [organization]);
@@ -833,9 +841,29 @@ const url = process.env.DATABASE_URL ?? "";
         const stored = (await setup.query("SELECT share_enabled,share_token FROM cycles WHERE id=$1", [restRun])).rows[0];
         expect(stored).toEqual({ share_enabled: false, share_token: sharing.shareToken });
       });
-      it.each(["PATCH", "DELETE"])("retains the authenticated schedule %s stub", async (method) => {
-        expect(await rest({ method, path: `/api/cycles/schedules/${randomUUID()}` })).toEqual({ status: 501, body: { error: "Scheduled runs are not available yet" } });
+      it("refuses schedule creation on a read-only project and keeps schedule edits authenticated", async () => {
+        const before = await businessState();
+        expect(
+          await rest({
+            method: "POST",
+            path: `/api/projects/${locked}/cycles/schedules`,
+            body: { name: "locked", cycleId: restRun, scheduleType: "recurring", intervalMinutes: 60 }
+          })
+        ).toEqual({ status: 403, body: { error: expect.stringContaining("This project is read-only") } });
+        expect(quota).toHaveBeenCalledWith(organization, locked);
+        expect(await businessState()).toEqual(before);
+
+        // PATCH/DELETE carry no project in the URL, so they never reach the plan guard; a non-existent
+        // row is a 404 from the schedule owner and still writes nothing.
+        quota.mockClear();
+        for (const method of ["PATCH", "DELETE"]) {
+          expect(await rest({ method, path: `/api/cycles/schedules/${randomUUID()}` })).toEqual({
+            status: 404,
+            body: { error: "Schedule not found" }
+          });
+        }
         expect(quota).not.toHaveBeenCalled();
+        expect(await businessState()).toEqual(before);
       });
       it("retains enabled public reads while locked and reuses the same token after disable and unlocked re-enable", async () => {
         const shareToken = randomUUID();

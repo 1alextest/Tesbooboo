@@ -1069,49 +1069,58 @@ execution status across multiple executions at once.
 
 ### Recurring Run Scheduling
 
-**What it is:** A designed-but-unbuilt feature. A `cycle_run_schedules` table exists with correct
-constraints, and the API routes exist, but nothing schedules or executes a run. The "Schedule Test
-Run" screen that once invited users to build one was **removed on 2026-11-18**: a form whose only
-possible outcome is an error is a dead end.
+**What it is:** Per-project run schedules stored in `cycle_run_schedules`. A due schedule creates a
+new Test Run (a `cycles` row) cloned from the run it points at, with that run's Approved cases, so
+each occurrence keeps its own results instead of overwriting the scheduled run's executions.
 
-**Use cases (intended, not delivered):**
+**Use cases:**
 - Schedule a nightly smoke-test run every 1440 minutes (24h).
 - Schedule a one-time run for a specific release date/time in a given timezone.
-- Disable a schedule temporarily without deleting it; see when it last ran and whether it errored.
+- Disable a schedule temporarily without deleting it; see the last outcome and any error.
 
-**Current state (2026-11-18):**
-- `GET /api/projects/:projectId/cycles/schedules` returns `[]`. Nothing writes rows, so this is an
-  empty list rather than a false one.
-- `POST` validates a one-time `runAt` (rejects a past or malformed instant) and then answers **501
-  "Scheduled runs are not available yet"**. `PATCH` and `DELETE` answer 501 too. An earlier stub
-  returned a fake `"local-schedule"` id and silently did nothing; a schedule the user was told
-  about and could never see again is worse than an honest refusal.
-- The `cycle_run_schedules` table (V21) has the right constraints (`schedule_type`, a one-time /
-  recurring CHECK with `interval_minutes > 0`) but nothing reads or writes it, and there is no cron
-  parser or worker anywhere in the backend. A future implementation needs the table wired to the
-  routes plus a worker that creates native runs.
-- The schedule form, its client API functions and its validation helper were removed; the old
-  `/cycles/schedule` URL now redirects to the test-runs list, and that page no longer offers a
-  Schedule action.
+**How it works:**
+- `GET /api/projects/:projectId/cycles/schedules` lists the project's schedules with the scheduled
+  run's name, next/last fire time, last status and last error.
+- `POST` and `PATCH` validate a bounded name, a Test Run from the same project, `scheduleType`
+  (`one_time` | `recurring`), an IANA timezone, a future one-time `runAt`, and a recurring interval
+  of 1–525600 minutes. A one-time schedule that already fired has `nextRunAt: null`; editing its
+  name cannot make it due again. `DELETE` removes the schedule.
+- The worker (`SchedulesService`) sweeps every 30 seconds by default. Claiming is one statement that
+  marks the row running **and** advances `next_run_at` (`FOR UPDATE SKIP LOCKED`), so a crash cannot
+  fire the same occurrence twice. A claim older than 15 minutes is recovered as an interrupted run.
+  A one-time schedule disables itself after firing; recurring schedules continue; a failure records
+  `lastStatus: "error"` and `lastError`.
+- Firing creates a Test Run named `<run> — scheduled <UTC instant>` through the same Approved-only
+  case writer as every other run-creation path. The scheduled run's own executions are never
+  modified.
+- Routes are project-authorized; `PATCH`/`DELETE` resolve the schedule's own project from the row, so
+  a non-member holding a real id is refused.
+- Environment: `SCHEDULES_WORKER_DISABLED=1` disables the worker; `SCHEDULE_SWEEP_INTERVAL_MS`
+  changes the sweep interval.
 
-**Coverage:**
-- `e2e/api/execution-ops.spec.ts` EXO-A-07/08 remain intentionally red: they describe the missing
-  feature (a created schedule listed, updated and deleted) and should turn green only when it is
-  built. They are not part of any workflow's passing selection.
-- `e2e/ui/cycles.spec.ts` pins that the test-runs page offers no Schedule affordance.
+**Known limits:** the timezone is stored and validated, but recurrence is absolute minutes — a "daily
+at 09:00 local" schedule is a 1440-minute interval from its first fire, not a local wall-clock rule.
+There is no catch-up run for occurrences missed while the backend was down: a missed row fires once
+on restart and then continues.
 
-**Edge cases worth testing when it is built:**
-- one-time with a past or malformed `runAt` (already refused server-side before the 501);
-- recurring with `intervalMinutes` at 0 or negative (the DB CHECK requires > 0);
-- a schedule pointing at a run that is later deleted (the FK is `ON DELETE CASCADE`, so the
-  schedule row vanishes with the run);
-- two workers racing the same due schedule (claim/lease semantics).
+**Coverage:** `e2e/api/execution-ops.spec.ts` EXO-A-07/08 (create/update/delete), EXO-A-08b (the worker
+fires a due schedule and creates the cloned run), EXO-A-09 (authorization), EXO-A-10/11/12/13
+(validation), plus `e2e/ui/cycles.spec.ts` for the form and `SWP-06` for the screen opening.
+
+**Edge cases worth testing when it changes:**
+- recurring with `intervalMinutes` at 0, negative, fractional or above the cap;
+- a schedule pointing at a run that is then hard-deleted (the FK cascades) or soft-deleted (the
+  worker skips it and the list marks `cycleAvailable: false`);
+- two workers racing the same due schedule (the claim statement is the guarantee);
+- a one-time schedule submitted with a past or malformed `runAt` (refused, nothing stored).
 
 **Key files:**
-- Backend: `legacy.controller.ts` (`schedules`, `createSchedule`, `updateSchedule`,
-  `deleteSchedule` — list returns `[]`, the rest answer 501 after validating a one-time `runAt`).
-- Schema (unused): `Tesbo-Backend-Nest/migrations/V21_cycle_run_schedules.sql`.
-- Frontend: no schedule page or client functions remain; the test-runs page has no Schedule action.
+- Backend: `Tesbo-Backend-Nest/src/schedules/` (`schedules.service.ts` with the worker and validated
+  writers, `schedules.controller.ts`, `schedules.module.ts`), plus
+  `LegacyService.createCycleFromScheduledRun`.
+- Schema: `Tesbo-Backend-Nest/migrations/V21_cycle_run_schedules.sql`.
+- Frontend: `Tesbo-Frontend/app/(app)/projects/[id]/cycles/schedule/page.tsx`, its client functions
+  in `lib/api.ts`, and the Schedule action on the test-runs page.
 
 ---
 
