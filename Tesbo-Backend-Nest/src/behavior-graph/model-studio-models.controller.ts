@@ -79,4 +79,26 @@ export class ModelStudioModelsController {
   ) {
     return this.models.generateForUser(request.userId, projectId, modelId, revisionId, body);
   }
+
+  @Post(":modelId/revisions/:revisionId/approve")
+  approve(
+    @Req() request: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("modelId") modelId: string,
+    @Param("revisionId") revisionId: string,
+    @Body() body: Record<string, any>
+  ) {
+    return this.models.approveRevisionForUser(request.userId, projectId, modelId, revisionId, body);
+  }
+
+  @Post(":modelId/revisions/:revisionId/candidates")
+  createCases(
+    @Req() request: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("modelId") modelId: string,
+    @Param("revisionId") revisionId: string,
+    @Body() body: Record<string, any>
+  ) {
+    return this.models.createCasesFromPathsForUser(request.userId, projectId, modelId, revisionId, body);
+  }
 }

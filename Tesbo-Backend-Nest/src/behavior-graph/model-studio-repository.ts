@@ -3,7 +3,7 @@ import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
 import { TESTCASE_EDIT_REVISION_SQL } from "../legacy/testcase-edit-revision";
 import { DraftPreviewError, previewDraftModel, type PreviewDefinition } from "./model-studio-preview.core";
-import { generateModelPaths, type GenerationStrategy } from "./model-studio-generator";
+import { generateModelPaths, type GeneratedPath, type GenerationStrategy } from "./model-studio-generator";
 
 type Body = Record<string, any>;
 
@@ -53,17 +53,18 @@ export class ModelStudioRepository {
     }
   }
 
-  private modelView(model: Body, revision: Body | null, includeContent: boolean) {
+  private modelView(model: Body, revision: Body | null, includeContent: boolean, approval: Body | null = null) {
     return {
       id: model.id,
       projectId: model.project_id,
       name: model.name,
       createdAt: model.created_at,
-      latestRevision: revision ? this.revisionView(revision, includeContent) : null
+      latestRevision: revision ? this.revisionView(revision, includeContent, approval) : null
     };
   }
 
-  private revisionView(row: Body, includeContent: boolean) {
+  private revisionView(row: Body, includeContent: boolean, approval: Body | null = null) {
+    const receipt = approval && approval.model_revision_id === row.id ? approval : null;
     return {
       id: row.id,
       modelId: row.model_id,
@@ -72,12 +73,21 @@ export class ModelStudioRepository {
       status: row.status,
       contentHash: row.content_hash,
       createdAt: row.created_at,
+      // A revision is immutable; approval is a separate human receipt bound to its content hash.
+      approval: receipt
+        ? {
+            status: "APPROVED",
+            contentHash: receipt.content_hash,
+            approvedBy: receipt.approved_by ?? null,
+            approvedAt: receipt.created_at
+          }
+        : { status: "NOT_APPROVED", contentHash: null, approvedBy: null, approvedAt: null },
       ...(includeContent ? { content: row.content, preview: this.previewOrNull(row) } : {}),
       authority: {
         expectedBehavior: true,
         observedSource: false,
         executionEvidence: false,
-        approval: "NOT_APPROVED",
+        approval: receipt ? "APPROVED" : "NOT_APPROVED",
         runtimeEvidence: "NONE"
       }
     };
@@ -142,13 +152,16 @@ export class ModelStudioRepository {
     const res = await this.db.query(
       `SELECT m.*, r.id AS latest_revision_id, r.revision_number AS latest_revision_number,
               r.parent_revision_id AS latest_parent_revision_id, r.status AS latest_status,
-              r.content_hash AS latest_content_hash, r.created_at AS latest_revision_created_at
+              r.content_hash AS latest_content_hash, r.created_at AS latest_revision_created_at,
+              a.id AS approval_id, a.content_hash AS approval_hash, a.approved_by AS approval_by,
+              a.created_at AS approval_at, a.model_revision_id AS approval_revision_id
        FROM mbt_models m
        LEFT JOIN LATERAL (
          SELECT * FROM mbt_model_revisions r
          WHERE r.model_id = m.id AND r.project_id = m.project_id
          ORDER BY r.revision_number DESC LIMIT 1
        ) r ON true
+       LEFT JOIN mbt_model_approvals a ON a.model_revision_id = r.id AND a.project_id = m.project_id
        WHERE m.project_id = $1 AND m.archived_at IS NULL
        ORDER BY m.created_at DESC`,
       [projectId]
@@ -165,7 +178,15 @@ export class ModelStudioRepository {
             created_at: row.latest_revision_created_at
           }
         : null;
-      return this.modelView(row, revision, false);
+      const approval = row.approval_id
+        ? {
+            model_revision_id: row.approval_revision_id,
+            content_hash: row.approval_hash,
+            approved_by: row.approval_by,
+            created_at: row.approval_at
+          }
+        : null;
+      return this.modelView(row, revision, false, approval);
     });
   }
 
@@ -178,9 +199,17 @@ export class ModelStudioRepository {
       "SELECT * FROM mbt_model_revisions WHERE model_id = $1 AND project_id = $2 ORDER BY revision_number DESC",
       [modelId, projectId]
     );
+    const approvals = await this.db.query(
+      "SELECT * FROM mbt_model_approvals WHERE model_id = $1 AND project_id = $2",
+      [modelId, projectId]
+    );
+    const approvalByRevision = new Map<string, Body>(
+      approvals.rows.map((row) => [String(row.model_revision_id), row])
+    );
+    const head = revisions.rows[0] ?? null;
     return {
-      ...this.modelView(model.rows[0], revisions.rows[0] ?? null, true),
-      revisions: revisions.rows.map((row) => this.revisionView(row, true))
+      ...this.modelView(model.rows[0], head, true, head ? approvalByRevision.get(String(head.id)) ?? null : null),
+      revisions: revisions.rows.map((row) => this.revisionView(row, true, approvalByRevision.get(String(row.id)) ?? null))
     };
   }
 
@@ -215,6 +244,190 @@ export class ModelStudioRepository {
       return inserted.rows[0];
     });
     return this.revisionView(revision, true);
+  }
+
+  /**
+   * Approve a revision as a human decision bound to the content hash the reviewer saw.
+   *
+   * Revisions stay immutable; approval is a receipt. Only the current head can be approved — approving
+   * a superseded revision would attest behavior the model no longer offers. Approval is not coverage,
+   * not execution and not runtime evidence.
+   */
+  async approveRevisionForUser(
+    userId: string | null | undefined,
+    projectId: string,
+    modelId: string,
+    revisionId: string,
+    body: Body
+  ) {
+    await this.access(userId, projectId);
+    for (const value of [modelId, revisionId]) {
+      if (!UUID.test(value)) throw new NotFoundException({ error: "Model revision not found" });
+    }
+    const expectedHash = body?.expectedHash;
+    if (typeof expectedHash !== "string" || !HASH.test(expectedHash)) {
+      throw new BadRequestException({ error: "expectedHash must be the revision contentHash that was reviewed" });
+    }
+    const result = await this.db.transaction(async (client) => {
+      const revision = await client.query(
+        `SELECT r.* FROM mbt_model_revisions r
+         JOIN mbt_models m ON m.id = r.model_id AND m.project_id = r.project_id AND m.archived_at IS NULL
+         WHERE r.id = $1 AND r.model_id = $2 AND r.project_id = $3
+         FOR UPDATE OF r`,
+        [revisionId, modelId, projectId]
+      );
+      if (!revision.rows[0]) throw new NotFoundException({ error: "Model revision not found" });
+      const head = await client.query(
+        "SELECT id FROM mbt_model_revisions WHERE model_id = $1 AND project_id = $2 ORDER BY revision_number DESC LIMIT 1",
+        [modelId, projectId]
+      );
+      if (head.rows[0]?.id !== revisionId) {
+        throw new ConflictException({
+          code: "SUPERSEDED_REVISION",
+          error: "Only the current revision can be approved; save a new revision and approve that"
+        });
+      }
+      if (String(revision.rows[0].content_hash) !== expectedHash) {
+        throw new ConflictException({
+          code: "MODEL_APPROVAL_CONFLICT",
+          error: "The revision changed since it was reviewed; reload before approving"
+        });
+      }
+      const inserted = await client.query(
+        `INSERT INTO mbt_model_approvals (project_id, model_id, model_revision_id, content_hash, approved_by)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (model_revision_id) DO NOTHING
+         RETURNING *`,
+        [projectId, modelId, revisionId, expectedHash, userId]
+      );
+      if (inserted.rows[0]) {
+        await client.query("UPDATE mbt_model_revisions SET status = 'approved' WHERE id = $1 AND project_id = $2", [
+          revisionId,
+          projectId
+        ]);
+      }
+      const receipt =
+        inserted.rows[0] ??
+        (await client.query("SELECT * FROM mbt_model_approvals WHERE model_revision_id = $1", [revisionId])).rows[0];
+      const current = await client.query("SELECT * FROM mbt_model_revisions WHERE id = $1", [revisionId]);
+      return { revision: current.rows[0], approval: receipt, alreadyApproved: !inserted.rows[0] };
+    });
+    return { ...this.revisionView(result.revision, true, result.approval), alreadyApproved: result.alreadyApproved };
+  }
+
+  /**
+   * Turn selected path proposals into unapproved Draft cases. The revision must be approved first;
+   * the server regenerates the proposals with the supplied generation inputs and accepts only their
+   * digests, so a caller cannot invent a path. Each created case is linked to its digest, making a
+   * repeated request idempotent.
+   */
+  async createCasesFromPathsForUser(
+    userId: string | null | undefined,
+    projectId: string,
+    modelId: string,
+    revisionId: string,
+    body: Body
+  ) {
+    await this.access(userId, projectId);
+    for (const value of [modelId, revisionId]) {
+      if (!UUID.test(value)) throw new NotFoundException({ error: "Model revision not found" });
+    }
+    const revision = await this.db.query(
+      `SELECT r.*, m.name AS model_name FROM mbt_model_revisions r
+       JOIN mbt_models m ON m.id = r.model_id AND m.project_id = r.project_id AND m.archived_at IS NULL
+       WHERE r.id = $1 AND r.model_id = $2 AND r.project_id = $3`,
+      [revisionId, modelId, projectId]
+    );
+    const row = revision.rows[0];
+    if (!row) throw new NotFoundException({ error: "Model revision not found" });
+    const approved = await this.db.query(
+      "SELECT 1 FROM mbt_model_approvals WHERE model_revision_id = $1 AND project_id = $2",
+      [revisionId, projectId]
+    );
+    if (!approved.rows[0]) {
+      throw new ConflictException({
+        code: "MODEL_NOT_APPROVED",
+        error: "Approve this revision before creating cases from its proposals"
+      });
+    }
+    const digests = Array.isArray(body?.digests) ? [...new Set(body.digests.map((digest: unknown) => String(digest)))] : [];
+    if (!digests.length || digests.length > 64) {
+      throw new BadRequestException({ error: "digests must name between 1 and 64 proposed paths" });
+    }
+    const options = this.generationOptions(body, row);
+    const generated = generateModelPaths({
+      definition: row.content as PreviewDefinition,
+      revisionId: row.id,
+      contentHash: row.content_hash,
+      options
+    });
+    const byDigest = new Map(generated.paths.map((path) => [path.digest, path]));
+    const unknown = digests.filter((digest) => !byDigest.has(digest));
+    if (unknown.length) {
+      throw new BadRequestException({ error: `Unknown or stale path digest(s): ${unknown.join(", ")}` });
+    }
+    const labels = new Map((row.content as PreviewDefinition).states.map((state) => [state.id, state.label]));
+    const cases = await this.db.transaction(async (client) => {
+      // Same revision + digest must not be generated twice concurrently; the advisory lock is
+      // transaction-scoped and only serializes callers of this method.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [
+        `model-candidates:${projectId}:${revisionId}`
+      ]);
+      const createdCases: Array<{ digest: string; testcaseId: string; created: boolean; title?: string }> = [];
+      for (const digest of digests) {
+        const path = byDigest.get(digest) as GeneratedPath;
+        const existing = await client.query(
+          "SELECT testcase_id FROM mbt_generated_cases WHERE model_revision_id = $1 AND path_digest = $2",
+          [revisionId, digest]
+        );
+        if (existing.rows[0]) {
+          createdCases.push({ digest, testcaseId: existing.rows[0].testcase_id, created: false });
+          continue;
+        }
+        const created = await this.legacy.createTestCase(projectId, userId, this.generatedCaseBody(row, path, labels));
+        await client.query(
+          `INSERT INTO mbt_generated_cases (project_id, model_id, model_revision_id, path_digest, testcase_id, created_by)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [projectId, modelId, revisionId, digest, created.id, userId]
+        );
+        createdCases.push({ digest, testcaseId: String(created.id), created: true, title: String(created.title) });
+      }
+      return createdCases;
+    });
+    return {
+      modelId,
+      revisionId,
+      created: cases.filter((item) => item.created).length,
+      skipped: cases.filter((item) => !item.created).length,
+      cases,
+      coverageAssertion: "none",
+      executionAssertion: "none",
+      note: "Generated cases are unapproved drafts derived from model proposals. A proposal is not coverage and these cases are not execution evidence."
+    };
+  }
+
+  /** The case a proposal becomes: a Draft with the path's transitions as steps and honest provenance. */
+  private generatedCaseBody(revisionRow: Body, path: GeneratedPath, labels: Map<string, string>) {
+    const transitions = (revisionRow.content as PreviewDefinition).transitions;
+    const byId = new Map(transitions.map((transition) => [transition.id, transition]));
+    const steps = path.transitionIds.map((id, index) => {
+      const transition = byId.get(id);
+      return {
+        stepNumber: index + 1,
+        action: transition?.action ?? id,
+        expectedResult: transition?.expectedObservation ?? ""
+      };
+    });
+    const route = path.stateIds.map((id) => labels.get(id) ?? id).join(" → ");
+    const title = `Model: ${route}`.slice(0, 255);
+    const description = [
+      `Generated from expected-behavior model "${revisionRow.model_name}" revision ${revisionRow.revision_number}, path ${path.digest}.`,
+      "",
+      ...steps.map((step) => `${step.stepNumber}. ${step.action} — expected: ${step.expectedResult}`),
+      "",
+      "This is an unapproved draft derived from a model proposal; review it before approving. A mapping or proposal is not verified coverage, execution or runtime evidence."
+    ].join("\n");
+    return { title, description, steps, status: "Draft", type: "Functional", priority: "P2" };
   }
 
   async linkCaseForUser(userId: string | null | undefined, projectId: string, modelId: string, revisionId: string, body: Body) {
@@ -345,6 +558,43 @@ export class ModelStudioRepository {
        WHERE l.model_id = $1 AND l.project_id = $2 AND t.deleted_at IS NOT NULL`,
       [modelId, projectId]
     );
+    const approval = await this.db.query(
+      "SELECT * FROM mbt_model_approvals WHERE model_revision_id = $1 AND project_id = $2",
+      [revision.rows[0].id, projectId]
+    );
+    // Observed results for the linked cases, reported separately from the model itself. This is the
+    // "what have these cases actually done" half of the honest coverage split; it is not model
+    // verification and does not prove the modeled behavior is correct.
+    const evidenceRows = await this.db.query(
+      `SELECT l.testcase_id, e.status, COUNT(*)::int AS count, MAX(e.updated_at) AS last_at
+       FROM mbt_model_case_links l
+       JOIN testcases t ON t.id = l.testcase_id AND t.deleted_at IS NULL
+       JOIN cycle_items ci ON ci.testcase_id = l.testcase_id
+       JOIN executions e ON e.cycle_item_id = ci.id
+       JOIN cycles c ON c.id = ci.cycle_id AND c.deleted_at IS NULL AND c.project_id = l.project_id
+       WHERE l.model_revision_id = $1 AND l.project_id = $2
+       GROUP BY l.testcase_id, e.status`,
+      [revision.rows[0].id, projectId]
+    );
+    const evidenceByCase = new Map<string, Body>();
+    for (const evidence of evidenceRows.rows) {
+      const key = String(evidence.testcase_id);
+      const entry = evidenceByCase.get(key) ?? { statusCounts: {}, latestStatus: null, latestAt: null };
+      entry.statusCounts[String(evidence.status)] = Number(evidence.count);
+      if (!entry.latestAt || new Date(evidence.last_at).getTime() > new Date(entry.latestAt as string).getTime()) {
+        entry.latestAt = evidence.last_at;
+        entry.latestStatus = evidence.status;
+      }
+      evidenceByCase.set(key, entry);
+    }
+    const caseEvidence = linkRows.rows
+      .filter((row) => row.testcase_deleted !== true)
+      .map((row) => ({
+        testcaseId: row.testcase_id,
+        testcaseTitle: row.testcase_title ?? "Deleted test case",
+        ...(evidenceByCase.get(String(row.testcase_id)) ?? { statusCounts: {}, latestStatus: null, latestAt: null })
+      }));
+
     const latestHash = String(revision.rows[0].content_hash);
     let testcasesChangedSinceLink = 0;
     let testcasesWithoutRecordedRevision = 0;
@@ -379,6 +629,17 @@ export class ModelStudioRepository {
         deletedTestcases: Number(deleted.rows[0]?.cases ?? 0),
         note: "Staleness reports a changed basis for review. It never rewrites a case, link or history."
       },
+      approval: approval.rows[0]
+        ? {
+            status: "APPROVED",
+            contentHash: approval.rows[0].content_hash,
+            approvedBy: approval.rows[0].approved_by ?? null,
+            approvedAt: approval.rows[0].created_at
+          }
+        : { status: "NOT_APPROVED", contentHash: null, approvedBy: null, approvedAt: null },
+      caseEvidence,
+      evidenceNote:
+        "Case evidence is the observed result history of linked cases. It is not model verification, coverage of the modeled behavior, or proof the expected behavior is correct.",
       coverageAssertion: "none",
       executionAssertion: "none",
       note: "A linked case is an accepted mapping, not execution or verified coverage."
@@ -403,6 +664,18 @@ export class ModelStudioRepository {
     );
     if (!revision.rows[0]) throw new NotFoundException({ error: "Model revision not found" });
 
+    const generated = generateModelPaths({
+      definition: revision.rows[0].content as PreviewDefinition,
+      revisionId: revision.rows[0].id,
+      contentHash: revision.rows[0].content_hash,
+      options: this.generationOptions(body, revision.rows[0])
+    });
+    // Read-only: proposals are returned, never written to cases, tasks, runs or evidence.
+    return { ...generated, modelId, revisionId: revision.rows[0].id, contentHash: revision.rows[0].content_hash };
+  }
+
+  /** Shared, validated generation inputs for preview-only generation and case creation. */
+  private generationOptions(body: Body, revision: Body) {
     const strategy = (body?.strategy === undefined ? "edge_coverage" : String(body.strategy)) as GenerationStrategy;
     if (strategy !== "edge_coverage" && strategy !== "shortest_paths") {
       throw new BadRequestException({ error: "strategy must be edge_coverage or shortest_paths" });
@@ -415,19 +688,11 @@ export class ModelStudioRepository {
     if (!Number.isInteger(maxDepth) || maxDepth < 1 || maxDepth > 32) {
       throw new BadRequestException({ error: "maxDepth must be an integer between 1 and 32" });
     }
-    const seed = body?.seed === undefined ? String(revision.rows[0].id) : String(body.seed).trim();
+    const seed = body?.seed === undefined ? String(revision.id) : String(body.seed).trim();
     if (!seed || seed.length > 128) {
       throw new BadRequestException({ error: "seed must be a non-empty string of at most 128 characters" });
     }
-
-    const generated = generateModelPaths({
-      definition: revision.rows[0].content as PreviewDefinition,
-      revisionId: revision.rows[0].id,
-      contentHash: revision.rows[0].content_hash,
-      options: { strategy, maxPaths, maxDepth, seed }
-    });
-    // Read-only: proposals are returned, never written to cases, tasks, runs or evidence.
-    return { ...generated, modelId, revisionId: revision.rows[0].id, contentHash: revision.rows[0].content_hash };
+    return { strategy, maxPaths, maxDepth, seed };
   }
 
   private linkView(row: Body) {

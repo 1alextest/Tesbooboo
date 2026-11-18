@@ -283,6 +283,142 @@ test.describe("persisted Model Studio revisions and mappings", () => {
     }
   });
 
+  test("approval gates proposal-to-case creation, keeps provenance and reports observed case evidence separately", { tag: '@tesbo.testId("TES-TC-3040")' }, async () => {
+    const tenant = await provisionRbacTenant("model-studio");
+    test.skip(!tenant, "requires direct SQL control for the disposable tenant");
+    const projectId = tenant!.mainProjectId;
+    const base = `/api/projects/${projectId}/model-studio/models`;
+    const owner = await loginAs(tenant!.owner);
+    let modelId = "";
+    let runCaseId = "";
+    let cycleId = "";
+    const generatedCaseIds: string[] = [];
+    try {
+      const created = await owner.post(base, { data: { name: `E2E governed model ${Date.now()}`, model: MODEL } });
+      expect(created.status(), await created.text()).toBe(201);
+      const model = await created.json();
+      modelId = model.id;
+      const revision1 = model.latestRevision;
+      const revisionTwoModel = {
+        ...MODEL,
+        states: [...MODEL.states, { id: "retry", label: "Retry" }],
+        transitions: [
+          ...MODEL.transitions,
+          { id: "retry_edge", from: "done", to: "start", action: "Retry", expectedObservation: "The flow restarts" }
+        ]
+      };
+      const saved = await owner.post(`${base}/${modelId}/revisions`, { data: { baseRevisionId: revision1.id, model: revisionTwoModel } });
+      expect(saved.status(), await saved.text()).toBe(201);
+      const revision2 = await saved.json();
+      expect(revision2.approval).toMatchObject({ status: "NOT_APPROVED" });
+
+      // Generation alone is still read-only; creating cases from it requires approval.
+      const unapproved = await owner.post(`${base}/${modelId}/revisions/${revision2.id}/candidates`, {
+        data: { digests: ["0".repeat(64)] }
+      });
+      expect(unapproved.status()).toBe(409);
+      expect((await unapproved.json()).code).toBe("MODEL_NOT_APPROVED");
+
+      const wrongHash = await owner.post(`${base}/${modelId}/revisions/${revision2.id}/approve`, {
+        data: { expectedHash: "a".repeat(64) }
+      });
+      expect(wrongHash.status()).toBe(409);
+      expect((await wrongHash.json()).code).toBe("MODEL_APPROVAL_CONFLICT");
+
+      const superseded = await owner.post(`${base}/${modelId}/revisions/${revision1.id}/approve`, {
+        data: { expectedHash: revision1.contentHash }
+      });
+      expect(superseded.status()).toBe(409);
+      expect((await superseded.json()).code).toBe("SUPERSEDED_REVISION");
+
+      const approved = await owner.post(`${base}/${modelId}/revisions/${revision2.id}/approve`, {
+        data: { expectedHash: revision2.contentHash }
+      });
+      expect(approved.status(), await approved.text()).toBe(201);
+      expect(await approved.json()).toMatchObject({
+        status: "approved",
+        approval: { status: "APPROVED", contentHash: revision2.contentHash },
+        alreadyApproved: false
+      });
+      const repeated = await owner.post(`${base}/${modelId}/revisions/${revision2.id}/approve`, {
+        data: { expectedHash: revision2.contentHash }
+      });
+      expect(repeated.status()).toBe(201);
+      expect((await repeated.json()).alreadyApproved).toBe(true);
+      const detail = await (await owner.get(`${base}/${modelId}`)).json();
+      expect(detail.latestRevision.approval.status).toBe("APPROVED");
+      expect(detail.revisions.find((row: { id: string }) => row.id === revision1.id).approval.status).toBe("NOT_APPROVED");
+
+      const generation = { strategy: "edge_coverage", maxPaths: 10, maxDepth: 8 };
+      const proposals = await owner.post(`${base}/${modelId}/revisions/${revision2.id}/generate`, { data: generation });
+      expect(proposals.status()).toBe(200);
+      const paths = (await proposals.json()).paths as Array<{ digest: string }>;
+      expect(paths.length).toBeGreaterThan(0);
+
+      const fabricated = await owner.post(`${base}/${modelId}/revisions/${revision2.id}/candidates`, {
+        data: { ...generation, digests: ["f".repeat(64)] }
+      });
+      expect(fabricated.status()).toBe(400);
+      expect(JSON.stringify(await fabricated.json())).toContain("Unknown or stale path digest");
+
+      const candidates = await owner.post(`${base}/${modelId}/revisions/${revision2.id}/candidates`, {
+        data: { ...generation, digests: [paths[0].digest] }
+      });
+      expect(candidates.status(), await candidates.text()).toBe(201);
+      const batch = await candidates.json();
+      expect(batch).toMatchObject({ created: 1, skipped: 0, coverageAssertion: "none", executionAssertion: "none" });
+      const generatedCaseId = batch.cases[0].testcaseId as string;
+      generatedCaseIds.push(generatedCaseId);
+      const generatedCase = await (await owner.get(`/api/projects/${projectId}/testcases/${generatedCaseId}`)).json();
+      expect(generatedCase.status).toBe("Draft");
+      expect(generatedCase.title).toMatch(/^Model: /);
+      expect(generatedCase.description).toContain(paths[0].digest);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM mbt_generated_cases
+        WHERE model_revision_id = ${literal(revision2.id)} AND path_digest = ${literal(paths[0].digest)};`))).toBe(1);
+
+      // Repeating the same request is idempotent: no duplicate case, no second provenance row.
+      const repeatedBatch = await owner.post(`${base}/${modelId}/revisions/${revision2.id}/candidates`, {
+        data: { ...generation, digests: [paths[0].digest] }
+      });
+      expect(await repeatedBatch.json()).toMatchObject({
+        created: 0,
+        skipped: 1,
+        cases: [expect.objectContaining({ testcaseId: generatedCaseId, created: false })]
+      });
+
+      // A separately approved case linked to the revision, executed once, is reported as observed
+      // evidence — explicitly not model verification.
+      const runCase = await owner.post(`/api/projects/${projectId}/testcases`, {
+        data: { title: `E2E evidence case ${Date.now()}`, status: "Approved" }
+      });
+      expect(runCase.status(), await runCase.text()).toBe(201);
+      runCaseId = (await runCase.json()).id;
+      const runCaseRevision = (await (await owner.get(`/api/projects/${projectId}/testcases/${runCaseId}`)).json()).editRevision;
+      const linked = await owner.post(`${base}/${modelId}/revisions/${revision2.id}/links`, {
+        data: { testcaseId: runCaseId, elementIds: ["start"], testcaseRevision: runCaseRevision }
+      });
+      expect(linked.status(), await linked.text()).toBe(201);
+      cycleId = (await (await owner.post(`/api/projects/${projectId}/cycles`, { data: { name: `E2E evidence run ${Date.now()}` } })).json()).id;
+      expect((await owner.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseIds: [runCaseId] } })).status()).toBeLessThan(400);
+      const execution = (await (await owner.get(`/api/cycles/${cycleId}/executions`)).json())[0];
+      expect((await owner.patch(`/api/cycles/${cycleId}/executions/${execution.id}`, { data: { status: "Failed" } })).ok()).toBe(true);
+
+      const coverage = await (await owner.get(`${base}/${modelId}/coverage`)).json();
+      expect(coverage.approval.status).toBe("APPROVED");
+      const evidence = coverage.caseEvidence.find((row: { testcaseId: string }) => row.testcaseId === runCaseId);
+      expect(evidence).toMatchObject({ latestStatus: "Failed", statusCounts: { Failed: 1 } });
+      expect(coverage.evidenceNote).toMatch(/not model verification/i);
+      expect(coverage.coverageAssertion).toBe("none");
+    } finally {
+      if (cycleId) await owner.delete(`/api/cycles/${cycleId}`, { failOnStatusCode: false });
+      for (const id of [runCaseId, ...generatedCaseIds]) {
+        if (id) await owner.delete(`/api/projects/${projectId}/testcases/${id}`, { failOnStatusCode: false });
+      }
+      if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(projectId)};`);
+      await owner.dispose();
+    }
+  });
+
   test("bounded generation is deterministic, respects bounds and writes no case or run", async () => {
     const tenant = await provisionRbacTenant("model-studio");
     test.skip(!tenant, "requires direct SQL control for the disposable tenant");

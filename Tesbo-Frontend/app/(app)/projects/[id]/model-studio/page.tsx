@@ -3,8 +3,11 @@
 import { useEffect, useState } from "react";
 import { useParams } from "@/lib/routeParams";
 import {
+  approveModelStudioRevision,
   archiveModelStudioModel,
+  createModelStudioCases,
   createModelStudioModel,
+  generateModelStudioPaths,
   getModelStudioCoverage,
   getModelStudioModel,
   getTestCase,
@@ -14,6 +17,7 @@ import {
   unlinkModelStudioCase,
   type ModelStudioCoverage,
   type ModelStudioDetail,
+  type ModelStudioGeneratedPath,
   type ModelStudioModel,
   type ModelStudioRevision
 } from "@/lib/api";
@@ -87,6 +91,13 @@ export default function ModelStudioPage() {
   const [linkBusy, setLinkBusy] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [mappingBusy, setMappingBusy] = useState<string | null>(null);
+  const [approving, setApproving] = useState(false);
+  const [proposals, setProposals] = useState<ModelStudioGeneratedPath[]>([]);
+  const [proposalsBusy, setProposalsBusy] = useState(false);
+  const [proposalsError, setProposalsError] = useState<string | null>(null);
+  const [selectedDigests, setSelectedDigests] = useState<string[]>([]);
+  const [casesBusy, setCasesBusy] = useState(false);
+  const [casesNotice, setCasesNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -241,6 +252,71 @@ export default function ModelStudioPage() {
     }
   }
 
+  async function approveRevision() {
+    if (!currentDetail || !latestRevision) return;
+    const confirmed = window.confirm(
+      `Approve revision ${latestRevision.revisionNumber} (content ${latestRevision.contentHash.slice(0, 12)}…)? ` +
+        "Approval is a human decision; it is not execution evidence."
+    );
+    if (!confirmed) return;
+    setApproving(true);
+    try {
+      await approveModelStudioRevision(projectId, currentDetail.id, latestRevision.id, latestRevision.contentHash);
+      setReloadToken((token) => token + 1);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not approve the revision.");
+    } finally {
+      setApproving(false);
+    }
+  }
+
+  async function generateProposals() {
+    if (!currentDetail || !latestRevision) return;
+    setProposalsBusy(true);
+    setProposalsError(null);
+    setCasesNotice(null);
+    try {
+      const result = await generateModelStudioPaths(projectId, currentDetail.id, latestRevision.id, {
+        strategy: "edge_coverage",
+        maxPaths: 20,
+        maxDepth: 12
+      });
+      setProposals(result.paths);
+      setSelectedDigests([]);
+    } catch (cause) {
+      setProposalsError(cause instanceof Error ? cause.message : "Could not generate proposals.");
+    } finally {
+      setProposalsBusy(false);
+    }
+  }
+
+  async function createCasesFromProposals() {
+    if (!currentDetail || !latestRevision || !selectedDigests.length) return;
+    setCasesBusy(true);
+    setProposalsError(null);
+    try {
+      // The same generation inputs are sent again: the server regenerates the proposals and accepts
+      // only their digests, so a fabricated path cannot become a case.
+      const result = await createModelStudioCases(projectId, currentDetail.id, latestRevision.id, {
+        digests: selectedDigests,
+        strategy: "edge_coverage",
+        maxPaths: 20,
+        maxDepth: 12
+      });
+      setCasesNotice(
+        `Created ${result.created} draft case${result.created === 1 ? "" : "s"}` +
+          (result.skipped ? `; ${result.skipped} already existed` : "") +
+          "."
+      );
+      setSelectedDigests([]);
+      setReloadToken((token) => token + 1);
+    } catch (cause) {
+      setProposalsError(cause instanceof Error ? cause.message : "Could not create draft cases.");
+    } finally {
+      setCasesBusy(false);
+    }
+  }
+
   const revision: ModelStudioRevision | null =
     currentDetail?.revisions.find((row) => row.id === revisionId) ?? currentDetail?.revisions[0] ?? null;
   const preview = revision?.preview ?? null;
@@ -326,6 +402,22 @@ export default function ModelStudioPage() {
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
+                  {latestRevision &&
+                    (latestRevision.approval.status === "APPROVED" ? (
+                      <span className="text-[11.5px] text-[var(--muted)]">
+                        Approved rev {latestRevision.revisionNumber}
+                        {latestRevision.approval.approvedAt ? ` · ${formatDate(latestRevision.approval.approvedAt)}` : ""}
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void approveRevision()}
+                        disabled={approving}
+                        className="rounded border border-[var(--border)] px-2 py-1 text-[12px] hover:bg-[var(--surface-secondary)] disabled:opacity-60"
+                      >
+                        {approving ? "Approving…" : `Approve revision ${latestRevision.revisionNumber}`}
+                      </button>
+                    ))}
                   <button
                     type="button"
                     onClick={() => {
@@ -429,6 +521,79 @@ export default function ModelStudioPage() {
                 <p className="text-[12.5px] text-[var(--muted)]">This revision has no renderable preview.</p>
               )}
 
+              {latestRevision && (
+                <section aria-label="Path proposals" className="rounded border border-[var(--border)] p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="font-medium">Path proposals</h3>
+                    <button
+                      type="button"
+                      onClick={() => void generateProposals()}
+                      disabled={proposalsBusy}
+                      className="rounded border border-[var(--border)] px-2 py-1 text-[12px] hover:bg-[var(--surface-secondary)] disabled:opacity-60"
+                    >
+                      {proposalsBusy ? "Generating…" : "Generate paths"}
+                    </button>
+                  </div>
+                  <p className="mt-1 text-[11.5px] text-[var(--muted)]">
+                    Bounded proposals over the latest revision. They are not tests, coverage or execution
+                    evidence; only an approved revision can turn them into Draft cases.
+                  </p>
+                  {proposalsError && (
+                    <p role="alert" className="mt-2 text-[12px] text-[var(--error-foreground)]">
+                      {proposalsError}
+                    </p>
+                  )}
+                  {proposals.length > 0 && (
+                    <>
+                      <ul className="mt-2 space-y-1 text-[12px]">
+                        {proposals.map((path) => (
+                          <li key={path.digest} className="flex flex-wrap items-center gap-2">
+                            <input
+                              type="checkbox"
+                              aria-label={`Select path ${path.digest.slice(0, 10)}`}
+                              checked={selectedDigests.includes(path.digest)}
+                              onChange={(event) =>
+                                setSelectedDigests((current) =>
+                                  event.target.checked
+                                    ? [...current, path.digest]
+                                    : current.filter((digest) => digest !== path.digest)
+                                )
+                              }
+                            />
+                            <span className="font-mono text-[11px] text-[var(--muted)]">
+                              {path.digest.slice(0, 10)}
+                            </span>
+                            <span>{path.transitionIds.join(" → ")}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="mt-2 flex flex-wrap items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => void createCasesFromProposals()}
+                          disabled={
+                            casesBusy || !selectedDigests.length || latestRevision.approval.status !== "APPROVED"
+                          }
+                          className="rounded border border-[var(--border)] px-2 py-1 text-[12px] hover:bg-[var(--surface-secondary)] disabled:opacity-60"
+                        >
+                          {casesBusy ? "Creating…" : "Create draft cases"}
+                        </button>
+                        {latestRevision.approval.status !== "APPROVED" && (
+                          <span className="text-[11.5px] text-[var(--muted)]">
+                            Approve the latest revision to create draft cases from these proposals.
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  )}
+                  {casesNotice && (
+                    <p role="status" className="mt-2 rounded border border-[var(--border)] bg-[var(--surface-secondary)] p-2 text-[12px]">
+                      {casesNotice}
+                    </p>
+                  )}
+                </section>
+              )}
+
               <section aria-label="Case mappings" className="rounded border border-[var(--border)] p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="font-medium">Case mappings</h3>
@@ -488,6 +653,29 @@ export default function ModelStudioPage() {
                           </li>
                         ))}
                       </ul>
+                    )}
+                    {currentCoverage.caseEvidence.length > 0 && (
+                      <div className="mt-3">
+                        <h4 className="text-[12px] font-semibold">Observed case results</h4>
+                        <ul className="mt-1 space-y-1 text-[12px]">
+                          {currentCoverage.caseEvidence.map((evidence) => (
+                            <li
+                              key={evidence.testcaseId}
+                              className="flex flex-wrap justify-between gap-2 border-b border-[var(--border)] py-1"
+                            >
+                              <span>{evidence.testcaseTitle}</span>
+                              <span>
+                                {evidence.latestStatus ?? "never run"}
+                                {Object.keys(evidence.statusCounts).length > 0 &&
+                                  ` · ${Object.entries(evidence.statusCounts)
+                                    .map(([status, count]) => `${status} ${count}`)
+                                    .join(", ")}`}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="mt-1 text-[11px] text-[var(--muted)]">{currentCoverage.evidenceNote}</p>
+                      </div>
                     )}
                     <MappingStalenessNote staleness={currentCoverage.mappingStaleness} />
                   </>
