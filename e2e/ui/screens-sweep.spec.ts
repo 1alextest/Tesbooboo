@@ -210,16 +210,14 @@ test.describe("screens sweep — the pages no other spec opens", () => {
     }
   });
 
-  test("SWP-06 the removed run schedule route redirects and offers no schedule form", { tag: '@tesbo.testId("TES-TC-812")' }, async ({ page }) => {
+  test("SWP-06 the run schedule screen opens on the real form", { tag: '@tesbo.testId("TES-TC-812")' }, async ({ page }) => {
     const result = await renderCheck(page, `/projects/${projectId()}/cycles/schedule`);
     expect(thrownExceptions(result)).toEqual([]);
-    // Scheduled runs are not implemented (see api/execution-ops.spec.ts EXO-A-07/08). The screen that
-    // offered the form was removed on 2026-11-18; the old URL redirects to the test runs list and
-    // must not render a create-schedule form or a saved schedule that does not exist.
-    await expect(page).toHaveURL(new RegExp(`/projects/${projectId()}/cycles$`));
+    // Schedules are persisted now (api/execution-ops.spec.ts EXO-A-07/08). The screen must render its
+    // create form, and must never show a saved schedule that does not exist.
+    await expect(page.getByRole("button", { name: "Create Schedule" })).toBeVisible();
     const body = (await page.locator("body").innerText()).toLowerCase();
     expect(body).not.toContain("local-schedule");
-    expect(body).not.toContain("create schedule");
   });
 
   test("SWP-07 a shared run opens for a visitor with no session", { tag: '@tesbo.testId("TES-TC-813")' }, async ({ browser }) => {

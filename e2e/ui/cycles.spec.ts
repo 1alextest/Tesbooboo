@@ -780,20 +780,115 @@ test.describe("Test Run filters — concurrent updates, pagination boundary, and
 });
 
 /*
- * Scheduled runs are not implemented server-side: every schedule route answers 501 (see
- * execution-ops.spec.ts's EXO-A-07/08). The screen that invited users to build one was removed on
- * 2026-11-18 — a form whose only possible outcome is an error is a dead end, and the schema
- * (cycle_run_schedules) is still there for a real implementation later. This pins that the
- * affordance stays gone until the feature exists.
+ * Schedule Run — the form and its "Run At" validation.
+ *
+ * Schedules are persisted in cycle_run_schedules; the worker creates a new Test Run for each
+ * occurrence (api/execution-ops.spec.ts EXO-A-08b covers that side). What only the browser can show
+ * is here: the field must never send a past instant, and a valid submit must produce a row that is
+ * still there after the list reloads.
  */
-test.describe("Schedule Run — not offered until implemented", () => {
-  test("the test runs page offers no Schedule action and the old schedule URL returns to it", { tag: '@tesbo.testId("TES-TC-2203")' }, async ({ page }) => {
-    // The old URL a bookmark or stale tab would hold redirects to the list instead of a 404.
-    await page.goto(`/projects/${ctx.projectId}/cycles/schedule`);
-    await expect(page).toHaveURL(new RegExp(`/projects/${ctx.projectId}/cycles$`));
+test.describe("Schedule Run — the form and Run At validation", () => {
+  let cycleId: string;
+  let cycleName: string;
 
-    await expect(page.getByRole("button", { name: "Create Test Run" }).first()).toBeVisible();
-    await expect(page.getByRole("link", { name: /schedule/i })).toHaveCount(0);
+  test.beforeAll(async () => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    try {
+      cycleName = `E2E ScheduleRunAt ${Date.now()}`;
+      const cycle = await (
+        await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: cycleName } })
+      ).json();
+      cycleId = cycle.id;
+    } finally {
+      await api.dispose();
+    }
+  });
+
+  test.afterAll(async () => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    try {
+      await api.delete(`/api/cycles/${cycleId}`, { failOnStatusCode: false });
+    } finally {
+      await api.dispose();
+    }
+  });
+
+  /** The "Test Run" select isn't tied to its label via for/id, so this walks the DOM structure. */
+  const testRunSelect = (page: Page) =>
+    page.locator('xpath=//label[normalize-space(text())="Test Run"]/following-sibling::select');
+
+  async function openSchedule(browserPage: Page) {
+    await browserPage.goto(`/projects/${ctx.projectId}/cycles`);
+    await browserPage.getByRole("link", { name: "Schedule", exact: true }).click();
+    await expect(browserPage).toHaveURL(/\/cycles\/schedule$/);
+  }
+
+  test("a past Run At is blocked client-side with an inline error, before any request is sent", { tag: '@tesbo.testId("TES-TC-2203")' }, async ({ page }) => {
+    let scheduleRequestSent = false;
+    await page.route("**/api/projects/*/cycles/schedules", async (route) => {
+      if (route.request().method() === "POST") scheduleRequestSent = true;
+      await route.continue();
+    });
+
+    await openSchedule(page);
+    await page.getByPlaceholder("Nightly Smoke").fill(`E2E Past Run At ${Date.now()}`);
+    await testRunSelect(page).selectOption({ label: cycleName });
+    // A clearly past datetime-local value — not merely a different day, to also cover "today with
+    // an earlier time" would need the current clock; a full year in the past is unambiguous either way.
+    await page.locator('input[type="datetime-local"]').fill("2020-01-01T00:00");
+    await page.getByRole("button", { name: "Create Schedule" }).click();
+
+    await expect(page.getByText("Date and time must be in future")).toBeVisible();
+    expect(scheduleRequestSent, "a past Run At must never reach the server").toBe(false);
+  });
+
+  test("a future Run At creates a schedule that survives the list reload", { tag: '@tesbo.testId("TES-TC-2204")' }, async ({ page }) => {
+    const scheduleName = `E2E Future Run At ${Date.now()}`;
+    await openSchedule(page);
+    await page.getByPlaceholder("Nightly Smoke").fill(scheduleName);
+    await testRunSelect(page).selectOption({ label: cycleName });
+    const future = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const futureValue = `${future.getFullYear()}-${pad(future.getMonth() + 1)}-${pad(future.getDate())}T${pad(future.getHours())}:${pad(future.getMinutes())}`;
+    await page.locator('input[type="datetime-local"]').fill(futureValue);
+    await page.getByRole("button", { name: "Create Schedule" }).click();
+
+    // The reloaded list must contain it. A create that only clears the form and then vanishes is the
+    // precise failure the old stub produced.
+    await expect(page.getByRole("cell", { name: scheduleName })).toBeVisible();
+
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    try {
+      const rows = await (await api.get(`/api/projects/${ctx.projectId}/cycles/schedules`)).json();
+      expect(rows.map((row: { name: string }) => row.name)).toContain(scheduleName);
+    } finally {
+      await api.dispose();
+    }
+  });
+
+  test("a past Run At shows the inline error as soon as it's picked, before Create Schedule is clicked", { tag: '@tesbo.testId("TES-TC-2205")' }, async ({ page }) => {
+    let scheduleRequestSent = false;
+    await page.route("**/api/projects/*/cycles/schedules", async (route) => {
+      if (route.request().method() === "POST") scheduleRequestSent = true;
+      await route.continue();
+    });
+
+    await openSchedule(page);
+    await page.getByPlaceholder("Nightly Smoke").fill(`E2E Inline Past Run At ${Date.now()}`);
+    await testRunSelect(page).selectOption({ label: cycleName });
+    await page.locator('input[type="datetime-local"]').fill("2020-01-01T00:00");
+
+    // No submit click here — the error must appear from the field's own onChange.
+    await expect(page.getByText("Date and time must be in future")).toBeVisible();
+    expect(scheduleRequestSent, "a past Run At must never reach the server").toBe(false);
+
+    // Correcting to a future value clears the inline error immediately too, still without submitting.
+    const future = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const futureValue = `${future.getFullYear()}-${pad(future.getMonth() + 1)}-${pad(future.getDate())}T${pad(future.getHours())}:${pad(future.getMinutes())}`;
+    await page.locator('input[type="datetime-local"]').fill(futureValue);
+    await expect(page.getByText("Date and time must be in future")).toBeHidden();
+    expect(scheduleRequestSent, "still no request from correcting the field alone").toBe(false);
   });
 });
 

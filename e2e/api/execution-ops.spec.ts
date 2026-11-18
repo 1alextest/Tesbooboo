@@ -13,20 +13,19 @@ import {
  *
  * Wave 7, on its own workspace ("exec-ops") because it deletes runs.
  *
- * READ THIS BEFORE "FIXING" A RED TEST IN HERE. Six of these routes are controller stubs with empty
- * bodies that answer 2xx without doing anything:
+ * READ THIS BEFORE "FIXING" A RED TEST IN HERE. The two bulk routes are still controller stubs with
+ * empty bodies that answer 2xx without doing anything:
  *
  *   POST   /api/cycles/:cycleId/executions/bulk-assign     bulkAssign() {}
  *   POST   /api/cycles/:cycleId/executions/bulk-status     bulkStatus() {}
- *   GET    /api/projects/:projectId/cycles/schedules       returns [] regardless of the project
- *   POST   /api/projects/:projectId/cycles/schedules       returns { id: "local-schedule", ...body }
- *   PATCH  /api/cycles/schedules/:scheduleId               updateSchedule() {}
- *   DELETE /api/cycles/schedules/:scheduleId               deleteSchedule() {}
  *
- * The tests below assert what those routes claim to do, so they are RED until the product either
- * implements them or removes them — the same two valid outcomes §3 bug 15 had for the import stubs.
- * They are deliberately not weakened: a bulk-status call that reports success and changes nothing is
- * exactly the failure a suite exists to catch, and a green test here would convert it into silence.
+ * Their tests are RED until the product either implements them or removes them — the same two valid
+ * outcomes §3 bug 15 had for the import stubs. They are deliberately not weakened: a bulk-status call
+ * that reports success and changes nothing is exactly the failure a suite exists to catch, and a
+ * green test here would convert it into silence.
+ *
+ * Run schedules used to be stubs too. They are now persisted in cycle_run_schedules (EXO-A-07/08),
+ * and a worker creates a new Test Run for each due occurrence (EXO-A-08b).
  */
 
 test.describe("execution bulk operations, schedules and share links", () => {
@@ -265,123 +264,121 @@ test.describe("execution bulk operations, schedules and share links", () => {
 
   // ─── Schedules ────────────────────────────────────────────────────────────
 
-  test("EXO-A-07 a created schedule is listed for its project", { tag: '@tesbo.testId("TES-TC-180")' }, async () => {
+  test("EXO-A-07 a created schedule is persisted and listed for its project", { tag: '@tesbo.testId("TES-TC-180")' }, async () => {
+    const { cycleId } = await seedRun(1);
+    const name = stamp("nightly");
     const created = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
-      data: { name: stamp("nightly"), cron: "0 2 * * *", enabled: true },
+      data: { name, cycleId, scheduleType: "recurring", intervalMinutes: 1440, timezone: "UTC" },
       failOnStatusCode: false,
     });
-    expect(
-      created.status(),
-      "MISSING FEATURE: scheduled runs are not implemented — see EXO-A-08b and the Wave 7 entry in " +
-        `docs/e2e-coverage-waves.md. Answered ${created.status()}: ${await created.text()}`,
-    ).toBeLessThan(400);
+    expect(created.status(), `creating a schedule — ${await created.text()}`).toBe(201);
     const schedule = await created.json();
-
-    // Red: createSchedule returns `{ id: "local-schedule", ...body }` without writing anything, and
-    // the list route returns [] regardless. A schedule the user created and cannot see again is
-    // indistinguishable from one that was silently dropped — which is what happens.
-    expect(
-      schedule.id,
-      "MISSING FEATURE: scheduled runs are not implemented — see EXO-A-08b and the Wave 7 entry in " +
-        "docs/e2e-coverage-waves.md. This test is the specification, and stays red until it is built.",
-    ).not.toBe("local-schedule");
-
-    const listed = await asOwner.get(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
-      failOnStatusCode: false,
+    expect(schedule).toMatchObject({
+      name,
+      cycleId,
+      enabled: true,
+      scheduleType: "recurring",
+      intervalMinutes: 1440,
+      timezone: "UTC",
     });
-    expect(listed.status()).toBe(200);
-    const list = await listed.json();
-    expect(
-      JSON.stringify(list),
-      "a schedule that was just created is not in the project's schedule list",
-    ).toContain(schedule.id);
+    expect(schedule.nextRunAt, "a recurring schedule needs a first fire time").toBeTruthy();
+
+    const listed = await (await asOwner.get(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`)).json();
+    const row = listed.find((item: { id: string }) => item.id === schedule.id);
+    expect(row, "the schedule that was just created is not in the project's list").toBeTruthy();
+    expect(row.cycleName, "the list shows which Test Run the schedule fires").toContain("E2E ExecOps");
   });
 
   test("EXO-A-08 a schedule is updated and deleted, and the list reflects both", { tag: '@tesbo.testId("TES-TC-181")' }, async () => {
+    const { cycleId } = await seedRun(1);
     const created = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
-      data: { name: stamp("weekly"), cron: "0 3 * * 1" },
+      data: { name: stamp("weekly"), cycleId, scheduleType: "recurring", intervalMinutes: 10080 },
       failOnStatusCode: false,
     });
+    expect(created.status(), await created.text()).toBe(201);
     const schedule = await created.json();
 
+    const renamed = stamp("weekly-renamed");
     const updated = await asOwner.patch(`/api/cycles/schedules/${schedule.id}`, {
-      data: { enabled: false },
+      data: { name: renamed, enabled: false, intervalMinutes: 60 },
       failOnStatusCode: false,
     });
-    expect(
-      updated.status(),
-      "MISSING FEATURE: scheduled runs are not implemented — see EXO-A-08b and the Wave 7 entry in " +
-        `docs/e2e-coverage-waves.md. Answered ${updated.status()}.`,
-    ).toBeLessThan(400);
-    const afterUpdate = await (
-      await asOwner.get(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`)
-    ).json();
-    // Red: updateSchedule() is an empty method, so there is nothing to read back.
-    expect(JSON.stringify(afterUpdate), "the updated schedule is not readable").toContain(schedule.id);
+    expect(updated.status(), await updated.text()).toBe(200);
+    expect(await updated.json()).toMatchObject({ id: schedule.id, name: renamed, enabled: false, intervalMinutes: 60 });
+
+    const afterUpdate = await (await asOwner.get(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`)).json();
+    expect(afterUpdate.find((item: { id: string }) => item.id === schedule.id)).toMatchObject({
+      name: renamed,
+      enabled: false,
+      intervalMinutes: 60,
+    });
+
+    // A malformed edit is refused at the edge, not stored.
+    const invalid = await asOwner.patch(`/api/cycles/schedules/${schedule.id}`, {
+      data: { intervalMinutes: 0 },
+      failOnStatusCode: false,
+    });
+    expect(invalid.status()).toBe(400);
 
     const deleted = await asOwner.delete(`/api/cycles/schedules/${schedule.id}`, { failOnStatusCode: false });
-    expect(deleted.status()).toBeLessThan(400);
-    const afterDelete = await (
-      await asOwner.get(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`)
-    ).json();
-    expect(JSON.stringify(afterDelete)).not.toContain(schedule.id);
+    expect(deleted.status()).toBe(200);
+    const afterDelete = await (await asOwner.get(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`)).json();
+    expect(afterDelete.map((item: { id: string }) => item.id)).not.toContain(schedule.id);
   });
 
-  test("EXO-A-08b while scheduled runs are unimplemented, the routes say so instead of faking success", { tag: '@tesbo.testId("TES-TC-922")' }, async () => {
-    /*
-     * The companion to EXO-A-07/08/10, which stay red on purpose.
-     *
-     * Scheduled runs need a cron parser, a scheduler and a runner — a feature, not a fix — so they are
-     * not implemented. What was fixed is the lie: createSchedule used to answer 201 with
-     * `{ id: "local-schedule", ...body }` and store nothing, so the UI told the user their schedule was
-     * saved. It now answers 501, which a caller can act on.
-     *
-     * This test is what stops the honest refusal from silently regressing back to a fake success while
-     * the feature is still missing. When scheduling is built, this test is the one to delete — and
-     * EXO-A-07/08/10 are the ones that should start passing.
-     */
+  test("EXO-A-08b a due schedule creates a new Test Run and records the outcome", { tag: '@tesbo.testId("TES-TC-922")' }, async () => {
+    const { cycleId } = await seedRun(1);
+    const source = await (await asOwner.get(`/api/cycles/${cycleId}`)).json();
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const created = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
-      data: { name: stamp("nightly"), cron: "0 2 * * *" },
+      data: { name: stamp("due"), cycleId, scheduleType: "one_time", runAt: future, timezone: "UTC" },
       failOnStatusCode: false,
     });
-    expect(
-      created.status(),
-      `creating a schedule answered ${created.status()} — either it works (and EXO-A-07 should be green) ` +
-        `or it says it cannot: ${await created.text()}`,
-    ).toBe(501);
-    expect(await created.text()).not.toContain("local-schedule");
+    expect(created.status(), await created.text()).toBe(201);
+    const schedule = await created.json();
 
-    for (const [what, attempt] of [
-      [
-        "update",
-        () => asOwner.patch("/api/cycles/schedules/11111111-1111-4111-8111-111111111111", {
-          data: { enabled: false },
-          failOnStatusCode: false,
-        }),
-      ],
-      [
-        "delete",
-        () => asOwner.delete("/api/cycles/schedules/11111111-1111-4111-8111-111111111111", { failOnStatusCode: false }),
-      ],
-    ] as Array<[string, () => Promise<APIResponse>]>) {
-      const res = await attempt();
-      expect(res.status(), `${what} answered ${res.status()}: ${await res.text()}`).toBe(501);
-    }
+    // Make it due now instead of waiting for the chosen hour; only this disposable tenant's row changes.
+    exec(`UPDATE cycle_run_schedules SET next_run_at = now() WHERE id = ${literal(schedule.id)};`);
 
-    // The list route is the one honest empty answer: no schedules exist, so [] is true.
-    const listed = await asOwner.get(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
-      failOnStatusCode: false,
-    });
-    expect(listed.status()).toBe(200);
-    expect(await listed.json()).toEqual([]);
+    await expect
+      .poll(
+        () => scalar(`SELECT COALESCE(last_status, '') FROM cycle_run_schedules WHERE id = ${literal(schedule.id)};`),
+        { message: "the worker must fire the due schedule", timeout: 120_000, intervals: [2_000] },
+      )
+      .toBe("success");
+
+    const spawned = JSON.parse(
+      scalar(
+        `SELECT COALESCE(json_build_object('id', id, 'name', name)::text, 'null') FROM cycles
+         WHERE project_id = ${literal(tenant!.mainProjectId)}
+           AND name LIKE ${literal(`${String(source.name).slice(0, 40)}% — scheduled %`)}
+           AND id <> ${literal(cycleId)}
+         ORDER BY created_at DESC LIMIT 1;`,
+      ),
+    );
+    expect(spawned?.id, "a due schedule must create a new Test Run").toBeTruthy();
+    // Only Approved cases are carried over, through the same writer every run-creation path uses.
+    expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items WHERE cycle_id = ${literal(spawned.id)};`))).toBe(1);
+
+    const listed = await (await asOwner.get(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`)).json();
+    const row = listed.find((item: { id: string }) => item.id === schedule.id);
+    expect(row).toMatchObject({ enabled: false, lastStatus: "success" });
+    expect(row.lastRunAt).toBeTruthy();
+    expect(row.nextRunAt, "a one-time schedule has no next occurrence").toBeNull();
   });
 
-  test("EXO-A-09 the schedule routes refuse a caller with no session, and a non-member on the project ones", { tag: '@tesbo.testId("TES-TC-183")' }, async () => {
-    // Anonymous is refused everywhere. For a signed-in non-member the split is structural: the list
-    // and create routes carry a projectId and can check membership, while PATCH/DELETE
-    // /api/cycles/schedules/:scheduleId identify a schedule that cannot exist yet — with no schedules
-    // table there is nothing to resolve a project from, so "not implemented" is as specific as they
-    // can be. When scheduling is built they must check the schedule's project too.
+  test("EXO-A-09 the schedule routes refuse a caller with no session, and a non-member", { tag: '@tesbo.testId("TES-TC-183")' }, async () => {
+    // PATCH and DELETE resolve the schedule's project from the row, so a non-member or anonymous caller
+    // holding a real id is refused by the same membership check as the list and create routes.
+    const { cycleId } = await seedRun(1);
+    const created = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
+      data: { name: stamp("guarded"), cycleId, scheduleType: "recurring", intervalMinutes: 60 },
+      failOnStatusCode: false,
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const schedule = await created.json();
+    const createBody = { name: "intruder", cycleId, scheduleType: "recurring", intervalMinutes: 60 };
+
     for (const [what, attempt] of [
       [
         "list (anonymous)",
@@ -391,21 +388,21 @@ test.describe("execution bulk operations, schedules and share links", () => {
         "create (anonymous)",
         () =>
           anon.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
-            data: { name: "intruder", cron: "* * * * *" },
+            data: createBody,
             failOnStatusCode: false,
           }),
       ],
       [
-        "update (anonymous)",
+        "update (anonymous, real id)",
         () =>
-          anon.patch("/api/cycles/schedules/11111111-1111-4111-8111-111111111111", {
+          anon.patch(`/api/cycles/schedules/${schedule.id}`, {
             data: { enabled: false },
             failOnStatusCode: false,
           }),
       ],
       [
-        "delete (anonymous)",
-        () => anon.delete("/api/cycles/schedules/11111111-1111-4111-8111-111111111111", { failOnStatusCode: false }),
+        "delete (anonymous, real id)",
+        () => anon.delete(`/api/cycles/schedules/${schedule.id}`, { failOnStatusCode: false }),
       ],
       [
         "list (non-member)",
@@ -415,44 +412,80 @@ test.describe("execution bulk operations, schedules and share links", () => {
         "create (non-member)",
         () =>
           asGuest.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
-            data: { name: "intruder", cron: "* * * * *" },
+            data: createBody,
             failOnStatusCode: false,
           }),
+      ],
+      [
+        "update (non-member, real id)",
+        () =>
+          asGuest.patch(`/api/cycles/schedules/${schedule.id}`, {
+            data: { enabled: false },
+            failOnStatusCode: false,
+          }),
+      ],
+      [
+        "delete (non-member, real id)",
+        () => asGuest.delete(`/api/cycles/schedules/${schedule.id}`, { failOnStatusCode: false }),
       ],
     ] as Array<[string, () => Promise<APIResponse>]>) {
       await expectRefused(await attempt(), `schedule ${what}`);
     }
+
+    // None of the refusals changed the row.
+    expect(
+      scalar(`SELECT enabled FROM cycle_run_schedules WHERE id = ${literal(schedule.id)};`),
+      "a refused update or delete must not touch the schedule",
+    ).toBe("t");
   });
 
-  test("EXO-A-10 a schedule needs a name and a valid cron expression", { tag: '@tesbo.testId("TES-TC-184")' }, async () => {
-    for (const data of [{}, { name: "" }, { name: "no cron" }, { name: "bad cron", cron: "not a cron" }]) {
+  test("EXO-A-10 a schedule needs a name, a run, a type and a valid fire time", { tag: '@tesbo.testId("TES-TC-184")' }, async () => {
+    const { cycleId } = await seedRun(1);
+    const foreign = await (
+      await asOwner.post(`/api/projects/${tenant!.secondProjectId}/cycles`, {
+        data: { name: stamp("foreign run") },
+        failOnStatusCode: false,
+      })
+    ).json();
+    const foreignCycleId = foreign.id;
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const base = { name: stamp("valid"), cycleId, scheduleType: "recurring", intervalMinutes: 60 };
+
+    for (const [label, data] of [
+      ["no name", { ...base, name: "" }],
+      ["no run", { ...base, cycleId: "" }],
+      ["unknown run", { ...base, cycleId: "11111111-1111-4111-8111-111111111111" }],
+      ["another project's run", { ...base, cycleId: foreignCycleId }],
+      ["unknown type", { ...base, scheduleType: "cron" }],
+      ["no interval", { ...base, intervalMinutes: undefined }],
+      ["zero interval", { ...base, intervalMinutes: 0 }],
+      ["fractional interval", { ...base, intervalMinutes: 1.5 }],
+      ["invalid timezone", { ...base, timezone: "Mars/Olympus" }],
+    ] as const) {
       const res = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
         data,
         failOnStatusCode: false,
       });
-      // A schedule with no cron expression can never fire, and one with a malformed expression is a
-      // job that silently never runs — both have to be refused at the edge.
-      expect(
-        res.status(),
-        `${JSON.stringify(data)} was accepted as a schedule: ${await res.text()}`,
-      ).toBeGreaterThanOrEqual(400);
-      // MISSING FEATURE, same as EXO-A-07/08: with no scheduling implementation there is no validation
-      // layer to reach, so this answers 501 rather than a field-level 400. It is the specification for
-      // the validation the feature will need, and stays red until then.
-      expect(res.status(), "scheduled runs are not implemented — see EXO-A-08b").toBeLessThan(500);
+      // Refused at the edge, and never a 5xx: a schedule that cannot be represented must not be stored.
+      expect(res.status(), `${label} was accepted: ${await res.text()}`).toBeGreaterThanOrEqual(400);
+      expect(res.status(), `${label} answered ${res.status()}`).toBeLessThan(500);
     }
+
+    // The valid control: the same body without the broken field is accepted.
+    const ok = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
+      data: { ...base, scheduleType: "one_time", intervalMinutes: undefined, runAt: future },
+      failOnStatusCode: false,
+    });
+    expect(ok.status(), `a valid one-time schedule was refused: ${await ok.text()}`).toBe(201);
   });
 
   /*
-   * EXO-A-11: "Run At" (a one-time schedule's fire time) must not accept a past instant.
-   *
-   * Unlike EXO-A-07/08/10 above, this is not part of the missing scheduling feature — it is real,
-   * unconditional validation added ahead of persistence (LegacyController.validateScheduleRunAt), so
-   * a caller bypassing the UI's own datetime-local `min` and submit-time check still cannot submit a
-   * past or malformed instant. It runs before the 501, so these assert real 400s, not "not
-   * implemented yet". recurring schedules carry no runAt at all, so they are unaffected.
+   * EXO-A-11: "Run At" (a one-time schedule's fire time) must not accept a past instant. A caller
+   * bypassing the UI's own datetime-local `min` and submit-time check must still be refused at the
+   * API, and nothing may be stored on the way to that refusal.
    */
   test("EXO-A-11 a one-time schedule refuses a past or malformed Run At", { tag: '@tesbo.testId("TES-TC-2200")' }, async () => {
+    const { cycleId } = await seedRun(1);
     const pastDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     // "Today with an earlier time" — a past instant that is not a different calendar day at all.
     const earlierToday = new Date(Date.now() - 60 * 1000).toISOString();
@@ -463,31 +496,40 @@ test.describe("execution bulk operations, schedules and share links", () => {
       ["not a date at all", "not-a-date"],
       ["an empty string", ""],
     ] as const) {
+      const name = stamp("bad-run-at");
       const res = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
-        data: { name: stamp("bad-run-at"), scheduleType: "one_time", runAt, cycleId: "irrelevant", timezone: "UTC" },
+        data: { name, scheduleType: "one_time", runAt, cycleId, timezone: "UTC" },
         failOnStatusCode: false,
       });
-      expect(res.status(), `${label} (${JSON.stringify(runAt)}) must be refused, not 501: ${await res.text()}`).toBe(400);
+      expect(res.status(), `${label} (${JSON.stringify(runAt)}) must be refused: ${await res.text()}`).toBe(400);
+      expect(
+        scalar(`SELECT COUNT(*)::int FROM cycle_run_schedules WHERE project_id = ${literal(tenant!.mainProjectId)} AND name = ${literal(name)};`),
+        "a refused schedule must not be stored",
+      ).toBe("0");
     }
   });
 
-  test("EXO-A-12 a one-time schedule with a future Run At is accepted by validation (still 501, not 400)", { tag: '@tesbo.testId("TES-TC-2201")' }, async () => {
+  test("EXO-A-12 a one-time schedule with a future Run At is accepted and fires at that instant", { tag: '@tesbo.testId("TES-TC-2201")' }, async () => {
+    const { cycleId } = await seedRun(1);
     const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const res = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
-      data: { name: stamp("future-run-at"), scheduleType: "one_time", runAt: future, cycleId: "irrelevant", timezone: "UTC" },
+      data: { name: stamp("future-run-at"), scheduleType: "one_time", runAt: future, cycleId, timezone: "UTC" },
       failOnStatusCode: false,
     });
-    // Validation must not reject a genuinely future instant — it clears the new check and reaches the
-    // same "not implemented yet" the rest of this feature answers with, per EXO-A-08b.
-    expect(res.status(), `a future Run At must pass validation: ${await res.text()}`).toBe(501);
+    expect(res.status(), `a future Run At must be accepted: ${await res.text()}`).toBe(201);
+    expect((await res.json()).nextRunAt).toBe(future);
   });
 
-  test("EXO-A-13 a recurring schedule needs no Run At and is unaffected by the check", { tag: '@tesbo.testId("TES-TC-2202")' }, async () => {
+  test("EXO-A-13 a recurring schedule needs no Run At and starts one interval out", { tag: '@tesbo.testId("TES-TC-2202")' }, async () => {
+    const { cycleId } = await seedRun(1);
     const res = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
-      data: { name: stamp("recurring"), scheduleType: "recurring", intervalMinutes: 60, cycleId: "irrelevant", timezone: "UTC" },
+      data: { name: stamp("recurring"), scheduleType: "recurring", intervalMinutes: 60, cycleId, timezone: "UTC" },
       failOnStatusCode: false,
     });
-    expect(res.status(), `a recurring schedule must not be judged by Run At: ${await res.text()}`).toBe(501);
+    expect(res.status(), `a recurring schedule must not be judged by Run At: ${await res.text()}`).toBe(201);
+    const schedule = await res.json();
+    expect(schedule.nextRunAt).toBeTruthy();
+    expect(new Date(schedule.nextRunAt).getTime()).toBeGreaterThan(Date.now());
   });
 
   // ─── Share links ──────────────────────────────────────────────────────────

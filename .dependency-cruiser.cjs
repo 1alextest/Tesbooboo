@@ -31,6 +31,9 @@ const legacyConsumers = [
   "mcp/mcp.tools.ts",
   "mcp/mcp.types.ts",
   "review-board/review-board.service.ts",
+  // Run schedules: project authorization and the Approved-only run-clone writer are owned by
+  // LegacyService; schedule validation and the worker live in the schedules module.
+  "schedules/schedules.service.ts",
   "zyra-archive-sweep/zyra-archive-sweep.service.ts"
 ];
 const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

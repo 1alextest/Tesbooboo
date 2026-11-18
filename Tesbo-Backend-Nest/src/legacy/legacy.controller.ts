@@ -6,7 +6,6 @@ import {
   Get,
   HttpCode,
   MessageEvent,
-  NotImplementedException,
   Param,
   Patch,
   Post,
@@ -910,64 +909,6 @@ export class LegacyController {
   @PlanRunWrite("sharing")
   shareCycle(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.shareCycle(cycleId, req.userId, body);
-  }
-
-  /*
-   * Scheduled runs are NOT IMPLEMENTED. The cycle_run_schedules table exists (V21) with correct
-   * constraints, but nothing reads or writes it and there is no cron parser or runner; these four
-   * routes were stubs that answered 2xx — createSchedule handed back `{ id: "local-schedule",
-   * ...body }` without storing anything, and the list, update and delete routes did nothing at all.
-   * A schedule the user created, was told about, and can never see again is worse than a feature
-   * that says it isn't there, and the UI that offered the form was removed on 2026-11-18.
-   *
-   * Implementing it is a feature (a cron parser, a scheduler, a runner), not a bug fix, so it is left
-   * out and recorded in docs/e2e-coverage-waves.md — see the red EXO-A-07/08/10 in
-   * e2e/api/execution-ops.spec.ts. What is fixed here is the part that is unambiguous: they no longer
-   * answer a caller with no session or no access to the project, and creating one no longer claims
-   * success. 501 is the honest status for "the route exists, the feature does not".
-   */
-  @Get("/api/projects/:projectId/cycles/schedules")
-  async schedules(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
-    await this.legacy.requireProjectAccess(req.userId, projectId);
-    return [];
-  }
-
-  // Nothing is persisted yet (see the comment above), but a one-time schedule's runAt is still
-  // validated up front: a caller bypassing the UI's own datetime-local `min` and submit-time check
-  // must not be able to submit a past or malformed instant just because the route 501s regardless —
-  // the rule has to hold at the API, not only in the form that happens to enforce it today.
-  private validateScheduleRunAt(body: Record<string, any>): void {
-    if (body?.scheduleType !== "one_time") return;
-    const raw = body?.runAt;
-    if (typeof raw !== "string" || !raw || Number.isNaN(Date.parse(raw))) {
-      throw new BadRequestException({ error: "Run At must be a valid date and time" });
-    }
-    if (Date.parse(raw) <= Date.now()) {
-      throw new BadRequestException({ error: "Date and time must be in future" });
-    }
-  }
-
-  @Post("/api/projects/:projectId/cycles/schedules")
-  async createSchedule(
-    @Req() req: AuthenticatedRequest,
-    @Param("projectId") projectId: string,
-    @Body() body: Record<string, any>
-  ) {
-    await this.legacy.requireProjectAccess(req.userId, projectId);
-    this.validateScheduleRunAt(body);
-    throw new NotImplementedException({ error: "Scheduled runs are not available yet" });
-  }
-
-  @Patch("/api/cycles/schedules/:scheduleId")
-  async updateSchedule(@Req() req: AuthenticatedRequest, @Param("scheduleId") _scheduleId: string) {
-    await this.legacy.requireSession(req.userId);
-    throw new NotImplementedException({ error: "Scheduled runs are not available yet" });
-  }
-
-  @Delete("/api/cycles/schedules/:scheduleId")
-  async deleteSchedule(@Req() req: AuthenticatedRequest, @Param("scheduleId") _scheduleId: string) {
-    await this.legacy.requireSession(req.userId);
-    throw new NotImplementedException({ error: "Scheduled runs are not available yet" });
   }
 
   @Get("/api/public/shared-runs/:token")

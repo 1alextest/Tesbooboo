@@ -24,6 +24,7 @@ import { AnalyticsReportModule } from "./analytics-report/analytics-report.modul
 import { ReviewBoardModule } from "./review-board/review-board.module";
 import { GraphChangeReviewModule } from "./behavior-graph/graph-change-review.module";
 import { ZyraArchiveSweepModule } from "./zyra-archive-sweep/zyra-archive-sweep.module";
+import { SchedulesModule } from "./schedules/schedules.module";
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { ZyraArchiveSweepModule } from "./zyra-archive-sweep/zyra-archive-sweep.
     CustomTagsModule,
     PlanLimitsModule,
     AutomationModule,
+    SchedulesModule,
     ZyraArchiveSweepModule,
     AnalyticsReportModule,
     ReviewBoardModule,
