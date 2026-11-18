@@ -223,6 +223,27 @@ function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** The persisted Model Studio owner, or an explicit refusal when the module is not wired. */
+function modelStudio(ctx: McpToolContext) {
+  if (!ctx.modelStudio) {
+    throw new McpError(RpcCode.ToolExecutionError, "Model Studio is unavailable on this deployment");
+  }
+  return ctx.modelStudio;
+}
+
+/** Translate the native owner's refusal (400/404/409…) into an MCP tool error, not an engine crash. */
+function rethrowModelError(error: unknown): never {
+  if (error instanceof HttpException) {
+    const response = error.getResponse();
+    const details: Record<string, unknown> = { httpStatus: error.getStatus() };
+    if (response && typeof response === "object" && "code" in response) {
+      details.code = (response as { code?: unknown }).code;
+    }
+    throw new McpError(RpcCode.ToolExecutionError, describeError(error), details);
+  }
+  throw error;
+}
+
 export function buildMcpTools(): McpTool[] {
   return [
     {
@@ -248,6 +269,140 @@ export function buildMcpTools(): McpTool[] {
             }
           }
           throw error;
+        }
+      }
+    },
+    {
+      name: "create_behavior_model",
+      description:
+        "Create a project-scoped expected-behavior model as draft revision 1. Supply the same bounded sequential FSM draft the preview tool validates. The model is NOT approved, is not coverage and creates no test case, run, evidence or execution. Requires write scope.",
+      requiredScope: "write",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "model"],
+        properties: {
+          name: { type: "string", minLength: 1, maxLength: 255, description: "Model name" },
+          model: DRAFT_MODEL_PREVIEW_INPUT_SCHEMA
+        }
+      },
+      handler: async (args, ctx) => {
+        try {
+          return await modelStudio(ctx).createModelForUser(ctx.userId, ctx.projectId, {
+            name: args.name,
+            model: args.model
+          });
+        } catch (error) {
+          rethrowModelError(error);
+        }
+      }
+    },
+    {
+      name: "save_behavior_model_revision",
+      description:
+        "Append an immutable revision to an existing model, starting from the current head. baseRevisionId must be that head: a stale base is refused with STALE_BASE and nothing is changed. Earlier revisions and their case mappings are retained. Returns the new draft revision. Requires write scope.",
+      requiredScope: "write",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["modelId", "baseRevisionId", "model"],
+        properties: {
+          modelId: { type: "string", format: "uuid", description: "Model id" },
+          baseRevisionId: { type: "string", format: "uuid", description: "Current head revision id" },
+          model: DRAFT_MODEL_PREVIEW_INPUT_SCHEMA
+        }
+      },
+      handler: async (args, ctx) => {
+        try {
+          return await modelStudio(ctx).saveRevisionForUser(ctx.userId, ctx.projectId, String(args.modelId), {
+            baseRevisionId: args.baseRevisionId,
+            model: args.model
+          });
+        } catch (error) {
+          rethrowModelError(error);
+        }
+      }
+    },
+    {
+      name: "link_behavior_model_case",
+      description:
+        "Link an existing project test case to one or more elements of a model revision. Records the case editRevision when supplied so a later edit is reported as changed-since-link. A mapping is an accepted relationship — never coverage, execution or approval. Requires write scope.",
+      requiredScope: "write",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["modelId", "revisionId", "testcaseId", "elementIds"],
+        properties: {
+          modelId: { type: "string", format: "uuid", description: "Model id" },
+          revisionId: { type: "string", format: "uuid", description: "Model revision id" },
+          testcaseId: { type: "string", format: "uuid", description: "Test case id in this project" },
+          elementIds: {
+            type: "array",
+            minItems: 1,
+            maxItems: 20,
+            items: { type: "string" },
+            description: "State and transition ids from that revision"
+          },
+          testcaseRevision: {
+            type: "string",
+            pattern: "^[a-f0-9]{64}$",
+            description: "The case editRevision the mapping was reviewed against"
+          }
+        }
+      },
+      handler: async (args, ctx) => {
+        try {
+          return await modelStudio(ctx).linkCaseForUser(
+            ctx.userId,
+            ctx.projectId,
+            String(args.modelId),
+            String(args.revisionId),
+            {
+              testcaseId: args.testcaseId,
+              elementIds: args.elementIds,
+              testcaseRevision: args.testcaseRevision
+            }
+          );
+        } catch (error) {
+          rethrowModelError(error);
+        }
+      }
+    },
+    {
+      name: "get_behavior_model_coverage",
+      description:
+        "Read the latest revision's per-element linked-case counts, its mappings and its staleness flags for one model. coverageAssertion and executionAssertion are always none: a mapping is not verified coverage and no execution is implied. Requires read scope.",
+      requiredScope: "read",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["modelId"],
+        properties: { modelId: { type: "string", format: "uuid", description: "Model id" } }
+      },
+      handler: async (args, ctx) => {
+        try {
+          return await modelStudio(ctx).coverageForUser(ctx.userId, ctx.projectId, String(args.modelId));
+        } catch (error) {
+          rethrowModelError(error);
+        }
+      }
+    },
+    {
+      name: "archive_behavior_model",
+      description:
+        "Retire a model from the list, detail, coverage, link and generate surfaces. Revisions and case mappings remain stored as history; there is no cascade delete. Archiving an already-archived or unknown model is a 404. Requires write scope.",
+      requiredScope: "write",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["modelId"],
+        properties: { modelId: { type: "string", format: "uuid", description: "Model id" } }
+      },
+      handler: async (args, ctx) => {
+        try {
+          return await modelStudio(ctx).archiveModelForUser(ctx.userId, ctx.projectId, String(args.modelId));
+        } catch (error) {
+          rethrowModelError(error);
         }
       }
     },

@@ -75,7 +75,7 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
         new ProjectSourceGraphCoordinator(bindings, history)
     }
   ],
-  exports: [ProjectSourceGraphCoordinator, GraphChangeReviewDelivery, ModelStudioPreview]
+  exports: [ProjectSourceGraphCoordinator, GraphChangeReviewDelivery, ModelStudioPreview, ModelStudioRepository]
 })
 export class GraphChangeReviewModule implements OnModuleInit {
   private readonly logger = new Logger(GraphChangeReviewModule.name);

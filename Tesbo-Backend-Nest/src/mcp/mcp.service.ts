@@ -8,6 +8,7 @@ import { LegacyService } from "../legacy/legacy.service";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import type { ApiTokenContext } from "../common/request.types";
 import { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
+import { ModelStudioRepository } from "../behavior-graph/model-studio-repository";
 import { buildMcpTools } from "./mcp.tools";
 import {
   MCP_AGENT_SLUG,
@@ -72,7 +73,8 @@ export class McpService {
     private readonly planLimits: PlanLimitsService,
     @Optional() private readonly graphCapture?: ProjectSourceGraphCoordinator,
     @Optional() private readonly graphNotificationDelivery?: GraphChangeReviewDelivery,
-    @Optional() private readonly modelPreview?: ModelStudioPreview
+    @Optional() private readonly modelPreview?: ModelStudioPreview,
+    @Optional() private readonly modelStudio?: ModelStudioRepository
   ) {}
 
   /** Actor id for the well-known "tesbo-mcp" agent (V65), used to attribute token-authed writes. */
@@ -251,7 +253,8 @@ export class McpService {
       db: this.db,
       graphCapture: this.graphCapture,
       graphNotificationDelivery: this.graphNotificationDelivery,
-      modelPreview: this.modelPreview
+      modelPreview: this.modelPreview,
+      modelStudio: this.modelStudio
     };
 
     try {

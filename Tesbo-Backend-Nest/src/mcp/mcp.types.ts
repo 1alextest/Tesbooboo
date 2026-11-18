@@ -1,4 +1,5 @@
 import type { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
+import type { ModelStudioRepository } from "../behavior-graph/model-studio-repository";
 import type { DatabaseService } from "../database/database.service";
 import type { LegacyService } from "../legacy/legacy.service";
 import type { ProjectSourceGraphCoordinator } from "../behavior-graph/project-source-graph.coordinator";
@@ -146,6 +147,8 @@ export interface McpToolContext {
   graphNotificationDelivery?: GraphChangeReviewDelivery;
   /** Same native opt-in, stateless validator as the REST preview. */
   modelPreview?: ModelStudioPreview;
+  /** Persisted Model Studio drafts, revisions and case mappings (same owner as REST). */
+  modelStudio?: ModelStudioRepository;
 }
 
 export interface McpTool {

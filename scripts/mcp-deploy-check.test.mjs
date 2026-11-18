@@ -28,7 +28,12 @@ function validTools() {
     tool("bulk_create_testcases", caseFields, true),
     tool("list_qa_graph_changes"),
     tool("capture_qa_graph_change"),
-    tool("preview_behavior_model_draft")
+    tool("preview_behavior_model_draft"),
+    tool("create_behavior_model", { name: text, model: { type: "object" } }),
+    tool("save_behavior_model_revision", { modelId: text, baseRevisionId: text, model: { type: "object" } }),
+    tool("link_behavior_model_case", { modelId: text, revisionId: text, testcaseId: text, elementIds: { type: "array" } }),
+    tool("get_behavior_model_coverage", { modelId: text }),
+    tool("archive_behavior_model", { modelId: text })
   ];
 }
 
@@ -160,10 +165,10 @@ test("tool count is informational; capability gaps fail", () => {
     serverVersion: "0.1.0+abc123.0123456789abcdef",
     health: { gitSha: "abc123" },
     expectedGitSha: "abc123",
-    expectedToolCount: "53"
+    expectedToolCount: "58"
   });
   assert.equal(result.ok, true);
-  assert.match(result.warnings.join("\n"), /differs from EXPECTED_TOOL_COUNT 53/);
+  assert.match(result.warnings.join("\n"), /differs from EXPECTED_TOOL_COUNT 58/);
 });
 
 test("a session without a reported version fails", () => {

@@ -17,6 +17,7 @@ import { McpController } from "../mcp/mcp.controller";
 import { McpService } from "../mcp/mcp.service";
 import { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
 import { ModelStudioPreviewController } from "../behavior-graph/model-studio-preview.controller";
+import { ModelStudioRepository } from "../behavior-graph/model-studio-repository";
 import { SchedulesController } from "../schedules/schedules.controller";
 import { SchedulesService } from "../schedules/schedules.service";
 import { AuthMiddleware } from "../auth/auth.middleware";
@@ -181,6 +182,7 @@ const url = process.env.DATABASE_URL ?? "";
     let restHandlers: jest.SpyInstance[], storageQuota: jest.SpyInstance, removeFile: jest.SpyInstance, notifications: jest.SpyInstance;
     let readToken: string, writeToken: string, writableToken: string, session: string;
     let suiteId: string, caseId: string, planId: string, runId: string, executionId: string, bugId: string, folderId: string, documentId: string;
+    let lockedModelId: string;
     let handlers: jest.SpyInstance[], quota: jest.SpyInstance, actor: jest.SpyInstance, tracking: jest.SpyInstance;
     const settings = { isStripeBillingEnabled: true, entitlementCacheEnabled: true, enableRequestScopedCache: true,
       frontendUrl: "http://127.0.0.1:3000", sessionCookieName: "mcp-native-session", sessionDays: 1 };
@@ -242,6 +244,28 @@ const url = process.env.DATABASE_URL ?? "";
       await setup.query("INSERT INTO testcase_versions (testcase_id,version,snapshot) VALUES ($1,1,'{\"title\":\"Prior native Case\"}'::jsonb)", [caseId]);
       await setup.query("INSERT INTO plan_items (plan_id,testcase_id) VALUES ($1,$2)", [planId, caseId]);
       await setup.query("INSERT INTO knowledge_document_versions (document_id,version_number,title,content_text,created_by) VALUES ($1,1,'Prior native document','Keep prior content',$2)", [documentId, owner]);
+      // A persisted Model Studio draft, so the read tool is served against real native rows.
+      lockedModelId = (await setup.query(
+        "INSERT INTO mbt_models (project_id, name, created_by) VALUES ($1,'Native locked model',$2) RETURNING id",
+        [locked, owner]
+      )).rows[0].id;
+      await setup.query(
+        `INSERT INTO mbt_model_revisions (model_id, project_id, revision_number, content, content_hash, status, created_by)
+         VALUES ($1,$2,1,$3::jsonb,$4,'draft',$5)`,
+        [
+          lockedModelId,
+          locked,
+          JSON.stringify({
+            schemaVersion: "tesbo-fsm-draft/1",
+            semantics: "SEQUENTIAL_FSM",
+            initialStateId: "start",
+            states: [{ id: "start", label: "Start" }],
+            transitions: []
+          }),
+          "a".repeat(64),
+          owner
+        ]
+      );
       await setup.query("INSERT INTO attachments (project_id,entity_type,entity_id,file_name,content_type,file_size,storage_path,uploaded_by) VALUES ($1,'execution',$2,'keep.txt','text/plain',4,'ci/mcp-lock/keep',$3)", [locked, executionId, owner]);
       quota = jest.spyOn(limits, "assertProjectWritable");
       // The schedule worker is not under test here (EXO-A-08b covers it); it must not sweep while this
@@ -249,7 +273,7 @@ const url = process.env.DATABASE_URL ?? "";
       process.env.SCHEDULES_WORKER_DISABLED = "1";
       const module = await Test.createTestingModule({
         controllers: [McpController, LegacyController, ModelStudioPreviewController, SchedulesController],
-        providers: [McpService, ModelStudioPreview, SchedulesService,
+        providers: [McpService, ModelStudioPreview, ModelStudioRepository, SchedulesService,
           { provide: DatabaseService, useValue: db }, { provide: LegacyService, useValue: legacy },
           { provide: PlanLimitsService, useValue: limits },
           { provide: ProjectLookupService, useValue: new ProjectLookupService(db, requestCache) },
@@ -374,7 +398,35 @@ const url = process.env.DATABASE_URL ?? "";
       archive_knowledge_document: () => ({ documentId }), restore_knowledge_document: () => ({ documentId }),
       create_knowledge_folder: () => ({ name: "Blocked folder", parentFolderId: folderId }),
       update_knowledge_folder: () => ({ folderId, description: "Blocked edit" }),
-      move_knowledge_folder: () => ({ folderId, parentFolderId: folderId })
+      move_knowledge_folder: () => ({ folderId, parentFolderId: folderId }),
+      create_behavior_model: () => ({
+        name: "Blocked model",
+        model: {
+          schemaVersion: "tesbo-fsm-draft/1",
+          semantics: "SEQUENTIAL_FSM",
+          initialStateId: "start",
+          states: [{ id: "start", label: "Start" }],
+          transitions: []
+        }
+      }),
+      save_behavior_model_revision: () => ({
+        modelId: lockedModelId,
+        baseRevisionId: randomUUID(),
+        model: {
+          schemaVersion: "tesbo-fsm-draft/1",
+          semantics: "SEQUENTIAL_FSM",
+          initialStateId: "start",
+          states: [{ id: "start", label: "Start" }],
+          transitions: []
+        }
+      }),
+      link_behavior_model_case: () => ({
+        modelId: lockedModelId,
+        revisionId: randomUUID(),
+        testcaseId: caseId,
+        elementIds: ["start"]
+      }),
+      archive_behavior_model: () => ({ modelId: lockedModelId })
     };
     const reads: Record<string, () => { args: Record<string, unknown>; expected: unknown }> = {
       list_qa_graph_changes: () => ({ args: {}, expected: { entries: [], nextBeforeId: null } }),
@@ -397,7 +449,18 @@ const url = process.env.DATABASE_URL ?? "";
       list_knowledge_documents: () => ({ args: {}, expected: expect.objectContaining({ list: expect.arrayContaining([expect.objectContaining({ id: documentId })]) }) }),
       get_knowledge_document: () => ({ args: { documentId }, expected: expect.objectContaining({ id: documentId, contentText: "Preserve locked content" }) }),
       list_knowledge_folders: () => ({ args: {}, expected: expect.objectContaining({ id: folderId, isRoot: true }) }),
-      get_knowledge_folder: () => ({ args: { folderId }, expected: expect.objectContaining({ id: folderId, isRoot: true }) })
+      get_knowledge_folder: () => ({ args: { folderId }, expected: expect.objectContaining({ id: folderId, isRoot: true }) }),
+      get_behavior_model_coverage: () => ({
+        args: { modelId: lockedModelId },
+        expected: expect.objectContaining({
+          modelId: lockedModelId,
+          elements: [{ id: "start", linkedCases: 0 }],
+          links: [],
+          unlinkedElements: ["start"],
+          coverageAssertion: "none",
+          executionAssertion: "none"
+        })
+      })
     };
     async function businessState() {
       const ids = [project, other, locked], state: Record<string, unknown> = {};
@@ -421,7 +484,7 @@ const url = process.env.DATABASE_URL ?? "";
       for (const [scope, cases] of [["write", writes], ["read", reads]] as const) {
         expect(Object.keys(cases).sort()).toEqual(mcp.listTools().filter((tool) => tool.requiredScope === scope).map((tool) => tool.name).sort());
       }
-      expect(Object.keys(writes)).toHaveLength(32); expect(Object.keys(reads)).toHaveLength(21);
+      expect(Object.keys(writes)).toHaveLength(36); expect(Object.keys(reads)).toHaveLength(22);
     });
     describe.each(routes)("%s full registry", (route) => {
       it.each(Object.keys(writes))("blocks %s before its handler, including prefix/no-op/clone work", async (name) => {
@@ -444,7 +507,7 @@ const url = process.env.DATABASE_URL ?? "";
     describe.each(routes)("%s authorization and transport controls", (route) => {
       it("preserves scope denials, unknown-tool/method errors and real issuer membership before entitlement checks", async () => {
         const before = await businessState();
-        expect((await rpc(route, "tools/list", {}, { token: writeToken })).body.result.tools).toHaveLength(53);
+        expect((await rpc(route, "tools/list", {}, { token: writeToken })).body.result.tools).toHaveLength(58);
         for (const [method, params, credential, code] of [
           ["tools/call", { name: "create_suite", arguments: { name: "No permission" } }, readToken, -32002],
           ["tools/call", { name: "list_testcases", arguments: {} }, writeToken, -32002],
@@ -482,11 +545,11 @@ const url = process.env.DATABASE_URL ?? "";
         const current = initialized.headers.get("mcp-session-id")!;
         expect(current).toMatch(/^[a-f0-9]{16}\.[a-f0-9-]{36}$/);
         expect(await rpc(route, "ping", {}, { session: current })).toEqual({ status: 201, body: { jsonrpc: "2.0", id: 7, result: {} } });
-        expect((await rpc(route, "tools/list", {}, { session: current })).body.result.tools).toHaveLength(53);
+        expect((await rpc(route, "tools/list", {}, { session: current })).body.result.tools).toHaveLength(58);
         const trailing = await fetch(`${endpoint(route)}/?native=1`, { method: "POST", headers: {
           Authorization: `Bearer ${readToken}`, "content-type": "application/json"
         }, body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/list" }) });
-        expect(trailing.status).toBe(201); expect((await trailing.json()).result.tools).toHaveLength(53);
+        expect(trailing.status).toBe(201); expect((await trailing.json()).result.tools).toHaveLength(58);
         const stale = "0000000000000000.11111111-2222-4333-8444-555555555555";
         const refused = await rpc(route, "tools/call", { name: "create_suite", arguments: { name: "Stale call" } }, { session: stale });
         expect(refused.status).toBe(404); expect(refused.body.error.code).toBe(-32004);
