@@ -35,7 +35,7 @@ The current `development` MCP source declares **58 tool names**, including nativ
 
 ## Portable lessons from Nesberry (research input, not code copied)
 
-- **Policy triad:** distinguish *who decided and why*, *what invariant/version is binding*, and *how a rule is enforced*. Nexberry's source is `NesberryEnterprise/Nesberry/.kiro/specs/policy-ledger/` and `docs/policies/README.md`; foundational phases are built, later integration/impact phases remain incomplete.
+- **Policy triad:** distinguish *who decided and why*, *what invariant/version is binding*, and *how a rule is enforced*. Nesberry's source is `NesberryEnterprise/Nesberry/.kiro/specs/policy-ledger/` and `docs/policies/README.md`; foundational phases are built, later integration/impact phases remain incomplete.
 - **Immutable meaning, versioned change:** a semantic policy change creates a successor revision; audit history cannot be silently rewritten.
 - **Avoid write hotspots:** Nesberry's per-issue files fixed parallel editing of a shared issue log (ISS-7166). In Tesbo, instantiate the principle as per-record version locking and conflict-aware writes; do **not** copy a repository issue-file schema into the database.
 - **Reuse canonical owners:** decisions, policies, rules, tests, issues, documentation, code and evidence are distinct truths connected by typed relationships. A traceability projection is not an authoritative duplicate.
