@@ -4,15 +4,28 @@ import { useEffect, useState } from "react";
 import { useParams } from "@/lib/routeParams";
 import {
   archiveModelStudioModel,
+  createModelStudioModel,
   getModelStudioCoverage,
   getModelStudioModel,
+  getTestCase,
+  linkModelStudioCase,
   listModelStudioModels,
+  saveModelStudioRevision,
+  unlinkModelStudioCase,
   type ModelStudioCoverage,
   type ModelStudioDetail,
   type ModelStudioModel,
   type ModelStudioRevision
 } from "@/lib/api";
 import { ModelDraftGraph } from "../agents/zyra/changes/ModelDraftGraph";
+import {
+  EMPTY_MODEL,
+  LinkCaseModal,
+  ModelDefinitionModal,
+  modelElements,
+  toModelDefinition,
+  type ModelDefinition
+} from "@/components/model-studio/ModelStudioAuthoring";
 import { formatDate } from "@/lib/date";
 
 /**
@@ -65,6 +78,15 @@ export default function ModelStudioPage() {
   const [loading, setLoading] = useState(true);
   const [archiving, setArchiving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bumped after any write so the model list, detail and coverage re-read together.
+  const [reloadToken, setReloadToken] = useState(0);
+  const [definitionModal, setDefinitionModal] = useState<"create" | "revision" | null>(null);
+  const [authorBusy, setAuthorBusy] = useState(false);
+  const [authorError, setAuthorError] = useState<string | null>(null);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [mappingBusy, setMappingBusy] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -84,7 +106,7 @@ export default function ModelStudioPage() {
     return () => {
       active = false;
     };
-  }, [projectId]);
+  }, [projectId, reloadToken]);
 
   useEffect(() => {
     if (!selectedModelId) return;
@@ -109,11 +131,15 @@ export default function ModelStudioPage() {
     return () => {
       active = false;
     };
-  }, [projectId, selectedModelId]);
+  }, [projectId, selectedModelId, reloadToken]);
 
   // Keyed to the current selection so a previous model's response cannot render under a new one.
   const currentDetail = detail && detail.id === selectedModelId ? detail : null;
   const currentCoverage = coverage && coverage.modelId === selectedModelId ? coverage : null;
+  // Mappings are stored per immutable revision; the coverage read and every authoring action below
+  // target the current head, so the latest revision is what "Link case" is relative to.
+  const latestRevision = currentDetail?.revisions[0] ?? null;
+  const latestDefinition = latestRevision?.content ? toModelDefinition(latestRevision.content) : null;
 
   /**
    * Archiving retires the whole model, so it is confirmed and never implicit. Revisions and case
@@ -145,18 +171,100 @@ export default function ModelStudioPage() {
     }
   }
 
+  async function createModel({ name, definition }: { name: string; definition: ModelDefinition }) {
+    setAuthorBusy(true);
+    setAuthorError(null);
+    try {
+      const created = await createModelStudioModel(projectId, { name, model: definition });
+      setDefinitionModal(null);
+      setReloadToken((token) => token + 1);
+      setSelectedModelId(created.id);
+    } catch (cause) {
+      setAuthorError(cause instanceof Error ? cause.message : "Could not create the model.");
+    } finally {
+      setAuthorBusy(false);
+    }
+  }
+
+  async function saveRevision({ definition }: { name: string; definition: ModelDefinition }) {
+    if (!currentDetail || !latestRevision) return;
+    setAuthorBusy(true);
+    setAuthorError(null);
+    try {
+      await saveModelStudioRevision(projectId, currentDetail.id, {
+        baseRevisionId: latestRevision.id,
+        model: definition
+      });
+      setDefinitionModal(null);
+      setReloadToken((token) => token + 1);
+    } catch (cause) {
+      // A STALE_BASE refusal means another edit landed first; keep the draft open and say so.
+      setAuthorError(cause instanceof Error ? cause.message : "Could not save the revision.");
+    } finally {
+      setAuthorBusy(false);
+    }
+  }
+
+  async function linkCase({ testcaseId, elementIds }: { testcaseId: string; elementIds: string[] }) {
+    if (!currentDetail || !latestRevision) return;
+    setLinkBusy(true);
+    setLinkError(null);
+    try {
+      // Record the case revision the mapping was accepted against, so a later edit is visible as
+      // changed-since-link rather than silently treated as current.
+      const testcase = await getTestCase(projectId, testcaseId);
+      const testcaseRevision = typeof testcase.editRevision === "string" ? testcase.editRevision : undefined;
+      await linkModelStudioCase(projectId, currentDetail.id, latestRevision.id, {
+        testcaseId,
+        elementIds,
+        testcaseRevision
+      });
+      setLinkOpen(false);
+      setReloadToken((token) => token + 1);
+    } catch (cause) {
+      setLinkError(cause instanceof Error ? cause.message : "Could not link the case.");
+    } finally {
+      setLinkBusy(false);
+    }
+  }
+
+  async function unlinkCase(linkId: string) {
+    if (!currentDetail || !currentCoverage) return;
+    setMappingBusy(linkId);
+    try {
+      await unlinkModelStudioCase(projectId, currentDetail.id, currentCoverage.revisionId, linkId);
+      setReloadToken((token) => token + 1);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not remove the mapping.");
+    } finally {
+      setMappingBusy(null);
+    }
+  }
+
   const revision: ModelStudioRevision | null =
     currentDetail?.revisions.find((row) => row.id === revisionId) ?? currentDetail?.revisions[0] ?? null;
   const preview = revision?.preview ?? null;
 
   return (
     <main className="space-y-5 p-5">
-      <header className="space-y-1">
-        <h1 className="text-xl font-semibold">Model Studio</h1>
-        <p className="text-[12.5px] text-[var(--muted)]">
-          Expected behavior, persisted as draft revisions. A model is not approved, execution evidence
-          or verified coverage.
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <h1 className="text-xl font-semibold">Model Studio</h1>
+          <p className="text-[12.5px] text-[var(--muted)]">
+            Expected behavior, persisted as draft revisions. A model is not approved, execution evidence
+            or verified coverage.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setAuthorError(null);
+            setDefinitionModal("create");
+          }}
+          className="rounded border border-[var(--border)] px-3 py-1.5 text-[12.5px] hover:bg-[var(--surface-secondary)]"
+        >
+          New model
+        </button>
       </header>
 
       {error && (
@@ -171,9 +279,19 @@ export default function ModelStudioPage() {
         <section className="rounded border border-[var(--border)] p-4">
           <h2 className="font-medium">No persisted models yet</h2>
           <p className="mt-1 text-[12.5px] text-[var(--muted)]">
-            This inspection surface lists models created through the REST/MCP API. Creation and editing
-            in the studio are the next increment.
+            Describe the expected behavior as states and transitions. Saving creates draft revision 1;
+            it is not approved, coverage or runtime evidence.
           </p>
+          <button
+            type="button"
+            onClick={() => {
+              setAuthorError(null);
+              setDefinitionModal("create");
+            }}
+            className="mt-3 rounded border border-[var(--border)] px-3 py-1.5 text-[12.5px] hover:bg-[var(--surface-secondary)]"
+          >
+            Create the first model
+          </button>
         </section>
       ) : (
         <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
@@ -208,6 +326,17 @@ export default function ModelStudioPage() {
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthorError(null);
+                      setDefinitionModal("revision");
+                    }}
+                    disabled={!latestRevision || !latestDefinition}
+                    className="rounded border border-[var(--border)] px-2 py-1 text-[12px] hover:bg-[var(--surface-secondary)] disabled:opacity-60"
+                  >
+                    New revision
+                  </button>
                   <button
                     type="button"
                     onClick={() => void archiveSelectedModel()}
@@ -301,9 +430,23 @@ export default function ModelStudioPage() {
               )}
 
               <section aria-label="Case mappings" className="rounded border border-[var(--border)] p-3">
-                <h3 className="font-medium">Case mappings</h3>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="font-medium">Case mappings</h3>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLinkError(null);
+                      setLinkOpen(true);
+                    }}
+                    disabled={!latestRevision || !latestDefinition}
+                    className="rounded border border-[var(--border)] px-2 py-1 text-[12px] hover:bg-[var(--surface-secondary)] disabled:opacity-60"
+                  >
+                    Link case
+                  </button>
+                </div>
                 <p className="mt-1 text-[11.5px] text-[var(--muted)]">
-                  A linked case is an accepted mapping, not execution or verified coverage.
+                  A linked case is an accepted mapping, not execution or verified coverage. Mappings are
+                  stored per revision; this list is the latest revision&apos;s.
                 </p>
                 {currentCoverage ? (
                   <>
@@ -315,6 +458,37 @@ export default function ModelStudioPage() {
                         </li>
                       ))}
                     </ul>
+                    {currentCoverage.links.length > 0 && (
+                      <ul aria-label="Linked cases" className="mt-3 space-y-1 text-[12px]">
+                        {currentCoverage.links.map((link) => (
+                          <li
+                            key={link.id}
+                            className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] py-1"
+                          >
+                            <span>
+                              {link.testcaseTitle}
+                              <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">
+                                {link.elementIds.join(", ")}
+                              </span>
+                              {link.caseDeleted && (
+                                <span className="ml-2 text-[var(--warning-foreground)]">deleted case</span>
+                              )}
+                              {link.caseChangedSinceLink && (
+                                <span className="ml-2 text-[var(--warning-foreground)]">changed since linked</span>
+                              )}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => void unlinkCase(link.id)}
+                              disabled={mappingBusy === link.id}
+                              className="rounded border border-[var(--border)] px-2 py-0.5 text-[11.5px] hover:bg-[var(--surface-secondary)] disabled:opacity-60"
+                            >
+                              {mappingBusy === link.id ? "Removing…" : "Unlink"}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                     <MappingStalenessNote staleness={currentCoverage.mappingStaleness} />
                   </>
                 ) : (
@@ -324,6 +498,38 @@ export default function ModelStudioPage() {
             </section>
           )}
         </div>
+      )}
+
+      {definitionModal && (
+        <ModelDefinitionModal
+          mode={definitionModal}
+          initialName={definitionModal === "revision" ? currentDetail?.name : ""}
+          initial={(definitionModal === "revision" ? latestDefinition : null) ?? EMPTY_MODEL}
+          baseRevisionNumber={latestRevision?.revisionNumber}
+          busy={authorBusy}
+          error={authorError}
+          onClose={() => {
+            if (!authorBusy) setDefinitionModal(null);
+          }}
+          onSave={(value) => {
+            void (definitionModal === "create" ? createModel(value) : saveRevision(value));
+          }}
+        />
+      )}
+
+      {linkOpen && latestDefinition && (
+        <LinkCaseModal
+          projectId={projectId}
+          elements={modelElements(latestDefinition)}
+          busy={linkBusy}
+          error={linkError}
+          onClose={() => {
+            if (!linkBusy) setLinkOpen(false);
+          }}
+          onLink={(value) => {
+            void linkCase(value);
+          }}
+        />
       )}
     </main>
   );

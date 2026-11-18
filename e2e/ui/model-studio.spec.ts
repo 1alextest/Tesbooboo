@@ -108,3 +108,50 @@ test("archiving a model in the studio removes it from the list and keeps its his
     await api.dispose();
   }
 });
+
+test("a model is created and revised in the studio, and a case is linked and unlinked", async ({ page }) => {
+  const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  const name = `E2E studio authoring ${Date.now()}`;
+  const caseTitle = `E2E studio case ${Date.now()}`;
+  let caseId = "";
+  try {
+    const createdCase = await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: caseTitle } });
+    expect(createdCase.status(), await createdCase.text()).toBe(201);
+    caseId = (await createdCase.json()).id;
+
+    await page.goto(`/projects/${ctx.projectId}/model-studio`);
+    await page.getByRole("button", { name: "New model" }).click();
+    await page.getByPlaceholder("Checkout flow").fill(name);
+    await page.getByRole("button", { name: "Create model" }).click();
+
+    // The new model is selected and shows its first immutable revision.
+    await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+    const revisionSelect = page.getByRole("combobox", { name: "Revision" });
+    await expect(revisionSelect).toContainText("rev 1");
+
+    // Saving revision 2 starts from the head and appends, rather than rewriting revision 1.
+    await page.getByRole("button", { name: "New revision" }).click();
+    await page.getByLabel("Transition 1 action").fill("Submit");
+    await page.getByRole("button", { name: "Save revision" }).click();
+    await expect(revisionSelect).toContainText("rev 2");
+
+    // Link the case to the start state, then remove the mapping from the studio.
+    await page.getByRole("button", { name: "Link case", exact: true }).click();
+    await page.getByRole("combobox", { name: "Test case" }).selectOption({ label: caseTitle });
+    await page.getByRole("checkbox", { name: /start/ }).check();
+    await page.getByRole("button", { name: "Link selected case" }).click();
+
+    const linked = page.getByRole("list", { name: "Linked cases" });
+    await expect(linked).toContainText(caseTitle);
+    await linked.getByRole("button", { name: "Unlink" }).click();
+    await expect(page.getByRole("list", { name: "Linked cases" })).toHaveCount(0);
+
+    // The case itself still exists; only the mapping was removed.
+    expect((await api.get(`/api/projects/${ctx.projectId}/testcases/${caseId}`)).status()).toBe(200);
+  } finally {
+    if (caseId) await api.delete(`/api/projects/${ctx.projectId}/testcases/${caseId}`, { failOnStatusCode: false });
+    // The model id is created through the UI; remove the row by its unique name.
+    exec(`DELETE FROM mbt_models WHERE project_id = ${literal(ctx.projectId)} AND name = ${literal(name)};`);
+    await api.dispose();
+  }
+});

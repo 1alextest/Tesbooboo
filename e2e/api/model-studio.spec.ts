@@ -97,6 +97,15 @@ test.describe("persisted Model Studio revisions and mappings", () => {
       expect(coverage).toMatchObject({ coverageAssertion: "none", executionAssertion: "none" });
       expect(coverage.elements.find((element: { id: string }) => element.id === "start").linkedCases).toBe(1);
       expect(coverage.elements.find((element: { id: string }) => element.id === "done").linkedCases).toBe(0);
+      // The mappings themselves are listed for the studio, not just counted.
+      expect(coverage.links).toHaveLength(2);
+      expect(coverage.links.find((row: { id: string }) => row.id === link.id)).toMatchObject({
+        testcaseId: caseId,
+        elementIds: ["start", "finish"],
+        caseChangedSinceLink: false,
+        caseDeleted: false
+      });
+      expect(coverage.links.find((row: { id: string }) => row.id === link.id).testcaseTitle).toBeTruthy();
       expect(coverage.mappingStaleness).toMatchObject({
         supersededRevisions: [],
         testcasesChangedSinceLink: 0,
@@ -114,6 +123,10 @@ test.describe("persisted Model Studio revisions and mappings", () => {
         testcasesChangedSinceLink: 1,
         testcasesWithoutRecordedRevision: 1
       });
+      expect(
+        changed.links.find((row: { id: string }) => row.id === link.id).caseChangedSinceLink,
+        "the mapping records the case revision it was accepted against"
+      ).toBe(true);
 
       // A later model revision does not rewrite earlier mappings: they remain stored and are
       // reported as superseded instead of silently becoming "no mapping" on the latest revision.
@@ -147,6 +160,10 @@ test.describe("persisted Model Studio revisions and mappings", () => {
       expect((await owner.delete(`/api/projects/${projectId}/testcases/${deletedCaseId}`)).ok()).toBe(true);
       const afterDelete = await (await owner.get(`${base}/${modelId}/coverage`)).json();
       expect(afterDelete.elements.find((element: { id: string }) => element.id === "cancel_edge").linkedCases).toBe(0);
+      // The link row survives (history), so the list still exposes it for review and unlinking.
+      expect(
+        afterDelete.links.find((row: { testcaseId: string }) => row.testcaseId === deletedCaseId)
+      ).toMatchObject({ caseDeleted: true });
       expect(afterDelete.mappingStaleness).toMatchObject({
         testcasesChangedSinceLink: 0,
         testcasesWithoutRecordedRevision: 0,
@@ -211,6 +228,54 @@ test.describe("persisted Model Studio revisions and mappings", () => {
         WHERE model_id = ${literal(modelId)} AND project_id = ${literal(projectId)};`))).toBe(1);
       expect(scalar(`SELECT (archived_at IS NOT NULL)::text FROM mbt_models
         WHERE id = ${literal(modelId)} AND project_id = ${literal(projectId)};`)).toBe("true");
+    } finally {
+      if (caseId) await owner.delete(`/api/projects/${projectId}/testcases/${caseId}`, { failOnStatusCode: false });
+      if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(projectId)};`);
+      await owner.dispose();
+    }
+  });
+
+  test("unlinking a case removes the mapping and leaves the case alone", { tag: '@tesbo.testId("TES-TC-3035")' }, async () => {
+    const tenant = await provisionRbacTenant("model-studio");
+    test.skip(!tenant, "requires direct SQL control for the disposable tenant");
+    const projectId = tenant!.mainProjectId;
+    const base = `/api/projects/${projectId}/model-studio/models`;
+    const owner = await loginAs(tenant!.owner);
+    let modelId = "";
+    let caseId = "";
+    try {
+      const created = await owner.post(base, { data: { name: `E2E unlink model ${Date.now()}`, model: MODEL } });
+      expect(created.status(), await created.text()).toBe(201);
+      const model = await created.json();
+      modelId = model.id;
+      const revisionId = model.latestRevision.id;
+
+      const createdCase = await owner.post(`/api/projects/${projectId}/testcases`, {
+        data: { title: `E2E unlink case ${Date.now()}` }
+      });
+      expect(createdCase.status(), await createdCase.text()).toBe(201);
+      caseId = (await createdCase.json()).id;
+      const caseRevision = (await (await owner.get(`/api/projects/${projectId}/testcases/${caseId}`)).json()).editRevision;
+      const linked = await owner.post(`${base}/${modelId}/revisions/${revisionId}/links`, {
+        data: { testcaseId: caseId, elementIds: ["start"], testcaseRevision: caseRevision }
+      });
+      expect(linked.status(), await linked.text()).toBe(201);
+      const link = await linked.json();
+
+      const before = await (await owner.get(`${base}/${modelId}/coverage`)).json();
+      expect(before.links.map((row: { id: string }) => row.id)).toEqual([link.id]);
+      expect(before.elements.find((element: { id: string }) => element.id === "start").linkedCases).toBe(1);
+
+      const removed = await owner.delete(`${base}/${modelId}/revisions/${revisionId}/links/${link.id}`);
+      expect(removed.status(), await removed.text()).toBe(200);
+      const after = await (await owner.get(`${base}/${modelId}/coverage`)).json();
+      expect(after.links).toEqual([]);
+      expect(after.elements.find((element: { id: string }) => element.id === "start").linkedCases).toBe(0);
+
+      // Unlinking is a mapping edit, not a case edit or delete.
+      expect((await owner.get(`/api/projects/${projectId}/testcases/${caseId}`)).status()).toBe(200);
+      // The same mapping id cannot be removed twice.
+      expect((await owner.delete(`${base}/${modelId}/revisions/${revisionId}/links/${link.id}`)).status()).toBe(404);
     } finally {
       if (caseId) await owner.delete(`/api/projects/${projectId}/testcases/${caseId}`, { failOnStatusCode: false });
       if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(projectId)};`);
