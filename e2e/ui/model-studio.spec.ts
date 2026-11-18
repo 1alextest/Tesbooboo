@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, request as pwRequest, test } from "@playwright/test";
 import { env } from "../utils/env";
-import { exec, literal } from "../utils/psql";
+import { exec, literal, scalar } from "../utils/psql";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 const STATE_PATH = path.join(__dirname, "../.auth/state.json");
@@ -104,6 +104,44 @@ test("archiving a model in the studio removes it from the list and keeps its his
     await expect(page.getByRole("button", { name, exact: false })).toHaveCount(0);
     expect((await api.get(`/api/projects/${ctx.projectId}/model-studio/models/${modelId}`)).status()).toBe(404);
   } finally {
+    if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(ctx.projectId)};`);
+    await api.dispose();
+  }
+});
+
+test("a reviewer approves the revision, generates proposals and creates a draft case", async ({ page }) => {
+  const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  const name = `E2E governed studio ${Date.now()}`;
+  let modelId = "";
+  try {
+    const created = await api.post(`/api/projects/${ctx.projectId}/model-studio/models`, { data: { name, model: MODEL } });
+    expect(created.status(), await created.text()).toBe(201);
+    modelId = (await created.json()).id;
+
+    // Approving asks for confirmation; the reviewer is attesting the content hash they saw.
+    page.on("dialog", (dialog) => void dialog.accept());
+    await page.goto(`/projects/${ctx.projectId}/model-studio`);
+    await page.getByRole("button", { name, exact: false }).click();
+    await page.getByRole("button", { name: "Approve revision 1" }).click();
+    await expect(page.getByText(/Approved rev 1/)).toBeVisible();
+
+    await page.getByRole("button", { name: "Generate paths" }).click();
+    const firstPath = page.getByRole("checkbox", { name: /Select path/ }).first();
+    await expect(firstPath).toBeVisible();
+    await firstPath.check();
+    await page.getByRole("button", { name: "Create draft cases" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Created" })).toBeVisible();
+
+    // The proposal became a real, unapproved Draft case. Read the persisted row directly so the
+    // assertion is about state, not about search ranking or list defaults.
+    expect(
+      scalar(`SELECT status FROM testcases
+        WHERE project_id = ${literal(ctx.projectId)} AND title LIKE 'Model:%' AND deleted_at IS NULL
+        ORDER BY created_at DESC LIMIT 1;`)
+    ).toBe("Draft");
+  } finally {
+    // Remove only the generated drafts; the model delete cascades its revisions and provenance.
+    exec(`DELETE FROM testcases WHERE project_id = ${literal(ctx.projectId)} AND title LIKE 'Model:%';`);
     if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(ctx.projectId)};`);
     await api.dispose();
   }

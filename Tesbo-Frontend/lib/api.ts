@@ -4781,6 +4781,13 @@ export async function previewModelDraft(projectId: string, model: unknown, signa
 
 // Persisted Model Studio (Phase A) ------------------------------------------------
 
+export type ModelStudioApproval = {
+  status: "APPROVED" | "NOT_APPROVED";
+  contentHash: string | null;
+  approvedBy: string | null;
+  approvedAt: string | null;
+};
+
 export type ModelStudioRevision = {
   id: string;
   modelId: string;
@@ -4789,13 +4796,14 @@ export type ModelStudioRevision = {
   status: "draft" | "approved" | "retired";
   contentHash: string;
   createdAt: string;
+  approval: ModelStudioApproval;
   content?: unknown;
   preview?: (Omit<ModelDraftPreview, "modelId" | "modelRevisionId"> & { modelId: string; modelRevisionId: string }) | null;
   authority: {
     expectedBehavior: true;
     observedSource: false;
     executionEvidence: false;
-    approval: "NOT_APPROVED";
+    approval: "NOT_APPROVED" | "APPROVED";
     runtimeEvidence: "NONE";
   };
 };
@@ -4838,6 +4846,16 @@ export type ModelStudioCoverage = {
     deletedTestcases: number;
     note: string;
   };
+  approval: ModelStudioApproval;
+  /** Observed result history of the linked cases — explicitly not model verification. */
+  caseEvidence: Array<{
+    testcaseId: string;
+    testcaseTitle: string;
+    statusCounts: Record<string, number>;
+    latestStatus: string | null;
+    latestAt: string | null;
+  }>;
+  evidenceNote: string;
   coverageAssertion: "none";
   executionAssertion: "none";
   note: string;
@@ -4899,5 +4917,81 @@ export async function unlinkModelStudioCase(
 ): Promise<{ ok: boolean }> {
   return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/links/${linkId}`, {
     method: "DELETE"
+  });
+}
+
+export type ModelStudioGeneratedPath = {
+  id: string;
+  transitionIds: string[];
+  stateIds: string[];
+  digest: string;
+};
+
+/** Bounded, deterministic proposals. Read-only: nothing is written by this call. */
+export async function generateModelStudioPaths(
+  projectId: string,
+  modelId: string,
+  revisionId: string,
+  data?: { strategy?: "edge_coverage" | "shortest_paths"; maxPaths?: number; maxDepth?: number; seed?: string }
+): Promise<{
+  status: "PROPOSAL_ONLY";
+  strategy: "edge_coverage" | "shortest_paths";
+  seed: string;
+  paths: ModelStudioGeneratedPath[];
+  coverageAssertion: "none";
+  executionAssertion: "none";
+}> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/generate`, {
+    method: "POST",
+    body: data ?? {}
+  });
+}
+
+/** Approve the current revision, attesting the exact content hash the reviewer saw. */
+export async function approveModelStudioRevision(
+  projectId: string,
+  modelId: string,
+  revisionId: string,
+  expectedHash: string
+): Promise<ModelStudioRevision & { alreadyApproved: boolean }> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/approve`, {
+    method: "POST",
+    body: { expectedHash }
+  });
+}
+
+export type ModelStudioGeneratedCase = {
+  digest: string;
+  testcaseId: string;
+  created: boolean;
+  title?: string;
+};
+
+/**
+ * Create unapproved Draft cases from selected path proposals of an approved revision. The server
+ * regenerates the proposals, so the same generation inputs must be supplied with the digests.
+ */
+export async function createModelStudioCases(
+  projectId: string,
+  modelId: string,
+  revisionId: string,
+  data: {
+    digests: string[];
+    strategy?: "edge_coverage" | "shortest_paths";
+    maxPaths?: number;
+    maxDepth?: number;
+    seed?: string;
+  }
+): Promise<{
+  created: number;
+  skipped: number;
+  cases: ModelStudioGeneratedCase[];
+  coverageAssertion: "none";
+  executionAssertion: "none";
+  note: string;
+}> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/candidates`, {
+    method: "POST",
+    body: data
   });
 }
