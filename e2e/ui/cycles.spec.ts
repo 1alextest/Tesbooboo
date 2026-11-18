@@ -866,6 +866,30 @@ test.describe("Schedule Run — the form and Run At validation", () => {
     }
   });
 
+  test("a daily schedule is stored as a local rule and shows it in the list", { tag: '@tesbo.testId("TES-TC-2206")' }, async ({ page }) => {
+    const scheduleName = `E2E Daily ${Date.now()}`;
+    await openSchedule(page);
+    await page.getByPlaceholder("Nightly Smoke").fill(scheduleName);
+    await page.getByRole("combobox", { name: "Test Run" }).selectOption({ label: cycleName });
+    await page.getByRole("combobox", { name: "Schedule Type" }).selectOption("daily");
+    await page.getByLabel("Local time").fill("09:00");
+    await page.getByRole("button", { name: "Create Schedule" }).click();
+
+    // The list names the local rule, including the zone it is local to.
+    await expect(page.getByRole("row", { name: new RegExp(scheduleName) })).toContainText("Daily at 09:00");
+
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    try {
+      const rows = await (await api.get(`/api/projects/${ctx.projectId}/cycles/schedules`)).json();
+      expect(rows.find((row: { name: string }) => row.name === scheduleName)).toMatchObject({
+        scheduleType: "daily",
+        localTime: "09:00"
+      });
+    } finally {
+      await api.dispose();
+    }
+  });
+
   test("a past Run At shows the inline error as soon as it's picked, before Create Schedule is clicked", { tag: '@tesbo.testId("TES-TC-2205")' }, async ({ page }) => {
     let scheduleRequestSent = false;
     await page.route("**/api/projects/*/cycles/schedules", async (route) => {

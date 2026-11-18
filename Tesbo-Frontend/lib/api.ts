@@ -2711,10 +2711,14 @@ export interface TestRunSchedule {
   cycleAvailable: boolean;
   name: string;
   enabled: boolean;
-  scheduleType: "one_time" | "recurring";
+  scheduleType: "one_time" | "recurring" | "daily" | "weekly";
   runAt: string | null;
   intervalMinutes: number | null;
   timezone: string;
+  /** HH:MM in `timezone`, for daily/weekly rules. */
+  localTime: string | null;
+  /** 0=Sunday .. 6=Saturday, for weekly rules. */
+  daysOfWeek: number[] | null;
   nextRunAt: string | null;
   lastRunAt: string | null;
   lastStatus: string | null;
@@ -2811,9 +2815,11 @@ export async function createTestRunSchedule(
   data: {
     cycleId: string;
     name: string;
-    scheduleType: "one_time" | "recurring";
+    scheduleType: "one_time" | "recurring" | "daily" | "weekly";
     runAt?: string;
     intervalMinutes?: number;
+    localTime?: string;
+    daysOfWeek?: number[];
     timezone?: string;
     enabled?: boolean;
   }
@@ -2828,9 +2834,11 @@ export async function updateTestRunSchedule(
   scheduleId: string,
   data: {
     name?: string;
-    scheduleType?: "one_time" | "recurring";
+    scheduleType?: "one_time" | "recurring" | "daily" | "weekly";
     runAt?: string | null;
     intervalMinutes?: number;
+    localTime?: string;
+    daysOfWeek?: number[];
     timezone?: string;
     enabled?: boolean;
   }

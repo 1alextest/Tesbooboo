@@ -324,3 +324,12 @@ export function validateScheduleRunAt(value: string): string {
   return "";
 }
 
+/** HH:MM for a daily/weekly rule; the instant is resolved in the schedule's timezone by the server. */
+export function validateScheduleLocalTime(value: string): string {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? "" : "Choose a valid time";
+}
+
+export function validateScheduleDays(days: number[]): string {
+  return days.length > 0 ? "" : "Choose at least one day";
+}
+

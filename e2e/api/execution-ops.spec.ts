@@ -532,6 +532,88 @@ test.describe("execution bulk operations, schedules and share links", () => {
     expect(new Date(schedule.nextRunAt).getTime()).toBeGreaterThan(Date.now());
   });
 
+  const localTimeOf = (iso: string, timezone: string) =>
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(new Date(iso));
+  const localWeekdayOf = (iso: string, timezone: string) =>
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "short" }).format(new Date(iso));
+
+  test("EXO-A-14 a daily schedule is stored as a local wall-clock rule", { tag: '@tesbo.testId("TES-TC-3036")' }, async () => {
+    const { cycleId } = await seedRun(1);
+    const timezone = "America/New_York";
+    const res = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
+      data: { name: stamp("daily"), cycleId, scheduleType: "daily", localTime: "09:00", timezone },
+      failOnStatusCode: false,
+    });
+    expect(res.status(), await res.text()).toBe(201);
+    const schedule = await res.json();
+    expect(schedule).toMatchObject({ scheduleType: "daily", localTime: "09:00", daysOfWeek: null, timezone });
+    expect(new Date(schedule.nextRunAt).getTime()).toBeGreaterThan(Date.now());
+    expect(localTimeOf(schedule.nextRunAt, timezone), "the rule is local to its zone, not UTC").toBe("09:00");
+  });
+
+  test("EXO-A-15 a weekly schedule fires only on the chosen local days", { tag: '@tesbo.testId("TES-TC-3037")' }, async () => {
+    const { cycleId } = await seedRun(1);
+    const timezone = "America/New_York";
+    const res = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
+      data: { name: stamp("weekly"), cycleId, scheduleType: "weekly", localTime: "08:30", daysOfWeek: [3, 1, 3], timezone },
+      failOnStatusCode: false,
+    });
+    expect(res.status(), await res.text()).toBe(201);
+    const schedule = await res.json();
+    // Duplicates are normalized away.
+    expect(schedule).toMatchObject({ scheduleType: "weekly", localTime: "08:30", daysOfWeek: [1, 3] });
+    expect(localTimeOf(schedule.nextRunAt, timezone)).toBe("08:30");
+    expect(["Mon", "Wed"]).toContain(localWeekdayOf(schedule.nextRunAt, timezone));
+  });
+
+  test("EXO-A-16 local rules refuse a missing or malformed time and empty or invalid days", { tag: '@tesbo.testId("TES-TC-3038")' }, async () => {
+    const { cycleId } = await seedRun(1);
+    for (const [label, data] of [
+      ["daily without a time", { scheduleType: "daily" }],
+      ["daily with a malformed time", { scheduleType: "daily", localTime: "9:00" }],
+      ["weekly without days", { scheduleType: "weekly", localTime: "09:00" }],
+      ["weekly with empty days", { scheduleType: "weekly", localTime: "09:00", daysOfWeek: [] }],
+      ["weekly with an out-of-range day", { scheduleType: "weekly", localTime: "09:00", daysOfWeek: [7] }],
+      ["daily with an invalid zone", { scheduleType: "daily", localTime: "09:00", timezone: "Mars/Olympus" }],
+    ] as const) {
+      const res = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
+        data: { name: stamp("bad local"), cycleId, ...data },
+        failOnStatusCode: false,
+      });
+      expect(res.status(), `${label} was accepted: ${await res.text()}`).toBe(400);
+    }
+  });
+
+  test("EXO-A-17 a fired daily schedule re-arms for the next local day and stays enabled", { tag: '@tesbo.testId("TES-TC-3039")' }, async () => {
+    const { cycleId } = await seedRun(1);
+    const timezone = "America/New_York";
+    const res = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
+      data: { name: stamp("daily due"), cycleId, scheduleType: "daily", localTime: "09:00", timezone },
+      failOnStatusCode: false,
+    });
+    expect(res.status(), await res.text()).toBe(201);
+    const schedule = await res.json();
+    exec(`UPDATE cycle_run_schedules SET next_run_at = now() WHERE id = ${literal(schedule.id)};`);
+
+    await expect
+      .poll(
+        () => scalar(`SELECT COALESCE(last_status, '') FROM cycle_run_schedules WHERE id = ${literal(schedule.id)};`),
+        { message: "the worker must fire the due daily schedule", timeout: 120_000, intervals: [2_000] },
+      )
+      .toBe("success");
+
+    const listed = await (await asOwner.get(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`)).json();
+    const row = listed.find((item: { id: string }) => item.id === schedule.id);
+    expect(row).toMatchObject({ enabled: true, lastStatus: "success" });
+    expect(new Date(row.nextRunAt).getTime(), "the next occurrence must be in the future").toBeGreaterThan(Date.now());
+    expect(localTimeOf(row.nextRunAt, timezone), "the re-armed instant keeps the local time").toBe("09:00");
+  });
+
   // ─── Share links ──────────────────────────────────────────────────────────
 
   test("EXO-A-11 sharing a run mints a token that serves the run publicly", { tag: '@tesbo.testId("TES-TC-185")' }, async () => {

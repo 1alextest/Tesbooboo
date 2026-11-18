@@ -3,11 +3,14 @@ import {
   parseScheduleRunAt,
   SCHEDULE_INTERVAL_MAX_MINUTES,
   SCHEDULE_NAME_MAX,
+  validateDaysOfWeek,
+  validateLocalTime,
   validateScheduleInterval,
   validateScheduleName,
   validateScheduleTimezone,
   validateScheduleType
 } from "./schedules.service";
+import { nextLocalRunAt } from "./local-time";
 
 const NOW = new Date("2026-11-18T12:00:00.000Z");
 
@@ -30,10 +33,28 @@ describe("schedule input validation", () => {
     expect(reasonOf(() => validateScheduleName("x".repeat(SCHEDULE_NAME_MAX + 1)))).toContain("at most");
   });
 
-  it("accepts only one_time or recurring", () => {
+  it("accepts only the four schedule types", () => {
     expect(validateScheduleType("one_time")).toBe("one_time");
     expect(validateScheduleType("recurring")).toBe("recurring");
-    expect(reasonOf(() => validateScheduleType("cron"))).toContain("one_time or recurring");
+    expect(validateScheduleType("daily")).toBe("daily");
+    expect(validateScheduleType("weekly")).toBe("weekly");
+    expect(reasonOf(() => validateScheduleType("cron"))).toContain("one_time, recurring, daily or weekly");
+  });
+
+  it("requires a 24-hour local time for daily/weekly rules", () => {
+    expect(validateLocalTime("09:00")).toBe("09:00");
+    expect(validateLocalTime("00:00")).toBe("00:00");
+    expect(validateLocalTime("23:59")).toBe("23:59");
+    for (const value of ["24:00", "9:00", "09:60", "", undefined, "09:00:00"]) {
+      expect(reasonOf(() => validateLocalTime(value))).toContain("HH:MM");
+    }
+  });
+
+  it("normalizes weekly days to unique sorted 0..6 values", () => {
+    expect(validateDaysOfWeek([5, 1, 5, 0])).toEqual([0, 1, 5]);
+    for (const value of [[], [-1], [7], ["x"], 3, undefined]) {
+      expect(reasonOf(() => validateDaysOfWeek(value)).toLowerCase()).toContain("week");
+    }
   });
 
   it("validates the timezone as an IANA zone, defaulting to UTC", () => {
@@ -80,5 +101,98 @@ describe("computeNextRunAt", () => {
     expect(reasonOf(() => computeNextRunAt({ scheduleType: "recurring", runAt: null, intervalMinutes: null }, NOW))).toContain(
       "Interval"
     );
+  });
+});
+
+describe("nextLocalRunAt", () => {
+  const from = new Date("2026-11-18T12:00:00.000Z"); // 07:00 in America/New_York (EST)
+
+  it("fires later today when the wall-clock time has not passed", () => {
+    expect(
+      nextLocalRunAt({ timezone: "America/New_York", localTime: "09:00", daysOfWeek: null }, from).toISOString()
+    ).toBe("2026-11-18T14:00:00.000Z"); // 09:00 EST
+  });
+
+  it("moves to tomorrow when the local time is exactly now", () => {
+    expect(
+      nextLocalRunAt({ timezone: "America/New_York", localTime: "07:00", daysOfWeek: null }, from).toISOString()
+    ).toBe("2026-11-19T12:00:00.000Z");
+  });
+
+  it("honours the zone's DST rules instead of a fixed offset", () => {
+    // 2026-07-01 is EDT (UTC-4) for the same 09:00 local time that is UTC-5 in November.
+    expect(
+      nextLocalRunAt(
+        { timezone: "America/New_York", localTime: "09:00", daysOfWeek: null },
+        new Date("2026-07-01T00:00:00.000Z")
+      ).toISOString()
+    ).toBe("2026-07-01T13:00:00.000Z");
+  });
+
+  it("skips a local time that does not exist on the spring-forward day", () => {
+    // 2026-03-08 02:00 America/New_York jumps to 03:00, so 02:30 never happens that day.
+    expect(
+      nextLocalRunAt(
+        { timezone: "America/New_York", localTime: "02:30", daysOfWeek: null },
+        new Date("2026-03-08T05:00:00.000Z")
+      ).toISOString()
+    ).toBe("2026-03-09T06:30:00.000Z"); // 02:30 EDT
+  });
+
+  it("picks the first instant when a local time repeats at fall-back", () => {
+    // 2026-11-01 01:30 happens twice in New York: 05:30Z (EDT) then 06:30Z (EST).
+    expect(
+      nextLocalRunAt(
+        { timezone: "America/New_York", localTime: "01:30", daysOfWeek: null },
+        new Date("2026-11-01T04:00:00.000Z")
+      ).toISOString()
+    ).toBe("2026-11-01T05:30:00.000Z");
+  });
+
+  it("finds the next allowed weekday", () => {
+    // Wednesday 2026-11-18; the next Monday is 2026-11-23, 09:00 EST.
+    expect(
+      nextLocalRunAt({ timezone: "America/New_York", localTime: "09:00", daysOfWeek: [1] }, from).toISOString()
+    ).toBe("2026-11-23T14:00:00.000Z");
+  });
+
+  it("supports zones east of UTC", () => {
+    // 2026-11-19 09:00 Asia/Tokyo (UTC+9) is 00:00Z that day.
+    expect(
+      nextLocalRunAt(
+        { timezone: "Asia/Tokyo", localTime: "09:00", daysOfWeek: null },
+        new Date("2026-11-18T12:00:00.000Z")
+      ).toISOString()
+    ).toBe("2026-11-19T00:00:00.000Z");
+  });
+});
+
+describe("computeNextRunAt local rules", () => {
+  it("requires the pieces a local rule needs", () => {
+    expect(
+      reasonOf(() =>
+        computeNextRunAt(
+          { scheduleType: "daily", runAt: null, intervalMinutes: null, timezone: "UTC", localTime: null, daysOfWeek: null },
+          NOW
+        )
+      )
+    ).toContain("Local time");
+    expect(
+      reasonOf(() =>
+        computeNextRunAt(
+          { scheduleType: "weekly", runAt: null, intervalMinutes: null, timezone: "UTC", localTime: "09:00", daysOfWeek: [] },
+          NOW
+        )
+      )
+    ).toContain("day of the week");
+  });
+
+  it("computes the next UTC daily occurrence", () => {
+    expect(
+      computeNextRunAt(
+        { scheduleType: "daily", runAt: null, intervalMinutes: null, timezone: "UTC", localTime: "13:00", daysOfWeek: null },
+        NOW
+      ).toISOString()
+    ).toBe("2026-11-18T13:00:00.000Z");
   });
 });
