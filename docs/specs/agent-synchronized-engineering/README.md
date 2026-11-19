@@ -2,7 +2,17 @@
 
 **Status:** Proposed product contract, now including governed Skills Library and module assignments; **not implemented, approved or deployed**. Assurance review state is recorded separately in this folder; a charter-guided desk review alone is not independent team execution.
 **Target repository/branch:** `1alextest/Tesbooboo` / `development`.
-**Purpose:** Keep the code and its relevant engineering records evolving together whenever a human or coding agent makes an application change.
+**Purpose:** Tesbo is the shared human-and-agent engineering assurance and delivery platform: help QA, BA, developers, PM, policy/security reviewers and release owners understand what AI agents did, reconcile what an application should do with what actually changed, verify real behavior, and release faster with defensible evidence. Keep the code and its relevant engineering records evolving together for every relevant change.
+
+## Product positioning and guiding outcome
+
+Tesbo **complements coding agents and IDEs** (Kiro, Claude Code, OpenCode, Codex) rather than replacing them. Its native case/run/bug, Knowledge Base, requirements, Zyra, graph, activity and existing project workflows are foundations for one connected cross-role experience. Test-management products such as Qase and TestRail are direct QA-category competitive benchmarks; GitLab, Polarion and other delivery/ALM platforms are sources of reusable methods and integration targets, not assumed direct substitutes.
+
+**North-star outcome:** A human who did not watch the coding session can open Tesbo and accurately answer: what was requested and authorized, what the agent actually did or only reported, what requirements/policies it may affect, what tests really ran against which build, who must act next, and whether the release has sufficient evidence for an authorized decision. Neither release speed nor a high case count is a guarantee of software correctness.
+
+The primary unit of coordination is an **application change moving from intent and implementation to human review, verification, release and post-release outcome**. Role-specific views should be projections on the same canonical objects and versioned graph, not replacement BA/PM/QA/policy stores. A solo developer may follow a lightweight path while an organization activates stronger policies without weakening server-side permissions.
+
+**Five external patterns are implementation inputs, not new subsystems:** Kiro-style event hooks (advisory); GitLab-style witnessed agent activity/audit; Qase-style compact context and composite MCP workflows; Spec Kit-style cross-artifact consistency analysis; DORA-style separate delivery-throughput and instability measurement. Each must be reconciled with Tesbo's current source and existing eight authoritative specifications before build, with executable negative acceptance tests.
 
 ## User outcome
 
@@ -43,6 +53,16 @@ The current `development` MCP source declares **58 tool names**, including nativ
 - **Avoid write hotspots:** Nesberry's per-issue files fixed parallel editing of a shared issue log (ISS-7166). In Tesbo, instantiate the principle as per-record version locking and conflict-aware writes; do **not** copy a repository issue-file schema into the database.
 - **Reuse canonical owners:** decisions, policies, rules, tests, issues, documentation, code and evidence are distinct truths connected by typed relationships. A traceability projection is not an authoritative duplicate.
 - **Principle distillation:** generalize the underlying *why* and re-apply based on Tesbo's actual context, ownership and source evidence.
+
+## End-to-end quality and product-learning contract
+
+A coding agent may begin without a formal specification; it still must not turn observed code into an automatically approved requirement. Use project source binding, graph observations and approved requirement/policy history as separate evidence planes. A source change can be observed through an optional agent hook, source-provider event or CI integration; **missing capture** must be reported as stale/unknown, not silently treated as no change.
+
+Tesbo distinguishes trusted server-observed events, externally authenticated event receipts, agent self-reports, inferred impacts, and unobserved activity; only show “agent did X” at the evidence tier actually available. Sensitive prompt/tool data require permissioned retention and redaction. Governed multi-operation MCP calls may make work easier but must reuse existing native services and preserve per-item authorization, idempotency, partial-result truth and review.
+
+The shared Change Workspace and release-readiness view must distinguish case drafted, approved, selected, executed, passed on a known build, deployed and post-deployment verified. Show blockers and accepted risk; release approval is an explicit accountable decision, not a generated green badge.
+
+Measure project outcomes in two axes: delivery throughput and instability, plus human comprehension, review burden, change-to-record freshness, false claims, duplicated records and defects escaping to production. Metrics are descriptive and baseline-aware; no causal success claim without comparison.
 
 ## Non-negotiable boundaries
 

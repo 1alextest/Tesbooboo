@@ -1,4 +1,4 @@
-# ASER — Requirements v0.2 (Skills Governance Integration)
+# ASER — Requirements v0.3 (governed human-and-agent delivery integration)
 
 **State:** Draft for independent specification challenge. These are **proposed** requirements, not assertions that Tesbo implements them.
 
@@ -202,6 +202,89 @@ A new approved/assigned skill version shall signal candidate review of affected 
 The proposal shall define bounded version/assignment scans, indexed contextual resolution, retry/timeout behavior, max payload/dependency depth, archive/revocation effects and measurable cache/latency budgets before code ships. When skill resolution fails or is unavailable, workflows remain safely resumable with explicit blocked/unassigned receipts rather than unverifiable publication.
 
 **Acceptance:** A revoked skill or unavailable resolver cannot be bypassed by requesting an old cached version; failure handling preserves draft work and produces bounded diagnostics.
+
+
+## R-ASE-37 — Change capture from complementary coding agents and source providers
+Tesbo shall support multiple **optional** authenticated change observers, including coding-agent hooks where available (for example Kiro agent/file/task hooks), repository push/PR/merge provider events, CI status callbacks and verified deploy facts. One project may bind multiple repos/branches/releases with observed scope and version. Ingested events shall be idempotent, source-attributed, ordered where source supports ordering, and durable. A missing hook, unsupported client or failed provider event must not imply the application was unchanged; mark source freshness `UNKNOWN` or `STALE` relative to the latest verified provider revision. The hook is neither the security boundary nor the only way Tesbo learns of changes.
+
+**Acceptance:** A commit pushed without any agent hook produces a visible unmatched change or missing-observation gap through the configured provider reconciliation; duplicate/out-of-order PR callbacks do not duplicate Change Packets; a deleted source binding cannot silently capture another project.
+
+## R-ASE-38 — Verified agent activity and understandable progress
+Tesbo shall provide one attributable human-readable activity timeline for an application change, using existing Zyra agent sessions/tasks, graph observations, native logs and authorized external agent event adapters. Each event explicitly distinguishes `tesbo_observed`, `provider_attested`, `agent_reported`, `derived_inference` and `unobserved`; record source, authenticated actor vs delegated agent, time, context/revision, status, retained evidence and privacy scope. Do not claim visibility into local/remote tool actions Tesbo never observed, reconstruct hidden agent reasoning or expose private context to unauthorized reviewers. Support liveness, interruption and unknown status without treating silence as success.
+
+**Acceptance:** A BA can tell what request changed behavior, QA can locate actual test evidence, PM can identify the owner of a blocker, and security can inspect authorized tool events. A self-reported "tests passed" without a runner receipt remains unverified.
+
+## R-ASE-39 — Task-oriented MCP context and composite operations
+Tesbo shall extend the **existing** MCP registry with capability-discoverable, bounded project/context bootstrap and composite agent workflows over canonical native services, including a proposed change+requirements/case draft and a verified run-result/defect triage flow. These are **orchestration adapters**, not new independent writers or permission bypasses. Each underlying action shall be authorized and revision-checked, with a stable overall idempotency key and per-item deduplication, explicit committed/failed/not-attempted status and resumable receipts. Batch atomicity may be asserted only for records within an actual transaction; external service effects use a durable handoff/outbox.
+
+**Acceptance:** One tool call cannot create a published case that an equivalent direct REST action would deny; failure after the requirement draft but before case linking reports exact partial persistence; replay with the same request key does not duplicate records; a changed payload with a reused key conflicts.
+
+## R-ASE-40 — Independent cross-artifact consistency and contradiction checks
+Before recommending publication or release, Tesbo shall be able to check typed relationships and discrepancies among *approved* requirements/policies, submitted proposals, source declarations/code observations, manual versions, test cases/models, tasks and run/evidence status. The analyzer is **read-only until an authorized proposal is explicitly created**; it must classify `confirmed_conflict`, `unresolved_conflict`, `missing_link`, `stale_reference`, `unknown_source`, `not_applicable` and `no_detected_issue` without pretending the last means complete correctness. A requirement inferred solely from code is an observation or candidate, not an approved independent oracle. Correct source owners, not the consistency analyzer, own amendments.
+
+**Acceptance:** A coding agent implements a permission behavior forbidden by an approved policy; Tesbo flags the contradiction rather than generating a matching "requirement" and passing its own check. A missing requirement does not automatically prove one should exist or that the code is invalid.
+
+## R-ASE-41 — One role-sensitive Change Workspace
+The existing Tesbo project/Zyra/graph shall expose a single navigable, role-authorized view of the change, with common immutable record identities and revision links. Developer, solo creator, QA, BA/product, PM, policy/security, support/operations and authorized executive views use the same underlying records, customized to their decisions—not different record stores. Show observed agent activity versus self-report, dependencies, requirements/policy impact, test and documentation draft/review state, task owners, release blockers and next actionable review steps. A user must be able to drill into evidence and return to context without a raw log or a separate agent product.
+
+**Acceptance:** Three role views on the same Change Packet show consistent revision IDs, differentiated visibility and no cross-role confidentiality leaks. A low-knowledge reviewer can answer what changed, why, who is accountable and what remains unproven.
+
+## R-ASE-42 — Evidence-aware release readiness and human decision
+Tesbo shall provide a **computed, explainable release-readiness projection** bound to a specific source/PR/commit, build/deployment candidate, approval and evidence scope. It shall distinguish `not_assessed`, `insufficient_evidence`, `blocked`, `ready_for_authorized_decision`, and `released_with_known_risks` (exact vocabulary reconciled with canonical eight), plus reason codes and freshness. Evidence inputs shall include approved expectation versions, coverage scope, case/run approval, executed selections and results, observed target-build identity, blocking defects, policy conflicts, unresolved changes, rollout/rollback plan and responsible release owner. A green CI check or count of linked cases cannot by itself make an application "safe" or verified. Original human controlled publication (P-07) stays in force pending any separately ratified amendment.
+
+**Acceptance:** With no target-build proof or negative-path execution, readiness is insufficient/blocked even when unit tests are green. An authorized release decision pins current evidence and risk owner; changing a critical policy afterward visibly stales that decision.
+
+## R-ASE-43 — Post-deployment verification and incident continuation
+An application change remains traceable through deployment, post-deploy smoke/health checks, operational monitoring, rollback or fix-forward, and any subsequently reported production defect. Tesbo shall distinguish source change, PR merge, deployment attempt, successfully deployed build, test observations, incident and recovered state. An unavailable provider or missing telemetry yields `UNVERIFIED` rather than a synthetic successful release.
+
+**Acceptance:** An agent's feature passed CI, deployed, then failed smoke: Tesbo links the precise build, regression, affected case/requirement/manual, incident owner, remediation and later retest. Pre-deploy success is preserved historically but does not imply post-deploy acceptance.
+
+## R-ASE-44 — Delivery throughput, instability and human comprehension measures
+Tesbo shall calculate or ingest **source-grounded** delivery measures with exposed source, denominator, scope, timestamp, missing data and confidence: change lead time, deployment frequency, failed deployment recovery time, change fail rate and deployment rework rate (DORA's five delivery measures). It shall additionally measure developer/BA/QA/PM time-to-understand a change, review burden, artifact freshness, unsupported agent claims, duplicate records and escaped defects when observable. No performance benefit may be claimed from created-document/testcase counts or by selectively excluding failed work; these measures are **descriptive**, not proof Tesbo caused improvement.
+
+**Acceptance:** A failed deployment is counted in stability and recovery metrics, not excluded to flatter lead time. A sample project with no deployment integration shows `NO_DATA` and source limitations rather than invented zero failures.
+
+## R-ASE-45 — Source and event semantics under failures
+For relevant sources and agents, define receipt identities, source/event version, capability flags, clock skew, out-of-order status, event loss and retry/cancellation. Tesbo shall use native graph history and notification writers to deliver change candidates and review tasks with idempotency, dead-letter/recovery and observable queue age. Do not require an always-running local coding agent; provider reconciliation and manual resync must be possible where permitted.
+
+**Acceptance:** A code change observed by provider after the agent process exited still appears in impact review; reconnecting two clients with the same event does not duplicate a requirement; dropped notifications remain visible as pending/failed delivery.
+
+## R-ASE-46 — Privacy and least-privilege agent trace visibility
+Tesbo shall distinguish operational trace metadata from optional sensitive prompt/tool payloads. Session logs, evidence, skill text, source snippets and externally linked files obey project/role/retention/redaction/access rules. Access to a high-level release summary does not grant access to private agent prompts, documents, secrets or protected QA evidence; collection and retention of detailed agent traces shall be configurable and bounded.
+
+**Acceptance:** A PM can see a failed agent task and its owner without viewing redacted secrets or a restricted policy draft; cross-project reads and raw tool-event export are denied and audited.
+
+## R-ASE-47 — Comparative acceptance, not copy-by-feature
+Delivery of the first integrated Tesbo Change Workspace shall be validated against a real coding-agent workflow using an existing application and a direct QA management baseline (Qase/TestRail where available). Reuse complementary Kiro/Spec Kit/GitLab patterns only where actual compatibility and maintenance/security tradeoffs support adoption. Record measured effectiveness: successful user jobs, erroneous agent claims, human correction effort, time to understand/review/release, test completeness, incomplete-sync recovery, CI/deploy outcomes and costs. A source review or a prototype does not establish production improvement.
+
+**Acceptance:** Two distinct authorized coding-agent clients can produce equivalent change receipts, and at least one BA/QA/PM review flow can be completed without manual record reconstruction. Any benchmark limitation is explicit.
+
+## R-ASE-48 — No forced ceremony, no governance bypass
+Agents may begin with spontaneous feature development, a defect fix, a requirement, an investigation or a policy change. Tesbo shall not require a formal model or approved requirement to be authored *before* any code edit, but must apply required authority checks before official publication/release, identify missing policy/requirement context, and preserve the approved test-case and skill-governance boundaries. Every change domain may legitimately be unchanged or N/A with evidence, and the user-facing workflow shall surface the smallest safe next action rather than forcing all modules to generate records.
+
+**Acceptance:** A cosmetic patch does not create fake policy and manual updates. A security-sensitive change cannot obtain a green readiness badge merely because its case author used an approved skill.
+
+## First integrated scenario matrix — mandatory implementation proof (proposed, NOT RUN)
+| ID | Starting point | What must be independently observed |
+| --- | --- | --- |
+| ASE-FLOW-01 | Spontaneous Kiro/OpenCode feature implementation | Source/agent/project binding, versioned Change Packet, native requirement candidate and linked case draft using active skills |
+| ASE-FLOW-02 | Coding agent stopped before calling Tesbo | Provider/CI source observer detects unknown/unreconciled change; no false current state |
+| ASE-FLOW-03 | Two concurrent delegated agents | Same change identity, distinct actor and permission receipts, no duplicate official record |
+| ASE-FLOW-04 | Agent reports successful tests without runner receipt | Report remains agent-reported, QA result unverified |
+| ASE-FLOW-05 | Approved policy contradicts changed implementation | Independent discrepancy, approved requirement remains authoritative, no self-generated oracle |
+| ASE-FLOW-06 | Composite MCP write fails after first item | Exact partial receipt, idempotent resume, same native authorization |
+| ASE-FLOW-07 | BA, QA and PM inspect one change | Cross-role status consistency and confidential-source filtering |
+| ASE-FLOW-08 | Test case linked to requirement but never executed | Current release not reported verified; coverage reasons readable |
+| ASE-FLOW-09 | Skill assignment revoked mid-change | Candidate preserved, no unapproved promotion, stale/version conflict surfaced |
+| ASE-FLOW-10 | PR merged without deployment | Production status UNKNOWN/NOT DEPLOYED, no fabricated release metrics |
+| ASE-FLOW-11 | Failed deployment and rollback | Correct change fail/recovery/rework classification with referenced provider events |
+| ASE-FLOW-12 | Native Copilot as an admin user | AI tool cannot perform human-only skill governance without exact independent human action |
+| ASE-FLOW-13 | Low-risk solo coder and high-governance organization | Same product truth, different presentation and approval configuration, no security bypass |
+| ASE-FLOW-14 | Support reports post-deploy regression | Accurate deployed build, incident, affected requirement/case/manual and retest lineage |
+| ASE-FLOW-15 | Wrong project token or disabled MCP | No cross-project read, discovery, candidate submission or effective skill resolution |
+| ASE-FLOW-16 | Lost hooks, out-of-order provider events, duplicate agent submission | Dedupe, freshness gaps, bounded retries and no false complete/approved records |
+
+**Evidence gate:** these rows are implementation acceptance requirements, not executed tests or formal assurance-team verdicts. The canonical Tesbo eight-file package governs official FR/T/QA/AC numbering; this noncanonical ASER proposal must be reconciled before promotion.
 
 ## Skills governance executable acceptance scenarios (proposed, not run)
 See [skills-governance.md](skills-governance.md) `SK-E2E-01..22` for the authorization, lifecycle, audience, composition, concurrency, stale-binding and malicious-candidate test contract. Those scenarios are required in the disposable-project gate; source-spec text alone is not execution evidence.
