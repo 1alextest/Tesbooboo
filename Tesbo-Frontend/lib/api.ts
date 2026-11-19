@@ -4833,6 +4833,8 @@ export type ModelStudioLink = {
   id: string;
   testcaseId: string;
   testcaseTitle: string;
+  /** Current repository status; only Approved cases can be dispatched into a governed run. */
+  testcaseStatus: string | null;
   elementIds: string[];
   testcaseRevision: string | null;
   caseChangedSinceLink: boolean;
@@ -4876,9 +4878,55 @@ export type ModelStudioCoverage = {
     latestAt: string | null;
   }>;
   evidenceNote: string;
+  /** Native Test Runs dispatched from this revision under its approval receipt. */
+  governedRuns: Array<{
+    id: string;
+    cycleId: string;
+    name: string;
+    createdAt: string;
+    caseCount: number;
+    runDeleted: boolean;
+    statusCounts: Record<string, number>;
+  }>;
+  /**
+   * Case outcomes per model element across the governed runs, taken from each run's immutable
+   * manifest. Case results are not proof of behavioral coverage.
+   */
+  observedByElement: Array<{
+    elementId: string;
+    runs: number;
+    results: number;
+    statusCounts: Record<string, number>;
+  }>;
   coverageAssertion: "none";
-  executionAssertion: "none";
+  executionAssertion: "none" | "governed-runs";
   note: string;
+};
+
+export type ModelStudioModelRun = {
+  id: string;
+  projectId: string;
+  modelId: string;
+  modelRevisionId: string;
+  approvalId: string;
+  contentHash: string;
+  cycleId: string;
+  createdAt: string;
+  run: { id: string; name: string; status: string; environment: string | null };
+  manifest: {
+    revisionNumber: number;
+    contentHash: string;
+    approvalId: string;
+    cases: Array<{
+      testcaseId: string;
+      title: string;
+      pathDigest: string | null;
+      elementIds: string[];
+      sources: string[];
+    }>;
+  };
+  coverageAssertion: "none";
+  executionAssertion: "governed-run";
 };
 
 export async function listModelStudioModels(projectId: string): Promise<ModelStudioModel[]> {
@@ -5011,6 +5059,24 @@ export async function createModelStudioCases(
   note: string;
 }> {
   return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/candidates`, {
+    method: "POST",
+    body: data
+  });
+}
+
+/**
+ * Starts a native Test Run from the model's current, approved revision.
+ *
+ * The server refuses a superseded or unapproved revision, cases that do not belong to the revision,
+ * and any case that is not Approved. The returned run is an ordinary Test Run.
+ */
+export async function dispatchModelStudioRun(
+  projectId: string,
+  modelId: string,
+  revisionId: string,
+  data: { caseIds?: string[]; name?: string; environment?: string; buildVersion?: string }
+): Promise<ModelStudioModelRun & { requested: number; added: number; skipped: number; note: string }> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/runs`, {
     method: "POST",
     body: data
   });
