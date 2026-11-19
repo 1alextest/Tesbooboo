@@ -426,7 +426,8 @@ const url = process.env.DATABASE_URL ?? "";
         testcaseId: caseId,
         elementIds: ["start"]
       }),
-      archive_behavior_model: () => ({ modelId: lockedModelId })
+      archive_behavior_model: () => ({ modelId: lockedModelId }),
+      run_behavior_model: () => ({ modelId: lockedModelId, revisionId: randomUUID() })
     };
     const reads: Record<string, () => { args: Record<string, unknown>; expected: unknown }> = {
       list_qa_graph_changes: () => ({ args: {}, expected: { entries: [], nextBeforeId: null } }),
@@ -484,7 +485,7 @@ const url = process.env.DATABASE_URL ?? "";
       for (const [scope, cases] of [["write", writes], ["read", reads]] as const) {
         expect(Object.keys(cases).sort()).toEqual(mcp.listTools().filter((tool) => tool.requiredScope === scope).map((tool) => tool.name).sort());
       }
-      expect(Object.keys(writes)).toHaveLength(36); expect(Object.keys(reads)).toHaveLength(22);
+      expect(Object.keys(writes)).toHaveLength(37); expect(Object.keys(reads)).toHaveLength(22);
     });
     describe.each(routes)("%s full registry", (route) => {
       it.each(Object.keys(writes))("blocks %s before its handler, including prefix/no-op/clone work", async (name) => {
