@@ -62,5 +62,6 @@ The current `development` MCP source declares **58 tool names**, including nativ
 - [Reuse-first technical design](design.md)
 - [Implementation and independent assurance plan](implementation-plan.md)
 - [Portable agent-rule template](AGENT_RULE_TEMPLATE.md)
+- [Preliminary charter-guided specification challenge and independent team-run status](reviews/2026-11-18-charter-guided-spec-challenge.md)
 
 No application code, schemas, migrations, MCP catalog, user data or production configuration is changed by this documentation PR. This package remains a **noncanonical proposal**: [the prior governed-asset evolution review](../../reviews/governed-asset-evolution-reconciliation.md) requires in-place reconciliation to Tesbo's eight original canonical specifications before any purported approval or freeze.
