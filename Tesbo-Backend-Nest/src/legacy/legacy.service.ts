@@ -11,6 +11,7 @@ import { PasswordService } from "../auth/password.service";
 import { AppConfigService } from "../config/app-config.service";
 import { DatabaseService } from "../database/database.service";
 import { endZyraTurn, recordExistingCoverage, recordGeneration, recordJiraContext, recordKnowledgeContext, recordReconciliation, startZyraTurn, type TurnHandle } from "../observability/ai-trace";
+import { storageKeyExtension } from "../storage/storage-key";
 import { StorageService } from "../storage/storage.service";
 import { encryptSecret, decryptSecret } from "../common/crypto.util";
 import { externallyReachableBaseUrl } from "../common/external-url.util";
@@ -3508,7 +3509,12 @@ export class LegacyService implements OnModuleInit {
     if (!provider) throw new BadRequestException({ error: "provider is required" });
 
     let apiKey = String(body.apiKey || "").trim();
-    let baseUrl = String(body.baseUrl || "").trim() || null;
+    // The base URL is never taken from the request. It is a server-side fetch target, and an
+    // endpoint that forwards a caller-supplied URL turns a workspace-owner form field into SSRF
+    // against the host's own network. A custom gateway is supported by saving the key first and
+    // reading its stored base_url below; an unsaved form falls back to the provider's catalog
+    // default (or the fallback model list).
+    let baseUrl: string | null = null;
     let authHeaderName = String(body.authHeaderName || "").trim() || null;
     let authScheme = String(body.authScheme || "").trim() || null;
 
@@ -3530,6 +3536,11 @@ export class LegacyService implements OnModuleInit {
     }
 
     const fallback = providerFallbackModels(provider).map((id) => ({ id, displayName: id }));
+    // A custom gateway has no catalog default to query until its key (and base URL) is saved.
+    // Say that, rather than silently querying a public catalog endpoint with the caller's key.
+    if (!baseUrl && !providerDefinition(provider)?.defaultBaseUrl) {
+      return { models: fallback, source: "fallback", reason: "Save the key to load models from its custom base URL." };
+    }
     // Self-hosted runtimes serve /v1/models unauthenticated, so an absent key is not a
     // reason to skip discovery for them — it is for everyone else.
     if (!apiKey && !providerDefinition(provider)?.optionalApiKey) {
@@ -8949,9 +8960,8 @@ export class LegacyService implements OnModuleInit {
     const stored: Array<{ key: string; id?: string }> = [];
     try {
       for (const file of files) {
-        const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
         const entry: { key: string; id?: string } = {
-          key: `bugs/${projectId}/${bugId}/comments/${commentId}/${randomUUID()}${ext ? `.${ext}` : ""}`
+          key: `bugs/${projectId}/${bugId}/comments/${commentId}/${randomUUID()}${storageKeyExtension(file.originalname)}`
         };
         await this.storage.put(entry.key, file.buffer, file.mimetype);
         stored.push(entry);
@@ -9475,8 +9485,7 @@ export class LegacyService implements OnModuleInit {
 
     const created: Body[] = [];
     for (const file of files) {
-      const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
-      const storageKey = `bugs/${projectId}/${bugId}/${randomUUID()}${ext ? `.${ext}` : ""}`;
+      const storageKey = `bugs/${projectId}/${bugId}/${randomUUID()}${storageKeyExtension(file.originalname)}`;
       await this.storage.put(storageKey, file.buffer, file.mimetype);
       const res = await this.db.query(
         `INSERT INTO attachments (project_id, entity_type, entity_id, file_name, content_type, file_size, storage_path, uploaded_by)
@@ -9592,8 +9601,7 @@ export class LegacyService implements OnModuleInit {
     const uploaded: Array<{ file: typeof files[number]; key: string }> = [];
     try {
       for (const file of files) {
-        const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
-        const key = `executions/${projectId}/${executionId}/${randomUUID()}${ext ? `.${ext}` : ""}`;
+        const key = `executions/${projectId}/${executionId}/${randomUUID()}${storageKeyExtension(file.originalname)}`;
         // Register before the put: a storage driver can write bytes then throw.
         uploaded.push({ file, key });
         await this.storage.put(key, file.buffer, file.mimetype);
@@ -12900,7 +12908,7 @@ export class LegacyService implements OnModuleInit {
     for (const file of files) {
       const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
       const originalFileName = await this.kbUniqueFileName(folderId, file.originalname);
-      const storageKey = `knowledge-base/${project.organization_id}/${projectId}/${randomUUID()}${ext ? `.${ext}` : ""}`;
+      const storageKey = `knowledge-base/${project.organization_id}/${projectId}/${randomUUID()}${storageKeyExtension(file.originalname)}`;
       await this.storage.put(storageKey, file.buffer, file.mimetype);
       // Audio/video transcription is slow (calls an external AI provider) and shouldn't block
       // the upload response — it's kicked off after insert, below, and fills in extracted_text
@@ -25916,6 +25924,10 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     for (const [rawKey, value] of Object.entries(fields || {})) {
       const camel = rawKey.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
       const key = stepAliases.has(camel) ? "stepsJson" : camel;
+      // Model output supplies the key names. The null-prototype map above prevents prototype
+      // pollution; refusing these outright also keeps them out of the object entirely, so a later
+      // spread or serialization cannot resurrect them.
+      if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
       if (!(key in normalized) || rawKey === key) normalized[key] = value;
     }
     const cleaned: Body = {};

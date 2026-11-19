@@ -6,6 +6,7 @@ import type { PoolClient } from "pg";
 import { LegacyService, isUuid } from "../legacy/legacy.service";
 import { assertApprovedNewRunCases } from "../legacy/approved-run-cases.policy";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
+import { storageKeyExtension } from "../storage/storage-key";
 import { StorageService } from "../storage/storage.service";
 import {
   ACCEPTED_WIRE_STATUSES,
@@ -898,8 +899,7 @@ export class AutomationService {
     const uploaded: Array<{ file: UploadedFile; storageKey: string }> = [];
     try {
       for (const file of files) {
-        const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
-        const storageKey = `executions/${projectId}/${executionId}/${randomUUID()}${ext ? `.${ext}` : ""}`;
+        const storageKey = `executions/${projectId}/${executionId}/${randomUUID()}${storageKeyExtension(file.originalname)}`;
         // Record the key before uploading. Some storage failures occur after
         // bytes have been written but before put() confirms success; those
         // partially successful objects must be included in compensation.
