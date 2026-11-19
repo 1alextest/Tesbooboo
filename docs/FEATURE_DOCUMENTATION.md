@@ -714,7 +714,7 @@ across test plans, cycles/runs, and reporting.
   | `type` (Functional/Regression/Smoke/.../Security, default Functional) | Yes | Yes | No DB CHECK constraint, arbitrary values possible via API |
   | `status` (Draft/In Review/Approved/Deprecated/Archived, default Draft) | Yes | Yes | No DB CHECK constraint. An `Uncertain` case status was considered and **not adopted**: a case status expresses authored intent, and outcome uncertainty belongs to execution results, not to the case. |
   | `component` | **No** | Yes | API/import-only |
-  | `estimatedDuration` | Yes (form field exists) | Yes (mappable in import UI) | **Dead field end-to-end**: DB column exists (`estimated_duration VARCHAR(64)`), but `createTestCase`/`updateTestCase` in `legacy.service.ts` never include it in the INSERT/UPDATE column list, so anything typed here is silently discarded and never persisted, and the import flow's own `createTestCase()` call in `ImportTestCasesModal.tsx` also drops it from the payload. **High-value, easy-to-demonstrate bug for QA.** |
+  | `estimatedDuration` | Yes (form field) | Yes (mappable in import UI) | **Persisted end to end**: the create/update writers include `estimated_duration` in their INSERT/UPDATE column lists, the import modal maps and sends it, and the MCP authoring schemas advertise it. (It was previously a dead field; the earlier note is superseded.) |
   | `attachments` | Yes, labeled **"Notes"** (free text) | **No** (not in `IMPORTABLE_FIELDS`) | Despite the name/DB column (`TEXT`), this is used purely as a free-text notes box in the UI, not file attachments (there is a separate, unrelated `attachments` *table* for entity file metadata that this feature does not use) |
   | `automationStatus`, `automationRepo`, `automationPath`, `automationTestName`, `automationFramework` | **No** | **No** | API/MCP-only fields, no UI anywhere in this scope to set them |
   | `automationTags` | **No** (read-only chip display in the repository table only) | **No** | Comma-split and rendered as small tags under the title in `RepositoryTestCaseTable`; nothing lets a user set/edit it manually |
@@ -3487,7 +3487,7 @@ duplicate bug filing.
 **Problem it solves (intended):** Gives CI-driven automated test output a home in Tesbo distinct from manually-tracked test cases/cycles/executions, so "was last night's Playwright run green" is answerable without a separate CI dashboard.
 
 **Features & actions:**
-- **Implemented today (backend stubs, all under `/api/projects/:projectId/tesbo-reports/...`, no auth/param validation, no DB queries):**
+- **Implemented today (authenticated project reads under `/api/projects/:projectId/tesbo-reports/...`, no DB queries, retained as a compatibility surface):**
   - `GET /runs` → always returns `[]`
   - `GET /specs` → always returns `[]`
   - `GET /tests` → always returns `[]`
@@ -3538,7 +3538,7 @@ duplicate bug filing.
 - **Protocol methods** (`tools/list`, `tools/call`, `initialize`, `ping`)
   - `initialize` → supports `2025-06-18` and `2024-11-05` (the latter is the fallback), server name `tesbo-mcp`, version `0.1.0+<deploy>.<tool-fingerprint>`, and capabilities (`tools.listChanged: false`). Returns `mcp-session-id`; stale schema sessions get HTTP 404 and must reinitialize. Initialized notifications get 202; GET/DELETE get 405 (no SSE/session termination).
   - `ping` → empty result, for client keep-alive/liveness checks.
-  - `tools/list` → returns every registered tool's `name`, `description`, and JSON-Schema `inputSchema`: **50 tools, 20 read / 30 write** (source/compiled registry inventory reconciled 2026-11-12, not a new expansion in this batch).
+  - `tools/list` → returns every registered tool's `name`, `description`, and JSON-Schema `inputSchema`: **58 tools** in the current source registry. The 2026-11-12 inventory below recorded 50; the graph history/capture and preview tools and five Model Studio authoring tools were added afterwards. `scripts/mcp-deploy-check.mjs` is the authoritative post-deploy contract.
   - `tools/call` → dispatches to the named tool with `arguments`; unknown tool name → `MethodNotFound` (-32601); on success wraps the JSON-stringified result as an MCP `content: [{type:"text", text}]` part with `isError:false`; on a handler exception, maps the underlying error (e.g. a `BadRequestException`'s message) onto a `ToolExecutionError` (-32003) rather than leaking a raw 500.
   - Malformed request (missing/wrong `jsonrpc` version, non-string `method`) → `InvalidRequest` (-32600); the request `id` is always echoed back on error responses (including `null` if none was sent), per JSON-RPC spec.
 - **Exposed registry** (thin adapters over the existing services, not independent product workflows):
@@ -4599,7 +4599,8 @@ overall F8/Phase 1 approval are explicitly excluded.
 **Authorized D2/F8b REST increment after #58:** following the selected review of
 all 28 Plan/Run aliases, the owner asked to continue development under the proposed
 bounded contract in #60. It selects 15 implemented mutations, retains 11 GETs and
-leaves the two authenticated schedule mutation stubs at 501. Existing resource/
+leaves the two authenticated schedule mutation stubs at 501 (later implemented —
+see "Recurring Run Scheduling"). Existing resource/
 workspace/membership checks and history-import role permission precede entitlement;
 authorized locked writes return ordinary HTTP 403 `{ error }` before action
 validation, transactions or multipart processing. Infrastructure faults are not
