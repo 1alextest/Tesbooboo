@@ -41,6 +41,7 @@ import {
   listCycleExecutions,
   updateExecution,
   bulkAssignExecutions,
+  bulkUpdateExecutionStatus,
   addTestCasesToRun,
   removeTestCaseFromRun,
   removeTestCasesFromRun,
@@ -407,6 +408,10 @@ export default function TestRunDetailPage() {
   const [bulkAssignAssigneeId, setBulkAssignAssigneeId] = useState("");
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [bulkAssignError, setBulkAssignError] = useState<string | null>(null);
+  const [bulkStatusOpen, setBulkStatusOpen] = useState(false);
+  const [bulkStatusValue, setBulkStatusValue] = useState("");
+  const [bulkStatusUpdating, setBulkStatusUpdating] = useState(false);
+  const [bulkStatusError, setBulkStatusError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const memberNames = useMemo(
     () => Object.fromEntries(members.map((m) => [m.userId, m.name || m.email || "Unknown user"])),
@@ -882,6 +887,32 @@ export default function TestRunDetailPage() {
       setBulkAssignError(err instanceof Error ? err.message : "Failed to assign the selected test cases.");
     } finally {
       setBulkAssigning(false);
+    }
+  }
+
+  /* ───── Set status on selected test cases ─────
+     The bulk-status endpoint takes execution ids, so the testcase-keyed selection is resolved
+     through the loaded executions list the same way bulk-assign does. The server applies one
+     status to the whole selection in a single transaction and refuses unknown values, so the
+     local state is updated only with the status the server echoed back. */
+  async function handleBulkStatus() {
+    const executionIds = executions
+      .filter((e) => selectedRunCaseIds.has(e.testcaseId))
+      .map((e) => e.id);
+    if (!executionIds.length || bulkStatusUpdating || !bulkStatusValue) return;
+    setBulkStatusUpdating(true);
+    try {
+      const { status } = await bulkUpdateExecutionStatus(cycleId, { executionIds, status: bulkStatusValue });
+      const updated = new Set(executionIds);
+      setExecutions((prev) => prev.map((e) => (updated.has(e.id) ? { ...e, status } : e)));
+      setSelectedRunCaseIds(new Set());
+      setBulkStatusError(null);
+      setBulkStatusOpen(false);
+      setBulkStatusValue("");
+    } catch (err) {
+      setBulkStatusError(err instanceof Error ? err.message : "Failed to update the selected test cases.");
+    } finally {
+      setBulkStatusUpdating(false);
     }
   }
 
@@ -1376,6 +1407,19 @@ export default function TestRunDetailPage() {
               </button>
               <button
                 type="button"
+                data-testid="run-bulk-status"
+                onClick={() => {
+                  setBulkStatusError(null);
+                  setBulkStatusValue("");
+                  setBulkStatusOpen(true);
+                }}
+                className="flex items-center gap-1 font-medium text-[var(--brand-primary)] hover:underline"
+              >
+                <IconCircleCheck size={13} />
+                Set status
+              </button>
+              <button
+                type="button"
                 onClick={() => setSelectedRunCaseIds(new Set())}
                 className="ml-auto flex items-center gap-1 text-[var(--muted)] hover:text-[var(--foreground)]"
               >
@@ -1628,6 +1672,52 @@ export default function TestRunDetailPage() {
           </Button>
           <Button onClick={handleBulkAssign} disabled={bulkAssigning}>
             {bulkAssigning ? "Assigning…" : `Assign ${selectedRunCaseIds.size}`}
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal
+        open={bulkStatusOpen}
+        onClose={() => {
+          // Escape/backdrop during an in-flight batch would close the dialog while the request
+          // still lands, clearing the selection after the fact. Block it like the submit button.
+          if (bulkStatusUpdating) return;
+          setBulkStatusOpen(false);
+        }}
+        title="Set status"
+        className="max-w-[460px]"
+      >
+        <p className="text-[13px] text-[var(--muted)]">
+          Set the status of{" "}
+          <span className="font-semibold text-[var(--foreground)]">{selectedRunCaseIds.size}</span> selected test
+          case{selectedRunCaseIds.size === 1 ? "" : "s"} to:
+        </p>
+        <div className="mt-3">
+          <label className="mb-1 block text-[12.5px] font-medium text-[var(--muted)]">Status</label>
+          <Select
+            value={bulkStatusValue}
+            onChange={(e) => setBulkStatusValue(e.target.value)}
+            aria-label="Status for selected test cases"
+          >
+            <option value="" disabled>
+              Choose a status…
+            </option>
+            {EXEC_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </Select>
+        </div>
+        {bulkStatusError && (
+          <p className="mt-3 text-[12.5px] text-[var(--error-foreground)]">{bulkStatusError}</p>
+        )}
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setBulkStatusOpen(false)} disabled={bulkStatusUpdating}>
+            Cancel
+          </Button>
+          <Button onClick={handleBulkStatus} disabled={bulkStatusUpdating || !bulkStatusValue}>
+            {bulkStatusUpdating ? "Updating…" : `Set status for ${selectedRunCaseIds.size}`}
           </Button>
         </div>
       </Modal>

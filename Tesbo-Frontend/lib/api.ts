@@ -2782,6 +2782,10 @@ export async function bulkAssignExecutions(cycleId: string, data: { executionIds
   return api(`/api/cycles/${cycleId}/executions/bulk-assign`, { method: "POST", body: data });
 }
 
+export async function bulkUpdateExecutionStatus(cycleId: string, data: { executionIds: string[]; status: string }): Promise<{ updated: number; status: string }> {
+  return api(`/api/cycles/${cycleId}/executions/bulk-status`, { method: "POST", body: data });
+}
+
 export async function getExecutionAutomationReport(cycleId: string, executionId: string): Promise<ExecutionAutomationReport> {
   return api<ExecutionAutomationReport>(`/api/cycles/${cycleId}/executions/${executionId}/automation-report`);
 }
