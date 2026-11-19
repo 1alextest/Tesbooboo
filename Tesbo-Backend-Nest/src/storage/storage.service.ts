@@ -44,9 +44,13 @@ export class StorageService {
    * overwrite or unlink a file outside `UPLOAD_DIR`.
    */
   private localPath(key: string): string {
-    const root = path.resolve(this.config.uploadDir);
+    // The root keeps its trailing separator and the resolved candidate is checked with a single
+    // startsWith against it — the containment check the static analysis models (resolved path,
+    // compared against a root), and one that also rejects a sibling directory whose name merely
+    // begins with the same text.
+    const root = path.resolve(this.config.uploadDir) + path.sep;
     const full = path.resolve(root, key);
-    if (full !== root && !full.startsWith(root + path.sep)) {
+    if (!full.startsWith(root)) {
       throw new Error("Storage key escapes the upload directory");
     }
     return full;
