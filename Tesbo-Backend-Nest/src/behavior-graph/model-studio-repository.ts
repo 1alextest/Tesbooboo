@@ -576,6 +576,18 @@ export class ModelStudioRepository {
        GROUP BY l.testcase_id, e.status`,
       [revision.rows[0].id, projectId]
     );
+    // The cases this revision's proposals actually produced, so the studio can show them back
+    // instead of leaving the reviewer with a one-line notice.
+    const generated = await this.db.query(
+      `SELECT g.path_digest, g.testcase_id, g.created_at,
+              testcases.title AS testcase_title, testcases.status AS testcase_status,
+              testcases.deleted_at IS NOT NULL AS testcase_deleted
+       FROM mbt_generated_cases g
+       LEFT JOIN testcases ON testcases.id = g.testcase_id
+       WHERE g.model_revision_id = $1 AND g.project_id = $2
+       ORDER BY g.created_at ASC`,
+      [revision.rows[0].id, projectId]
+    );
     const evidenceByCase = new Map<string, Body>();
     for (const evidence of evidenceRows.rows) {
       const key = String(evidence.testcase_id);
@@ -637,6 +649,14 @@ export class ModelStudioRepository {
             approvedAt: approval.rows[0].created_at
           }
         : { status: "NOT_APPROVED", contentHash: null, approvedBy: null, approvedAt: null },
+      generatedCases: generated.rows.map((generatedCase) => ({
+        pathDigest: generatedCase.path_digest,
+        testcaseId: generatedCase.testcase_id,
+        testcaseTitle: generatedCase.testcase_title ?? "Deleted test case",
+        testcaseStatus: generatedCase.testcase_status ?? null,
+        caseDeleted: generatedCase.testcase_deleted === true,
+        createdAt: generatedCase.created_at
+      })),
       caseEvidence,
       evidenceNote:
         "Case evidence is the observed result history of linked cases. It is not model verification, coverage of the modeled behavior, or proof the expected behavior is correct.",

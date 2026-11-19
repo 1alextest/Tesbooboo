@@ -4854,6 +4854,15 @@ export type ModelStudioCoverage = {
     note: string;
   };
   approval: ModelStudioApproval;
+  /** Draft cases this revision's proposals produced, with the path digest that generated each. */
+  generatedCases: Array<{
+    pathDigest: string;
+    testcaseId: string;
+    testcaseTitle: string;
+    testcaseStatus: string | null;
+    caseDeleted: boolean;
+    createdAt: string;
+  }>;
   /** Observed result history of the linked cases — explicitly not model verification. */
   caseEvidence: Array<{
     testcaseId: string;

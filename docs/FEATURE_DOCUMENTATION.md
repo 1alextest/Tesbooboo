@@ -2708,6 +2708,10 @@ both humans and the AI assistant can read, without needing an external documenta
 - Jira ticket mirroring: a background sync job upserts Jira issues into the KB as `general` documents (not `ai_memory`) tagged with `source_provider='jira'`/`source_external_id`, filed into the project's "Requirements" folder if one exists (falls back to the root folder if not — relevant given new projects don't get default subfolders, see Folders section).
 - Restore-version and AI-memory approval are covered in their own sections below.
 
+**Title validation:** a document title can be neither emptied nor whitespace-only. The editor refuses
+to schedule or perform any save with a blank title (autosave, manual save and retries share the
+guard), shows an inline error, and restores the last valid title on blur. KBU-25/26 pin it.
+
 **Key files:**
 - Backend controller: `legacy.controller.ts` lines 818–891 (list/create/versions/restore-version/approve/reject/get/move/restore/duplicate/update/delete)
 - Backend service: `listKnowledgeDocuments` (3212), `createKnowledgeDocument` (3227), `kbDocument` helper (3257), `getKnowledgeDocument` (3266), `updateKnowledgeDocument` (3273, versioning + ai_memory guard logic at 3285–3322), `moveKnowledgeDocument` (3336), `duplicateKnowledgeDocument` (3355), `deleteKnowledgeDocument` (3379), `restoreKnowledgeDocument` (3393)

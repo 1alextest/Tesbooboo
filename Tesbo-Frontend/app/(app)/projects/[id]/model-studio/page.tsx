@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "@/lib/routeParams";
 import {
@@ -590,6 +591,31 @@ export default function ModelStudioPage() {
                     <p role="status" className="mt-2 rounded border border-[var(--border)] bg-[var(--surface-secondary)] p-2 text-[12px]">
                       {casesNotice}
                     </p>
+                  )}
+                  {currentCoverage && currentCoverage.generatedCases.length > 0 && (
+                    <div className="mt-3">
+                      <h4 className="text-[12px] font-semibold">Generated cases</h4>
+                      <ul className="mt-1 space-y-1 text-[12px]">
+                        {currentCoverage.generatedCases.map((generatedCase) => (
+                          <li
+                            key={generatedCase.testcaseId}
+                            className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] py-1"
+                          >
+                            <Link
+                              href={`/projects/${projectId}/testcases/${generatedCase.testcaseId}`}
+                              className="text-[var(--accent-light)] hover:underline"
+                            >
+                              {generatedCase.testcaseTitle}
+                            </Link>
+                            <span className="text-[11px] text-[var(--muted)]">
+                              {generatedCase.testcaseStatus ?? "deleted"}
+                              {generatedCase.caseDeleted ? " · deleted" : ""} · path{" "}
+                              {generatedCase.pathDigest.slice(0, 10)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   )}
                 </section>
               )}

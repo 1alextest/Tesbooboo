@@ -916,6 +916,10 @@ test.describe("Schedule Run — the form and Run At validation", () => {
       await expect(editedRow).toContainText("Daily at 10:30");
       await editedRow.getByRole("button", { name: "Run now" }).click();
       await expect(page.getByRole("status")).toContainText("Created run");
+      // The notice links to the run it created instead of only naming it.
+      await expect(
+        page.getByRole("status").getByRole("link", { name: new RegExp(`${cycleName} — scheduled`) })
+      ).toBeVisible();
 
       const cycles = await (await api.get(`/api/projects/${ctx.projectId}/cycles`)).json();
       const spawned = (Array.isArray(cycles) ? cycles : cycles.rows ?? []).find((item: { name: string }) =>

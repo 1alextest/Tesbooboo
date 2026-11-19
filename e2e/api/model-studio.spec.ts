@@ -405,6 +405,15 @@ test.describe("persisted Model Studio revisions and mappings", () => {
 
       const coverage = await (await owner.get(`${base}/${modelId}/coverage`)).json();
       expect(coverage.approval.status).toBe("APPROVED");
+      // The studio can show back what the proposals produced, with the digest that generated it.
+      expect(coverage.generatedCases).toContainEqual(
+        expect.objectContaining({
+          testcaseId: generatedCaseId,
+          pathDigest: paths[0].digest,
+          testcaseStatus: "Draft",
+          caseDeleted: false
+        })
+      );
       const evidence = coverage.caseEvidence.find((row: { testcaseId: string }) => row.testcaseId === runCaseId);
       expect(evidence).toMatchObject({ latestStatus: "Failed", statusCounts: { Failed: 1 } });
       expect(coverage.evidenceNote).toMatch(/not model verification/i);
