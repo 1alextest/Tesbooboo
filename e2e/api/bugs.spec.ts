@@ -742,11 +742,15 @@ test.describe("bug severity is optional", () => {
 });
 
 /*
- * A bug association is context, not a new execution observation. Preserve the native execution
- * result, timestamps, step results and history; actual result writers record a later failure.
- * This corrects the earlier reverse-link inference without removing the useful association.
+ * Linking a bug marks the execution Failed — Basecamp 10226284379 and 10221755377. A bug filed
+ * against a case in an open run used to leave it Untested, so the run's numbers said nothing had
+ * gone wrong; this is the reverse path (reporting from the Bugs page, or adding a link later).
+ *
+ * A finalized automated run is sealed: the association is stored for traceability, but linking is
+ * not a result correction. Over an already-recorded result the previous value is recorded in the
+ * activity payload so the override is visible rather than silent.
  */
-test.describe("linking a bug preserves original execution evidence", () => {
+test.describe("linking a bug fails the execution", () => {
   async function seedRunWithCase(request: any, titleSuffix: string) {
     const cycle = await (
       await request.post(`/api/projects/${ctx.projectId}/cycles`, {
@@ -774,20 +778,10 @@ test.describe("linking a bug preserves original execution evidence", () => {
     return found?.status;
   }
 
-  async function executionEvidence(request: APIRequestContext, cycleId: string, executionId: string) {
-    const response=await request.get(`/api/cycles/${cycleId}/executions`);
-    expect(response.ok(),await response.text()).toBe(true);
-    const result=await response.json();
-    const row=(result.list??result).find((item:{id:string})=>item.id===executionId);
-    expect(row).toBeTruthy();
-    return Object.fromEntries(["status","executedAt","executedBy","actualResult","history","stepResults","durationMs","errorMessage","errorStack"].map(key=>[key,row[key]??null]));
-  }
-
-  test("reporting an observation against an untested case does not invent an execution", { tag: '@tesbo.testId("TES-TC-1158")' }, async ({ request }) => {
+  test("reporting a bug against an untested case marks it Failed", { tag: '@tesbo.testId("TES-TC-1158")' }, async ({ request }) => {
     const suffix = `${Date.now()}`;
     const { cycle, testcase, execution } = await seedRunWithCase(request, suffix);
     expect(execution.status, "the fixture has to start untested for this to prove anything").toBe("Untested");
-    const original=await executionEvidence(request,cycle.id,execution.id);
 
     const bug = await (
       await request.post(`/api/projects/${ctx.projectId}/bugs`, {
@@ -799,8 +793,7 @@ test.describe("linking a bug preserves original execution evidence", () => {
     ).json();
 
     try {
-      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Untested");
-      expect(await executionEvidence(request,cycle.id,execution.id)).toEqual(original);
+      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Failed");
     } finally {
       await request.delete(`/api/bugs/${bug.id}`, { failOnStatusCode: false });
       await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
@@ -808,13 +801,12 @@ test.describe("linking a bug preserves original execution evidence", () => {
     }
   });
 
-  test("a side finding preserves a passed result and does not invent a result-change event", { tag: '@tesbo.testId("TES-TC-1159")' }, async ({ request }) => {
+  test("a passed result is overridden, and the override is recorded in the activity stream", { tag: '@tesbo.testId("TES-TC-1159")' }, async ({ request }) => {
     const suffix = `${Date.now()}`;
     const startedAt = new Date(Date.now() - 60_000).toISOString();
     const { cycle, testcase, execution } = await seedRunWithCase(request, `override ${suffix}`);
     await request.patch(`/api/cycles/${cycle.id}/executions/${execution.id}`, { data: { status: "Passed" } });
     expect(await executionStatus(request, cycle.id, execution.id)).toBe("Passed");
-    const original=await executionEvidence(request,cycle.id,execution.id);
 
     const bug = await (
       await request.post(`/api/projects/${ctx.projectId}/bugs`, {
@@ -826,10 +818,10 @@ test.describe("linking a bug preserves original execution evidence", () => {
     ).json();
 
     try {
-      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Passed");
-      expect(await executionEvidence(request,cycle.id,execution.id)).toEqual(original);
+      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Failed");
 
-      // A side finding must not be logged as an actual target result transition.
+      // Overwriting somebody's recorded result silently would be worse than not doing it at all —
+      // the previous value has to be recoverable from the activity stream.
       //
       // Filtered rather than read off page 1: this project is account A's shared fixture, and during
       // a full run it takes ~70 audit rows a minute, so the default 30-row page had scrolled past
@@ -844,7 +836,9 @@ test.describe("linking a bug preserves original execution evidence", () => {
       const entry = rows.find(
         (a: { entityId?: string; diff?: any }) => a.entityId === execution.id && a.diff?.reason === "bug_linked",
       );
-      expect(entry, "a bug association must not be reported as a target execution").toBeUndefined();
+      expect(entry, "the flip should be logged with its reason").toBeTruthy();
+      expect(entry.diff.before.status).toBe("Passed");
+      expect(entry.diff.after.status).toBe("Failed");
     } finally {
       await request.delete(`/api/bugs/${bug.id}`, { failOnStatusCode: false });
       await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
@@ -852,10 +846,9 @@ test.describe("linking a bug preserves original execution evidence", () => {
     }
   });
 
-  test("adding and replaying a link preserves the original execution", { tag: '@tesbo.testId("TES-TC-1160")' }, async ({ request }) => {
+  test("adding a link to an existing bug fails that execution too", { tag: '@tesbo.testId("TES-TC-1160")' }, async ({ request }) => {
     const suffix = `${Date.now()}`;
     const { cycle, testcase, execution } = await seedRunWithCase(request, `late link ${suffix}`);
-    const original=await executionEvidence(request,cycle.id,execution.id);
 
     // Reported with no link at all, so nothing can have been failed at create time.
     const bug = await (
@@ -870,12 +863,12 @@ test.describe("linking a bug preserves original execution evidence", () => {
       await request.post(`/api/bugs/${bug.id}/links`, {
         data: { testcaseId: testcase.id, cycleId: cycle.id, executionId: execution.id },
       });
-      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Untested");
-      expect(await executionEvidence(request,cycle.id,execution.id)).toEqual(original);
+      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Failed");
+      // Replaying the same link is idempotent; the already-Failed execution is not re-transitioned.
       await request.post(`/api/bugs/${bug.id}/links`, {
         data: { testcaseId: testcase.id, cycleId: cycle.id, executionId: execution.id },
       });
-      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Untested");
+      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Failed");
     } finally {
       await request.delete(`/api/bugs/${bug.id}`, { failOnStatusCode: false });
       await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });

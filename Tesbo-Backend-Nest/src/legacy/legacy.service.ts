@@ -8326,6 +8326,84 @@ export class LegacyService implements OnModuleInit {
   // Bug associations preserve execution outcomes. A verified result is recorded through
   // the explicit native result writer, never inferred from creating or linking a bug.
 
+  /**
+   * Linking a bug to a test case in a run marks that execution Failed — the reverse path.
+   *
+   * Basecamp 10226284379 / 10221755377: a bug was filed against a case in a run and the case sat
+   * there Untested, so the run's own numbers said nothing had gone wrong. The run screen prompts
+   * for a bug when something is marked Failed; this covers reporting from the Bugs page or adding
+   * a link later.
+   *
+   * Scope (decision 2026-11-19): manual and open automated runs keep the transition. A **finalized
+   * automated** run accepts the association for traceability but its execution is sealed — linking
+   * is not a result correction. Already-Failed executions are no-ops. Serialize with closeRun on the
+   * same parent rows, then re-read the active persisted associations before writing.
+   *
+   * Scoped by project: a link row can name any execution id, and without the join a caller could
+   * flip a result in a workspace they cannot see.
+   */
+  private async failLinkedExecutions(projectId: string, actorId: string | null | undefined, bugId: string, links: Body[]) {
+    const executionIds = [...new Set(links.map((link) => link.executionId).filter((id): id is string => isUuid(String(id ?? ""))))];
+    if (executionIds.length === 0) return;
+
+    const transitions = await this.db.transaction(async (client) => {
+      // Parent before execution locks, in stable order even for reversed multi-run batches.
+      // Associations were committed by the caller; no new exception for a sealed run may turn
+      // successful linking into an error with a partially persisted request.
+      const runs = await client.query<{ id: string; source: string; closed_at: Date | null }>(
+        `SELECT c.id, c.source, c.closed_at FROM cycles c
+          WHERE c.project_id = $2 AND c.deleted_at IS NULL
+            AND EXISTS (
+              SELECT 1 FROM cycle_items ci JOIN executions e ON e.cycle_item_id = ci.id
+               WHERE ci.cycle_id = c.id AND ci.deleted_at IS NULL AND e.deleted_at IS NULL
+                 AND e.id = ANY($1::uuid[])
+            )
+          ORDER BY c.id FOR UPDATE`,
+        [executionIds, projectId]
+      );
+      const writableRunIds = runs.rows.filter((run) => !this.isAutomatedRunFinalized(run)).map((run) => run.id);
+      if (!writableRunIds.length) return [];
+
+      const affected = await client.query(
+        `SELECT e.id, e.status, e.assignee_id,
+                COALESCE(NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Untitled test case') AS testcase_title
+           FROM executions e
+           JOIN cycle_items ci ON ci.id = e.cycle_item_id
+           LEFT JOIN testcases t ON t.id = ci.testcase_id
+          WHERE e.id = ANY($1::uuid[]) AND e.deleted_at IS NULL AND ci.deleted_at IS NULL
+            AND ci.cycle_id = ANY($2::uuid[])
+            AND EXISTS (
+              SELECT 1 FROM bug_links bl JOIN bugs b ON b.id = bl.bug_id
+               WHERE bl.bug_id = $3 AND bl.execution_id = e.id AND bl.deleted_at IS NULL
+                 AND b.project_id = $4 AND b.deleted_at IS NULL
+            )
+          ORDER BY e.id FOR UPDATE OF e`,
+        [executionIds, writableRunIds, bugId, projectId]
+      );
+      const changed: typeof affected.rows = [];
+      for (const row of affected.rows) {
+        if (row.status === "Failed") continue;
+        await client.query(
+          `UPDATE executions SET status = 'Failed', executed_at = now(), executed_by = $2, updated_at = now()
+            WHERE id = $1 AND deleted_at IS NULL`,
+          [row.id, actorId || null]
+        );
+        changed.push(row);
+      }
+      return changed;
+    });
+
+    // Only committed, actual result transitions produce result activity/notifications.
+    for (const row of transitions) {
+      await this.logProjectActivity(projectId, actorId ?? null, "execution_updated", "execution", String(row.id), row.testcase_title, {
+        reason: "bug_linked",
+        before: { status: row.status },
+        after: { status: "Failed" }
+      });
+      await this.notifyExecutionChange(String(row.id), actorId ?? null, { status: row.status ?? null, assigneeId: row.assignee_id ?? null });
+    }
+  }
+
   private bugLinkKey(link: Body, withExecution = false): string {
     return `${link.testcaseId || ""}|${link.cycleId || ""}${withExecution ? `|${link.executionId || ""}` : ""}`;
   }
@@ -8612,6 +8690,7 @@ export class LegacyService implements OnModuleInit {
     }
     // After the commit, not inside it: the bug is the record that must exist, and a failure while
     // flipping an execution should not roll back the bug report someone just wrote.
+    await this.failLinkedExecutions(projectId, uid, bugId as string, links);
     const created: Body = await this.getBug(bugId as string);
     await this.logProjectActivity(projectId, uid, "bug_created", "bug", String(created.id), String(created.title ?? ""), {
       status: created.status ?? null,
@@ -9339,6 +9418,8 @@ export class LegacyService implements OnModuleInit {
       // NULL-distinct unique index alone cannot make concurrent testcase-only links idempotent.
       await this.replaceBugLinks(client, bugId, uid, [...desired.values()]);
     });
+    // Reverse path: an open run's linked case becomes Failed; a finalized automated run is sealed.
+    await this.failLinkedExecutions(projectId, uid, bugId, links);
     return this.getBug(bugId);
   }
 
