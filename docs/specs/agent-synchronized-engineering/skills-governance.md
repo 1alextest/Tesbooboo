@@ -140,3 +140,39 @@ Sharing a skill across projects does not share all its candidate files, audit hi
 
 ### 12.7 Truthful implementation/evaluation limits
 Before shipping, specify actual workload inputs (scale, peak concurrent agents, assignment fanout, dependency depth), bounded resolver/cache/dependency limits, measured response-time targets and fallback/error budgets. Do not manufacture SLO values. The first authenticated production-like disposable-project tests must include a denied admin-owned MCP approval and alternate REST route, a real interactive human promotion, and rerunning a stale agent client against the new effective assignment.
+
+## 13. Skills within the connected delivery assurance workflow
+The governed Skills Library exists to make the **entire Tesbo human-and-agent delivery lifecycle more trustworthy**. It is not itself the product's only objective or a substitute for the native requirements, QA, manual, policy and task services.
+
+### 13.1 Role of skill versus role of tool/event
+- A **skill** prescribes a reviewed authoring/evaluation method for an applicable module, versioned and assigned only through human governance.
+- An **agent hook** is an optional client-side event producer (e.g. Kiro-style task/file events), never a module-skill assignment tool, evidence of full external agent behavior or official write approval.
+- A **source/CI provider event** is a scoped, separately authenticated observation of code/build/deployment state, not a request to invent requirements from observed code.
+- A **composite MCP tool** invokes several native Tesbo domain actions under the same effective skills and role/approval checks; it has no elevated governance authority simply because it is one call.
+- A **consistency analyzer** compares observed/inferred behavior against independently authorized requirements/policies; its output is a review candidate, not a newly approved normative source.
+- A **release-readiness calculation** combines independently sourced status/evidence and human decisions, never an AI certification or automatic proof of defect-free software.
+
+### 13.2 Governing skill resolution in a multi-step composite workflow
+Before authoring, the agent retrieves approved effective skill IDs, immutable version IDs and digests per **applicable** module and subtype. Server-side compound operations check each sub-operation's skill constraints, project scope, changed content revision and native writer. A requirements skill cannot silently govern test-case publication, and the skills-authoring meta-skill cannot override project P-07 approval, P-18 external MCP consent or actual run evidence.
+
+A partial transaction preserves skill provenance for items that committed and leaves all other items explicitly failed, uncertain or not-attempted. On retry, changed effective skill heads require conflict/reassessment; restoring client cache alone cannot authorize stale publication. A raw provider/agent event does not become a newly skill-authored artifact solely because it was observed.
+
+### 13.3 Source-package interoperability and safety boundary
+Evaluate the portable [Agent Skills](https://agentskills.io/specification) `SKILL.md` format and auxiliary `references/`, `assets/` and optional `scripts/` as interchange representations rather than inventing a Tesbo-exclusive skill syntax. Library records must preserve a versioned package digest, attachment hashes, supported agent/engine capabilities and dependency/version constraints. **Executable skill resources are disabled by default** until independently authorized sandbox execution and scan/policy controls are implemented. A human approving skill text does not grant executable scripts/network/MCP tool privileges.
+
+An imported skill is an inert candidate. It does not become active because an external agent includes it in its local context or uploads it to KB. Only explicitly approved Tesbo assignment records govern the module.
+
+### 13.4 Quality and learning boundaries
+Compare candidate skills using held-out task fixtures, failure patterns, omission rates, evidence fidelity, false positives, human corrections and cost/latency, without letting agent-authored evaluation examples self-prove improvement. Correlate project changes with DORA throughput/instability and review effort only as a measurement **hypothesis**, never as direct proof that a specific skill reduced defects. Skill effectiveness should use actual authoring and QA outcome receipts.
+
+### 13.5 Skills-and-integration acceptance
+| ID | Scenario | Expected proof |
+| --- | --- | --- |
+| SK-E2E-23 | A Kiro-style event hook invokes Tesbo while a skill is disabled | Event may be recorded as authorized observation; it cannot reactivate skill or publish governed records |
+| SK-E2E-24 | Composite MCP creates requirement and test-case candidates | Per-sub-operation approved skill version pinned, no bypass of individual guards, precise partial result |
+| SK-E2E-25 | Agent imports external `SKILL.md` package containing scripts | Package remains inert until reviewed; scripts not executed or given network access |
+| SK-E2E-26 | Requirements skill conflicts with actual approved policy | Skill format is not a policy override; consistency checker raises authoritative conflict |
+| SK-E2E-27 | Post-release metrics worsen after a skill upgrade | Historical skill and release facts remain accurate; no fabricated skill effectiveness or silent version rollback |
+| SK-E2E-28 | External source event arrives without any agent session | Source revision may enter graph review, but no fictional agent skill-use or action history is attached |
+
+**Implementation boundary:** P-14 of the original Tesbo specification package remains authoritative; these proposed contracts must be reconciled with the current eight canonical documents before they are treated as binding product decisions. This section adds no new skill authority and does not change actual Tesbo MCP/REST capabilities.
