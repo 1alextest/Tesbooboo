@@ -219,6 +219,8 @@ export default function KnowledgeDocumentPage() {
   const latestContent = useRef<DocumentPayload | null>(null);
   const pendingAutosave = useRef<((visible?: boolean) => void) | null>(null);
   const latestTitle = useRef("");
+  const lastValidTitle = useRef("");
+  const [titleError, setTitleError] = useState<string | null>(null);
   const editRevision = useRef(0);
   const writerRef = useRef<DocumentWriteQueue<KnowledgeDocument> | null>(null);
   // Synchronous double-submit guard for restore: state alone can't stop a second click that fires
@@ -271,6 +273,7 @@ export default function KnowledgeDocumentPage() {
           contentText: data.contentText ?? "",
         };
         latestTitle.current = data.title;
+        lastValidTitle.current = data.title;
         setDoc(data);
         setBreadcrumb(data.breadcrumb);
         setTitle(data.title);
@@ -364,6 +367,13 @@ export default function KnowledgeDocumentPage() {
   function scheduleSave(nextTitle: string) {
     const writer = writerRef.current;
     if (!writer || restoreInFlightRef.current || doc?.id !== documentId) return;
+    // A blank title must never be persisted. The editor keeps showing what the person typed so they
+    // can fix it, but body edits continue to carry the last valid title.
+    if (!nextTitle.trim()) {
+      setTitleError("A document title is required");
+      return;
+    }
+    setTitleError(null);
     setSaveStatus("unsaved");
     if (saveTimer.current) clearTimeout(saveTimer.current);
     const revision = editRevision.current;
@@ -387,10 +397,24 @@ export default function KnowledgeDocumentPage() {
 
   function handleTitleChange(value: string) {
     if (restoreInFlightRef.current || doc?.id !== documentId) return;
+    if (!value.trim()) {
+      setTitle(value);
+      setTitleError("A document title is required");
+      return;
+    }
+    setTitleError(null);
+    lastValidTitle.current = value;
     latestTitle.current = value;
     editRevision.current++;
     setTitle(value);
     scheduleSave(value);
+  }
+
+  /** Restore the last valid title when a blank edit is abandoned, rather than persisting or losing it. */
+  function handleTitleBlur() {
+    if (title.trim()) return;
+    setTitle(lastValidTitle.current);
+    setTitleError(null);
   }
 
   async function handleManualSave() {
@@ -403,6 +427,11 @@ export default function KnowledgeDocumentPage() {
   }
 
   async function saveSnapshot(writer: DocumentWriteQueue<KnowledgeDocument>, nextTitle: string, payload: DocumentPayload | null, revision: number, generation: number, explicit: boolean, visible = true) {
+    // Applies to every save path (autosave, manual save and retries), not only the title handler.
+    if (!nextTitle.trim()) {
+      setTitleError("A document title is required");
+      return;
+    }
     const size = documentPayloadSize(payload);
     if (size > MAX_DOCUMENT_PAYLOAD_BYTES) {
       if (visible) setError(
@@ -515,6 +544,7 @@ export default function KnowledgeDocumentPage() {
         contentText: updated.contentText ?? "",
       };
       latestTitle.current = updated.title;
+      lastValidTitle.current = updated.title;
       editRevision.current++;
       setDoc(updated);
       setTitle(updated.title);
@@ -646,15 +676,23 @@ export default function KnowledgeDocumentPage() {
       )}
 
       <div className="mb-4 flex items-start justify-between gap-4">
-        <Input
-          value={title}
-          onChange={(e) => handleTitleChange(e.target.value)}
-          readOnly={bodyLocked || restorePhase === "restoring"}
-          className={`!h-auto flex-1 border-0 !bg-transparent px-0 text-[26px] font-semibold shadow-none focus:ring-0 ${
-            bodyLocked ? "cursor-default" : ""
-          }`}
-          placeholder="Untitled document"
-        />
+        <div className="min-w-0 flex-1">
+          <Input
+            value={title}
+            onChange={(e) => handleTitleChange(e.target.value)}
+            onBlur={handleTitleBlur}
+            readOnly={bodyLocked || restorePhase === "restoring"}
+            className={`!h-auto w-full border-0 !bg-transparent px-0 text-[26px] font-semibold shadow-none focus:ring-0 ${
+              bodyLocked ? "cursor-default" : ""
+            }`}
+            placeholder="Untitled document"
+          />
+          {titleError && (
+            <p role="alert" className="mt-1 text-[12px] text-[var(--error-foreground)]">
+              {titleError}
+            </p>
+          )}
+        </div>
         <div className="flex shrink-0 items-center gap-2">
           {isSyncedMirror && (
             <StatusChip tone="info" dot>

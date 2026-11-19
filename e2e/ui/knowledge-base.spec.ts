@@ -765,10 +765,10 @@ test.describe("knowledge base (UI)", () => {
   // "user should not be able to save blank documents add some validation".
   //
   // KBU-07 already covers the CREATE modal refusing an empty title. These two are about the editor,
-  // which is a different code path and currently unguarded: handleTitleChange feeds scheduleSave
-  // directly, and scheduleSave's only precondition is a payload size ceiling. So a title can be
-  // cleared to nothing and autosaved, and the document then shows as "Untitled" everywhere it is
-  // listed. Both tests are expected RED until the editor validates before saving.
+  // which was a different, unguarded code path: an emptied or whitespace-only title could be
+  // autosaved and the document then showed as "Untitled" everywhere it was listed. The editor now
+  // refuses to schedule or perform any save with a blank title and restores the last valid one on
+  // blur, so both tests are green.
 
   test("KBU-25 a document's title cannot be emptied and saved", { tag: '@tesbo.testId("TES-TC-1019")' }, async ({ browser }) => {
     const title = stamp("KeepsTitle");

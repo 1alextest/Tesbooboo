@@ -73,7 +73,7 @@ export default function ScheduleRunsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; href?: string; linkText?: string } | null>(null);
   const [editing, setEditing] = useState<TestRunSchedule | null>(null);
 
   const [name, setName] = useState("");
@@ -197,7 +197,11 @@ export default function ScheduleRunsPage() {
     setNotice(null);
     try {
       const result = await runTestRunSchedule(schedule.id);
-      setNotice(`Created run "${result.cycleName}".`);
+      setNotice({
+        text: "Created run",
+        href: `/projects/${projectId}/cycles/${result.cycleId}`,
+        linkText: result.cycleName
+      });
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to run the schedule");
@@ -238,7 +242,15 @@ export default function ScheduleRunsPage() {
       )}
       {notice && (
         <div role="status" className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-4 py-2 text-sm">
-          {notice}
+          {notice.text}
+          {notice.href && (
+            <>
+              {" — "}
+              <Link href={notice.href} className="font-medium text-[var(--accent-light)] hover:underline">
+                {notice.linkText}
+              </Link>
+            </>
+          )}
         </div>
       )}
 
@@ -461,7 +473,7 @@ export default function ScheduleRunsPage() {
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
-            setNotice("Schedule updated.");
+            setNotice({ text: "Schedule updated." });
             void load();
           }}
         />

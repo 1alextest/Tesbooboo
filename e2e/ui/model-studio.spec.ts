@@ -131,6 +131,8 @@ test("a reviewer approves the revision, generates proposals and creates a draft 
     await firstPath.check();
     await page.getByRole("button", { name: "Create draft cases" }).click();
     await expect(page.getByRole("status").filter({ hasText: "Created" })).toBeVisible();
+    // The generated case is listed with a link back to it, not only announced in a notice.
+    await expect(page.getByRole("link", { name: /^Model: / })).toBeVisible();
 
     // The proposal became a real, unapproved Draft case. Read the persisted row directly so the
     // assertion is about state, not about search ranking or list defaults.
