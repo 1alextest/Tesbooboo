@@ -25918,21 +25918,18 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     // to drop silently, staging an update whose rewritten values had all been lost. Known spellings
     // are folded onto the real key first; a key already given in its canonical form wins.
     const stepAliases = new Set(["steps", "testSteps", "stepList"]);
-    // Null-prototype map: the keys are derived from model output, and a plain object would let a
-    // "__proto__" key mutate Object.prototype instead of being stored as an ignored field.
-    const normalized: Body = Object.create(null);
+    // A Map, not an object: the key names are derived from model output, and a Map has no prototype
+    // for a "__proto__" key to reach. Values are read back only by the fixed allowlist below.
+    const normalized = new Map<string, unknown>();
     for (const [rawKey, value] of Object.entries(fields || {})) {
       const camel = rawKey.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
       const key = stepAliases.has(camel) ? "stepsJson" : camel;
-      // Model output supplies the key names. The null-prototype map above prevents prototype
-      // pollution; refusing these outright also keeps them out of the object entirely, so a later
-      // spread or serialization cannot resurrect them.
-      if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
-      if (!(key in normalized) || rawKey === key) normalized[key] = value;
+      if (!normalized.has(key) || rawKey === key) normalized.set(key, value);
     }
     const cleaned: Body = {};
     for (const key of allowed) {
-      if (normalized[key] !== undefined && normalized[key] !== null) cleaned[key] = normalized[key];
+      const value = normalized.get(key);
+      if (value !== undefined && value !== null) cleaned[key] = value;
     }
     if (cleaned.stepsJson) cleaned.stepsJson = this.safeSteps(cleaned.stepsJson);
     return cleaned;

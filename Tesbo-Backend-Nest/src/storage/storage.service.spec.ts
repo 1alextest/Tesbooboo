@@ -130,10 +130,13 @@ describe("StorageService local path confinement", () => {
     const service = new StorageService(localConfig(dir) as never);
     const escape = path.relative(dir, path.join(outside, "stolen.txt"));
 
-    await expect(service.put(escape, Buffer.from("x"), "text/plain")).rejects.toThrow(/escapes the upload directory/);
+    // Either barrier may answer first: the key allowlist rejects the characters, and the
+    // containment check rejects a normalized path outside the root. Both are refusals.
+    const refused = /unsupported characters|escapes the upload directory/;
+    await expect(service.put(escape, Buffer.from("x"), "text/plain")).rejects.toThrow(refused);
     expect(fs.existsSync(path.join(outside, "stolen.txt"))).toBe(false);
-    await expect(service.getBuffer("../outside.txt")).rejects.toThrow(/escapes the upload directory/);
-    await expect(service.delete(escape)).rejects.toThrow(/escapes the upload directory/);
+    await expect(service.getBuffer("../outside.txt")).rejects.toThrow(refused);
+    await expect(service.delete(escape)).rejects.toThrow(refused);
   });
 
   it("still reads and writes a normal nested key", async () => {
