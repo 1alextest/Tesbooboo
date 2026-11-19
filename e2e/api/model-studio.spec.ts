@@ -594,10 +594,12 @@ test.describe("persisted Model Studio revisions and mappings", () => {
       const provenance = await owner.get(`/api/projects/${projectId}/model-studio/runs/by-cycle/${cycleId}`);
       expect(provenance.status(), await provenance.text()).toBe(200);
       expect(await provenance.json()).toMatchObject({
-        modelId,
-        modelRevisionId: revision.id,
-        revisionNumber: 1,
-        caseCount: 1
+        provenance: {
+          modelId,
+          modelRevisionId: revision.id,
+          revisionNumber: 1,
+          caseCount: 1
+        }
       });
       const ordinaryRun = await (
         await owner.post(`/api/projects/${projectId}/cycles`, { data: { name: `E2E ordinary run ${Date.now()}` } })
@@ -605,7 +607,7 @@ test.describe("persisted Model Studio revisions and mappings", () => {
       ordinaryRunId = ordinaryRun.id;
       const noProvenance = await owner.get(`/api/projects/${projectId}/model-studio/runs/by-cycle/${ordinaryRunId}`);
       expect(noProvenance.status()).toBe(200);
-      expect(await noProvenance.json()).toBeNull();
+      expect(await noProvenance.json()).toEqual({ provenance: null });
 
       // Dispatch is project-scoped: an anonymous caller is refused, and the model is not reachable
       // through another project even by a member of both.
