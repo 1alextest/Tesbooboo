@@ -5,7 +5,7 @@
 **Method:** Actual upstream documentation of competing products and open standards, compared to the source-verified ASER proposal; product source and original spec reconciliation. “Missing explicit contract” below means missing from the inspected ASER proposal, **not** proof missing from every other Tesbo source or that implementation is defective.
 
 ## 1. Product purpose, corrected positioning and differentiation decision
-**Owner clarification (2026-11-18):** Tesbo is NOT intended to be another coding agent or IDE, nor merely an AGENTS.md reminder or a collection of MCP endpoints. Its collaborative platform already brings QA, BA, PM, policy and related disciplines together around native domain records, Knowledge Base, Zyra, graph and release workflows. Proposed new capabilities must **extend this shared product** rather than invent the collaboration premise from scratch.
+**Owner clarification (2026-11-18):** Tesbo is NOT intended to be another coding agent or IDE, nor merely an AGENTS.md reminder or a collection of MCP endpoints. Its existing project, test-case, run, bug, Knowledge Base, Zyra and graph foundations serve multiple functions; **cross-role BA/PM/policy workflows and end-to-end release controls are part of the intended platform and are not yet verified as fully implemented**. This is a product-vision correction, not a release claim. Proposed new capabilities must **extend this shared product** rather than invent the collaboration premise from scratch.
 
 **North-star product thesis:** **Tesbo is a collaborative software engineering assurance and delivery platform for software built by humans and agents.** It gives people a comprehensible, accountable account of an application: what it should do, what agents changed and attempted, what actually works, what remains uncertain, who owns decisions, and whether a known build is ready for a controlled release. It is where fast agent-assisted/vibe coding meets evidence-backed engineering discipline. It should help teams reach production sooner *and* lower avoidable failure/rework risk.
 
@@ -115,6 +115,21 @@ The comparison is a **design input**, not a market-share ranking or instruction 
 | **Policy/compliance/security** | What policy version governs this feature? Who authorized it? Which controls/tests enforce it, and what evidence supports compliance claims? |
 | **Executive/business sponsor** | What changed for users, can we release, what's the evidence and accepted risk, and are delivery speed and reliability improving? |
 | **Operations/support** | Which build was deployed, how do we monitor and recover, what changed in troubleshooting guidance, and who owns incidents? |
+
+
+### Existing Tesbo implementation evidence versus desired product behavior
+A source check against `development` on 2026-11-18 inspected the following **current native entry points**. This strengthens reuse confidence but does not certify the complete role-to-release journey:
+
+| Tesbo native source | Evidence actually visible in source | What remains proposed or unverified |
+|---|---|---|
+| [Project sidebar](https://github.com/1alextest/Tesbooboo/blob/development/Tesbo-Frontend/components/Sidebar.tsx) | Requirements, Test cases, Bugs, Tasks, Knowledge base are named project navigation destinations | That each audience has sufficient permissions, appropriate role-specific view, and synchronized release decision |
+| [MCP tool registry](https://github.com/1alextest/Tesbooboo/blob/development/Tesbo-Backend-Nest/src/mcp/mcp.tools.ts) | `create_testcase`, `link_requirement_to_testcase` (external Jira/Linear/Notion), `create_knowledge_document`, graph and behavior-model tools | Native versioned requirements/policy/skills linking and end-to-end Change Workspace/approval enforcement |
+| [Requirements page](https://github.com/1alextest/Tesbooboo/blob/development/Tesbo-Frontend/app/%28app%29/projects/%5Bid%5D/requirements/page.tsx) | Requirement-ticket and Zyra task/status data; source-linked external issue keys | Independent native requirement authority and approval-aware requirement→case→verified-run completeness |
+| [Knowledge Base page](https://github.com/1alextest/Tesbooboo/blob/development/Tesbo-Frontend/app/%28app%29/projects/%5Bid%5D/knowledge-base/page.tsx) | Existing feature-requirements document template, Knowledge Base browsing and document ownership controls | Governed internal/external manual publication and immutable policy/skills lifecycle |
+| [Zyra page](https://github.com/1alextest/Tesbooboo/blob/development/Tesbo-Frontend/app/%28app%29/projects/%5Bid%5D/agents/zyra/page.tsx) | Native agent chat, sessions, task/plan events and resume/stop flows | Verified model/executor observability across all external runtimes; no new parallel Copilot |
+| [Graph change-review controller](https://github.com/1alextest/Tesbooboo/blob/development/Tesbo-Backend-Nest/src/behavior-graph/graph-change-review.controller.ts) | Native Zyra review route around existing graph history and capture | Complete multi-repository change provenance, live cross-role readiness and deployment verification |
+
+**Interpretation:** Tesbo is already more than AGENTS.md + MCP. **We should finish and connect the existing platform**, not falsely claim an unimplemented Skills, Policies or Release Readiness module already works. Use current UI/API workflows as the baseline for extensions and independent user testing.
 
 ### Data/visibility and assurance constraints
 - **Agent activity visibility:** Tesbo can truthfully show Tesbo MCP calls and authenticated integrations. Without a client callback or execution transcript integration, Tesbo **cannot claim to observe every local tool call, file edit or hidden agent decision**. Show observed, externally reported, inferred and unknown as distinct evidence tiers.
