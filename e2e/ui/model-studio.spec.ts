@@ -190,9 +190,22 @@ test("a reviewer approves the revision, creates a draft case and starts a govern
     const observed = runsAfter.getByRole("list", { name: "Observed results by element" });
     await expect(observed).toContainText("Passed 1");
   } finally {
-    // The run references the case, so remove it before the case itself.
+    /*
+     * The run references the generated case, and the API delete of a cycle is a SOFT delete — its
+     * cycle_items and executions would still block the hard test-case delete below.
+     * executions -> cycle_items -> cycles is the FK order.
+     */
+    if (modelId) {
+      exec(
+        `DELETE FROM executions WHERE cycle_item_id IN (SELECT ci.id FROM cycle_items ci
+          JOIN mbt_model_runs mr ON mr.cycle_id = ci.cycle_id WHERE mr.model_id = ${literal(modelId)});`
+      );
+      exec(
+        `DELETE FROM cycle_items WHERE cycle_id IN (SELECT cycle_id FROM mbt_model_runs WHERE model_id = ${literal(modelId)});`
+      );
+    }
     if (cycleId) await api.delete(`/api/cycles/${cycleId}`, { failOnStatusCode: false });
-    // Remove only the generated drafts; the model delete cascades its revisions and provenance.
+    // Remove only the generated cases; the model delete cascades its revisions and provenance.
     exec(`DELETE FROM testcases WHERE project_id = ${literal(ctx.projectId)} AND title LIKE 'Model:%';`);
     if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(ctx.projectId)};`);
     await api.dispose();
