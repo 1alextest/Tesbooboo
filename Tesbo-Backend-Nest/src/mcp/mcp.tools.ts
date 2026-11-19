@@ -371,7 +371,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "get_behavior_model_coverage",
       description:
-        "Read the latest revision's per-element linked-case counts, its mappings and its staleness flags for one model. coverageAssertion and executionAssertion are always none: a mapping is not verified coverage and no execution is implied. Requires read scope.",
+        "Read the latest revision's per-element linked-case counts, its mappings, its staleness flags and any governed runs dispatched from it. coverageAssertion is always none: a mapping or a case outcome is not verified behavioral coverage. executionAssertion is governed-runs when this revision started a run, none otherwise. Requires read scope.",
       requiredScope: "read",
       inputSchema: {
         type: "object",
