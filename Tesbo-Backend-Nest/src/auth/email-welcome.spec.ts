@@ -69,7 +69,15 @@ describe("EmailService.sendWelcome", () => {
 
   it("carries the approved copy, in order", async () => {
     const { HtmlBody } = await send();
-    const text = HtmlBody.replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+    // Strip until stable. A single pass can leave a tag behind when the markup is nested in a way
+    // that reconstitutes one ("<scr<b>ipt>"), and the assertion is about the copy a reader sees.
+    let stripped = HtmlBody;
+    for (;;) {
+      const next = stripped.replace(/<[^>]+>/g, "");
+      if (next === stripped) break;
+      stripped = next;
+    }
+    const text = stripped.replace(/\s+/g, " ");
     const lines = [
       "Hi Ada,",
       "Thank you for Choosing Tesbo Test Manager!",

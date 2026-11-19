@@ -333,3 +333,22 @@ export function validateScheduleDays(days: number[]): string {
   return days.length > 0 ? "" : "Choose at least one day";
 }
 
+/**
+ * Returns a URL only when it is absolute http(s); anything else becomes undefined.
+ *
+ * Values like an issue link or a defect URL come from a server or a text field, and a `javascript:`
+ * or `data:` URL assigned to an anchor's href executes on click. Rendering the value without an
+ * href (undefined) keeps the text visible without making it a live URL.
+ */
+export function safeExternalUrl(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+

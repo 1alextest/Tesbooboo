@@ -48,7 +48,17 @@ function resolveConfig(): { publicKey: string; secretKey: string; baseUrl: strin
     return null;
   }
   const allowCloud = String(process.env.LANGFUSE_ALLOW_CLOUD || "").toLowerCase() === "true";
-  if (/cloud\.langfuse\.com/i.test(baseUrl) && !allowCloud) {
+  // Host comparison, not a substring search. The guard exists to stop customer prompts reaching
+  // Langfuse Cloud by accident; matching anywhere in the string would also fire on a path segment
+  // (or miss a differently-cased/subdomained spelling), so the parsed hostname decides.
+  let pointsAtCloud = baseUrl.toLowerCase().includes("cloud.langfuse.com");
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    pointsAtCloud = host === "cloud.langfuse.com" || host.endsWith(".cloud.langfuse.com");
+  } catch {
+    // Not a parseable absolute URL: keep the conservative substring answer above.
+  }
+  if (pointsAtCloud && !allowCloud) {
     logger.warn("Tracing off: LANGFUSE_BASE_URL points at Langfuse Cloud. Set LANGFUSE_ALLOW_CLOUD=true to send customer data there deliberately.");
     return null;
   }

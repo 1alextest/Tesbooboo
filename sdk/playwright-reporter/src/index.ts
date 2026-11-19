@@ -375,14 +375,21 @@ export default class TesboReporter implements Reporter {
       const kind = EVIDENCE_BY_EXTENSION[ext];
       if (!kind) continue;
       let body: Uint8Array;
+      // One handle for the size check and the read. Stat-then-read by path is a race: a trace may be
+      // replaced or finalised between the two calls, and the size that was checked would not be the
+      // size that gets uploaded (which is what the cap exists to prevent).
+      let handle: fs.promises.FileHandle | undefined;
       try {
-        const stat = await fs.promises.stat(attachment.path);
+        handle = await fs.promises.open(attachment.path, "r");
+        const stat = await handle.stat();
         // Size is checked before reading: a 500MB video would otherwise be pulled into memory only
         // to be rejected, and on a large matrix that is the difference between a slow run and an OOM.
         if (stat.size <= 0 || stat.size > MAX_EVIDENCE_BYTES) continue;
-        body = await fs.promises.readFile(attachment.path);
+        body = await handle.readFile();
       } catch {
         continue; // traces and videos are finalised asynchronously and may not exist yet
+      } finally {
+        await handle?.close().catch(() => undefined);
       }
       const entry: Payload = {
         name: path.basename(attachment.path),

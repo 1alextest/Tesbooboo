@@ -29,7 +29,17 @@ export class EmailService {
   ): Promise<void> {
     const decision = await this.delivery.decide(kind);
     if (!decision.post || this.delivery.logsEveryEmail) {
-      console.log(logLabel);
+      // Labels carry caller-supplied values (an address, a workspace name). Collapsing control
+      // characters keeps a crafted newline from forging additional log lines — the log is scraped by
+      // the e2e suite, and a forged line would be indistinguishable from a real delivery record.
+      // The set is written as a scan rather than a regex so it is obvious this covers CR, LF and
+      // the C0/C1 control ranges without relying on a character-class escape surviving edits.
+      let line = "";
+      for (const ch of logLabel) {
+        const code = ch.codePointAt(0) ?? 0;
+        line += code < 0x20 || (code >= 0x7f && code <= 0x9f) ? " " : ch;
+      }
+      console.log(line);
     }
     if (!decision.post) return;
 

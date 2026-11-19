@@ -20,6 +20,7 @@ import SelfLoggedTrackerField, { type SelfLoggedSystem } from "@/components/Self
 import IssuePickerModal from "@/components/IssuePickerModal";
 import BugEvidenceField, { type EvidenceMode } from "@/components/BugEvidenceField";
 import { BUG_PRIORITIES, BUG_SEVERITIES } from "@/components/bugs/BugBadges";
+import { safeExternalUrl } from "@/lib/validation";
 
 type EditBugModalProps = {
   projectId: string;
@@ -329,7 +330,7 @@ export default function EditBugModal({
                 <div className="flex items-center justify-between gap-2 rounded-[var(--radius-control)] border border-[var(--border)] px-3 py-2 text-[13px]">
                   {editSelectedIssue ? (
                     <a
-                      href={editSelectedIssue.url || editUrl || undefined}
+                      href={safeExternalUrl(editSelectedIssue.url || editUrl)}
                       target="_blank"
                       rel="noreferrer"
                       className="truncate text-[var(--foreground)] hover:underline"

@@ -846,7 +846,10 @@ export class AutomationService {
     }
     const actorId = (await this.resolveAutomationActorId()) ?? this.requireActor(userId);
 
-    if (!files || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
+    // Array.isArray, not just a length check: multipart parsing is outside our types, so a single
+    // field or a malformed payload can arrive as a non-array and `.length` would then read a string
+    // length and count it as files.
+    if (!Array.isArray(files) || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
     if (!isEvidenceKind(kindInput)) {
       throw new BadRequestException({ error: `kind must be one of: ${EVIDENCE_KINDS.join(", ")}` });
     }

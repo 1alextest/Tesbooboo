@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { env } from "./env";
 
 /*
@@ -26,8 +26,12 @@ export function escapeRegExp(value: string): string {
  */
 export function readBackendLogs(tailLines: number | "all" = 500): string | null {
   try {
-    return execSync(
-      `docker compose -f "${env.dockerComposeFile}" logs ${env.dockerService} --no-color --tail=${tailLines}`,
+    // execFile with an argument array, not a shell string: the compose file and service come from
+    // environment configuration, and interpolating them into a command line made them part of the
+    // shell program. No shell is involved here, so no quoting rules to get wrong.
+    return execFileSync(
+      "docker",
+      ["compose", "-f", env.dockerComposeFile, "logs", env.dockerService, "--no-color", `--tail=${tailLines}`],
       { encoding: "utf-8", maxBuffer: 256 * 1024 * 1024 },
     );
   } catch {

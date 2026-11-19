@@ -391,8 +391,10 @@ export function ReviewCaseRunSetup({
             : mode === "new" ? "Create run and add selected cases" : "Add selected cases to run"}
         </button>
         {(pendingRunId || complete) && (
-          <Link className="underline" href={"/projects/" + projectId + "/cycles/" +
-            (complete?.runId ?? pendingRunId)}>Open native test run</Link>
+          // Both ids are route segments: encoding them keeps a malformed value from changing the
+          // path (or turning the href into a non-http scheme) rather than being treated as an id.
+          <Link className="underline" href={"/projects/" + encodeURIComponent(projectId) + "/cycles/" +
+            encodeURIComponent(complete?.runId ?? pendingRunId ?? "")}>Open native test run</Link>
         )}
       </div>
         </>

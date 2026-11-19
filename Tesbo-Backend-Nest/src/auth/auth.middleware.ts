@@ -14,25 +14,25 @@ export class AuthMiddleware implements NestMiddleware {
   ) {}
 
   async use(req: AuthenticatedRequest, _res: Response, next: NextFunction) {
-    // Explicit bearer credentials cannot inherit permissions from a browser cookie.
-    const authorization = req.headers?.authorization;
-    const rawHeader = Array.isArray(authorization) ? authorization[0] : authorization;
-    const presentingBearer = /^Bearer(?:\s|$)/i.test(rawHeader?.trim() ?? "");
+    // An explicit bearer credential is authoritative: it cannot inherit permissions from a browser
+    // cookie. So the presence of the header decides which credential is even consulted — an invalid
+    // bearer yields an anonymous request rather than falling back to the cookie — and the cookie is
+    // never resolved (no session lookup) on a bearer-authenticated call.
     req.userId = null;
     req.apiToken = null;
 
-    if (presentingBearer) {
-      const bearer = this.extractBearerToken(authorization);
-      const principal = bearer ? await this.apiTokens.authenticate(bearer) : null;
-      if (principal) {
-        req.userId = principal.userId;
-        req.apiToken = {
-          tokenId: principal.tokenId,
-          userId: principal.userId,
-          projectId: principal.projectId,
-          scopes: principal.scopes
-        };
-      }
+    const bearer = this.readBearerHeader(req.headers?.authorization);
+    if (bearer.present) {
+      const principal = bearer.token ? await this.apiTokens.authenticate(bearer.token) : null;
+      req.userId = principal?.userId ?? null;
+      req.apiToken = principal
+        ? {
+            tokenId: principal.tokenId,
+            userId: principal.userId,
+            projectId: principal.projectId,
+            scopes: principal.scopes
+          }
+        : null;
     } else {
       const sessionToken = req.cookies?.[this.config.sessionCookieName];
       req.userId = sessionToken ? await this.otpService.resolveSession(sessionToken) : null;
@@ -41,10 +41,20 @@ export class AuthMiddleware implements NestMiddleware {
     next();
   }
 
-  private extractBearerToken(header: string | string[] | undefined): string | null {
-    const value = Array.isArray(header) ? header[0] : header;
-    if (!value) return null;
-    const match = /^Bearer\s+(.+)$/i.exec(value.trim());
-    return match ? match[1].trim() : null;
+  /**
+   * Reads `Authorization: Bearer <token>` without a backtracking regular expression.
+   *
+   * The previous `/^Bearer\s+(.+)$/i` is polynomial on a long run of whitespace, and the header is
+   * attacker-controlled on every request. `present` distinguishes "no bearer credential at all"
+   * (fall back to the cookie) from "a bearer credential was presented" — including a bare "Bearer"
+   * with no token, which must not silently inherit the cookie session.
+   */
+  private readBearerHeader(header: string | string[] | undefined): { present: boolean; token: string | null } {
+    const value = (Array.isArray(header) ? header[0] : header)?.trim();
+    if (!value || value.slice(0, 6).toLowerCase() !== "bearer") return { present: false, token: null };
+    const separator = value.slice(6, 7);
+    if (separator !== "" && !/\s/.test(separator)) return { present: false, token: null };
+    const token = value.slice(6).trim();
+    return { present: true, token: token ? token : null };
   }
 }

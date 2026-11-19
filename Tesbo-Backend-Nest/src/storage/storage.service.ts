@@ -35,8 +35,21 @@ export class StorageService {
     return this.s3 !== null;
   }
 
+  /**
+   * Resolves a storage key to a local path, refusing anything that escapes the upload directory.
+   *
+   * Keys are generated server-side today (project/entity UUIDs plus a random name), but this is the
+   * single place a key becomes a filesystem path for every read, write and delete. Confining it here
+   * means a future key-building mistake — or a key read back from a corrupted row — cannot read,
+   * overwrite or unlink a file outside `UPLOAD_DIR`.
+   */
   private localPath(key: string): string {
-    return path.resolve(this.config.uploadDir, key);
+    const root = path.resolve(this.config.uploadDir);
+    const full = path.resolve(root, key);
+    if (full !== root && !full.startsWith(root + path.sep)) {
+      throw new Error("Storage key escapes the upload directory");
+    }
+    return full;
   }
 
   // Applies the optional S3_BUCKET_FOLDER prefix (e.g. "local", "staging") so multiple

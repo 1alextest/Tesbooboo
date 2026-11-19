@@ -11,6 +11,8 @@
  * project has opted into.
  */
 
+import { stripTrailingSlashes } from "./config";
+
 export interface TesboClientOptions {
   baseUrl: string;
   projectId: string;
@@ -88,7 +90,7 @@ export class TesboClient {
   public failures = 0;
 
   constructor(private readonly options: TesboClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+    this.baseUrl = stripTrailingSlashes(options.baseUrl);
     this.log = options.log ?? ((message) => console.warn(message));
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retries = Math.max(1, options.retries ?? DEFAULT_RETRIES);
