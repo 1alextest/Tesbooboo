@@ -5101,5 +5101,8 @@ export async function getModelStudioRunProvenance(
   projectId: string,
   cycleId: string
 ): Promise<ModelStudioRunProvenance | null> {
-  return api(`/api/projects/${projectId}/model-studio/runs/by-cycle/${cycleId}`);
+  const response = await api<{ provenance: ModelStudioRunProvenance | null }>(
+    `/api/projects/${projectId}/model-studio/runs/by-cycle/${cycleId}`
+  );
+  return response.provenance ?? null;
 }
