@@ -3,6 +3,7 @@ import { expect, type APIRequestContext } from "@playwright/test";
 import type { FakeAiServer } from "./fake-ai-server";
 import { seedMoveRepository, type MoveFixture, type MoveRepositoryState } from "./zyra-move-feedback";
 import { SUITE_OPERATION_ERROR } from "./zyra-suite-feedback";
+import { assertMoveAudit, assertMovesStillUnpublished, governingMoveRepositoryState, readReviewedMoves, saveReviewedMoves, unchangedMoveContent, type MoveReviewPreview } from "./zyra-reviewed-moves";
 
 export const MISSING_SUITE_MODES = ["missing", "deleted", "partial", "moved"] as const;
 export type MissingSuiteMode = typeof MISSING_SUITE_MODES[number] | "foreign";
@@ -30,9 +31,11 @@ type MissingSuiteEvidence = {
 export async function verifyZyraMissingSuite(input: {
   request: APIRequestContext; ai: FakeAiServer; base: string; ownerId: string; language: "en" | "ru";
   mode: MissingSuiteMode; fixture: MissingSuiteFixture; foreignSuiteId?: string; state: () => Promise<MoveRepositoryState>;
+  beforeApply?: (preview: MoveReviewPreview) => Promise<void>;
   afterReply?: (evidence: MissingSuiteEvidence) => Promise<void>;
 }) {
-  const { request, ai, base, ownerId, language, mode, fixture, foreignSuiteId, state, afterReply } = input;
+  const { request, ai, base, ownerId, language, mode, fixture, foreignSuiteId, state: rawState, afterReply } = input;
+  const state = async () => governingMoveRepositoryState(await rawState());
   const refused = mode !== "moved", movedIds = mode === "partial" || mode === "moved" ? [fixture.firstId, fixture.secondId] : [];
   const requestedSuiteId = mode === "foreign" ? foreignSuiteId! : mode === "deleted" || mode === "moved" ? fixture.destinationId : randomUUID();
   expect(requestedSuiteId).toMatch(/^[a-f0-9-]{36}$/i);
@@ -59,18 +62,27 @@ export async function verifyZyraMissingSuite(input: {
     const assistants = session.messages.filter((entry: Record<string, unknown>) => entry.role === "assistant");
     expect(assistants).toHaveLength(1); const assistant = assistants[0];
     expect(assistant.content).toBe(response.message.content); expect(assistant.actionType).toBe("suite");
-    expect(assistant.reviewRequestId ?? null).toBeNull();
     expect(assistant.testcases.map((row: Record<string, unknown>) => row.id).sort()).toEqual([...movedIds].sort());
-    expect(assistant.testcases.every((row: Record<string, unknown>) => row.action === "moved")).toBe(true);
+    expect(assistant.testcases.every((row: Record<string, unknown>) => row.action === "proposed-update")).toBe(true);
     expect(assistant.activity.filter((entry: Record<string, unknown>) => entry.title === "An operation failed unexpectedly")).toHaveLength(0);
+    const staged = await state();
+    assertMovesStillUnpublished(before, staged);
+    const reviewed = movedIds.length ? await readReviewedMoves(request, base, assistant.reviewRequestId,
+      movedIds.map((testcaseId) => ({ testcaseId, suiteId: fixture.destinationId }))) : null;
+    await input.beforeApply?.({ sessionId, language, reply, before, reviewed, proposedCount: movedIds.length,
+      traceOutcome: refused ? "completed_with_errors" : "completed", stagingStatus: refused ? "failed" : "ok" });
+    if (reviewed) await saveReviewedMoves(request, base, reviewed, ownerId);
+    else expect(assistant.reviewRequestId ?? null).toBeNull();
     const after = await state();
-    expect(after.cases).toHaveLength(before.cases.length); expect(after.suites).toEqual(before.suites); expect(after.reviews).toEqual(before.reviews);
+    expect(after.cases).toHaveLength(before.cases.length); expect(after.suites).toEqual(before.suites);
+    expect(after.reviews.length - before.reviews.length).toBe(movedIds.length ? 1 : 0);
+    expect(after.reviews.filter((row) => before.reviews.some((old) => (old as { id: string }).id === (row as { id: string }).id))).toEqual(before.reviews);
     for (const old of before.cases) {
       const current = after.cases.find((row) => row.id === old.id)!;
       if (movedIds.includes(String(old.id))) {
         expect(current).toMatchObject({ suite_id: fixture.destinationId, updated_by: ownerId });
-        const content = (row: Record<string, unknown>) => Object.fromEntries(Object.entries(row).filter(([key]) => !["suite_id", "updated_by", "updated_at"].includes(key)));
-        expect(content(current)).toEqual(content(old));
+        expect(unchangedMoveContent(current)).toEqual(unchangedMoveContent(old));
+        expect(Number(current.review_dependency_revision)).toBe(Number(old.review_dependency_revision) + 1);
       } else expect(current).toEqual(old);
     }
     for (const old of before.history) expect(after.history.find((row) => row.id === old.id)).toEqual(old);
@@ -79,21 +91,13 @@ export async function verifyZyraMissingSuite(input: {
     for (const id of movedIds) expect(history.find((row) => row.testcase_id === id)).toMatchObject({
       changed_by: ownerId, change_type: "update", snapshot: before.cases.find((row) => row.id === id),
     });
-    const oldAudit = before.audit as Array<Record<string, unknown>>, audit = after.audit as Array<Record<string, unknown>>;
-    expect(audit.filter((row) => oldAudit.some((old) => old.id === row.id))).toEqual(oldAudit);
-    const addedAudit = audit.filter((row) => !oldAudit.some((old) => old.id === row.id));
-    expect(addedAudit).toHaveLength(movedIds.length ? 1 : 0);
-    if (movedIds.length) {
-      expect(addedAudit[0]).toMatchObject({ action: "zyra_moved_to_suite", entity_id: fixture.destinationId,
-        actor_id: ownerId, diff: { movedCount: 2 } });
-      const auditIds = (addedAudit[0].diff as { testcaseIds: string[] }).testcaseIds;
-      expect([...auditIds].sort()).toEqual([...movedIds].sort());
-    } else expect(after).toEqual(before);
+    if (reviewed) assertMoveAudit(staged, after, reviewed, ownerId);
+    else expect(after).toEqual(before);
     const users = session.messages.filter((entry: Record<string, unknown>) => entry.role === "user");
     expect(users).toHaveLength(1); const trace = users[0].trace;
     expect(trace.version).toBe(1); expect(trace.steps.filter((step: Record<string, unknown>) => step.stage === "staging")).toHaveLength(1);
-    expect(trace.steps.find((step: Record<string, unknown>) => step.stage === "finalizing").meta).toMatchObject({ savedCount: movedIds.length, proposedCount: 0 });
-    if (movedIds.length) expect(assistant.content).toContain(language === "en" ? "2 test case(s) total" : "всего тест-кейсов: 2");
+    expect(trace.steps.find((step: Record<string, unknown>) => step.stage === "finalizing").meta).toMatchObject({ savedCount: 0, proposedCount: movedIds.length });
+    if (movedIds.length) expect(assistant.content).toMatch(language === "en" ? /staged for your review/ : /Ожидают вашей проверки/);
     // Keep known red assertions soft so all persistence, controls and browser readbacks execute.
     expect.soft(assistant.activity.filter((entry: Record<string, unknown>) => entry.title === "Could not move testcases")).toHaveLength(refused ? 1 : 0);
     expect.soft(String(assistant.content).startsWith(SUITE_OPERATION_ERROR[language])).toBe(refused);

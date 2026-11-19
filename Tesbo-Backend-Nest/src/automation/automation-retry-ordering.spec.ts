@@ -27,7 +27,7 @@ describe("automation retry ordering", () => {
       queries.push({ sql, params });
       if (sql.includes("FROM actors a")) return { rows: [{ id: actor }] };
       if (sql.includes("FROM cycles WHERE id = $1 AND project_id")) return { rows: [{ id: run, name: "CI", closed_at: null, source: "automation" }] };
-      if (sql.includes("FROM testcases")) return { rows: [{ id: testcase, external_id: "TES-TC-1", title: "Retry test", status: "Approved" }] };
+      if (sql.includes("FROM testcases")) return { rows: [{ id: testcase, external_id: "TES-TC-1", title: "Retry test", status: "Approved", approval_current: true }] };
       if (sql.includes("UPDATE executions e SET")) {
         const incoming = params[5] as number | null;
         if (incoming !== null && incoming <= current.retry_count &&

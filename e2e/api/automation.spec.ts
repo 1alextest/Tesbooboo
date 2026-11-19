@@ -1,3 +1,4 @@
+import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, request, test, type APIRequestContext } from "@playwright/test";
@@ -61,7 +62,7 @@ interface SeededCase {
 async function seedCases(api: APIRequestContext, count: number, label: string): Promise<SeededCase[]> {
   const cases: SeededCase[] = [];
   for (let index = 0; index < count; index += 1) {
-    const res = await api.post(`/api/projects/${ctxA.projectId}/testcases`, {
+    const res = await createTestcaseFixtureResponse(api, `/api/projects/${ctxA.projectId}/testcases`, {
       data: { title: `E2E Automation ${label} ${index} ${Date.now()}`, status: "Approved" },
     });
     expect(res.ok(), `seeding test case ${index} for ${label}`).toBeTruthy();

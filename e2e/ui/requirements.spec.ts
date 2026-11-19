@@ -29,6 +29,47 @@ const skipReason = screensSuiteSkipReason(tenant);
 
 test.use({ storageState: path.join(__dirname, "../.auth/state-screens.json") });
 
+test.describe("requirements page — truthful coverage reads", () => {
+  test.skip(!!skipReason, skipReason ?? "");
+  let api: APIRequestContext;
+  test.beforeAll(async () => { api = await screensApi(); });
+  test.afterAll(async () => { await api?.dispose(); });
+
+  for (const denied of [false, true]) {
+    test(`REQ-U-coverage ${denied ? "denied" : "unavailable"} links stay unknown while another source remains usable, and retry distinguishes empty success`, async ({ page }) => {
+      test.skip(!dbControlAvailable(), "requires disposable source fixtures");
+      const project = await createProject(api);
+      const jiraKey = `E2EJ-${uniqueSuffix()}`;
+      const linearKey = `E2EL-${uniqueSuffix()}`;
+      let refuse = true;
+      try {
+        seedJiraRequirements(tenant!.organizationId, project.id, [jiraKey]);
+        seedLinearRequirements(tenant!.organizationId, project.id, [linearKey]);
+        const endpoint = `/api/projects/${project.id}/testcases/linked-jira-keys`;
+        await page.route((url) => url.pathname === endpoint, async (route) => {
+          if (!refuse) return route.continue();
+          return route.fulfill({ status: denied ? 403 : 503, json: { error: denied ? "Coverage access denied" : "Coverage service unavailable" } });
+        });
+        await page.goto(`/projects/${project.id}/requirements`);
+        const jiraRow = page.getByTestId("requirement-row").filter({ hasText: jiraKey });
+        const linearRow = page.getByTestId("requirement-row").filter({ hasText: linearKey });
+        await expect(page.getByTestId("requirement-link-warning")).toBeVisible();
+        await expect(jiraRow.getByTestId("requirement-coverage-unknown")).toHaveText(denied ? "Access denied" : "Unavailable");
+        await expect(jiraRow.getByText("Unknown", { exact: true })).toBeVisible();
+        await expect(jiraRow.getByRole("button", { name: "Assign to Zyra" })).toBeDisabled();
+        await expect(linearRow.getByText("Not started", { exact: true })).toBeVisible();
+        await expect(linearRow.getByRole("button", { name: "Assign to Zyra" })).toBeEnabled();
+        refuse = false;
+        await page.getByRole("button", { name: "Retry coverage" }).click();
+        await expect(page.getByTestId("requirement-link-warning")).toHaveCount(0);
+        await expect(jiraRow.getByTestId("requirement-coverage-unknown")).toHaveCount(0);
+        await expect(jiraRow.getByText("Not started", { exact: true })).toBeVisible();
+        await expect(jiraRow.getByRole("button", { name: "Assign to Zyra" })).toBeEnabled();
+      } finally { await deleteProjects(api, [project.id]); }
+    });
+  }
+});
+
 test.describe("requirements page — sync error banner", () => {
   test.skip(!!skipReason, skipReason ?? "");
 

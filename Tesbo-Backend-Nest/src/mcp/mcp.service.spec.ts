@@ -1,6 +1,9 @@
+import { proposalReviewPreviewEnabled } from "../common/testcase-publication.policy";
 import { ForbiddenException } from "@nestjs/common";
 import { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
 import { previewDraftModel } from "../behavior-graph/model-studio-preview.core";
+import { onlyReducesMcpAccess, readMcpAccess, validateMcpAccess, type ProjectMcpAccess } from "./mcp-access";
+import { McpController } from "./mcp.controller";
 import { McpService } from "./mcp.service";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
@@ -65,6 +68,13 @@ function makeLegacy(overrides: Partial<Record<string, jest.Mock>> = {}) {
   } as unknown as LegacyService;
 }
 
+function approvedMcpRow() {
+  return { settings: { externalMcpAccess: {
+    enabled: true, revision: 1,
+    clients: [{ tokenId: "00000000-0000-4000-8000-000000000001", clientName: "Unit test client", scopes: ["read", "write"], allowedTools: null, expiresAt: null }]
+  } }, scopes: "read,write" };
+}
+
 /**
  * DB double. Routes the queries the engine and the tool handlers make:
  *  - MCP agent actor lookup -> configurable actor id
@@ -74,6 +84,7 @@ function makeLegacy(overrides: Partial<Record<string, jest.Mock>> = {}) {
 function makeDb(
   opts: {
     mcpActorId?: string | null;
+    mcpAccess?: ProjectMcpAccess | null;
     executionProject?: string | null | undefined;
     executionCycleId?: string;
     testcaseProject?: string | null | undefined;
@@ -86,6 +97,13 @@ function makeDb(
   } = {}
 ) {
   const query = jest.fn((sql: string) => {
+    if (sql.includes("SELECT p.settings, t.scopes")) {
+      const access = opts.mcpAccess === undefined ? {
+        enabled: true, revision: 1,
+        clients: [{ tokenId: "00000000-0000-4000-8000-000000000001", clientName: "Unit test client", scopes: ["read", "write"], allowedTools: null, expiresAt: null }]
+      } : opts.mcpAccess;
+      return Promise.resolve({ rows: access ? [{ settings: { externalMcpAccess: access }, scopes: "read,write" }] : [] });
+    }
     if (sql.includes("FROM actors a JOIN agents g")) {
       return Promise.resolve({ rows: opts.mcpActorId ? [{ id: opts.mcpActorId }] : [] });
     }
@@ -138,7 +156,7 @@ function makeDb(
 const writableLimits = { assertProjectWritable: jest.fn().mockResolvedValue(undefined) } as unknown as PlanLimitsService;
 
 function principal(over: Partial<ApiTokenContext> = {}): ApiTokenContext {
-  return { tokenId: "tok-1", userId: "user-1", projectId: "proj-1", scopes: ["read", "write"], ...over };
+  return { tokenId: "00000000-0000-4000-8000-000000000001", userId: "user-1", projectId: "proj-1", scopes: ["read", "write"], ...over };
 }
 
 const rpc = (method: string, params?: Record<string, unknown>, id: number | string = 1) => ({
@@ -213,28 +231,7 @@ describe("McpService", () => {
       expect(res.result).toEqual({});
     });
 
-    it("advertises the authoring fields the legacy writers already persist", async () => {
-      const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db, writableLimits);
-      const res: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
-      const tools = res.result.tools as Array<{ name: string; inputSchema: any }>;
-      const byName = new Map(tools.map((tool) => [tool.name, tool]));
-      const create = byName.get("create_testcase")!.inputSchema.properties;
-      const update = byName.get("update_testcase")!.inputSchema.properties;
-      const bulk = byName.get("bulk_create_testcases")!.inputSchema.properties.testcases.items.properties;
-      for (const field of ["attachments", "postconditions", "estimatedDuration", "sourceRefs"]) {
-        expect(create).toHaveProperty(field);
-        expect(bulk).toHaveProperty(field);
-      }
-      for (const field of ["attachments", "postconditions", "expectedRevision", "estimatedDuration", "sourceRefs"]) {
-        expect(update).toHaveProperty(field);
-      }
-      expect(create.sourceRefs.items.properties.type.enum).toEqual([
-        "knowledge_document", "knowledge_file", "jira_ticket", "testcase", "bug"
-      ]);
-    });
-
-    it("tools/list returns every registered tool with a name, description and inputSchema", async () => {
+    it("tools/list returns callable tools with a name, description and inputSchema", async () => {
       const { db } = makeDb();
       const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
@@ -247,23 +244,12 @@ describe("McpService", () => {
           "list_projects",
           "list_testcases",
           "get_testcase",
-          "create_testcase",
-          "update_testcase",
-          "archive_testcase",
-          "restore_testcase",
-          "duplicate_testcase",
-          "bulk_create_testcases",
-          "bulk_update_testcases",
-          "bulk_archive_testcases",
           "get_testcase_bugs",
           "get_testcase_executions",
-          "link_requirement_to_testcase",
-          "unlink_requirement_from_testcase",
           "list_suites",
           "get_suite",
           "create_suite",
           "update_suite",
-          "clone_test_suite",
           "list_test_cycles",
           "get_test_cycle",
           "create_cycle_from_plan",
@@ -891,17 +877,6 @@ describe("McpService", () => {
   });
 
   describe("actor attribution", () => {
-    it("attributes create_testcase writes to the resolved MCP agent actor", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      await svc.handleRequest(
-        rpc("tools/call", { name: "create_testcase", arguments: { title: "Login works" } }),
-        principal(),
-        "proj-1"
-      );
-      expect((legacy as any).createTestCase).toHaveBeenCalledWith("proj-1", "mcp-actor-1", { title: "Login works" });
-    });
 
     it("does not resolve an actor for read tools", async () => {
       const { db, query } = makeDb({ mcpActorId: "mcp-actor-1" });
@@ -1028,260 +1003,6 @@ describe("McpService", () => {
     });
   });
 
-  describe("existing test-case Notes over MCP", () => {
-    it("advertises Notes on create, update and per-item bulk create without another field", async () => {
-      const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db, writableLimits);
-      const res: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
-      for (const name of ["create_testcase", "update_testcase"]) {
-        const tool = res.result.tools.find((entry: any) => entry.name === name);
-        expect(tool.inputSchema.properties.attachments.type).toBe("string");
-        expect(tool.description).toMatch(/Notes/);
-      }
-      const bulk = res.result.tools.find((entry: any) => entry.name === "bulk_create_testcases");
-      expect(bulk.inputSchema.properties.testcases.items.properties.attachments.type).toBe("string");
-      const detail = res.result.tools.find((entry: any) => entry.name === "get_testcase");
-      expect(detail.description).toMatch(/Notes/);
-    });
-
-    it("sends exact Unicode and multiline Notes through create without changing other fields", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const notes = "Evidence: café 🧪\nSource: QA reviewer";
-      const res: any = await svc.handleRequest(rpc("tools/call", {
-        name: "create_testcase", arguments: { title: "Draft", suiteId: "suite-1", attachments: notes }
-      }), principal(), "proj-1");
-      expect(res.result.isError).toBe(false);
-      expect((legacy as any).createTestCase).toHaveBeenCalledWith("proj-1", "mcp-actor-1", {
-        title: "Draft", suiteId: "suite-1", attachments: notes
-      });
-    });
-
-    it("preserves omitted Notes and passes replacement or explicit empty clear unchanged", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      for (const payload of [{ title: "Reworded" }, { attachments: "New text" }, { attachments: "" }]) {
-        const res: any = await svc.handleRequest(rpc("tools/call", {
-          name: "update_testcase", arguments: { testcaseId: "tc-1", ...payload }
-        }), principal(), "proj-1");
-        expect(res.result.isError).toBe(false);
-        expect((legacy as any).updateTestCase).toHaveBeenLastCalledWith("tc-1", "mcp-actor-1", payload);
-      }
-      expect((legacy as any).updateTestCase).toHaveBeenCalledTimes(3);
-    });
-
-    it.each([null, 8, true, [], {}, ["bad"]])("refuses invalid Notes %p before any create or update writer", async (notes) => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      for (const [name, payload] of [
-        ["create_testcase", { title: "Draft", attachments: notes }],
-        ["update_testcase", { testcaseId: "tc-1", attachments: notes }]
-      ] as const) {
-        const res: any = await svc.handleRequest(rpc("tools/call", {
-          name, arguments: payload
-        }), principal(), "proj-1");
-        expect(res.error.code).toBe(RpcCode.ToolExecutionError);
-        expect(res.error.message).toMatch(/attachments.*Notes/i);
-      }
-      expect((legacy as any).createTestCase).not.toHaveBeenCalled();
-      expect((legacy as any).updateTestCase).not.toHaveBeenCalled();
-    });
-
-    it("isolates invalid bulk Notes while preserving order and later valid entries", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(rpc("tools/call", {
-        name: "bulk_create_testcases",
-        arguments: { testcases: [
-          { title: "First", attachments: "Note 1" },
-          { title: "Invalid", attachments: null },
-          { title: "Last", attachments: "" }
-        ] }
-      }), principal(), "proj-1");
-      const body = JSON.parse(res.result.content[0].text);
-      expect(body.succeeded).toBe(2);
-      expect(body.failed).toBe(1);
-      expect(body.results[1].error).toMatch(/attachments.*Notes/i);
-      expect((legacy as any).createTestCase).toHaveBeenCalledTimes(2);
-      expect((legacy as any).createTestCase).toHaveBeenNthCalledWith(2, "proj-1", "mcp-actor-1", {
-        title: "Last", attachments: ""
-      });
-    });
-  });
-
-  describe("create postconditions with native test-case writer", () => {
-    it("advertises existing postconditions for single and bulk create without another field", async () => {
-      const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db, writableLimits);
-      const catalog: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
-      const one = catalog.result.tools.find((t: any) => t.name === "create_testcase");
-      const bulk = catalog.result.tools.find((t: any) => t.name === "bulk_create_testcases");
-      expect(one.inputSchema.properties.postconditions.type).toBe("string");
-      expect(bulk.inputSchema.properties.testcases.items.properties.postconditions.type).toBe("string");
-      expect(one.description).toContain("postconditions");
-      expect(bulk.description).toContain("postconditions");
-    });
-
-    it("passes postconditions through the existing create writer and preserves omission", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      for (const args of [
-        { title: "Postcondition case", postconditions: "Inventory remains unchanged" },
-        { title: "Omitted postcondition" }
-      ]) {
-        const result: any = await svc.handleRequest(rpc("tools/call", {
-          name: "create_testcase", arguments: args
-        }), principal(), "proj-1");
-        expect(result.result.isError).toBe(false);
-        expect((legacy as any).createTestCase).toHaveBeenLastCalledWith("proj-1", "mcp-actor-1", args);
-      }
-    });
-
-    it("passes postconditions through per-item bulk create, maintaining item isolation", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const result: any = await svc.handleRequest(rpc("tools/call", {
-        name: "bulk_create_testcases", arguments: { testcases: [
-          { title: "First", postconditions: "No side effects" },
-          { title: "Bad missing title" , postconditions: "Not saved" },
-          { title: "Last", postconditions: "" }
-        ].map((row, index) => index === 1 ? { postconditions: row.postconditions } : row) }
-      }), principal(), "proj-1");
-      expect(result.result.isError).toBe(false);
-      const response = JSON.parse(result.result.content[0].text);
-      expect(response).toMatchObject({ total: 3, succeeded: 2, failed: 1 });
-      expect((legacy as any).createTestCase).toHaveBeenCalledTimes(2);
-      expect((legacy as any).createTestCase).toHaveBeenNthCalledWith(2, "proj-1", "mcp-actor-1", {
-        title: "Last", postconditions: ""
-      });
-    });
-
-    it.each([null, 8, true, [], {}, ["bad"]])("refuses invalid postconditions %p before any create or update writer", async (postconditions) => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      for (const [name, payload] of [
-        ["create_testcase", { title: "Draft", postconditions }],
-        ["update_testcase", { testcaseId: "tc-1", postconditions }]
-      ] as const) {
-        const res: any = await svc.handleRequest(rpc("tools/call", { name, arguments: payload }), principal(), "proj-1");
-        expect(res.error.code).toBe(RpcCode.ToolExecutionError);
-        expect(res.error.message).toMatch(/postconditions/i);
-      }
-      expect((legacy as any).createTestCase).not.toHaveBeenCalled();
-      expect((legacy as any).updateTestCase).not.toHaveBeenCalled();
-    });
-
-    it("preserves omitted postconditions and passes replacement or explicit empty clear through update", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      for (const payload of [{ title: "Reworded" }, { postconditions: "Final state" }, { postconditions: "" }]) {
-        const res: any = await svc.handleRequest(rpc("tools/call", {
-          name: "update_testcase", arguments: { testcaseId: "tc-1", ...payload }
-        }), principal(), "proj-1");
-        expect(res.result.isError).toBe(false);
-        expect((legacy as any).updateTestCase).toHaveBeenLastCalledWith("tc-1", "mcp-actor-1", payload);
-      }
-      expect((legacy as any).updateTestCase).toHaveBeenCalledTimes(3);
-    });
-
-    it("isolates invalid bulk postconditions while preserving order and later valid entries", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(rpc("tools/call", {
-        name: "bulk_create_testcases",
-        arguments: { testcases: [
-          { title: "First", postconditions: "No side effects" },
-          { title: "Invalid", postconditions: null },
-          { title: "Last", postconditions: "" }
-        ] }
-      }), principal(), "proj-1");
-      const body = JSON.parse(res.result.content[0].text);
-      expect(body.succeeded).toBe(2);
-      expect(body.failed).toBe(1);
-      expect(body.results[1].error).toMatch(/postconditions/i);
-      expect((legacy as any).createTestCase).toHaveBeenCalledTimes(2);
-      expect((legacy as any).createTestCase).toHaveBeenNthCalledWith(2, "proj-1", "mcp-actor-1", {
-        title: "Last", postconditions: ""
-      });
-    });
-  });
-
-  describe("authoring citations and duration estimates", () => {
-    const citation = { type: "testcase", id: "00000000-0000-4000-8000-000000000004", title: "Source case" };
-
-    it("passes sourceRefs and estimatedDuration through the existing writers", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const created = { title: "Cited", sourceRefs: [citation], estimatedDuration: "45m" };
-      const createRes: any = await svc.handleRequest(rpc("tools/call", {
-        name: "create_testcase", arguments: created
-      }), principal(), "proj-1");
-      expect(createRes.result.isError).toBe(false);
-      expect((legacy as any).createTestCase).toHaveBeenLastCalledWith("proj-1", "mcp-actor-1", created);
-
-      const updated = { sourceRefs: [citation], estimatedDuration: "1h" };
-      const updateRes: any = await svc.handleRequest(rpc("tools/call", {
-        name: "update_testcase", arguments: { testcaseId: "tc-1", ...updated }
-      }), principal(), "proj-1");
-      expect(updateRes.result.isError).toBe(false);
-      expect((legacy as any).updateTestCase).toHaveBeenLastCalledWith("tc-1", "mcp-actor-1", updated);
-    });
-
-    it.each([
-      ["a non-array", "not-an-array"],
-      ["null", null],
-      ["an unsupported type", [{ type: "unknown", id: "x" }]],
-      ["a blank id", [{ type: "testcase", id: " " }]],
-      ["a non-string title", [{ type: "testcase", id: "x", title: 7 }]],
-      ["more than 20 citations", Array.from({ length: 21 }, (_, index) => ({ type: "testcase", id: `x-${index}` }))]
-    ])("refuses %s before any writer runs", async (_label, sourceRefs) => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      for (const [name, payload] of [
-        ["create_testcase", { title: "Draft", sourceRefs }],
-        ["update_testcase", { testcaseId: "tc-1", sourceRefs }]
-      ] as const) {
-        const res: any = await svc.handleRequest(rpc("tools/call", { name, arguments: payload }), principal(), "proj-1");
-        expect(res.error.code).toBe(RpcCode.ToolExecutionError);
-        expect(res.error.message).toMatch(/sourceRefs/i);
-      }
-      expect((legacy as any).createTestCase).not.toHaveBeenCalled();
-      expect((legacy as any).updateTestCase).not.toHaveBeenCalled();
-    });
-
-    it("isolates an invalid citation entry in a bulk create without dropping valid items", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(rpc("tools/call", {
-        name: "bulk_create_testcases",
-        arguments: { testcases: [
-          { title: "First", sourceRefs: [citation], estimatedDuration: "10m" },
-          { title: "Invalid", sourceRefs: "nope" },
-          { title: "Last" }
-        ] }
-      }), principal(), "proj-1");
-      const body = JSON.parse(res.result.content[0].text);
-      expect(body).toMatchObject({ total: 3, succeeded: 2, failed: 1 });
-      expect(body.results[1].error).toMatch(/sourceRefs/i);
-      expect((legacy as any).createTestCase).toHaveBeenCalledTimes(2);
-      expect((legacy as any).createTestCase).toHaveBeenNthCalledWith(1, "proj-1", "mcp-actor-1", {
-        title: "First", sourceRefs: [citation], estimatedDuration: "10m"
-      });
-    });
-  });
-
   describe("committed QA graph changes via read-only MCP", () => {
     it("advertises source-change history as read-only with no case mutation or fake coverage", async () => {
       const { db } = makeDb();
@@ -1297,6 +1018,7 @@ describe("McpService", () => {
     it("passes project and current member identity to the existing scoped history query", async () => {
       const { db, query } = makeDb();
       (query as jest.Mock).mockImplementation((sql: string, _params: unknown[]) =>
+        sql.includes("SELECT p.settings, t.scopes") ? Promise.resolve({ rows: [approvedMcpRow()] }) :
         sql.includes("authorized_history AS MATERIALIZED")
           ? Promise.resolve({ rows: [{ authorized: true, entries: [{
               id: "18", revision: "rev", capturedAt: "2026-11-15T00:00:00Z",
@@ -1332,7 +1054,7 @@ describe("McpService", () => {
         }), principal(), "proj-1");
         expect(reply.error.code).toBe(RpcCode.ToolExecutionError);
       }
-      expect(query).not.toHaveBeenCalled();
+      expect(query.mock.calls.every(([sql]) => sql.includes("SELECT p.settings, t.scopes"))).toBe(true);
     });
 
     it("rejects write-only scoped tokens and cross-project MCP URLs before reading graph history", async () => {
@@ -1343,7 +1065,7 @@ describe("McpService", () => {
       expect(scope.error.code).toBe(RpcCode.ScopeDenied);
       const foreign: any = await svc.handleRequest(args, principal({ scopes: ["read"] }), "proj-2");
       expect(foreign.error.code).toBe(RpcCode.ProjectScopeDenied);
-      expect(query).not.toHaveBeenCalled();
+      expect(query.mock.calls.every(([sql]) => sql.includes("SELECT p.settings, t.scopes"))).toBe(true);
     });
   });
 
@@ -1408,518 +1130,6 @@ describe("McpService", () => {
       }), principal(), "proj-1");
       expect(response.error.code).toBe(RpcCode.ToolExecutionError);
       expect(response.error.message).toMatch(/not configured/);
-    });
-  });
-
-  describe("update_testcase project scoping", () => {
-    it("advertises and forwards the optional existing-row revision precondition", async () => {
-      const { db } = makeDb({ testcaseProject: "proj-1", mcpActorId: "mcp-actor-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const listed: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
-      const update = listed.result.tools.find((tool: any) => tool.name === "update_testcase");
-      expect(update.inputSchema.properties.expectedRevision).toMatchObject({ type: "string" });
-      const revision = "a".repeat(64);
-      const res: any = await svc.handleRequest(rpc("tools/call", {
-        name: "update_testcase", arguments: { testcaseId: "tc-1", title: "Guarded", expectedRevision: revision }
-      }), principal(), "proj-1");
-      expect(res.error).toBeUndefined();
-      expect(legacy.updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", {
-        title: "Guarded", expectedRevision: revision
-      });
-    });
-
-    it.each([null, "", 4, true, [], {}])("refuses malformed MCP expectedRevision %p before the legacy writer", async (expectedRevision) => {
-      const { db } = makeDb({ testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(rpc("tools/call", {
-        name: "update_testcase", arguments: { testcaseId: "tc-1", expectedRevision, title: "Invalid" }
-      }), principal(), "proj-1");
-      expect(res.error.message).toMatch(/expectedRevision/);
-      expect(legacy.updateTestCase).not.toHaveBeenCalled();
-    });
-
-    it("updates a test case when it belongs to the token's project, attributed to the agent actor", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "update_testcase", arguments: { testcaseId: "tc-1", title: "New title" } }),
-        principal({ userId: "user-1" }),
-        "proj-1"
-      );
-      expect(res.result.isError).toBe(false);
-      // Attributed to the resolved MCP agent actor, same as create_testcase, since
-      // testcases.updated_by references actors(id) — see mcp.tools.ts's handler comment.
-      // Omission reaches the shared writer unchanged: no stale read-and-reapply workaround.
-      expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", {
-        title: "New title"
-      });
-      expect((legacy as any).getTestCase).toHaveBeenCalledWith("tc-1");
-      expect((legacy as any).getTestCase).toHaveBeenCalledTimes(1);
-    });
-
-    it("denies updating a test case that belongs to another project", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-OTHER" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "update_testcase", arguments: { testcaseId: "tc-1", title: "New title" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.error.code).toBe(RpcCode.ProjectScopeDenied);
-      expect((legacy as any).updateTestCase).not.toHaveBeenCalled();
-    });
-
-    it("returns a tool error when updating a test case that does not exist", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: undefined });
-      const svc = new McpService(makeLegacy(), db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "update_testcase", arguments: { testcaseId: "ghost", title: "x" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.error.code).toBe(RpcCode.ToolExecutionError);
-      expect(res.error.message).toMatch(/not found/i);
-    });
-
-    it("rejects update_testcase without testcaseId", async () => {
-      const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "update_testcase", arguments: { title: "x" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.error.code).toBe(RpcCode.ToolExecutionError);
-      expect(res.error.message).toMatch(/"testcaseId"/i);
-    });
-
-  });
-
-  describe("archive_testcase / restore_testcase project scoping", () => {
-    it("archives a test case by setting status to Archived, attributed to the agent actor", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "archive_testcase", arguments: { testcaseId: "tc-1" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.result.isError).toBe(false);
-      // Archive changes only status; the shared SQL writer preserves live relationships.
-      expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", {
-        status: "Archived"
-      });
-      expect((legacy as any).getTestCase).toHaveBeenCalledWith("tc-1");
-      expect((legacy as any).getTestCase).toHaveBeenCalledTimes(1);
-    });
-
-    it("restores a test case by setting status to Draft, attributed to the agent actor", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "restore_testcase", arguments: { testcaseId: "tc-1" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.result.isError).toBe(false);
-      expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", {
-        status: "Draft"
-      });
-      expect((legacy as any).getTestCase).toHaveBeenCalledTimes(1);
-    });
-
-    it("does not fetch or override suiteId/ownerId when the caller already supplied both", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      await svc.handleRequest(
-        rpc("tools/call", {
-          name: "update_testcase",
-          arguments: { testcaseId: "tc-1", suiteId: "suite-explicit", ownerId: "user-explicit", title: "New title" }
-        }),
-        principal(),
-        "proj-1"
-      );
-      expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", {
-        title: "New title",
-        suiteId: "suite-explicit",
-        ownerId: "user-explicit"
-      });
-      // getTestCase is still called once for the return value, but not a second time to look up
-      // current suiteId/ownerId, since both were already supplied.
-      expect((legacy as any).getTestCase).toHaveBeenCalledTimes(1);
-    });
-
-    it("respects an explicit null suiteId (unassign from suite) instead of preserving the current one", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      await svc.handleRequest(
-        rpc("tools/call", { name: "update_testcase", arguments: { testcaseId: "tc-1", suiteId: null, ownerId: null } }),
-        principal(),
-        "proj-1"
-      );
-      expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", { suiteId: null, ownerId: null });
-    });
-
-    it("denies archiving and restoring a test case that belongs to another project", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-OTHER" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-
-      const archiveRes: any = await svc.handleRequest(
-        rpc("tools/call", { name: "archive_testcase", arguments: { testcaseId: "tc-1" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(archiveRes.error.code).toBe(RpcCode.ProjectScopeDenied);
-
-      const restoreRes: any = await svc.handleRequest(
-        rpc("tools/call", { name: "restore_testcase", arguments: { testcaseId: "tc-1" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(restoreRes.error.code).toBe(RpcCode.ProjectScopeDenied);
-      expect((legacy as any).updateTestCase).not.toHaveBeenCalled();
-    });
-
-    it("returns a tool error for archive_testcase/restore_testcase on a test case that does not exist", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: undefined });
-      const svc = new McpService(makeLegacy(), db, writableLimits);
-      const archiveRes: any = await svc.handleRequest(
-        rpc("tools/call", { name: "archive_testcase", arguments: { testcaseId: "ghost" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(archiveRes.error.code).toBe(RpcCode.ToolExecutionError);
-      expect(archiveRes.error.message).toMatch(/not found/i);
-
-      const restoreRes: any = await svc.handleRequest(
-        rpc("tools/call", { name: "restore_testcase", arguments: { testcaseId: "ghost" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(restoreRes.error.code).toBe(RpcCode.ToolExecutionError);
-      expect(restoreRes.error.message).toMatch(/not found/i);
-    });
-
-    it("rejects archive_testcase and restore_testcase without testcaseId", async () => {
-      const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db, writableLimits);
-      expect(
-        (await svc.handleRequest(rpc("tools/call", { name: "archive_testcase", arguments: {} }), principal(), "proj-1") as any).error
-          .message
-      ).toMatch(/"testcaseId"/i);
-      expect(
-        (await svc.handleRequest(rpc("tools/call", { name: "restore_testcase", arguments: {} }), principal(), "proj-1") as any).error
-          .message
-      ).toMatch(/"testcaseId"/i);
-    });
-  });
-
-  describe("duplicate_testcase project scoping", () => {
-    it("duplicates a test case, attributed to the agent actor, without altering the original", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "duplicate_testcase", arguments: { testcaseId: "tc-1" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.result.isError).toBe(false);
-      expect((legacy as any).duplicateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1");
-      // updateTestCase (or any other write on the source id) must never be invoked by a duplicate.
-      expect((legacy as any).updateTestCase).not.toHaveBeenCalled();
-      const body = JSON.parse(res.result.content[0].text);
-      expect(body.id).toBe("tc-copy");
-    });
-
-    it("denies duplicate_testcase for a test case belonging to another project", async () => {
-      const { db } = makeDb({ testcaseProject: "proj-OTHER" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "duplicate_testcase", arguments: { testcaseId: "tc-1" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.error.code).toBe(RpcCode.ProjectScopeDenied);
-      expect((legacy as any).duplicateTestCase).not.toHaveBeenCalled();
-    });
-
-    it("returns a tool error when duplicating a test case that does not exist, and rejects a missing testcaseId", async () => {
-      const { db } = makeDb({ testcaseProject: undefined });
-      const svc = new McpService(makeLegacy(), db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "duplicate_testcase", arguments: { testcaseId: "ghost" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.error.code).toBe(RpcCode.ToolExecutionError);
-      expect(res.error.message).toMatch(/not found/i);
-
-      const missing: any = await svc.handleRequest(rpc("tools/call", { name: "duplicate_testcase", arguments: {} }), principal(), "proj-1");
-      expect(missing.error.message).toMatch(/"testcaseId"/i);
-    });
-  });
-
-  describe("bulk_create_testcases", () => {
-    it("creates every valid item and reports a per-item failure without stopping the batch", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
-      const legacy = makeLegacy({
-        createTestCase: jest
-          .fn()
-          .mockResolvedValueOnce({ id: "tc-a" })
-          .mockRejectedValueOnce({ getResponse: () => ({ error: "Title must be 512 characters or fewer" }) })
-          .mockResolvedValueOnce({ id: "tc-c" })
-      });
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", {
-          name: "bulk_create_testcases",
-          arguments: { testcases: [{ title: "A" }, { title: "B-too-long" }, { title: "C" }] }
-        }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.result.isError).toBe(false);
-      const body = JSON.parse(res.result.content[0].text);
-      expect(body.total).toBe(3);
-      expect(body.succeeded).toBe(2);
-      expect(body.failed).toBe(1);
-      expect(body.results[0]).toEqual({ index: 0, ok: true, testcase: { id: "tc-a" } });
-      expect(body.results[1].ok).toBe(false);
-      expect(body.results[1].error).toMatch(/512 characters/i);
-      expect(body.results[2]).toEqual({ index: 2, ok: true, testcase: { id: "tc-c" } });
-      expect((legacy as any).createTestCase).toHaveBeenCalledTimes(3);
-      // Every item attributed to the agent actor, exactly like create_testcase.
-      expect((legacy as any).createTestCase).toHaveBeenNthCalledWith(1, "proj-1", "mcp-actor-1", { title: "A" });
-    });
-
-    it("reports a per-item failure for a missing title without needing the legacy call to reject", async () => {
-      const { db } = makeDb();
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "bulk_create_testcases", arguments: { testcases: [{ title: "Fine" }, {}] } }),
-        principal(),
-        "proj-1"
-      );
-      const body = JSON.parse(res.result.content[0].text);
-      expect(body.succeeded).toBe(1);
-      expect(body.failed).toBe(1);
-      expect(body.results[1].error).toMatch(/"title"/i);
-      // The invalid item never reached the legacy layer at all.
-      expect((legacy as any).createTestCase).toHaveBeenCalledTimes(1);
-    });
-
-    it("rejects an empty or over-limit testcases array", async () => {
-      const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db, writableLimits);
-      const empty: any = await svc.handleRequest(
-        rpc("tools/call", { name: "bulk_create_testcases", arguments: { testcases: [] } }),
-        principal(),
-        "proj-1"
-      );
-      expect(empty.error.message).toMatch(/non-empty array/i);
-
-      const overLimit = Array.from({ length: 501 }, (_, i) => ({ title: `T${i}` }));
-      const tooMany: any = await svc.handleRequest(
-        rpc("tools/call", { name: "bulk_create_testcases", arguments: { testcases: overLimit } }),
-        principal(),
-        "proj-1"
-      );
-      expect(tooMany.error.message).toMatch(/limited to 500/i);
-    });
-
-    it("accepts a large batch at the limit, creating every item", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
-      const legacy = makeLegacy({ createTestCase: jest.fn().mockResolvedValue({ id: "tc-x" }) });
-      const svc = new McpService(legacy, db, writableLimits);
-      const atLimit = Array.from({ length: 500 }, (_, i) => ({ title: `T${i}` }));
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "bulk_create_testcases", arguments: { testcases: atLimit } }),
-        principal(),
-        "proj-1"
-      );
-      const body = JSON.parse(res.result.content[0].text);
-      expect(body.total).toBe(500);
-      expect(body.succeeded).toBe(500);
-      expect((legacy as any).createTestCase).toHaveBeenCalledTimes(500);
-    });
-
-    it("rejects bulk_create_testcases for a read-scoped token", async () => {
-      const { db } = makeDb();
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "bulk_create_testcases", arguments: { testcases: [{ title: "X" }] } }),
-        principal({ scopes: ["read"] }),
-        "proj-1"
-      );
-      expect(res.error.code).toBe(RpcCode.ScopeDenied);
-      expect((legacy as any).createTestCase).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("bulk_update_testcases / bulk_archive_testcases", () => {
-    it("applies one update to every valid id and reports invalid ids as per-item failures", async () => {
-      const { db } = makeDb({ ownedTestcaseIds: ["tc-1", "tc-2"] });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", {
-          name: "bulk_update_testcases",
-          arguments: { testcaseIds: ["tc-1", "tc-2", "tc-ghost"], priority: "High" }
-        }),
-        principal({ userId: "user-7" }),
-        "proj-1"
-      );
-      expect(res.result.isError).toBe(false);
-      // bulkUpdateTestCases requires a real user, not the agent actor (same as update_suite).
-      expect((legacy as any).bulkUpdateTestCases).toHaveBeenCalledWith("proj-1", "user-7", {
-        testcaseIds: ["tc-1", "tc-2"],
-        priority: "High",
-        suiteId: undefined,
-        status: undefined,
-        ownerId: undefined,
-        automationStatus: undefined,
-        severity: undefined
-      });
-      const body = JSON.parse(res.result.content[0].text);
-      expect(body.total).toBe(3);
-      expect(body.succeeded).toBe(2);
-      expect(body.failed).toBe(1);
-      expect(body.results.find((r: any) => r.id === "tc-ghost")).toEqual({
-        id: "tc-ghost",
-        ok: false,
-        error: "Test case not found in this project"
-      });
-    });
-
-    it("advertises and applies canonical severity through bulk update", async () => {
-      const { db } = makeDb({ ownedTestcaseIds: ["tc-1", "tc-2"] });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const catalog: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
-      const tool = catalog.result.tools.find((entry: any) => entry.name === "bulk_update_testcases");
-      expect(tool.inputSchema.properties.severity.type).toBe("string");
-
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "bulk_update_testcases", arguments: { testcaseIds: ["tc-1", "tc-2"], severity: "critical" } }),
-        principal({ userId: "user-7" }),
-        "proj-1"
-      );
-      expect(res.result.isError).toBe(false);
-      expect((legacy as any).bulkUpdateTestCases).toHaveBeenCalledWith("proj-1", "user-7", {
-        testcaseIds: ["tc-1", "tc-2"],
-        priority: undefined,
-        suiteId: undefined,
-        status: undefined,
-        ownerId: undefined,
-        automationStatus: undefined,
-        severity: "Critical"
-      });
-
-      const invalid: any = await svc.handleRequest(
-        rpc("tools/call", { name: "bulk_update_testcases", arguments: { testcaseIds: ["tc-1"], severity: "not-a-severity" } }),
-        principal({ userId: "user-7" }),
-        "proj-1"
-      );
-      expect(invalid.error.code).toBe(RpcCode.ToolExecutionError);
-      expect(invalid.error.message).toMatch(/severity/i);
-      expect((legacy as any).bulkUpdateTestCases).toHaveBeenCalledTimes(1);
-    });
-
-    it("deduplicates repeated ids in the input before applying and reporting", async () => {
-      const { db } = makeDb({ ownedTestcaseIds: ["tc-1"] });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "bulk_update_testcases", arguments: { testcaseIds: ["tc-1", "tc-1", "tc-1"], priority: "Low" } }),
-        principal(),
-        "proj-1"
-      );
-      const body = JSON.parse(res.result.content[0].text);
-      expect(body.total).toBe(1);
-      expect(body.results).toHaveLength(1);
-      expect((legacy as any).bulkUpdateTestCases).toHaveBeenCalledTimes(1);
-    });
-
-    it("never calls bulkUpdateTestCases at all when every id is invalid (no unintended update)", async () => {
-      const { db } = makeDb({ ownedTestcaseIds: [] });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "bulk_update_testcases", arguments: { testcaseIds: ["tc-ghost-1", "tc-ghost-2"], priority: "High" } }),
-        principal(),
-        "proj-1"
-      );
-      const body = JSON.parse(res.result.content[0].text);
-      expect(body.succeeded).toBe(0);
-      expect(body.failed).toBe(2);
-      expect((legacy as any).bulkUpdateTestCases).not.toHaveBeenCalled();
-    });
-
-    it("bulk-archives valid ids by setting status to Archived, leaving invalid ids untouched", async () => {
-      const { db } = makeDb({ ownedTestcaseIds: ["tc-1", "tc-2"] });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "bulk_archive_testcases", arguments: { testcaseIds: ["tc-1", "tc-2", "tc-ghost"] } }),
-        principal({ userId: "user-7" }),
-        "proj-1"
-      );
-      expect(res.result.isError).toBe(false);
-      expect((legacy as any).bulkUpdateTestCases).toHaveBeenCalledWith("proj-1", "user-7", {
-        testcaseIds: ["tc-1", "tc-2"],
-        status: "Archived"
-      });
-      const body = JSON.parse(res.result.content[0].text);
-      expect(body.succeeded).toBe(2);
-      expect(body.failed).toBe(1);
-    });
-
-    it("rejects an empty or over-limit testcaseIds array for both tools", async () => {
-      const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db, writableLimits);
-      for (const name of ["bulk_update_testcases", "bulk_archive_testcases"]) {
-        const empty: any = await svc.handleRequest(rpc("tools/call", { name, arguments: { testcaseIds: [] } }), principal(), "proj-1");
-        expect(empty.error.message).toMatch(/non-empty array/i);
-
-        const tooMany: any = await svc.handleRequest(
-          rpc("tools/call", { name, arguments: { testcaseIds: Array.from({ length: 501 }, (_, i) => `id-${i}`) } }),
-          principal(),
-          "proj-1"
-        );
-        expect(tooMany.error.message).toMatch(/limited to 500/i);
-      }
-    });
-
-    it("rejects bulk_update_testcases and bulk_archive_testcases for a read-scoped token", async () => {
-      const { db } = makeDb({ ownedTestcaseIds: ["tc-1"] });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const updateRes: any = await svc.handleRequest(
-        rpc("tools/call", { name: "bulk_update_testcases", arguments: { testcaseIds: ["tc-1"], priority: "High" } }),
-        principal({ scopes: ["read"] }),
-        "proj-1"
-      );
-      expect(updateRes.error.code).toBe(RpcCode.ScopeDenied);
-      const archiveRes: any = await svc.handleRequest(
-        rpc("tools/call", { name: "bulk_archive_testcases", arguments: { testcaseIds: ["tc-1"] } }),
-        principal({ scopes: ["read"] }),
-        "proj-1"
-      );
-      expect(archiveRes.error.code).toBe(RpcCode.ScopeDenied);
-      expect((legacy as any).bulkUpdateTestCases).not.toHaveBeenCalled();
     });
   });
 
@@ -1994,136 +1204,6 @@ describe("McpService", () => {
           await svc.handleRequest(rpc("tools/call", { name: "get_testcase_executions", arguments: {} }), principal(), "proj-1") as any
         ).error.message
       ).toMatch(/"testcaseId"/i);
-    });
-  });
-
-  describe("link_requirement_to_testcase / unlink_requirement_from_testcase project scoping", () => {
-    it("links a test case to a Jira requirement, attributed to the agent actor", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "link_requirement_to_testcase", arguments: { testcaseId: "tc-1", jiraIssueKey: "PROJ-1" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.result.isError).toBe(false);
-      // Requirement edits must not replay an earlier suite/owner snapshot.
-      expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", {
-        jiraIssueKey: "PROJ-1",
-        jiraUrl: undefined
-      });
-      expect((legacy as any).getTestCase).toHaveBeenCalledTimes(1);
-    });
-
-    it("unlinks a test case's Jira requirement by clearing jiraIssueKey/jiraUrl", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "unlink_requirement_from_testcase", arguments: { testcaseId: "tc-1", provider: "jira" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.result.isError).toBe(false);
-      expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", {
-        jiraIssueKey: null,
-        jiraUrl: null
-      });
-      expect((legacy as any).getTestCase).toHaveBeenCalledTimes(1);
-    });
-
-    it("links a test case to a Notion page by page id and unlinks it", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", testcaseProject: "proj-1" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const link: any = await svc.handleRequest(
-        rpc("tools/call", {
-          name: "link_requirement_to_testcase",
-          arguments: { testcaseId: "tc-1", notionPageId: "1429989f-e8ac-4eff-bc8f-57f56486db54", notionUrl: "https://www.notion.so/x" }
-        }),
-        principal(),
-        "proj-1"
-      );
-      expect(link.result.isError).toBe(false);
-      expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-1", "mcp-actor-1", {
-        notionPageId: "1429989f-e8ac-4eff-bc8f-57f56486db54",
-        notionUrl: "https://www.notion.so/x"
-      });
-
-      const unlink: any = await svc.handleRequest(
-        rpc("tools/call", { name: "unlink_requirement_from_testcase", arguments: { testcaseId: "tc-1", provider: "notion" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(unlink.result.isError).toBe(false);
-      expect((legacy as any).updateTestCase).toHaveBeenLastCalledWith("tc-1", "mcp-actor-1", {
-        notionPageId: null,
-        notionUrl: null
-      });
-    });
-
-    it("rejects a link that names a Notion page together with another provider's key", async () => {
-      const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "link_requirement_to_testcase", arguments: { testcaseId: "tc-1", jiraIssueKey: "PROJ-1", notionPageId: "p" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.error.message).toMatch(/only one of/i);
-    });
-
-    it("rejects link_requirement_to_testcase with neither or both of jiraIssueKey/linearIssueKey", async () => {
-      const { db } = makeDb();
-      const svc = new McpService(makeLegacy(), db, writableLimits);
-      const neither: any = await svc.handleRequest(
-        rpc("tools/call", { name: "link_requirement_to_testcase", arguments: { testcaseId: "tc-1" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(neither.error.message).toMatch(/jiraIssueKey.*linearIssueKey|linearIssueKey.*jiraIssueKey/i);
-
-      const both: any = await svc.handleRequest(
-        rpc("tools/call", {
-          name: "link_requirement_to_testcase",
-          arguments: { testcaseId: "tc-1", jiraIssueKey: "PROJ-1", linearIssueKey: "ENG-1" }
-        }),
-        principal(),
-        "proj-1"
-      );
-      expect(both.error.message).toMatch(/only one of/i);
-    });
-
-    it("rejects unlink_requirement_from_testcase with an invalid provider", async () => {
-      const { db } = makeDb({ testcaseProject: "proj-1" });
-      const svc = new McpService(makeLegacy(), db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "unlink_requirement_from_testcase", arguments: { testcaseId: "tc-1", provider: "github" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.error.code).toBe(RpcCode.ToolExecutionError);
-      expect(res.error.message).toMatch(/"provider" must be "jira" or "linear"/i);
-    });
-
-    it("denies link/unlink_requirement for a test case belonging to another project", async () => {
-      const { db } = makeDb({ testcaseProject: "proj-OTHER" });
-      const legacy = makeLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const linkRes: any = await svc.handleRequest(
-        rpc("tools/call", { name: "link_requirement_to_testcase", arguments: { testcaseId: "tc-1", jiraIssueKey: "PROJ-1" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(linkRes.error.code).toBe(RpcCode.ProjectScopeDenied);
-      const unlinkRes: any = await svc.handleRequest(
-        rpc("tools/call", { name: "unlink_requirement_from_testcase", arguments: { testcaseId: "tc-1", provider: "jira" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(unlinkRes.error.code).toBe(RpcCode.ProjectScopeDenied);
-      expect((legacy as any).updateTestCase).not.toHaveBeenCalled();
     });
   });
 
@@ -2229,131 +1309,6 @@ describe("McpService", () => {
         parentId: null,
         position: undefined
       });
-    });
-  });
-
-  describe("clone_test_suite", () => {
-    // A 2-node subtree: suite-1 (source, parent "suite-root") with one child suite-2, one test
-    // case directly in each. Exercises the parent-before-child clone order and per-suite
-    // test-case relocation in one pass.
-    function makeCloneLegacy(overrides: Partial<Record<string, jest.Mock>> = {}) {
-      return makeLegacy({
-        listSuites: jest.fn().mockResolvedValue([
-          { id: "suite-1", parentId: "suite-root", name: "Suite 1", position: 0, testCaseCount: 1, recursiveTestCaseCount: 2 },
-          { id: "suite-2", parentId: "suite-1", name: "Suite 2", position: 0, testCaseCount: 1, recursiveTestCaseCount: 1 }
-        ]),
-        listTestCases: jest
-          .fn()
-          .mockResolvedValueOnce({ rows: [], total: 1 }) // pre-count for suite-1
-          .mockResolvedValueOnce({ rows: [], total: 1 }) // pre-count for suite-2
-          .mockResolvedValueOnce({ rows: [{ id: "tc-in-suite-1" }], total: 1 }) // full fetch, suite-1
-          .mockResolvedValueOnce({ rows: [{ id: "tc-in-suite-2" }], total: 1 }), // full fetch, suite-2
-        createSuite: jest
-          .fn()
-          .mockResolvedValueOnce({ id: "suite-1-clone", name: "Suite 1 (copy)" })
-          .mockResolvedValueOnce({ id: "suite-2-clone", name: "Suite 2" }),
-        duplicateTestCase: jest
-          .fn()
-          .mockResolvedValueOnce({ id: "tc-in-suite-1-clone", ownerId: "owner-copied-1" })
-          .mockResolvedValueOnce({ id: "tc-in-suite-2-clone", ownerId: "owner-copied-2" }),
-        ...overrides
-      });
-    }
-
-    it("clones a suite and its subtree's test cases, leaving the originals untouched", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1", suiteProject: "proj-1" });
-      const legacy = makeCloneLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "clone_test_suite", arguments: { suiteId: "suite-1" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.result.isError).toBe(false);
-      const body = JSON.parse(res.result.content[0].text);
-      expect(body.suiteCount).toBe(2);
-      expect(body.testcaseCount).toBe(2);
-      expect(body.clonedSuiteId).toBe("suite-1-clone");
-
-      // Parent cloned before child: suite-1's clone must exist before suite-2 is created under it.
-      expect((legacy as any).createSuite).toHaveBeenNthCalledWith(1, "proj-1", { name: "Suite 1 (copy)", parentId: "suite-root", position: 0 });
-      expect((legacy as any).createSuite).toHaveBeenNthCalledWith(2, "proj-1", { name: "Suite 2", parentId: "suite-1-clone", position: 0 });
-
-      // Each source test case duplicated (attributed to the agent actor) then relocated into its
-      // new suite — the source suite/test case ids are never passed to any write except
-      // duplicateTestCase's read-only source-id argument.
-      expect((legacy as any).duplicateTestCase).toHaveBeenCalledWith("tc-in-suite-1", "mcp-actor-1");
-      // Relocation only changes suite; copied/current ownership is retained by the SQL writer.
-      expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-in-suite-1-clone", "mcp-actor-1", {
-        suiteId: "suite-1-clone"
-      });
-      expect((legacy as any).duplicateTestCase).toHaveBeenCalledWith("tc-in-suite-2", "mcp-actor-1");
-      expect((legacy as any).updateTestCase).toHaveBeenCalledWith("tc-in-suite-2-clone", "mcp-actor-1", {
-        suiteId: "suite-2-clone"
-      });
-      // Never a write keyed on the original suite ids.
-      expect((legacy as any).updateSuite).not.toHaveBeenCalled();
-    });
-
-    it("denies clone_test_suite for a suite belonging to another project", async () => {
-      const { db } = makeDb({ suiteProject: "proj-OTHER" });
-      const legacy = makeCloneLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "clone_test_suite", arguments: { suiteId: "suite-1" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.error.code).toBe(RpcCode.ProjectScopeDenied);
-      expect((legacy as any).createSuite).not.toHaveBeenCalled();
-    });
-
-    it("refuses a subtree over the suite-count limit before creating anything", async () => {
-      const { db } = makeDb({ suiteProject: "proj-1" });
-      const bigTree = Array.from({ length: 101 }, (_, i) => ({
-        id: i === 0 ? "suite-1" : `suite-child-${i}`,
-        parentId: i === 0 ? null : "suite-1",
-        name: `Suite ${i}`,
-        position: i
-      }));
-      const legacy = makeLegacy({ listSuites: jest.fn().mockResolvedValue(bigTree) });
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "clone_test_suite", arguments: { suiteId: "suite-1" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.error.code).toBe(RpcCode.ToolExecutionError);
-      expect(res.error.message).toMatch(/over the 100-suite clone limit/i);
-      expect((legacy as any).createSuite).not.toHaveBeenCalled();
-    });
-
-    it("returns a tool error when the source suite does not exist, and rejects a missing suiteId", async () => {
-      const { db } = makeDb({ suiteProject: undefined });
-      const svc = new McpService(makeLegacy(), db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "clone_test_suite", arguments: { suiteId: "ghost" } }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.error.code).toBe(RpcCode.ToolExecutionError);
-      expect(res.error.message).toMatch(/not found/i);
-
-      const missing: any = await svc.handleRequest(rpc("tools/call", { name: "clone_test_suite", arguments: {} }), principal(), "proj-1");
-      expect(missing.error.message).toMatch(/"suiteId"/i);
-    });
-
-    it("rejects clone_test_suite for a read-scoped token", async () => {
-      const { db } = makeDb({ suiteProject: "proj-1" });
-      const legacy = makeCloneLegacy();
-      const svc = new McpService(legacy, db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "clone_test_suite", arguments: { suiteId: "suite-1" } }),
-        principal({ scopes: ["read"] }),
-        "proj-1"
-      );
-      expect(res.error.code).toBe(RpcCode.ScopeDenied);
-      expect((legacy as any).createSuite).not.toHaveBeenCalled();
     });
   });
 
@@ -2908,6 +1863,7 @@ describe("McpService", () => {
       // makeDb("FROM executions e") single-shape mock — override the query fn directly since
       // requireExecutionOwner is called per item with different ids.
       query.mockImplementation((sql: string, params?: unknown[]) => {
+        if (sql.includes("SELECT p.settings, t.scopes")) return Promise.resolve({ rows: [approvedMcpRow()] });
         if (sql.includes("FROM actors a JOIN agents g")) return Promise.resolve({ rows: [] });
         if (sql.includes("FROM executions e")) {
           const id = (params as string[])?.[0];
@@ -2947,6 +1903,7 @@ describe("McpService", () => {
     it("reports a per-item failure for an execution in another project without touching it", async () => {
       const { db, query } = makeDb();
       query.mockImplementation((sql: string, params?: unknown[]) => {
+        if (sql.includes("SELECT p.settings, t.scopes")) return Promise.resolve({ rows: [approvedMcpRow()] });
         if (sql.includes("FROM actors a JOIN agents g")) return Promise.resolve({ rows: [] });
         if (sql.includes("FROM executions e")) {
           const id = (params as string[])?.[0];
@@ -3092,17 +2049,6 @@ describe("McpService", () => {
   });
 
   describe("argument validation & error mapping", () => {
-    it("rejects create_testcase without a title", async () => {
-      const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
-      const svc = new McpService(makeLegacy(), db, writableLimits);
-      const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "create_testcase", arguments: {} }),
-        principal(),
-        "proj-1"
-      );
-      expect(res.error.code).toBe(RpcCode.ToolExecutionError);
-      expect(res.error.message).toMatch(/title/i);
-    });
 
     it("rejects search_knowledge_base without q", async () => {
       const { db } = makeDb();
@@ -3144,7 +2090,7 @@ describe("MCP native model draft preview", () => {
   const call = (args: unknown = { model: draft() }) => rpc("tools/call", { name: "preview_behavior_model_draft", arguments: args });
   function setup(limits: PlanLimitsService = writableLimits) {
     const legacy = makeLegacy();
-    const query = jest.fn().mockResolvedValue({ rows: [{ allowed: true }] });
+    const query = jest.fn(async (sql: string) => ({ rows: sql.includes("SELECT p.settings, t.scopes") ? [approvedMcpRow()] : [{ allowed: true }] }));
     const db = { query } as unknown as DatabaseService;
     const preview = new ModelStudioPreview(db, legacy as unknown as LegacyService);
     const invoked = jest.spyOn(preview, "previewForUser");
@@ -3159,8 +2105,8 @@ describe("MCP native model draft preview", () => {
   it("advertises a bounded exact schema and returns the shared native result without writes", async () => {
     const { svc, query } = setup();
     const list: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
-    expect(list.result.tools).toHaveLength(59);
-    expect(new Set(list.result.tools.map((tool: any) => tool.name)).size).toBe(59);
+    expect(list.result.tools).toHaveLength(proposalReviewPreviewEnabled() ? 51 : 48);
+    expect(new Set(list.result.tools.map((tool: any) => tool.name)).size).toBe(proposalReviewPreviewEnabled() ? 51 : 48);
     const tool = list.result.tools.find((t: any) => t.name === "preview_behavior_model_draft");
     expect(tool.inputSchema).toMatchObject({ additionalProperties: false, required: ["model"],
       properties: { model: { additionalProperties: false, properties: { states: { maxItems: 32 }, transitions: { maxItems: 64 } } } } });
@@ -3205,9 +2151,92 @@ describe("MCP native model draft preview", () => {
     const revoked: any = await svc.handleRequest(call(), principal(), "proj-1");
     expect(revoked.error.code).toBe(RpcCode.ProjectScopeDenied);
     expect(invoked).not.toHaveBeenCalled();
-    query.mockImplementation(async (sql: string) => ({ rows: sql.includes("AS allowed") ? [{ allowed: false }] : [] }));
+    query.mockImplementation(async (sql: string) => ({ rows: sql.includes("SELECT p.settings, t.scopes") ? [approvedMcpRow()] : sql.includes("AS allowed") ? [{ allowed: false }] : [] }));
     const raced: any = await svc.handleRequest(call(), principal(), "proj-1");
     expect(raced.error.message).toContain("Project access changed");
     expect(raced.result).toBeUndefined();
+  });
+});
+
+
+describe("MCP project consent and named credential grants", () => {
+  it.each(["initialize", "tools/list", "ping", "tools/call"])("denies %s when the project has not opted in", async method => {
+    const { db } = makeDb({ mcpAccess: { enabled: false, revision: 0, clients: [] } });
+    const legacy = makeLegacy();
+    const result: any = await new McpService(legacy, db, writableLimits).handleRequest(rpc(method, { name: "list_projects" }), principal(), "proj-1");
+    expect(result.error.code).toBe(RpcCode.ProjectScopeDenied);
+    expect(result.result).toBeUndefined();
+    expect(legacy.getProject).not.toHaveBeenCalled();
+  });
+  it.each(["missing", "expired", "unapproved"])("denies a %s credential without returning project metadata", async reason => {
+    const access = approvedMcpRow().settings.externalMcpAccess as ProjectMcpAccess;
+    if (reason === "expired") access.clients[0].expiresAt = "2000-01-01T00:00:00.000Z";
+    if (reason === "unapproved") access.clients = [];
+    const { db } = makeDb({ mcpAccess: reason === "missing" ? null : access });
+    const result: any = await new McpService(makeLegacy(), db, writableLimits).handleRequest(rpc("tools/list"), principal(), "proj-1");
+    expect(result.error.code).toBe(RpcCode.ProjectScopeDenied);
+    expect(result.result).toBeUndefined();
+  });
+  it("filters discovery and refuses cached tools outside the approved client grant", async () => {
+    const access = approvedMcpRow().settings.externalMcpAccess as ProjectMcpAccess;
+    access.clients[0].allowedTools = ["list_projects"];
+    const { db } = makeDb({ mcpAccess: access });
+    const legacy = makeLegacy();
+    const svc = new McpService(legacy, db, writableLimits);
+    const list: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
+    expect(list.result.tools.map((tool: any) => tool.name)).toEqual(["list_projects"]);
+    const refused: any = await svc.handleRequest(rpc("tools/call", { name: "create_testcase", arguments: { title: "Forbidden" } }), principal(), "proj-1");
+    expect(refused.error.code).toBe(RpcCode.ScopeDenied);
+    expect(legacy.createTestCase).not.toHaveBeenCalled();
+  });
+  it("checks consent again on the next call after an already successful request", async () => {
+    const access = approvedMcpRow().settings.externalMcpAccess as ProjectMcpAccess;
+    const { db } = makeDb({ mcpAccess: access });
+    const svc = new McpService(makeLegacy(), db, writableLimits);
+    expect((await svc.handleRequest(rpc("initialize"), principal(), "proj-1") as any).result).toBeDefined();
+    access.enabled = false;
+    const refused: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
+    expect(refused.error.code).toBe(RpcCode.ProjectScopeDenied);
+  });
+});
+
+
+describe("MCP consent validation and transport bypass regression", () => {
+  it("leaves legacy projects off and fails closed on malformed persisted consent", () => {
+    expect(readMcpAccess({})).toEqual({ enabled: false, revision: 0, clients: [] });
+    expect(() => readMcpAccess({ externalMcpAccess: { enabled: true } })).toThrow();
+    expect(readMcpAccess(JSON.stringify({ externalMcpAccess: { enabled: false, revision: 2, clients: [] } })).revision).toBe(2);
+  });
+  it.each([null, [], {}, { enabled: "true", revision: 0, clients: [] }, { enabled: true, revision: -1, clients: [] }])("rejects malformed administrative input %#", value => {
+    expect(() => validateMcpAccess(value)).toThrow();
+  });
+  it("allows reductions on a billing-locked project, but never new, broader or extended grants", () => {
+    const before = approvedMcpRow().settings.externalMcpAccess as ProjectMcpAccess;
+    before.clients[0].allowedTools = ["list_projects"];
+    before.clients[0].expiresAt = "2030-01-01T00:00:00.000Z";
+    expect(onlyReducesMcpAccess(before, { ...before, enabled: false })).toBe(true);
+    expect(onlyReducesMcpAccess(before, { ...before, clients: [] })).toBe(true);
+    expect(onlyReducesMcpAccess(before, { ...before, clients: [{ ...before.clients[0], allowedTools: null }] })).toBe(false);
+    expect(onlyReducesMcpAccess(before, { ...before, clients: [{ ...before.clients[0], expiresAt: null }] })).toBe(false);
+    expect(onlyReducesMcpAccess({ ...before, enabled: false }, before)).toBe(false);
+  });
+  it.each(["notifications/initialized", "tools/list"])("checks consent before the %s shortcut for both aliases", async method => {
+    const { db } = makeDb({ mcpAccess: { enabled: false, revision: 0, clients: [] } });
+    const service = new McpService(makeLegacy(), db, writableLimits);
+    const controller = new McpController(service);
+    const body = method.startsWith("notifications/") ? { jsonrpc: "2.0", method } : rpc(method);
+    const req = { apiToken: principal(), header: () => "stale.cached.session" } as never;
+    for (const handle of [
+      (res: never) => controller.handle(req, res, "proj-1", body),
+      (res: never) => controller.handleForToken(req, res, body)
+    ]) {
+      const response = { status: jest.fn(), json: jest.fn(), end: jest.fn(), setHeader: jest.fn() };
+      response.status.mockReturnValue(response);
+      await handle(response as never);
+      expect(response.status).toHaveBeenCalledWith(201);
+      expect(response.json.mock.calls[0][0].error.code).toBe(RpcCode.ProjectScopeDenied);
+      expect(response.end).not.toHaveBeenCalled();
+      expect(response.setHeader).not.toHaveBeenCalled();
+    }
   });
 });

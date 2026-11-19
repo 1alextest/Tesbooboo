@@ -326,14 +326,14 @@ describe("Zyra model-response parsing", () => {
         { reply: "Created 3 test cases and saved them to the repository.", actionType: "create", operations: creates(3) },
         { testcases: stagedRows(3), activity: [] }
       );
-      expect(out).toContain("Sorry! Nothing was saved");
+      expect(out).toContain("The proposed changes have not been applied");
+      expect(out).toContain("select the changes you want, and Save them in the review panel");
       expect(out).toContain("Created 3 test cases and saved them to the repository.");
       expect(out).toContain("staged for your review");
     });
 
-    // The banner must not fire on rows that really were written immediately (move_to_suite), even
-    // though the reply text uses the same "saved"/"moved" language — proposedCount is 0 there because
-    // nothing about a move is staged, so the claim is true.
+    // A genuine applied-row result must not receive the unpublished-proposal correction. This is
+    // a formatter positive control, not an assertion that current chat moves bypass human review.
     it("does not correct a reply whose completion claim is actually true", () => {
       const out = internals(svc).reconcileZyraReply(
         { reply: "Moved 3 test cases into the Login suite.", actionType: "suite", operations: [{ type: "move_to_suite" }] },

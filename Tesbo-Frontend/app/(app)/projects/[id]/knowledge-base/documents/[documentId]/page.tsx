@@ -198,6 +198,8 @@ export default function KnowledgeDocumentPage() {
   const [confirmTarget, setConfirmTarget] = useState<KnowledgeDocumentHistoryEntry | null>(null);
   const [restorePhase, setRestorePhase] = useState<"idle" | "restoring" | "error">("idle");
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [reviewPending, setReviewPending] = useState(false);
+  const [reviewContextText, setReviewContextText] = useState("");
   // Bumped only when the editor's content must be force-replaced (a restore) — not on every
   // ordinary save, which would otherwise reset the caret/scroll position on every autosave tick.
   const [contentResetKey, setContentResetKey] = useState(0);
@@ -223,6 +225,7 @@ export default function KnowledgeDocumentPage() {
   const [titleError, setTitleError] = useState<string | null>(null);
   const editRevision = useRef(0);
   const writerRef = useRef<DocumentWriteQueue<KnowledgeDocument> | null>(null);
+  const persistedDocRef = useRef<KnowledgeDocument | null>(null);
   // Synchronous double-submit guard for restore: state alone can't stop a second click that fires
   // before React re-renders the disabled button, so this is checked and set before any await.
   const restoreInFlightRef = useRef(false);
@@ -274,6 +277,8 @@ export default function KnowledgeDocumentPage() {
         };
         latestTitle.current = data.title;
         lastValidTitle.current = data.title;
+        persistedDocRef.current = data;
+        setReviewContextText(data.contentText ?? "");
         setDoc(data);
         setBreadcrumb(data.breadcrumb);
         setTitle(data.title);
@@ -391,6 +396,7 @@ export default function KnowledgeDocumentPage() {
   function handleEditorUpdate(payload: { json: JSONContent; html: string; text: string }) {
     if (restoreInFlightRef.current || doc?.id !== documentId) return;
     latestContent.current = { contentJson: payload.json, contentHtml: payload.html, contentText: payload.text };
+    setReviewContextText(payload.text);
     editRevision.current++;
     scheduleSave(latestTitle.current);
   }
@@ -453,12 +459,19 @@ export default function KnowledgeDocumentPage() {
     }
     if (visible) setSaveStatus("saving");
     try {
-      const updated = await writer.save(revision, () => updateKnowledgeDocument(projectId, documentId, {
-        title: nextTitle,
-        contentJson: payload?.contentJson,
-        contentHtml: payload?.contentHtml,
-        contentText: payload?.contentText,
-      }), generation);
+      const updated = await writer.save(revision, async () => {
+        const saved = await updateKnowledgeDocument(projectId, documentId, {
+          title: nextTitle,
+          contentJson: payload?.contentJson,
+          contentHtml: payload?.contentHtml,
+          contentText: payload?.contentText,
+          expectedRevision: persistedDocRef.current?.editRevision,
+        });
+        // Advance inside the queue operation so the next save/review uses the committed base,
+        // even if React has not rendered the response or a review barrier is already waiting.
+        if (writerRef.current === writer) persistedDocRef.current = saved;
+        return saved;
+      }, generation);
       if (!visible || !isMountedRef.current || writerRef.current !== writer || revision !== editRevision.current || restoreInFlightRef.current) return;
       setDoc(updated);
       setSaveStatus("saved");
@@ -471,6 +484,7 @@ export default function KnowledgeDocumentPage() {
   }
 
   async function handleDuplicate() {
+    if (restoreInFlightRef.current) return;
     try {
       const dup = await duplicateKnowledgeDocument(projectId, documentId);
       router.push(`/projects/${projectId}/knowledge-base/documents/${dup.id}`);
@@ -480,6 +494,7 @@ export default function KnowledgeDocumentPage() {
   }
 
   async function handleDelete() {
+    if (restoreInFlightRef.current) return;
     if (!window.confirm(`Delete "${title}"? It will be moved to trash.`)) return;
     try {
       await deleteKnowledgeDocument(projectId, documentId);
@@ -502,7 +517,7 @@ export default function KnowledgeDocumentPage() {
   // manual document's version-diff entries ever carry a versionId (see ChangeHistoryList), so this
   // is only ever reachable for those.
   function requestRestoreVersion(entry: KnowledgeDocumentHistoryEntry) {
-    if (restorePhase === "restoring" || !entry.versionId) return; // one confirmation/restore in flight at a time
+    if (restoreInFlightRef.current || !entry.versionId) return; // one confirmation/restore/review in flight at a time
     setConfirmTarget(entry);
     setRestorePhase("idle");
     setRestoreError(null);
@@ -536,7 +551,7 @@ export default function KnowledgeDocumentPage() {
     try {
       // Drain earlier in-flight/queued writes before sending the restore. If one fails after this
       // confirmation, the queue rejects the barrier instead of blindly sending another mutation.
-      const updated = await writer.restore(() => restoreKnowledgeDocumentVersion(projectId, documentId, confirmTarget.versionId!));
+      const updated = await writer.restore(() => restoreKnowledgeDocumentVersion(projectId, documentId, confirmTarget.versionId!, persistedDocRef.current?.editRevision));
       if (!isMountedRef.current || writerRef.current !== writer) return;
       latestContent.current = {
         contentJson: (updated.contentJson ?? null) as JSONContent,
@@ -545,6 +560,8 @@ export default function KnowledgeDocumentPage() {
       };
       latestTitle.current = updated.title;
       lastValidTitle.current = updated.title;
+      persistedDocRef.current = updated;
+      setReviewContextText(updated.contentText ?? "");
       editRevision.current++;
       setDoc(updated);
       setTitle(updated.title);
@@ -567,20 +584,56 @@ export default function KnowledgeDocumentPage() {
   }
 
   async function handleApprove() {
-    try {
-      const updated = await approveAiMemory(projectId, documentId);
-      setDoc(updated);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to approve AI memory.");
-    }
+    await handleReview("approved");
   }
 
   async function handleReject() {
+    await handleReview("rejected");
+  }
+
+  async function handleReview(decision: "approved" | "rejected") {
+    const writer = writerRef.current;
+    if (!writer || restoreInFlightRef.current || doc?.id !== documentId) return;
+    if (!title.trim() || titleError || documentPayloadSize(latestContent.current) > MAX_DOCUMENT_PAYLOAD_BYTES ||
+        (requireContentAndTitle && !latestContent.current?.contentText.trim())) {
+      setError("Finish saving a valid document before reviewing it.");
+      return;
+    }
+    if (saveStatus === "unsaved" && !pendingAutosave.current) {
+      setError("Save your changes successfully before reviewing this document.");
+      return;
+    }
+    restoreInFlightRef.current = true; // The same queue barrier also fences edits during review.
+    setReviewPending(true);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    const pending = pendingAutosave.current;
+    pendingAutosave.current = null;
+    pending?.();
     try {
-      const updated = await rejectAiMemory(projectId, documentId);
+      const updated = await writer.restore(() => {
+        const saved = persistedDocRef.current;
+        if (saved?.id !== documentId || !saved.editRevision) throw new Error("Reload this document before reviewing it.");
+        return decision === "approved"
+          ? approveAiMemory(projectId, documentId, saved.editRevision)
+          : rejectAiMemory(projectId, documentId, saved.editRevision);
+      });
+      if (!isMountedRef.current || writerRef.current !== writer) return;
+      persistedDocRef.current = updated;
       setDoc(updated);
+      setSaveStatus("saved");
+      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to reject AI memory.");
+      if (!isMountedRef.current || writerRef.current !== writer) return;
+      // A failed queued save leaves the visible draft uncommitted. A second review click
+      // must not approve the older persisted copy after the queue barrier is released.
+      setSaveStatus("unsaved");
+      setError(err instanceof Error ? err.message : "Could not record this review. Reload and check its current state.");
+    } finally {
+      if (writerRef.current === writer) {
+        restoreInFlightRef.current = false;
+        setReviewPending(false);
+      }
     }
   }
 
@@ -596,6 +649,8 @@ export default function KnowledgeDocumentPage() {
   }
 
   const isAiMemory = doc.documentType === "ai_memory";
+  const hasExactMemoryReview = doc.reviewBinding === "exact_snapshot";
+  const memoryNeedsReview = isAiMemory && (!hasExactMemoryReview || (doc.status !== "approved" && doc.status !== "rejected"));
   // Provider mirrors are rewritten wholesale by each sync, so the editor is locked and the API
   // rejects updates. Comments are the writable channel — they're stored apart from the body.
   const isSyncedMirror = doc.isReadOnly && doc.sourceRole === "mirror";
@@ -681,7 +736,7 @@ export default function KnowledgeDocumentPage() {
             value={title}
             onChange={(e) => handleTitleChange(e.target.value)}
             onBlur={handleTitleBlur}
-            readOnly={bodyLocked || restorePhase === "restoring"}
+            readOnly={bodyLocked || restorePhase === "restoring" || reviewPending}
             className={`!h-auto w-full border-0 !bg-transparent px-0 text-[26px] font-semibold shadow-none focus:ring-0 ${
               bodyLocked ? "cursor-default" : ""
             }`}
@@ -700,8 +755,8 @@ export default function KnowledgeDocumentPage() {
             </StatusChip>
           )}
           {isAiMemory && (
-            <StatusChip tone={doc.status === "approved" ? "success" : doc.status === "rejected" ? "error" : "draft"} dot>
-              {doc.status === "approved" ? "Approved memory" : doc.status === "rejected" ? "Rejected" : "AI Generated"}
+            <StatusChip tone={hasExactMemoryReview && doc.status === "approved" ? "success" : hasExactMemoryReview && doc.status === "rejected" ? "error" : "draft"} dot>
+              {memoryNeedsReview ? "Review required" : doc.status === "approved" ? "Approved memory" : "Rejected"}
             </StatusChip>
           )}
           {!isAiMemory && (
@@ -724,7 +779,7 @@ export default function KnowledgeDocumentPage() {
             </button>
             {menuOpen && (
               <div className="absolute right-0 z-20 mt-1 min-w-[180px] rounded-[8px] border border-[var(--border)] bg-[var(--surface-overlay)] py-1 shadow-[var(--shadow-elevated)]">
-                <button onClick={handleDuplicate} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-[var(--surface-secondary)]">
+                <button onClick={handleDuplicate} disabled={restorePhase === "restoring" || reviewPending} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-[var(--surface-secondary)]">
                   <IconCopy size={14} /> Duplicate
                 </button>
                 <button onClick={openHistory} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-[var(--surface-secondary)]">
@@ -734,7 +789,7 @@ export default function KnowledgeDocumentPage() {
                   <IconLink size={14} /> {linkCopied ? "Copied!" : "Copy link"}
                 </button>
                 {!isZyraMemory && canModifyDoc && (
-                  <button onClick={handleDelete} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-[var(--error-foreground)] hover:bg-[var(--error-soft)]">
+                  <button onClick={handleDelete} disabled={restorePhase === "restoring" || reviewPending} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-[var(--error-foreground)] hover:bg-[var(--error-soft)]">
                     <IconTrash size={14} /> Delete
                   </button>
                 )}
@@ -742,7 +797,7 @@ export default function KnowledgeDocumentPage() {
             )}
           </div>
           {!bodyLocked && (
-            <Button variant="secondary" size="sm" onClick={handleManualSave} disabled={restorePhase === "restoring"}>Save</Button>
+            <Button variant="secondary" size="sm" onClick={handleManualSave} disabled={restorePhase === "restoring" || reviewPending}>Save</Button>
           )}
         </div>
       </div>
@@ -794,13 +849,18 @@ export default function KnowledgeDocumentPage() {
         </div>
       )}
 
-      {isAiMemory && canApprove && doc.status !== "approved" && doc.status !== "rejected" && (
-        <div className="mb-4 flex items-center justify-between rounded-[10px] border border-[var(--ai-border)] bg-[var(--ai-soft)] px-4 py-3">
-          <p className="text-[13px] text-[var(--ai-primary)]">This is AI-generated memory. Review before it&apos;s trusted as context.</p>
-          <div className="flex gap-2">
-            <Button size="sm" variant="secondary" onClick={handleReject}><IconX size={14} /> Reject</Button>
-            <Button size="sm" onClick={handleApprove}><IconCheck size={14} /> Approve</Button>
+      {memoryNeedsReview && (
+        <div className="mb-4 rounded-[10px] border border-[var(--ai-border)] bg-[var(--ai-soft)] px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[13px] text-[var(--ai-primary)]">{doc.reviewBinding === "legacy_unverified" ? "This document has a legacy approval without an exact review receipt. It is excluded from AI context until an owner or manager reviews it again." : "This is AI-generated memory. Review before it's trusted as context."}</p>
+            {canApprove && <div className="flex gap-2">
+              <Button size="sm" variant="secondary" onClick={handleReject} disabled={reviewPending}><IconX size={14} /> Reject</Button>
+              <Button size="sm" onClick={handleApprove} disabled={reviewPending}><IconCheck size={14} /> {reviewPending ? "Recording review…" : "Approve"}</Button>
+            </div>}
           </div>
+          <p className="mt-3 text-[12px] font-medium">Text supplied as AI context</p>
+          <pre tabIndex={0} aria-label="Text supplied as AI context" className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-[var(--border)] bg-[var(--surface)] p-3 text-[12px]">{reviewContextText || "No context text."}</pre>
+          {saveStatus !== "saved" && <p className="mt-1 text-[12px] text-[var(--muted)]">Includes your pending edits. They must save successfully before this review is recorded.</p>}
         </div>
       )}
 
@@ -835,7 +895,7 @@ export default function KnowledgeDocumentPage() {
           <RichTextEditor
             contentJson={doc.contentJson as JSONContent | null}
             contentHtml={doc.contentHtml}
-            editable={!isSyncedMirror && restorePhase !== "restoring"}
+            editable={!isSyncedMirror && restorePhase !== "restoring" && !reviewPending}
             onUpdate={handleEditorUpdate}
             resetKey={contentResetKey}
           />

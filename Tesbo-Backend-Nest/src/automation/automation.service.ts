@@ -436,12 +436,15 @@ export class AutomationService {
            cycle_id, testcase_id, snapshot_title, position,
            snapshot_external_id, snapshot_priority, snapshot_type, snapshot_suite_id,
            snapshot_description, snapshot_preconditions, snapshot_postconditions, snapshot_steps,
-           snapshot_test_data, snapshot_automation_status, snapshot_automation_tags
+           snapshot_test_data, snapshot_automation_status, snapshot_automation_tags,
+           snapshot_approval_revision, snapshot_reviewed_content
          )
          SELECT $1, t.id, t.title, base.pos + i.ord,
                 t.external_id, t.priority, t.type, t.suite_id,
                 t.description, t.preconditions, t.postconditions, t.steps,
-                t.test_data, t.automation_status, t.automation_tags
+                t.test_data, t.automation_status, t.automation_tags,
+                encode(sha256(convert_to(testcase_approval_snapshot(t.id)::text,'UTF8')),'hex'),
+                testcase_approval_snapshot(t.id)
            FROM input i
            JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3 AND t.status = 'Approved'
            CROSS JOIN base

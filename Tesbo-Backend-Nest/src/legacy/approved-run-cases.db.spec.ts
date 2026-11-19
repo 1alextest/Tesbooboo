@@ -12,6 +12,7 @@ const url = process.env.DATABASE_URL ?? "";
   "Approved-only run-case write policy — real migrated PostgreSQL", () => {
     let admin: Client, pool: Pool, project: string, user: string, approved: string, draft: string, inReview: string, foreign: string;
     const stamp = randomUUID();
+    const poolApplicationName = `approved-run-review-${stamp}`;
     const approvedExternal = "APR-OK";
     const draftExternal = "APR-DRAFT";
     const cases = (cycleId: string) => admin.query<{ id: string; testcase_id: string }>(
@@ -27,10 +28,23 @@ const url = process.env.DATABASE_URL ?? "";
         [project, name]
       )).rows[0].id;
     }
+    async function waitForBlockedCaseWriters(count: number): Promise<void> {
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        const blocked = await admin.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE application_name=$1 AND state='active' AND wait_event_type='Lock'
+              AND query LIKE '%testcases%'`, [poolApplicationName]
+        );
+        if (blocked.rows[0].n >= count) return;
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error(`Expected ${count} case queries to wait for the open writer transaction`);
+    }
     beforeAll(async () => {
       admin = new Client({ connectionString: url });
       await admin.connect();
-      pool = new Pool({ connectionString: url, max: 5 });
+      pool = new Pool({ connectionString: url, max: 5, application_name: poolApplicationName });
       user = (await admin.query<{ id: string }>(
         "INSERT INTO users(email,name) VALUES ($1,'Run approval QA') RETURNING id",
         ["run-approval-" + stamp + "@tesbo.invalid"]
@@ -72,10 +86,18 @@ const url = process.env.DATABASE_URL ?? "";
     function service() {
       const db = new DatabaseService(pool), svc = makeLegacy(db);
       jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({ id: project } as never);
+      jest.spyOn(svc as never, "enqueueTestcaseEmbedding" as never).mockImplementation((() => undefined) as never);
       return svc;
     }
+    async function approve(id = approved) {
+      const svc = service();
+      const reviewed = await svc.getTestCaseForUser(user, project, id);
+      return svc.approveTestCaseForUser(user, project, id, {
+        expectedRevision: reviewed.editRevision, expectedApprovalRevision: reviewed.approvalRevision
+      }, { kind: "human_session" });
+    }
     async function resetStatus(): Promise<void> {
-      await admin.query("UPDATE testcases SET status='Approved' WHERE id=$1", [approved]);
+      await approve();
       await admin.query("UPDATE testcases SET status='Draft' WHERE id=$1", [draft]);
       await admin.query("UPDATE testcases SET status='In Review' WHERE id=$1", [inReview]);
     }
@@ -131,7 +153,7 @@ const url = process.env.DATABASE_URL ?? "";
         expect((await admin.query<{ id: string }>(
           "SELECT id FROM executions WHERE id=$1", [oldExecution]
         )).rows).toHaveLength(1);
-        await admin.query("UPDATE testcases SET status='Approved' WHERE id=$1", [approved]);
+        await approve();
         expect(await svc.addCycleTestCases(cycle, user, { testcaseIds: [approved] }))
           .toMatchObject({ added: 1, skipped: 0 });
         expect((await cases(cycle)).rows).toHaveLength(1);
@@ -168,9 +190,11 @@ const url = process.env.DATABASE_URL ?? "";
       try {
         await blocker.query("BEGIN");
         await blocker.query("UPDATE testcases SET status='Draft' WHERE id=$1", [approved]);
-        const attempt = service().addCycleTestCases(cycle,user,{ testcaseIds: [approved] });
+        const attempt = service().addCycleTestCases(cycle,user,{ testcaseIds: [approved] })
+          .then(() => null, (error: unknown) => error);
+        await waitForBlockedCaseWriters(1);
         await blocker.query("COMMIT");
-        await expect(attempt).rejects.toMatchObject({ status: 409 });
+        expect(await attempt).toMatchObject({ status: 409 });
         expect((await cases(cycle)).rows).toHaveLength(0);
         expect((await executions(cycle)).rows).toHaveLength(0);
       } finally {
@@ -196,6 +220,117 @@ const url = process.env.DATABASE_URL ?? "";
       expect(run.casesAttached).toBe(1);
       expect((await cases(run.runId)).rows.map(r=>r.testcase_id)).toEqual([approved]);
       expect((await executions(run.runId)).rows).toHaveLength(1);
+    });
+
+    it("rejects a historical Approved label with no semantic receipt and preserves existing run history", async () => {
+      const unknown = (await admin.query<{id: string}>(
+        "INSERT INTO testcases(project_id,external_id,title,status) VALUES ($1,$2,'Unverified old approval','Approved') RETURNING id",
+        [project, `APR-UNKNOWN-${randomUUID().slice(0,8)}`]
+      )).rows[0].id;
+      const cycle = await newCycle("No fabricated historical approval");
+      await expect(service().addCycleTestCases(cycle,user,{testcaseIds:[unknown]})).rejects.toMatchObject({status:409});
+      expect((await cases(cycle)).rows).toHaveLength(0);
+      expect((await admin.query("SELECT * FROM testcase_approval_receipts WHERE testcase_id=$1",[unknown])).rows).toHaveLength(0);
+    });
+
+    it("binds the exact reviewed snapshot, keeps retry idempotent, and rejects content ABA", async () => {
+      const svc=service(), reviewed=await svc.getTestCaseForUser(user,project,draft);
+      const request={expectedRevision:reviewed.editRevision,expectedApprovalRevision:reviewed.approvalRevision};
+      const first=await svc.approveTestCaseForUser(user,project,draft,request,{kind:"human_session"});
+      const repeated=await svc.approveTestCaseForUser(user,project,draft,request,{kind:"human_session"});
+      expect(repeated.receipt.id).toBe(first.receipt.id);
+      expect(first.receipt.reviewedSnapshot).toEqual(reviewed.approvalSnapshot);
+      const audit=await admin.query("SELECT * FROM audit_logs WHERE entity_id=$1 AND action='testcase_approved'",[draft]);
+      expect(audit.rows.filter(row=>row.diff?.approvedRevision===request.expectedRevision)).toHaveLength(1);
+      const cycle=await newCycle("Pinned reviewed content");
+      await svc.addCycleTestCases(cycle,user,{testcaseIds:[draft]});
+      const snapshot=(await admin.query("SELECT snapshot_reviewed_content,snapshot_approval_revision FROM cycle_items WHERE cycle_id=$1",[cycle])).rows[0];
+      expect(snapshot.snapshot_reviewed_content).toEqual(reviewed.approvalSnapshot);
+      await admin.query("UPDATE testcases SET title='Temporary change' WHERE id=$1",[draft]);
+      await admin.query("UPDATE testcases SET title=$2 WHERE id=$1",[draft,reviewed.title]);
+      expect((await svc.getTestCaseForUser(user,project,draft)).approvalRevision).not.toBe(reviewed.approvalRevision);
+      await expect(svc.approveTestCaseForUser(user,project,draft,request,{kind:"human_session"})).rejects.toMatchObject({status:409});
+      expect((await admin.query("SELECT snapshot_reviewed_content,snapshot_approval_revision FROM cycle_items WHERE cycle_id=$1",[cycle])).rows[0]).toEqual(snapshot);
+      await expect(admin.query("UPDATE testcase_approval_receipts SET reviewed_snapshot='{}'::jsonb WHERE id=$1",[first.receipt.id])).rejects.toMatchObject({code:"23514"});
+      await resetStatus();
+    });
+
+    it("rejects a partially bound receipt without a human principal at the database boundary", async () => {
+      // The digest deliberately matches the actual snapshot: only the missing principal is
+      // invalid. A nullable CHECK expression must not treat this partial receipt as UNKNOWN.
+      await expect(admin.query(
+        `INSERT INTO testcase_approval_receipts
+           (project_id,testcase_id,approved_revision,actor_id,semantic_revision,reviewed_snapshot,principal_kind)
+         SELECT project_id,id,repeat('a',64),$2,
+                encode(sha256(convert_to(testcase_approval_snapshot(id)::text,'UTF8')),'hex'),
+                testcase_approval_snapshot(id),NULL
+           FROM testcases WHERE id=$1`, [inReview,user]
+      )).rejects.toMatchObject({code:"23514",constraint:"testcase_approval_snapshot_binding"});
+      expect((await admin.query(
+        "SELECT id FROM testcase_approval_receipts WHERE testcase_id=$1 AND approved_revision=repeat('a',64)",
+        [inReview]
+      )).rows).toHaveLength(0);
+    });
+
+    it("invalidates approval for custom values, their definitions and tag assignments while preserving old snapshots", async () => {
+      const field=(await admin.query<{id:string}>(
+        "INSERT INTO custom_field_definitions(project_id,key,name,field_type) VALUES ($1,$2,'Review field','text') RETURNING id",
+        [project,`review-${randomUUID()}`]
+      )).rows[0].id;
+      const tag=(await admin.query<{id:string}>("INSERT INTO custom_tags(project_id,name) VALUES ($1,$2) RETURNING id",[project,`Review ${randomUUID().slice(0,8)}`])).rows[0].id;
+      try {
+        await approve();
+        const before=await service().getTestCaseForUser(user,project,approved);
+        await admin.query("INSERT INTO custom_field_values(definition_id,testcase_id,value) VALUES ($1,$2,'\"first\"'::jsonb)",[field,approved]);
+        await expect(service().approveTestCaseForUser(user,project,approved,{expectedRevision:before.editRevision,expectedApprovalRevision:before.approvalRevision},{kind:"human_session"})).rejects.toMatchObject({status:409});
+        expect((await service().getTestCaseForUser(user,project,approved)).status).toBe("In Review");
+        await approve();
+        await admin.query("UPDATE custom_field_definitions SET name='Changed meaning' WHERE id=$1",[field]);
+        expect((await service().getTestCaseForUser(user,project,approved)).status).toBe("In Review");
+        await approve();
+        await admin.query("INSERT INTO testcase_custom_tags(testcase_id,tag_id) VALUES ($1,$2)",[approved,tag]);
+        const cycle=await newCycle("Dependency invalidation");
+        await expect(service().addCycleTestCases(cycle,user,{testcaseIds:[approved]})).rejects.toMatchObject({status:409});
+        await approve();
+        await admin.query("UPDATE custom_tags SET name='Changed tag' WHERE id=$1",[tag]);
+        expect((await service().getTestCaseForUser(user,project,approved)).status).toBe("In Review");
+      } finally {
+        await admin.query("DELETE FROM custom_field_definitions WHERE id=$1",[field]);
+        await admin.query("DELETE FROM custom_tags WHERE id=$1",[tag]);
+        await resetStatus();
+      }
+    });
+
+    it("serializes a dependency edit against approval and run admission", async () => {
+      const tag=(await admin.query<{id:string}>("INSERT INTO custom_tags(project_id,name) VALUES ($1,$2) RETURNING id",[project,`Race ${randomUUID().slice(0,8)}`])).rows[0].id;
+      await approve();
+      const reviewed=await service().getTestCaseForUser(user,project,approved);
+      const cycle=await newCycle("Concurrent dependency");
+      const blocker=new Client({connectionString:url});await blocker.connect();
+      try {
+        await blocker.query("BEGIN");
+        await blocker.query("INSERT INTO testcase_custom_tags(testcase_id,tag_id) VALUES ($1,$2)",[approved,tag]);
+        const approval=service().approveTestCaseForUser(user,project,approved,{expectedRevision:reviewed.editRevision,expectedApprovalRevision:reviewed.approvalRevision},{kind:"human_session"}).then(()=>null,(error:unknown)=>error);
+        const attachment=service().addCycleTestCases(cycle,user,{testcaseIds:[approved]}).then(()=>null,(error:unknown)=>error);
+        await waitForBlockedCaseWriters(2);
+        await blocker.query("COMMIT");
+        expect(await approval).toMatchObject({status:409});
+        expect(await attachment).toMatchObject({status:409});
+        expect((await cases(cycle)).rows).toHaveLength(0);
+      } finally {
+        await blocker.query("ROLLBACK");await blocker.end();
+        await admin.query("DELETE FROM custom_tags WHERE id=$1",[tag]);await resetStatus();
+      }
+    });
+
+    it("rolls back status and receipt when mandatory audit fails", async () => {
+      const svc=service(), reviewed=await svc.getTestCaseForUser(user,project,inReview);
+      const before=(await admin.query("SELECT * FROM testcases WHERE id=$1",[inReview])).rows[0];
+      const receipts=(await admin.query("SELECT * FROM testcase_approval_receipts WHERE testcase_id=$1 ORDER BY id",[inReview])).rows;
+      jest.spyOn(svc,"logProjectActivity").mockRejectedValueOnce(new Error("mandatory audit unavailable"));
+      await expect(svc.approveTestCaseForUser(user,project,inReview,{expectedRevision:reviewed.editRevision,expectedApprovalRevision:reviewed.approvalRevision},{kind:"human_session"})).rejects.toThrow("mandatory audit unavailable");
+      expect((await admin.query("SELECT * FROM testcases WHERE id=$1",[inReview])).rows[0]).toEqual(before);
+      expect((await admin.query("SELECT * FROM testcase_approval_receipts WHERE testcase_id=$1 ORDER BY id",[inReview])).rows).toEqual(receipts);
     });
   }
 );

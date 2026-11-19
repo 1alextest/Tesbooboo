@@ -28,6 +28,8 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
     projectId = (await setup.query<{ id: string }>("INSERT INTO projects (organization_id,key,name) VALUES ($1,'REPO','Repository integrity') RETURNING id", [org])).rows[0].id;
     otherProjectId = (await setup.query<{ id: string }>("INSERT INTO projects (organization_id,key,name) VALUES ($1,'OTHER','Bulk isolation control') RETURNING id", [org])).rows[0].id;
     await setup.query("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'owner'),($1,$3,'qa_engineer')", [projectId, owner, otherOwner]);
+    await setup.query("INSERT INTO organization_members (organization_id,user_id,role) VALUES ($1,$2,'owner'),($1,$3,'qa_engineer')", [org, owner, otherOwner]);
+    await setup.query("UPDATE users SET active_organization_id=$1 WHERE id=ANY($2::uuid[])", [org, [owner, otherOwner]]);
     root = await suite("Original parent"); nextRoot = await suite("Concurrent parent");
     control = await seedCase("Unselected control");
   });
@@ -513,13 +515,13 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
     } finally { await observed.end(); }
   });
 
-  // These drive the real save transaction and both entry implementations. Capabilities,
-  // custom fields/tags, queues and activity delivery are declared collaborators, not auth/AI proof.
+  // These drive the real bounded native Save transaction under either legacy batching setting.
+  // Custom fields/tags, queues and activity are declared collaborators, not HTTP authorization proof.
   function zyraFixture(f: ReturnType<typeof service>, batched: boolean) {
     const internals = f.svc as unknown as {
       config: { zyraSetBasedSaveEnabled: boolean };
       zyraProjectCapabilities: (id: string) => Promise<{ testcaseStorage: boolean }>;
-      zyraSaveAttempt: (project: string, actor: string, task: string, body: Record<string, unknown>, selected: null) => Promise<{ savedCount: number; suiteId: string | null; testcases: Array<{ id: string; suiteId: string | null }> }>;
+      zyraSaveAttempt: (project: string, actor: string, task: string, body: Record<string, unknown>, selected: number[]) => Promise<{ savedCount: number; suiteId: string | null; testcases: Array<{ id: string; suiteId: string | null }> }>;
     };
     internals.config.zyraSetBasedSaveEnabled = batched;
     jest.spyOn(internals, "zyraProjectCapabilities").mockResolvedValue({ testcaseStorage: true });
@@ -529,14 +531,20 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
     return (await setup.query("INSERT INTO ai_generation_requests (project_id,requested_by,provider,user_story,generated_payload) VALUES ($1,$2,'ci','Native Suite save boundary',$3::jsonb) RETURNING id", [projectId, owner, JSON.stringify([{ draft: { title: "Native reviewed draft", suiteId: target } }])])).rows[0].id as string;
   }
 
-  describe.each([false, true])("Zyra set-based save %s", (batched) => {
-    it.each(["valid", "foreign", "deleted", "missing", "malformed"])("preserves the existing %s Suite assignment/fallback contract", async (kind) => {
+  describe.each([false, true])("Zyra exact selected Save with legacy batching flag %s", (batched) => {
+    it.each(["valid", "foreign", "deleted", "missing", "malformed"])("requires an exact valid %s Suite assignment or explicit human unassigned choice", async (kind) => {
       const target = kind === "valid" ? root : kind === "foreign"
         ? (await setup.query("INSERT INTO suites (project_id,name) VALUES ($1,'Private review Suite') RETURNING id", [otherProjectId])).rows[0].id
         : kind === "deleted" ? (await setup.query("INSERT INTO suites (project_id,name,deleted_at) VALUES ($1,'Deleted review Suite',now()) RETURNING id", [projectId])).rows[0].id
           : kind === "missing" ? randomUUID() : "not-a-suite-id";
       const task = await reviewTask(target), before = await state(), f = service();
-      const result = await zyraFixture(f, batched).zyraSaveAttempt(projectId, owner, task, { suiteId: target }, null);
+      const reviewed = await f.svc.zyraTask(projectId,owner,task);
+      const body = { expectedProposalRevision: reviewed.proposalRevision, suiteId: target };
+      if (kind !== "valid") {
+        await expect(zyraFixture(f, batched).zyraSaveAttempt(projectId,owner,task,body,[0])).rejects.toMatchObject({status:400});
+        expect((await setup.query("SELECT saved_count,save_events FROM ai_generation_requests WHERE id=$1",[task])).rows[0]).toMatchObject({saved_count:0,save_events:[]});
+      }
+      const result = await zyraFixture(f, batched).zyraSaveAttempt(projectId, owner, task, { ...body, suiteId: kind === "valid" ? target : null }, [0]);
       expect(result).toMatchObject({ savedCount: 1, suiteId: kind === "valid" ? root : null });
       const row = (await setup.query("SELECT * FROM testcases WHERE id=$1", [result.testcases[0].id])).rows[0];
       expect(row).toMatchObject({ project_id: projectId, suite_id: kind === "valid" ? root : null, created_by: owner, updated_by: owner });
@@ -546,17 +554,18 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
 
     it("holds the deletion mutex from before review-row locks until the reviewed case commits", async () => {
       const target = await suite("Reviewed assignment wins"), task = await reviewTask(target);
+      const reviewed = await service().svc.zyraTask(projectId,owner,task);
       let entered!: () => void, release!: () => void;
       const checked = new Promise<void>((resolve) => { entered = resolve; }), gate = new Promise<void>((resolve) => { release = resolve; });
       let pid = 0;
       const statements: string[] = [];
       const observed = observedPool(async (sql, _result, raw) => {
         statements.push(sql);
-        if (!pid && sql.startsWith("SELECT id FROM suites WHERE id = ANY")) {
+        if (!pid && sql.startsWith("SELECT id FROM suites WHERE project_id = $1 AND id = ANY")) {
           pid = Number((await raw("SELECT pg_backend_pid() AS pid")).rows[0].pid); entered(); await gate;
         }
       });
-      const writing = zyraFixture(service(observed), batched).zyraSaveAttempt(projectId, owner, task, { suiteId: target }, null).then(() => null, (error: unknown) => error);
+      const writing = zyraFixture(service(observed), batched).zyraSaveAttempt(projectId, owner, task, { suiteId: target, expectedProposalRevision: reviewed.proposalRevision }, [0]).then(() => null, (error: unknown) => error);
       let deleting: Promise<unknown> | undefined;
       try {
         await checked; deleting = service().svc.deleteSuite(owner, target, "moveToDefault").then(() => null, (error: unknown) => error);
@@ -568,13 +577,14 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
 
     it("rolls back the case and review receipt on a late database fault", async () => {
       const task = await reviewTask(root), before = (await setup.query("SELECT * FROM testcases WHERE project_id=$1 ORDER BY id", [projectId])).rows;
+      const reviewed = await service().svc.zyraTask(projectId,owner,task);
       const reviewBefore = (await setup.query("SELECT * FROM ai_generation_requests WHERE id=$1", [task])).rows;
       let failed = false;
       const observed = observedPool(async (sql, result, raw) => {
         if (!failed && /UPDATE ai_generation_requests/.test(sql)) { failed = true; expect(result.rowCount).toBe(1); await raw("SELECT 1 / 0"); }
       });
       try {
-        await expect(zyraFixture(service(observed), batched).zyraSaveAttempt(projectId, owner, task, { suiteId: root }, null)).rejects.toMatchObject({ code: "22012" });
+        await expect(zyraFixture(service(observed), batched).zyraSaveAttempt(projectId, owner, task, { suiteId: root, expectedProposalRevision: reviewed.proposalRevision }, [0])).rejects.toMatchObject({ code: "22012" });
         expect(failed).toBe(true);
         expect((await setup.query("SELECT * FROM testcases WHERE project_id=$1 ORDER BY id", [projectId])).rows).toEqual(before);
         expect((await setup.query("SELECT * FROM ai_generation_requests WHERE id=$1", [task])).rows).toEqual(reviewBefore);
@@ -582,8 +592,9 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
     });
   });
 
-  it.each([false, true])("Zyra direct move revalidates its resolved target after concurrent deletion: %s", async (deleted) => {
+  it.each([false, true])("Zyra staged move preserves official state and revalidates the destination at human Save: %s", async (deleted) => {
     const target = await suite("Direct chat move"), before = await state(); let resolved = false;
+    const session = (await setup.query("INSERT INTO zyra_chat_sessions(project_id,user_id,title) VALUES ($1,$2,'Native staged movement') RETURNING id",[projectId,owner])).rows[0].id;
     const observed = observedPool(async (sql) => {
       if (!resolved && sql.startsWith("SELECT id, name FROM suites WHERE project_id = $1 AND id = $2::uuid")) {
         resolved = true; if (deleted) await service().svc.deleteSuite(owner, target, "moveToDefault");
@@ -593,20 +604,25 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
     const internals = f.svc as unknown as {
       resolveZyraActor: (id: string) => Promise<string>;
       zyraProjectCapabilities: (id: string) => Promise<{ suiteOperations: boolean }>;
-      applyZyraChatOperations: (...args: unknown[]) => Promise<{ activity: Array<{ title: string }>; moveBreakdown: Array<{ suiteId: string; count: number }> }>;
+      applyZyraChatOperations: (...args: unknown[]) => Promise<{ reviewRequestId: string; proposedCount: number; activity: Array<{ title: string }>; moveBreakdown: Array<{ suiteId: string; count: number }> }>;
     };
     jest.spyOn(internals, "resolveZyraActor").mockResolvedValue(owner);
     jest.spyOn(internals, "zyraProjectCapabilities").mockResolvedValue({ suiteOperations: true });
     try {
-      const result = await internals.applyZyraChatOperations(projectId, owner, randomUUID(), [{ type: "move_to_suite", suiteId: target, testcaseIds: [testcaseId] }]);
+      const result = await internals.applyZyraChatOperations(projectId, owner, session, [{ type: "move_to_suite", suiteId: target, testcaseIds: [testcaseId] }]);
       expect(resolved).toBe(true);
+      expect(await state()).toEqual(before);
+      expect(result.moveBreakdown).toEqual([]);
+      expect(result.proposedCount).toBe(1);
+      expect(f.activity).not.toHaveBeenCalled();
+      const reviewed = await f.svc.zyraTask(projectId,owner,result.reviewRequestId);
+      const applying = zyraFixture(f,false).zyraSaveAttempt(projectId,owner,result.reviewRequestId,{expectedProposalRevision:reviewed.proposalRevision},[0]);
       if (deleted) {
-        expect(await state()).toEqual(before); expect(result.moveBreakdown).toEqual([]);
-        expect(result.activity).toContainEqual(expect.objectContaining({ title: "An operation failed unexpectedly" }));
-        expect(f.activity).not.toHaveBeenCalled();
+        await expect(applying).rejects.toMatchObject({status:400});
+        expect(await state()).toEqual(before);
       } else {
+        expect(await applying).toMatchObject({savedCount:1});
         expect((await state()).row).toMatchObject({ suite_id: target });
-        expect(result.moveBreakdown).toEqual([expect.objectContaining({ suiteId: target, count: 1 })]);
       }
     } finally { await observed.end(); }
   });

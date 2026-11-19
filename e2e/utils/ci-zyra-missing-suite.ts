@@ -1,5 +1,6 @@
 import { expect, request as newRequest, test, type Page, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
+import { verifyMoveReviewPreview } from "./zyra-reviewed-moves";
 import { answerRepositorySnapshotSql } from "./zyra-answer-feedback";
 import { startFakeAiServer } from "./fake-ai-server";
 import { seedMoveRepository, settleMoveFixtures, type MoveRepositoryState } from "./zyra-move-feedback";
@@ -36,24 +37,10 @@ export async function verifyCiZyraMissingSuite(page: Page, api: string, web: str
       await test.step(label, async () => {
         try {
           await verifyZyraMissingSuite({ request: page.request, ai, base, ownerId, language, mode, fixture: fixtures.get(label)!, foreignSuiteId: foreign.destinationId, state,
+            beforeApply: async (preview) => verifyMoveReviewPreview(page, web, projectId, preview, testInfo, `destination-${label}`, mode !== "moved" ? SUITE_OPERATION_ERROR[language] : undefined),
             afterReply: async (evidence) => {
               const foreignAfter = await foreignState(); expect(foreignAfter).toEqual(foreignBefore);
               await testInfo.attach(`destination-${label}-readback`, { body: JSON.stringify({ ...evidence, foreignBefore, foreignAfter }, null, 2), contentType: "application/json" });
-              const trace = page.locator("[data-zyra-trace]");
-              const verify = async () => {
-                await expect(page.getByText(evidence.reply, { exact: true })).toBeVisible(); await expect(trace).toBeVisible();
-                for (const id of evidence.movedIds) {
-                  const row = evidence.before.cases.find((entry) => entry.id === id)!;
-                  await expect(page.getByText(String(row.external_id), { exact: true })).toBeVisible();
-                }
-                expect.soft(await page.getByText(SUITE_OPERATION_ERROR[language], { exact: true }).count()).toBe(evidence.refused ? 1 : 0);
-                expect.soft(await trace.getAttribute("data-zyra-trace")).toBe(evidence.refused ? "completed_with_errors" : "completed");
-              };
-              await page.goto(`${web}/projects/${projectId}/agents/zyra`); await verify(); await page.reload(); await verify();
-              await testInfo.attach(`destination-${label}`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
-              await trace.locator("summary").click();
-              expect.soft(await trace.locator('[data-zyra-step="staging"]').getAttribute("data-zyra-step-status")).toBe(evidence.refused ? "failed" : "ok");
-              await testInfo.attach(`destination-${label}-expanded`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
             },
           });
         } catch (error) {

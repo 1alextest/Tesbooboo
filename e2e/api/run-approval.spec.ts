@@ -1,6 +1,8 @@
 import { expect, test, request as newRequestContext, type APIRequestContext } from "@playwright/test";
 import { env } from "../utils/env";
 import { exec, execMany, literal, scalar } from "../utils/psql";
+import { approveTestcase } from "../utils/testcase-approval";
+import { approveMcpTestClient } from "../utils/mcp-access";
 import {
   anonymousContext, loginAs, provisionRbacTenant, rbacSuiteSkipReason, type RbacTenant
 } from "../utils/rbac-tenant";
@@ -47,14 +49,16 @@ test.describe("Approved-only native run attachments", () => {
     ]);
   }
 
-  function caseId(externalId: string, status: string): string {
+  async function caseId(externalId: string, status: string): Promise<string> {
     const p = literal(tenant!.mainProjectId);
-    return scalar("INSERT INTO testcases(project_id,external_id,title,status) VALUES (" +
+    const id = scalar("INSERT INTO testcases(project_id,external_id,title,status) VALUES (" +
       p + "," + literal(externalId) + "," + literal("E2E Approval " + externalId) + "," +
-      literal(status) + ") RETURNING id;");
+      literal(status === "Approved" ? "Draft" : status) + ") RETURNING id;");
+    if (status === "Approved") await approveTestcase(asOwner, tenant!.mainProjectId, id);
+    return id;
   }
 
-  function caseIdForRemoval(): string {
+  async function caseIdForRemoval(): Promise<string> {
     return caseId("APR-REMOVAL-" + Date.now(), "Approved");
   }
 
@@ -78,9 +82,9 @@ test.describe("Approved-only native run attachments", () => {
   }
 
   test("REST refuses Draft/In Review or mixed selection atomically, keeps approved replay and old snapshots", async () => {
-    const approved = caseId("APR-OK-1","Approved");
-    const draft = caseId("APR-DRAFT-1","Draft");
-    const review = caseId("APR-REVIEW-1","In Review");
+    const approved = await caseId("APR-OK-1","Approved");
+    const draft = await caseId("APR-DRAFT-1","Draft");
+    const review = await caseId("APR-REVIEW-1","In Review");
     const run = await cycle("E2E Approved-only REST run");
     const endpoint = "/api/cycles/" + run + "/testcases";
 
@@ -112,7 +116,7 @@ test.describe("Approved-only native run attachments", () => {
     expect(countItems(run)).toBe(1);
     expect(countExecutions(run)).toBe(1);
 
-    const foreign = caseId("APR-UNKNOWN-1","Approved");
+    const foreign = await caseId("APR-UNKNOWN-1","Approved");
     // A nonexistent/malformed ID remains a *skipped* item under the existing
     // native response contract, not a private cross-project data disclosure.
     exec("UPDATE testcases SET status='Approved' WHERE id=" + literal(foreign) + ";");
@@ -124,7 +128,7 @@ test.describe("Approved-only native run attachments", () => {
   });
 
   test("REST re-add after soft removal rejects Draft and retains historical result rows", async () => {
-    const caseId = caseIdForRemoval();
+    const caseId = await caseIdForRemoval();
     const run = await cycle("E2E Soft-removed Approval " + Date.now());
     const endpoint = "/api/cycles/" + run + "/testcases";
     const insert = async () => asQa.post(endpoint, {
@@ -156,7 +160,7 @@ test.describe("Approved-only native run attachments", () => {
     expect(Number(scalar("SELECT COUNT(*)::int FROM executions WHERE cycle_item_id=" +
       literal(oldItem) + ";"))).toBe(1); // Historical execution not destroyed.
 
-    exec("UPDATE testcases SET status='Approved' WHERE id=" + literal(caseId) + ";");
+    await approveTestcase(asOwner, tenant!.mainProjectId, caseId);
     const restored = await insert();
     expect(restored.status(), await restored.text()).toBe(201);
     expect(await restored.json()).toMatchObject({ requested: 1, added: 1, skipped: 0 });
@@ -189,13 +193,14 @@ test.describe("Approved-only native run attachments", () => {
   });
 
   test("MCP create-from-cases is atomic and returns no run for a Draft candidate", async () => {
-    const approved = caseId("APR-MCP-OK","Approved");
-    const draft = caseId("APR-MCP-DRAFT","Draft");
+    const approved = await caseId("APR-MCP-OK","Approved");
+    const draft = await caseId("APR-MCP-DRAFT","Draft");
     const tokenRes = await asOwner.post("/api/projects/" + tenant!.mainProjectId + "/apikeys", {
-      data: { name: "CI approved-only MCP", scopes: ["write"] }, failOnStatusCode: false
+      data: { name: "CI approved-only MCP", scopes: ["read", "write"] }, failOnStatusCode: false
     });
     expect(tokenRes.status(),await tokenRes.text()).toBe(201);
     const {id:tokenId,token} = await tokenRes.json() as {id:string;token:string};
+    await approveMcpTestClient(asOwner, tenant!.mainProjectId, { id: tokenId, name: "CI approved-only MCP", scopes: ["read", "write"] });
     const mcpApi = await newRequestContext.newContext({
       baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] }
     });
@@ -230,8 +235,8 @@ test.describe("Approved-only native run attachments", () => {
   });
 
   test("automation ingest refuses unapproved cases and does not persist an orphan run", async () => {
-    caseId("APR-AUTO-OK","Approved");
-    caseId("APR-AUTO-DRAFT","Draft");
+    await caseId("APR-AUTO-OK","Approved");
+    await caseId("APR-AUTO-DRAFT","Draft");
     const api = "/api/projects/" + tenant!.mainProjectId + "/automation/runs";
     const name = "E2E Automation Approval Rejected";
     const blocked = await asOwner.post(api, {
@@ -253,7 +258,7 @@ test.describe("Approved-only native run attachments", () => {
   });
 
   test("anonymous cannot use native cycle-add for an otherwise Approved case",async()=>{
-    const approved = caseId("APR-ANON-OK","Approved");
+    const approved = await caseId("APR-ANON-OK","Approved");
     const run=await cycle("E2E Unauthorized Run");
     const result=await anon.post("/api/cycles/"+run+"/testcases",{
       data:{testcaseIds:[approved]},failOnStatusCode:false
@@ -263,5 +268,79 @@ test.describe("Approved-only native run attachments", () => {
     expect(result.status(), await result.text()).toBe(400);
     expect((await result.json()).error).toMatch(/Authentication required/i);
     expect(countItems(run)).toBe(0);
+  });
+
+  test("machine issuer identity cannot approve, and generic status writes cannot replace exact human review", async () => {
+    const id=await caseId("APR-PRINCIPAL", "Draft");
+    const endpoint=`/api/projects/${tenant!.mainProjectId}/testcases/${id}`;
+    const reviewed=await (await asOwner.get(endpoint)).json();
+    const tokenResult=await asOwner.post(`/api/projects/${tenant!.mainProjectId}/apikeys`,{
+      data:{name:"E2E human-review boundary",scopes:["read","write"]}
+    });
+    expect(tokenResult.ok(),await tokenResult.text()).toBe(true);
+    const issued=await tokenResult.json();
+    const machine=await newRequestContext.newContext({baseURL:env.apiBaseUrl,storageState:{cookies:[],origins:[]},extraHTTPHeaders:{Authorization:`Bearer ${issued.token}`}});
+    try {
+      const forbidden=await machine.post(`${endpoint}/approve`,{data:{expectedRevision:reviewed.editRevision,expectedApprovalRevision:reviewed.approvalRevision}});
+      expect(forbidden.status(),await forbidden.text()).toBe(403);
+      for (const caller of [asOwner,machine]) {
+        const bypass=await caller.put(endpoint,{data:{status:"Approved",expectedRevision:reviewed.editRevision}});
+        expect(bypass.status(),await bypass.text()).toBe(caller === machine ? 403 : 400);
+        expect((await bypass.json()).code).toBe(caller === machine ? "HUMAN_PUBLICATION_REQUIRED" : "USE_TESTCASE_APPROVAL");
+      }
+      expect((await (await asOwner.get(endpoint)).json()).status).toBe("Draft");
+      expect(await (await asOwner.get(`${endpoint}/approvals`)).json()).toHaveLength(0);
+      const legitimate=await asOwner.post(`${endpoint}/approve`,{data:{expectedRevision:reviewed.editRevision,expectedApprovalRevision:reviewed.approvalRevision}});
+      expect(legitimate.status(),await legitimate.text()).toBe(200);
+      const first=await legitimate.json();
+      const replay=await asOwner.post(`${endpoint}/approve`,{data:{expectedRevision:reviewed.editRevision,expectedApprovalRevision:reviewed.approvalRevision}});
+      expect(replay.status(),await replay.text()).toBe(200);
+      expect((await replay.json()).receipt.id).toBe(first.receipt.id);
+      const readback=await (await asOwner.get(endpoint)).json();
+      expect(readback.approvalCurrent).toBe(true);
+      expect(first.receipt.reviewedSnapshot).toEqual(reviewed.approvalSnapshot);
+    } finally {
+      await machine.dispose();
+      await asOwner.delete(`/api/projects/${tenant!.mainProjectId}/apikeys/${issued.id}`,{failOnStatusCode:false});
+    }
+  });
+
+  test("empty or malformed review context cannot publish a case", async () => {
+    const id=await caseId("APR-MALFORMED", "Draft");
+    const endpoint=`/api/projects/${tenant!.mainProjectId}/testcases/${id}`;
+    const read=await (await asOwner.get(endpoint)).json();
+    for (const payload of [{},{expectedRevision:read.editRevision},{expectedRevision:null,expectedApprovalRevision:read.approvalRevision},{expectedRevision:read.editRevision,expectedApprovalRevision:" "}]) {
+      const refused=await asOwner.post(`${endpoint}/approve`,{data:payload});
+      expect(refused.status(),await refused.text()).toBe(400);
+    }
+    expect((await (await asOwner.get(endpoint)).json()).status).toBe("Draft");
+    expect(await (await asOwner.get(`${endpoint}/approvals`)).json()).toHaveLength(0);
+  });
+
+  test("approval and run admission reject a dependency changed after review and retain the old run snapshot", async () => {
+    const id=await caseId("APR-DEPENDENCY", "Approved");
+    const project=tenant!.mainProjectId;
+    const endpoint=`/api/projects/${project}/testcases/${id}`;
+    const reviewed=await (await asOwner.get(endpoint)).json();
+    const oldRun=await cycle("E2E approved dependency snapshot");
+    const added=await asOwner.post(`/api/cycles/${oldRun}/testcases`,{data:{testcaseIds:[id]}});
+    expect(added.ok(),await added.text()).toBe(true);
+    const snapshot=scalar(`SELECT snapshot_reviewed_content::text FROM cycle_items WHERE cycle_id=${literal(oldRun)} AND testcase_id=${literal(id)};`);
+    expect(JSON.parse(snapshot)).toEqual(reviewed.approvalSnapshot);
+    const tag=scalar(`INSERT INTO custom_tags(project_id,name) VALUES (${literal(project)},${literal(`APR dependency ${Date.now()}`)}) RETURNING id;`);
+    try {
+      exec(`INSERT INTO testcase_custom_tags(testcase_id,tag_id) VALUES (${literal(id)},${literal(tag)});`);
+      const stale=await asOwner.post(`${endpoint}/approve`,{data:{expectedRevision:reviewed.editRevision,expectedApprovalRevision:reviewed.approvalRevision}});
+      expect(stale.status(),await stale.text()).toBe(409);
+      const current=await (await asOwner.get(endpoint)).json();
+      expect(current.status).toBe("In Review"); expect(current.approvalCurrent).toBe(false);
+      const nextRun=await cycle("E2E stale dependency refusal");
+      const denied=await asOwner.post(`/api/cycles/${nextRun}/testcases`,{data:{testcaseIds:[id]}});
+      expect(denied.status(),await denied.text()).toBe(409); expect(countItems(nextRun)).toBe(0);
+      expect(scalar(`SELECT snapshot_reviewed_content::text FROM cycle_items WHERE cycle_id=${literal(oldRun)} AND testcase_id=${literal(id)};`)).toBe(snapshot);
+      await approveTestcase(asOwner,project,id);
+      const accepted=await asOwner.post(`/api/cycles/${nextRun}/testcases`,{data:{testcaseIds:[id]}});
+      expect(accepted.ok(),await accepted.text()).toBe(true);
+    } finally { exec(`DELETE FROM custom_tags WHERE id=${literal(tag)};`); }
   });
 });

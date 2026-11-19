@@ -16,6 +16,7 @@ import {
 import { Button, Card, Modal, Input, Field, FieldLabel, StatusChip, CopyButton } from "@/components/ui";
 import { PageHeader, StandardPageLayout, Breadcrumbs } from "@/components/workflows";
 import { useAppData } from "@/components/app/AppDataProvider";
+import { ExternalMcpAccessPanel } from "@/components/project/ExternalMcpAccessPanel";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
 import { formatDate as formatDateShared } from "@/lib/date";
 import { checkMcpConnection } from "@/lib/mcpConnectionCheck";
@@ -59,18 +60,8 @@ const MCP_TOOL_GROUPS: Array<{ category: string; tools: Array<{ name: string; bl
     tools: [
       { name: "list_testcases", blurb: "Filter/search/paginate test cases." },
       { name: "get_testcase", blurb: "Full detail for one test case." },
-      { name: "create_testcase", blurb: "Create a test case." },
-      { name: "update_testcase", blurb: "Update a test case (only the fields you pass)." },
-      { name: "archive_testcase", blurb: "Archive a test case (non-destructive)." },
-      { name: "restore_testcase", blurb: "Restore an archived test case." },
-      { name: "duplicate_testcase", blurb: "Copy a test case within its suite." },
-      { name: "bulk_create_testcases", blurb: "Create many test cases in one call." },
-      { name: "bulk_update_testcases", blurb: "Apply the same field changes to many test cases." },
-      { name: "bulk_archive_testcases", blurb: "Archive many test cases in one call." },
       { name: "get_testcase_bugs", blurb: "Bugs linked to one test case." },
       { name: "get_testcase_executions", blurb: "A test case's run history across every cycle." },
-      { name: "link_requirement_to_testcase", blurb: "Attach a Jira ticket, Linear ticket or Notion page to a test case." },
-      { name: "unlink_requirement_from_testcase", blurb: "Remove a test case's Jira, Linear or Notion link." },
     ],
   },
   {
@@ -80,7 +71,6 @@ const MCP_TOOL_GROUPS: Array<{ category: string; tools: Array<{ name: string; bl
       { name: "get_suite", blurb: "One suite by id." },
       { name: "create_suite", blurb: "Create a suite." },
       { name: "update_suite", blurb: "Rename, move, or reposition a suite." },
-      { name: "clone_test_suite", blurb: "Deep-copy a suite, its sub-suites, and their test cases." },
     ],
   },
   {
@@ -107,6 +97,24 @@ const MCP_TOOL_GROUPS: Array<{ category: string; tools: Array<{ name: string; bl
       { name: "update_bug", blurb: "Update a bug's fields." },
       { name: "link_testcase_to_bug", blurb: "Link a test case (and optionally a run) to a bug." },
       { name: "unlink_testcase_from_bug", blurb: "Remove a test case/bug link." },
+    ],
+  },
+  {
+    category: "Behavior models",
+    tools: [
+      { name: "preview_behavior_model_draft", blurb: "Validate a model draft when the server supports model preview." },
+      { name: "create_behavior_model", blurb: "Create a native model draft." },
+      { name: "save_behavior_model_revision", blurb: "Save a model revision against its current base." },
+      { name: "link_behavior_model_case", blurb: "Map a case to model elements without claiming coverage or execution." },
+      { name: "get_behavior_model_coverage", blurb: "Inspect recorded model/case mappings and their gaps." },
+      { name: "archive_behavior_model", blurb: "Archive a model while preserving its history." },
+    ],
+  },
+  {
+    category: "Connected source changes",
+    tools: [
+      { name: "list_qa_graph_changes", blurb: "Inspect captured source-change records." },
+      { name: "capture_qa_graph_change", blurb: "Capture a change from a configured source binding." },
     ],
   },
   {
@@ -359,6 +367,7 @@ export default defineConfig({
 
   return (
     <StandardPageLayout header={header}>
+      <ExternalMcpAccessPanel projectId={projectId} canManage={canManageApiTokens} refreshKey={tokens.length} />
       {!canManageApiTokens && (
         <Card className="p-4">
           <p className="text-sm text-[var(--muted)]">
@@ -558,7 +567,13 @@ export default defineConfig({
               </div>
             </div>
             <p className="text-xs text-[var(--muted-soft)]">
-              Protocol methods: <code className="font-mono">initialize</code>, <code className="font-mono">ping</code>, <code className="font-mono">tools/list</code>, <code className="font-mono">tools/call</code>. An MCP client (Claude Code, Claude Desktop, …) discovers every tool and its full schema live via <code className="font-mono">tools/list</code> — the groups below are just a quick human reference for what&apos;s available.
+              Protocol methods: <code className="font-mono">initialize</code>, <code className="font-mono">ping</code>, <code className="font-mono">tools/list</code>, <code className="font-mono">tools/call</code>. An MCP client discovers its permitted tools and schemas through <code className="font-mono">tools/list</code>. The 47 tools below describe the default catalog; token scopes, project consent and named-client grants can narrow it. Live discovery is authoritative.
+            </p>
+            <p className="text-xs text-[var(--muted-soft)]">
+              Agents cannot publish official test-case changes directly. The proposal review preview is disabled by default.
+              Only when the server advertises <code className="font-mono">stage_testcase_changes</code>,
+              <code className="font-mono"> list_testcase_proposals</code> and <code className="font-mono">get_testcase_proposal_task</code>
+              can an agent prepare an unpublished proposal for a human to review and save. A token or project setting cannot enable this preview.
             </p>
             <div className="space-y-3">
               {MCP_TOOL_GROUPS.map((group) => (
@@ -798,7 +813,7 @@ function McpConnectionCheck({ mcpUrl, projectId, projectName }: { mcpUrl: string
       if (activeCheck.current !== controller) return;
       setResult({
         ok: true,
-        message: `Connected to ${projectName}: Read permission and project identity verified; ${toolCount} MCP tools advertised. Discovery includes write tools regardless of token scope. Write permissions and reporting were not tested.`,
+        message: `Connected to ${projectName}: Read permission and project identity verified; ${toolCount} MCP tools advertised. Discovery reflects this token’s current scopes and named-client grant. Write permissions and reporting were not tested.`,
       });
     } catch (error) {
       if (activeCheck.current !== controller) return;

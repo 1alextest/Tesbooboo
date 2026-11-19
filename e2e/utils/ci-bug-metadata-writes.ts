@@ -1,3 +1,5 @@
+import { createTestcaseFixtureResponse } from "./testcase-approval";
+import { issueMcpTestToken } from "./mcp-access";
 import { expect, request as newRequest, test, type Page, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
 
@@ -17,7 +19,11 @@ export async function verifyBugMetadataWrites(page: Page, api: string, web: stri
     catch (error) { failures.push(error); await capture(`bug-edit-failure-${failures.length}`); }
   };
   async function post(path: string, data: Record<string, unknown>) {
-    const response = await page.request.post(path, { data }); expect(response.ok(), await response.text()).toBeTruthy(); return response.json();
+    const response = /\/testcases$/.test(path)
+      ? await createTestcaseFixtureResponse(page.request, path, { data })
+      : /\/apikeys$/.test(path)
+        ? await issueMcpTestToken(page.request, path, { data })
+        : await page.request.post(path, { data }); expect(response.ok(), await response.text()).toBeTruthy(); return response.json();
   }
   async function patch(id: string, data: Record<string, unknown>) {
     const response = await page.request.patch(`${api}/api/bugs/${id}`, { data }); expect(response.ok(), await response.text()).toBeTruthy(); return response.json();

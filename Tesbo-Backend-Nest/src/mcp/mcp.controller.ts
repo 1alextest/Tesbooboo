@@ -1,8 +1,9 @@
-import { Body, Controller, Delete, Get, Param, Post, Req, Res, UnauthorizedException } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Post, Put, Req, Res, UnauthorizedException } from "@nestjs/common";
 import type { Response } from "express";
 import type { AuthenticatedRequest } from "../common/request.types";
 import { McpService } from "./mcp.service";
 import { MCP_SESSION_HEADER, RpcCode, type JsonRpcId } from "./mcp.types";
+import type { McpClientGrant } from "./mcp-access";
 
 /**
  * Tesbo MCP — HTTP transport.
@@ -49,7 +50,7 @@ export class McpController {
     @Body() body: unknown
   ) {
     const principal = this.requirePrincipal(req);
-    await this.respond(req, res, body, () => this.mcp.handleRequest(body, principal, projectId));
+    await this.respond(req, res, body, principal, projectId);
   }
 
   @Post("/api/mcp")
@@ -57,22 +58,37 @@ export class McpController {
     const principal = this.requirePrincipal(req);
     // No URL project to read, so hand the token's own project straight back to McpService's
     // scope check — it always matches, which is the point: the token is the only source of truth.
-    await this.respond(req, res, body, () => this.mcp.handleRequest(body, principal, principal.projectId ?? ""));
+    await this.respond(req, res, body, principal, principal.projectId ?? "");
+  }
+
+  @Get("/api/projects/:projectId/mcp-access")
+  getAccess(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
+    return this.mcp.getAccessSettings(req, projectId);
+  }
+
+  @Put("/api/projects/:projectId/mcp-access")
+  updateAccess(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: unknown) {
+    return this.mcp.updateAccessSettings(req, projectId, body);
   }
 
   // Two handlers, not two decorators on one: Nest keeps a single route-method per handler.
   @Get(["/api/mcp", "/api/projects/:projectId/mcp"])
-  getNotAllowed(@Req() req: AuthenticatedRequest, @Res() res: Response) {
-    this.methodNotAllowed(req, res);
+  async getNotAllowed(@Req() req: AuthenticatedRequest, @Res() res: Response) {
+    await this.methodNotAllowed(req, res);
   }
 
   @Delete(["/api/mcp", "/api/projects/:projectId/mcp"])
-  deleteNotAllowed(@Req() req: AuthenticatedRequest, @Res() res: Response) {
-    this.methodNotAllowed(req, res);
+  async deleteNotAllowed(@Req() req: AuthenticatedRequest, @Res() res: Response) {
+    await this.methodNotAllowed(req, res);
   }
 
-  private methodNotAllowed(req: AuthenticatedRequest, res: Response) {
-    this.requirePrincipal(req);
+  private async methodNotAllowed(req: AuthenticatedRequest, res: Response) {
+    const principal = this.requirePrincipal(req);
+    const projectId = typeof req.params?.projectId === "string" ? req.params.projectId : principal.projectId ?? "";
+    try { await this.mcp.authorizeRequest(principal, projectId); } catch (error) {
+      res.status(403).json(this.mcp.toErrorResponse(null, error));
+      return;
+    }
     res.setHeader("Allow", "POST");
     res.status(405).json({ error: "The Tesbo MCP endpoint accepts POST only (no server-sent event stream, no session termination)." });
   }
@@ -81,15 +97,21 @@ export class McpController {
     req: AuthenticatedRequest,
     res: Response,
     body: unknown,
-    handle: () => ReturnType<McpService["handleRequest"]>
+    principal: NonNullable<AuthenticatedRequest["apiToken"]>,
+    projectId: string
   ) {
     const rpc = (body && typeof body === "object" ? body : {}) as { id?: unknown; method?: unknown };
     const id: JsonRpcId = typeof rpc.id === "string" || typeof rpc.id === "number" ? rpc.id : null;
     const isInitialize = rpc.method === "initialize";
     const sessionId = req.header(MCP_SESSION_HEADER);
 
+    let grant: McpClientGrant;
+    try { ({ grant } = await this.mcp.authorizeRequest(principal, projectId)); } catch (error) {
+      res.status(201).json(this.mcp.toErrorResponse(id, error));
+      return;
+    }
     // initialize is exempt: it is how a client recovers from exactly this 404.
-    if (sessionId && !isInitialize && !this.mcp.isCurrentSession(sessionId)) {
+    if (sessionId && !isInitialize && !this.mcp.isCurrentSession(sessionId, principal, grant)) {
       res.status(404).json({
         jsonrpc: "2.0",
         id,
@@ -101,9 +123,10 @@ export class McpController {
       res.status(202).end();
       return;
     }
-    const result = await handle();
+    const result = await this.mcp.handleRequest(body, principal, projectId);
     if (isInitialize && "result" in result) {
-      res.setHeader(MCP_SESSION_HEADER, this.mcp.newSessionId());
+      const version = (result.result as { serverInfo: { version: string } }).serverInfo.version;
+      res.setHeader(MCP_SESSION_HEADER, this.mcp.newSessionId(version));
     }
     res.status(201).json(result);
   }

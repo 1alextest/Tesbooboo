@@ -7,6 +7,7 @@ import Link from "next/link";
 import React from "react";
 import { IconRefresh, IconSettings, IconPlug } from "@tabler/icons-react";
 import {
+  ApiError,
   getJiraStatus,
   getLinearStatus,
   getNotionStatus,
@@ -38,6 +39,9 @@ const PAGE_SIZE = 25;
 
 type Source = "all" | "jira" | "linear" | "notion";
 type TicketSource = "jira" | "linear" | "notion";
+type LinkReadStatus = "loading" | "available" | "unavailable" | "denied" | "stale";
+type LinkReadState = Record<TicketSource, LinkReadStatus>;
+const UNKNOWN_LINKS: LinkReadState = { jira: "loading", linear: "loading", notion: "loading" };
 
 /** Normalized shape for a past (no-longer-current) Jira project / Linear team-or-project / Notion database this
  * project has been mapped to — never deleted, just no longer the active mapping. */
@@ -129,6 +133,7 @@ const EMPTY_STATS: TicketSourceStats = { total: 0, covered: 0, uncovered: 0, typ
 // downstream of a filter change, tab switch, or sync run is intentionally excluded, since this
 // cache exists only to make a bare revisit render the last-known initial view instantly.
 interface RequirementsPageData {
+  linkReadState: LinkReadState;
   connectedSources: TicketSource[];
   source: Source;
   tickets: Requirement[];
@@ -279,6 +284,12 @@ export default function RequirementsPage() {
   const [linkedNotionPages, setLinkedNotionPages] = useState<Set<string>>(cached?.linkedNotionPages ?? new Set());
   const [notionPageCounts, setNotionPageCounts] = useState<Record<string, number>>(cached?.notionPageCounts ?? {});
   const [notionTaskStatuses, setNotionTaskStatuses] = useState<Record<string, LinkedIssueTaskStatus>>(cached?.notionTaskStatuses ?? {});
+  // Cached links remain last-known data until a fresh authorized read succeeds.
+  const [linkReadState, setLinkReadState] = useState<LinkReadState>(cached
+    ? { jira: "stale", linear: "stale", notion: "stale" } : UNKNOWN_LINKS);
+  const linkRequestRef = useRef(0);
+  const activeProjectRef = useRef(projectId);
+  activeProjectRef.current = projectId;
   const [syncError, setSyncError] = useState<string | null>(null);
   const [generatingKey, setGeneratingKey] = useState<string | null>(null);
   // Past mappings for whichever single-provider tab is active — tickets from these are never
@@ -333,7 +344,7 @@ export default function RequirementsPage() {
   }
 
   function isLinked(req: Requirement): boolean {
-    return linkStateFor(req).linked.has(req.externalId);
+    return linkReadState[req.source] === "available" && linkStateFor(req).linked.has(req.externalId);
   }
 
   // The latest Zyra task assigned to this ticket, however far along it is — independent of whether
@@ -341,6 +352,7 @@ export default function RequirementsPage() {
   // ai_generation_requests row still exists, but "done" is the case isLinked/tcCountFor already
   // covers via the saved testcase itself), so the two states never fight over the same row.
   function activeTaskFor(req: Requirement): LinkedIssueTaskStatus | undefined {
+    if (linkReadState[req.source] !== "available") return undefined;
     const task = linkStateFor(req).tasks[req.externalId];
     if (!task || normalizeTaskStatus(task.status) === "done") return undefined;
     return task;
@@ -350,6 +362,7 @@ export default function RequirementsPage() {
   // "N saved"/"Regenerate"), this is the persistent, always-on label: every requirement is always
   // somewhere in the Zyra pipeline, including before any task exists at all ("Not started").
   function zyraStatusFor(req: Requirement): { label: string; tone: "neutral" | "info" | "success" | "warning" | "error" } {
+    if (linkReadState[req.source] !== "available") return { label: "Unknown", tone: "warning" };
     const task = linkStateFor(req).tasks[req.externalId];
     if (!task) return { label: "Not started", tone: "neutral" };
     return { label: taskStatusLabel(task.status), tone: taskStatusTone(task.status) };
@@ -426,11 +439,37 @@ export default function RequirementsPage() {
   );
 
   const refreshLinkedKeys = useCallback(async () => {
-    const [jiraKeysRes, linearKeysRes, notionPagesRes] = await Promise.all([
-      listLinkedJiraKeys(projectId).catch(() => ({ keys: [], counts: {}, tasks: {} })),
-      listLinkedLinearKeys(projectId).catch(() => ({ keys: [], counts: {}, tasks: {} })),
-      listLinkedNotionPages(projectId).catch(() => ({ keys: [], counts: {}, tasks: {} })),
+    const requestId = ++linkRequestRef.current;
+    const key = `requirements:${projectId}`;
+    const prior = getPageCache<RequirementsPageData>(key);
+    const results = await Promise.allSettled([
+      listLinkedJiraKeys(projectId),
+      listLinkedLinearKeys(projectId),
+      listLinkedNotionPages(projectId),
     ]);
+    // A late reply from a previous project or refresh cannot replace the current projection.
+    if (activeProjectRef.current !== projectId || requestId !== linkRequestRef.current) return null;
+    const states = { ...UNKNOWN_LINKS };
+    const responses = results.map((result, index) => {
+      const provider = PROVIDERS[index].id;
+      if (result.status === "fulfilled" && Array.isArray(result.value?.keys)) {
+        states[provider] = "available";
+        return result.value;
+      }
+      const denied = result.status === "rejected" && result.reason instanceof ApiError
+        && (result.reason.status === 401 || result.reason.status === 403);
+      const wasKnown = prior?.linkReadState?.[provider] === "available" || prior?.linkReadState?.[provider] === "stale";
+      states[provider] = denied ? "denied" : wasKnown ? "stale" : "unavailable";
+      // Permission loss clears cached payloads. A temporary outage may retain labelled historical
+      // counts, but cannot enable authoring or be presented as successful zero coverage.
+      if (!denied && wasKnown && prior) {
+        if (provider === "jira") return { keys: [...prior.linkedJiraKeys], counts: prior.jiraKeyCounts, tasks: prior.jiraTaskStatuses };
+        if (provider === "linear") return { keys: [...prior.linkedLinearKeys], counts: prior.linearKeyCounts, tasks: prior.linearTaskStatuses };
+        return { keys: [...prior.linkedNotionPages], counts: prior.notionPageCounts, tasks: prior.notionTaskStatuses };
+      }
+      return { keys: [], counts: {}, tasks: {} };
+    });
+    const [jiraKeysRes, linearKeysRes, notionPagesRes] = responses;
     const linkedJira = new Set(jiraKeysRes.keys);
     const jiraCounts = jiraKeysRes.counts ?? {};
     const jiraTasks = jiraKeysRes.tasks ?? {};
@@ -449,7 +488,9 @@ export default function RequirementsPage() {
     setLinkedNotionPages(linkedNotion);
     setNotionPageCounts(notionCounts);
     setNotionTaskStatuses(notionTasks);
-    return {
+    setLinkReadState(states);
+    const snapshot = {
+      linkReadState: states,
       linkedJiraKeys: linkedJira,
       jiraKeyCounts: jiraCounts,
       jiraTaskStatuses: jiraTasks,
@@ -460,6 +501,8 @@ export default function RequirementsPage() {
       notionPageCounts: notionCounts,
       notionTaskStatuses: notionTasks,
     };
+    if (prior) setPageCache<RequirementsPageData>(key, { ...prior, ...snapshot });
+    return snapshot;
   }, [projectId]);
 
   const refreshSummary = useCallback(async () => {
@@ -516,6 +559,7 @@ export default function RequirementsPage() {
       }
       const key = `requirements:${projectId}`;
       const existing = getPageCache<RequirementsPageData>(key);
+      setLinkReadState(existing ? { jira: "stale", linear: "stale", notion: "stale" } : UNKNOWN_LINKS);
       if (existing) {
         setConnectedSources(existing.connectedSources);
         setSource(existing.source);
@@ -554,11 +598,13 @@ export default function RequirementsPage() {
         refreshSummary(),
         refreshKbFolders(),
       ]);
+      if (!linkedResult || activeProjectRef.current !== projectId) return;
       setLoading(false);
       // refreshHistory above is intentionally not awaited (see its own comment), so this write
       // carries forward whatever history the cache already had rather than blocking on it; that
       // function patches the history field in on its own once it resolves.
       setPageCache<RequirementsPageData>(key, {
+        linkReadState: linkedResult.linkReadState,
         connectedSources: connected,
         source: initialSource,
         tickets: ticketsResult?.tickets ?? [],
@@ -577,6 +623,7 @@ export default function RequirementsPage() {
         providerFolderIds: kbFoldersResult,
       });
     })();
+    return () => { linkRequestRef.current += 1; };
   }, [projectId, loadTickets, refreshHistory, refreshLinkedKeys, refreshSummary, refreshKbFolders, router, currentUser]);
 
   useEffect(() => {
@@ -629,6 +676,10 @@ export default function RequirementsPage() {
   }
 
   async function handleGenerateFromTicket(ticket: Requirement, mode: "generate" | "regenerate") {
+    if (linkReadState[ticket.source] !== "available") {
+      setSyncError("Refresh this source's coverage before assigning work so existing cases and tasks can be checked.");
+      return;
+    }
     setGeneratingKey(ticket.key);
     setSyncError(null);
     try {
@@ -834,6 +885,24 @@ export default function RequirementsPage() {
         </div>
       )}
 
+      {connectedProviders.some((provider) => ["unavailable", "denied", "stale"].includes(linkReadState[provider.id])) && (
+        <div role="alert" data-testid="requirement-link-warning" className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-4 py-3 text-sm">
+          <p className="font-semibold">Some requirement coverage could not be verified</p>
+          {connectedProviders.filter((provider) => ["unavailable", "denied", "stale"].includes(linkReadState[provider.id])).map((provider) => (
+            <p key={provider.id}>
+              {provider.label}: {linkReadState[provider.id] === "denied"
+                ? "Access denied. Check your project access or sign in again."
+                : linkReadState[provider.id] === "stale"
+                  ? "Showing last-known coverage. Current links and task status are unavailable."
+                  : "Coverage and task status are unavailable. This does not mean no cases or tasks exist."}
+            </p>
+          ))}
+          <Button type="button" variant="secondary" size="sm" onClick={() => void refreshLinkedKeys()} className="mt-2">
+            Retry coverage
+          </Button>
+        </div>
+      )}
+
       {!sourceConnected && tickets.length === 0 && (
         <div className="rounded-xl border border-dashed border-[var(--border)] p-12 text-center">
           <div className="mx-auto w-14 h-14 rounded-full bg-[var(--brand-soft)] flex items-center justify-center">
@@ -969,6 +1038,7 @@ export default function RequirementsPage() {
               </thead>
               <tbody>
                 {tickets.map((ticket) => {
+                  const coverageState = linkReadState[ticket.source];
                   const linked = isLinked(ticket);
                   const tcCount = tcCountFor(ticket);
                   const activeTask = activeTaskFor(ticket);
@@ -1012,7 +1082,11 @@ export default function RequirementsPage() {
                           {ticket.assignee || "Unassigned"}
                         </td>
                         <td className="px-4 py-2.5">
-                          {tcCount > 0 ? (
+                          {coverageState !== "available" ? (
+                            <span className="text-[11px] text-[var(--muted-soft)]" data-testid="requirement-coverage-unknown">
+                              {coverageState === "denied" ? "Access denied" : coverageState === "stale" ? `${tcCount} TC (stale)` : coverageState === "loading" ? "Checking…" : "Unavailable"}
+                            </span>
+                          ) : tcCount > 0 ? (
                             <div className="flex items-center gap-1.5">
                               <div className="w-8 h-1 rounded-full bg-[var(--surface-tertiary)] overflow-hidden">
                                 <div className="h-full w-full rounded-full bg-[var(--success)]" />
@@ -1062,7 +1136,7 @@ export default function RequirementsPage() {
                                   e.stopPropagation();
                                   void handleGenerateFromTicket(ticket, "regenerate");
                                 }}
-                                disabled={generatingKey === ticket.key}
+                                disabled={generatingKey === ticket.key || coverageState !== "available"}
                                 className="rounded-lg bg-[var(--brand-primary)] px-2.5 py-1 text-xs font-semibold text-white shadow-sm hover:bg-[var(--brand-hover)] disabled:opacity-50"
                               >
                                 {generatingKey === ticket.key ? "Assigning..." : "Regenerate with Zyra"}
@@ -1074,7 +1148,7 @@ export default function RequirementsPage() {
                                   e.stopPropagation();
                                   void handleGenerateFromTicket(ticket, "generate");
                                 }}
-                                disabled={generatingKey === ticket.key}
+                                disabled={generatingKey === ticket.key || coverageState !== "available"}
                                 className="rounded-lg bg-[var(--brand-primary)] px-2.5 py-1 text-xs font-semibold text-white shadow-sm hover:bg-[var(--brand-hover)] disabled:opacity-50"
                               >
                                 {generatingKey === ticket.key ? "Assigning..." : "Assign to Zyra"}

@@ -1,6 +1,7 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from "@nestjs/common";
 import type { AuthenticatedRequest } from "../common/request.types";
 import { LegacyService } from "../legacy/legacy.service";
+import { humanPublicationRequired, isProtectedTestcaseRestWrite } from "../common/testcase-publication.policy";
 
 /**
  * Bearer tokens are project-bound machine credentials, not replacements for a
@@ -8,12 +9,12 @@ import { LegacyService } from "../legacy/legacy.service";
  * REST routes lacking an explicit project prefix are deliberately unavailable
  * to API tokens until they have their own scoped authorization contract.
  */
-const MCP_ROUTE = /^\/api\/(?:mcp|projects\/[0-9a-fA-F-]{36}\/mcp)\/?$/;
-const PROJECT_ROUTE = /^\/api\/projects\/([0-9a-fA-F-]{36})(?:\/|$)/;
+const MCP_ROUTE = /^\/api\/(?:mcp|projects\/[0-9a-fA-F-]{36}\/mcp)\/?$/i;
+const PROJECT_ROUTE = /^\/api\/projects\/([0-9a-fA-F-]{36})(?:\/|$)/i;
 const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /** Token credentials cannot administer the project, its members, or further tokens. */
-const CONTROL_PLANE = /^\/(?:apikeys|members)(?:\/|$)/;
+const CONTROL_PLANE = /^\/(?:apikeys|members|mcp-access)(?:\/|$)/i;
 
 @Injectable()
 export class ApiTokenRestGuard implements CanActivate {
@@ -27,6 +28,12 @@ export class ApiTokenRestGuard implements CanActivate {
     const path = (req.path ?? req.url ?? "").split("?")[0];
     if (MCP_ROUTE.test(path)) return true; // McpService owns JSON-RPC authorization.
 
+    // These aliases were already unavailable to tokens; identify the protected publication action
+    // without resolving a case/suite or mutating anything on behalf of the token's human issuer.
+    if (/^\/api\/suites\/[^/]+\/?$/i.test(path) && req.method.toUpperCase() === "DELETE") {
+      throw new ForbiddenException(humanPublicationRequired(token.projectId ?? ""));
+    }
+
     const match = PROJECT_ROUTE.exec(path);
     if (!match || !token.projectId || token.projectId.toLowerCase() !== match[1].toLowerCase()) {
       throw new ForbiddenException({ error: "API token is not authorized for this REST project route" });
@@ -38,6 +45,10 @@ export class ApiTokenRestGuard implements CanActivate {
     if (CONTROL_PLANE.test(projectSuffix) ||
         (projectSuffix === "" || projectSuffix === "/") && !READ_METHODS.has(req.method.toUpperCase())) {
       throw new ForbiddenException({ error: "API token cannot administer project settings or credentials" });
+    }
+
+    if (isProtectedTestcaseRestWrite(req.method, projectSuffix)) {
+      throw new ForbiddenException(humanPublicationRequired(token.projectId));
     }
 
     if (!token.userId) {

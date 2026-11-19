@@ -1,3 +1,5 @@
+import { createTestcaseFixtureResponse } from "./testcase-approval";
+import { issueMcpTestToken } from "./mcp-access";
 import { expect, test, type Page, type Route, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
 
@@ -7,7 +9,11 @@ export async function verifyRestLockRecovery(page: Page, api: string, web: strin
   const base = `${api}/api/projects/${projectId}`;
   const message = "This project is read-only — CI controlled UI refusal.";
   async function post(url: string, data: Record<string, unknown>) {
-    const response = await page.request.post(url, { data });
+    const response = /\/testcases$/.test(url)
+      ? await createTestcaseFixtureResponse(page.request, url, { data })
+      : /\/apikeys$/.test(url)
+        ? await issueMcpTestToken(page.request, url, { data })
+        : await page.request.post(url, { data });
     expect(response.ok(), await response.text()).toBeTruthy(); return response.json();
   }
   const state = async () => ({

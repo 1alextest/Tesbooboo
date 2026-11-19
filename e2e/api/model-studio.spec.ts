@@ -1,4 +1,5 @@
 import { expect, request as pwRequest, test } from "@playwright/test";
+import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import { loginAs, provisionRbacTenant } from "../utils/rbac-tenant";
 import { env } from "../utils/env";
 import { exec, literal, scalar } from "../utils/psql";
@@ -389,7 +390,7 @@ test.describe("persisted Model Studio revisions and mappings", () => {
 
       // A separately approved case linked to the revision, executed once, is reported as observed
       // evidence — explicitly not model verification.
-      const runCase = await owner.post(`/api/projects/${projectId}/testcases`, {
+      const runCase = await createTestcaseFixtureResponse(owner, `/api/projects/${projectId}/testcases`, {
         data: { title: `E2E evidence case ${Date.now()}`, status: "Approved" }
       });
       expect(runCase.status(), await runCase.text()).toBe(201);

@@ -1,4 +1,5 @@
-import { expect, test, type APIRequestContext, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { expect, request as newRequest, test, type APIRequestContext, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import { exec, literal, scalar } from "../utils/psql";
 import {
   loginAs,
@@ -2654,6 +2655,91 @@ test.describe("zyra / agents (UI)", () => {
       .toBe(1);
   });
 
+  test("ZYR-P07 UI publishes only the human-selected external proposals without a model key", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId;
+    const base = `/api/projects/${projectId}`;
+    const titles = [stamp("External selected proposal"), stamp("External remaining proposal")];
+    const agentState = await (await api.get(`${base}/agents/zyra`)).json();
+    expect(agentState.aiKey, "this round trip must not depend on an allocated model key").toBeNull();
+    const issued = await api.post(`${base}/apikeys`, { data: { name: stamp("External proposal client"), scopes: ["read", "write"] } });
+    expect(issued.ok(), await issued.text()).toBeTruthy();
+    const token = await issued.json();
+    const machine = await newRequest.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] }, extraHTTPHeaders: { Authorization: `Bearer ${token.token}` } });
+    try {
+      const staged = await machine.post(`${base}/agents/zyra/tasks/proposals`, { data: {
+        requestKey: randomUUID(),
+        title: stamp("External review task"),
+        operations: titles.map((title) => ({ opType: "create", draft: { title, priority: "P2", description: "Exact external proposal content", steps: [] }, reason: "External QA finding for human review" })),
+      } });
+      expect(staged.status(), await staged.text()).toBe(201);
+      const task = await staged.json();
+      expect(task.drafts).toHaveLength(2);
+      expect(task.proposalRevision).toEqual(expect.any(String));
+      const caseCount = (title: string) => Number(scalar(`SELECT count(*) FROM testcases WHERE project_id = ${literal(projectId)} AND title = ${literal(title)};`));
+      expect(titles.map(caseCount), "staging must not publish native Draft cases").toEqual([0, 0]);
+      const deniedSave = await machine.post(`${base}/agents/zyra/tasks/${task.id}/save`, { data: { expectedProposalRevision: task.proposalRevision, selectedDraftIndexes: [0] } });
+      expect(deniedSave.status(), await deniedSave.text()).toBe(403);
+      expect(titles.map(caseCount)).toEqual([0, 0]);
+
+      const page = await open(browser, `/agents/tasks/${task.id}`);
+      const dialog = await openSaveFor(page, new RegExp(escapeRegExp(titles[0])));
+      await dialog.getByText("Inspect the saved proposal and target content", { exact: true }).click();
+      await expect(dialog.locator("pre")).toContainText("Exact external proposal content");
+      await dialog.getByRole("combobox").selectOption("none");
+      const sent = page.waitForRequest(isSaveRequest(task.id));
+      await dialog.getByRole("button", { name: "Save", exact: true }).click();
+      expect((await sent).postDataJSON()).toMatchObject({ expectedProposalRevision: task.proposalRevision, selectedDraftIndexes: [0] });
+      await expect(dialog).toHaveCount(0);
+      await expect.poll(() => titles.map(caseCount)).toEqual([1, 0]);
+      const remaining = await (await api.get(`${base}/agents/zyra/tasks/${task.id}`)).json();
+      expect(remaining).toMatchObject({ taskStatus: "in_review", savedCount: 1 });
+      expect(remaining.drafts).toHaveLength(1);
+      expect(remaining.drafts[0].title).toBe(titles[1]);
+      expect(remaining.proposalRevision).not.toBe(task.proposalRevision);
+      expect(scalar(`SELECT status FROM testcases WHERE project_id = ${literal(projectId)} AND title = ${literal(titles[0])};`)).toBe("Draft");
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(titles[1])) })).toBeVisible();
+    } finally {
+      await machine.dispose();
+      await api.delete(`${base}/apikeys/${token.id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("ZYR-P07 UI refuses a changed proposal without publishing or creating an orphan suite", async ({ browser }) => {
+    const originalTitle = stamp("Reviewed proposal");
+    const changedTitle = stamp("Changed proposal");
+    const suiteName = stamp("Atomic proposal suite");
+    const projectId = tenant!.mainProjectId;
+    const base = `/api/projects/${projectId}`;
+    const staged = await api.post(`${base}/agents/zyra/tasks/proposals`, { data: {
+      requestKey: randomUUID(), operations: [{ opType: "create", draft: { title: originalTitle, priority: "P2", steps: [] } }],
+    } });
+    expect(staged.status(), await staged.text()).toBe(201);
+    const task = await staged.json();
+    const page = await open(browser, `/agents/tasks/${task.id}`);
+    const dialog = await openSaveFor(page, new RegExp(escapeRegExp(originalTitle)));
+    await dialog.getByText("Inspect the saved proposal and target content", { exact: true }).click();
+    await expect(dialog.locator("pre")).toContainText(originalTitle);
+    await dialog.getByRole("combobox").selectOption("new");
+    await dialog.getByRole("textbox").fill(suiteName);
+    const changed = await api.patch(`${base}/agents/zyra/tasks/${task.id}/drafts/0`, { data: { title: changedTitle } });
+    expect(changed.ok(), await changed.text()).toBeTruthy();
+    const response = page.waitForResponse((res) => isSaveRequest(task.id)(res.request()));
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    expect((await response).status()).toBe(409);
+    await expect(dialog.getByRole("alert")).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    await expect(dialog.locator("pre")).toContainText(originalTitle);
+    expect(Number(scalar(`SELECT count(*) FROM testcases WHERE project_id = ${literal(projectId)} AND title IN (${literal(originalTitle)}, ${literal(changedTitle)});`))).toBe(0);
+    expect(Number(scalar(`SELECT count(*) FROM suites WHERE project_id = ${literal(projectId)} AND name = ${literal(suiteName)};`))).toBe(0);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.reload();
+    const fresh = await openSaveFor(page, new RegExp(escapeRegExp(changedTitle)));
+    await fresh.getByRole("combobox").selectOption("none");
+    await fresh.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(fresh).toHaveCount(0);
+    await expect.poll(() => Number(scalar(`SELECT count(*) FROM testcases WHERE project_id = ${literal(projectId)} AND title = ${literal(changedTitle)};`))).toBe(1);
+  });
+
   /*
    * "[Zyra] Severity and Component Are Missing in Generated Test Cases" — drives the actual Save
    * button (not the API directly, see api/zyra.spec.ts ZYR-A-71..74 for that half) to prove the
@@ -2734,7 +2820,8 @@ test.describe("zyra / agents (UI)", () => {
 
   test("ZYU-129 'No suite' hides every suite field and saves the draft unassigned", async ({ browser }) => {
     const title = stamp("No suite draft");
-    const taskId = seedTask({ drafts: [{ title, priority: "P1", preconditions: "", steps: [] }] });
+    const stagedSuiteId = await seedSuite(stamp("Originally proposed suite"));
+    const taskId = seedTask({ drafts: [{ title, priority: "P1", preconditions: "", steps: [], suiteId: stagedSuiteId }] });
     const page = await open(browser, `/agents/tasks/${taskId}`);
     const dialog = await openSaveFor(page, new RegExp(escapeRegExp(title)));
 
@@ -2746,7 +2833,7 @@ test.describe("zyra / agents (UI)", () => {
 
     const request = page.waitForRequest(isSaveRequest(taskId));
     await save.click();
-    expect((await request).postDataJSON().suiteId).toBeUndefined();
+    expect((await request).postDataJSON().suiteId).toBeNull();
     await expect(dialog).toHaveCount(0);
     await expect(page.getByText("1 testcase saved.")).toBeVisible();
     await expect
@@ -2758,7 +2845,8 @@ test.describe("zyra / agents (UI)", () => {
     const title = stamp("Existing suite draft");
     const suiteName = stamp("Target suite");
     const suiteId = await seedSuite(suiteName);
-    const taskId = seedTask({ drafts: [{ title, priority: "P1", preconditions: "", steps: [] }] });
+    const stagedSuiteId = await seedSuite(stamp("Different proposed suite"));
+    const taskId = seedTask({ drafts: [{ title, priority: "P1", preconditions: "", steps: [], suiteId: stagedSuiteId }] });
     const page = await open(browser, `/agents/tasks/${taskId}`);
     const dialog = await openSaveFor(page, new RegExp(escapeRegExp(title)));
     const save = dialog.getByRole("button", { name: "Save" });
@@ -2843,7 +2931,7 @@ test.describe("zyra / agents (UI)", () => {
 
     const request = page.waitForRequest(isSaveRequest(taskId));
     await dialog.getByRole("button", { name: "Save" }).click();
-    expect((await request).postDataJSON().suiteId).toBeUndefined();
+    expect((await request).postDataJSON().suiteId).toBeNull();
     await expect
       .poll(() => scalar(`SELECT COALESCE(suite_id::text, 'NULL') FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(title)};`))
       .toBe("NULL");

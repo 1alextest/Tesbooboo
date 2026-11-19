@@ -53,6 +53,10 @@ export async function verifyCiZyraSuiteFeedback(page: Page, api: string, web: st
                 const trace = page.locator("[data-zyra-trace]");
                 const verifyTrace = async () => {
                   await expect(trace).toBeVisible();
+                  // Empty-suite operations remain separate from testcase publication. They must
+                  // never fabricate a review batch, case card, or case-publication count.
+                  await expect(page.getByTestId("zyra-review-number")).toHaveCount(0);
+                  await expect(page.getByText("Inspect the saved proposal and target content", { exact: true })).toHaveCount(0);
                   // The settled trace and message render together. Snapshot known-final values so
                   // expected red mismatches do not spend a timeout per assertion or skip controls.
                   expect.soft(await trace.getAttribute("data-zyra-trace")).toBe(warning ? "completed_with_errors" : "completed");

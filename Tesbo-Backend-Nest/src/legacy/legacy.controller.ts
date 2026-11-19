@@ -608,7 +608,9 @@ export class LegacyController {
     @Param("testcaseId") testcaseId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.approveTestCaseForUser(req.userId, projectId, testcaseId, body);
+    return this.legacy.approveTestCaseForUser(req.userId, projectId, testcaseId, body, {
+      kind: req.apiToken ? "api_token" : "human_session"
+    });
   }
 
   @Get("/api/projects/:projectId/testcases/:testcaseId/approvals")
@@ -1447,7 +1449,7 @@ export class LegacyController {
     @Param("requestId") requestId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.aiSave(projectId, req.userId, requestId, body);
+    return this.legacy.aiSave(projectId, req.userId, requestId, body, {kind:req.apiToken ? "api_token" : "human_session"});
   }
 
   @Get("/api/projects/:projectId/agents/zyra")
@@ -1649,6 +1651,18 @@ export class LegacyController {
     return this.legacy.aiGenerate(projectId, req.userId, body);
   }
 
+  @Post("/api/projects/:projectId/agents/zyra/tasks/proposals")
+  stageTestcaseChanges(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.stageTestcaseChanges(projectId, req.userId, body, {
+      kind: req.apiToken ? "api_token" : "human_session", tokenId: req.apiToken?.tokenId, transport: "rest"
+    });
+  }
+
+  @Get("/api/projects/:projectId/agents/zyra/tasks/proposals")
+  listTestcaseProposals(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Query() query: Record<string, any>) {
+    return this.legacy.listTestcaseProposals(projectId, req.userId, query);
+  }
+
   @Get("/api/projects/:projectId/agents/zyra/tasks/:taskId")
   getZyraTask(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string) {
     return this.legacy.zyraTask(projectId, req.userId, taskId);
@@ -1661,7 +1675,7 @@ export class LegacyController {
     @Param("taskId") taskId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.zyraFeedback(projectId, req.userId, taskId, body);
+    return this.legacy.zyraFeedback(projectId, req.userId, taskId, body, {kind:req.apiToken ? "api_token" : "human_session",tokenId:req.apiToken?.tokenId});
   }
 
   @Delete("/api/projects/:projectId/agents/zyra/tasks/:taskId/drafts/:draftIndex")
@@ -1671,7 +1685,7 @@ export class LegacyController {
     @Param("taskId") taskId: string,
     @Param("draftIndex") draftIndex: string
   ) {
-    return this.legacy.zyraDeleteDraft(projectId, req.userId, taskId, Number(draftIndex));
+    return this.legacy.zyraDeleteDraft(projectId, req.userId, taskId, Number(draftIndex), {kind:req.apiToken ? "api_token" : "human_session",tokenId:req.apiToken?.tokenId});
   }
 
   @Patch("/api/projects/:projectId/agents/zyra/tasks/:taskId/drafts/:draftIndex")
@@ -1682,17 +1696,17 @@ export class LegacyController {
     @Param("draftIndex") draftIndex: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.zyraEditDraft(projectId, req.userId, taskId, Number(draftIndex), body);
+    return this.legacy.zyraEditDraft(projectId, req.userId, taskId, Number(draftIndex), body, {kind:req.apiToken ? "api_token" : "human_session",tokenId:req.apiToken?.tokenId});
   }
 
   @Post("/api/projects/:projectId/agents/zyra/tasks/:taskId/close")
   closeZyraTask(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string) {
-    return this.legacy.zyraCloseTask(projectId, req.userId, taskId);
+    return this.legacy.zyraCloseTask(projectId, req.userId, taskId, {kind:req.apiToken ? "api_token" : "human_session"});
   }
 
   @Post("/api/projects/:projectId/agents/zyra/tasks/:taskId/save")
   saveZyraTask(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string, @Body() body: Record<string, any>) {
-    return this.legacy.zyraSave(projectId, req.userId, taskId, body);
+    return this.legacy.zyraSave(projectId, req.userId, taskId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Get("/api/projects/:projectId/agents/zyra/tasks/:taskId/ticket-comments")
@@ -1813,6 +1827,16 @@ export class LegacyController {
     return this.legacy.listKnowledgeDocumentVersions(projectId, req.userId, documentId);
   }
 
+  @Get("/api/projects/:projectId/knowledge-base/documents/:documentId/versions/:versionId")
+  getKnowledgeDocumentVersion(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Param("versionId") versionId: string) {
+    return this.legacy.getKnowledgeDocumentVersion(projectId, req.userId, documentId, versionId);
+  }
+
+  @Post("/api/projects/:projectId/knowledge-base/documents/:documentId/submissions")
+  submitKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.submitKnowledgeDocument(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
   @Post("/api/projects/:projectId/knowledge-base/documents/:documentId/restore-version")
   restoreKnowledgeDocumentVersion(
     @Req() req: AuthenticatedRequest,
@@ -1824,13 +1848,13 @@ export class LegacyController {
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/documents/:documentId/approve-ai-memory")
-  approveAiMemory(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string) {
-    return this.legacy.approveAiMemory(projectId, req.userId, documentId);
+  approveAiMemory(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.approveAiMemory(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/documents/:documentId/reject-ai-memory")
-  rejectAiMemory(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string) {
-    return this.legacy.rejectAiMemory(projectId, req.userId, documentId);
+  rejectAiMemory(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.rejectAiMemory(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   // ── Document comments ──

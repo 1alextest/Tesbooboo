@@ -18,7 +18,7 @@ describe("automation Run closure boundary", () => {
         return { rows: [{ id: run, name: "CI", closed_at: closed ? "2026-10-21" : null }] };
       if (sql.includes("FROM cycles WHERE id = $1 AND project_id") && sql.includes("FOR UPDATE"))
         return { rows: [{ id: run, closed_at: closed ? "2026-10-21" : null }] };
-      if (sql.includes("FROM testcases")) return { rows: [{ id: user, external_id: "CI-TC-1", title: "Case", status: "Approved" }] };
+      if (sql.includes("FROM testcases")) return { rows: [{ id: user, external_id: "CI-TC-1", title: "Case", status: "Approved", approval_current: true }] };
       if (sql.includes("COUNT(*)::int AS total")) return { rows: [{ total: results, passed: results, failed: 0, skipped: 0, blocked: 0, untested: 0 }] };
       if (sql.includes("UPDATE executions e SET")) { results++; return { rows: [{ id: user, status: "Passed", retry_count: 0 }] }; }
       if (sql.includes("UPDATE cycles SET status = 'Completed'")) closed = true;
