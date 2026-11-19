@@ -268,10 +268,12 @@ export class McpService {
       const settings = { ...projectSettingsObject(row.settings), [MCP_ACCESS_KEY]: after };
       await client.query("UPDATE projects SET settings = $2::jsonb, updated_at = now() WHERE id = $1", [projectId, JSON.stringify(settings)]);
       // The consent change and its attributable receipt commit together. Audit failure rolls back consent.
+      // entity_id is varchar while project_id is uuid: reusing one parameter for both makes
+      // Postgres fail with "inconsistent types deduced for parameter $1". Pass the project id twice.
       await client.query(
         `INSERT INTO audit_logs (project_id, actor_id, action, entity_type, entity_id, entity_name, diff, organization_id)
-         VALUES ($1,$2,'project_mcp_access_updated','project',$1,'External AI & MCP Access',$3::jsonb,$4)`,
-        [projectId, req.userId, JSON.stringify({ before, after }), project.organization_id]
+         VALUES ($1,$2,'project_mcp_access_updated','project',$5,'External AI & MCP Access',$3::jsonb,$4)`,
+        [projectId, req.userId, JSON.stringify({ before, after }), project.organization_id, projectId]
       );
       return after;
     });
