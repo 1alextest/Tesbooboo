@@ -55,6 +55,10 @@ export class AppConfigService {
   // config/email-delivery.policy.ts for the full decision table.
   readonly emailDeliveryMode: "live" | "log" =
     this.string("EMAIL_DELIVERY_MODE", "log").trim().toLowerCase() === "live" ? "live" : "log";
+  // Test-only email outbox (see auth/email-outbox.service.ts). Off unless explicitly enabled; the
+  // service also refuses to record anything unless delivery is in log mode, so a stack that opted in
+  // by mistake still cannot surface real mail.
+  readonly emailOutboxEnabled = this.string("EMAIL_OUTBOX_ENABLED", "").trim() === "1";
   // Daily Basecamp analytics report. Opt-in and PRODUCTION-ONLY: the scheduler registers only when this
   // is exactly "true", and only the production Jenkinsfile sets it. Everything else (local, e2e,
   // stage, or a stage stack pointed at the prod database) leaves it off, so a forgotten setting fails

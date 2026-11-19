@@ -1,5 +1,5 @@
 import { expect, request, test, type APIRequestContext, type Browser, type BrowserContext, type Page } from "@playwright/test";
-import { waitForPasswordResetLinkInLogs, backendLogsAvailable } from "../utils/backend-logs";
+import { emailOutboxAvailable, waitForPasswordResetLinkEmail } from "../utils/email-outbox";
 import { env, testAddress } from "../utils/env";
 import {
   FIXTURE_PASSWORD,
@@ -36,9 +36,10 @@ import {
  * run — would authenticate with a password that no longer exists. The suite also restores
  * FIXTURE_PASSWORD in afterEach so `loginAs()` keeps working for anything that reuses this tenant.
  *
- * The reset link is read out of the backend log, not a mailbox: outside production the backend runs
- * EMAIL_DELIVERY_MODE=log and prints "PASSWORD RESET for <email>: <url>" (EmailService
- * sendPasswordReset keeps that format parseable precisely for this). No real mail is sent.
+ * The reset link is read out of the backend's test-only email outbox, not a mailbox: outside
+ * production the backend runs EMAIL_DELIVERY_MODE=log and records each message instead of sending
+ * it, and the e2e stack sets EMAIL_OUTBOX_ENABLED=1 so GET /api/test/email-outbox can return it. No
+ * real mail is sent, and no credential appears in the log.
  *
  * Locator notes: `Field`/`FieldLabel` DO set htmlFor on this screen, so ids are used directly
  * (#current-password, #new-password, #confirm-new-password).
@@ -277,7 +278,7 @@ test.describe("account screen and password reset (UI)", () => {
   });
 
   test("ACU-07 a reset link sets a new password and signs the user in with it", { tag: '@tesbo.testId("TES-TC-992")' }, async ({ browser }) => {
-    test.skip(!backendLogsAvailable(), "reads the reset link out of the backend container log");
+    test.skip(!(await emailOutboxAvailable()), "needs EMAIL_OUTBOX_ENABLED=1 on a log-mode stack");
     const page = await anonymousPage(browser);
 
     await page.goto("/forgot-password");
@@ -285,8 +286,8 @@ test.describe("account screen and password reset (UI)", () => {
     await page.getByRole("button", { name: /Send reset link/i }).click();
     await expect(page.getByText("Check your email")).toBeVisible();
 
-    const resetUrl = await waitForPasswordResetLinkInLogs(tenant!.owner.email);
-    expect(resetUrl, "the backend should have printed a reset link").toBeTruthy();
+    const resetUrl = await waitForPasswordResetLinkEmail(tenant!.owner.email);
+    expect(resetUrl, "the backend should have recorded a reset link").toBeTruthy();
 
     await page.goto(new URL(resetUrl!).pathname);
     await expect(page.getByText("Set a new password")).toBeVisible();
@@ -300,7 +301,7 @@ test.describe("account screen and password reset (UI)", () => {
   });
 
   test("ACU-08 a reset link cannot be used twice", { tag: '@tesbo.testId("TES-TC-993")' }, async ({ browser }) => {
-    test.skip(!backendLogsAvailable(), "reads the reset link out of the backend container log");
+    test.skip(!(await emailOutboxAvailable()), "needs EMAIL_OUTBOX_ENABLED=1 on a log-mode stack");
     const page = await anonymousPage(browser);
 
     await page.goto("/forgot-password");
@@ -308,7 +309,7 @@ test.describe("account screen and password reset (UI)", () => {
     await page.getByRole("button", { name: /Send reset link/i }).click();
     await expect(page.getByText("Check your email")).toBeVisible();
 
-    const resetUrl = await waitForPasswordResetLinkInLogs(tenant!.owner.email);
+    const resetUrl = await waitForPasswordResetLinkEmail(tenant!.owner.email);
     expect(resetUrl).toBeTruthy();
     const resetPath = new URL(resetUrl!).pathname;
 
@@ -337,7 +338,7 @@ test.describe("account screen and password reset (UI)", () => {
   });
 
   test("ACU-10 the reset form enforces the same password rules as the account screen", { tag: '@tesbo.testId("TES-TC-995")' }, async ({ browser }) => {
-    test.skip(!backendLogsAvailable(), "reads the reset link out of the backend container log");
+    test.skip(!(await emailOutboxAvailable()), "needs EMAIL_OUTBOX_ENABLED=1 on a log-mode stack");
     const page = await anonymousPage(browser);
 
     await page.goto("/forgot-password");
@@ -345,7 +346,7 @@ test.describe("account screen and password reset (UI)", () => {
     await page.getByRole("button", { name: /Send reset link/i }).click();
     await expect(page.getByText("Check your email")).toBeVisible();
 
-    const resetUrl = await waitForPasswordResetLinkInLogs(tenant!.owner.email);
+    const resetUrl = await waitForPasswordResetLinkEmail(tenant!.owner.email);
     expect(resetUrl).toBeTruthy();
     await page.goto(new URL(resetUrl!).pathname);
 

@@ -4,18 +4,13 @@ import { env } from "./env";
 /*
  * Reading the backend container's stdout.
  *
- * With EMAIL_DELIVERY_MODE=log — the default, and what every local and CI stack runs — the backend
- * prints OTP codes and invite links instead of emailing them, so the log IS the mailbox for these
- * tests. That's deliberate: nothing this suite does can then bounce mail off the addresses it
- * invents, which is what once got the Postmark sending account flagged.
+ * Used for delivery-policy observations (the boot line, refusal warnings) — never for message
+ * contents. OTP codes and invite/reset links live in the test-only email outbox now; see
+ * utils/email-outbox.ts for why the log stopped being the mailbox.
  *
  * Every function here is best-effort and returns null rather than throwing when `docker compose` is
  * unavailable — against a remote target there is no container to read, and the callers skip.
  */
-
-export function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 /**
  * The last `tailLines` lines of the backend container's log ("all" for the whole thing), or null if
@@ -41,55 +36,6 @@ export function readBackendLogs(tailLines: number | "all" = 500): string | null 
 
 export function backendLogsAvailable(): boolean {
   return readBackendLogs(1) !== null;
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Polls the log until `pattern` matches, returning the match (capture groups included) or null.
- *
- * Polls rather than reads once because the API call that triggers the line returns before the line
- * is necessarily flushed. Stops immediately — without burning the timeout — when docker itself is
- * unavailable, since that will not start working mid-run.
- */
-export async function waitForBackendLog(
-  pattern: RegExp,
-  { timeoutMs = 8_000, tailLines = 500, intervalMs = 500 } = {},
-): Promise<RegExpMatchArray | null> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const logs = readBackendLogs(tailLines);
-    if (logs === null) return null;
-    const match = logs.match(pattern);
-    if (match) return match;
-    if (Date.now() >= deadline) return null;
-    await sleep(intervalMs);
-  }
-}
-
-/** The six-digit code the backend printed for `email`, or null if it never appeared. */
-export async function waitForOtpInLogs(email: string, timeoutMs = 8_000): Promise<string | null> {
-  // Format is fixed by EmailService.sendOtp — "OTP for <email>: <code>".
-  const match = await waitForBackendLog(new RegExp(`OTP for ${escapeRegExp(email)}: (\\d{6})`), { timeoutMs });
-  return match?.[1] ?? null;
-}
-
-/** The accept URL the backend printed for an invite to `email`, or null. */
-export async function waitForInviteLinkInLogs(email: string, timeoutMs = 8_000): Promise<string | null> {
-  // Format is fixed by EmailService.sendInvite — "[INVITE] <email> → <url>".
-  const match = await waitForBackendLog(new RegExp(`\\[INVITE\\] ${escapeRegExp(email)} → (\\S+)`), { timeoutMs });
-  return match?.[1] ?? null;
-}
-
-/** The reset URL the backend printed for a forgot-password request, or null. */
-export async function waitForPasswordResetLinkInLogs(email: string, timeoutMs = 8_000): Promise<string | null> {
-  // Format is fixed by EmailService.sendPasswordReset — "PASSWORD RESET for <email>: <url>".
-  const match = await waitForBackendLog(new RegExp(`PASSWORD RESET for ${escapeRegExp(email)}: (\\S+)`), {
-    timeoutMs,
-  });
-  return match?.[1] ?? null;
 }
 
 export interface EmailDeliveryReport {

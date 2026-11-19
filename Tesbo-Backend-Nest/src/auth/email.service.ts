@@ -2,37 +2,39 @@ import { Injectable } from "@nestjs/common";
 import { escapeHtml } from "../common/integration-text.util";
 import { AppConfigService } from "../config/app-config.service";
 import { EmailDeliveryPolicy, EmailKind } from "../config/email-delivery.policy";
+import { EmailOutboxService } from "./email-outbox.service";
 
 @Injectable()
 export class EmailService {
   constructor(
     private readonly config: AppConfigService,
-    private readonly delivery: EmailDeliveryPolicy
+    private readonly delivery: EmailDeliveryPolicy,
+    private readonly outbox: EmailOutboxService
   ) {}
 
   /**
    * Posts one email to Postmark — but only when EmailDeliveryPolicy allows it.
    *
-   * In log mode (the default, and what every local and CI stack runs) `logLabel` is written to
-   * stdout: the e2e setup scrapes OTP codes and invite links out of container logs, so that path has
-   * to stay, and it is the only way to read a code when nothing was emailed. See
-   * config/email-delivery.policy.ts for which emails are still posted to the sandbox server.
+   * The message is always handed to the test outbox (a no-op unless the stack explicitly enabled
+   * it), and the log line carries only the kind and the delivery outcome. Earlier versions wrote a
+   * label with the recipient, OTP code or reset link to stdout so the e2e suite could scrape it;
+   * that made the log a credential store, so the suite now reads the outbox instead.
+   * See config/email-delivery.policy.ts for which emails are still posted to the sandbox server.
    */
   private async send(
     to: string,
     subject: string,
     textBody: string,
     htmlBody: string | undefined,
-    logLabel: string,
     kind: EmailKind = "communication",
     cc?: string
   ): Promise<void> {
     const decision = await this.delivery.decide(kind);
+    this.outbox.record({ to, kind, subject, text: textBody, html: htmlBody, createdAt: new Date().toISOString() });
     if (!decision.post || this.delivery.logsEveryEmail) {
-      // Labels carry caller-supplied values (an address, a workspace name). Line terminators are
-      // replaced rather than trimmed: a crafted newline could otherwise forge a second,
-      // indistinguishable delivery record in the log the e2e suite reads.
-      console.log(logLabel.replace(/\r\n|\r|\n/g, " "));
+      // Constant shape: `kind` is our own union, never caller input. Nothing from the message —
+      // address, code, link — reaches the log.
+      console.log(`[email] ${kind} ${decision.post ? "posted (sandbox)" : "not posted (log mode)"}`);
     }
     if (!decision.post) return;
 
@@ -85,7 +87,7 @@ export class EmailService {
 <p>This usually means the card expired or was declined. Your workspace still has full Pro access for now — we'll retry the payment automatically over the next few days.</p>
 ${this.button(billingUrl, "Update payment method")}
 <p style="color:#6B7280;font-size:12px">If the payment can't be collected, ${workspaceName} moves to the free Launch plan. You'd keep full access for a further ${graceDays} days after that before Launch limits apply, so nothing is lost immediately.</p>`;
-    await this.sendBestEffort("payment-failed", () => this.send(to, subject, text, html, `[PAYMENT FAILED] ${to} → ${workspaceName}`));
+    await this.sendBestEffort("payment-failed", () => this.send(to, subject, text, html));
   }
 
   /** A subscription invoice was paid — the renewal receipt. */
@@ -99,7 +101,7 @@ ${this.button(billingUrl, "Update payment method")}
 ${periodEnd ? `<p>Your next renewal is ${periodEnd}.</p>` : ""}
 ${invoiceUrl ? this.button(invoiceUrl, "View invoice") : ""}`;
     await this.sendBestEffort("payment-succeeded", () =>
-      this.send(to, subject, text, html, `[PAYMENT OK] ${to} → ${workspaceName} ${amountLabel}`)
+      this.send(to, subject, text, html)
     );
   }
 
@@ -115,7 +117,7 @@ ${invoiceUrl ? this.button(invoiceUrl, "View invoice") : ""}`;
 <p>${window}</p>
 <p>Nothing has been deleted. Resubscribe any time to restore Pro.</p>
 ${this.button(billingUrl, "View billing")}`;
-    await this.sendBestEffort("plan-downgraded", () => this.send(to, subject, text, html, `[DOWNGRADED] ${to} → ${workspaceName}`));
+    await this.sendBestEffort("plan-downgraded", () => this.send(to, subject, text, html));
   }
 
   /** The grace window closed and Launch limits are now actually being enforced. */
@@ -126,7 +128,7 @@ ${this.button(billingUrl, "View billing")}`;
 <p>The grace period for <strong>${workspaceName}</strong> has ended, so free Launch limits are now in effect: 2 projects and 500 MB of storage.</p>
 <p>Projects beyond the first two are read-only, and new uploads are paused until you're back under the storage limit. <strong>Nothing has been deleted</strong> — upgrading restores full access immediately.</p>
 ${this.button(billingUrl, "Upgrade to Pro")}`;
-    await this.sendBestEffort("grace-ended", () => this.send(to, subject, text, html, `[GRACE ENDED] ${to} → ${workspaceName}`));
+    await this.sendBestEffort("grace-ended", () => this.send(to, subject, text, html));
   }
 
   /** Workspace storage crossed a warning threshold (80 / 95 / 100%). */
@@ -159,7 +161,7 @@ ${
 }
 <p style="color:#6B7280;font-size:12px">You can also free space by deleting large knowledge-base files and attachments you no longer need.</p>`;
     await this.sendBestEffort("storage-warning", () =>
-      this.send(to, subject, text, html, `[STORAGE ${pct}%] ${to} → ${workspaceName} ${usedLabel}/${limitLabel}`)
+      this.send(to, subject, text, html)
     );
   }
 
@@ -185,7 +187,7 @@ ${projectNames.length > 0 ? `<p>You have been assigned to: ${projectNames.map((n
 <p><a href="${acceptUrl}" style="display:inline-block;padding:10px 20px;background:#E8600A;color:#fff;text-decoration:none;border-radius:6px">Accept invite</a></p>
 <p style="color:#6B7280;font-size:12px">This invite expires in 7 days. If you did not expect this, you can ignore it.</p>`;
 
-    await this.send(to, `You have been invited to join ${workspaceName}`, textBody, htmlBody, `[INVITE] ${to} → ${acceptUrl}`);
+    await this.send(to, `You have been invited to join ${workspaceName}`, textBody, htmlBody);
   }
 
   async sendPasswordReset(to: string, resetUrl: string): Promise<void> {
@@ -194,14 +196,7 @@ ${projectNames.length > 0 ? `<p>You have been assigned to: ${projectNames.map((n
 <p>We received a request to reset your Tesbo Test Manager password.</p>
 ${this.button(resetUrl, "Reset password")}
 <p style="color:#6B7280;font-size:12px">This link expires in 60 minutes. If you did not request this, you can ignore this email — your password will not be changed.</p>`;
-    await this.send(
-      to,
-      "Reset your Tesbo Test Manager password",
-      textBody,
-      htmlBody,
-      // Format kept parseable like the OTP line: e2e tests scrape reset links out of container logs.
-      `PASSWORD RESET for ${to}: ${resetUrl}`
-    );
+    await this.send(to, "Reset your Tesbo Test Manager password", textBody, htmlBody);
   }
 
   /**
@@ -217,7 +212,7 @@ ${this.button(resetUrl, "Reset password")}
 <p>If this was you, no action is needed.</p>
 <p style="color:#6B7280;font-size:12px">If this wasn't you, <a href="${resetUrl}">reset your password now</a> or contact us at <a href="mailto:${this.config.supportContactEmail}">${this.config.supportContactEmail}</a>.</p>`;
     await this.sendBestEffort("password-changed", () =>
-      this.send(to, subject, textBody, htmlBody, `[PASSWORD CHANGED] ${to}`)
+      this.send(to, subject, textBody, htmlBody)
     );
   }
 
@@ -255,7 +250,7 @@ ${this.button(resetUrl, "Reset password")}
 </table>
 </td></tr>
 </table>`;
-    await this.send(to, subject, textBody, htmlBody, `[WELCOME] ${to}${cc ? ` cc ${cc}` : ""} → ${loginUrl}`, "communication", cc);
+    await this.send(to, subject, textBody, htmlBody, "communication", cc);
   }
 
   async sendOtp(to: string, code: string): Promise<void> {
@@ -264,11 +259,9 @@ ${this.button(resetUrl, "Reset password")}
       "Your Tesbo Test Manager verification code",
       `Your Tesbo Test Manager verification code is ${code}. It expires in ${this.config.otpExpiryMinutes} minutes.`,
       undefined,
-      // Format kept verbatim: e2e/global-setup.ts scrapes this line out of container logs.
-      `OTP for ${to}: ${code}`,
       // Never posted to Postmark outside live mode, not even to a sandbox server: signup and login
-      // are by far the highest-volume sends, they're the ones aimed at freshly invented addresses,
-      // and nothing downstream needs the real send to have happened — the code is read from the log.
+      // are the highest-volume sends, aimed at freshly invented addresses, and nothing downstream
+      // needs the real send to have happened — the outbox holds the code for the suite.
       "otp"
     );
   }

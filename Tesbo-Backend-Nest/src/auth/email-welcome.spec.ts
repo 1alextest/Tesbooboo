@@ -1,6 +1,7 @@
 import { EmailService } from "./email.service";
 import { AppConfigService } from "../config/app-config.service";
 import { EmailDeliveryPolicy } from "../config/email-delivery.policy";
+import { EmailOutboxService } from "./email-outbox.service";
 
 /**
  * EmailService.sendWelcome — the approved welcome email, asserted on the exact payload posted to
@@ -15,7 +16,7 @@ function makeService(configOverrides: Partial<Record<string, unknown>> = {}) {
     frontendUrl: "https://app.tesbo.io",
     ...configOverrides
   } as unknown as AppConfigService;
-  return new EmailService(config, new EmailDeliveryPolicy(config));
+  return new EmailService(config, new EmailDeliveryPolicy(config), new EmailOutboxService(config));
 }
 
 type Posted = { From: string; To: string; Cc?: string; Subject: string; TextBody: string; HtmlBody: string };

@@ -80,6 +80,10 @@ services:
       # emails an OTP and only replays other emails through a Postmark SANDBOX server (verified with
       # Postmark, not assumed), so a local or CI stack cannot bounce mail off invented addresses.
       EMAIL_DELIVERY_MODE: ${EMAIL_DELIVERY_MODE:-log}
+      # Test-only mailbox the e2e suite reads OTP codes and invite/reset links from instead of the
+      # container log. Off unless the local stack opts in (repo-root .env or CI env); the endpoint
+      # 404s when it is off, and it never records anything outside log delivery mode.
+      EMAIL_OUTBOX_ENABLED: ${EMAIL_OUTBOX_ENABLED:-}
       # Optional CC on the welcome email (see Tesbo-Backend-Nest/.env.example). No default on purpose.
       WELCOME_EMAIL_CC: ${WELCOME_EMAIL_CC:-}
       # Platform OAuth apps. Set these and workspace owners connect with one click — no
