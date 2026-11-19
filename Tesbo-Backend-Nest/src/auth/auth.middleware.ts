@@ -23,7 +23,9 @@ export class AuthMiddleware implements NestMiddleware {
 
     const bearer = this.readBearerHeader(req.headers?.authorization);
     if (bearer.present) {
-      const principal = bearer.token ? await this.apiTokens.authenticate(bearer.token) : null;
+      // authenticate() answers null for an absent token, so no second user-controlled branch is
+      // needed between "a bearer was presented" and "a principal was resolved".
+      const principal = await this.apiTokens.authenticate(bearer.token);
       req.userId = principal?.userId ?? null;
       req.apiToken = principal
         ? {
