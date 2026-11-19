@@ -86,6 +86,14 @@ decision 1 below.
 
 ### Trap 3: `POST /cycles/from-cases` silently discards `testcaseIds`
 
+> **Resolved 2026-11-18.** `from-cases` now creates the run and attaches the given cases in one
+> transaction, through the same Approved-only writer as the MCP `create_cycle_from_testcases` tool.
+> The response carries `requested`/`added`/`skipped`; a Draft/Demoted case refuses the whole request
+> (409) so no orphan run is left behind; ids that do not resolve inside the project are counted as
+> skipped rather than dropped silently. `from-plan` deliberately still only records `plan_id` —
+> cloning a plan's items is a separate semantic decision no caller has asked for. The original
+> finding is kept below as history.
+
 All three of `/cycles`, `/cycles/from-plan` and `/cycles/from-cases` are wired to the *same*
 `createCycle()`, which reads neither `planId`'s items nor `testcaseIds` — it inserts one `cycles` row
 and returns. `from-cases` has no frontend caller and is reachable only by API. Already documented at

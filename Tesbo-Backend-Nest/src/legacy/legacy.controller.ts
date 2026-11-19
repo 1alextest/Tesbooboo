@@ -733,7 +733,7 @@ export class LegacyController {
 
   @Post("/api/projects/:projectId/cycles/from-cases")
   createCycleFromCases(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
-    return this.legacy.createCycleForUser(req.userId, projectId, body);
+    return this.legacy.createCycleFromCasesForUser(req.userId, projectId, body);
   }
 
   @Get("/api/cycles/:cycleId")
