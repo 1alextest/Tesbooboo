@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -10,6 +11,7 @@ import {
 } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
+import { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import { nextLocalRunAt } from "./local-time";
 
 type Body = Record<string, any>;
@@ -151,7 +153,11 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
   private timer: NodeJS.Timeout | null = null;
   private sweeping = false;
 
-  constructor(private readonly db: DatabaseService, private readonly legacy: LegacyService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly legacy: LegacyService,
+    private readonly planLimits: PlanLimitsService
+  ) {}
 
   onModuleInit(): void {
     if (process.env.SCHEDULES_WORKER_DISABLED === "1") return;
@@ -356,6 +362,50 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
     const row = await this.requireSchedule(userId, scheduleId);
     await this.db.query("DELETE FROM cycle_run_schedules WHERE id = $1", [row.id]);
     return { success: true };
+  }
+
+  /**
+   * Run a schedule once, now. This is a manual action: it creates a Test Run like a due occurrence
+   * but does not move the schedule's cadence, disable a one-time schedule, or wait for the worker.
+   * Claiming uses the same running flag the worker uses, so both cannot create the same occurrence.
+   * The project write lock applies, because this writes a run.
+   */
+  async runNowForUser(userId: string | null | undefined, scheduleId: string) {
+    if (!userId) throw new ForbiddenException({ error: "Project membership required" });
+    const row = await this.requireSchedule(userId, scheduleId);
+    const project = await this.legacy.requireProjectAccess(userId, row.project_id);
+    await this.planLimits.assertProjectWritable(project.organization_id, row.project_id);
+    const claimed = await this.db.query(
+      "UPDATE cycle_run_schedules SET is_running = true, updated_at = now() WHERE id = $1 AND is_running = false RETURNING id",
+      [row.id]
+    );
+    if (!claimed.rows[0]) {
+      throw new ConflictException({ code: "SCHEDULE_RUNNING", error: "This schedule is already running" });
+    }
+    try {
+      const cycle = await this.legacy.createCycleFromScheduledRun({
+        projectId: row.project_id,
+        cycleId: row.cycle_id,
+        scheduledFor: new Date()
+      });
+      await this.db.query(
+        `UPDATE cycle_run_schedules
+         SET is_running = false, last_run_at = now(), last_status = 'success', last_error = NULL, updated_at = now()
+         WHERE id = $1`,
+        [row.id]
+      );
+      return { ok: true, status: "success", cycleId: cycle.id, cycleName: cycle.name };
+    } catch (error) {
+      const message = (error instanceof Error ? error.message : String(error)).slice(0, LAST_ERROR_MAX);
+      await this.db.query(
+        `UPDATE cycle_run_schedules
+         SET is_running = false, last_run_at = now(), last_status = 'error', last_error = $2, updated_at = now()
+         WHERE id = $1`,
+        [row.id, message]
+      );
+      if (error instanceof HttpException) throw error;
+      throw new ConflictException({ code: "SCHEDULE_RUN_FAILED", error: message });
+    }
   }
 
   /**

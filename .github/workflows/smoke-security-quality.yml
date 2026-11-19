@@ -211,7 +211,7 @@ jobs:
           # occurrence (EXO-A-08b). The selection is by title fragment because the EXO-A-09/11
           # numbers are shared with unrelated tests in that file; neither spec was referenced by
           # any workflow before this step.
-          selection="a created schedule|a schedule is updated|a due schedule|the schedule routes refuse|a schedule needs a name|a one-time schedule refuses|a one-time schedule with a future|a recurring schedule needs no Run At|a daily schedule|a weekly schedule|local rules refuse|a fired daily schedule|Schedule Run — the form|SWP-06"
+          selection="a created schedule|a schedule is updated|a due schedule|the schedule routes refuse|a schedule needs a name|a one-time schedule refuses|a one-time schedule with a future|a recurring schedule needs no Run At|a daily schedule|a weekly schedule|local rules refuse|a fired daily schedule|runs on demand without shifting|edited and run on demand|Schedule Run — the form|SWP-06"
           npx playwright test -c playwright.config.ts api/execution-ops.spec.ts ui/cycles.spec.ts ui/screens-sweep.spec.ts --workers=10 --output=test-results-schedules -g "$selection" --list
           npx playwright test -c playwright.config.ts api/execution-ops.spec.ts ui/cycles.spec.ts ui/screens-sweep.spec.ts --workers=10 --output=test-results-schedules -g "$selection"
       - name: Verify fresh MCP catalog and canonical QA fields on isolated backend

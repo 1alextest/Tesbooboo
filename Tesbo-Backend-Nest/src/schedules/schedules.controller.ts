@@ -34,4 +34,10 @@ export class SchedulesController {
   remove(@Req() req: AuthenticatedRequest, @Param("scheduleId") scheduleId: string) {
     return this.schedules.deleteForUser(req.userId, scheduleId);
   }
+
+  @Post("/api/cycles/schedules/:scheduleId/run")
+  @HttpCode(200)
+  runNow(@Req() req: AuthenticatedRequest, @Param("scheduleId") scheduleId: string) {
+    return this.schedules.runNowForUser(req.userId, scheduleId);
+  }
 }
