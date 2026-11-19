@@ -830,7 +830,7 @@ export class ModelStudioRepository {
     if (!UUID.test(cycleId)) return null;
     const res = await this.db.query(
       `SELECT mr.id, mr.model_id, mr.model_revision_id, mr.content_hash, mr.approval_id, mr.created_at,
-              m.name AS model_name, r.revision_number, a.approved_at, a.approved_by,
+              m.name AS model_name, r.revision_number, a.created_at AS approved_at, a.approved_by,
               jsonb_array_length(COALESCE(mr.manifest->'cases', '[]'::jsonb)) AS case_count
        FROM mbt_model_runs mr
        JOIN mbt_models m ON m.id = mr.model_id AND m.project_id = mr.project_id
