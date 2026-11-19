@@ -310,7 +310,7 @@ A read-only cross-artifact analyzer operates on typed **approved source obligati
 **Completeness boundaries:** first inventory material user goals, actors, states, interfaces, upstream/downstream consumers and negative/recovery paths. Maintain a denominator of assessed vs missing/unverified scope. All change candidates point to canonical records and existing graph; none automatically reclassifies historical executions. Report coverage separately for authored cases, approved cases, execution, deployed target validation and currently reviewed requirement revision. Re-run bounded consistency on relevant source/policy/requirement/skill head changes.
 
 ## 15. Release readiness, after-release outcomes and DORA-style metrics
-**Reuse:** existing runs/executions/bugs, reports/dashboards, project releases and Graph/Yzra change review as applicable; extend one project-level role-sensitive reporting projection. Do **not** invent a new release-authority database or allow an LLM to determine whether production is "safe."
+**Reuse:** existing runs/executions/bugs, reports/dashboards, project releases and Graph/Zyra change review as applicable; extend one project-level role-sensitive reporting projection. Do **not** invent a new release-authority database or allow an LLM to determine whether production is "safe."
 
 **Proposed readiness evidence dimensions:**
 - source PR/commit and signed/observed target deployment identity;
