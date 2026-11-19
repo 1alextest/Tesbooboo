@@ -2850,6 +2850,13 @@ export async function deleteTestRunSchedule(scheduleId: string): Promise<{ succe
   return api(`/api/cycles/schedules/${scheduleId}`, { method: "DELETE" });
 }
 
+/** Run a schedule once, now, without changing its cadence. */
+export async function runTestRunSchedule(
+  scheduleId: string
+): Promise<{ ok: boolean; status: string; cycleId: string; cycleName: string }> {
+  return api(`/api/cycles/schedules/${scheduleId}/run`, { method: "POST" });
+}
+
 // Sharing
 export interface ShareState {
   shareToken: string;

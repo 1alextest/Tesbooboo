@@ -890,6 +890,46 @@ test.describe("Schedule Run — the form and Run At validation", () => {
     }
   });
 
+  test("a schedule is edited and run on demand from the list", { tag: '@tesbo.testId("TES-TC-2207")' }, async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const originalName = `E2E EditRun ${Date.now()}`;
+    const editedName = `${originalName} edited`;
+    let scheduleId = "";
+    let createdCycleId = "";
+    try {
+      const created = await api.post(`/api/projects/${ctx.projectId}/cycles/schedules`, {
+        data: { name: originalName, cycleId, scheduleType: "daily", localTime: "09:00", timezone: "America/New_York" }
+      });
+      expect(created.status(), await created.text()).toBe(201);
+      scheduleId = (await created.json()).id;
+
+      await page.goto(`/projects/${ctx.projectId}/cycles/schedule`);
+      const row = page.getByRole("row", { name: new RegExp(originalName) });
+      await expect(row).toContainText("Daily at 09:00");
+      await row.getByRole("button", { name: "Edit" }).click();
+      await page.getByLabel("Edit schedule name").fill(editedName);
+      await page.getByLabel("Edit local time").fill("10:30");
+      await page.getByRole("button", { name: "Save schedule" }).click();
+      await expect(page.getByRole("status")).toContainText("Schedule updated.");
+
+      const editedRow = page.getByRole("row", { name: new RegExp(editedName) });
+      await expect(editedRow).toContainText("Daily at 10:30");
+      await editedRow.getByRole("button", { name: "Run now" }).click();
+      await expect(page.getByRole("status")).toContainText("Created run");
+
+      const cycles = await (await api.get(`/api/projects/${ctx.projectId}/cycles`)).json();
+      const spawned = (Array.isArray(cycles) ? cycles : cycles.rows ?? []).find((item: { name: string }) =>
+        item.name.startsWith(`${cycleName} — scheduled`)
+      );
+      expect(spawned, "Run now must create a new Test Run").toBeTruthy();
+      createdCycleId = spawned.id;
+    } finally {
+      if (createdCycleId) await api.delete(`/api/cycles/${createdCycleId}`, { failOnStatusCode: false });
+      if (scheduleId) await api.delete(`/api/cycles/schedules/${scheduleId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
   test("a past Run At shows the inline error as soon as it's picked, before Create Schedule is clicked", { tag: '@tesbo.testId("TES-TC-2205")' }, async ({ page }) => {
     let scheduleRequestSent = false;
     await page.route("**/api/projects/*/cycles/schedules", async (route) => {

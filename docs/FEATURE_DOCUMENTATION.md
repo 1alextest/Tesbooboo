@@ -1103,7 +1103,11 @@ each occurrence keeps its own results instead of overwriting the scheduled run's
   case writer as every other run-creation path. The scheduled run's own executions are never
   modified.
 - Routes are project-authorized; `PATCH`/`DELETE` resolve the schedule's own project from the row, so
-  a non-member holding a real id is refused.
+  a non-member holding a real id is refused. `PATCH` applies only the fields supplied: renaming a
+  schedule does not shift its cadence.
+- `POST /api/cycles/schedules/:scheduleId/run` creates a Test Run immediately. It uses the same
+  `is_running` claim as the worker (so both cannot create the same occurrence), respects the project
+  write lock, and does **not** move `next_run_at` or disable a one-time schedule.
 - Environment: `SCHEDULES_WORKER_DISABLED=1` disables the worker; `SCHEDULE_SWEEP_INTERVAL_MS`
   changes the sweep interval.
 

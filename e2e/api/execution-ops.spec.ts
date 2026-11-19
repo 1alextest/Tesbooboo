@@ -589,6 +589,40 @@ test.describe("execution bulk operations, schedules and share links", () => {
     }
   });
 
+  test("EXO-A-18 a schedule runs on demand without shifting its cadence", { tag: '@tesbo.testId("TES-TC-3041")' }, async () => {
+    const { cycleId } = await seedRun(1);
+    const created = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`, {
+      data: { name: stamp("run-now"), cycleId, scheduleType: "recurring", intervalMinutes: 60 },
+      failOnStatusCode: false,
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const schedule = await created.json();
+    const cadence = schedule.nextRunAt;
+
+    const run = await asOwner.post(`/api/cycles/schedules/${schedule.id}/run`, { failOnStatusCode: false });
+    expect(run.status(), await run.text()).toBe(200);
+    const result = await run.json();
+    expect(result).toMatchObject({ ok: true, status: "success" });
+    expect(result.cycleName).toContain("— scheduled");
+
+    const listed = await (await asOwner.get(`/api/projects/${tenant!.mainProjectId}/cycles/schedules`)).json();
+    const row = listed.find((item: { id: string }) => item.id === schedule.id);
+    expect(row).toMatchObject({ enabled: true, lastStatus: "success" });
+    expect(row.nextRunAt, "a manual run must not shift the schedule's cadence").toBe(cadence);
+
+    const cycles = await (await asOwner.get(`/api/projects/${tenant!.mainProjectId}/cycles`)).json();
+    expect(cycles.map((cycle: { id: string }) => cycle.id)).toContain(result.cycleId);
+
+    // Running again creates a second run rather than reusing the first.
+    const second = await (await asOwner.post(`/api/cycles/schedules/${schedule.id}/run`)).json();
+    expect(second.status).toBe("success");
+    expect(second.cycleId).not.toBe(result.cycleId);
+
+    // The manual action is still a project-authorized write.
+    await expectRefused(await anon.post(`/api/cycles/schedules/${schedule.id}/run`, { failOnStatusCode: false }), "schedule run (anonymous)");
+    await expectRefused(await asGuest.post(`/api/cycles/schedules/${schedule.id}/run`, { failOnStatusCode: false }), "schedule run (non-member)");
+  });
+
   test("EXO-A-17 a fired daily schedule re-arms for the next local day and stays enabled", { tag: '@tesbo.testId("TES-TC-3039")' }, async () => {
     const { cycleId } = await seedRun(1);
     const timezone = "America/New_York";
