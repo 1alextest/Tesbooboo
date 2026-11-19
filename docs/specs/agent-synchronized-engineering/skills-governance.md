@@ -116,3 +116,27 @@ These are **proposed acceptance tests**, not executed tests.
 - Human-only interactive approval design; independent authority boundaries for root-meta changes and initial bootstrap.
 - Controlled migration path for existing authored cases and documents with no historical skill pin.
 - Historical export/retention and allowed read visibility across workspace/global/project scopes.
+
+## 12. Source-challenge clarifications (2026-11-18)
+The specification's reviewer-operated preliminary risk record is [reviews/2026-11-18-charter-guided-spec-challenge.md](reviews/2026-11-18-charter-guided-spec-challenge.md). This section adds **testable corrections**, not independent team sign-off.
+
+### 12.1 Candidate repair without mutable history
+An agent may create one new skill candidate or propose successor version under a stable skill identity; after submission, its specific content snapshot/digest is immutable. Repair requires an explicit **new candidate iteration/version proposal**, referencing its predecessor and base revision, or withdrawal/abandonment of the candidate; no overwrite of the same accepted/submitted snapshot, no fabricated published version, no duplicate skill logical identity for a retry. The UI/MCP must expose these states, provenance, revision guards, idempotency and deterministic conflict receipts. Only accepted publication increments the public version sequence.
+
+### 12.2 Separate Skills promotion from case/document publication
+The protected, human-only governance ban applies to **skill approval, assignment, activation, precedence and root-meta promotion**, not automatically to every other Tesbo artifact's policy. Existing per-domain bounded automatic publication in the governed-asset proposal must be explicitly reconciled with the current authoritative eight Tesbo specifications. No change here silently revokes or grants automatic publication rights for ordinary cases, manuals or work items; no proof of an existing enforceable automatic mode is claimed. Skill resolution controls authoring provenance, and native domain authorization controls artifact publication.
+
+### 12.3 Machine-checkable rules versus semantic review
+The server can enforce a deterministic rule grammar, matching, version compatibility, dependency/precedence DAG, authorization, immutable hashes and explicit required fields; it **cannot reliably decide whether every pair of free-text skills has contradictory normative meaning or malicious instructions**. Treat unsupported semantic consistency as UNKNOWN/REVIEW REQUIRED; no claim that lint, static scan or a generated safety summary proves malicious content impossible. Protect execution with provenance+review, least-privilege tools and containment, safe rendering, separate secret/tool permissions, and a controlled declassification/publishing workflow. Reject definite schema/authorization violations mechanically.
+
+### 12.4 Proper evidence ownership
+Files that merely contain externally sourced data or raw evidence are **not necessarily authored under a Tesbo skill**. Where an agent transforms, classifies or reports on them, capture the applicable skill/assignment; otherwise mark skill `not_applicable` with an explanation and preserve independent provenance, bytes hash, chain-of-custody and inspection status. No skill association proves target runtime authenticity, evidence completeness or test passage.
+
+### 12.5 Root skill recovery and extraordinary operations
+Initial trusted root meta-skill installation, emergency revocation, replacement, loss of all active bindings and break-glass governance need an independently authorized human recovery mechanism with durable audit, explicit scope/expiry and post-event review. No agent may create its own emergency exception, no offline writer may promote a stale binding, and no implicit "latest" assignment is an emergency fallback. The exact decision owner, approval quorum and normal/emergency behavior must be resolved from Tesbo's approved project policy before implementation.
+
+### 12.6 Cross-workspace access and history visibility
+Sharing a skill across projects does not share all its candidate files, audit history, external references, secret source material or internal documents. Resolve effective assignments and read visibility at each scope; losing access to the parent/global skill makes affected project bindings invalid/unavailable, without fabricating a replacement. Historic version identifiers remain durable but payload and confidential metadata require original/access-policy authorization.
+
+### 12.7 Truthful implementation/evaluation limits
+Before shipping, specify actual workload inputs (scale, peak concurrent agents, assignment fanout, dependency depth), bounded resolver/cache/dependency limits, measured response-time targets and fallback/error budgets. Do not manufacture SLO values. The first authenticated production-like disposable-project tests must include a denied admin-owned MCP approval and alternate REST route, a real interactive human promotion, and rerunning a stale agent client against the new effective assignment.
