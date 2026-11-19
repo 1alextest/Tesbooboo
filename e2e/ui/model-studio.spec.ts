@@ -132,8 +132,11 @@ test("a reviewer approves the revision, creates a draft case and starts a govern
     await firstPath.check();
     await page.getByRole("button", { name: "Create draft cases" }).click();
     await expect(page.getByRole("status").filter({ hasText: "Created" })).toBeVisible();
-    // The generated case is listed with a link back to it, not only announced in a notice.
-    await expect(page.getByRole("link", { name: /^Model: / })).toBeVisible();
+    // The generated case is listed with a link back to it, not only announced in a notice. Scoped
+    // to the proposals panel: the same case also appears in the run-eligibility list below.
+    await expect(
+      page.getByRole("region", { name: "Path proposals" }).getByRole("link", { name: /^Model: / }).first()
+    ).toBeVisible();
 
     // The proposal became a real, unapproved Draft case. Read the persisted row directly so the
     // assertion is about state, not about search ranking or list defaults.
@@ -157,7 +160,7 @@ test("a reviewer approves the revision, creates a draft case and starts a govern
     const caseApproved = await api.post(`/api/projects/${ctx.projectId}/testcases/${caseId}/approve`, {
       data: { expectedRevision: caseRow.editRevision }
     });
-    expect(caseApproved.status(), await caseApproved.text()).toBe(201);
+    expect(caseApproved.status(), await caseApproved.text()).toBe(200);
 
     await page.reload();
     await page.getByRole("button", { name, exact: false }).click();

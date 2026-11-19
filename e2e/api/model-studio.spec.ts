@@ -557,7 +557,8 @@ test.describe("persisted Model Studio revisions and mappings", () => {
       const caseApproved = await owner.post(`/api/projects/${projectId}/testcases/${caseId}/approve`, {
         data: { expectedRevision: caseRow.editRevision }
       });
-      expect(caseApproved.status(), await caseApproved.text()).toBe(201);
+      // The approval endpoint answers 200 (it updates and returns the case + receipt).
+      expect(caseApproved.status(), await caseApproved.text()).toBe(200);
 
       const dispatched = await owner.post(dispatchUrl(revision.id), {
         data: { caseIds: [caseId], name: `E2E model run ${Date.now()}` }
