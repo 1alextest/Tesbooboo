@@ -432,6 +432,127 @@ test.describe("Test Run — Priority/Type/Assignee filters", () => {
 });
 
 /*
+ * Feature: setting one status across a multi-selection of the run table.
+ *
+ * The bulk-status route has accepted a selection since the "bulkStatus() {}" stub was replaced, and
+ * `api/execution-ops.spec.ts` covers it at the boundary. What was missing was the frontend half:
+ * the multi-select bar offered Remove and Assign only, so the run detail screen could not perform
+ * the batch its selection UI implied. These tests drive the control a user actually sees.
+ */
+test.describe("Test Run — bulk status on a multi-selection", () => {
+  let api: APIRequestContext;
+  let cycleId: string;
+  let testcaseIds: string[] = [];
+  const stamp = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  // Titles are asserted as row text; the -0/-1/-2 suffix also gives the SQL aggregate a stable order.
+  const titles = Array.from({ length: 3 }, (_, i) => `E2E BulkStatus ${stamp}-${i}`);
+
+  test.beforeAll(async () => {
+    api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const cycle = await (
+      await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E BulkStatus ${stamp}` } })
+    ).json();
+    cycleId = cycle.id;
+
+    const created = await (
+      await api.post(`/api/projects/${ctx.projectId}/testcases/bulk-create`, {
+        data: { testcases: titles.map((title) => ({ title, status: "Approved" })) },
+      })
+    ).json();
+    testcaseIds = created.created.map((c: { id: string }) => c.id);
+    await api.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseIds } });
+  });
+
+  test.afterAll(async () => {
+    if (api) {
+      await cleanUpRun(api, cycleId, testcaseIds);
+      await api.dispose();
+    }
+  });
+
+  test.beforeEach(async ({ page }) => {
+    await page.goto(`/projects/${ctx.projectId}/cycles/${cycleId}`);
+    await expect(page.getByText(titles[0], { exact: true })).toBeVisible();
+  });
+
+  test("setting a status on a multi-selection applies it to exactly those rows and clears the selection", async ({ page }) => {
+    await page.getByRole("checkbox", { name: `Select ${titles[0]}` }).check();
+    await page.getByRole("checkbox", { name: `Select ${titles[1]}` }).check();
+    await expect(page.getByText("2 selected")).toBeVisible();
+
+    await page.getByTestId("run-bulk-status").click();
+    // Nothing is applied until a status is chosen; the placeholder must stop an accidental submit.
+    const submit = page.getByRole("button", { name: "Set status for 2" });
+    await expect(submit).toBeDisabled();
+    await page.getByLabel("Status for selected test cases").selectOption("Passed");
+    await submit.click();
+
+    // The bar (and the selection it acted on) is gone once the batch lands.
+    await expect(page.getByTestId("run-bulk-status")).toHaveCount(0);
+    await expect(page.getByLabel("Status for selected test cases")).toHaveCount(0);
+
+    const row = (title: string) => page.locator("tr", { hasText: title });
+    await expect(row(titles[0]).getByText("Passed", { exact: true })).toBeVisible();
+    await expect(row(titles[1]).getByText("Passed", { exact: true })).toBeVisible();
+    await expect(row(titles[2]).getByText("Untested", { exact: true })).toBeVisible();
+
+    // Assert the persisted state, not only the optimistic row update: the whole point of the fix
+    // is that the server (not just the screen) received the batch.
+    expect(
+      scalar(
+        "SELECT COALESCE(string_agg(e.status, ',' ORDER BY t.title), '') FROM executions e " +
+          "JOIN cycle_items ci ON ci.id = e.cycle_item_id JOIN testcases t ON t.id = ci.testcase_id " +
+          `WHERE ci.cycle_id = ${literal(cycleId)};`,
+      ),
+    ).toBe("Passed,Passed,Untested");
+  });
+
+  test("a refused bulk status shows the server message and keeps the selection", async ({ page }) => {
+    // Force the failure path the backend owns (an unknown status is a 400) instead of hoping the
+    // UI can produce one; the assertion is that the message is surfaced verbatim and the selection
+    // survives, so the user can correct it without re-selecting every row.
+    await page.route("**/api/cycles/*/executions/bulk-status", (route) =>
+      route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "status must be one of: Untested, Passed, Failed, Blocked, Skipped, Retest" }),
+      }),
+    );
+
+    await page.getByRole("checkbox", { name: `Select ${titles[2]}` }).check();
+    await page.getByTestId("run-bulk-status").click();
+    await page.getByLabel("Status for selected test cases").selectOption("Failed");
+    await page.getByRole("button", { name: "Set status for 1" }).click();
+
+    await expect(page.getByText(/status must be one of: Untested, Passed, Failed, Blocked/)).toBeVisible();
+    await expect(page.getByLabel("Status for selected test cases")).toBeVisible();
+    // The refused batch changed nothing: no execution in this run is Failed (the row the earlier
+    // test set to Passed legitimately still is, which is why the assertion is not "all Untested").
+    expect(
+      scalar(
+        `SELECT COUNT(*) FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id
+         WHERE ci.cycle_id = ${literal(cycleId)} AND e.status = 'Failed';`,
+      ),
+    ).toBe("0");
+  });
+
+  test("a completed run offers no bulk status action", async ({ page }) => {
+    // Completed runs are sealed for results; the selection checkboxes disappear with the bar.
+    const completed = await api.patch(`/api/cycles/${cycleId}`, { data: { status: "Completed" } });
+    expect(completed.ok(), await completed.text()).toBeTruthy();
+    try {
+      await page.goto(`/projects/${ctx.projectId}/cycles/${cycleId}`);
+      await expect(page.getByText(titles[0], { exact: true })).toBeVisible();
+      await expect(page.getByRole("checkbox", { name: `Select ${titles[0]}` })).toHaveCount(0);
+      await expect(page.getByTestId("run-bulk-status")).toHaveCount(0);
+    } finally {
+      // Reopen so the next test in the file (and cleanup) sees an editable run.
+      await api.patch(`/api/cycles/${cycleId}`, { data: { status: "Planning" } });
+    }
+  });
+});
+
+/*
  * Feature: sorting controls on the run table's ID, Priority and Test Case columns
  * (app/(app)/projects/[id]/cycles/[cycleId]/page.tsx's SortableColumnHeader / runSort /
  * compareExternalId / comparePriority / compareTestCaseTitle). Sorting is entirely client-side

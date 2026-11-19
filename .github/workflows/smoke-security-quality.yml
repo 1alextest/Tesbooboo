@@ -214,6 +214,18 @@ jobs:
           selection="a created schedule|a schedule is updated|a due schedule|the schedule routes refuse|a schedule needs a name|a one-time schedule refuses|a one-time schedule with a future|a recurring schedule needs no Run At|a daily schedule|a weekly schedule|local rules refuse|a fired daily schedule|runs on demand without shifting|edited and run on demand|Schedule Run — the form|SWP-06"
           npx playwright test -c playwright.config.ts api/execution-ops.spec.ts ui/cycles.spec.ts ui/screens-sweep.spec.ts --workers=10 --output=test-results-schedules -g "$selection" --list
           npx playwright test -c playwright.config.ts api/execution-ops.spec.ts ui/cycles.spec.ts ui/screens-sweep.spec.ts --workers=10 --output=test-results-schedules -g "$selection"
+      - name: Verify bulk execution actions from the run table
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-bulk-executions
+        run: |
+          # Neither bulk route was referenced by a workflow, so their coverage proved nothing, and
+          # the run table's multi-select gained the status action it previously lacked. Select the
+          # bulk API contract plus the run-detail UI that drives it. EXO-A-07/08/09 numbers are
+          # shared with the schedule tests above, so the two PATCH tests are matched by title.
+          selection="EXO-A-0[1-6]|a single-execution PATCH also refuses|a status-only PATCH does not clear|multi-selection applies it to exactly those rows|a refused bulk status|a completed run offers no bulk status action"
+          npx playwright test -c playwright.config.ts api/execution-ops.spec.ts ui/cycles.spec.ts --workers=10 --output=test-results-bulk-executions -g "$selection" --list
+          npx playwright test -c playwright.config.ts api/execution-ops.spec.ts ui/cycles.spec.ts --workers=10 --output=test-results-bulk-executions -g "$selection"
       - name: Verify fresh MCP catalog and canonical QA fields on isolated backend
         working-directory: e2e
         env:

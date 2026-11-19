@@ -1042,28 +1042,40 @@ by whom, and what happened — the atomic unit all run/plan progress rollups are
 
 ### Bulk Execution Actions
 
-**What it is:** Two REST routes intended for bulk-assigning executions to a user and bulk-setting
-execution status across multiple executions at once.
+**What it is:** Two REST routes that apply one change across a selection of a run's executions —
+assigning an owner and setting a status.
 
-**Use cases (intended, not delivered):**
-- A test lead wants to assign all "Untested" cases in a run to two testers in one action.
-- A tester wants to mark 20 already-verified-fixed cases as "Passed" in one batch instead of one at a time.
+> **Superseded snapshot (audited before implementation, updated 2026-11-18).** The audit originally
+> recorded both routes as empty controller stubs (`bulkAssign() {}` / `bulkStatus() {}`) with no
+> frontend caller or selection UI. Both are implemented now; the original findings are kept below
+> only as history.
 
-**Problem it solves:** Nothing today — see below.
+**How it works today:**
+- `POST /api/cycles/:cycleId/executions/bulk-assign` and `.../bulk-status` resolve the selection,
+  lock the run and the selected executions in one transaction (`writeBulkExecutions`), and write
+  through the same `writeExecution` path as the single-execution PATCH. A status batch also emits
+  one summary notification per assignee instead of one per case; Failed/Blocked keep their
+  per-case matrix notices.
+- Bulk status validates the status against the canonical list and refuses an unknown value at the
+  edge (400, not a Postgres CHECK violation). Bulk assign refuses a non-member assignee and keeps
+  a status-only PATCH from clearing an assignee set this way.
+- Completed automated runs are sealed: the shared writer's `assertAutomatedRunWritable` refuses
+  the batch rather than letting a selection rewrite a finished robot run.
+- Frontend: the run detail table's multi-selection bar offers **Remove from run**, **Assign to** and
+  **Set status**. Set status requires an explicit choice before it can submit, shows the server's
+  refusal in the dialog, and clears the selection only after the batch succeeds. The bar is absent
+  on a Completed run, matching the hidden selection checkboxes.
 
-**Features & actions:**
-- `POST /api/cycles/:cycleId/executions/bulk-assign` — controller handler is a **completely empty method body** (`bulkAssign() {}`), with no parameters bound at all (not even `@Body()`); it returns `undefined` (HTTP 200 with an empty response) no matter what is sent.
-- `POST /api/cycles/:cycleId/executions/bulk-status` — identical situation (`bulkStatus() {}`).
-- **No frontend caller exists for either route** — no function in `lib/api.ts`, no component references `bulk-assign`/`bulk-status` anywhere in the frontend tree. There is also no bulk-selection UI (checkboxes, "select all," a bulk action bar) anywhere on the run detail execution table — the checkbox/multi-select pattern that exists for bulk test-case operations (status/suite/priority/owner and delete) on the **Test Cases** repository page has no equivalent on the **Test Executions** table.
-- Net effect: this is a fully unimplemented feature end-to-end (no UI, no backend logic, no persistence) — currently indistinguishable from a no-op API if called directly.
-
-**Edge cases / validation worth testing:**
-- Confirm both routes currently return 200/empty for literally any payload (including malformed JSON, missing `cycleId`, or a `cycleId` that doesn't exist) — there is no validation to trigger a 4xx.
-- Regression-test that whenever this is implemented, it gets standard coverage: assigning to a user not on the project, assigning to an empty list, bulk-status to an invalid status string, bulk actions on a `Completed` run, and permission gating consistent with the single-execution update path.
+**Coverage:** `e2e/api/execution-ops.spec.ts` EXO-A-01…06 and EXO-A-08/09 cover the boundary
+(partial selection, unknown status, non-member assignee, cross-tenant/no-session refusal, assignee
+preservation); `e2e/ui/cycles.spec.ts` covers the run-table control, its failure path and the
+Completed-run absence. Both run in the "Verify bulk execution actions from the run table" CI step.
 
 **Key files:**
-- Backend: `legacy.controller.ts` L419–423 (`bulkAssign`, `bulkStatus` — both empty stub bodies). No corresponding methods exist in `legacy.service.ts`.
-- Frontend: none (no caller, no bulk UI on `Tesbo-Frontend/app/(app)/projects/[id]/cycles/[cycleId]/page.tsx`).
+- Backend: `legacy.controller.ts` (`bulkAssign`, `bulkStatus`), `legacy.service.ts`
+  (`writeBulkExecutions`, `bulkUpdateExecutionStatus`, `bulkAssignExecutions`, `writeExecution`).
+- Frontend: `Tesbo-Frontend/app/(app)/projects/[id]/cycles/[cycleId]/page.tsx`,
+  `Tesbo-Frontend/lib/api.ts` (`bulkAssignExecutions`, `bulkUpdateExecutionStatus`).
 
 ---
 
