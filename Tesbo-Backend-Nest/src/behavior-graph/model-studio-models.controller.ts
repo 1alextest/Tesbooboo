@@ -3,9 +3,11 @@ import type { AuthenticatedRequest } from "../common/request.types";
 import { ModelStudioRepository } from "./model-studio-repository";
 
 /**
- * Persisted expected-model drafts and explicit mappings. Generation returns proposals only; there is
- * no approval, activation or target-execution route — those remain later phases and separate owners.
- * Archiving retires a model as a whole while keeping its revisions and mappings as history.
+ * Persisted expected models, explicit mappings, approval receipts, proposal generation and governed
+ * dispatch. Generation returns proposals; dispatch starts a native Test Run from the current
+ * approved revision under the native Approved-only policy. Results stay in the native run; this
+ * controller never writes execution or evidence rows. Archiving retires a model as a whole while
+ * keeping its revisions, mappings and dispatch history.
  */
 @Controller("/api/projects/:projectId/model-studio/models")
 export class ModelStudioModelsController {
@@ -89,6 +91,17 @@ export class ModelStudioModelsController {
     @Body() body: Record<string, any>
   ) {
     return this.models.approveRevisionForUser(request.userId, projectId, modelId, revisionId, body);
+  }
+
+  @Post(":modelId/revisions/:revisionId/runs")
+  dispatchRun(
+    @Req() request: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("modelId") modelId: string,
+    @Param("revisionId") revisionId: string,
+    @Body() body: Record<string, any>
+  ) {
+    return this.models.dispatchRunForUser(request.userId, projectId, modelId, revisionId, body);
   }
 
   @Post(":modelId/revisions/:revisionId/candidates")

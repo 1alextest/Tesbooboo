@@ -8,6 +8,7 @@ import {
   archiveModelStudioModel,
   createModelStudioCases,
   createModelStudioModel,
+  dispatchModelStudioRun,
   generateModelStudioPaths,
   getModelStudioCoverage,
   getModelStudioModel,
@@ -34,9 +35,10 @@ import {
 import { formatDate } from "@/lib/date";
 
 /**
- * Read-only inspection of persisted expected-behavior drafts. This is the Phase A consumer: it
- * shows model identity, immutable revisions, the structural graph, and explicit case mappings.
- * It does not create, approve, activate, generate or execute anything; a mapping is not coverage.
+ * Model Studio: expected behavior, immutable revisions, explicit case mappings, human approval,
+ * bounded path proposals, Draft-case generation, and governed dispatch of an approved revision into
+ * a native Test Run. A mapping is not execution or verified coverage; a dispatched run's results are
+ * case outcomes, reported per element without claiming behavioral conformance.
  */
 /**
  * Staleness is a review cue, not a status change: nothing here rewrites the case, the link or its
@@ -99,6 +101,12 @@ export default function ModelStudioPage() {
   const [selectedDigests, setSelectedDigests] = useState<string[]>([]);
   const [casesBusy, setCasesBusy] = useState(false);
   const [casesNotice, setCasesNotice] = useState<string | null>(null);
+  const [excludedRunCaseIds, setExcludedRunCaseIds] = useState<string[]>([]);
+  const [runName, setRunName] = useState("");
+  const [runEnvironment, setRunEnvironment] = useState("");
+  const [runBusy, setRunBusy] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [runNotice, setRunNotice] = useState<{ text: string; href: string; linkText: string } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -152,6 +160,53 @@ export default function ModelStudioPage() {
   // target the current head, so the latest revision is what "Link case" is relative to.
   const latestRevision = currentDetail?.revisions[0] ?? null;
   const latestDefinition = latestRevision?.content ? toModelDefinition(latestRevision.content) : null;
+
+  /*
+   * The cases a governed run may include: those this revision generated and those explicitly linked
+   * to it, deduped by case. Status is read live from the repository — a Draft or deleted case is
+   * listed with its reason but cannot be selected, and the server refuses it as well.
+   */
+  const eligibleRunCases = (() => {
+    type EligibleRunCase = {
+      testcaseId: string;
+      title: string;
+      status: string | null;
+      deleted: boolean;
+      sources: string[];
+    };
+    if (!currentCoverage) return [] as EligibleRunCase[];
+    const byId = new Map<string, EligibleRunCase>();
+    for (const generatedCase of currentCoverage.generatedCases) {
+      byId.set(generatedCase.testcaseId, {
+        testcaseId: generatedCase.testcaseId,
+        title: generatedCase.testcaseTitle,
+        status: generatedCase.testcaseStatus,
+        deleted: generatedCase.caseDeleted,
+        sources: ["generated"]
+      });
+    }
+    for (const link of currentCoverage.links) {
+      const existing = byId.get(link.testcaseId);
+      if (existing) {
+        if (!existing.sources.includes("linked")) existing.sources.push("linked");
+        existing.deleted = existing.deleted || link.caseDeleted;
+        existing.status = existing.status ?? link.testcaseStatus;
+      } else {
+        byId.set(link.testcaseId, {
+          testcaseId: link.testcaseId,
+          title: link.testcaseTitle,
+          status: link.testcaseStatus,
+          deleted: link.caseDeleted,
+          sources: ["linked"]
+        });
+      }
+    }
+    return [...byId.values()];
+  })();
+  const approvedRunCaseIds = eligibleRunCases
+    .filter((entry) => !entry.deleted && entry.status === "Approved")
+    .map((entry) => entry.testcaseId);
+  const selectedRunCaseIds = approvedRunCaseIds.filter((id) => !excludedRunCaseIds.includes(id));
 
   /**
    * Archiving retires the whole model, so it is confirmed and never implicit. Revisions and case
@@ -318,6 +373,38 @@ export default function ModelStudioPage() {
     }
   }
 
+  /*
+   * Starts a native Test Run from the approved latest revision. The selection is sent explicitly so
+   * the server refuses anything that is not an Approved case of this revision; the created run is an
+   * ordinary Test Run, linked back here.
+   */
+  async function dispatchModelRun() {
+    if (!currentDetail || !currentCoverage || !latestRevision) return;
+    if (latestRevision.approval.status !== "APPROVED" || !selectedRunCaseIds.length || runBusy) return;
+    setRunBusy(true);
+    setRunError(null);
+    setRunNotice(null);
+    try {
+      const result = await dispatchModelStudioRun(projectId, currentDetail.id, latestRevision.id, {
+        caseIds: selectedRunCaseIds,
+        ...(runName.trim() ? { name: runName.trim() } : {}),
+        ...(runEnvironment.trim() ? { environment: runEnvironment.trim() } : {})
+      });
+      setRunNotice({
+        text: "Created run",
+        href: `/projects/${projectId}/cycles/${result.cycleId}`,
+        linkText: result.run.name
+      });
+      setRunName("");
+      setRunEnvironment("");
+      setReloadToken((token) => token + 1);
+    } catch (cause) {
+      setRunError(cause instanceof Error ? cause.message : "Could not start the run.");
+    } finally {
+      setRunBusy(false);
+    }
+  }
+
   const revision: ModelStudioRevision | null =
     currentDetail?.revisions.find((row) => row.id === revisionId) ?? currentDetail?.revisions[0] ?? null;
   const preview = revision?.preview ?? null;
@@ -399,7 +486,9 @@ export default function ModelStudioPage() {
                 <div>
                   <h2 className="text-lg font-semibold">{currentDetail.name}</h2>
                   <p className="mt-1 text-[12px] text-[var(--muted)]">
-                    Expected model · Draft · Not approved · Runtime evidence: none
+                    Expected model · {revision.status} ·{" "}
+                    {revision.approval.status === "APPROVED" ? "Approved" : "Not approved"} · Runtime evidence:{" "}
+                    {currentCoverage?.executionAssertion === "governed-runs" ? "governed runs" : "none"}
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
@@ -707,6 +796,181 @@ export default function ModelStudioPage() {
                   </>
                 ) : (
                   <p className="mt-2 text-[12px] text-[var(--muted)]">Coverage is unavailable.</p>
+                )}
+              </section>
+
+              <section aria-label="Model runs" className="rounded border border-[var(--border)] p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="font-medium">Model runs</h3>
+                  {currentCoverage && (
+                    <span className="text-[11.5px] text-[var(--muted)]">
+                      {currentCoverage.executionAssertion === "governed-runs"
+                        ? "Runtime evidence: governed runs"
+                        : "Runtime evidence: none"}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-[11.5px] text-[var(--muted)]">
+                  A run starts only from the model&apos;s current, approved revision, and only with Approved
+                  cases that belong to it. Results are case outcomes — not proof that the modeled behavior
+                  is correct.
+                </p>
+                {!latestRevision ? (
+                  <p className="mt-2 text-[12px] text-[var(--muted)]">This model has no revision to run.</p>
+                ) : latestRevision.approval.status !== "APPROVED" ? (
+                  <p className="mt-2 text-[12px] text-[var(--muted)]">
+                    Approve revision {latestRevision.revisionNumber} to run it.
+                  </p>
+                ) : (
+                  <>
+                    {eligibleRunCases.length === 0 ? (
+                      <p className="mt-2 text-[12px] text-[var(--muted)]">
+                        No cases belong to this revision yet. Generate cases from its proposals or link
+                        existing cases.
+                      </p>
+                    ) : (
+                      <ul aria-label="Eligible model cases" className="mt-2 space-y-1 text-[12px]">
+                        {eligibleRunCases.map((entry) => {
+                          const selectable = !entry.deleted && entry.status === "Approved";
+                          const checked = selectable && !excludedRunCaseIds.includes(entry.testcaseId);
+                          return (
+                            <li
+                              key={entry.testcaseId}
+                              className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] py-1"
+                            >
+                              <label className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  aria-label={`Include ${entry.title}`}
+                                  disabled={!selectable}
+                                  checked={checked}
+                                  onChange={(event) =>
+                                    setExcludedRunCaseIds((current) =>
+                                      event.target.checked
+                                        ? current.filter((id) => id !== entry.testcaseId)
+                                        : [...current, entry.testcaseId]
+                                    )
+                                  }
+                                />
+                                <Link
+                                  href={`/projects/${projectId}/testcases/${entry.testcaseId}`}
+                                  className="text-[var(--accent-light)] hover:underline"
+                                >
+                                  {entry.title}
+                                </Link>
+                              </label>
+                              <span className="text-[11px] text-[var(--muted)]">
+                                {entry.deleted ? "deleted" : (entry.status ?? "unknown")} ·{" "}
+                                {entry.sources.join(" + ")}
+                                {!selectable && !entry.deleted ? " · approve it to include it" : ""}
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      <label className="text-[12px] text-[var(--muted)]">
+                        Run name (optional)
+                        <input
+                          value={runName}
+                          onChange={(event) => setRunName(event.target.value)}
+                          placeholder="Defaults to the model and revision"
+                          className="mt-1 block w-full rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-[12px] text-[var(--foreground)]"
+                        />
+                      </label>
+                      <label className="text-[12px] text-[var(--muted)]">
+                        Environment (optional)
+                        <input
+                          value={runEnvironment}
+                          onChange={(event) => setRunEnvironment(event.target.value)}
+                          className="mt-1 block w-full rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-[12px] text-[var(--foreground)]"
+                        />
+                      </label>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => void dispatchModelRun()}
+                        disabled={runBusy || !selectedRunCaseIds.length}
+                        className="rounded border border-[var(--border)] px-2 py-1 text-[12px] hover:bg-[var(--surface-secondary)] disabled:opacity-60"
+                      >
+                        {runBusy
+                          ? "Starting…"
+                          : `Start run with ${selectedRunCaseIds.length} case${selectedRunCaseIds.length === 1 ? "" : "s"}`}
+                      </button>
+                      {!selectedRunCaseIds.length && eligibleRunCases.length > 0 && (
+                        <span className="text-[11.5px] text-[var(--muted)]">
+                          Select at least one Approved case.
+                        </span>
+                      )}
+                    </div>
+                    {runError && (
+                      <p role="alert" className="mt-2 text-[12px] text-[var(--error-foreground)]">
+                        {runError}
+                      </p>
+                    )}
+                    {runNotice && (
+                      <p role="status" className="mt-2 rounded border border-[var(--border)] bg-[var(--surface-secondary)] p-2 text-[12px]">
+                        {runNotice.text}{" "}
+                        <Link href={runNotice.href} className="text-[var(--accent-light)] hover:underline">
+                          {runNotice.linkText}
+                        </Link>
+                      </p>
+                    )}
+                  </>
+                )}
+                {currentCoverage && currentCoverage.governedRuns.length > 0 && (
+                  <div className="mt-3">
+                    <h4 className="text-[12px] font-semibold">Governed runs</h4>
+                    <ul className="mt-1 space-y-1 text-[12px]">
+                      {currentCoverage.governedRuns.map((run) => (
+                        <li
+                          key={run.id}
+                          className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] py-1"
+                        >
+                          <Link
+                            href={`/projects/${projectId}/cycles/${run.cycleId}`}
+                            className="text-[var(--accent-light)] hover:underline"
+                          >
+                            {run.name}
+                          </Link>
+                          <span className="text-[11px] text-[var(--muted)]">
+                            {formatDate(run.createdAt)} · {run.caseCount} case{run.caseCount === 1 ? "" : "s"}
+                            {run.runDeleted ? " · run deleted" : ""}
+                            {Object.keys(run.statusCounts).length > 0 &&
+                              ` · ${Object.entries(run.statusCounts)
+                                .map(([status, count]) => `${status} ${count}`)
+                                .join(", ")}`}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {currentCoverage && currentCoverage.observedByElement.length > 0 && (
+                  <div className="mt-3">
+                    <h4 className="text-[12px] font-semibold">Observed results by element</h4>
+                    <ul aria-label="Observed results by element" className="mt-1 space-y-1 text-[12px]">
+                      {currentCoverage.observedByElement.map((entry) => (
+                        <li
+                          key={entry.elementId}
+                          className="flex items-center justify-between gap-3 border-b border-[var(--border)] py-1"
+                        >
+                          <span className="font-mono">{entry.elementId}</span>
+                          <span className="text-[11px] text-[var(--muted)]">
+                            {Object.entries(entry.statusCounts)
+                              .map(([status, count]) => `${status} ${count}`)
+                              .join(", ")}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-1 text-[11px] text-[var(--muted)]">
+                      Case outcomes from governed runs, grouped by model element. Not behavioral coverage or
+                      verification.
+                    </p>
+                  </div>
                 )}
               </section>
             </section>

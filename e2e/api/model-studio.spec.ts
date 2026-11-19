@@ -1,5 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { expect, request as pwRequest, test } from "@playwright/test";
 import { loginAs, provisionRbacTenant } from "../utils/rbac-tenant";
+import { env } from "../utils/env";
 import { exec, literal, scalar } from "../utils/psql";
 
 const MODEL = {
@@ -495,6 +496,173 @@ test.describe("persisted Model Studio revisions and mappings", () => {
         (await owner.post(`/api/projects/${tenant!.secondProjectId}/model-studio/models/${modelId}/revisions/${revisionId}/generate`, { data: body })).status()
       ).toBe(404);
     } finally {
+      if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(projectId)};`);
+      await owner.dispose();
+    }
+  });
+
+  test("a governed run requires the current approved revision and its own Approved cases", { tag: '@tesbo.testId("TES-TC-3043")' }, async () => {
+    const tenant = await provisionRbacTenant("model-studio");
+    test.skip(!tenant, "requires direct SQL control for the disposable tenant");
+    const projectId = tenant!.mainProjectId;
+    const base = `/api/projects/${projectId}/model-studio/models`;
+    const owner = await loginAs(tenant!.owner);
+    let modelId = "";
+    let caseId = "";
+    let foreignCaseId = "";
+    let cycleId = "";
+    const dispatchUrl = (revisionId: string) => `${base}/${modelId}/revisions/${revisionId}/runs`;
+    try {
+      const created = await owner.post(base, { data: { name: `E2E run model ${Date.now()}`, model: MODEL } });
+      expect(created.status(), await created.text()).toBe(201);
+      const model = await created.json();
+      modelId = model.id;
+      const revision = model.latestRevision;
+
+      // An unapproved revision is not a runnable basis, whatever cases exist.
+      const unapproved = await owner.post(dispatchUrl(revision.id), { data: {} });
+      expect(unapproved.status()).toBe(409);
+      expect((await unapproved.json()).code).toBe("MODEL_NOT_APPROVED");
+
+      const approved = await owner.post(`${base}/${modelId}/revisions/${revision.id}/approve`, {
+        data: { expectedHash: revision.contentHash }
+      });
+      expect(approved.status(), await approved.text()).toBe(201);
+      const generation = { strategy: "edge_coverage", maxPaths: 10, maxDepth: 8 };
+      const paths = (await (
+        await owner.post(`${base}/${modelId}/revisions/${revision.id}/generate`, { data: generation })
+      ).json()).paths as Array<{ digest: string }>;
+      const batch = await (
+        await owner.post(`${base}/${modelId}/revisions/${revision.id}/candidates`, {
+          data: { ...generation, digests: [paths[0].digest] }
+        })
+      ).json();
+      caseId = batch.cases[0].testcaseId;
+
+      // A generated case starts as a Draft; a Draft is refused by name, and no run is left behind.
+      const draftDispatch = await owner.post(dispatchUrl(revision.id), { data: { caseIds: [caseId] } });
+      expect(draftDispatch.status()).toBe(409);
+      expect(await draftDispatch.json()).toMatchObject({ code: "CASE_NOT_APPROVED", caseIds: [caseId] });
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM mbt_model_runs WHERE model_id = ${literal(modelId)};`))).toBe(0);
+      expect(
+        Number(
+          scalar(
+            `SELECT COUNT(*)::int FROM cycles WHERE project_id = ${literal(projectId)} AND name LIKE 'Model run:%';`
+          )
+        )
+      ).toBe(0);
+
+      // Approve the case, then dispatch it.
+      const caseRow = await (await owner.get(`/api/projects/${projectId}/testcases/${caseId}`)).json();
+      const caseApproved = await owner.post(`/api/projects/${projectId}/testcases/${caseId}/approve`, {
+        data: { expectedRevision: caseRow.editRevision }
+      });
+      // The approval endpoint answers 200 (it updates and returns the case + receipt).
+      expect(caseApproved.status(), await caseApproved.text()).toBe(200);
+
+      const dispatched = await owner.post(dispatchUrl(revision.id), {
+        data: { caseIds: [caseId], name: `E2E model run ${Date.now()}` }
+      });
+      expect(dispatched.status(), await dispatched.text()).toBe(201);
+      const run = await dispatched.json();
+      cycleId = run.cycleId;
+      expect(run).toMatchObject({
+        modelRevisionId: revision.id,
+        contentHash: revision.contentHash,
+        coverageAssertion: "none",
+        executionAssertion: "governed-run",
+        requested: 1,
+        added: 1,
+        skipped: 0,
+        run: { id: cycleId }
+      });
+      expect(run.manifest.cases).toEqual([
+        expect.objectContaining({ testcaseId: caseId, pathDigest: paths[0].digest, sources: ["generated"] })
+      ]);
+      expect(run.manifest.cases[0].elementIds).toEqual(expect.arrayContaining(["start", "done", "finish"]));
+
+      // Native run membership and the provenance row are both present.
+      expect(
+        Number(
+          scalar(`SELECT COUNT(*)::int FROM cycle_items ci WHERE ci.cycle_id = ${literal(cycleId)} AND ci.deleted_at IS NULL;`)
+        )
+      ).toBe(1);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM mbt_model_runs WHERE cycle_id = ${literal(cycleId)};`))).toBe(1);
+
+      // Dispatch is project-scoped: an anonymous caller is refused, and the model is not reachable
+      // through another project even by a member of both.
+      const anon = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
+      try {
+        const denied = await anon.post(dispatchUrl(revision.id), { data: { caseIds: [caseId] }, failOnStatusCode: false });
+        expect(denied.status()).toBe(403);
+      } finally {
+        await anon.dispose();
+      }
+      const crossProject = await owner.post(
+        `/api/projects/${tenant!.secondProjectId}/model-studio/models/${modelId}/revisions/${revision.id}/runs`,
+        { data: { caseIds: [caseId] }, failOnStatusCode: false }
+      );
+      expect(crossProject.status()).toBe(404);
+
+      // Coverage separates the governed run from coverage: results are case outcomes per element.
+      let coverage = await (await owner.get(`${base}/${modelId}/coverage`)).json();
+      expect(coverage.executionAssertion).toBe("governed-runs");
+      expect(coverage.coverageAssertion).toBe("none");
+      expect(coverage.governedRuns).toEqual([
+        expect.objectContaining({ cycleId, caseCount: 1, runDeleted: false })
+      ]);
+      for (const element of ["start", "done", "finish"]) {
+        expect(coverage.observedByElement).toContainEqual(
+          expect.objectContaining({ elementId: element, runs: 1, results: 1, statusCounts: { Untested: 1 } })
+        );
+      }
+
+      const execution = (await (await owner.get(`/api/cycles/${cycleId}/executions`)).json())[0];
+      expect((await owner.patch(`/api/cycles/${cycleId}/executions/${execution.id}`, { data: { status: "Passed" } })).ok()).toBe(
+        true
+      );
+      coverage = await (await owner.get(`${base}/${modelId}/coverage`)).json();
+      for (const element of ["start", "done", "finish"]) {
+        expect(coverage.observedByElement).toContainEqual(
+          expect.objectContaining({ elementId: element, statusCounts: { Passed: 1 } })
+        );
+      }
+      expect(coverage.note).toMatch(/do not prove the modeled behavior/i);
+
+      // A case that belongs to no part of this revision is refused by id, not silently dropped.
+      const foreignCase = await (
+        await owner.post(`/api/projects/${projectId}/testcases`, {
+          data: { title: `E2E unrelated case ${Date.now()}`, status: "Approved" }
+        })
+      ).json();
+      foreignCaseId = foreignCase.id;
+      const foreign = await owner.post(dispatchUrl(revision.id), { data: { caseIds: [foreignCaseId] } });
+      expect(foreign.status()).toBe(400);
+      expect(await foreign.json()).toMatchObject({ code: "CASE_NOT_IN_MODEL" });
+
+      // Saving a revision moves the active basis: the earlier approved revision cannot start a run.
+      const saved = await owner.post(`${base}/${modelId}/revisions`, {
+        data: {
+          baseRevisionId: revision.id,
+          model: {
+            ...MODEL,
+            states: [...MODEL.states, { id: "retry", label: "Retry" }],
+            transitions: [
+              ...MODEL.transitions,
+              { id: "retry_edge", from: "done", to: "start", action: "Retry", expectedObservation: "Restarts" }
+            ]
+          }
+        }
+      });
+      expect(saved.status(), await saved.text()).toBe(201);
+      const superseded = await owner.post(dispatchUrl(revision.id), { data: { caseIds: [caseId] } });
+      expect(superseded.status()).toBe(409);
+      expect((await superseded.json()).code).toBe("SUPERSEDED_REVISION");
+    } finally {
+      if (cycleId) await owner.delete(`/api/cycles/${cycleId}`, { failOnStatusCode: false });
+      for (const id of [caseId, foreignCaseId]) {
+        if (id) await owner.delete(`/api/projects/${projectId}/testcases/${id}`, { failOnStatusCode: false });
+      }
       if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(projectId)};`);
       await owner.dispose();
     }

@@ -11,15 +11,18 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HASH = /^[a-f0-9]{64}$/;
 
 /**
- * Persisted Model Studio Phase A: expected-model identity, immutable draft revisions and explicit
- * case links. This is deliberately not a second graph/approval/execution store:
+ * Persisted Model Studio: expected-model identity, immutable revisions, explicit case links,
+ * human approval receipts bound to a revision's content hash, proposal generation, and governed
+ * dispatch of an approved revision into a native Test Run. It is deliberately not a second
+ * graph/approval/execution store:
  *
  *  - expected behavior lives here;
  *  - observed source declarations remain graph_capture_history / source bindings;
- *  - execution remains native cycles/executions/attachments.
+ *  - runs, executions, results and evidence remain native cycles/executions/attachments.
  *
- * No approval, activation, generation or target execution route exists yet. A link is an accepted
- * mapping between two artifacts, never execution or coverage evidence.
+ * A link is an accepted mapping between two artifacts, never execution or verified coverage. A
+ * governed run records which cases were dispatched and which elements they came from; its results
+ * are case outcomes, not proof that the modeled behavior is correct.
  */
 @Injectable()
 export class ModelStudioRepository {
@@ -380,15 +383,27 @@ export class ModelStudioRepository {
           "SELECT testcase_id FROM mbt_generated_cases WHERE model_revision_id = $1 AND path_digest = $2",
           [revisionId, digest]
         );
+        // The path's states and transitions are recorded with the case: a governed run reports
+        // observed results per model element, and the generation options that produced the path
+        // are not persisted, so the digest alone cannot be mapped back later.
+        const elementIds = [...path.stateIds, ...path.transitionIds];
         if (existing.rows[0]) {
+          // Opportunistic backfill for a case generated before element_ids existed. The path was
+          // just regenerated with the caller's options and matched by digest, so these are its
+          // elements; an empty array is left alone once filled.
+          await client.query(
+            `UPDATE mbt_generated_cases SET element_ids = $3
+             WHERE model_revision_id = $1 AND path_digest = $2 AND element_ids = '{}'`,
+            [revisionId, digest, elementIds]
+          );
           createdCases.push({ digest, testcaseId: existing.rows[0].testcase_id, created: false });
           continue;
         }
         const created = await this.legacy.createTestCase(projectId, userId, this.generatedCaseBody(row, path, labels));
         await client.query(
-          `INSERT INTO mbt_generated_cases (project_id, model_id, model_revision_id, path_digest, testcase_id, created_by)
-           VALUES ($1,$2,$3,$4,$5,$6)`,
-          [projectId, modelId, revisionId, digest, created.id, userId]
+          `INSERT INTO mbt_generated_cases (project_id, model_id, model_revision_id, path_digest, testcase_id, created_by, element_ids)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [projectId, modelId, revisionId, digest, created.id, userId, elementIds]
         );
         createdCases.push({ digest, testcaseId: String(created.id), created: true, title: String(created.title) });
       }
@@ -488,6 +503,321 @@ export class ModelStudioRepository {
     return { ok: true };
   }
 
+  /**
+   * Dispatches the model's current, approved revision into a native Test Run.
+   *
+   * The rules, in order:
+   *  - only the model's **latest** revision is a dispatchable basis. Saving a new revision moves the
+   *    basis and blocks dispatch until that revision is approved (no second "active" pointer);
+   *  - that revision must carry an approval receipt whose content hash matches it;
+   *  - only cases that **belong to this revision** may enter the run: generated from its proposals
+   *    (`mbt_generated_cases`) or explicitly linked to it (`mbt_model_case_links`). A case from
+   *    another model, or one merely selected in the UI, is refused by id;
+   *  - only Approved, non-deleted cases can be attached — the native Approved-only writer remains
+   *    authoritative, and this method refuses up front with the same rule.
+   *
+   * The run is created by the same atomic writer every other run-creation path uses. The dispatch
+   * manifest is recorded afterwards; if that insert fails, the just-created run is removed again so
+   * a governed run never exists without its provenance.
+   */
+  async dispatchRunForUser(
+    userId: string | null | undefined,
+    projectId: string,
+    modelId: string,
+    revisionId: string,
+    body: Body
+  ) {
+    await this.access(userId, projectId);
+    for (const value of [modelId, revisionId]) {
+      if (!UUID.test(value)) throw new NotFoundException({ error: "Model revision not found" });
+    }
+    const model = await this.db.query(
+      "SELECT id, name FROM mbt_models WHERE id = $1 AND project_id = $2 AND archived_at IS NULL",
+      [modelId, projectId]
+    );
+    if (!model.rows[0]) throw new NotFoundException({ error: "Model not found" });
+    const revision = await this.db.query(
+      "SELECT * FROM mbt_model_revisions WHERE id = $1 AND model_id = $2 AND project_id = $3",
+      [revisionId, modelId, projectId]
+    );
+    const revisionRow = revision.rows[0];
+    if (!revisionRow) throw new NotFoundException({ error: "Model revision not found" });
+
+    const head = await this.db.query(
+      "SELECT id FROM mbt_model_revisions WHERE model_id = $1 AND project_id = $2 ORDER BY revision_number DESC LIMIT 1",
+      [modelId, projectId]
+    );
+    if (String(head.rows[0]?.id) !== String(revisionRow.id)) {
+      throw new ConflictException({
+        code: "SUPERSEDED_REVISION",
+        error: "Only the model's current revision can start a run. Save a revision, approve it, then run it."
+      });
+    }
+    const approval = await this.db.query(
+      "SELECT * FROM mbt_model_approvals WHERE model_revision_id = $1 AND project_id = $2",
+      [revisionId, projectId]
+    );
+    if (!approval.rows[0] || String(approval.rows[0].content_hash) !== String(revisionRow.content_hash)) {
+      throw new ConflictException({
+        code: "MODEL_NOT_APPROVED",
+        error: "Approve this revision before running it"
+      });
+    }
+
+    const generated = await this.db.query(
+      `SELECT g.testcase_id, g.path_digest, g.element_ids, t.title, t.status, t.deleted_at IS NOT NULL AS deleted
+       FROM mbt_generated_cases g
+       JOIN testcases t ON t.id = g.testcase_id
+       WHERE g.model_revision_id = $1 AND g.project_id = $2`,
+      [revisionId, projectId]
+    );
+    const linked = await this.db.query(
+      `SELECT l.testcase_id, l.element_ids, t.title, t.status, t.deleted_at IS NOT NULL AS deleted
+       FROM mbt_model_case_links l
+       JOIN testcases t ON t.id = l.testcase_id
+       WHERE l.model_revision_id = $1 AND l.project_id = $2`,
+      [revisionId, projectId]
+    );
+    type EligibleCase = {
+      title: string;
+      status: string;
+      deleted: boolean;
+      elementIds: Set<string>;
+      pathDigest: string | null;
+      sources: string[];
+    };
+    const eligible = new Map<string, EligibleCase>();
+    const entryFor = (id: string, row: Body): EligibleCase => {
+      const existing = eligible.get(id) ?? {
+        title: String(row.title ?? "Untitled test case"),
+        status: String(row.status ?? ""),
+        deleted: row.deleted === true,
+        elementIds: new Set<string>(),
+        pathDigest: null,
+        sources: []
+      };
+      for (const elementId of Array.isArray(row.element_ids) ? row.element_ids : []) existing.elementIds.add(String(elementId));
+      eligible.set(id, existing);
+      return existing;
+    };
+    for (const row of generated.rows) {
+      const entry = entryFor(String(row.testcase_id), row);
+      entry.pathDigest = entry.pathDigest ?? String(row.path_digest);
+      if (!entry.sources.includes("generated")) entry.sources.push("generated");
+    }
+    for (const row of linked.rows) {
+      const entry = entryFor(String(row.testcase_id), row);
+      if (!entry.sources.includes("linked")) entry.sources.push("linked");
+    }
+
+    const rawRequested = body?.caseIds;
+    let requested: string[];
+    if (rawRequested === undefined) {
+      requested = [...eligible.keys()];
+    } else {
+      if (!Array.isArray(rawRequested) || rawRequested.length === 0 || rawRequested.length > 200) {
+        throw new BadRequestException({ error: "caseIds must be a non-empty list of at most 200 case ids" });
+      }
+      requested = [...new Set(rawRequested.map((id: unknown) => String(id ?? "").trim()))];
+      const malformed = requested.filter((id) => !UUID.test(id));
+      if (malformed.length) throw new BadRequestException({ error: `Invalid case id(s): ${malformed.join(", ")}` });
+    }
+    const unknown = requested.filter((id) => !eligible.has(id));
+    if (unknown.length) {
+      throw new BadRequestException({
+        code: "CASE_NOT_IN_MODEL",
+        error: `These cases do not belong to this model revision: ${unknown.join(", ")}`
+      });
+    }
+    const ineligible = requested.filter((id) => {
+      const entry = eligible.get(id) as EligibleCase;
+      return entry.deleted || entry.status !== "Approved";
+    });
+    if (ineligible.length) {
+      throw new ConflictException({
+        code: "CASE_NOT_APPROVED",
+        error: "Only Approved, non-deleted model cases can enter a run",
+        caseIds: ineligible
+      });
+    }
+    if (!requested.length) {
+      throw new ConflictException({
+        code: "NO_ELIGIBLE_CASES",
+        error: "This revision has no Approved cases to run. Generate cases from its proposals and approve them first."
+      });
+    }
+
+    const defaultName = `Model run: ${String(model.rows[0].name)} r${Number(revisionRow.revision_number)}`.slice(0, 255);
+    const created = await this.legacy.createCycleWithTestcasesForUser(userId, projectId, {
+      name: body?.name === undefined || body?.name === "" ? defaultName : String(body.name),
+      environment: body?.environment,
+      buildVersion: body?.buildVersion,
+      testcaseIds: requested
+    });
+    if (created.added !== requested.length) {
+      // A case was demoted, deleted or moved between the eligibility read and the atomic writer's
+      // approval check. Nothing partial is kept: the run it created is removed again.
+      await this.legacy.deleteCycle(String(created.cycle.id), userId).catch(() => undefined);
+      throw new ConflictException({
+        code: "CASE_NOT_APPROVED",
+        error: "A selected case is no longer Approved. Nothing was created; review the cases and try again."
+      });
+    }
+
+    const manifest = {
+      revisionNumber: Number(revisionRow.revision_number),
+      contentHash: String(revisionRow.content_hash),
+      approvalId: String(approval.rows[0].id),
+      cases: requested.map((id) => {
+        const entry = eligible.get(id) as EligibleCase;
+        return {
+          testcaseId: id,
+          title: entry.title,
+          pathDigest: entry.pathDigest,
+          elementIds: [...entry.elementIds],
+          sources: entry.sources
+        };
+      })
+    };
+    let runRow: Body;
+    try {
+      const inserted = await this.db.query(
+        `INSERT INTO mbt_model_runs
+           (project_id, model_id, model_revision_id, approval_id, content_hash, cycle_id, created_by, manifest)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING *`,
+        [
+          projectId,
+          modelId,
+          revisionId,
+          approval.rows[0].id,
+          revisionRow.content_hash,
+          created.cycle.id,
+          userId,
+          JSON.stringify(manifest)
+        ]
+      );
+      runRow = inserted.rows[0];
+    } catch (error) {
+      await this.legacy.deleteCycle(String(created.cycle.id), userId).catch(() => undefined);
+      throw error;
+    }
+    return {
+      ...this.modelRunView(runRow, created.cycle, manifest),
+      requested: created.requested,
+      added: created.added,
+      skipped: created.skipped,
+      note: "The run is native. Its results are case outcomes, not proof that the modeled behavior is correct."
+    };
+  }
+
+  private modelRunView(row: Body, cycle: Body, manifest: Body) {
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      modelId: row.model_id,
+      modelRevisionId: row.model_revision_id,
+      approvalId: row.approval_id,
+      contentHash: row.content_hash,
+      cycleId: row.cycle_id,
+      createdAt: row.created_at,
+      run: { id: cycle.id, name: cycle.name, status: cycle.status, environment: cycle.environment ?? null },
+      manifest,
+      coverageAssertion: "none",
+      executionAssertion: "governed-run"
+    };
+  }
+
+  /** Dispatched runs of one revision, with their native execution status rollups. */
+  private async governedRunsFor(revisionId: string, projectId: string) {
+    const runs = await this.db.query(
+      `SELECT mr.id, mr.cycle_id, mr.created_at, c.name AS cycle_name, c.deleted_at AS cycle_deleted,
+              (SELECT COUNT(*)::int FROM cycle_items ci WHERE ci.cycle_id = mr.cycle_id AND ci.deleted_at IS NULL) AS case_count
+       FROM mbt_model_runs mr
+       JOIN cycles c ON c.id = mr.cycle_id
+       WHERE mr.model_revision_id = $1 AND mr.project_id = $2
+       ORDER BY mr.created_at DESC`,
+      [revisionId, projectId]
+    );
+    const statuses = await this.db.query(
+      `SELECT mr.id AS model_run_id, e.status, COUNT(*)::int AS count
+       FROM mbt_model_runs mr
+       JOIN cycle_items ci ON ci.cycle_id = mr.cycle_id AND ci.deleted_at IS NULL
+       JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
+       WHERE mr.model_revision_id = $1 AND mr.project_id = $2
+       GROUP BY mr.id, e.status`,
+      [revisionId, projectId]
+    );
+    const byRun = new Map<string, Record<string, number>>();
+    for (const row of statuses.rows) {
+      const key = String(row.model_run_id);
+      const counts = byRun.get(key) ?? {};
+      counts[String(row.status)] = Number(row.count);
+      byRun.set(key, counts);
+    }
+    return runs.rows.map((row) => ({
+      id: row.id,
+      cycleId: row.cycle_id,
+      name: row.cycle_name,
+      createdAt: row.created_at,
+      caseCount: Number(row.case_count),
+      runDeleted: row.cycle_deleted !== null,
+      statusCounts: byRun.get(String(row.id)) ?? {}
+    }));
+  }
+
+  /**
+   * Observed case outcomes per model element, across this revision's governed runs.
+   *
+   * The element list comes from each run's immutable manifest, not from today's links: a link
+   * removed after dispatch does not rewrite what that run exercised. Results are native execution
+   * statuses — this is not model verification or behavioral coverage.
+   */
+  private async observedByElementFor(revisionId: string, projectId: string) {
+    const runs = await this.db.query<{ id: string; manifest: Body }>(
+      "SELECT id, manifest FROM mbt_model_runs WHERE model_revision_id = $1 AND project_id = $2",
+      [revisionId, projectId]
+    );
+    if (!runs.rows.length) return [];
+    const elementsByRunCase = new Map<string, string[]>();
+    for (const run of runs.rows) {
+      const cases = Array.isArray(run.manifest?.cases) ? run.manifest.cases : [];
+      for (const entry of cases) {
+        elementsByRunCase.set(
+          `${run.id}:${String(entry.testcaseId)}`,
+          Array.isArray(entry.elementIds) ? entry.elementIds.map(String) : []
+        );
+      }
+    }
+    const executions = await this.db.query(
+      `SELECT mr.id AS model_run_id, ci.testcase_id, e.status
+       FROM mbt_model_runs mr
+       JOIN cycle_items ci ON ci.cycle_id = mr.cycle_id AND ci.deleted_at IS NULL
+       JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
+       WHERE mr.model_revision_id = $1 AND mr.project_id = $2`,
+      [revisionId, projectId]
+    );
+    const perElement = new Map<string, { runs: Set<string>; results: number; statusCounts: Record<string, number> }>();
+    for (const row of executions.rows) {
+      const elements = elementsByRunCase.get(`${row.model_run_id}:${row.testcase_id}`) ?? [];
+      for (const elementId of elements) {
+        const entry = perElement.get(elementId) ?? { runs: new Set<string>(), results: 0, statusCounts: {} };
+        entry.runs.add(String(row.model_run_id));
+        entry.results += 1;
+        entry.statusCounts[String(row.status)] = (entry.statusCounts[String(row.status)] ?? 0) + 1;
+        perElement.set(elementId, entry);
+      }
+    }
+    return [...perElement.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([elementId, entry]) => ({
+        elementId,
+        runs: entry.runs.size,
+        results: entry.results,
+        statusCounts: entry.statusCounts
+      }));
+  }
+
   async coverageForUser(userId: string | null | undefined, projectId: string, modelId: string) {
     await this.access(userId, projectId);
     if (!UUID.test(modelId)) throw new NotFoundException({ error: "Model not found" });
@@ -540,7 +870,8 @@ export class ModelStudioRepository {
     // contribute to the per-element counts above.
     const linkRows = await this.db.query(
       `SELECT l.id, l.testcase_id, l.element_ids, l.testcase_revision, l.created_at,
-              testcases.title AS testcase_title, testcases.deleted_at IS NOT NULL AS testcase_deleted,
+              testcases.title AS testcase_title, testcases.status AS testcase_status,
+              testcases.deleted_at IS NOT NULL AS testcase_deleted,
               (l.testcase_revision IS NOT NULL
                AND l.testcase_revision <> ${TESTCASE_EDIT_REVISION_SQL}) AS changed_since_link
        FROM mbt_model_case_links l
@@ -607,6 +938,9 @@ export class ModelStudioRepository {
         ...(evidenceByCase.get(String(row.testcase_id)) ?? { statusCounts: {}, latestStatus: null, latestAt: null })
       }));
 
+    const governedRuns = await this.governedRunsFor(String(revision.rows[0].id), projectId);
+    const observedByElement = await this.observedByElementFor(String(revision.rows[0].id), projectId);
+
     const latestHash = String(revision.rows[0].content_hash);
     let testcasesChangedSinceLink = 0;
     let testcasesWithoutRecordedRevision = 0;
@@ -623,6 +957,7 @@ export class ModelStudioRepository {
         id: row.id,
         testcaseId: row.testcase_id,
         testcaseTitle: row.testcase_title ?? "Deleted test case",
+        testcaseStatus: row.testcase_status ?? null,
         elementIds: row.element_ids,
         testcaseRevision: row.testcase_revision,
         caseChangedSinceLink: row.testcase_revision !== null && row.changed_since_link === true,
@@ -660,9 +995,12 @@ export class ModelStudioRepository {
       caseEvidence,
       evidenceNote:
         "Case evidence is the observed result history of linked cases. It is not model verification, coverage of the modeled behavior, or proof the expected behavior is correct.",
+      governedRuns,
+      observedByElement,
       coverageAssertion: "none",
-      executionAssertion: "none",
-      note: "A linked case is an accepted mapping, not execution or verified coverage."
+      executionAssertion: governedRuns.length ? "governed-runs" : "none",
+      note:
+        "A linked case is an accepted mapping, not execution or verified coverage. Observed results are case outcomes from governed runs of this revision; they do not prove the modeled behavior is correct."
     };
   }
 

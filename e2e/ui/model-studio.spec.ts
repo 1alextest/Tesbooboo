@@ -109,10 +109,11 @@ test("archiving a model in the studio removes it from the list and keeps its his
   }
 });
 
-test("a reviewer approves the revision, generates proposals and creates a draft case", async ({ page }) => {
+test("a reviewer approves the revision, creates a draft case and starts a governed run", async ({ page }) => {
   const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
   const name = `E2E governed studio ${Date.now()}`;
   let modelId = "";
+  let cycleId = "";
   try {
     const created = await api.post(`/api/projects/${ctx.projectId}/model-studio/models`, { data: { name, model: MODEL } });
     expect(created.status(), await created.text()).toBe(201);
@@ -131,8 +132,11 @@ test("a reviewer approves the revision, generates proposals and creates a draft 
     await firstPath.check();
     await page.getByRole("button", { name: "Create draft cases" }).click();
     await expect(page.getByRole("status").filter({ hasText: "Created" })).toBeVisible();
-    // The generated case is listed with a link back to it, not only announced in a notice.
-    await expect(page.getByRole("link", { name: /^Model: / })).toBeVisible();
+    // The generated case is listed with a link back to it, not only announced in a notice. Scoped
+    // to the proposals panel: the same case also appears in the run-eligibility list below.
+    await expect(
+      page.getByRole("region", { name: "Path proposals" }).getByRole("link", { name: /^Model: / }).first()
+    ).toBeVisible();
 
     // The proposal became a real, unapproved Draft case. Read the persisted row directly so the
     // assertion is about state, not about search ranking or list defaults.
@@ -141,8 +145,67 @@ test("a reviewer approves the revision, generates proposals and creates a draft 
         WHERE project_id = ${literal(ctx.projectId)} AND title LIKE 'Model:%' AND deleted_at IS NULL
         ORDER BY created_at DESC LIMIT 1;`)
     ).toBe("Draft");
+
+    /*
+     * Governed run. A Draft cannot be dispatched, so the case is approved through the product's own
+     * approval endpoint first — the same path the Test Cases screen uses — and then the studio is
+     * reloaded so its eligibility list reflects the live status.
+     */
+    const modelDetail = await (await api.get(`/api/projects/${ctx.projectId}/model-studio/models/${modelId}`)).json();
+    const revisionId = modelDetail.latestRevision.id as string;
+    const caseId = scalar(`SELECT id FROM testcases
+      WHERE project_id = ${literal(ctx.projectId)} AND title LIKE 'Model:%' AND deleted_at IS NULL
+      ORDER BY created_at DESC LIMIT 1;`);
+    const caseRow = await (await api.get(`/api/projects/${ctx.projectId}/testcases/${caseId}`)).json();
+    const caseApproved = await api.post(`/api/projects/${ctx.projectId}/testcases/${caseId}/approve`, {
+      data: { expectedRevision: caseRow.editRevision }
+    });
+    expect(caseApproved.status(), await caseApproved.text()).toBe(200);
+
+    await page.reload();
+    await page.getByRole("button", { name, exact: false }).click();
+    const runs = page.getByRole("region", { name: "Model runs" });
+    await expect(runs).toBeVisible();
+    // The approved case is selectable and selected by default; a Draft would be listed disabled.
+    const includeCase = runs.getByRole("checkbox", { name: /Include Model:/ }).first();
+    await expect(includeCase).toBeChecked();
+    await runs.getByRole("button", { name: /Start run with 1 case/ }).click();
+    await expect(runs.getByRole("status").filter({ hasText: "Created run" })).toBeVisible();
+
+    cycleId = scalar(
+      `SELECT cycle_id FROM mbt_model_runs WHERE model_revision_id = ${literal(revisionId)} ORDER BY created_at DESC LIMIT 1;`
+    );
+    expect(cycleId, "the dispatch should have recorded a provenance row").toBeTruthy();
+
+    // Execute the dispatched case through the native API, then reload: observed results are the
+    // live execution outcomes, shown per model element.
+    const execution = (await (await api.get(`/api/cycles/${cycleId}/executions`)).json())[0];
+    expect((await api.patch(`/api/cycles/${cycleId}/executions/${execution.id}`, { data: { status: "Passed" } })).ok()).toBe(
+      true
+    );
+    await page.reload();
+    await page.getByRole("button", { name, exact: false }).click();
+    const runsAfter = page.getByRole("region", { name: "Model runs" });
+    await expect(runsAfter.getByRole("link", { name: /Model run:/ }).first()).toBeVisible();
+    const observed = runsAfter.getByRole("list", { name: "Observed results by element" });
+    await expect(observed).toContainText("Passed 1");
   } finally {
-    // Remove only the generated drafts; the model delete cascades its revisions and provenance.
+    /*
+     * The run references the generated case, and the API delete of a cycle is a SOFT delete — its
+     * cycle_items and executions would still block the hard test-case delete below.
+     * executions -> cycle_items -> cycles is the FK order.
+     */
+    if (modelId) {
+      exec(
+        `DELETE FROM executions WHERE cycle_item_id IN (SELECT ci.id FROM cycle_items ci
+          JOIN mbt_model_runs mr ON mr.cycle_id = ci.cycle_id WHERE mr.model_id = ${literal(modelId)});`
+      );
+      exec(
+        `DELETE FROM cycle_items WHERE cycle_id IN (SELECT cycle_id FROM mbt_model_runs WHERE model_id = ${literal(modelId)});`
+      );
+    }
+    if (cycleId) await api.delete(`/api/cycles/${cycleId}`, { failOnStatusCode: false });
+    // Remove only the generated cases; the model delete cascades its revisions and provenance.
     exec(`DELETE FROM testcases WHERE project_id = ${literal(ctx.projectId)} AND title LIKE 'Model:%';`);
     if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(ctx.projectId)};`);
     await api.dispose();
