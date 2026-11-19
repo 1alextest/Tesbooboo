@@ -483,7 +483,13 @@ const url = process.env.DATABASE_URL ?? "";
     };
     async function businessState() {
       const ids = [project, other, locked], state: Record<string, unknown> = {};
-      state.projects = (await setup.query("SELECT * FROM projects WHERE id=ANY($1::uuid[]) ORDER BY id", [ids])).rows;
+      // The proposal-review triggers bump projects.testcase_proposal_dependency_revision on every
+      // dependent suite/testcase write. That monotonic counter is deliberately excluded here: this
+      // snapshot asserts BUSINESS state, and a legitimate single write must not read as a second one.
+      state.projects = (await setup.query(
+        `SELECT id, organization_id, key, name, description, created_at, updated_at, archived_at
+         FROM projects WHERE id=ANY($1::uuid[]) ORDER BY id`, [ids]
+      )).rows;
       for (const table of ["suites", "testcases", "plans", "cycles", "bugs", "knowledge_folders", "knowledge_documents", "knowledge_files", "attachments", "audit_logs"]) {
         state[table] = (await setup.query(`SELECT * FROM ${table} WHERE project_id=ANY($1::uuid[]) ORDER BY id`, [ids])).rows;
       }

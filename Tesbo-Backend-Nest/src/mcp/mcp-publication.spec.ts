@@ -55,7 +55,7 @@ describe("MCP-P07 protected testcase publication and unpublished proposal previe
     else process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = value;
     const f = fixture();
     const tools = (await f.list()).result.tools;
-    expect(tools).toHaveLength(47);
+    expect(tools).toHaveLength(48);
     for (const name of [...previewTools, ...DIRECT_TESTCASE_PUBLISHERS]) expect(tools.map((tool: any) => tool.name)).not.toContain(name);
     for (const name of previewTools) {
       const denied = await f.call(name, { taskId, requestKey: "forged-preview", operations: [], enabled: true,
@@ -84,12 +84,12 @@ describe("MCP-P07 protected testcase publication and unpublished proposal previe
     }
   );
 
-  it("advertises exactly 50 callable tools with preview on, with 24 read and 26 write tools", async () => {
+  it("advertises exactly 51 callable tools with preview on, with 24 read and 27 write tools", async () => {
     const f = fixture();
     const all = (await f.list()).result.tools;
-    expect(all).toHaveLength(50);
+    expect(all).toHaveLength(51);
     expect((await f.list(["read"])).result.tools).toHaveLength(24);
-    expect((await f.list(["write"])).result.tools).toHaveLength(26);
+    expect((await f.list(["write"])).result.tools).toHaveLength(27);
     expect(all.map((tool: any) => tool.name)).toEqual(expect.arrayContaining(previewTools));
     for (const name of DIRECT_TESTCASE_PUBLISHERS) expect(all.map((tool: any) => tool.name)).not.toContain(name);
     expect(all.map((tool: any) => tool.name).some((name: string) => /approve|apply/.test(name))).toBe(false);

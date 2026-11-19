@@ -149,18 +149,29 @@ export class McpService {
     const id: JsonRpcId = req && (typeof req.id === "string" || typeof req.id === "number") ? req.id : null;
 
     try {
-      if (!req || req.jsonrpc !== "2.0" || typeof req.method !== "string") {
-        throw new McpError(RpcCode.InvalidRequest, "Invalid JSON-RPC 2.0 request");
-      }
-
+      // Authorization runs for every request before its shape is considered: a credential's project
+      // consent, scope and grant are checked regardless of how well formed the body is, so a
+      // malformed request can never be used to reach dispatch without passing that check.
       const { organizationId, grant } = await this.authorizeRequest(principal, urlProjectId);
-
-      const params = (req.params ?? {}) as Record<string, unknown>;
-      const result = await this.dispatch(req.method, params, principal, organizationId, grant);
-      return { jsonrpc: "2.0", id, result };
+      const parsed = this.parseRequest(body);
+      const result = await this.dispatch(parsed.method, parsed.params, principal, organizationId, grant);
+      return { jsonrpc: "2.0", id: parsed.id, result };
     } catch (err) {
       return this.toErrorResponse(id, err);
     }
+  }
+
+  /** Shape validation for a JSON-RPC 2.0 request; throws InvalidRequest rather than returning one. */
+  private parseRequest(body: unknown): { id: JsonRpcId; method: string; params: Record<string, unknown> } {
+    const req = body as Partial<JsonRpcRequest> | null;
+    if (!req || req.jsonrpc !== "2.0" || typeof req.method !== "string") {
+      throw new McpError(RpcCode.InvalidRequest, "Invalid JSON-RPC 2.0 request");
+    }
+    return {
+      id: typeof req.id === "string" || typeof req.id === "number" ? req.id : null,
+      method: req.method,
+      params: (req.params ?? {}) as Record<string, unknown>
+    };
   }
 
   /** Every transport path (including cached sessions and notifications) rechecks current consent. */

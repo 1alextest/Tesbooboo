@@ -29,7 +29,8 @@ function validTools(preview = false) {
     tool("save_behavior_model_revision", { modelId: text, baseRevisionId: text, model: { type: "object" } }),
     tool("link_behavior_model_case", { modelId: text, revisionId: text, testcaseId: text, elementIds: { type: "array" } }),
     tool("get_behavior_model_coverage", { modelId: text }),
-    tool("archive_behavior_model", { modelId: text })
+    tool("archive_behavior_model", { modelId: text }),
+    tool("run_behavior_model", { modelId: text, revisionId: text })
   ];
   if (preview) {
     const candidate = () => ({ type: "object", properties: structuredClone(caseFields) });
