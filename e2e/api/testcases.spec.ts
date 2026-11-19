@@ -4,12 +4,13 @@ import { expect, request as newRequestContext, test } from "@playwright/test";
 import { env } from "../utils/env";
 import { dbControlAvailable, literal, scalar } from "../utils/psql";
 import { testcaseEditState } from "../utils/testcase-edit-state";
+import { approveTestcase, createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import { loginAs, provisionRbacTenant } from "../utils/rbac-tenant";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 
 async function createCase(request: import("@playwright/test").APIRequestContext, data: Record<string, unknown> = {}) {
-  const res = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+  const res = await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, {
     data: { title: `E2E ${Date.now()}`, ...data },
   });
   return res.json();
@@ -638,15 +639,23 @@ test.describe("bulk operations", () => {
     const b = await createCase(request, { priority: "P3", status: "Draft" });
 
     try {
-      const res = await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-update`, {
+      const forbidden = await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-update`, {
         data: { testcaseIds: [a.id, b.id], priority: "P0", status: "Approved", ownerId: me.userId },
+      });
+      expect(forbidden.status()).toBe(400);
+      for (const id of [a.id, b.id]) {
+        const unchanged = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${id}`)).json();
+        expect(unchanged).toMatchObject({ priority: "P3", status: "Draft" });
+      }
+      const res = await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-update`, {
+        data: { testcaseIds: [a.id, b.id], priority: "P0", status: "In Review", ownerId: me.userId },
       });
       expect(res.ok()).toBeTruthy();
 
       for (const id of [a.id, b.id]) {
         const after = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${id}`)).json();
         expect(after.priority).toBe("P0");
-        expect(after.status).toBe("Approved");
+        expect(after.status).toBe("In Review");
         expect(after.ownerId).toBe(me.userId);
       }
     } finally {
@@ -699,13 +708,13 @@ test.describe("bulk operations", () => {
 
     try {
       await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-update`, {
-        data: { testcaseIds: [created.id], status: "Approved" },
+        data: { testcaseIds: [created.id], status: "In Review" },
       });
       const after = await (
         await request.get(`/api/projects/${ctx.projectId}/testcases/${created.id}`)
       ).json();
       expect(after.severity).toBe("High");
-      expect(after.status).toBe("Approved");
+      expect(after.status).toBe("In Review");
     } finally {
       await deleteCase(request, created.id);
     }
@@ -777,7 +786,7 @@ test.describe("bulk operations", () => {
     expect(res.ok()).toBeTruthy();
   });
 
-  test("archiving sets status to Archived; restoring a prior status is just another update", { tag: '@tesbo.testId("TES-TC-570")' }, async ({
+  test("archiving preserves history; restoring approval requires a new exact human review", { tag: '@tesbo.testId("TES-TC-570")' }, async ({
     request,
   }) => {
     const created = await createCase(request, { status: "Approved" });
@@ -791,14 +800,13 @@ test.describe("bulk operations", () => {
       ).json();
       expect(archived.status).toBe("Archived");
 
-      // The frontend's "Unarchive" button always sends status:"Draft" regardless of what the
-      // status was before archiving, rather than restoring "Approved" (see
-      // FEATURE_DOCUMENTATION.md Section B5) — a UI-level gap, not a backend one. The backend
-      // itself has no opinion on the prior value and accepts whatever status a direct PUT sends,
-      // which is what this asserts.
-      await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
+      // A historic Approved label cannot restore a current human decision through a generic write.
+      const refused = await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
         data: { status: "Approved" },
       });
+      expect(refused.status()).toBe(400);
+      await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, { data: { status: "Draft" } });
+      await approveTestcase(request, ctx.projectId, created.id);
       const restored = await (
         await request.get(`/api/projects/${ctx.projectId}/testcases/${created.id}`)
       ).json();
@@ -2506,7 +2514,7 @@ test.describe("exact-revision approval", () => {
       const initial = await (await request.get(url)).json();
       expect(initial.status).toBe("Draft");
 
-      const approved = await request.post(`${url}/approve`, { data: { expectedRevision: initial.editRevision } });
+      const approved = await request.post(`${url}/approve`, { data: { expectedRevision: initial.editRevision, expectedApprovalRevision: initial.approvalRevision } });
       expect(approved.status(), await approved.text()).toBe(200);
       const body = await approved.json();
       expect(body.testcase).toMatchObject({ id: created.id, status: "Approved" });
@@ -2517,11 +2525,11 @@ test.describe("exact-revision approval", () => {
 
       // A change after the review makes the previously reviewed revision stale.
       expect((await request.put(url, { data: { description: "changed after review" } })).ok()).toBeTruthy();
-      const stale = await request.post(`${url}/approve`, { data: { expectedRevision: initial.editRevision }, failOnStatusCode: false });
+      const stale = await request.post(`${url}/approve`, { data: { expectedRevision: initial.editRevision, expectedApprovalRevision: initial.approvalRevision }, failOnStatusCode: false });
       expect(stale.status()).toBe(409);
       expect((await stale.json()).code).toBe("TESTCASE_APPROVAL_CONFLICT");
       expect(await (await request.get(`${url}/approvals`)).json()).toHaveLength(receipts.length);
-      expect((await (await request.get(url)).json()).status).toBe("Approved");
+      expect((await (await request.get(url)).json()).status).toBe("In Review");
 
       expect((await request.post(`${url}/approve`, { data: {}, failOnStatusCode: false })).status()).toBe(400);
       expect((await request.post(`${url}/approve`, { data: { expectedRevision: "nope" }, failOnStatusCode: false })).status()).toBe(400);
@@ -2532,7 +2540,7 @@ test.describe("exact-revision approval", () => {
       });
       try {
         const current = await (await request.get(url)).json();
-        expect((await asB.post(`${url}/approve`, { data: { expectedRevision: current.editRevision }, failOnStatusCode: false })).status()).toBe(404);
+        expect((await asB.post(`${url}/approve`, { data: { expectedRevision: current.editRevision, expectedApprovalRevision: current.approvalRevision }, failOnStatusCode: false })).status()).toBe(404);
       } finally {
         await asB.dispose();
       }

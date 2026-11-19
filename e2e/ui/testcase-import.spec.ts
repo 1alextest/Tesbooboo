@@ -1,3 +1,4 @@
+import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, request as pwRequest, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
@@ -915,7 +916,7 @@ test.describe("test case import wizard", () => {
       const stamp = Date.now();
       const title = `E2E Run Export Case ${stamp}`;
       const testcase = await (
-        await api.post(`/api/projects/${projectId}/testcases`, { data: { title } })
+        await createTestcaseFixtureResponse(api, `/api/projects/${projectId}/testcases`, { data: { title, status: "Approved" } })
       ).json();
       const cycle = await (
         await api.post(`/api/projects/${projectId}/cycles`, { data: { name: `E2E Run Export ${stamp}` } })
@@ -947,7 +948,7 @@ test.describe("test case import wizard", () => {
       fixture = await withProject(browser, "RU Export Click", "ru-RU");
       const { page, projectId } = fixture;
       const title = `E2E RU Export Click ${Date.now()}`;
-      await api.post(`/api/projects/${projectId}/testcases`, { data: { title, status: "Approved", severity: "High" } });
+      await createTestcaseFixtureResponse(api, `/api/projects/${projectId}/testcases`, { data: { title, status: "Approved", severity: "High" } });
 
       await page.goto(`/projects/${projectId}/testcases`);
       await page.getByRole("button", { name: "Export", exact: true }).click();

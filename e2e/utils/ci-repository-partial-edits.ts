@@ -1,9 +1,12 @@
+import { createTestcaseFixtureResponse } from "./testcase-approval";
+import { approveMcpTestClient, issueMcpTestToken } from "./mcp-access";
+import { randomUUID } from "node:crypto";
 import { expect, request as newRequest, test, type Page, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
 import { isDeepStrictEqual } from "node:util";
 import { verifyMcpDiagnosticLifecycle } from "./ci-mcp-diagnostic-lifecycle";
 
-const advertisedTools = `list_projects list_testcases get_testcase create_testcase update_testcase archive_testcase restore_testcase duplicate_testcase bulk_create_testcases bulk_update_testcases bulk_archive_testcases get_testcase_bugs get_testcase_executions link_requirement_to_testcase unlink_requirement_from_testcase list_suites get_suite create_suite update_suite clone_test_suite list_test_cycles get_test_cycle create_cycle_from_plan create_cycle_from_testcases record_execution_result list_executions get_execution update_execution_result bulk_record_execution_results get_test_execution_summary list_bugs get_bug create_bug update_bug link_testcase_to_bug unlink_testcase_from_bug get_requirement_matrix search_knowledge_base list_knowledge_documents get_knowledge_document create_knowledge_document update_knowledge_document move_knowledge_document archive_knowledge_document restore_knowledge_document list_knowledge_folders get_knowledge_folder create_knowledge_folder update_knowledge_folder move_knowledge_folder list_qa_graph_changes capture_qa_graph_change preview_behavior_model_draft create_behavior_model save_behavior_model_revision link_behavior_model_case get_behavior_model_coverage archive_behavior_model`.split(" ");
+const advertisedTools = `list_projects list_testcases get_testcase get_testcase_bugs get_testcase_executions list_suites get_suite create_suite update_suite list_test_cycles get_test_cycle create_cycle_from_plan create_cycle_from_testcases record_execution_result list_executions get_execution update_execution_result bulk_record_execution_results get_test_execution_summary list_bugs get_bug create_bug update_bug link_testcase_to_bug unlink_testcase_from_bug get_requirement_matrix search_knowledge_base list_knowledge_documents get_knowledge_document create_knowledge_document update_knowledge_document move_knowledge_document archive_knowledge_document restore_knowledge_document list_knowledge_folders get_knowledge_folder create_knowledge_folder update_knowledge_folder move_knowledge_folder list_qa_graph_changes capture_qa_graph_change preview_behavior_model_draft create_behavior_model save_behavior_model_revision link_behavior_model_case get_behavior_model_coverage archive_behavior_model stage_testcase_changes list_testcase_proposals get_testcase_proposal_task`.split(" ");
 
 /** Only called after the smoke's explicit loopback/tesbo_ci checks and genuine login. */
 export async function verifyRepositoryPartialEdits(page: Page, api: string, web: string, projectId: string, ownerId: string, testInfo: TestInfo) {
@@ -22,7 +25,11 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
     }
   };
   async function post(path: string, data: Record<string, unknown>) {
-    const response = await page.request.post(path, { data });
+    const response = /\/testcases$/.test(path)
+      ? await createTestcaseFixtureResponse(page.request, path, { data })
+      : /\/apikeys$/.test(path)
+        ? await issueMcpTestToken(page.request, path, { data })
+        : await page.request.post(path, { data });
     expect(response.ok(), await response.text()).toBeTruthy(); return response.json();
   }
   async function patch(path: string, data: Record<string, unknown>) {
@@ -217,7 +224,7 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
       await expect(panel().getByRole("button", { name: "Save changes", exact: true })).toBeEnabled();
     });
 
-    await checked("UI-created API tokens support cookie-free MCP initialize/discovery/writes, read-only refusal and UI revocation", async () => {
+    await checked("UI-created API tokens support consent, unpublished MCP proposals, human publication and revocation", async () => {
       const tokenPage = `${web}/projects/${projectId}/settings/api-tokens`;
       async function createToken(name: string, scopes: "read" | "read-write") {
         await page.goto(tokenPage);
@@ -264,6 +271,9 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
         await page.reload();
         await expect(page.getByRole("row").filter({ hasText: name })).toBeVisible();
         expect(await page.locator("body").innerText()).not.toContain(data.token);
+        // Token issuance alone grants no MCP consent. This fixture's human explicitly approves
+        // the particular credential before the independent cookie-free client uses it.
+        await approveMcpTestClient(page.request, projectId, data, api);
         return { id: data.id as string, secret: data.token as string, name };
       }
       const diagnostic = () => page.getByRole("heading", { name: "Check MCP connection", exact: true }).locator("../..");
@@ -287,6 +297,22 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
         const body = await response.json(); expect(body.error).toBeUndefined(); expect(body.result.isError).toBe(false);
         return JSON.parse(body.result.content[0].text);
       }
+      async function stageAndApply(secret: string, session: string, operation: Record<string, unknown>) {
+        const before = await projectState();
+        const staged = await call(secret, session, "stage_testcase_changes", { requestKey: randomUUID(), operations: [operation] });
+        expect(staged.publication).toBe("unpublished");
+        expect(staged.taskId).toBe(staged.task.id);
+        expectProjectUnchanged(before, await projectState());
+        const reviewed = await call(secret, session, "get_testcase_proposal_task", { taskId: staged.taskId });
+        expect(reviewed.proposalRevision).toBe(staged.task.proposalRevision);
+        const applied = await page.request.post(`${base}/agents/zyra/tasks/${staged.taskId}/save`, {
+          data: { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [0] },
+        });
+        expect(applied.ok(), await applied.text()).toBeTruthy();
+        const result = await applied.json();
+        expect(result.saveReceipt).toMatchObject({ reviewerId: ownerId, principalKind: "human_session" });
+        return result;
+      }
       const write = await createToken("CI MCP read-write", "read-write");
       const initialized = await rpc(write.secret, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "tesbo-ci", version: "1" } });
       expect(initialized.status()).toBe(201);
@@ -300,22 +326,28 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
       const noBearer = await page.request.post(`${base}/mcp`, { data: { jsonrpc: "2.0", id: 1, method: "tools/list" } });
       expect(noBearer.status()).toBe(401); // A real browser session is not an MCP credential.
       expect((await machine.storageState()).cookies).toEqual([]);
-      const created = await call(write.secret, session, "create_testcase", { title: "CI MCP persisted case", suiteId: first.id, ownerId, description: "MCP body" });
+      const beforeCachedWrites = await projectState();
+      for (const name of ["create_testcase", "update_testcase", "archive_testcase", "restore_testcase", "duplicate_testcase", "bulk_create_testcases", "bulk_update_testcases", "bulk_archive_testcases", "link_requirement_to_testcase", "unlink_requirement_from_testcase", "clone_test_suite"]) {
+        const refused = await rpc(write.secret, "tools/call", { name, arguments: { title: "Must remain unpublished" } }, session);
+        expect((await refused.json()).error.data).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED", stagingAvailable: true });
+        expectProjectUnchanged(beforeCachedWrites, await projectState());
+      }
+      const created = (await stageAndApply(write.secret, session, { opType: "create", draft: { title: "CI MCP persisted case", suiteId: first.id, ownerId, description: "MCP body" } })).testcases[0];
       const initial = await caseState(created.id);
-      const mcpActor = (await db.query<{ id: string }>("SELECT id FROM agents WHERE slug = 'tesbo-mcp'")).rows[0].id;
-      expect(initial.row).toMatchObject({ suite_id: first.id, owner_id: ownerId, created_by: mcpActor });
-      for (const [name, args, expected] of [
-        ["update_testcase", { title: "CI MCP partial title" }, { title: "CI MCP partial title" }],
-        ["archive_testcase", {}, { status: "Archived" }],
-        ["restore_testcase", {}, { status: "Draft" }],
-        ["link_requirement_to_testcase", { jiraIssueKey: "CI-22" }, { jira_issue_key: "CI-22" }],
-        ["unlink_requirement_from_testcase", { provider: "jira" }, { jira_issue_key: null }],
+      expect(initial.row).toMatchObject({ suite_id: first.id, owner_id: ownerId, created_by: ownerId });
+      for (const [opType, fields, expected] of [
+        ["update", { title: "CI MCP partial title" }, { title: "CI MCP partial title" }],
+        ["archive", {}, { status: "Archived" }],
+        ["update", { status: "Draft" }, { status: "Draft" }],
+        ["update", { jiraIssueKey: "CI-22" }, { jira_issue_key: "CI-22" }],
+        ["update", { jiraIssueKey: null }, { jira_issue_key: null }],
       ] as const) {
         const before = await caseState(created.id);
-        await call(write.secret, session, name, { testcaseId: created.id, ...args });
+        const current = await call(write.secret, session, "get_testcase", { testcaseId: created.id });
+        await stageAndApply(write.secret, session, { opType, testcaseId: created.id, expectedRevision: current.editRevision, fields });
         const after = await caseState(created.id);
-        expect(after.row).toMatchObject({ suite_id: first.id, owner_id: ownerId, description: "MCP body", updated_by: mcpActor, ...expected });
-        expectHistory(before, after, 1, mcpActor);
+        expect(after.row).toMatchObject({ suite_id: first.id, owner_id: ownerId, description: "MCP body", updated_by: ownerId, ...expected });
+        expectHistory(before, after, 1, ownerId);
       }
       const readCase = await call(write.secret, session, "get_testcase", { testcaseId: created.id });
       expect(readCase.editRevision).toMatch(/^[a-f0-9]{64}$/);
@@ -323,24 +355,31 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
       expect(humanEdit.ok(), await humanEdit.text()).toBeTruthy();
       const committed = await caseState(created.id);
       for (const expectedRevision of [readCase.editRevision, null, "", 3, true, [], {}]) {
-        const response = await rpc(write.secret, "tools/call", { name: "update_testcase", arguments: {
-          testcaseId: created.id, expectedRevision, attachments: "Must not replace human Notes"
+        const response = await rpc(write.secret, "tools/call", { name: "stage_testcase_changes", arguments: {
+          requestKey: randomUUID(), operations: [{ opType: "update", testcaseId: created.id, expectedRevision, fields: { attachments: "Must not replace human Notes" } }]
         } }, session);
         expect(response.ok()).toBeTruthy();
         const body = await response.json();
-        expect(body.error.message).toMatch(expectedRevision === readCase.editRevision ? /changed since it was loaded/ : /expectedRevision/);
+        if (expectedRevision === readCase.editRevision) {
+          expect(body.error.data).toMatchObject({ code: "PROPOSAL_TARGET_CONFLICT" });
+          expect(body.error.message).toMatch(/changed before this proposal was staged/);
+        } else {
+          expect(body.error.message).toMatch(/expectedRevision/);
+        }
         expectCaseUnchanged(committed, await caseState(created.id));
       }
       const current = await call(write.secret, session, "get_testcase", { testcaseId: created.id });
-      await call(write.secret, session, "update_testcase", {
-        testcaseId: created.id, expectedRevision: current.editRevision, attachments: "Human Notes; reviewed MCP addition"
+      await stageAndApply(write.secret, session, {
+        opType: "update", testcaseId: created.id, expectedRevision: current.editRevision, fields: { attachments: "Human Notes; reviewed MCP addition" }
       });
       const guarded = await caseState(created.id);
       expect(guarded.row.attachments).toBe("Human Notes; reviewed MCP addition");
-      expectHistory(committed, guarded, 1, mcpActor);
-      await call(write.secret, session, "update_testcase", { testcaseId: created.id, suiteId: null });
+      expectHistory(committed, guarded, 1, ownerId);
+      const beforeUnassign = await call(write.secret, session, "get_testcase", { testcaseId: created.id });
+      await stageAndApply(write.secret, session, { opType: "update", testcaseId: created.id, expectedRevision: beforeUnassign.editRevision, fields: { suiteId: null } });
       expect((await caseState(created.id)).row).toMatchObject({ suite_id: null, owner_id: ownerId });
-      await call(write.secret, session, "update_testcase", { testcaseId: created.id, suiteId: second.id });
+      const beforeMove = await call(write.secret, session, "get_testcase", { testcaseId: created.id });
+      await stageAndApply(write.secret, session, { opType: "update", testcaseId: created.id, expectedRevision: beforeMove.editRevision, fields: { suiteId: second.id } });
       expect((await caseState(created.id)).row).toMatchObject({ suite_id: second.id, owner_id: ownerId });
       const read = await createToken("CI MCP read-only", "read");
       const readInit = await rpc(read.secret, "initialize", { protocolVersion: "2024-11-05" });
@@ -372,7 +411,8 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
           const before = await projectState();
           for (const token of [read, write]) {
             requests.length = 0;
-            await checkConnection(token.secret, /Read permission and project identity verified; 58 MCP tools advertised/);
+            const advertisedCount = token.id === read.id ? 24 : 50;
+            await checkConnection(token.secret, new RegExp(`Read permission and project identity verified; ${advertisedCount} MCP tools advertised`));
             expect(await Promise.all(requests)).toEqual([
               { method: "tools/list", params: undefined, cookie: undefined },
               { method: "tools/call", params: { name: "list_projects", arguments: {} }, cookie: undefined },

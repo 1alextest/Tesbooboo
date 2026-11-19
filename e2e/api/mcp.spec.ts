@@ -1,10 +1,14 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { expect, test, request as newRequestContext, type APIRequestContext } from "@playwright/test";
 import { env } from "../utils/env";
+import { approveMcpTestClient, issueMcpTestToken } from "../utils/mcp-access";
+import { approveTestcase, createApprovedTestcase } from "../utils/testcase-approval";
 import { testcaseEditState } from "../utils/testcase-edit-state";
 import { loginAs, provisionRbacTenant } from "../utils/rbac-tenant";
 import { exec, literal, scalar } from "../utils/psql";
+import { stageAndApplyMcpTestcases, testcaseUpdateProposal, type TestcaseProposalOperation } from "../utils/mcp-proposals";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 // Account B: a second, fully independent account/org/project (see global-setup.ts and
@@ -67,13 +71,7 @@ async function deleteCycleRest(request: import("@playwright/test").APIRequestCon
 }
 
 async function addCycleTestCaseRest(request: import("@playwright/test").APIRequestContext, cycleId: string, testcaseId: string) {
-  // This helper seeds execution-focused E2E fixtures, not the approval
-  // workflow. Make the *existing* case Approved through Tesbo's native API
-  // before putting it into a run, matching the normal Test Runs picker.
-  const ready = await request.put(`/api/projects/${ctx.projectId}/testcases/${testcaseId}`, {
-    data: { status: "Approved" }
-  });
-  expect(ready.ok(), await ready.text()).toBeTruthy();
+  await approveTestcase(request, ctx.projectId, testcaseId);
   const attached = await request.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseId } });
   expect(attached.ok(), await attached.text()).toBeTruthy();
 }
@@ -156,10 +154,65 @@ async function callMcpToolExpectError(
   expect(res.ok()).toBeTruthy();
   const body = await res.json();
   expect(body.error).toBeDefined();
-  return body.error as { code: number; message: string };
+  return body.error as { code: number; message: string; data?: { code?: string; stagingAvailable?: boolean; httpStatus?: number } };
 }
 
-test("disposable MCP agent create read update archive lifecycle preserves project and run boundaries", async () => {
+/** Successful case-field regressions now exercise unpublished staging and an explicit human Save. */
+async function publishReviewedCaseChange(
+  human: APIRequestContext, machine: APIRequestContext, token: string, legacyTool: string, args: Record<string, unknown>,
+) {
+  const denied = await callMcpToolExpectError(machine, token, legacyTool, args);
+  expect(denied.data).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED", stagingAvailable: true });
+  let operation: TestcaseProposalOperation;
+  if (legacyTool === "create_testcase") {
+    operation = { opType: "create", draft: args };
+  } else {
+    const { testcaseId, expectedRevision, ...supplied } = args;
+    const opType = legacyTool === "archive_testcase" ? "archive" : "update";
+    const fields = legacyTool === "archive_testcase" ? {} : legacyTool === "restore_testcase" ? { status: "Draft" } : supplied;
+    operation = await testcaseUpdateProposal(human, ctx.projectId, String(testcaseId), fields, opType);
+    if (expectedRevision !== undefined && operation.opType !== "create") operation.expectedRevision = String(expectedRevision);
+  }
+  const { published } = await stageAndApplyMcpTestcases(human, machine, token, ctx.projectId, [operation]);
+  const id = published.testcases[0].id;
+  const current = await human.get(`/api/projects/${ctx.projectId}/testcases/${id}`);
+  expect(current.ok(), await current.text()).toBe(true);
+  return current.json();
+}
+
+/** Batch success exposes the native human Save response, with no legacy per-item result emulation. */
+async function publishReviewedOperations(
+  human: APIRequestContext, machine: APIRequestContext, token: string, legacyTool: string,
+  legacyArgs: Record<string, unknown>, operations: TestcaseProposalOperation[],
+) {
+  const denied = await callMcpToolExpectError(machine, token, legacyTool, legacyArgs);
+  expect(denied.data).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED", stagingAvailable: true });
+  return (await stageAndApplyMcpTestcases(human, machine, token, ctx.projectId, operations)).published;
+}
+
+/** Validation controls first prove the cached writer is refused, then exercise the real proposal inlet. */
+async function expectRejectedCaseProposal(
+  human: APIRequestContext, machine: APIRequestContext, token: string, legacyTool: string, args: Record<string, unknown> = {},
+) {
+  const denied = await callMcpToolExpectError(machine, token, legacyTool, args);
+  if (denied.code === -32002) return denied; // Scope denial remains ahead of all candidate work.
+  expect(denied.data).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED", stagingAvailable: true });
+  let operation: Record<string, unknown>;
+  if (legacyTool === "create_testcase") operation = { opType: "create", draft: args };
+  else {
+    const { testcaseId, expectedRevision, ...supplied } = args;
+    let targetRevision = expectedRevision;
+    if (!Object.prototype.hasOwnProperty.call(args, "expectedRevision")) {
+      const current = testcaseId ? await human.get(`/api/projects/${ctx.projectId}/testcases/${testcaseId}`) : null;
+      targetRevision = current?.ok() ? (await current.json()).editRevision : "0".repeat(64);
+    }
+    const fields = legacyTool === "archive_testcase" ? {} : legacyTool === "restore_testcase" ? { status: "Draft" } : supplied;
+    operation = { opType: legacyTool === "archive_testcase" ? "archive" : "update", testcaseId, expectedRevision: targetRevision, fields };
+  }
+  return callMcpToolExpectError(machine, token, "stage_testcase_changes", { requestKey: `E2E refusal ${Date.now()}-${Math.random()}`, operations: [operation] });
+}
+
+test("MCP-P07 disposable proposal review lifecycle preserves project and run boundaries", async () => {
   // A separate synthetic tenant is the only allowed target. No Nesberry token,
   // production case or existing project membership is ever reused by this test.
   const tenant = await provisionRbacTenant("mcp-lifecycle");
@@ -180,7 +233,7 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
   const prior = counts();
   let tokenId: string | undefined, caseId: string | undefined, modelId: string | undefined;
   try {
-    const issue = await owner.post(`/api/projects/${projectId}/apikeys`, {
+    const issue = await issueMcpTestToken(owner, `/api/projects/${projectId}/apikeys`, {
       data: { name: `E2E isolated MCP QA ${Date.now()}`, scopes: ["read", "write"] }
     });
     expect(issue.ok(), await issue.text()).toBeTruthy();
@@ -204,13 +257,13 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
     const rejected = async (name: string, args: Record<string, unknown> = {}) => {
       const body = await rpc("tools/call", { name, arguments: args });
       expect(body.error).toBeDefined();
-      return body.error as { code: number; message: string };
+      return body.error as { code: number; message: string; data?: { code?: string; stagingAvailable?: boolean } };
     };
     const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {} });
     expect(init.result.serverInfo.name).toBe("tesbo-mcp");
     const catalog = (await rpc("tools/list")).result.tools as Array<{ name: string }>;
-    expect(catalog).toHaveLength(58);
-    expect(new Set(catalog.map(item => item.name)).size).toBe(58);
+    expect(catalog).toHaveLength(50);
+    expect(new Set(catalog.map(item => item.name)).size).toBe(50);
     expect(catalog.map(item => item.name)).toContain("list_qa_graph_changes");
     expect(catalog.map(item => item.name)).toEqual(
       expect.arrayContaining([
@@ -225,12 +278,24 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
     expect(foreign.error?.code).toBe(-32001); // token cannot switch project via URL
 
     const citation = { type: "jira_ticket", id: "E2E-123", title: "Disposable QA source ticket" };
-    const created = await call("create_testcase", {
+    const createFields = {
       title, description: "Disposable QA lifecycle proof", status: "Draft",
       attachments: "Initial Notes", postconditions: "Environment unchanged",
       estimatedDuration: "45m", sourceRefs: [citation]
-    });
-    caseId = created.id;
+    };
+    for (const name of ["create_testcase", "update_testcase", "archive_testcase", "restore_testcase", "duplicate_testcase",
+      "bulk_create_testcases", "bulk_update_testcases", "bulk_archive_testcases", "link_requirement_to_testcase",
+      "unlink_requirement_from_testcase", "clone_test_suite"]) {
+      expect(catalog.map(item => item.name)).not.toContain(name);
+      const denied = await rejected(name, createFields);
+      expect(denied.data).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED", stagingAvailable: true });
+    }
+    const created = await stageAndApplyMcpTestcases(owner, machine, token, projectId, [{ opType: "create", draft: createFields }]);
+    expect(created.staged.task.proposalProvenance).toMatchObject({ kind: "api_token", tokenId, issuerId: tenant!.owner.userId });
+    expect(created.staged.task.proposalProvenance.actorId).not.toBe(tenant!.owner.userId);
+    expect(created.staged.task.proposalProvenance.actorId).toBeTruthy();
+    expect(created.published.saveReceipt).toMatchObject({ reviewerId: tenant!.owner.userId, principalKind: "human_session" });
+    caseId = created.published.testcases[0].id;
     const original = await call("get_testcase", { testcaseId: caseId });
     expect(original).toMatchObject({
       id: caseId, title, status: "Draft", attachments: "Initial Notes",
@@ -239,12 +304,14 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
     });
     expect(original.editRevision).toMatch(/^[a-f0-9]{64}$/);
 
-    const amended = await call("update_testcase", {
-      testcaseId: caseId, expectedRevision: original.editRevision,
-      attachments: "Reviewed Notes", postconditions: "All fixtures cleaned",
-      estimatedDuration: "1h", sourceRefs: [{ type: "testcase", id: caseId, title: title }],
-      description: "Verified by the connected machine over native MCP"
-    });
+    await stageAndApplyMcpTestcases(owner, machine, token, projectId, [{
+      opType: "update", testcaseId: caseId!, expectedRevision: original.editRevision, fields: {
+        attachments: "Reviewed Notes", postconditions: "All fixtures cleaned",
+        estimatedDuration: "1h", sourceRefs: [{ type: "testcase", id: caseId, title: title }],
+        description: "Verified by the connected machine over native MCP"
+      }
+    }]);
+    const amended = await call("get_testcase", { testcaseId: caseId });
     expect(amended.editRevision).not.toBe(original.editRevision);
     const persisted = await owner.get(caseUrl(caseId!));
     expect(persisted.ok()).toBeTruthy();
@@ -254,12 +321,15 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
       description: "Verified by the connected machine over native MCP"
     });
     // Malformed citations are refused, not silently dropped by the legacy sanitizer.
-    const badRefs = await rejected("update_testcase", { testcaseId: caseId, sourceRefs: [{ type: "nope", id: "x" }] });
+    const badRefs = await rejected("stage_testcase_changes", { requestKey: `bad-refs-${Date.now()}`, operations: [{
+      opType: "update", testcaseId: caseId, expectedRevision: amended.editRevision, fields: { sourceRefs: [{ type: "nope", id: "x" }] }
+    }] });
     expect(badRefs.message).toMatch(/sourceRefs/i);
-    const stale = await rejected("update_testcase", {
-      testcaseId: caseId, expectedRevision: original.editRevision, attachments: "Stale overwrite"
-    });
-    expect(stale.message).toMatch(/changed since it was loaded/);
+    const stale = await rejected("stage_testcase_changes", { requestKey: `stale-${Date.now()}`, operations: [{
+      opType: "update", testcaseId: caseId, expectedRevision: original.editRevision, fields: { attachments: "Stale overwrite" }
+    }] });
+    expect(stale.data?.code).toBe("PROPOSAL_TARGET_CONFLICT");
+    expect(stale.message).toMatch(/changed before this proposal was staged/);
     expect((await (await owner.get(caseUrl(caseId!))).json()).attachments).toBe("Reviewed Notes");
 
     // Model Studio authoring runs through the same native owner as the REST routes. A mapping is an
@@ -316,7 +386,10 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
     const archivedCoverage = await rejected("get_behavior_model_coverage", { modelId });
     expect(archivedCoverage.message).toMatch(/not found/i);
 
-    expect((await call("archive_testcase", { testcaseId: caseId })).status).toBe("Archived");
+    await stageAndApplyMcpTestcases(owner, machine, token, projectId, [
+      await testcaseUpdateProposal(owner, projectId, caseId!, {}, "archive")
+    ]);
+    expect((await call("get_testcase", { testcaseId: caseId })).status).toBe("Archived");
     expect((await call("get_testcase", { testcaseId: caseId })).postconditions).toBe("All fixtures cleaned");
     const hidden = await call("list_testcases", { search: title });
     expect(hidden.rows.some((item: { id: string }) => item.id === caseId)).toBe(false);
@@ -371,6 +444,7 @@ test("write-scoped project tokens require an owner/manager and carry explicit ta
     expect(JSON.stringify(qaWrite.body)).toMatch(/owners and managers/i);
     expect((await issue(qa, ["read"])).status).toBe(201);
     const qaReadToken = issued.at(-1)!;
+    await approveMcpTestClient(owner, projectId, { ...qaReadToken, scopes: ["read"] });
 
     // The read-only token can discover the project but is refused a write at the MCP scope guard.
     const machine = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
@@ -402,13 +476,13 @@ test("write-scoped project tokens require an owner/manager and carry explicit ta
   }
 });
 
-test("MCP revision preconditions refuse stale and malformed edits without overwriting human Notes", async ({ request }) => {
+test("MCP-P07 revision preconditions refuse stale and malformed edits without overwriting human Notes", async ({ request }) => {
   const created = await createCase(request, { attachments: "Original Notes" });
   const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
   const mcp = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
   let tokenId: string | undefined;
   try {
-    const response = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+    const response = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
       data: { name: `E2E edit revision ${Date.now()}`, scopes: ["read", "write"] }
     });
     expect(response.ok()).toBeTruthy();
@@ -418,19 +492,19 @@ test("MCP revision preconditions refuse stale and malformed edits without overwr
     expect(initial.editRevision).toMatch(/^[a-f0-9]{64}$/);
     expect((await request.put(url, { data: { attachments: "Human edited Notes" } })).ok()).toBeTruthy();
     const committed = await (await request.get(url)).json();
-    const stale = await callMcpToolExpectError(mcp, issued.token, "update_testcase", {
+    const stale = await expectRejectedCaseProposal(request, mcp, issued.token, "update_testcase", {
       testcaseId: created.id, expectedRevision: initial.editRevision, attachments: "Stale machine Notes"
     });
-    expect(stale.message).toMatch(/changed since it was loaded/);
+    expect(stale.message).toMatch(/changed before this proposal was staged/);
     expect(testcaseEditState(await (await request.get(url)).json())).toEqual(testcaseEditState(committed));
     for (const expectedRevision of [null, "", 7, true, [], {}]) {
-      const invalid = await callMcpToolExpectError(mcp, issued.token, "update_testcase", {
+      const invalid = await expectRejectedCaseProposal(request, mcp, issued.token, "update_testcase", {
         testcaseId: created.id, expectedRevision, title: "Must not change"
       });
       expect(invalid.message).toContain("expectedRevision");
       expect(testcaseEditState(await (await request.get(url)).json())).toEqual(testcaseEditState(committed));
     }
-    const saved = await callMcpTool(mcp, issued.token, "update_testcase", {
+    const saved = await publishReviewedCaseChange(request, mcp, issued.token, "update_testcase", {
       testcaseId: created.id, expectedRevision: committed.editRevision, description: "Reviewed update"
     });
     expect(saved.attachments).toBe("Human edited Notes");
@@ -443,13 +517,13 @@ test("MCP revision preconditions refuse stale and malformed edits without overwr
   }
 });
 
-test("MCP postconditions preserve omission, clear explicitly and refuse invalid types", async ({ request }) => {
+test("MCP-P07 postconditions preserve omission, clear explicitly and refuse invalid types", async ({ request }) => {
   const created = await createCase(request, { postconditions: "Initial final state" });
   const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
   const mcp = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
   let tokenId: string | undefined;
   try {
-    const response = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+    const response = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
       data: { name: `E2E postconditions ${Date.now()}`, scopes: ["read", "write"] }
     });
     expect(response.ok()).toBeTruthy();
@@ -460,19 +534,19 @@ test("MCP postconditions preserve omission, clear explicitly and refuse invalid 
     expect(initial.postconditions).toBe("Initial final state");
 
     // Omission preserves the stored value; an unrelated edit must not clear it.
-    const omitted = await callMcpTool(mcp, issued.token, "update_testcase", {
+    const omitted = await publishReviewedCaseChange(request, mcp, issued.token, "update_testcase", {
       testcaseId: created.id, description: "Unrelated edit", expectedRevision: initial.editRevision
     });
     expect(omitted.postconditions).toBe("Initial final state");
 
     // "" is the explicit clear; null is not.
-    const cleared = await callMcpTool(mcp, issued.token, "update_testcase", {
+    const cleared = await publishReviewedCaseChange(request, mcp, issued.token, "update_testcase", {
       testcaseId: created.id, postconditions: "", expectedRevision: omitted.editRevision
     });
     expect(cleared.postconditions).toBe("");
 
     for (const postconditions of [null, 8, true, [], {}]) {
-      const invalid = await callMcpToolExpectError(mcp, issued.token, "update_testcase", {
+      const invalid = await expectRejectedCaseProposal(request, mcp, issued.token, "update_testcase", {
         testcaseId: created.id, postconditions, expectedRevision: cleared.editRevision
       });
       expect(invalid.message).toMatch(/postconditions/i);
@@ -496,7 +570,7 @@ test.describe("MCP initialize", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP token ${Date.now()}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -554,7 +628,7 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
     const createdIds: string[] = [];
     let tokenId: string | undefined;
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP session token ${Date.now()}`, scopes },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -600,59 +674,44 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
     });
   });
 
-  test("a current session is served, and tools/list exposes the deployed create_testcase schema", async ({ request }) => {
-    await withToken(request, ["read"], async (api, token) => {
+  test("MCP-P07 current session discovery exposes the exact proposal schema and scoped fingerprint", async ({ request }) => {
+    await withToken(request, ["read", "write"], async (api, token) => {
       const init = await initialize(api, token);
       const session = init.headers["mcp-session-id"];
       const list = await rpc(api, token, { id: 2, method: "tools/list" }, session);
       expect(list.status).toBeLessThan(300);
-      const tools = list.body.result.tools as Array<{ name: string; inputSchema: {
-        properties?: Record<string, { type?: string; enum?: string[] }>;
-      } }>;
+      type Schema = { type?: string; enum?: string[]; required?: string[]; properties?: Record<string, Schema>;
+        items?: { oneOf?: Schema[] } };
+      const tools = list.body.result.tools as Array<{ name: string; inputSchema: Schema }>;
       const names = tools.map(t => t.name);
-      // Exact source/deployment contract. A 50-tool client cache is not proof
-      // that this server is current, nor can 58 source tools prove stage deployed.
-      expect(names, "freshly initialized deployed catalog").toHaveLength(58);
-      expect(new Set(names).size, "MCP names must be unique").toBe(58);
-      for (const name of [
-        "list_qa_graph_changes",
-        "capture_qa_graph_change",
-        "preview_behavior_model_draft",
-        "create_behavior_model",
-        "save_behavior_model_revision",
-        "link_behavior_model_case",
-        "get_behavior_model_coverage",
-        "archive_behavior_model"
-      ]) {
-        expect(names).toContain(name);
+      // This test runs only in the explicitly enabled isolated preview profile.
+      expect(names, "freshly initialized deployed preview catalog").toHaveLength(50);
+      expect(new Set(names).size, "MCP names must be unique").toBe(50);
+      expect(names).toEqual(expect.arrayContaining([
+        "list_qa_graph_changes", "capture_qa_graph_change", "preview_behavior_model_draft", "create_behavior_model",
+        "save_behavior_model_revision", "link_behavior_model_case", "get_behavior_model_coverage", "archive_behavior_model",
+        "stage_testcase_changes", "list_testcase_proposals", "get_testcase_proposal_task"
+      ]));
+      for (const name of ["create_testcase", "update_testcase", "archive_testcase", "restore_testcase", "duplicate_testcase",
+        "bulk_create_testcases", "bulk_update_testcases", "bulk_archive_testcases", "link_requirement_to_testcase",
+        "unlink_requirement_from_testcase", "clone_test_suite"]) expect(names).not.toContain(name);
+      const operations = tools.find(t => t.name === "stage_testcase_changes")?.inputSchema.properties?.operations.items?.oneOf;
+      const create = operations?.[0].properties?.draft.properties;
+      const update = operations?.[1].properties?.fields.properties;
+      expect(create?.severity?.enum, "current severity vocabulary").toEqual(["Critical", "High", "Medium", "Low"]);
+      for (const fields of [create, update]) {
+        for (const field of ["postconditions", "attachments", "estimatedDuration"]) expect(fields?.[field]?.type).toBe("string");
+        expect(fields?.sourceRefs?.type).toBe("array");
       }
-      const create = tools.find(t => t.name === "create_testcase");
-      const update = tools.find(t => t.name === "update_testcase");
-      expect(create?.inputSchema.properties?.severity?.enum, "current severity vocabulary")
-        .toEqual(["Critical", "High", "Medium", "Low"]);
-      expect(create?.inputSchema.properties?.postconditions?.type, "create-time Postconditions").toBe("string");
-      expect(create?.inputSchema.properties?.attachments?.type, "create-time plain-text Notes").toBe("string");
-      expect(update?.inputSchema.properties?.postconditions?.type, "update-time Postconditions").toBe("string");
-      expect(update?.inputSchema.properties?.attachments?.type, "update-time plain-text Notes").toBe("string");
-      // Authoring fields the legacy writers persist but an older catalog stopped advertising.
-      expect(create?.inputSchema.properties?.estimatedDuration?.type, "create-time estimate").toBe("string");
-      expect(create?.inputSchema.properties?.sourceRefs?.type, "create-time citations").toBe("array");
-      expect(update?.inputSchema.properties?.estimatedDuration?.type, "update-time estimate").toBe("string");
-      expect(update?.inputSchema.properties?.sourceRefs?.type, "update-time citations").toBe("array");
-      expect(update?.inputSchema.properties?.expectedRevision?.type, "update-time revision guard").toBe("string");
-      const bulk = tools.find(t => t.name === "bulk_create_testcases") as {
-        inputSchema: { properties: { testcases: { items: { properties: Record<string, { type?: string }> } } } };
-      } | undefined;
-      const bulkProps = bulk?.inputSchema.properties.testcases.items.properties;
-      expect(bulkProps?.estimatedDuration?.type, "bulk create estimate").toBe("string");
-      expect(bulkProps?.sourceRefs?.type, "bulk create citations").toBe("array");
-      const fingerprint = String(init.body.result.serverInfo.version).split(".").at(-1);
-      expect(fingerprint).toMatch(/^[a-f0-9]{16}$/);
+      expect(operations?.[1].required).toContain("expectedRevision");
+      expect(operations?.[1].properties?.expectedRevision?.type).toBe("string");
+      const fingerprint = createHash("sha256").update(JSON.stringify({ tools, instructions: init.body.result.instructions })).digest("hex").slice(0, 16);
+      expect(String(init.body.result.serverInfo.version).split(".").at(-1)).toBe(fingerprint);
       expect(session).toMatch(new RegExp("^" + fingerprint + "\\."));
     });
   });
 
-  test("a session from a different tool set gets 404, runs nothing, and re-initializing recovers", async ({ request }) => {
+  test("MCP-P07 a stale session runs nothing and reinitializing enables reviewed staging", async ({ request }) => {
     await withToken(request, ["read", "write"], async (api, token, createdIds) => {
       const listed = await rpc(api, token, { id: 2, method: "tools/list" }, STALE_SESSION);
       expect(listed.status, "the spec's signal to re-initialize").toBe(404);
@@ -675,14 +734,28 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
       expect(fresh).toBeTruthy();
       expect(fresh).not.toBe(STALE_SESSION);
 
-      // The Severity fix through the recovered session: the canonical value is persisted.
-      const created = await rpc(api, token, { id: 4, method: "tools/call", params: { name: "create_testcase", arguments: { title, severity: "high" } } }, fresh);
-      expect(created.status).toBeLessThan(300);
-      expect(created.body.error).toBeUndefined();
-      const testcase = JSON.parse(created.body.result.content[0].text);
-      createdIds.push(testcase.id);
-      const stored = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${testcase.id}`)).json();
-      expect(stored.severity, "severity is canonicalized and persisted").toBe("High");
+      const staged = await rpc(api, token, { id: 4, method: "tools/call", params: {
+        name: "stage_testcase_changes", arguments: { requestKey: `recovered-${Date.now()}`, operations: [
+          { opType: "create", draft: { title, severity: "high" } }
+        ] }
+      } }, fresh);
+      expect(staged.status).toBeLessThan(300);
+      expect(staged.body.error).toBeUndefined();
+      const proposal = JSON.parse(staged.body.result.content[0].text);
+      expect(proposal.publication).toBe("unpublished");
+      const unchanged = await request.get(`/api/projects/${ctx.projectId}/testcases?search=${encodeURIComponent(title)}`);
+      expect(JSON.stringify(await unchanged.json())).not.toContain(title);
+      const taskUrl = `/api/projects/${ctx.projectId}/agents/zyra/tasks/${proposal.taskId}`;
+      const reviewed = await request.get(taskUrl);
+      expect(reviewed.ok(), await reviewed.text()).toBe(true);
+      const revision = (await reviewed.json()).proposalRevision;
+      const applied = await request.post(`${taskUrl}/save`, { data: { expectedProposalRevision: revision, selectedDraftIndexes: [0] } });
+      expect(applied.ok(), await applied.text()).toBe(true);
+      const saved = await applied.json();
+      expect(saved.saveReceipt.principalKind).toBe("human_session");
+      createdIds.push(saved.testcases[0].id);
+      const stored = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${saved.testcases[0].id}`)).json();
+      expect(stored.severity, "severity is canonicalized and persisted only after human Save").toBe("High");
     });
   });
 
@@ -731,7 +804,7 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
       try {
         const aCase = await createCase(request, { title: `E2E MCP session A-only ${Date.now()}` });
         aCaseId = aCase.id;
-        const bTokenRes = await asB.post(`/api/projects/${ctxB.projectId}/apikeys`, { data: { name: `E2E MCP session B ${Date.now()}`, scopes: ["read"] } });
+        const bTokenRes = await issueMcpTestToken(asB, `/api/projects/${ctxB.projectId}/apikeys`, { data: { name: `E2E MCP session B ${Date.now()}`, scopes: ["read"] } });
         expect(bTokenRes.ok()).toBeTruthy();
         const bToken = await bTokenRes.json();
         bTokenId = bToken.id;
@@ -771,7 +844,7 @@ test.describe("MCP list_testcases and the repository total agree on Archived cas
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP token ${Date.now()}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -835,7 +908,7 @@ test.describe("MCP create_testcase normalizes step field synonyms", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP Steps token ${Date.now()}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -843,7 +916,7 @@ test.describe("MCP create_testcase normalizes step field synonyms", () => {
       tokenId = tokenBody.id;
       const token = tokenBody.token as string;
 
-      const created = await callMcpTool(mcpApi, token, "create_testcase", {
+      const created = await publishReviewedCaseChange(request, mcpApi, token, "create_testcase", {
         title,
         // Deliberately the synonym keys safeSteps() maps, not the canonical ones — the shape an
         // MCP-calling LLM guessing from an undocumented `steps: array` schema would plausibly send.
@@ -919,7 +992,7 @@ test.describe("MCP create_testcase stores steps in the shape the test case edito
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP Steps Shape token ${Date.now()}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -935,7 +1008,7 @@ test.describe("MCP create_testcase stores steps in the shape the test case edito
         { stepNumber: 2, action: "Second step", expectedResult: "Second result" },
         { stepNumber: 3, action: "Third step with unicode: héllo 世界", expectedResult: "Renders unchanged" },
       ];
-      const created = await callMcpTool(mcpApi, token, "create_testcase", { title, steps });
+      const created = await publishReviewedCaseChange(request, mcpApi, token, "create_testcase", { title, steps });
       createdId = created.id;
       expect(createdId).toBeTruthy();
 
@@ -966,7 +1039,7 @@ test.describe("MCP create_testcase stores steps in the shape the test case edito
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP Steps Empty token ${Date.now()}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -974,7 +1047,7 @@ test.describe("MCP create_testcase stores steps in the shape the test case edito
       tokenId = tokenBody.id;
       const token = tokenBody.token as string;
 
-      const created = await callMcpTool(mcpApi, token, "create_testcase", { title, steps: [] });
+      const created = await publishReviewedCaseChange(request, mcpApi, token, "create_testcase", { title, steps: [] });
       createdId = created.id;
       expect(createdId).toBeTruthy();
 
@@ -1014,14 +1087,14 @@ test.describe("MCP create postconditions use existing test-case field", () => {
     let tokenId: string | undefined;
     const caseIds: string[] = [];
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP postconditions ${Date.now()}`, scopes: ["read", "write"] }
       });
       expect(tokenRes.ok()).toBeTruthy();
       const tokenBody = await tokenRes.json();
       tokenId = tokenBody.id;
       const token = tokenBody.token as string;
-      const one = await callMcpTool(mcpApi, token, "create_testcase", {
+      const one = await publishReviewedCaseChange(request, mcpApi, token, "create_testcase", {
         title: `E2E MCP postconditions single ${Date.now()}`,
         description: "Readable case intent",
         postconditions: "No source records changed"
@@ -1033,15 +1106,15 @@ test.describe("MCP create postconditions use existing test-case field", () => {
         postconditions: "No source records changed",
         description: "Readable case intent"
       });
-      const many = await callMcpTool(mcpApi, token, "bulk_create_testcases", {
-        testcases: [
-          { title: `E2E MCP postconditions first ${Date.now()}`, postconditions: "Audit remains intact" },
-          { title: `E2E MCP postconditions second ${Date.now()}`, postconditions: "" }
-        ]
-      });
-      for (const item of many.results) if (item.ok) caseIds.push(item.testcase.id);
-      expect(many).toMatchObject({ succeeded: 2, failed: 0 });
-      const first = await request.get(`/api/projects/${ctx.projectId}/testcases/${many.results[0].testcase.id}`);
+      const drafts = [
+        { title: `E2E MCP postconditions first ${Date.now()}`, postconditions: "Audit remains intact" },
+        { title: `E2E MCP postconditions second ${Date.now()}`, postconditions: "" }
+      ];
+      const many = await publishReviewedOperations(request, mcpApi, token, "bulk_create_testcases", { testcases: drafts },
+        drafts.map(draft => ({ opType: "create", draft })));
+      caseIds.push(...many.testcases.map((item: { id: string }) => item.id));
+      expect(many.savedCount).toBe(2);
+      const first = await request.get(`/api/projects/${ctx.projectId}/testcases/${many.testcases[0].id}`);
       expect(first.ok()).toBeTruthy();
       expect((await first.json()).postconditions).toBe("Audit remains intact");
     } finally {
@@ -1059,7 +1132,7 @@ test.describe("MCP source capture ownership", () => {
     });
     let tokenId: string | undefined;
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E graph capture ${Date.now()}`, scopes: ["read", "write"] }
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -1094,7 +1167,7 @@ test.describe("MCP graph change-review discovery", () => {
     });
     let tokenId: string | undefined;
     try {
-      const tokenResponse = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenResponse = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E graph review read ${Date.now()}`, scopes: ["read"] }
       });
       expect(tokenResponse.ok()).toBeTruthy();
@@ -1135,7 +1208,7 @@ test.describe("MCP Notes use the existing test case field", () => {
     let tokenId: string | undefined;
     let caseId: string | undefined;
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP Notes ${Date.now()}`, scopes: ["read", "write"] }
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -1148,15 +1221,16 @@ test.describe("MCP Notes use the existing test case field", () => {
         data: { jsonrpc: "2.0", id: 2, method: "tools/list" }
       });
       const catalog = (await catalogRes.json()).result.tools;
-      for (const name of ["create_testcase", "update_testcase"]) {
-        const tool = catalog.find((item: { name: string }) => item.name === name);
-        expect(tool.inputSchema.properties.attachments.type).toBe("string");
+      for (const name of ["create_testcase", "update_testcase", "bulk_create_testcases"]) {
+        expect(catalog.find((item: { name: string }) => item.name === name)).toBeUndefined();
       }
-      expect(catalog.find((item: { name: string }) => item.name === "bulk_create_testcases")
-        .inputSchema.properties.testcases.items.properties.attachments.type).toBe("string");
+      const operationSchemas = catalog.find((item: { name: string }) => item.name === "stage_testcase_changes")
+        .inputSchema.properties.operations.items.oneOf;
+      expect(operationSchemas[0].properties.draft.properties.attachments.type).toBe("string");
+      expect(operationSchemas[1].properties.fields.properties.attachments.type).toBe("string");
 
       const notes = "Technical support: café 🧪\\nEvidence: independent observation";
-      const created = await callMcpTool(api, token, "create_testcase", {
+      const created = await publishReviewedCaseChange(request, api, token, "create_testcase", {
         title: `E2E MCP Notes case ${Date.now()}`, description: "Human-readable purpose",
         preconditions: "Authorized project member", attachments: notes
       });
@@ -1168,18 +1242,18 @@ test.describe("MCP Notes use the existing test case field", () => {
       const originalSources = persisted.sourceRefs;
       const originalSuite = persisted.suiteId;
 
-      await callMcpTool(api, token, "update_testcase", { testcaseId: caseId, title: "Reworded purpose" });
+      await publishReviewedCaseChange(request, api, token, "update_testcase", { testcaseId: caseId, title: "Reworded purpose" });
       persisted = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${caseId}`)).json();
       expect(persisted.attachments).toBe(notes);
       expect(persisted.sourceRefs).toEqual(originalSources);
       expect(persisted.suiteId).toBe(originalSuite);
-      await callMcpTool(api, token, "update_testcase", { testcaseId: caseId, attachments: "" });
+      await publishReviewedCaseChange(request, api, token, "update_testcase", { testcaseId: caseId, attachments: "" });
       persisted = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${caseId}`)).json();
       expect(persisted.attachments).toBe("");
       expect(persisted.description).toBe("Human-readable purpose");
       expect(persisted.title).toBe("Reworded purpose");
 
-      const invalid = await callMcpToolExpectError(api, token, "update_testcase", {
+      const invalid = await expectRejectedCaseProposal(request, api, token, "update_testcase", {
         testcaseId: caseId, attachments: null
       });
       expect(invalid.message).toMatch(/attachments.*Notes/i);
@@ -1191,32 +1265,41 @@ test.describe("MCP Notes use the existing test case field", () => {
     }
   });
 
-  test("mixed bulk Notes input isolates invalid item and persists valid sibling", async ({ request }) => {
+  test("MCP-P07 mixed Notes input refuses atomic staging and valid siblings require human Save", async ({ request }) => {
     const api = await newRequestContext.newContext({
       baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] }
     });
     let tokenId: string | undefined;
     const ids: string[] = [];
     try {
-      const response = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const response = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP Notes bulk ${Date.now()}`, scopes: ["write"] }
       });
       expect(response.ok()).toBeTruthy();
       const tokenBody = await response.json();
       tokenId = tokenBody.id;
       const notes = "First Notes";
-      const result = await callMcpTool(api, tokenBody.token, "bulk_create_testcases", {
-        testcases: [
-          { title: `E2E Notes first ${Date.now()}`, attachments: notes },
-          { title: `E2E Notes invalid ${Date.now()}`, attachments: false },
-          { title: `E2E Notes last ${Date.now()}`, attachments: "" }
-        ]
+      const drafts = [
+        { title: `E2E Notes first ${Date.now()}`, attachments: notes },
+        { title: `E2E Notes invalid ${Date.now()}`, attachments: false },
+        { title: `E2E Notes last ${Date.now()}`, attachments: "" }
+      ];
+      const denied = await callMcpToolExpectError(api, tokenBody.token, "bulk_create_testcases", { testcases: drafts });
+      expect(denied.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+      const invalid = await callMcpToolExpectError(api, tokenBody.token, "stage_testcase_changes", {
+        requestKey: `invalid-notes-${Date.now()}`, operations: drafts.map(draft => ({ opType: "create", draft }))
       });
-      for (const item of result.results) if (item.ok) ids.push(item.testcase.id);
-      expect(result).toMatchObject({ total: 3, succeeded: 2, failed: 1 });
-      expect(result.results[1].error).toMatch(/attachments.*Notes/i);
-      const first = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${result.results[0].testcase.id}`)).json();
-      const last = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${result.results[2].testcase.id}`)).json();
+      expect(invalid.message).toMatch(/attachments.*Notes/i);
+      for (const draft of drafts) {
+        const found = await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: draft.title } });
+        expect((await found.json()).filter((item: { title: string }) => item.title === draft.title)).toHaveLength(0);
+      }
+      const result = await publishReviewedOperations(request, api, tokenBody.token, "bulk_create_testcases", { testcases: [drafts[0], drafts[2]] },
+        [drafts[0], drafts[2]].map(draft => ({ opType: "create", draft })));
+      ids.push(...result.testcases.map((item: { id: string }) => item.id));
+      expect(result.savedCount).toBe(2);
+      const first = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${result.testcases[0].id}`)).json();
+      const last = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${result.testcases[1].id}`)).json();
       expect(first.attachments).toBe(notes);
       expect([null, ""]).toContain(last.attachments);
     } finally {
@@ -1236,7 +1319,7 @@ test.describe("MCP test case severity uses the vocabulary Test Case Detail can d
     const createdIds: string[] = [];
     let tokenId: string | undefined;
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP Severity token ${Date.now()}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -1259,7 +1342,7 @@ test.describe("MCP test case severity uses the vocabulary Test Case Detail can d
   test("create_testcase persists the exact severity given, in the response and in what Test Case Detail reads", async ({ request }) => {
     await withWriteToken(request, async (mcpApi, token, createdIds) => {
       for (const severity of ["Critical", "High", "Medium", "Low"]) {
-        const created = await callMcpTool(mcpApi, token, "create_testcase", { title: `E2E MCP Severity ${severity} ${Date.now()}`, severity });
+        const created = await publishReviewedCaseChange(request, mcpApi, token, "create_testcase", { title: `E2E MCP Severity ${severity} ${Date.now()}`, severity });
         createdIds.push(created.id);
         expect(created.severity).toBe(severity);
         expect((await fetchCase(request, created.id)).severity).toBe(severity);
@@ -1269,7 +1352,7 @@ test.describe("MCP test case severity uses the vocabulary Test Case Detail can d
 
   test("create_testcase maps a differently-cased severity onto the canonical value", async ({ request }) => {
     await withWriteToken(request, async (mcpApi, token, createdIds) => {
-      const created = await callMcpTool(mcpApi, token, "create_testcase", { title: `E2E MCP Severity case ${Date.now()}`, severity: "  critical " });
+      const created = await publishReviewedCaseChange(request, mcpApi, token, "create_testcase", { title: `E2E MCP Severity case ${Date.now()}`, severity: "  critical " });
       createdIds.push(created.id);
       expect(created.severity).toBe("Critical");
       expect((await fetchCase(request, created.id)).severity).toBe("Critical");
@@ -1278,12 +1361,12 @@ test.describe("MCP test case severity uses the vocabulary Test Case Detail can d
 
   test("create_testcase without severity leaves it unset, as before", async ({ request }) => {
     await withWriteToken(request, async (mcpApi, token, createdIds) => {
-      const omitted = await callMcpTool(mcpApi, token, "create_testcase", { title: `E2E MCP Severity omitted ${Date.now()}` });
+      const omitted = await publishReviewedCaseChange(request, mcpApi, token, "create_testcase", { title: `E2E MCP Severity omitted ${Date.now()}` });
       createdIds.push(omitted.id);
       expect(omitted.severity).toBeNull();
       expect((await fetchCase(request, omitted.id)).severity).toBeFalsy();
 
-      const blank = await callMcpTool(mcpApi, token, "create_testcase", { title: `E2E MCP Severity blank ${Date.now()}`, severity: "" });
+      const blank = await publishReviewedCaseChange(request, mcpApi, token, "create_testcase", { title: `E2E MCP Severity blank ${Date.now()}`, severity: "" });
       createdIds.push(blank.id);
       expect(blank.severity).toBeNull();
     });
@@ -1294,7 +1377,7 @@ test.describe("MCP test case severity uses the vocabulary Test Case Detail can d
   test("create_testcase refuses a severity outside the vocabulary and creates nothing", async ({ request }) => {
     await withWriteToken(request, async (mcpApi, token) => {
       const title = `E2E MCP Severity invalid ${Date.now()}`;
-      const error = await callMcpToolExpectError(mcpApi, token, "create_testcase", { title, severity: "Major" });
+      const error = await expectRejectedCaseProposal(request, mcpApi, token, "create_testcase", { title, severity: "Major" });
       expect(error.message).toContain("severity");
       expect(error.message).toContain("Critical, High, Medium, Low");
       const list = await (await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: title } })).json();
@@ -1306,7 +1389,7 @@ test.describe("MCP test case severity uses the vocabulary Test Case Detail can d
     await withWriteToken(request, async (mcpApi, token, createdIds) => {
       const title = `E2E MCP Severity other fields ${Date.now()}`;
       const steps = [{ stepNumber: 1, action: "Open the post", expectedResult: "Post is editable" }];
-      const created = await callMcpTool(mcpApi, token, "create_testcase", {
+      const created = await publishReviewedCaseChange(request, mcpApi, token, "create_testcase", {
         title,
         description: "desc",
         preconditions: "pre",
@@ -1317,7 +1400,7 @@ test.describe("MCP test case severity uses the vocabulary Test Case Detail can d
         type: "Regression",
         automationStatus: "Automated",
         component: "Buzz",
-        status: "In Review",
+        status: "Draft",
       });
       createdIds.push(created.id);
       const fetched = await fetchCase(request, created.id);
@@ -1331,47 +1414,52 @@ test.describe("MCP test case severity uses the vocabulary Test Case Detail can d
         type: "Regression",
         automationStatus: "Automated",
         component: "Buzz",
-        status: "In Review",
+        status: "Draft",
       });
       expect(JSON.parse(fetched.steps)).toEqual(steps);
     });
   });
 
-  test("bulk_create_testcases applies the same rule per item without failing the rest of the batch", async ({ request }) => {
+  test("MCP-P07 a malformed severity refuses the whole proposal batch before valid drafts are separately reviewed", async ({ request }) => {
     await withWriteToken(request, async (mcpApi, token, createdIds) => {
       const stamp = Date.now();
-      const result = await callMcpTool(mcpApi, token, "bulk_create_testcases", {
-        testcases: [
-          { title: `E2E MCP Bulk Severity ok ${stamp}`, severity: "medium" },
-          { title: `E2E MCP Bulk Severity bad ${stamp}`, severity: "Blocker" },
-          { title: `E2E MCP Bulk Severity none ${stamp}` },
-        ],
+      const drafts = [
+        { title: `E2E MCP Bulk Severity ok ${stamp}`, severity: "medium" },
+        { title: `E2E MCP Bulk Severity bad ${stamp}`, severity: "Blocker" },
+        { title: `E2E MCP Bulk Severity none ${stamp}` }
+      ];
+      const denied = await callMcpToolExpectError(mcpApi, token, "bulk_create_testcases", { testcases: drafts });
+      expect(denied.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+      const invalid = await callMcpToolExpectError(mcpApi, token, "stage_testcase_changes", {
+        requestKey: `invalid-severity-${stamp}`, operations: drafts.map(draft => ({ opType: "create", draft }))
       });
-      for (const r of result.results) if (r.ok) createdIds.push(r.testcase.id);
-      expect(result).toMatchObject({ total: 3, succeeded: 2, failed: 1 });
-      const [ok, bad, none] = result.results;
-      expect(ok.ok).toBe(true);
-      expect((await fetchCase(request, ok.testcase.id)).severity).toBe("Medium");
-      expect(bad).toMatchObject({ index: 1, ok: false });
-      expect(bad.error).toContain("severity");
-      expect(none.ok).toBe(true);
-      expect((await fetchCase(request, none.testcase.id)).severity).toBeFalsy();
+      expect(invalid.message).toContain("severity");
+      for (const draft of drafts) {
+        const found = await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: draft.title } });
+        expect((await found.json()).filter((item: { title: string }) => item.title === draft.title)).toHaveLength(0);
+      }
+      const result = await publishReviewedOperations(request, mcpApi, token, "bulk_create_testcases", { testcases: [drafts[0], drafts[2]] },
+        [drafts[0], drafts[2]].map(draft => ({ opType: "create", draft })));
+      createdIds.push(...result.testcases.map((item: { id: string }) => item.id));
+      expect(result.savedCount).toBe(2);
+      expect((await fetchCase(request, result.testcases[0].id)).severity).toBe("Medium");
+      expect((await fetchCase(request, result.testcases[1].id)).severity).toBeFalsy();
     });
   });
 
   test("update_testcase sets a canonical severity, refuses an unknown one, and leaves it alone when omitted", async ({ request }) => {
     await withWriteToken(request, async (mcpApi, token, createdIds) => {
-      const created = await callMcpTool(mcpApi, token, "create_testcase", { title: `E2E MCP Severity update ${Date.now()}`, severity: "Low" });
+      const created = await publishReviewedCaseChange(request, mcpApi, token, "create_testcase", { title: `E2E MCP Severity update ${Date.now()}`, severity: "Low" });
       createdIds.push(created.id);
 
-      const updated = await callMcpTool(mcpApi, token, "update_testcase", { testcaseId: created.id, severity: "high" });
+      const updated = await publishReviewedCaseChange(request, mcpApi, token, "update_testcase", { testcaseId: created.id, severity: "high" });
       expect(updated.severity).toBe("High");
 
-      const error = await callMcpToolExpectError(mcpApi, token, "update_testcase", { testcaseId: created.id, severity: "Major" });
+      const error = await expectRejectedCaseProposal(request, mcpApi, token, "update_testcase", { testcaseId: created.id, severity: "Major" });
       expect(error.message).toContain("severity");
       expect((await fetchCase(request, created.id)).severity).toBe("High");
 
-      const untouched = await callMcpTool(mcpApi, token, "update_testcase", { testcaseId: created.id, component: "Buzz" });
+      const untouched = await publishReviewedCaseChange(request, mcpApi, token, "update_testcase", { testcaseId: created.id, component: "Buzz" });
       expect(untouched.severity).toBe("High");
       expect(untouched.component).toBe("Buzz");
     });
@@ -1415,7 +1503,7 @@ test.describe("MCP search_knowledge_base", () => {
       expect(docRes.ok()).toBeTruthy();
       documentId = (await docRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP KB token ${Date.now()}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -1451,7 +1539,7 @@ test.describe("MCP search_knowledge_base", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP KB validation token ${Date.now()}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -1499,7 +1587,7 @@ test.describe("MCP Knowledge Base write tools", () => {
       expect(treeRes.ok()).toBeTruthy();
       const rootFolderId = (await treeRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP KB write token ${stamp}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -1613,7 +1701,7 @@ test.describe("MCP Knowledge Base write tools", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP KB validation token ${Date.now()}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -1663,7 +1751,7 @@ test.describe("MCP Knowledge Base write tools", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP KB not-found token ${Date.now()}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -1724,7 +1812,7 @@ test.describe("MCP get_testcase", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP get_testcase token ${Date.now()}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -1768,7 +1856,7 @@ test.describe("MCP get_testcase", () => {
       expect(bCaseRes.ok()).toBeTruthy();
       bCaseId = (await bCaseRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP get_testcase validation token ${Date.now()}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -1806,7 +1894,7 @@ test.describe("MCP update_testcase", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP update token ${Date.now()}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -1815,7 +1903,7 @@ test.describe("MCP update_testcase", () => {
       const token = tokenBody.token as string;
 
       const newTitle = `E2E MCP Update Retitled ${Date.now()}`;
-      const updated = await callMcpTool(mcpApi, token, "update_testcase", {
+      const updated = await publishReviewedCaseChange(request, mcpApi, token, "update_testcase", {
         testcaseId: created.id,
         title: newTitle,
         priority: "High",
@@ -1863,7 +1951,7 @@ test.describe("MCP update_testcase", () => {
       expect(bCaseRes.ok()).toBeTruthy();
       bCaseId = (await bCaseRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP cross-project token ${Date.now()}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -1871,11 +1959,11 @@ test.describe("MCP update_testcase", () => {
       tokenId = tokenBody.id;
       const token = tokenBody.token as string;
 
-      const updateError = await callMcpToolExpectError(mcpApi, token, "update_testcase", {
+      const updateError = await expectRejectedCaseProposal(request, mcpApi, token, "update_testcase", {
         testcaseId: bCaseId,
         title: "Retitled by project A's token",
       });
-      expect(updateError.code).toBe(-32001); // RpcCode.ProjectScopeDenied
+      expect(updateError).toMatchObject({ code: -32003, data: { httpStatus: 404 } });
 
       // Untouched: still readable, under its original title, via account B's own session.
       const stillThere = await asB.get(`/api/projects/${ctxB.projectId}/testcases/${bCaseId}`);
@@ -1905,7 +1993,7 @@ test.describe("MCP update_testcase", () => {
     });
 
     try {
-      const writeTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const writeTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP update_testcase validation token ${Date.now()}`, scopes: ["write"] },
       });
       expect(writeTokenRes.ok()).toBeTruthy();
@@ -1913,14 +2001,14 @@ test.describe("MCP update_testcase", () => {
       writeTokenId = writeTokenBody.id;
       const writeToken = writeTokenBody.token as string;
 
-      expect((await callMcpToolExpectError(mcpApi, writeToken, "update_testcase", { title: "x" })).message).toMatch(
-        /"testcaseId"/i,
+      expect((await expectRejectedCaseProposal(request, mcpApi, writeToken, "update_testcase", { title: "x" })).message).toMatch(
+        /testcaseId/i,
       );
       expect(
-        (await callMcpToolExpectError(mcpApi, writeToken, "update_testcase", { testcaseId: ghostId, title: "x" })).message,
+        (await expectRejectedCaseProposal(request, mcpApi, writeToken, "update_testcase", { testcaseId: ghostId, title: "x" })).message,
       ).toMatch(/not found/i);
 
-      const readTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const readTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP update_testcase read-only token ${Date.now()}`, scopes: ["read"] },
       });
       expect(readTokenRes.ok()).toBeTruthy();
@@ -1928,7 +2016,7 @@ test.describe("MCP update_testcase", () => {
       readTokenId = readTokenBody.id;
       const readToken = readTokenBody.token as string;
 
-      const scopeError = await callMcpToolExpectError(mcpApi, readToken, "update_testcase", {
+      const scopeError = await expectRejectedCaseProposal(request, mcpApi, readToken, "update_testcase", {
         testcaseId: created.id,
         title: "Should be refused",
       });
@@ -1970,7 +2058,7 @@ test.describe("MCP archive_testcase and restore_testcase", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP archive token ${Date.now()}`, scopes: ["read", "write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -1978,7 +2066,7 @@ test.describe("MCP archive_testcase and restore_testcase", () => {
       tokenId = tokenBody.id;
       const token = tokenBody.token as string;
 
-      const archived = await callMcpTool(mcpApi, token, "archive_testcase", { testcaseId: created.id });
+      const archived = await publishReviewedCaseChange(request, mcpApi, token, "archive_testcase", { testcaseId: created.id });
       expect(archived.status).toBe("Archived");
       // Nothing else about the row changed — this is a status flip, not a rewrite.
       expect(archived.priority).toBe("High");
@@ -1991,7 +2079,7 @@ test.describe("MCP archive_testcase and restore_testcase", () => {
       const withArchived = await callMcpTool(mcpApi, token, "list_testcases", { search: title, includeArchived: true });
       expect(withArchived.rows.some((r: { id: string }) => r.id === created.id)).toBe(true);
 
-      const restored = await callMcpTool(mcpApi, token, "restore_testcase", { testcaseId: created.id });
+      const restored = await publishReviewedCaseChange(request, mcpApi, token, "restore_testcase", { testcaseId: created.id });
       // Matches the app's own Restore/Unarchive action: always back to "Draft", not whatever
       // status the case had before it was archived (there is no stored prior status).
       expect(restored.status).toBe("Draft");
@@ -2029,7 +2117,7 @@ test.describe("MCP archive_testcase and restore_testcase", () => {
       expect(bCaseRes.ok()).toBeTruthy();
       bCaseId = (await bCaseRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP archive cross-project token ${Date.now()}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -2037,10 +2125,10 @@ test.describe("MCP archive_testcase and restore_testcase", () => {
       tokenId = tokenBody.id;
       const token = tokenBody.token as string;
 
-      const archiveError = await callMcpToolExpectError(mcpApi, token, "archive_testcase", { testcaseId: bCaseId });
-      expect(archiveError.code).toBe(-32001); // RpcCode.ProjectScopeDenied
-      const restoreError = await callMcpToolExpectError(mcpApi, token, "restore_testcase", { testcaseId: bCaseId });
-      expect(restoreError.code).toBe(-32001);
+      const archiveError = await expectRejectedCaseProposal(request, mcpApi, token, "archive_testcase", { testcaseId: bCaseId });
+      expect(archiveError).toMatchObject({ code: -32003, data: { httpStatus: 404 } });
+      const restoreError = await expectRejectedCaseProposal(request, mcpApi, token, "restore_testcase", { testcaseId: bCaseId });
+      expect(restoreError).toMatchObject({ code: -32003, data: { httpStatus: 404 } });
 
       const stillThere = await (await asB.get(`/api/projects/${ctxB.projectId}/testcases/${bCaseId}`)).json();
       expect(stillThere.status).not.toBe("Archived");
@@ -2069,7 +2157,7 @@ test.describe("MCP archive_testcase and restore_testcase", () => {
     });
 
     try {
-      const writeTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const writeTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP archive validation token ${Date.now()}`, scopes: ["write"] },
       });
       expect(writeTokenRes.ok()).toBeTruthy();
@@ -2077,16 +2165,16 @@ test.describe("MCP archive_testcase and restore_testcase", () => {
       writeTokenId = writeTokenBody.id;
       const writeToken = writeTokenBody.token as string;
 
-      expect((await callMcpToolExpectError(mcpApi, writeToken, "archive_testcase", {})).message).toMatch(/"testcaseId"/i);
-      expect((await callMcpToolExpectError(mcpApi, writeToken, "restore_testcase", {})).message).toMatch(/"testcaseId"/i);
+      expect((await expectRejectedCaseProposal(request, mcpApi, writeToken, "archive_testcase", {})).message).toMatch(/testcaseId/i);
+      expect((await expectRejectedCaseProposal(request, mcpApi, writeToken, "restore_testcase", {})).message).toMatch(/testcaseId/i);
       expect(
-        (await callMcpToolExpectError(mcpApi, writeToken, "archive_testcase", { testcaseId: ghostId })).message,
+        (await expectRejectedCaseProposal(request, mcpApi, writeToken, "archive_testcase", { testcaseId: ghostId })).message,
       ).toMatch(/not found/i);
       expect(
-        (await callMcpToolExpectError(mcpApi, writeToken, "restore_testcase", { testcaseId: ghostId })).message,
+        (await expectRejectedCaseProposal(request, mcpApi, writeToken, "restore_testcase", { testcaseId: ghostId })).message,
       ).toMatch(/not found/i);
 
-      const readTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const readTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP archive read-only token ${Date.now()}`, scopes: ["read"] },
       });
       expect(readTokenRes.ok()).toBeTruthy();
@@ -2094,11 +2182,11 @@ test.describe("MCP archive_testcase and restore_testcase", () => {
       readTokenId = readTokenBody.id;
       const readToken = readTokenBody.token as string;
 
-      const archiveScopeError = await callMcpToolExpectError(mcpApi, readToken, "archive_testcase", {
+      const archiveScopeError = await expectRejectedCaseProposal(request, mcpApi, readToken, "archive_testcase", {
         testcaseId: created.id,
       });
       expect(archiveScopeError.code).toBe(-32002); // RpcCode.ScopeDenied
-      const restoreScopeError = await callMcpToolExpectError(mcpApi, readToken, "restore_testcase", {
+      const restoreScopeError = await expectRejectedCaseProposal(request, mcpApi, readToken, "restore_testcase", {
         testcaseId: created.id,
       });
       expect(restoreScopeError.code).toBe(-32002);
@@ -2158,7 +2246,7 @@ test.describe("MCP list_suites, get_suite, and update_suite", () => {
       expect(bSuiteRes.ok()).toBeTruthy();
       bSuiteId = (await bSuiteRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP list_suites token ${stamp}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -2208,7 +2296,7 @@ test.describe("MCP list_suites, get_suite, and update_suite", () => {
       const suite = await createSuiteRest(request, { name: `E2E MCP Get Suite ${stamp}`, parentId });
       suiteId = suite.id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP get/update_suite token ${stamp}`, scopes: ["read", "write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -2261,7 +2349,7 @@ test.describe("MCP list_suites, get_suite, and update_suite", () => {
       expect(bSuiteRes.ok()).toBeTruthy();
       bSuiteId = (await bSuiteRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP suite cross-project token ${Date.now()}`, scopes: ["read", "write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -2304,7 +2392,7 @@ test.describe("MCP list_suites, get_suite, and update_suite", () => {
     });
 
     try {
-      const writeTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const writeTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP suite validation token ${Date.now()}`, scopes: ["read", "write"] },
       });
       expect(writeTokenRes.ok()).toBeTruthy();
@@ -2321,7 +2409,7 @@ test.describe("MCP list_suites, get_suite, and update_suite", () => {
         (await callMcpToolExpectError(mcpApi, writeToken, "update_suite", { suiteId: ghostId, name: "x" })).message,
       ).toMatch(/not found/i);
 
-      const readTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const readTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP suite read-only token ${Date.now()}`, scopes: ["read"] },
       });
       expect(readTokenRes.ok()).toBeTruthy();
@@ -2381,7 +2469,7 @@ test.describe("MCP list_bugs, get_bug, and update_bug", () => {
       expect(bBugRes.ok()).toBeTruthy();
       bBugId = (await bBugRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP list/get_bug token ${stamp}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -2424,7 +2512,7 @@ test.describe("MCP list_bugs, get_bug, and update_bug", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP update_bug token ${stamp}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -2479,7 +2567,7 @@ test.describe("MCP list_bugs, get_bug, and update_bug", () => {
       expect(bBugRes.ok()).toBeTruthy();
       bBugId = (await bBugRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP bug cross-project token ${Date.now()}`, scopes: ["read", "write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -2520,7 +2608,7 @@ test.describe("MCP list_bugs, get_bug, and update_bug", () => {
     });
 
     try {
-      const writeTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const writeTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP bug validation token ${Date.now()}`, scopes: ["read", "write"] },
       });
       expect(writeTokenRes.ok()).toBeTruthy();
@@ -2539,7 +2627,7 @@ test.describe("MCP list_bugs, get_bug, and update_bug", () => {
         (await callMcpToolExpectError(mcpApi, writeToken, "update_bug", { bugId: ghostId, status: "Closed" })).message,
       ).toMatch(/not found/i);
 
-      const readTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const readTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP bug read-only token ${Date.now()}`, scopes: ["read"] },
       });
       expect(readTokenRes.ok()).toBeTruthy();
@@ -2608,7 +2696,7 @@ test.describe("MCP list_test_cycles and get_test_cycle", () => {
       expect(bCycleRes.ok()).toBeTruthy();
       bCycleId = (await bCycleRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP list/get_test_cycle token ${stamp}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -2648,7 +2736,7 @@ test.describe("MCP list_test_cycles and get_test_cycle", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP no-plan token ${Date.now()}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -2690,7 +2778,7 @@ test.describe("MCP list_test_cycles and get_test_cycle", () => {
       expect(bCycleRes.ok()).toBeTruthy();
       bCycleId = (await bCycleRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP cycle validation token ${Date.now()}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -2742,7 +2830,7 @@ test.describe("MCP list_executions, get_execution, and update_execution_result",
       executionId = executions[0]?.id;
       expect(executionId).toBeTruthy();
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP list/get_execution token ${stamp}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -2796,7 +2884,7 @@ test.describe("MCP list_executions, get_execution, and update_execution_result",
       otherExecutionId = (await getCycleExecutionsRest(request, otherCycle.id))[0]?.id;
       expect(otherExecutionId).toBeTruthy();
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP update_execution_result token ${stamp}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -2859,13 +2947,15 @@ test.describe("MCP list_executions, get_execution, and update_execution_result",
       });
       expect(bCaseRes.ok()).toBeTruthy();
       bTestcaseId = (await bCaseRes.json()).id;
-      await asB.post(`/api/cycles/${bCycleId}/testcases`, { data: { testcaseId: bTestcaseId } });
+      await approveTestcase(asB, ctxB.projectId, bTestcaseId!);
+      const attachedForeign = await asB.post(`/api/cycles/${bCycleId}/testcases`, { data: { testcaseId: bTestcaseId } });
+      expect(attachedForeign.ok(), await attachedForeign.text()).toBe(true);
       const bExecutionsRes = await asB.get(`/api/cycles/${bCycleId}/executions`);
       expect(bExecutionsRes.ok()).toBeTruthy();
       bExecutionId = (await bExecutionsRes.json())[0]?.id;
       expect(bExecutionId).toBeTruthy();
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP execution cross-project token ${Date.now()}`, scopes: ["read", "write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -2913,7 +3003,7 @@ test.describe("MCP list_executions, get_execution, and update_execution_result",
       executionId = (await getCycleExecutionsRest(request, cycle.id))[0]?.id;
       expect(executionId).toBeTruthy();
 
-      const writeTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const writeTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP execution validation token ${Date.now()}`, scopes: ["read", "write"] },
       });
       expect(writeTokenRes.ok()).toBeTruthy();
@@ -2940,7 +3030,7 @@ test.describe("MCP list_executions, get_execution, and update_execution_result",
         ).message,
       ).toMatch(/not found/i);
 
-      const readTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const readTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP execution read-only token ${Date.now()}`, scopes: ["read"] },
       });
       expect(readTokenRes.ok()).toBeTruthy();
@@ -2997,7 +3087,7 @@ test.describe("MCP link_testcase_to_bug, unlink_testcase_from_bug, and get_testc
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP link_testcase_to_bug token ${stamp}`, scopes: ["read", "write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -3085,7 +3175,7 @@ test.describe("MCP link_testcase_to_bug, unlink_testcase_from_bug, and get_testc
       expect(bBugRes.ok()).toBeTruthy();
       bBugId = (await bBugRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP link cross-project token ${Date.now()}`, scopes: ["read", "write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -3150,7 +3240,7 @@ test.describe("MCP link_testcase_to_bug, unlink_testcase_from_bug, and get_testc
     });
 
     try {
-      const writeTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const writeTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP link validation token ${Date.now()}`, scopes: ["read", "write"] },
       });
       expect(writeTokenRes.ok()).toBeTruthy();
@@ -3179,7 +3269,7 @@ test.describe("MCP link_testcase_to_bug, unlink_testcase_from_bug, and get_testc
       });
       expect(ghostCaseError.message).toMatch(/not found/i);
 
-      const readTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const readTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP link read-only token ${Date.now()}`, scopes: ["read"] },
       });
       expect(readTokenRes.ok()).toBeTruthy();
@@ -3222,7 +3312,7 @@ test.describe("MCP get_testcase_executions", () => {
       await addCycleTestCaseRest(request, cycleA.id, testcase.id);
       await addCycleTestCaseRest(request, cycleB.id, testcase.id);
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP get_testcase_executions token ${stamp}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -3268,7 +3358,7 @@ test.describe("MCP get_testcase_executions", () => {
       expect(bCaseRes.ok()).toBeTruthy();
       bCaseId = (await bCaseRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP get_testcase_executions validation token ${Date.now()}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -3298,7 +3388,20 @@ test.describe("MCP get_testcase_executions", () => {
 });
 
 test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_testcase", () => {
-  test("links, duplicate-links, and unlinks a Jira requirement without touching anything else on the test case", async ({
+  async function publishRequirementFields(
+    human: APIRequestContext, machine: APIRequestContext, token: string,
+    legacyTool: "link_requirement_to_testcase" | "unlink_requirement_from_testcase",
+    legacyArgs: Record<string, unknown>, fields: Record<string, unknown>,
+  ) {
+    const endpoint = `/api/projects/${ctx.projectId}/testcases/${legacyArgs.testcaseId}`;
+    const before = await (await human.get(endpoint)).json();
+    const denied = await callMcpToolExpectError(machine, token, legacyTool, legacyArgs);
+    expect(denied.data).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED", stagingAvailable: true });
+    expect((await (await human.get(endpoint)).json()).editRevision).toBe(before.editRevision);
+    return publishReviewedCaseChange(human, machine, token, "update_testcase", { testcaseId: legacyArgs.testcaseId, ...fields });
+  }
+
+  test("refuses cached Jira linking, then human selection links, re-links and unlinks only the requested fields", async ({
     request,
   }) => {
     const stamp = Date.now();
@@ -3310,7 +3413,7 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP link_requirement token ${stamp}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -3318,30 +3421,31 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
       tokenId = tokenBody.id;
       const token = tokenBody.token as string;
 
-      const linked = await callMcpTool(mcpApi, token, "link_requirement_to_testcase", {
+      const linked = await publishRequirementFields(request, mcpApi, token, "link_requirement_to_testcase", {
         testcaseId: testcase.id,
         jiraIssueKey: `E2E-${stamp}`,
         jiraUrl: `https://example.atlassian.net/browse/E2E-${stamp}`,
-      });
+      }, { jiraIssueKey: `E2E-${stamp}`, jiraUrl: `https://example.atlassian.net/browse/E2E-${stamp}` });
       expect(linked.jiraIssueKey).toBe(`E2E-${stamp}`);
       expect(linked.jiraUrl).toBe(`https://example.atlassian.net/browse/E2E-${stamp}`);
       expect(linked.priority).toBe("High");
 
       // Linking the same requirement again just re-sets the same value — no duplication is
       // possible since this is a plain column, not a join table.
-      const linkedAgain = await callMcpTool(mcpApi, token, "link_requirement_to_testcase", {
+      const linkedAgain = await publishRequirementFields(request, mcpApi, token, "link_requirement_to_testcase", {
         testcaseId: testcase.id,
         jiraIssueKey: `E2E-${stamp}`,
-      });
+      }, { jiraIssueKey: `E2E-${stamp}` });
       expect(linkedAgain.jiraIssueKey).toBe(`E2E-${stamp}`);
+      expect(linkedAgain.jiraUrl).toBe(`https://example.atlassian.net/browse/E2E-${stamp}`);
 
       const fetchedLinked = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${testcase.id}`)).json();
       expect(fetchedLinked.jiraIssueKey).toBe(`E2E-${stamp}`);
 
-      const unlinked = await callMcpTool(mcpApi, token, "unlink_requirement_from_testcase", {
+      const unlinked = await publishRequirementFields(request, mcpApi, token, "unlink_requirement_from_testcase", {
         testcaseId: testcase.id,
         provider: "jira",
-      });
+      }, { jiraIssueKey: null, jiraUrl: null });
       expect(unlinked.jiraIssueKey ?? null).toBeNull();
       expect(unlinked.jiraUrl ?? null).toBeNull();
       expect(unlinked.priority).toBe("High");
@@ -3350,10 +3454,10 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
       expect(fetchedUnlinked.jiraIssueKey ?? null).toBeNull();
 
       // Unlinking again is a graceful no-op, not an error.
-      const unlinkedAgain = await callMcpTool(mcpApi, token, "unlink_requirement_from_testcase", {
+      const unlinkedAgain = await publishRequirementFields(request, mcpApi, token, "unlink_requirement_from_testcase", {
         testcaseId: testcase.id,
         provider: "jira",
-      });
+      }, { jiraIssueKey: null, jiraUrl: null });
       expect(unlinkedAgain.jiraIssueKey ?? null).toBeNull();
     } finally {
       if (tokenId) {
@@ -3366,7 +3470,7 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
 
   // Notion links by PAGE ID (notionPageId/notionUrl), not by the short display key. Like the Jira and
   // Linear fields it is a plain testcases column, so no Notion connection or seeded page is needed.
-  test("links, re-links and unlinks a Notion page by id without touching the Jira link or anything else", async ({ request }) => {
+  test("refuses cached Notion linking, then human selection links and unlinks the page without changing Jira", async ({ request }) => {
     const stamp = Date.now();
     const pageId = crypto.randomUUID();
     const notionUrl = `https://www.notion.so/e2e-${pageId.replace(/-/g, "")}`;
@@ -3382,7 +3486,7 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP link_requirement notion token ${stamp}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -3390,22 +3494,23 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
       tokenId = tokenBody.id;
       const token = tokenBody.token as string;
 
-      const linked = await callMcpTool(mcpApi, token, "link_requirement_to_testcase", {
+      const linked = await publishRequirementFields(request, mcpApi, token, "link_requirement_to_testcase", {
         testcaseId: testcase.id,
         notionPageId: pageId,
         notionUrl,
-      });
+      }, { notionPageId: pageId, notionUrl });
       expect(linked.notionPageId).toBe(pageId);
       expect(linked.notionUrl).toBe(notionUrl);
       expect(linked.priority).toBe("High");
       expect(linked.jiraIssueKey).toBe(`E2E-${stamp}`);
 
       // Linking the same page again re-sets the same value; the url is optional on the second call.
-      const again = await callMcpTool(mcpApi, token, "link_requirement_to_testcase", {
+      const again = await publishRequirementFields(request, mcpApi, token, "link_requirement_to_testcase", {
         testcaseId: testcase.id,
         notionPageId: pageId,
-      });
+      }, { notionPageId: pageId });
       expect(again.notionPageId).toBe(pageId);
+      expect(again.notionUrl).toBe(notionUrl);
 
       const fetched = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${testcase.id}`)).json();
       expect(fetched.notionPageId).toBe(pageId);
@@ -3413,10 +3518,10 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
       const linkedPages = await (await request.get(`/api/projects/${ctx.projectId}/testcases/linked-notion-pages`)).json();
       expect(linkedPages.counts[pageId]).toBe(1);
 
-      const unlinked = await callMcpTool(mcpApi, token, "unlink_requirement_from_testcase", {
+      const unlinked = await publishRequirementFields(request, mcpApi, token, "unlink_requirement_from_testcase", {
         testcaseId: testcase.id,
         provider: "notion",
-      });
+      }, { notionPageId: null, notionUrl: null });
       expect(unlinked.notionPageId ?? null).toBeNull();
       expect(unlinked.notionUrl ?? null).toBeNull();
       // Only the Notion link went: the Jira link and the rest of the test case are untouched.
@@ -3427,10 +3532,10 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
       expect(fetchedUnlinked.notionPageId ?? null).toBeNull();
 
       // Unlinking again is a graceful no-op, not an error.
-      const unlinkedAgain = await callMcpTool(mcpApi, token, "unlink_requirement_from_testcase", {
+      const unlinkedAgain = await publishRequirementFields(request, mcpApi, token, "unlink_requirement_from_testcase", {
         testcaseId: testcase.id,
         provider: "notion",
-      });
+      }, { notionPageId: null, notionUrl: null });
       expect(unlinkedAgain.notionPageId ?? null).toBeNull();
     } finally {
       if (tokenId) {
@@ -3441,7 +3546,7 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
     }
   });
 
-  test("link_requirement_to_testcase accepts exactly one of jira, linear or notion, and names all three when none is given", async ({
+  test("cached link/unlink calls refuse before obsolete provider validation and leave every link unchanged", async ({
     request,
   }) => {
     const testcase = await createCase(request, { title: `E2E MCP Link Notion Validation ${Date.now()}` });
@@ -3452,7 +3557,7 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP link_requirement notion validation token ${Date.now()}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -3462,13 +3567,13 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
       const pageId = crypto.randomUUID();
 
       const neither = await callMcpToolExpectError(mcpApi, token, "link_requirement_to_testcase", { testcaseId: testcase.id });
-      expect(neither.message).toMatch(/notionPageId/);
-      // A whitespace-only page id is "not given", not a link to a blank page.
+      expect(neither.data).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
+      // A malformed old call cannot bypass the publication boundary by reaching its old parser.
       const blank = await callMcpToolExpectError(mcpApi, token, "link_requirement_to_testcase", {
         testcaseId: testcase.id,
         notionPageId: "   ",
       });
-      expect(blank.message).toMatch(/notionPageId/);
+      expect(blank.data).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
 
       for (const other of [{ jiraIssueKey: "PROJ-1" }, { linearIssueKey: "ENG-1" }]) {
         const both = await callMcpToolExpectError(mcpApi, token, "link_requirement_to_testcase", {
@@ -3476,7 +3581,7 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
           notionPageId: pageId,
           ...other,
         });
-        expect(both.message).toMatch(/only one of/i);
+        expect(both.data).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
       }
 
       // None of the refused calls linked anything.
@@ -3485,13 +3590,13 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
       expect(fetched.jiraIssueKey ?? null).toBeNull();
       expect(fetched.linearIssueKey ?? null).toBeNull();
 
-      // The unlink provider list now includes notion and still refuses anything else.
+      // Cached unlink is also refused before provider inspection.
       const bad = await callMcpToolExpectError(mcpApi, token, "unlink_requirement_from_testcase", {
         testcaseId: testcase.id,
         provider: "github",
       });
-      expect(bad.message).toMatch(/"provider" must be "jira" or "linear"/i);
-      expect(bad.message).toMatch(/notion/i);
+      expect(bad.data).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
+      expect((await (await request.get(`/api/projects/${ctx.projectId}/testcases/${testcase.id}`)).json()).editRevision).toBe(fetched.editRevision);
     } finally {
       if (tokenId) {
         await request.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
@@ -3501,7 +3606,7 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
     }
   });
 
-  test("rejects link_requirement_to_testcase with neither or both provider keys, and an invalid unlink provider", async ({
+  test("native requirement proposals validate fields and exact target revision, then preserve multiple provider links", async ({
     request,
   }) => {
     const testcase = await createCase(request, { title: `E2E MCP Link Requirement Validation ${Date.now()}` });
@@ -3512,7 +3617,7 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP link_requirement validation token ${Date.now()}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -3520,30 +3625,42 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
       tokenId = tokenBody.id;
       const token = tokenBody.token as string;
 
-      const neitherError = await callMcpToolExpectError(mcpApi, token, "link_requirement_to_testcase", {
-        testcaseId: testcase.id,
+      for (const [tool, args] of [
+        ["link_requirement_to_testcase", {}],
+        ["unlink_requirement_from_testcase", { testcaseId: testcase.id }],
+      ] as const) {
+        const denied = await callMcpToolExpectError(mcpApi, token, tool, args);
+        expect(denied.data).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
+      }
+      const current = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${testcase.id}`)).json();
+      const invalidFields = await expectRejectedCaseProposal(request, mcpApi, token, "update_testcase", {
+        testcaseId: testcase.id, provider: "github", jiraIssueKey: "PROJ-1",
       });
-      expect(neitherError.message).toMatch(/jiraIssueKey.*linearIssueKey|linearIssueKey.*jiraIssueKey/i);
-
-      const bothError = await callMcpToolExpectError(mcpApi, token, "link_requirement_to_testcase", {
-        testcaseId: testcase.id,
-        jiraIssueKey: "PROJ-1",
-        linearIssueKey: "ENG-1",
+      expect(invalidFields.message).toMatch(/native testcase field contract/i);
+      const missingId = await expectRejectedCaseProposal(request, mcpApi, token, "update_testcase", { jiraIssueKey: "PROJ-1" });
+      expect(missingId.message).toMatch(/testcaseId/i);
+      const missingRevision = await expectRejectedCaseProposal(request, mcpApi, token, "update_testcase", {
+        testcaseId: testcase.id, expectedRevision: null, jiraIssueKey: "PROJ-1",
       });
-      expect(bothError.message).toMatch(/only one of/i);
-
-      const badProviderError = await callMcpToolExpectError(mcpApi, token, "unlink_requirement_from_testcase", {
-        testcaseId: testcase.id,
-        provider: "github",
+      expect(missingRevision.message).toMatch(/expectedRevision/i);
+      const stale = await expectRejectedCaseProposal(request, mcpApi, token, "update_testcase", {
+        testcaseId: testcase.id, expectedRevision: "0".repeat(64), jiraIssueKey: "PROJ-1",
       });
-      expect(badProviderError.message).toMatch(/"provider" must be "jira" or "linear"/i);
-
-      expect((await callMcpToolExpectError(mcpApi, token, "link_requirement_to_testcase", {})).message).toMatch(
-        /"testcaseId"/i,
-      );
-      expect(
-        (await callMcpToolExpectError(mcpApi, token, "unlink_requirement_from_testcase", { testcaseId: testcase.id })).message,
-      ).toMatch(/"provider"/i);
+      expect(stale.code).toBe(-32003);
+      expect(stale.data).toMatchObject({ code: "PROPOSAL_TARGET_CONFLICT", httpStatus: 409 });
+      expect(stale.message).toMatch(/changed before this proposal was staged/i);
+      expect((await (await request.get(`/api/projects/${ctx.projectId}/testcases/${testcase.id}`)).json()).editRevision).toBe(current.editRevision);
+      // Native case fields can retain more than one provider; the old helper's one-provider input
+      // rule does not replace the existing native case contract during exact human review.
+      const linked = await publishReviewedCaseChange(request, mcpApi, token, "update_testcase", {
+        testcaseId: testcase.id, jiraIssueKey: "PROJ-1", jiraUrl: "https://example.atlassian.net/browse/PROJ-1",
+        linearIssueKey: "ENG-1", linearUrl: "https://linear.app/example/issue/ENG-1",
+      });
+      expect(linked).toMatchObject({ jiraIssueKey: "PROJ-1", linearIssueKey: "ENG-1" });
+      const unlinked = await publishRequirementFields(request, mcpApi, token, "unlink_requirement_from_testcase", {
+        testcaseId: testcase.id, provider: "linear",
+      }, { linearIssueKey: null, linearUrl: null });
+      expect(unlinked).toMatchObject({ jiraIssueKey: "PROJ-1", jiraUrl: "https://example.atlassian.net/browse/PROJ-1", linearIssueKey: null, linearUrl: null });
     } finally {
       if (tokenId) {
         await request.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
@@ -3553,7 +3670,7 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
     }
   });
 
-  test("rejects link/unlink_requirement_to_testcase for a test case belonging to another project, and for a read-scoped token", async ({
+  test("cached link writers stay refused and native proposals preserve foreign-project and read-scope boundaries", async ({
     request,
   }) => {
     const asB = await newRequestContext.newContext({
@@ -3575,8 +3692,10 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
       });
       expect(bCaseRes.ok()).toBeTruthy();
       bCaseId = (await bCaseRes.json()).id;
+      const bBefore = await (await asB.get(`/api/projects/${ctxB.projectId}/testcases/${bCaseId}`)).json();
+      const localBefore = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${localCase.id}`)).json();
 
-      const writeTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const writeTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP link_requirement cross-project token ${Date.now()}`, scopes: ["write"] },
       });
       expect(writeTokenRes.ok()).toBeTruthy();
@@ -3588,14 +3707,23 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
         testcaseId: bCaseId,
         jiraIssueKey: "PROJ-1",
       });
-      expect(linkError.code).toBe(-32001); // RpcCode.ProjectScopeDenied
+      expect(linkError.data).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
       const unlinkError = await callMcpToolExpectError(mcpApi, writeToken, "unlink_requirement_from_testcase", {
         testcaseId: bCaseId,
         provider: "jira",
       });
-      expect(unlinkError.code).toBe(-32001);
+      expect(unlinkError.data).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
+      for (const fields of [{ jiraIssueKey: "PROJ-1" }, { jiraIssueKey: null, jiraUrl: null }]) {
+        const foreignProposal = await callMcpToolExpectError(mcpApi, writeToken, "stage_testcase_changes", {
+          requestKey: crypto.randomUUID(), operations: [{ opType: "update", testcaseId: bCaseId, expectedRevision: bBefore.editRevision, fields }],
+        });
+        expect(foreignProposal.code).toBe(-32003);
+        expect(foreignProposal.data).toMatchObject({ httpStatus: 404 });
+        expect(foreignProposal.message).toMatch(/target not found in this project/i);
+      }
+      expect((await (await asB.get(`/api/projects/${ctxB.projectId}/testcases/${bCaseId}`)).json()).editRevision).toBe(bBefore.editRevision);
 
-      const readTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const readTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP link_requirement read-only token ${Date.now()}`, scopes: ["read"] },
       });
       expect(readTokenRes.ok()).toBeTruthy();
@@ -3608,6 +3736,12 @@ test.describe("MCP link_requirement_to_testcase and unlink_requirement_from_test
         jiraIssueKey: "PROJ-1",
       });
       expect(scopeError.code).toBe(-32002); // RpcCode.ScopeDenied
+      const proposalScopeError = await callMcpToolExpectError(mcpApi, readToken, "stage_testcase_changes", {
+        requestKey: crypto.randomUUID(), operations: [{ opType: "update", testcaseId: localCase.id, expectedRevision: localBefore.editRevision,
+          fields: { jiraIssueKey: "PROJ-1" } }],
+      });
+      expect(proposalScopeError.code).toBe(-32002);
+      expect((await (await request.get(`/api/projects/${ctx.projectId}/testcases/${localCase.id}`)).json()).editRevision).toBe(localBefore.editRevision);
     } finally {
       if (writeTokenId) {
         await request.delete(`/api/projects/${ctx.projectId}/apikeys/${writeTokenId}`, { failOnStatusCode: false });
@@ -3667,7 +3801,7 @@ test.describe("MCP list_knowledge_documents and get_knowledge_document", () => {
       expect(bDocRes.ok()).toBeTruthy();
       bDocumentId = (await bDocRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP list/get_knowledge_document token ${stamp}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -3722,7 +3856,7 @@ test.describe("MCP list_knowledge_documents and get_knowledge_document", () => {
       expect(bDocRes.ok()).toBeTruthy();
       bDocumentId = (await bDocRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP get_knowledge_document validation token ${Date.now()}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -3772,7 +3906,7 @@ test.describe("MCP list_knowledge_folders and get_knowledge_folder", () => {
       });
       folderId = folder.id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP list/get_knowledge_folder token ${stamp}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -3822,7 +3956,7 @@ test.describe("MCP list_knowledge_folders and get_knowledge_folder", () => {
       expect(bFolderRes.ok()).toBeTruthy();
       bFolderId = (await bFolderRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP get_knowledge_folder validation token ${Date.now()}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -3880,7 +4014,7 @@ test.describe("MCP archive_knowledge_document and restore_knowledge_document", (
       });
       documentId = doc.id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP archive_knowledge_document token ${stamp}`, scopes: ["read", "write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -3954,7 +4088,7 @@ test.describe("MCP archive_knowledge_document and restore_knowledge_document", (
       expect(bDocRes.ok()).toBeTruthy();
       bDocumentId = (await bDocRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP archive cross-project token ${Date.now()}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4000,7 +4134,7 @@ test.describe("MCP archive_knowledge_document and restore_knowledge_document", (
     });
 
     try {
-      const writeTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const writeTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP archive validation token ${Date.now()}`, scopes: ["write"] },
       });
       expect(writeTokenRes.ok()).toBeTruthy();
@@ -4015,7 +4149,7 @@ test.describe("MCP archive_knowledge_document and restore_knowledge_document", (
         /"documentId"/i,
       );
 
-      const readTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const readTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP archive read-only token ${Date.now()}`, scopes: ["read"] },
       });
       expect(readTokenRes.ok()).toBeTruthy();
@@ -4054,14 +4188,13 @@ test.describe("MCP archive_knowledge_document and restore_knowledge_document", (
  * bulk_update_testcases, bulk_archive_testcases, bulk_record_execution_results,
  * clone_test_suite, create_cycle_from_testcases, get_test_execution_summary.
  *
- * The four "bulk_*" tools deliberately give per-item results rather than an atomic all-or-nothing
- * outcome (unlike the app's own bulk-import path) — one bad item in a batch must never silently
- * affect, or block, the rest. Every test below that mixes a valid id with an invalid one asserts
- * both halves: the valid items actually persisted, and the invalid one is reported, not just
- * counted.
+ * Case publishers are cached-name refusals. Their replacements validate an unpublished batch
+ * atomically, and a human selects exact proposals to save. Raw execution reporting retains its
+ * existing per-item outcomes. These tests assert unchanged official cases on refusal and native
+ * persisted rows after an explicit review; they never emulate removed writer responses.
  */
 test.describe("MCP duplicate_testcase", () => {
-  test("creates a copy without modifying the original", async ({ request }) => {
+  test("MCP-P07 cached duplicate is refused and an explicitly reviewed draft copy preserves its source", async ({ request }) => {
     const stamp = Date.now();
     const suite = await createSuiteRest(request, { name: `E2E MCP Duplicate Suite ${stamp}` });
     const original = await createCase(request, {
@@ -4078,7 +4211,7 @@ test.describe("MCP duplicate_testcase", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP duplicate_testcase token ${stamp}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4086,8 +4219,14 @@ test.describe("MCP duplicate_testcase", () => {
       tokenId = tokenBody.id;
       const token = tokenBody.token as string;
 
-      const copy = await callMcpTool(mcpApi, token, "duplicate_testcase", { testcaseId: original.id });
+      const beforeOriginal = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${original.id}`)).json();
+      const saved = await publishReviewedOperations(request, mcpApi, token, "duplicate_testcase", { testcaseId: original.id }, [{
+        opType: "create", draft: { title: `${original.title} (copy)`, suiteId: suite.id, priority: "High", description: "Original description" }
+      }]);
+      const copy = saved.testcases[0];
       copyId = copy.id;
+      expect(testcaseEditState(await (await request.get(`/api/projects/${ctx.projectId}/testcases/${original.id}`)).json()))
+        .toEqual(testcaseEditState(beforeOriginal));
       expect(copyId).not.toBe(original.id);
       expect(copy.title).toBe(`${original.title} (copy)`);
       expect(copy.suiteId).toBe(suite.id);
@@ -4131,7 +4270,7 @@ test.describe("MCP duplicate_testcase", () => {
       expect(bCaseRes.ok()).toBeTruthy();
       bCaseId = (await bCaseRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP duplicate validation token ${Date.now()}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4140,9 +4279,18 @@ test.describe("MCP duplicate_testcase", () => {
       const token = tokenBody.token as string;
 
       const crossProjectError = await callMcpToolExpectError(mcpApi, token, "duplicate_testcase", { testcaseId: bCaseId });
-      expect(crossProjectError.code).toBe(-32001); // RpcCode.ProjectScopeDenied
+      expect(crossProjectError.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
       const notFoundError = await callMcpToolExpectError(mcpApi, token, "duplicate_testcase", { testcaseId: ghostId });
-      expect(notFoundError.message).toMatch(/not found/i);
+      expect(notFoundError.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+      expect(crossProjectError.message).toBe(notFoundError.message);
+      const stillThere = await asB.get(`/api/projects/${ctxB.projectId}/testcases/${bCaseId}`);
+      expect(stillThere.ok()).toBe(true);
+      expect((await stillThere.json()).title).toMatch(/^E2E MCP Duplicate Cross-Project/);
+      const forbiddenTarget = await callMcpToolExpectError(mcpApi, token, "stage_testcase_changes", {
+        requestKey: `foreign-copy-${Date.now()}`, operations: [{ opType: "update", testcaseId: bCaseId,
+          expectedRevision: "0".repeat(64), fields: { title: "Forbidden source mutation" } }]
+      });
+      expect(forbiddenTarget).toMatchObject({ code: -32003, data: { httpStatus: 404 } });
     } finally {
       if (tokenId) {
         await request.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
@@ -4155,7 +4303,7 @@ test.describe("MCP duplicate_testcase", () => {
 });
 
 test.describe("MCP bulk_create_testcases", () => {
-  test("creates every valid item and reports an invalid one separately, without blocking the batch", async ({
+  test("MCP-P07 invalid create batches publish nothing and valid proposals save after exact human review", async ({
     request,
   }) => {
     const stamp = Date.now();
@@ -4167,7 +4315,7 @@ test.describe("MCP bulk_create_testcases", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP bulk_create_testcases token ${stamp}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4175,20 +4323,25 @@ test.describe("MCP bulk_create_testcases", () => {
       tokenId = tokenBody.id;
       const token = tokenBody.token as string;
 
-      const result = await callMcpTool(mcpApi, token, "bulk_create_testcases", {
-        testcases: [
-          { title: `E2E MCP Bulk Create A ${stamp}`, priority: "High" },
-          { title: "" }, // invalid: empty title
-          { title: `E2E MCP Bulk Create B ${stamp}`, priority: "Low" },
-        ],
+      const drafts = [
+        { title: `E2E MCP Bulk Create A ${stamp}`, priority: "High" },
+        { title: "" },
+        { title: `E2E MCP Bulk Create B ${stamp}`, priority: "Low" }
+      ];
+      const refused = await callMcpToolExpectError(mcpApi, token, "bulk_create_testcases", { testcases: drafts });
+      expect(refused.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+      const invalid = await callMcpToolExpectError(mcpApi, token, "stage_testcase_changes", {
+        requestKey: `invalid-batch-${stamp}`, operations: drafts.map(draft => ({ opType: "create", draft }))
       });
-      expect(result.total).toBe(3);
-      expect(result.succeeded).toBe(2);
-      expect(result.failed).toBe(1);
-      expect(result.results[0].ok).toBe(true);
-      expect(result.results[1]).toEqual({ index: 1, ok: false, error: expect.stringMatching(/title/i) });
-      expect(result.results[2].ok).toBe(true);
-      createdIds = [result.results[0].testcase.id, result.results[2].testcase.id];
+      expect(invalid.message).toMatch(/title/i);
+      for (const draft of [drafts[0], drafts[2]]) {
+        const found = await request.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: draft.title } });
+        expect((await found.json()).filter((item: { title: string }) => item.title === draft.title)).toHaveLength(0);
+      }
+      const result = await publishReviewedOperations(request, mcpApi, token, "bulk_create_testcases", { testcases: [drafts[0], drafts[2]] },
+        [drafts[0], drafts[2]].map(draft => ({ opType: "create", draft })));
+      expect(result.savedCount).toBe(2);
+      createdIds = result.testcases.map((item: { id: string }) => item.id);
 
       const fetchedA = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${createdIds[0]}`)).json();
       expect(fetchedA.title).toBe(`E2E MCP Bulk Create A ${stamp}`);
@@ -4215,7 +4368,7 @@ test.describe("MCP bulk_create_testcases", () => {
     try {
       // Scope is checked before argument validation (mcp.service.ts callTool), so a read-scoped
       // token can never reach the empty-array check — it needs write scope to get there at all.
-      const writeTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const writeTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP bulk_create validation token ${Date.now()}`, scopes: ["write"] },
       });
       expect(writeTokenRes.ok()).toBeTruthy();
@@ -4224,9 +4377,13 @@ test.describe("MCP bulk_create_testcases", () => {
       const writeToken = writeTokenBody.token as string;
 
       const emptyError = await callMcpToolExpectError(mcpApi, writeToken, "bulk_create_testcases", { testcases: [] });
-      expect(emptyError.message).toMatch(/non-empty array/i);
+      expect(emptyError.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+      const emptyProposal = await callMcpToolExpectError(mcpApi, writeToken, "stage_testcase_changes", {
+        requestKey: `empty-batch-${Date.now()}`, operations: []
+      });
+      expect(emptyProposal.message).toMatch(/operations must contain/i);
 
-      const readTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const readTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP bulk_create read-only token ${Date.now()}`, scopes: ["read"] },
       });
       expect(readTokenRes.ok()).toBeTruthy();
@@ -4251,7 +4408,7 @@ test.describe("MCP bulk_create_testcases", () => {
 });
 
 test.describe("MCP bulk_update_testcases and bulk_archive_testcases", () => {
-  test("bulk_update_testcases updates only the requested cases, reports an invalid id, and is safe to repeat with duplicates", async ({
+  test("MCP-P07 update batch refusal preserves every case and reviewed valid targets change together", async ({
     request,
   }) => {
     const stamp = Date.now();
@@ -4266,7 +4423,7 @@ test.describe("MCP bulk_update_testcases and bulk_archive_testcases", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP bulk_update_testcases token ${stamp}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4274,19 +4431,23 @@ test.describe("MCP bulk_update_testcases and bulk_archive_testcases", () => {
       tokenId = tokenBody.id;
       const token = tokenBody.token as string;
 
-      // Deliberately duplicate tcA.id in the input.
-      const result = await callMcpTool(mcpApi, token, "bulk_update_testcases", {
-        testcaseIds: [tcA.id, tcA.id, tcB.id, ghostId],
-        priority: "High",
+      const refused = await callMcpToolExpectError(mcpApi, token, "bulk_update_testcases", {
+        testcaseIds: [tcA.id, tcA.id, tcB.id, ghostId], priority: "High"
       });
-      expect(result.total).toBe(3); // deduplicated before counting
-      expect(result.succeeded).toBe(2);
-      expect(result.failed).toBe(1);
-      expect(result.results.find((r: { id: string }) => r.id === ghostId)).toEqual({
-        id: ghostId,
-        ok: false,
-        error: "Test case not found in this project",
+      expect(refused.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+      const operations = await Promise.all([tcA.id, tcB.id].map(id => testcaseUpdateProposal(request, ctx.projectId, id, { priority: "High" })));
+      const invalid = await callMcpToolExpectError(mcpApi, token, "stage_testcase_changes", {
+        requestKey: `invalid-update-${stamp}`, operations: [...operations,
+          { opType: "update", testcaseId: ghostId, expectedRevision: "0".repeat(64), fields: { priority: "High" } }]
       });
+      expect(invalid).toMatchObject({ code: -32003, data: { httpStatus: 404 } });
+      for (const tc of [tcA, tcB, control]) {
+        const unchanged = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${tc.id}`)).json();
+        expect(unchanged.priority).toBe("Low");
+      }
+      const result = await publishReviewedOperations(request, mcpApi, token, "bulk_update_testcases",
+        { testcaseIds: [tcA.id, tcB.id], priority: "High" }, operations);
+      expect(result.savedCount).toBe(2);
 
       const fetchedA = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${tcA.id}`)).json();
       expect(fetchedA.priority).toBe("High");
@@ -4306,7 +4467,7 @@ test.describe("MCP bulk_update_testcases and bulk_archive_testcases", () => {
     }
   });
 
-  test("bulk_archive_testcases archives without deleting, leaving an invalid id reported and an unrelated case untouched", async ({
+  test("MCP-P07 archive batch refusal is atomic and reviewed archives preserve unrelated cases", async ({
     request,
   }) => {
     const stamp = Date.now();
@@ -4322,7 +4483,7 @@ test.describe("MCP bulk_update_testcases and bulk_archive_testcases", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP bulk_archive_testcases token ${stamp}`, scopes: ["read", "write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4330,9 +4491,20 @@ test.describe("MCP bulk_update_testcases and bulk_archive_testcases", () => {
       tokenId = tokenBody.id;
       const token = tokenBody.token as string;
 
-      const result = await callMcpTool(mcpApi, token, "bulk_archive_testcases", { testcaseIds: [tcA.id, tcB.id, ghostId] });
-      expect(result.succeeded).toBe(2);
-      expect(result.failed).toBe(1);
+      const refused = await callMcpToolExpectError(mcpApi, token, "bulk_archive_testcases", { testcaseIds: [tcA.id, tcB.id, ghostId] });
+      expect(refused.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+      const operations = await Promise.all([tcA.id, tcB.id].map(id => testcaseUpdateProposal(request, ctx.projectId, id, {}, "archive")));
+      const invalid = await callMcpToolExpectError(mcpApi, token, "stage_testcase_changes", {
+        requestKey: `invalid-archive-${stamp}`, operations: [...operations,
+          { opType: "archive", testcaseId: ghostId, expectedRevision: "0".repeat(64), fields: {} }]
+      });
+      expect(invalid).toMatchObject({ code: -32003, data: { httpStatus: 404 } });
+      for (const tc of [tcA, tcB, control]) {
+        expect((await (await request.get(`/api/projects/${ctx.projectId}/testcases/${tc.id}`)).json()).status).not.toBe("Archived");
+      }
+      const result = await publishReviewedOperations(request, mcpApi, token, "bulk_archive_testcases",
+        { testcaseIds: [tcA.id, tcB.id] }, operations);
+      expect(result.savedCount).toBe(2);
 
       // Archived, not deleted: still a 200 with status Archived, not a 404.
       const fetchedA = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${tcA.id}`)).json();
@@ -4369,7 +4541,7 @@ test.describe("MCP bulk_update_testcases and bulk_archive_testcases", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP bulk read-only token ${Date.now()}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4387,16 +4559,23 @@ test.describe("MCP bulk_update_testcases and bulk_archive_testcases", () => {
 
       // Scope is checked before argument validation, so the empty-array message can only be
       // reached with a token that actually has write scope.
-      const writeTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const writeTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP bulk empty-array token ${Date.now()}`, scopes: ["write"] },
       });
       expect(writeTokenRes.ok()).toBeTruthy();
       const writeTokenBody = await writeTokenRes.json();
       writeTokenId = writeTokenBody.id;
       const writeToken = writeTokenBody.token as string;
-      expect(
-        (await callMcpToolExpectError(mcpApi, writeToken, "bulk_update_testcases", { testcaseIds: [] })).message,
-      ).toMatch(/non-empty array/i);
+      const emptyLegacy = await callMcpToolExpectError(mcpApi, writeToken, "bulk_update_testcases", { testcaseIds: [] });
+      expect(emptyLegacy.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+      const emptyProposal = await callMcpToolExpectError(mcpApi, writeToken, "stage_testcase_changes", {
+        requestKey: `empty-update-${Date.now()}`, operations: []
+      });
+      expect(emptyProposal.message).toMatch(/operations must contain/i);
+      const readProposal = await callMcpToolExpectError(mcpApi, token, "stage_testcase_changes", {
+        requestKey: `read-cannot-stage-${Date.now()}`, operations: []
+      });
+      expect(readProposal.code).toBe(-32002);
 
       const fetched = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${tc.id}`)).json();
       expect(fetched.status).not.toBe("Archived");
@@ -4443,7 +4622,7 @@ test.describe("MCP bulk_record_execution_results", () => {
       const otherExecutionId = (await getCycleExecutionsRest(request, otherCycle.id))[0]?.id;
       expect(otherExecutionId).toBeTruthy();
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP bulk_record_execution_results token ${stamp}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4515,11 +4694,13 @@ test.describe("MCP bulk_record_execution_results", () => {
       });
       expect(bCaseRes.ok()).toBeTruthy();
       bTestcaseId = (await bCaseRes.json()).id;
-      await asB.post(`/api/cycles/${bCycleId}/testcases`, { data: { testcaseId: bTestcaseId } });
+      await approveTestcase(asB, ctxB.projectId, bTestcaseId!);
+      const attachedForeign = await asB.post(`/api/cycles/${bCycleId}/testcases`, { data: { testcaseId: bTestcaseId } });
+      expect(attachedForeign.ok(), await attachedForeign.text()).toBe(true);
       const bExecution = (await (await asB.get(`/api/cycles/${bCycleId}/executions`)).json())[0];
       expect(bExecution?.id).toBeTruthy();
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP bulk_record cross-project token ${Date.now()}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4554,7 +4735,7 @@ test.describe("MCP bulk_record_execution_results", () => {
 });
 
 test.describe("MCP clone_test_suite", () => {
-  test("deep-clones a suite's sub-suite and test cases, leaving the original subtree untouched", async ({ request }) => {
+  test("MCP-P07 cached deep clone is refused and explicit suites plus reviewed case copies preserve their source", async ({ request }) => {
     const stamp = Date.now();
     const sourceParent = await createSuiteRest(request, { name: `E2E MCP Clone Source ${stamp}` });
     const sourceChild = await createSuiteRest(request, { name: `E2E MCP Clone Source Child ${stamp}`, parentId: sourceParent.id });
@@ -4570,7 +4751,7 @@ test.describe("MCP clone_test_suite", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP clone_test_suite token ${stamp}`, scopes: ["read", "write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4578,12 +4759,22 @@ test.describe("MCP clone_test_suite", () => {
       tokenId = tokenBody.id;
       const token = tokenBody.token as string;
 
-      const result = await callMcpTool(mcpApi, token, "clone_test_suite", { suiteId: sourceParent.id });
-      clonedParentId = result.clonedSuiteId;
+      const beforeSuites = await callMcpTool(mcpApi, token, "list_suites", {});
+      const refused = await callMcpToolExpectError(mcpApi, token, "clone_test_suite", { suiteId: sourceParent.id });
+      expect(refused.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+      expect(await callMcpTool(mcpApi, token, "list_suites", {})).toEqual(beforeSuites);
+      // Suite-only creation is still available. Official copied cases appear only after human Save.
+      const parent = await callMcpTool(mcpApi, token, "create_suite", { name: `${sourceParent.name} (copy)` });
+      clonedParentId = parent.id;
+      const child = await callMcpTool(mcpApi, token, "create_suite", { name: sourceChild.name, parentId: clonedParentId });
+      clonedChildId = child.id;
+      const saved = await stageAndApplyMcpTestcases(request, mcpApi, token, ctx.projectId, [
+        { opType: "create", draft: { title: `${caseInParent.title} (copy)`, suiteId: clonedParentId } },
+        { opType: "create", draft: { title: `${caseInChild.title} (copy)`, suiteId: clonedChildId } }
+      ]);
       expect(clonedParentId).not.toBe(sourceParent.id);
-      expect(result.suiteCount).toBe(2);
-      expect(result.testcaseCount).toBe(2);
-      clonedCaseIds = result.testcases.map((t: { clonedId: string }) => t.clonedId);
+      expect(saved.published.savedCount).toBe(2);
+      clonedCaseIds = saved.published.testcases.map((item: { id: string }) => item.id);
 
       const clonedTree = await callMcpTool(mcpApi, token, "list_suites", {});
       const clonedParentRow = clonedTree.suites.find((s: { id: string }) => s.id === clonedParentId);
@@ -4643,7 +4834,7 @@ test.describe("MCP clone_test_suite", () => {
       expect(bSuiteRes.ok()).toBeTruthy();
       bSuiteId = (await bSuiteRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP clone validation token ${Date.now()}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4652,9 +4843,17 @@ test.describe("MCP clone_test_suite", () => {
       const token = tokenBody.token as string;
 
       const crossProjectError = await callMcpToolExpectError(mcpApi, token, "clone_test_suite", { suiteId: bSuiteId });
-      expect(crossProjectError.code).toBe(-32001); // RpcCode.ProjectScopeDenied
+      expect(crossProjectError.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
       const notFoundError = await callMcpToolExpectError(mcpApi, token, "clone_test_suite", { suiteId: ghostId });
-      expect(notFoundError.message).toMatch(/not found/i);
+      expect(notFoundError.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+      expect(crossProjectError.message).toBe(notFoundError.message);
+      for (const suiteId of [bSuiteId, ghostId]) {
+        const forbiddenSuite = await callMcpToolExpectError(mcpApi, token, "stage_testcase_changes", {
+          requestKey: `foreign-suite-${suiteId}-${Date.now()}`, operations: [{ opType: "create", draft: { title: "Forbidden suite copy", suiteId } }]
+        });
+        expect(forbiddenSuite).toMatchObject({ code: -32003, data: { httpStatus: 400 } });
+        expect(forbiddenSuite.message).toMatch(/suiteId.*this project/);
+      }
     } finally {
       if (tokenId) {
         await request.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
@@ -4675,8 +4874,8 @@ test.describe("MCP create_cycle_from_testcases", () => {
       baseURL: env.apiBaseUrl,
       storageState: path.join(__dirname, "../.auth/state-b.json"),
     });
-    const tcA = await createCase(request, { title: `E2E MCP Cycle From Cases A ${stamp}`, status: "Approved" });
-    const tcB = await createCase(request, { title: `E2E MCP Cycle From Cases B ${stamp}`, status: "Approved" });
+    const tcA = await createApprovedTestcase(request, ctx.projectId, { title: `E2E MCP Cycle From Cases A ${stamp}` });
+    const tcB = await createApprovedTestcase(request, ctx.projectId, { title: `E2E MCP Cycle From Cases B ${stamp}` });
     let tokenId: string | undefined;
     let cycleId: string | undefined;
     let bCaseId: string | undefined;
@@ -4692,7 +4891,7 @@ test.describe("MCP create_cycle_from_testcases", () => {
       expect(bCaseRes.ok()).toBeTruthy();
       bCaseId = (await bCaseRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP create_cycle_from_testcases token ${stamp}`, scopes: ["write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4738,7 +4937,7 @@ test.describe("MCP create_cycle_from_testcases", () => {
     try {
       // Scope is checked before argument validation, so the "name"/"non-empty array" messages
       // can only be reached with a token that actually has write scope.
-      const writeTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const writeTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP cycle-from-cases validation token ${Date.now()}`, scopes: ["write"] },
       });
       expect(writeTokenRes.ok()).toBeTruthy();
@@ -4754,7 +4953,7 @@ test.describe("MCP create_cycle_from_testcases", () => {
         (await callMcpToolExpectError(mcpApi, writeToken, "create_cycle_from_testcases", { name: "Run" })).message,
       ).toMatch(/non-empty array/i);
 
-      const readTokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const readTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP cycle-from-cases read-only token ${Date.now()}`, scopes: ["read"] },
       });
       expect(readTokenRes.ok()).toBeTruthy();
@@ -4801,7 +5000,7 @@ test.describe("MCP get_test_execution_summary", () => {
       await request.patch(`/api/cycles/${cycle.id}/executions/${execA.id}`, { data: { status: "Passed" } });
       await request.patch(`/api/cycles/${cycle.id}/executions/${execB.id}`, { data: { status: "Failed" } });
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP get_test_execution_summary token ${stamp}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4842,7 +5041,7 @@ test.describe("MCP get_test_execution_summary", () => {
     });
 
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP execution summary empty token ${Date.now()}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4883,7 +5082,7 @@ test.describe("MCP get_test_execution_summary", () => {
       expect(bCycleRes.ok()).toBeTruthy();
       bCycleId = (await bCycleRes.json()).id;
 
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP execution summary validation token ${Date.now()}`, scopes: ["read"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4907,7 +5106,7 @@ test.describe("MCP get_test_execution_summary", () => {
 });
 
 test.describe("MCP suite description and preconditions", () => {
-  test("create_suite, get_suite, list_suites, update_suite and clone_test_suite carry the text", async ({ request }) => {
+  test("suite text persists across native creation and edits while cached cloning is refused", async ({ request }) => {
     const stamp = Date.now();
     let tokenId: string | undefined;
     const suiteIds: string[] = [];
@@ -4916,7 +5115,7 @@ test.describe("MCP suite description and preconditions", () => {
       storageState: { cookies: [], origins: [] },
     });
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP suite text token ${stamp}`, scopes: ["read", "write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4946,18 +5145,27 @@ test.describe("MCP suite description and preconditions", () => {
       const edited = await callMcpTool(mcpApi, token, "update_suite", { suiteId: created.id, description: "Edited", preconditions: "Back again" });
       expect([edited.description, edited.preconditions]).toEqual(["Edited", "Back again"]);
 
-      // A child suite and a deep clone: the clone and its sub-suite keep their own text.
+      // A child suite retains its own text; cached deep cloning cannot publish cases.
       const child = await callMcpTool(mcpApi, token, "create_suite", {
         name: `E2E MCP Suite Child ${stamp}`,
         parentId: created.id,
         description: "Child text",
       });
       suiteIds.push(child.id);
-      const cloned = await callMcpTool(mcpApi, token, "clone_test_suite", { suiteId: created.id, name: `E2E MCP Suite Clone ${stamp}` });
-      for (const s of cloned.suites) suiteIds.push(s.id);
-      const byName = new Map<string, { description: string; preconditions: string }>(cloned.suites.map((s: { name: string }) => [s.name, s]));
-      expect(byName.get(`E2E MCP Suite Clone ${stamp}`)).toMatchObject({ description: "Edited", preconditions: "Back again" });
-      expect(byName.get(`E2E MCP Suite Child ${stamp}`)).toMatchObject({ description: "Child text", preconditions: "" });
+      const beforeClone = await callMcpTool(mcpApi, token, "list_suites", {});
+      const denied = await callMcpToolExpectError(mcpApi, token, "clone_test_suite", { suiteId: created.id, name: `E2E MCP Suite Clone ${stamp}` });
+      expect(denied.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+      expect(await callMcpTool(mcpApi, token, "list_suites", {})).toEqual(beforeClone);
+      const copiedParent = await callMcpTool(mcpApi, token, "create_suite", {
+        name: `E2E MCP Suite Clone ${stamp}`, description: edited.description, preconditions: edited.preconditions
+      });
+      suiteIds.push(copiedParent.id);
+      const copiedChild = await callMcpTool(mcpApi, token, "create_suite", {
+        name: child.name, parentId: copiedParent.id, description: child.description, preconditions: child.preconditions
+      });
+      suiteIds.push(copiedChild.id);
+      expect(copiedParent).toMatchObject({ description: "Edited", preconditions: "Back again" });
+      expect(copiedChild).toMatchObject({ description: "Child text", preconditions: "", parentId: copiedParent.id });
 
       // Over the limit is refused as a tool error, and nothing is written.
       const tooLong = await callMcpToolExpectError(mcpApi, token, "update_suite", { suiteId: created.id, description: "x".repeat(20001) });
@@ -4981,7 +5189,7 @@ test.describe("MCP test case ID", () => {
       storageState: { cookies: [], origins: [] },
     });
     try {
-      const tokenRes = await request.post(`/api/projects/${ctx.projectId}/apikeys`, {
+      const tokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP case id token ${stamp}`, scopes: ["read", "write"] },
       });
       expect(tokenRes.ok()).toBeTruthy();
@@ -4993,18 +5201,34 @@ test.describe("MCP test case ID", () => {
       const b = await createCase(request, { title: `E2E MCP ID B ${stamp}` });
       caseIds.push(a.id, b.id);
 
-      const renamed = await callMcpTool(mcpApi, token, "update_testcase", { testcaseId: a.id, externalId: `Z${stamp}-TC-3` });
+      const renamed = await publishReviewedCaseChange(request, mcpApi, token, "update_testcase", { testcaseId: a.id, externalId: `Z${stamp}-TC-3` });
       expect(renamed.externalId).toBe(`Z${stamp}-TC-3`);
       expect((await callMcpTool(mcpApi, token, "get_testcase", { testcaseId: a.id })).externalId).toBe(`Z${stamp}-TC-3`);
 
-      const taken = await callMcpToolExpectError(mcpApi, token, "update_testcase", { testcaseId: b.id, externalId: `Z${stamp}-TC-3` });
-      expect(taken.message).toMatch(/already used/i);
-      const blank = await callMcpToolExpectError(mcpApi, token, "update_testcase", { testcaseId: b.id, externalId: "  " });
-      expect(blank.message).toMatch(/non-empty|spaces/i);
-      expect((await callMcpTool(mcpApi, token, "get_testcase", { testcaseId: b.id })).externalId).toBe(b.externalId);
+      for (const [externalId, expectedStatus, message] of [
+        [`Z${stamp}-TC-3`, 409, /already used/i], ["  ", 400, /non-empty|spaces/i]
+      ] as const) {
+        const before = await callMcpTool(mcpApi, token, "get_testcase", { testcaseId: b.id });
+        const denied = await callMcpToolExpectError(mcpApi, token, "update_testcase", { testcaseId: b.id, externalId });
+        expect(denied.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+        const staged = await callMcpTool(mcpApi, token, "stage_testcase_changes", {
+          requestKey: `invalid-id-${expectedStatus}-${stamp}`, operations: [{ opType: "update", testcaseId: b.id,
+            expectedRevision: before.editRevision, fields: { externalId } }]
+        });
+        expect(staged.publication).toBe("unpublished");
+        const taskUrl = `/api/projects/${ctx.projectId}/agents/zyra/tasks/${staged.taskId}`;
+        const reviewed = await request.get(taskUrl);
+        expect(reviewed.ok(), await reviewed.text()).toBe(true);
+        const revision = (await reviewed.json()).proposalRevision;
+        const refused = await request.post(`${taskUrl}/save`, { data: { expectedProposalRevision: revision, selectedDraftIndexes: [0] } });
+        expect(refused.status(), await refused.text()).toBe(expectedStatus);
+        expect(JSON.stringify(await refused.json())).toMatch(message);
+        expect(testcaseEditState(await callMcpTool(mcpApi, token, "get_testcase", { testcaseId: b.id })))
+          .toEqual(testcaseEditState(before));
+      }
 
       // Omitting it leaves it alone.
-      const kept = await callMcpTool(mcpApi, token, "update_testcase", { testcaseId: a.id, title: `E2E MCP ID A ${stamp} edited` });
+      const kept = await publishReviewedCaseChange(request, mcpApi, token, "update_testcase", { testcaseId: a.id, title: `E2E MCP ID A ${stamp} edited` });
       expect(kept.externalId).toBe(`Z${stamp}-TC-3`);
     } finally {
       for (const id of caseIds) await deleteCase(request, id);
@@ -5012,4 +5236,124 @@ test.describe("MCP test case ID", () => {
       await mcpApi.dispose();
     }
   });
+});
+
+
+test("MCP-P18 project consent, named credentials and revocation cover both aliases and cached sessions", async () => {
+  const tenant = await provisionRbacTenant("mcp-lifecycle");
+  expect(tenant, "MCP-P18 requires the authorized disposable database fixture").not.toBeNull();
+  const owner = await loginAs(tenant!.owner);
+  const qa = await loginAs(tenant!.qa);
+  const machine = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
+  let projectId: string | undefined;
+  const credentials: Array<{ id: string; token: string }> = [];
+  let foreignTokenId: string | undefined;
+  try {
+    const stamp = Date.now().toString().slice(-9);
+    const created = await owner.post("/api/projects", { data: { name: `E2E MCP consent ${stamp}`, key: `MCP${stamp}` } });
+    expect(created.ok(), await created.text()).toBeTruthy();
+    projectId = (await created.json()).id;
+    const endpoint = `/api/projects/${projectId}/mcp-access`;
+    const read = async () => {
+      const response = await owner.get(endpoint);
+      expect(response.ok(), await response.text()).toBeTruthy();
+      return response.json();
+    };
+    const initial = await read();
+    expect(initial).toEqual({ enabled: false, revision: 0, clients: [] });
+    const issued = await owner.post(`/api/projects/${projectId}/apikeys`, { data: { name: "Approved test executor", scopes: ["read", "write"] } });
+    expect(issued.ok(), await issued.text()).toBeTruthy();
+    const token = await issued.json(); credentials.push(token);
+    const other = await owner.post(`/api/projects/${projectId}/apikeys`, { data: { name: "Unapproved test executor", scopes: ["read", "write"] } });
+    expect(other.ok(), await other.text()).toBeTruthy();
+    const unapproved = await other.json(); credentials.push(unapproved);
+    const aliases = ["/api/mcp", `/api/projects/${projectId}/mcp`];
+    const rpc = async (route: string, method: string, credential = token.token, session?: string, params: Record<string, unknown> = {}) => {
+      const response = await machine.post(route, {
+        headers: { Authorization: `Bearer ${credential}`, ...(session ? { "Mcp-Session-Id": session } : {}) },
+        data: { jsonrpc: "2.0", ...(method.startsWith("notifications/") ? {} : { id: 41 }), method, params }
+      });
+      return { response, body: response.status() === 202 ? null : await response.json() };
+    };
+    for (const route of aliases) {
+      for (const method of ["initialize", "tools/list", "ping", "tools/call", "notifications/initialized"]) {
+        const denied = await rpc(route, method, token.token, "old.cached.session", { name: "list_projects" });
+        expect(denied.body.error.code).toBe(-32001);
+        expect(denied.body.result).toBeUndefined();
+      }
+    }
+    // Ordinary native use remains possible while MCP is off.
+    expect((await owner.get(`/api/projects/${projectId}`)).ok()).toBeTruthy();
+    expect((await qa.get(endpoint)).status()).toBe(404); // not a member of this new project
+    const machineGrant = await machine.put(endpoint, { headers: { Authorization: `Bearer ${token.token}` }, data: { ...initial, enabled: true } });
+    expect(machineGrant.status()).toBe(403);
+    expect(await read()).toEqual(initial);
+    const grant = { tokenId: token.id, clientName: "QA executor", scopes: ["read", "write"], allowedTools: ["list_projects", "create_suite"], expiresAt: null };
+    for (const bad of [
+      { ...initial, enabled: "true" },
+      { ...initial, revision: -1 },
+      { ...initial, clients: [{ ...grant, clientName: " " }] },
+      { ...initial, clients: [{ ...grant, scopes: ["admin"] }] },
+      { ...initial, clients: [{ ...grant, allowedTools: ["unknown_tool"] }] },
+      { ...initial, clients: [grant, grant] }
+    ]) {
+      expect((await owner.put(endpoint, { data: bad })).status()).toBe(400);
+      expect(await read()).toEqual(initial);
+    }
+    const foreign = await owner.post(`/api/projects/${tenant!.secondProjectId}/apikeys`, { data: { name: "Foreign MCP credential", scopes: ["read"] } });
+    expect(foreign.ok(), await foreign.text()).toBeTruthy();
+    foreignTokenId = (await foreign.json()).id;
+    expect((await owner.put(endpoint, { data: { ...initial, enabled: true, clients: [{ ...grant, tokenId: foreignTokenId, scopes: ["read"] }] } })).status()).toBe(400);
+    expect(await read()).toEqual(initial);
+    const enabledResponse = await owner.put(endpoint, { data: { ...initial, enabled: true, clients: [grant] } });
+    expect(enabledResponse.ok(), await enabledResponse.text()).toBeTruthy();
+    let current = await enabledResponse.json();
+    expect(current.revision).toBe(1);
+    // Stale administration cannot silently overwrite a more recent human decision.
+    expect((await owner.put(endpoint, { data: { ...initial, enabled: false } })).status()).toBe(409);
+    expect(await read()).toEqual(current);
+    // Generic whole-project settings writes cannot enable, delete or restore this reserved field.
+    const generic = await owner.patch(`/api/projects/${projectId}`, { data: { settings: { testcaseIdPrefix: "MCP", externalMcpAccess: { ...initial, enabled: false } } } });
+    expect(generic.ok(), await generic.text()).toBeTruthy();
+    expect(await read()).toEqual(current);
+    const initialized = await rpc(aliases[0], "initialize");
+    expect(initialized.body.result.serverInfo.name).toBe("tesbo-mcp");
+    const session = initialized.response.headers()["mcp-session-id"];
+    expect(session).toBeTruthy();
+    for (const route of aliases) {
+      const list = await rpc(route, "tools/list", token.token, session);
+      expect(list.body.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["create_suite", "list_projects"]);
+      const denied = await rpc(route, "tools/list", unapproved.token, undefined, { clientInfo: { name: "QA executor" } });
+      expect(denied.body.error.code).toBe(-32001); // claimed app name is never authorization
+      const hiddenTool = await rpc(route, "tools/call", token.token, session, { name: "list_testcases", arguments: {} });
+      expect(hiddenTool.body.error.code).toBe(-32002);
+    }
+    const made = await rpc(aliases[0], "tools/call", token.token, session, { name: "create_suite", arguments: { name: "MCP consent permitted suite" } });
+    expect(made.body.error).toBeUndefined();
+    const suite = JSON.parse(made.body.result.content[0].text);
+    expect((await owner.delete(`/api/suites/${suite.id}`)).ok()).toBeTruthy();
+    const disabled = await owner.put(endpoint, { data: { ...current, enabled: false } });
+    expect(disabled.ok(), await disabled.text()).toBeTruthy(); current = await disabled.json();
+    for (const route of aliases) {
+      for (const method of ["tools/list", "tools/call", "notifications/initialized"]) {
+        const denied = await rpc(route, method, token.token, session, { name: "create_suite", arguments: { name: "MCP must never write" } });
+        expect(denied.body.error.code).toBe(-32001);
+      }
+    }
+    expect(Number(scalar(`SELECT COUNT(*) FROM suites WHERE project_id=${literal(projectId!)} AND name='MCP must never write';`))).toBe(0);
+    const expired = await owner.put(endpoint, { data: { ...current, enabled: true, clients: [{ ...grant, expiresAt: "2000-01-01T00:00:00.000Z" }] } });
+    expect(expired.ok(), await expired.text()).toBeTruthy(); current = await expired.json();
+    expect((await rpc(aliases[0], "tools/list", token.token, session)).body.error.code).toBe(-32001);
+    const revoked = await owner.put(endpoint, { data: { ...current, clients: [] } });
+    expect(revoked.ok(), await revoked.text()).toBeTruthy();
+    expect((await rpc(aliases[1], "tools/list", token.token, session)).body.error.code).toBe(-32001);
+    expect(Number(scalar(`SELECT COUNT(*) FROM audit_logs WHERE project_id=${literal(projectId!)} AND action='project_mcp_access_updated';`))).toBe(4);
+  } finally {
+    if (projectId) {
+      for (const token of credentials) await owner.delete(`/api/projects/${projectId}/apikeys/${token.id}`, { failOnStatusCode: false });
+      await owner.delete(`/api/projects/${projectId}`, { failOnStatusCode: false });
+    }
+    if (foreignTokenId) await owner.delete(`/api/projects/${tenant!.secondProjectId}/apikeys/${foreignTokenId}`, { failOnStatusCode: false });
+    await Promise.all([owner.dispose(), qa.dispose(), machine.dispose()]);
+  }
 });

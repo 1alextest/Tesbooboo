@@ -1,3 +1,4 @@
+import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import { expect, test, type APIRequestContext, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { literal, scalar } from "../utils/psql";
 import {
@@ -119,7 +120,7 @@ test.describe("test case repository (UI)", () => {
   }
 
   async function seedCase(title: string, extra: Record<string, unknown> = {}): Promise<string> {
-    const res = await api.post(`/api/projects/${tenant!.mainProjectId}/testcases`, {
+    const res = await createTestcaseFixtureResponse(api, `/api/projects/${tenant!.mainProjectId}/testcases`, {
       data: { title, ...extra },
     });
     expect(res.ok(), `seeding case ${title} — ${await res.text()}`).toBeTruthy();
@@ -546,7 +547,7 @@ test.describe("test case repository (UI)", () => {
    * COALESCEs an omitted one). TCR-12 fails against the old modal: the untouched fields come back
    * rewritten.
    */
-  test("TCR-12 a bulk edit changes only the field that was set, leaving the others alone", { tag: '@tesbo.testId("TES-TC-1083")' }, async ({
+  test("TCR-12 a bulk edit sends only the chosen field and invalidates the earlier approval", { tag: '@tesbo.testId("TES-TC-1083")' }, async ({
     browser,
   }) => {
     const title = stamp("BulkScoped");
@@ -580,12 +581,18 @@ test.describe("test case repository (UI)", () => {
 
     // Change Priority only, which is exactly what the reporter wanted to do.
     await prioritySelect.selectOption("P1");
+    const submitted = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith(`/api/projects/${tenant!.mainProjectId}/testcases/bulk-update`));
     await page.getByRole("button", { name: "Confirm" }).click();
+    const fields = (await submitted).postDataJSON();
+    expect(fields.priority).toBe("P1");
+    expect(fields).not.toHaveProperty("status");
+    expect(fields).not.toHaveProperty("automationStatus");
 
     // Priority moved...
     await expect(page.getByRole("row").filter({ hasText: title })).toContainText("P1");
 
-    // ...and nothing else did. Asserted against the API, not the row, so a stale render cannot pass it.
+    // The content change invalidates its old approval. Other content remains intact; the request
+    // above proves that the modal did not silently write the unselected fields.
     const listed = await api.get(`/api/projects/${tenant!.mainProjectId}/testcases`, {
       params: { search: title, limit: 10 },
       failOnStatusCode: false,
@@ -594,7 +601,8 @@ test.describe("test case repository (UI)", () => {
     const updated = (await listed.json())[0];
     expect(updated, "the case vanished from the list").toBeTruthy();
     expect(updated.priority, "the field that was chosen should have changed").toBe("P1");
-    expect(updated.status, "Status was overwritten by a bulk edit that never touched it").toBe("Approved");
+    expect(updated.status, "Changed reviewed content must require a fresh approval").toBe("In Review");
+    expect(updated.approvalCurrent).toBe(false);
     expect(
       updated.automationStatus,
       "Automation Type was overwritten by a bulk edit that never touched it",

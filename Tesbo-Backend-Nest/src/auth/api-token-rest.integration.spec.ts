@@ -14,13 +14,24 @@ import { WelcomeEmailService } from "../welcome-email/welcome-email.service";
 import type { PlanLimitsService } from "../plan-limits/plan-limits.service";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
-@Controller("api/projects/:projectId/testcases")
+const nativeCaseWrite = jest.fn(() => ({ created: true }));
+const nativeCredentialWrite = jest.fn(() => ({ credentialCreated: true }));
+@Controller("api/projects/:projectId")
 class CasesController {
-  @Get()
+  @Get("testcases")
   getCases() { return { ok: true }; }
 
-  @Post()
-  createCase() { return { created: true }; }
+  @Post("testcases")
+  createCase() { return nativeCaseWrite(); }
+
+  @Post("apikeys")
+  createCredential() { return nativeCredentialWrite(); }
+
+  @Post("agents/zyra/tasks/proposals")
+  stageCandidate() { return { candidateRouteReached: true }; }
+
+  @Post("automation/runs/:runId/results/:caseId/evidence")
+  evidence() { return { evidenceRouteReached: true }; }
 }
 @Module({ controllers: [CasesController] })
 class CasesModule {}
@@ -29,8 +40,8 @@ describe("ApiTokenRestGuard at the Nest HTTP boundary", () => {
   let app: INestApplication;
   const member = jest.fn().mockResolvedValue({ id: PROJECT });
   let baseUrl: string;
-  async function send(method: "GET" | "POST", scope: "read" | "write" = "read") {
-    const response = await fetch(`${baseUrl}/api/projects/${PROJECT}/testcases`, {
+  async function send(method: "GET" | "POST", scope: "read" | "write" = "read", suffix = "testcases") {
+    const response = await fetch(`${baseUrl}/api/projects/${PROJECT}/${suffix}`, {
       method,
       headers: { "x-test-scope": scope, ...(method === "POST" ? { "content-type": "application/json" } : {}) },
       ...(method === "POST" ? { body: "{}" } : {})
@@ -60,7 +71,14 @@ describe("ApiTokenRestGuard at the Nest HTTP boundary", () => {
   });
 
   afterAll(async () => { await app?.close(); });
-  beforeEach(() => { member.mockClear(); });
+  beforeEach(() => { member.mockClear(); nativeCaseWrite.mockClear(); nativeCredentialWrite.mockClear(); });
+
+  it.each(["apikeys", "APIKEYS", "ApiKeys/"])("denies credential administration through the case-insensitive %s route before its handler", async suffix => {
+    const response = await send("POST", "write", suffix);
+    expect(response.status).toBe(403);
+    expect(nativeCredentialWrite).not.toHaveBeenCalled();
+    expect(member).not.toHaveBeenCalled();
+  });
 
   it("rejects read-token writes and allows reads", async () => {
     const rejected = await send("POST");
@@ -72,13 +90,24 @@ describe("ApiTokenRestGuard at the Nest HTTP boundary", () => {
     expect(member).toHaveBeenCalledWith("u", PROJECT);
   });
 
-  it("checks membership for writes and denies revoked issuers", async () => {
-    const allowed = await send("POST", "write");
-    expect(allowed).toEqual({ status: 201, body: { created: true } });
+  it("refuses write-token publication before entering the native handler", async () => {
+    const refused = await send("POST", "write");
+    expect(refused.status).toBe(403);
+    expect(refused.body.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+    expect(nativeCaseWrite).not.toHaveBeenCalled();
+    expect(member).not.toHaveBeenCalled();
+  });
+
+  it("preserves candidate/evidence routes while checking membership and refusing revoked issuers", async () => {
+    const allowed = await send("POST", "write", "agents/zyra/tasks/proposals");
+    expect(allowed).toEqual({ status: 201, body: { candidateRouteReached: true } });
+    expect(await send("POST", "write", "automation/runs/run/results/case/evidence"))
+      .toEqual({ status: 201, body: { evidenceRouteReached: true } });
+    expect(member).toHaveBeenCalledWith("u", PROJECT);
 
     const { ForbiddenException } = await import("@nestjs/common");
     member.mockRejectedValueOnce(new ForbiddenException("revoked"));
-    const rejected = await send("POST", "write");
+    const rejected = await send("POST", "write", "agents/zyra/tasks/proposals");
     expect(rejected.status).toBe(403);
   });
 });
@@ -342,13 +371,19 @@ describe("testcase bulk-create through the actual controller/service HTTP bounda
     expect((await send(outsider, undefined, body)).status).toBe(404); expect(access).toHaveBeenCalledWith(outsider, PROJECT); noEffects();
   });
   it("keeps read-token writes refused", async () => { expect((await send(member, "read")).status).toBe(403); noEffects(); });
-  it.each([undefined, "write"] as const)("allows a current member using %s with unchanged batch shape and attribution", async (scope) => {
-    const response = await send(member, scope); expect(response.status).toBe(201);
+  it("allows a current human member with unchanged batch shape and attribution", async () => {
+    const response = await send(member, undefined); expect(response.status).toBe(201);
     expect(access).toHaveBeenCalledWith(member, PROJECT); expect(transaction).toHaveBeenCalledTimes(1);
     expect(await response.json()).toMatchObject({ createdCount: 2, created: [
       expect.objectContaining({ title: "First case", projectId: PROJECT, createdBy: member }),
       expect.objectContaining({ title: "Second case", projectId: PROJECT, createdBy: member }),
     ] });
+  });
+  it.each([valid, { testcases: [] }, { testcases: [{ title: "x".repeat(513) }] }])("refuses write-token bulk publication without any native side effect", async body => {
+    const response = await send(member, "write", body);
+    expect(response.status).toBe(403);
+    expect((await response.json()).code).toBe("HUMAN_PUBLICATION_REQUIRED");
+    noEffects();
   });
   it("preserves the authorized empty-batch response without writes", async () => {
     const response = await send(member, undefined, { testcases: [] }); expect(response.status).toBe(201);

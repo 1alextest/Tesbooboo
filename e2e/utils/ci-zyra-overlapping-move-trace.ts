@@ -1,5 +1,6 @@
 import { expect, request as newRequest, test, type Page, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
+import { verifyMoveReviewPreview } from "./zyra-reviewed-moves";
 import { answerRepositorySnapshotSql } from "./zyra-answer-feedback";
 import { startFakeAiServer } from "./fake-ai-server";
 import { seedMoveRepository, settleMoveFixtures, type MoveRepositoryState } from "./zyra-move-feedback";
@@ -31,27 +32,10 @@ export async function verifyCiZyraOverlappingMoveTrace(page: Page, api: string, 
       await test.step(label, async () => {
         try {
           await verifyZyraOverlappingMoveTrace({ request: page.request, ai, base, ownerId, language, mode, fixture: fixtures.get(label)!, state,
+            beforeApply: async (preview) => verifyMoveReviewPreview(page, web, projectId, preview, testInfo, `overlapping-move-${label}`),
             afterReply: async (evidence) => {
               const foreignAfter = await foreignState(); expect(foreignAfter).toEqual(foreignBefore);
               await testInfo.attach(`overlapping-move-${label}-readback`, { body: JSON.stringify({ ...evidence, foreignBefore, foreignAfter }, null, 2), contentType: "application/json" });
-              const trace = page.locator("[data-zyra-trace]"), summary = trace.locator("summary");
-              const expected = language === "en" ? `${evidence.expectedSaved} saved` : `сохранено: ${evidence.expectedSaved}`;
-              const verify = async () => {
-                await expect(page.getByText(evidence.reply, { exact: true })).toBeVisible(); await expect(trace).toBeVisible();
-                await expect(trace).toHaveAttribute("data-zyra-trace", "completed");
-                for (const id of new Set(evidence.previewIds)) {
-                  const row = evidence.before.cases.find((entry) => entry.id === id)!;
-                  await expect(page.getByText(String(row.external_id), { exact: true })).toHaveCount(evidence.previewIds.filter((preview) => preview === id).length);
-                }
-                expect.soft(await summary.innerText()).toContain(expected);
-              };
-              await page.goto(`${web}/projects/${projectId}/agents/zyra`); await verify(); await page.reload(); await verify();
-              await testInfo.attach(`overlapping-move-${label}`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
-              await summary.click();
-              const finalizing = trace.locator('[data-zyra-step="finalizing"]');
-              await expect(finalizing).toHaveAttribute("data-zyra-step-status", "ok");
-              expect.soft(await finalizing.innerText()).toContain(expected);
-              await testInfo.attach(`overlapping-move-${label}-expanded`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
             },
           });
         } catch (error) {

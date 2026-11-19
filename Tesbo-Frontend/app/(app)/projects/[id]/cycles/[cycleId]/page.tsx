@@ -505,8 +505,8 @@ export default function TestRunDetailPage() {
     // Report a Bug) closes the panel before opening this dialog, so panelExecution is null exactly
     // when a bug is filed through that path, and the freshly linked Bug Key/Title would otherwise
     // never surface until the user manually reopened the row.
-    // The dialog's snapshot is not the saved verdict: writable runs can auto-fail, while sealed
-    // automation only gains the association. Always reopen from the authoritative refreshed row.
+    // A bug association does not change the recorded execution result. Reopen from the
+    // authoritative row so an independently recorded result is never inferred from the link.
     onLogged: (exec) => {
       void load().then((list) => {
         if (!list) return;
@@ -619,7 +619,7 @@ export default function TestRunDetailPage() {
 
   /* selectable = only Approved cases */
   const selectableCases = useMemo(
-    () => filteredCases.filter((tc) => tc.status === "Approved"),
+    () => filteredCases.filter((tc) => tc.status === "Approved" && tc.approvalCurrent === true),
     [filteredCases]
   );
 
@@ -640,7 +640,7 @@ export default function TestRunDetailPage() {
   function toggleCase(id: string) {
     if (adding) return;
     const tc = filteredCases.find((c) => c.id === id);
-    if (tc && tc.status !== "Approved") return;
+    if (!tc || tc.status !== "Approved" || tc.approvalCurrent !== true) return;
     setSelectedCases((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -1854,7 +1854,7 @@ export default function TestRunDetailPage() {
                 </thead>
                 <tbody className="divide-y divide-[var(--border-subtle)]">
                   {filteredCases.map((tc) => {
-                    const isApproved = tc.status === "Approved";
+                    const isApproved = tc.status === "Approved" && tc.approvalCurrent === true;
                     return (
                       <tr
                         key={tc.id}
@@ -1866,7 +1866,7 @@ export default function TestRunDetailPage() {
                             : "opacity-50 cursor-not-allowed"
                         }`}
                         onClick={() => isApproved && toggleCase(tc.id)}
-                        title={!isApproved ? `Only Approved test cases can be added to a test run. This case is "${tc.status}" — please approve it first.` : undefined}
+                        title={!isApproved ? "This case needs a current human approval of its exact content and dependencies before it can be added." : undefined}
                       >
                         <td className="px-3 py-2">
                           <input
@@ -1876,7 +1876,7 @@ export default function TestRunDetailPage() {
                             className={`rounded ${!isApproved ? "cursor-not-allowed" : ""}`}
                             onClick={(e) => e.stopPropagation()}
                             disabled={!isApproved || adding}
-                            title={!isApproved ? `Only Approved test cases can be added. This case is "${tc.status}".` : undefined}
+                            title={!isApproved ? "Review and approve the current version first." : undefined}
                           />
                         </td>
                         <td className="px-3 py-2 text-xs text-[var(--muted-soft)] font-mono whitespace-nowrap">
@@ -2182,15 +2182,14 @@ export default function TestRunDetailPage() {
                 />
               </div>
 
-              {/* Bug Key / Bug Title — keep the existing Failed-only presentation on writable runs.
-                  Sealed automation also shows its traceability links without implying failure.
+              {/* Bug Key / Bug Title — associations remain visible for every recorded result.
                   A status alone never fabricates a bug association. Read-only:
                   these reflect the real bug(s), not a free-text value typed here. One execution can
                   now have several bugs linked (multi-select existing-bug picker) — a single linked
                   bug keeps the original "Bug Key"/"Bug Title" labels; more than one numbers them
                   ("Bug 1 Key", "Bug 2 Key", …) so none is silently dropped. Every row gets its own
                   Unlink action regardless of count. */}
-              <div className="space-y-3" hidden={panelBugs.length === 0 || (panelStatus !== "Failed" && !(run?.source === "automation" && run.closedAt != null))}>
+              <div className="space-y-3" hidden={panelBugs.length === 0}>
                 {panelBugs.map((bug, i) => {
                   const keyLabel = panelBugs.length > 1 ? `Bug ${i + 1} Key` : "Bug Key";
                   const titleLabel = panelBugs.length > 1 ? `Bug ${i + 1} Title` : "Bug Title";

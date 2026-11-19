@@ -3,6 +3,7 @@ import { expect, type APIRequestContext } from "@playwright/test";
 import type { FakeAiServer } from "./fake-ai-server";
 import type { MoveRepositoryState } from "./zyra-move-feedback";
 import { seedMoveTraceRepository, type MoveTraceFixture } from "./zyra-move-trace-count";
+import { assertMoveAudit, assertMovesStillUnpublished, governingMoveRepositoryState, readReviewedMoves, saveReviewedMoves, unchangedMoveContent, type MoveReviewPreview } from "./zyra-reviewed-moves";
 
 export const OVERLAPPING_MOVE_MODES = ["overlap", "disjoint"] as const;
 export type OverlappingMoveMode = typeof OVERLAPPING_MOVE_MODES[number];
@@ -23,13 +24,15 @@ export type OverlappingMoveEvidence = {
   fixture: OverlappingMoveFixture; session: Record<string, unknown>; before: MoveRepositoryState; after: MoveRepositoryState; previewIds: string[];
 };
 
-/** Two real writes remain two writes; the final trace counts the same distinct cases as the footer. */
+/** Ordered proposals remain separate writes, with complete operation counts and distinct target scope. */
 export async function verifyZyraOverlappingMoveTrace(input: {
   request: APIRequestContext; ai: FakeAiServer; base: string; ownerId: string; language: "en" | "ru";
   mode: OverlappingMoveMode; fixture: OverlappingMoveFixture; state: () => Promise<MoveRepositoryState>;
+  beforeApply?: (preview: MoveReviewPreview) => Promise<void>;
   afterReply?: (evidence: OverlappingMoveEvidence) => Promise<void>;
 }) {
-  const { request, ai, base, ownerId, language, mode, fixture, state, afterReply } = input;
+  const { request, ai, base, ownerId, language, mode, fixture, state: rawState, afterReply } = input;
+  const state = async () => governingMoveRepositoryState(await rawState());
   const before = await state(), calls = ai.requests.length;
   const groups = [fixture.first, fixture.last], targetIds = [...new Set(groups.flatMap((group) => group.targetIds))];
   const expectedSaved = mode === "overlap" ? 26 : 52;
@@ -52,7 +55,6 @@ export async function verifyZyraOverlappingMoveTrace(input: {
     const assistants = session.messages.filter((row: Record<string, unknown>) => row.role === "assistant");
     expect(assistants).toHaveLength(1); const assistant = assistants[0];
     expect(assistant.content).toBe(response.message.content); expect(assistant.actionType).toBe("suite");
-    expect(assistant.reviewRequestId ?? null).toBeNull();
     const previewIds = assistant.testcases.map((row: Record<string, unknown>) => String(row.id)) as string[];
     expect(previewIds).toHaveLength(50); // Original per-operation 25-card bound, not a global cap or deduped UI.
     expect(previewIds.every((id) => targetIds.includes(id))).toBe(true);
@@ -64,20 +66,28 @@ export async function verifyZyraOverlappingMoveTrace(input: {
     // SQL row order has no contract; overlapping previews may omit the same case in both operations.
     if (mode === "overlap") expect(new Set(previewIds).size).toBeGreaterThanOrEqual(25);
     else expect(new Set(previewIds).size).toBe(50);
-    expect(assistant.testcases.every((row: Record<string, unknown>) => row.action === "moved")).toBe(true);
+    expect(assistant.testcases.every((row: Record<string, unknown>) => row.action === "proposed-update")).toBe(true);
     expect(assistant.activity.filter((row: Record<string, unknown>) => row.title === "An operation failed unexpectedly")).toHaveLength(0);
-    expect(assistant.content).toContain(language === "en" ? `${expectedSaved} test case(s) total` : `всего тест-кейсов: ${expectedSaved}`);
+    expect(assistant.content).toMatch(language === "en" ? /staged for your review/ : /Ожидают вашей проверки/);
+    const staged = await state();
+    assertMovesStillUnpublished(before, staged);
+    const reviewed = await readReviewedMoves(request, base, assistant.reviewRequestId,
+      groups.flatMap((group) => group.targetIds.map((testcaseId) => ({ testcaseId, suiteId: group.destinationId }))));
+    await input.beforeApply?.({ sessionId, language, reply, before, reviewed, proposedCount: 52, traceOutcome: "completed", stagingStatus: "ok" });
+    await saveReviewedMoves(request, base, reviewed, ownerId);
     const after = await state();
-    expect(after.cases).toHaveLength(before.cases.length); expect(after.suites).toEqual(before.suites); expect(after.reviews).toEqual(before.reviews);
+    expect(after.cases).toHaveLength(before.cases.length); expect(after.suites).toEqual(before.suites);
+    expect(after.reviews.length - before.reviews.length).toBe(1);
+    expect(after.reviews.filter((row) => before.reviews.some((old) => (old as { id: string }).id === (row as { id: string }).id))).toEqual(before.reviews);
     const changed = after.cases.filter((row) => JSON.stringify(row) !== JSON.stringify(before.cases.find((old) => old.id === row.id)));
     expect(changed.map((row) => String(row.id)).sort()).toEqual([...targetIds].sort());
-    const content = (row: Record<string, unknown>) => Object.fromEntries(Object.entries(row).filter(([key]) => !["suite_id", "updated_by", "updated_at"].includes(key)));
     for (const old of before.cases) {
       const current = after.cases.find((row) => row.id === old.id)!;
       if (targetIds.includes(String(old.id))) {
         const lastGroup = [...groups].reverse().find((group) => group.targetIds.includes(String(old.id)))!;
         expect(current).toMatchObject({ suite_id: lastGroup.destinationId, updated_by: ownerId });
-        expect(content(current)).toEqual(content(old));
+        expect(unchangedMoveContent(current)).toEqual(unchangedMoveContent(old));
+        expect(Number(current.review_dependency_revision)).toBe(Number(old.review_dependency_revision) + (mode === "overlap" ? 2 : 1));
       } else expect(current).toEqual(old);
     }
     for (const old of before.history) expect(after.history.find((row) => row.id === old.id)).toEqual(old);
@@ -92,23 +102,16 @@ export async function verifyZyraOverlappingMoveTrace(input: {
       if (mode === "overlap") {
         expect(Number(versions[1].version)).toBe(Number(versions[0].version) + 1);
         expect(versions[1].snapshot).toMatchObject({ suite_id: fixture.first.destinationId, updated_by: ownerId });
-        expect(content(versions[1].snapshot as Record<string, unknown>)).toEqual(content(original));
+        expect(unchangedMoveContent(versions[1].snapshot as Record<string, unknown>)).toEqual(unchangedMoveContent(original));
+        expect(Number((versions[1].snapshot as Record<string, unknown>).review_dependency_revision)).toBe(Number(original.review_dependency_revision) + 1);
       }
     }
-    const oldAudit = before.audit as Array<Record<string, unknown>>, audit = after.audit as Array<Record<string, unknown>>;
-    expect(audit.filter((row) => oldAudit.some((old) => old.id === row.id))).toEqual(oldAudit);
-    const addedAudit = audit.filter((row) => !oldAudit.some((old) => old.id === row.id));
-    expect(addedAudit).toHaveLength(2);
-    for (const group of groups) {
-      const entry = addedAudit.find((row) => row.entity_id === group.destinationId)!;
-      expect(entry).toMatchObject({ action: "zyra_moved_to_suite", actor_id: ownerId, diff: { movedCount: 26 } });
-      expect([...(entry.diff as { testcaseIds: string[] }).testcaseIds].sort()).toEqual([...group.targetIds].sort());
-    }
+    assertMoveAudit(staged, after, reviewed, ownerId);
     const users = session.messages.filter((row: Record<string, unknown>) => row.role === "user");
     expect(users).toHaveLength(1); const trace = users[0].trace;
     expect(trace.version).toBe(1); expect(trace.outcome).toBe("completed");
     expect(trace.steps.find((step: Record<string, unknown>) => step.stage === "staging").status).toBe("ok");
-    expect.soft(trace.steps.find((step: Record<string, unknown>) => step.stage === "finalizing").meta).toMatchObject({ savedCount: expectedSaved, proposedCount: 0 });
+    expect(trace.steps.find((step: Record<string, unknown>) => step.stage === "finalizing").meta).toMatchObject({ savedCount: 0, proposedCount: 52 });
     await afterReply?.({ sessionId, language, mode, reply, expectedSaved, fixture, session, before, after, previewIds });
   } finally {
     if (sessionId) { const deleted = await request.delete(`${base}/agents/zyra/chat/sessions/${sessionId}`, { failOnStatusCode: false }); expect(deleted.ok(), await deleted.text()).toBeTruthy(); }

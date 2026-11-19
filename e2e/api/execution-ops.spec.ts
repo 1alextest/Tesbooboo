@@ -1,3 +1,4 @@
+import { approveTestcase, createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
 import { column, exec, literal, scalar } from "../utils/psql";
 import {
@@ -76,12 +77,20 @@ test.describe("execution bulk operations, schedules and share links", () => {
     return `E2E ExecOps ${label} ${Date.now()}${Math.floor(Math.random() * 1000)}`;
   }
 
+  async function approveBulkFixtureCases(testcaseIds: string[]): Promise<void> {
+    // Setup uses genuine human review receipts. Keep concurrency bounded so the large-selection
+    // timing below measures only adding cases to the run, not approval fixture preparation.
+    for (let offset = 0; offset < testcaseIds.length; offset += 8) {
+      await Promise.all(testcaseIds.slice(offset, offset + 8).map((id) => approveTestcase(asOwner, tenant!.mainProjectId, id)));
+    }
+  }
+
   /** A run with `count` test cases in it, each with a fresh Untested execution. */
   async function seedRun(count = 3, projectId?: string): Promise<{ cycleId: string; executionIds: string[] }> {
     const project = projectId ?? tenant!.mainProjectId;
     const testcaseIds: string[] = [];
     for (let i = 0; i < count; i++) {
-      const res = await asOwner.post(`/api/projects/${project}/testcases`, {
+      const res = await createTestcaseFixtureResponse(asOwner, `/api/projects/${project}/testcases`, {
         data: { title: stamp(`case ${i + 1}`), status: "Approved" },
         failOnStatusCode: false,
       });
@@ -865,11 +874,12 @@ test.describe("execution bulk operations, schedules and share links", () => {
    * for minutes, Cloudflare cut it off at 100s with a 524, and the rows already committed stayed in
    * the run.
    *
-   * Seeded through psql rather than the API — the point is the size of the ADD, and paying 250
-   * sequential POSTs to set it up would dwarf the thing under test. This suite owns a disposable
-   * tenant, which is the only place bulk-seeding like this is allowed.
+   * Draft rows are seeded through psql, then each gets a real human review receipt before the
+   * timed ADD. This suite owns a disposable tenant, which is the only place bulk-seeding like
+   * this is allowed.
    */
   test("EXO-E-01 a large selection is added completely, and fast enough not to hit a proxy timeout", { tag: '@tesbo.testId("TES-TC-923")' }, async () => {
+    test.slow(); // Human approval setup is outside the unchanged 30-second add ceiling.
     const BATCH = 250;
     const cycle = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/cycles`, {
       data: { name: stamp("bulk run") },
@@ -880,7 +890,7 @@ test.describe("execution bulk operations, schedules and share links", () => {
 
     exec(
       `INSERT INTO testcases (project_id, external_id, title, status)
-       SELECT ${literal(tenant!.mainProjectId)}, 'E2EBULK-' || g, 'E2E ExecOps bulk ' || lpad(g::text, 4, '0'), 'Approved'
+       SELECT ${literal(tenant!.mainProjectId)}, 'E2EBULK-' || g, 'E2E ExecOps bulk ' || lpad(g::text, 4, '0'), 'Draft'
          FROM generate_series(1, ${BATCH}) AS g;`,
     );
     const testcaseIds = column(
@@ -888,6 +898,7 @@ test.describe("execution bulk operations, schedules and share links", () => {
         "AND title LIKE 'E2E ExecOps bulk %' ORDER BY title;",
     );
     expect(testcaseIds, "seeding the bulk test cases").toHaveLength(BATCH);
+    await approveBulkFixtureCases(testcaseIds);
 
     const started = Date.now();
     const res = await asOwner.post(`/api/cycles/${cycleId}/testcases`, {
@@ -914,7 +925,7 @@ test.describe("execution bulk operations, schedules and share links", () => {
     // Ordering, over the whole batch. The rows are written by one statement now, so they share a
     // created_at and `position` is the only thing carrying the caller's order — a regression there
     // would leave the run's list shuffled. Asserted here rather than in cycles.spec.ts because these
-    // 250 fixtures cost one INSERT instead of 250 API round trips.
+    // the fixture insertion is shared with the large-selection regression.
     expect(
       column(
         `SELECT testcase_id FROM cycle_items WHERE cycle_id = ${literal(cycleId)} ORDER BY position, created_at;`,
@@ -942,13 +953,14 @@ test.describe("execution bulk operations, schedules and share links", () => {
 
     exec(
       `INSERT INTO testcases (project_id, external_id, title, status)
-       SELECT ${literal(tenant!.mainProjectId)}, 'E2ERETRY-' || g, 'E2E ExecOps retry ' || lpad(g::text, 4, '0'), 'Approved'
+       SELECT ${literal(tenant!.mainProjectId)}, 'E2ERETRY-' || g, 'E2E ExecOps retry ' || lpad(g::text, 4, '0'), 'Draft'
          FROM generate_series(1, ${BATCH}) AS g;`,
     );
     const testcaseIds = column(
       `SELECT id FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} ` +
         "AND title LIKE 'E2E ExecOps retry %' ORDER BY title;",
     );
+    await approveBulkFixtureCases(testcaseIds);
 
     // Stand in for the partial import a timed-out request leaves behind: the first half is already
     // in the run when the user hits "add" again with the full selection.

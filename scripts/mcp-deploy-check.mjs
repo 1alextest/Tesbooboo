@@ -17,7 +17,8 @@
  *   node scripts/mcp-deploy-check.mjs
  *
  * Optional:
- *   EXPECTED_TOOL_COUNT=58   informational; a mismatch is a warning, because the catalog evolves.
+ *   EXPECTED_TOOL_COUNT=47   informational; a mismatch is a warning, because grants filter tools.
+ *   REQUIRE_PROPOSAL_PREVIEW=1  require the isolated, default-off proposal review capability.
  *   TESBO_API_HEALTH_URL     defaults to <origin>/api/health derived from TESBO_MCP_URL.
  *
  * Exit code is 1 on any failed requirement. The token is never printed, and server error text is
@@ -30,9 +31,6 @@ import { pathToFileURL } from "node:url";
 export const REQUIRED_TOOLS = [
   "list_projects",
   "get_testcase",
-  "create_testcase",
-  "update_testcase",
-  "bulk_create_testcases",
   "list_qa_graph_changes",
   "capture_qa_graph_change",
   "preview_behavior_model_draft",
@@ -43,13 +41,17 @@ export const REQUIRED_TOOLS = [
   "archive_behavior_model"
 ];
 
-/** Fields a deployment must advertise on the shape clients actually read/write. These are the
- *  authoring fields the legacy writers already persist; an older catalog dropped several of them
- *  from the schemas even though the handlers accepted them, so clients never supplied them. */
+export const PROPOSAL_TOOLS = ["stage_testcase_changes", "list_testcase_proposals", "get_testcase_proposal_task"];
+const RETIRED_PUBLISHERS = ["create_testcase", "update_testcase", "archive_testcase", "restore_testcase", "duplicate_testcase",
+  "bulk_create_testcases", "bulk_update_testcases", "bulk_archive_testcases", "link_requirement_to_testcase", "unlink_requirement_from_testcase", "clone_test_suite"];
+
+/** If proposal preview is exposed, its actual candidate fields must be discoverable. Default-off
+ * deployments are valid without these tools; a retired direct publisher is never a substitute. */
 const REQUIRED_FIELDS = [
-  { tool: "create_testcase", path: ["properties"], fields: ["attachments", "postconditions", "estimatedDuration", "sourceRefs"] },
-  { tool: "update_testcase", path: ["properties"], fields: ["attachments", "postconditions", "expectedRevision", "estimatedDuration", "sourceRefs"] },
-  { tool: "bulk_create_testcases", path: ["properties", "testcases", "items", "properties"], fields: ["attachments", "postconditions", "estimatedDuration", "sourceRefs"] }
+  { tool: "stage_testcase_changes", path: ["properties"], fields: ["requestKey", "operations"] },
+  { tool: "stage_testcase_changes", path: ["properties", "operations", "items", "oneOf", "0", "properties", "draft", "properties"], fields: ["attachments", "postconditions", "estimatedDuration", "sourceRefs"] },
+  { tool: "stage_testcase_changes", path: ["properties", "operations", "items", "oneOf", "1", "properties"], fields: ["testcaseId", "expectedRevision", "fields"] },
+  { tool: "stage_testcase_changes", path: ["properties", "operations", "items", "oneOf", "1", "properties", "fields", "properties"], fields: ["attachments", "postconditions", "estimatedDuration", "sourceRefs"] }
 ];
 
 /**
@@ -80,7 +82,7 @@ function shapeAt(schema, path) {
   return current && typeof current === "object" ? current : null;
 }
 
-export function catalogGaps(tools) {
+export function catalogGaps(tools, { requireProposalPreview = false } = {}) {
   if (!Array.isArray(tools)) return { errors: ["tools/list did not return an array"], count: 0 };
   const errors = [];
   const names = [];
@@ -96,8 +98,11 @@ export function catalogGaps(tools) {
     if (seen.has(name)) errors.push(`duplicate tool: ${name}`);
     seen.add(name);
   }
-  for (const required of REQUIRED_TOOLS) {
+  for (const required of [...REQUIRED_TOOLS, ...(requireProposalPreview ? PROPOSAL_TOOLS : [])]) {
     if (!seen.has(required)) errors.push(`missing tool: ${required}`);
+  }
+  for (const retired of RETIRED_PUBLISHERS) {
+    if (seen.has(retired)) errors.push(`direct publication tool must not be advertised: ${retired}`);
   }
   return { errors, count: names.length, names };
 }
@@ -119,13 +124,19 @@ export function schemaGaps(tools) {
       if (!(field in properties)) errors.push(`${requirement.tool}: missing field ${field}`);
     }
   }
+  const stage = byName.get("stage_testcase_changes")?.inputSchema;
+  if (stage) {
+    if (!stage.required?.includes("requestKey") || !stage.required?.includes("operations")) errors.push("stage_testcase_changes: requestKey and operations must be required");
+    const update = shapeAt(stage, ["properties", "operations", "items", "oneOf", "1"]);
+    if (!update?.required?.includes("expectedRevision")) errors.push("stage_testcase_changes: update expectedRevision must be required");
+  }
   return { errors };
 }
 
-export function summarize({ tools, instructions, serverVersion, health, expectedGitSha, expectedToolCount }) {
+export function summarize({ tools, instructions, serverVersion, health, expectedGitSha, expectedToolCount, requireProposalPreview = false }) {
   const errors = [];
   const warnings = [];
-  const catalog = catalogGaps(tools);
+  const catalog = catalogGaps(tools, { requireProposalPreview });
   const schemas = schemaGaps(tools);
   errors.push(...catalog.errors, ...schemas.errors);
 
@@ -209,6 +220,7 @@ async function main() {
   const token = String(process.env.TESBO_MCP_TOKEN || "").trim();
   const expectedGitSha = String(process.env.EXPECTED_GIT_SHA || "").trim();
   const expectedToolCount = String(process.env.EXPECTED_TOOL_COUNT || "").trim();
+  const requireProposalPreview = process.env.REQUIRE_PROPOSAL_PREVIEW === "1";
   if (!endpoint || !token) {
     console.error("TESBO_MCP_URL and TESBO_MCP_TOKEN must be set (token is read from the environment only).");
     process.exit(2);
@@ -244,7 +256,8 @@ async function main() {
       serverVersion: initialized.json?.result?.serverInfo?.version,
       health,
       expectedGitSha,
-      expectedToolCount
+      expectedToolCount,
+      requireProposalPreview
     });
 
     console.log("MCP deploy check");

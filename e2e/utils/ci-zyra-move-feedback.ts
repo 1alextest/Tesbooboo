@@ -2,7 +2,7 @@ import { expect, request as newRequest, test, type Page, type TestInfo } from "@
 import { Client } from "pg";
 import { startFakeAiServer } from "./fake-ai-server";
 import { answerRepositorySnapshotSql } from "./zyra-answer-feedback";
-import { SUITE_OPERATION_ERROR } from "./zyra-suite-feedback";
+import { verifyMoveReviewPreview } from "./zyra-reviewed-moves";
 import { MOVE_MODES, seedMoveRepository, settleMoveFixtures, verifyZyraMoveTurn, withMoveUpdateFailure, type MoveFixture, type MoveRepositoryState } from "./zyra-move-feedback";
 
 /** Caller enforces loopback URLs and disposable tesbo_ci; never a shared/live-data inventory. */
@@ -31,21 +31,9 @@ export async function verifyCiZyraMoveFeedback(page: Page, api: string, web: str
       await test.step(label, async () => {
         try {
           const run = () => verifyZyraMoveTurn({ request: page.request, ai, base, ownerId, language, mode, fixture, state,
+            beforeApply: async (preview) => verifyMoveReviewPreview(page, web, projectId, preview, testInfo, `move-${label}`),
             afterReply: async (evidence) => {
               await testInfo.attach(`move-${label}-readback`, { body: JSON.stringify(evidence, null, 2), contentType: "application/json" });
-              const trace = page.locator("[data-zyra-trace]"), failed = mode === "failed" || mode === "partial";
-              const verify = async () => {
-                await expect(page.getByText(evidence.reply, { exact: true })).toBeVisible();
-                await expect(trace).toBeVisible();
-                expect.soft(await page.getByText(SUITE_OPERATION_ERROR[language], { exact: true }).count()).toBe(failed ? 1 : 0);
-                expect.soft(await trace.getAttribute("data-zyra-trace")).toBe(failed ? "completed_with_errors" : "completed");
-              };
-              await page.goto(`${web}/projects/${projectId}/agents/zyra`); await verify();
-              await page.reload(); await verify();
-              await testInfo.attach(`move-${label}`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
-              await trace.locator("summary").click();
-              expect.soft(await trace.locator('[data-zyra-step="staging"]').getAttribute("data-zyra-step-status")).toBe(failed ? "failed" : "ok");
-              await testInfo.attach(`move-${label}-expanded`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
             },
           });
           if (mode === "failed" || mode === "partial") await withMoveUpdateFailure(projectId, fixture.secondId, async (sql) => { await db.query(sql); }, run);

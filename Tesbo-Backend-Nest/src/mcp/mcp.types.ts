@@ -59,9 +59,12 @@ Typical shapes:
 - Captured changes and notifications do not run tests or approve them. Only actually executed tests with attributable evidence may receive results through the existing execution tools, under human QA review.
 
 Rules worth knowing before calling a write tool:
-- To archive/restore a test case, use archive_testcase/restore_testcase rather than setting status directly — restoring always resets status to "Draft" (the prior status isn't retained).
-- update_testcase and update_suite only change the fields you pass; every other field keeps its current value.
-- bulk_update_testcases only accepts priority, suiteId, status, ownerId, automationStatus — not the full field set update_testcase supports.
+- Machine clients cannot directly create, update, archive, restore, duplicate, bulk-publish or change requirements on official test cases. Cached calls to those old tools return HUMAN_PUBLICATION_REQUIRED.
+- The unpublished proposal review preview is off by default. Only when stage_testcase_changes is advertised can this client prepare unpublished create/update/archive proposals without a model key. Otherwise use native human editing; do not assume a missing staging capability is available.
+- When the preview is available, supply an explicit requestKey; updates and archives bind the current get_testcase editRevision. Read the resulting task with get_testcase_proposal_task or list_testcase_proposals.
+- A task ID identifies a proposal workflow, never a newly published test case. A human must inspect the exact proposal revision and save selected changes in Tesbo. There is no MCP apply or approval tool.
+- Stage restore as an update with status Draft. A new case is published as Draft; human publication and subsequent test-case approval are separate decisions.
+- update_suite only changes the fields you pass; every other field keeps its current value.
 - Every id-addressed tool is already scoped to this token's project; passing an id from another project fails with a clear "not found" / "belongs to a different project" error rather than acting on it.
 
 Example workflow: "file a bug for the test case that just failed" → get_testcase_executions or list_executions to find the failing execution, then create_bug with links: [{testcaseId, cycleId, executionId}].`;
@@ -137,6 +140,8 @@ export type TokenScope = "read" | "write";
  */
 export interface McpToolContext {
   projectId: string;
+  /** Actual authenticated credential, never an id or identity supplied in tool arguments. */
+  tokenId?: string;
   actorId: string | null;
   userId: string | null;
   scopes: TokenScope[];
@@ -158,5 +163,9 @@ export interface McpTool {
   inputSchema: Record<string, unknown>;
   /** Minimum token scope required to call this tool. */
   requiredScope: TokenScope;
+  /** Retained only to give cached legacy calls an actionable refusal. */
+  hiddenFromDiscovery?: boolean;
+  /** Default-off unpublished proposal preview; only server configuration can enable it. */
+  proposalPreviewOnly?: boolean;
   handler: (args: Record<string, unknown>, ctx: McpToolContext) => Promise<unknown>;
 }

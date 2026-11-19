@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import { column, exec, literal, scalar } from "../utils/psql";
 import { purgeProject } from "../utils/seed";
 import {
@@ -11,6 +12,8 @@ import {
 import { startFakeAiServer, type FakeAiServer } from "../utils/fake-ai-server";
 import { env } from "../utils/env";
 import { parseSseEvents } from "../utils/sse";
+import { issueMcpTestToken } from "../utils/mcp-access";
+import { readZyraProposal, saveReviewedZyraTask } from "../utils/zyra-proposals";
 
 /*
  * Zyra — the AI agent surface: agent state, connection test, settings, chat sessions and messages,
@@ -285,13 +288,16 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     }
     try {
       for (const scopes of [["read"], ["read", "write"]]) {
-        const created = await asOwner.post(`/api/projects/${projectId}/apikeys`, {
+        const created = await issueMcpTestToken(asOwner, `/api/projects/${projectId}/apikeys`, {
           data: { name: `E2E native MCP preview ${Date.now()}`, scopes } });
         expect(created.ok()).toBe(true); keys.push(await created.json());
       }
       const [read, write] = keys;
-      const listed = await rpc(read.token, "tools/list");
-      expect(listed.result.tools).toHaveLength(58);
+      const readCatalog = await rpc(read.token, "tools/list");
+      expect(readCatalog.result.tools).toHaveLength(24);
+      expect(readCatalog.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("preview_behavior_model_draft");
+      const listed = await rpc(write.token, "tools/list");
+      expect(listed.result.tools).toHaveLength(50);
       expect(listed.result.tools.find((tool: { name: string }) => tool.name === "preview_behavior_model_draft").inputSchema.additionalProperties).toBe(false);
       const params = { name: "preview_behavior_model_draft", arguments: { model: modelPreviewDraft() } };
       expect((await rpc(read.token, "tools/call", params)).error.code).toBe(-32002);
@@ -405,10 +411,8 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
      * measures as zero drafts and every index is out of range.
      *
      * jira_issue_keys defaults to '[]' (its own column default) whenever fields.jiraIssueKey is
-     * omitted — every existing caller keeps behaving exactly as before. Passed, it's what
-     * processZyraSaveEntriesSequential/Batched's `existingLinked` lookup matches an already-saved
-     * test case's own jira_issue_key against, to exercise the "regenerating an already-linked case"
-     * path (severity/component "only fill if blank") rather than a brand-new create.
+     * omitted. Passing a key exercises source linkage without allowing a reviewed create to
+     * silently become an update to an existing linked case at Save time.
      */
     exec(
       "INSERT INTO ai_generation_requests (project_id, requested_by, provider, model, user_story, " +
@@ -1083,7 +1087,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(res.status(), `reading a task — ${await res.text()}`).toBe(200);
     const task = await res.json();
     expect(task.id).toBe(taskId);
-    expect(task.taskStatus).toBe("awaiting_review");
+    expect(task.taskStatus).toBe("in_review");
     expect(JSON.stringify(task)).toContain("E2E draft 1");
     expect(task.generatedCount).toBe(3);
   });
@@ -1103,7 +1107,9 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(stored.map((d: any) => d.title)).toEqual(["E2E draft 1", "E2E draft 3"]);
 
     const task = await (await asOwner.get(url(`/agents/zyra/tasks/${taskId}`))).json();
-    expect(task.generatedCount).toBe(2);
+    expect(task.generatedCount).toBe(3);
+    expect(task.drafts).toHaveLength(2);
+    expect((await res.json()).proposalRevision).toBe(task.proposalRevision);
   });
 
   test("ZYR-A-19 a draft index outside the list is refused rather than corrupting the payload", { tag: '@tesbo.testId("TES-TC-613")' }, async () => {
@@ -1127,7 +1133,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/close`), { data: {}, failOnStatusCode: false });
     expect(res.status(), `closing a task — ${await res.text()}`).toBe(201);
     const status = scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`);
-    expect(status, "closing the task did not move it out of awaiting_review").not.toBe("awaiting_review");
+    expect(status, "closing the task did not resolve its review").toBe("done");
 
     const again = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/close`), { data: {}, failOnStatusCode: false });
     expect(again.status()).toBeLessThan(500);
@@ -1135,8 +1141,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
 
   test("ZYR-A-21 feedback on a task is recorded against it", { tag: '@tesbo.testId("TES-TC-615")' }, async () => {
     // Explicitly 'in_review': zyraFeedback now guards on the task's current status (ZYR-A-34), and
-    // the suite's default seed status ("awaiting_review") is not one of the two statuses that
-    // guard accepts. Seeding the real status keeps this test on the "task legitimately can take
+    // the real review status keeps this test on the "task legitimately can take
     // feedback, but no AI key is configured" path its comment describes, rather than accidentally
     // exercising the new status guard instead.
     const taskId = seedTask({ status: "in_review" });
@@ -1162,7 +1167,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
         ["draft", () => asOwner.delete(url(`/agents/zyra/tasks/${bad}/drafts/0`), { failOnStatusCode: false })],
         [
           "save",
-          () => asOwner.post(url(`/agents/zyra/tasks/${bad}/save`), { data: { testcaseIds: [] }, failOnStatusCode: false }),
+          () => asOwner.post(url(`/agents/zyra/tasks/${bad}/save`), { data: { expectedProposalRevision: "a".repeat(64), selectedDraftIndexes: [] }, failOnStatusCode: false }),
         ],
       ] as Array<[string, () => Promise<APIResponse>]>) {
         const res = await attempt();
@@ -1199,35 +1204,105 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(await other.text()).not.toContain(first);
   });
 
-  test("ZYR-A-24 saving a task's drafts records the save against the task", { tag: '@tesbo.testId("TES-TC-618")' }, async () => {
-    const taskId = seedTask();
-    // An empty selection is the boundary: nothing to save, so nothing should be recorded and
-    // nothing should break.
-    const empty = await asOwner.post(url(`/ai/generation-history/${taskId}/save`), {
-      data: { testcaseIds: [] },
-      failOnStatusCode: false,
-    });
-    expect(empty.status(), `an empty save answered ${empty.status()}: ${await empty.text()}`).toBeLessThan(500);
+  test("ZYR-A-24 the legacy Save route requires a real reviewed selection and cannot fabricate saved counters", { tag: '@tesbo.testId("TES-TC-618")' }, async () => {
+    const taskId = seedTask({ drafts: 2 });
+    const saveUrl = url(`/ai/generation-history/${taskId}/save`);
+    const before = scalar(`SELECT row_to_json(r)::text FROM ai_generation_requests r WHERE id=${literal(taskId)};`);
+    const fabricated = await asOwner.post(saveUrl, { data: { testcaseIds: ["11111111-1111-4111-8111-111111111111"] } });
+    expect(fabricated.status(), await fabricated.text()).toBe(400);
+    expect(scalar(`SELECT row_to_json(r)::text FROM ai_generation_requests r WHERE id=${literal(taskId)};`)).toBe(before);
+    const empty = await saveReviewedZyraTask(asOwner, saveUrl, { data: { selectedDraftIndexes: [] } });
+    expect(empty.status(), await empty.text()).toBe(201);
+    expect((await empty.json()).savedCount).toBe(0);
+    expect(scalar(`SELECT saved_count FROM ai_generation_requests WHERE id=${literal(taskId)};`)).toBe("0");
+    const selected = await saveReviewedZyraTask(asOwner, saveUrl, { data: { selectedDraftIndexes: [0] } });
+    expect(selected.status(), await selected.text()).toBe(201);
+    const applied = await selected.json();
+    expect(applied.savedCount).toBe(1);
+    expect(applied.testcases[0]).toMatchObject({ title: "E2E draft 1", status: "Draft" });
+    expect(applied.saveReceipt).toMatchObject({ principalKind: "human_session", reviewerId: tenant!.owner.userId, selectedDraftIndexes: [0] });
+    expect(scalar(`SELECT save_events::text FROM ai_generation_requests WHERE id=${literal(taskId)};`)).toContain(applied.testcases[0].id);
+    expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id=${literal(taskId)};`)).toBe("in_review");
+  });
 
-    const created = await asOwner.post(url("/testcases"), {
-      data: { title: `E2E saved from Zyra ${Date.now()}` },
-      failOnStatusCode: false,
-    });
-    expect(created.status()).toBe(201);
-    const testcaseId = (await created.json()).id;
-
+  test("ZYR-P07 external no-model staging stays unpublished until an exact human selection, with retry-safe receipts", async () => {
+    const projectId = tenant!.mainProjectId;
+    const stageUrl = url("/agents/zyra/tasks/proposals");
+    const requestKey = randomUUID();
+    const operations = [
+      { opType: "create", draft: { title: `Unselected external draft ${requestKey}` } },
+      { opType: "create", draft: { title: `Selected external draft ${requestKey}`, steps: [{ action: "Inspect", expectedResult: "Exact published content" }] } },
+    ];
+    const before = scalar(`SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY id),'[]'::jsonb)::text FROM testcases t WHERE project_id=${literal(projectId)};`);
+    const issued = await asOwner.post(url("/apikeys"), { data: { name: `P07 producer ${requestKey}`, scopes: ["read", "write"] } });
+    expect(issued.ok(), await issued.text()).toBe(true);
+    const token = await issued.json();
+    const headers = { Authorization: `Bearer ${token.token}` };
     try {
-      const res = await asOwner.post(url(`/ai/generation-history/${taskId}/save`), {
-        data: { testcaseIds: [testcaseId] },
-        failOnStatusCode: false,
-      });
-      expect(res.status(), `saving — ${await res.text()}`).toBeLessThan(500);
-      // The save event is what the UI reads to show "3 of 5 saved", so it has to be persisted.
-      const events = scalar(`SELECT coalesce(save_events::text, '') FROM ai_generation_requests WHERE id = ${literal(taskId)};`);
-      expect(events).toContain(testcaseId);
+      const response = await anon.post(stageUrl, { headers, data: { requestKey, operations } });
+      expect(response.status(), await response.text()).toBe(201);
+      const staged = await response.json();
+      expect(staged).toMatchObject({ taskStatus: "in_review", proposalProvenance: { kind: "api_token", tokenId: token.id, issuerId: tenant!.owner.userId } });
+      expect(staged.proposalProvenance.actorId).not.toBe(tenant!.owner.userId);
+      expect(staged.proposalSnapshot.operations).toHaveLength(2);
+      expect(staged).not.toHaveProperty("testcaseId");
+      const repeat = await anon.post(stageUrl, { headers, data: { requestKey, operations } });
+      expect(repeat.status(), await repeat.text()).toBe(201);
+      expect((await repeat.json()).id).toBe(staged.id);
+      const changed = await anon.post(stageUrl, { headers, data: { requestKey, operations: [operations[0]] } });
+      expect(changed.status(), await changed.text()).toBe(409);
+      const saveUrl = url(`/agents/zyra/tasks/${staged.id}/save`);
+      const reviewed = await readZyraProposal(asOwner, saveUrl);
+      const data = { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [1] };
+      const machine = await anon.post(saveUrl, { headers, data });
+      expect(machine.status(), await machine.text()).toBe(403);
+      expect((await machine.json()).code).toBe("HUMAN_PUBLICATION_REQUIRED");
+      expect(scalar(`SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY id),'[]'::jsonb)::text FROM testcases t WHERE project_id=${literal(projectId)};`)).toBe(before);
+      const applied = await asOwner.post(saveUrl, { data });
+      expect(applied.status(), await applied.text()).toBe(201);
+      const saved = await applied.json();
+      expect(saved).toMatchObject({ savedCount: 1, remaining: 1 });
+      expect(saved.testcases[0]).toMatchObject({ title: operations[1].draft.title, status: "Draft", createdBy: tenant!.owner.userId });
+      expect(saved.saveReceipt).toMatchObject({ principalKind: "human_session", reviewerId: tenant!.owner.userId, provenance: { kind: "api_token", tokenId: token.id }, reviewedSnapshot: reviewed.proposalSnapshot });
+      const retry = await asOwner.post(saveUrl, { data });
+      expect(retry.status(), await retry.text()).toBe(201);
+      expect(await retry.json()).toMatchObject({ replayed: true, saveReceipt: { id: saved.saveReceipt.id } });
+      const pending = await readZyraProposal(asOwner, saveUrl);
+      expect(pending).toMatchObject({ taskStatus: "in_review", savedCount: 1, generatedCount: 2 });
+      expect(pending.proposalSnapshot.operations).toHaveLength(1);
+      expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id=${literal(projectId)} AND title=${literal(operations[0].draft.title)};`)).toBe("0");
+      expect(scalar(`SELECT COUNT(*) FROM audit_logs WHERE entity_id=${literal(staged.id)} AND action='testcase_proposals_applied';`)).toBe("1");
     } finally {
-      await asOwner.delete(url(`/testcases/${testcaseId}`), { failOnStatusCode: false });
+      await asOwner.delete(url(`/apikeys/${token.id}`));
     }
+  });
+
+  test("ZYR-P07 changed draft returns a coherent review; the prior revision cannot publish or create an orphan suite", async () => {
+    const marker = randomUUID();
+    const response = await asOwner.post(url("/agents/zyra/tasks/proposals"), {
+      data: { requestKey: marker, operations: [{ opType: "create", draft: { title: `Original ${marker}`, steps: [{ action: "Retained action", expectedResult: "Retained expectation" }] } }] },
+    });
+    expect(response.status(), await response.text()).toBe(201);
+    const staged = await response.json(), saveUrl = url(`/agents/zyra/tasks/${staged.id}/save`);
+    const reviewed = await readZyraProposal(asOwner, saveUrl);
+    const edit = await asOwner.patch(url(`/agents/zyra/tasks/${staged.id}/drafts/0`), { data: { title: `Revised ${marker}` } });
+    expect(edit.status(), await edit.text()).toBe(200);
+    const edited = await edit.json();
+    expect(edited.proposalRevision).toMatch(/^[a-f0-9]{64}$/);
+    expect(edited.proposalRevision).not.toBe(reviewed.proposalRevision);
+    expect(edited.proposalSnapshot.operations[0].draft.title).toBe(`Revised ${marker}`);
+    expect(JSON.stringify(edited.proposalSnapshot.operations[0].draft.steps)).toContain("Retained action");
+    const suiteName = `Exact reviewed suite ${marker}`;
+    const stale = await asOwner.post(saveUrl, { data: { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [0], suiteName } });
+    expect(stale.status(), await stale.text()).toBe(409);
+    expect(scalar(`SELECT COUNT(*) FROM suites WHERE project_id=${literal(tenant!.mainProjectId)} AND name=${literal(suiteName)};`)).toBe("0");
+    expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)} AND title IN (${literal(`Original ${marker}`)},${literal(`Revised ${marker}`)});`)).toBe("0");
+    const current = await asOwner.post(saveUrl, { data: { expectedProposalRevision: edited.proposalRevision, selectedDraftIndexes: [0], suiteName } });
+    expect(current.status(), await current.text()).toBe(201);
+    const applied = await current.json();
+    expect(applied.testcases[0]).toMatchObject({ title: `Revised ${marker}`, status: "Draft" });
+    expect(applied.saveReceipt.reviewedSnapshot).toEqual(edited.proposalSnapshot);
+    expect(scalar(`SELECT COUNT(*) FROM suites WHERE project_id=${literal(tenant!.mainProjectId)} AND name=${literal(suiteName)};`)).toBe("1");
   });
 
   // ─── MCP ──────────────────────────────────────────────────────────────────
@@ -1594,10 +1669,10 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     async () => {
       // Exercises POST .../tasks/:id/save (zyraSave/zyraSaveAttempt) and POST .../tasks/:id/close
       // (zyraCloseTask) for real — the actual product actions behind the Save and Close buttons —
-      // rather than seeding task_status = 'done' directly. Task-board batches resolve to 'done' on
-      // ANY save (see zyraSaveAttempt's own comment), partial or not, unlike a chat-staged batch.
+      // rather than seeding task_status = 'done' directly. A partial batch remains reviewable;
+      // an explicit human Close resolves the unselected remainder before the completed-task rate.
       const partialTaskId = seedTask({ drafts: 3, status: "in_review" });
-      const saveRes = await asOwner.post(url(`/agents/zyra/tasks/${partialTaskId}/save`), {
+      const saveRes = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${partialTaskId}/save`), {
         data: { selectedDraftIndexes: [0, 1] },
         failOnStatusCode: false,
       });
@@ -1609,8 +1684,11 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       try {
         expect(
           scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(partialTaskId)};`),
-          "a task-board batch must resolve to 'done' even on a partial save",
-        ).toBe("done");
+          "a partially selected task must retain its reviewable remainder",
+        ).toBe("in_review");
+        expect(scalar(`SELECT generated_count FROM ai_generation_requests WHERE id = ${literal(partialTaskId)};`)).toBe("3");
+        const closePartial = await asOwner.post(url(`/agents/zyra/tasks/${partialTaskId}/close`), { data: {} });
+        expect(closePartial.status(), await closePartial.text()).toBe(201);
 
         const closedTaskId = seedTask({ drafts: 2, status: "in_review" });
         const closeRes = await asOwner.post(url(`/agents/zyra/tasks/${closedTaskId}/close`), {
@@ -1884,7 +1962,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
      * the time this runs. It now refuses that status outright.
      */
     const taskId = seedTask({ status: "in_progress" });
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), {
+    const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), {
       data: { selectedDraftIndexes: [0] },
       failOnStatusCode: false,
     });
@@ -2339,7 +2417,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     }
   });
 
-  test("ZYR-A-51 saving a chat-staged create draft writes a real test case into its own suite, tagged and audited as zyra_chat", async () => {
+  test("ZYR-A-51 saving a chat-staged create preserves its suite and producer provenance in human publication evidence", async () => {
     const suite = await asOwner.post(url("/suites"), { data: { name: `E2E zyra chat suite ${Date.now()}` }, failOnStatusCode: false });
     expect(suite.status()).toBe(201);
     const suiteId = (await suite.json()).id;
@@ -2348,7 +2426,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       entries: [{ opType: "create", draft: { suiteId, title: draftTitle, description: "", preconditions: "", stepsJson: "[]", priority: "P1", type: "Functional", status: "Draft" }, reason: "" }],
     });
 
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), {
+    const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), {
       data: { selectedDraftIndexes: [0] },
       failOnStatusCode: false,
     });
@@ -2362,7 +2440,8 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const auditSource = scalar(
       `SELECT diff->>'source' FROM audit_logs WHERE action = 'zyra_created' AND entity_id = ${literal(testcaseId)} ORDER BY created_at DESC LIMIT 1;`,
     );
-    expect(auditSource, "a chat-saved case must be audited with source zyra_chat, same as chat's own direct writes").toBe("zyra_chat");
+    expect(auditSource, "the native publication owner records the human decision").toBe("testcase_proposal_review");
+    expect(body.saveReceipt).toMatchObject({ principalKind: "human_session", reviewerId: tenant!.owner.userId, provenance: { provider: "zyra_chat" } });
     expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("done");
   });
 
@@ -2373,7 +2452,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       const { taskId } = seedChatReviewTask({
         entries: [{ opType: "update", testcaseId, externalId: "E2E-1", fields: { priority: "P0", title: "Updated via chat review" }, reason: "" }],
       });
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving a chat-staged update — ${await res.text()}`).toBe(201);
       expect(scalar(`SELECT priority FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("P0");
       expect(scalar(`SELECT title FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("Updated via chat review");
@@ -2427,7 +2506,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       ],
     });
 
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), {
+    const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), {
       data: { selectedDraftIndexes: [0] },
       failOnStatusCode: false,
     });
@@ -2465,7 +2544,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
           { opType: "update", testcaseId, externalId: "E2E-1", fields: { stepsJson: JSON.stringify(steps) }, reason: "" },
         ],
       });
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), {
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), {
         data: { selectedDraftIndexes: [0] },
         failOnStatusCode: false,
       });
@@ -2488,7 +2567,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       const { taskId } = seedChatReviewTask({
         entries: [{ opType: "archive", testcaseId, externalId: "E2E-1", fields: { status: "Archived" }, reason: "" }],
       });
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving a chat-staged archive — ${await res.text()}`).toBe(201);
       expect(scalar(`SELECT status FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("Archived");
     } finally {
@@ -2508,21 +2587,21 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
         ],
       });
 
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving one of two staged drafts — ${await res.text()}`).toBe(201);
       const body = await res.json();
       expect(body.savedCount).toBe(1);
       expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(createTitle)};`)).toBe("1");
       expect(scalar(`SELECT status FROM testcases WHERE id = ${literal(otherId)};`), "the unselected archive must not have run").not.toBe("Archived");
 
-      // The batch stays open — this is what distinguishes a chat-staged batch from a Task-board one.
+      // Every partially selected producer's batch stays open until its remainder is resolved.
       expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("in_review");
       const remaining = JSON.parse(scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`));
       expect(remaining).toHaveLength(1);
       expect(remaining[0].opType).toBe("archive");
 
       // And the remaining draft is still fully actionable.
-      const secondSave = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const secondSave = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(secondSave.status(), `saving the remaining draft — ${await secondSave.text()}`).toBe(201);
       expect(scalar(`SELECT status FROM testcases WHERE id = ${literal(otherId)};`)).toBe("Archived");
       expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("done");
@@ -2533,7 +2612,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
 
   test("ZYR-A-55 an explicitly empty selection saves nothing and leaves the batch in review", async () => {
     const { taskId } = seedChatReviewTask();
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [] }, failOnStatusCode: false });
+    const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [] }, failOnStatusCode: false });
     expect(res.status(), `an explicit empty selection — ${await res.text()}`).toBe(201);
     const body = await res.json();
     expect(body.savedCount, "an explicitly empty selection must not fall back to saving everything").toBe(0);
@@ -2541,16 +2620,21 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)};`)).toBe("0");
   });
 
-  test("ZYR-A-56 omitting the selection entirely saves the whole batch, for back-compat", async () => {
+  test("ZYR-A-56 omitting the selection is refused without effects; an explicit reviewed selection applies the batch", async () => {
     const { taskId } = seedChatReviewTask({
       entries: [
         { opType: "create", draft: { suiteId: null, title: `E2E omit-selection A ${Date.now()}`, description: "", preconditions: "", stepsJson: "[]", priority: "P2", type: "Functional", status: "Draft" }, reason: "" },
         { opType: "create", draft: { suiteId: null, title: `E2E omit-selection B ${Date.now()}`, description: "", preconditions: "", stepsJson: "[]", priority: "P2", type: "Functional", status: "Draft" }, reason: "" },
       ],
     });
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
-    expect(res.status(), `an omitted selection — ${await res.text()}`).toBe(201);
-    expect((await res.json()).savedCount).toBe(2);
+    const reviewed = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}/save`));
+    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { expectedProposalRevision: reviewed.proposalRevision }, failOnStatusCode: false });
+    expect(res.status(), `an omitted selection — ${await res.text()}`).toBe(400);
+    expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)};`)).toBe("0");
+    expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("in_review");
+    const selected = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [0, 1] } });
+    expect(selected.status(), await selected.text()).toBe(201);
+    expect((await selected.json()).savedCount).toBe(2);
     expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("done");
   });
 
@@ -2568,7 +2652,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       ],
     });
 
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0, 1] }, failOnStatusCode: false });
+    const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0, 1] }, failOnStatusCode: false });
     expect(res.status(), `saving alongside a deleted target — ${await res.text()}`).toBe(409);
     const body = await res.json();
     expect(body.staleDraftIndexes).toEqual([1]);
@@ -2585,16 +2669,18 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       entries: [{ opType: "create", draft: { suiteId: null, title: createTitle, description: "", preconditions: "", stepsJson: "[]", priority: "P2", type: "Functional", status: "Draft" }, reason: "" }],
     });
 
+    const reviewed = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}/save`));
+    const data = { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [0] };
     const [a, b] = await Promise.all([
-      asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false }),
-      asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false }),
+      asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data, failOnStatusCode: false }),
+      asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data, failOnStatusCode: false }),
     ]);
-    expect(a.status(), `first concurrent save — ${await a.text()}`).toBeLessThan(500);
-    expect(b.status(), `second concurrent save — ${await b.text()}`).toBeLessThan(500);
-    // One request wins the row lock and saves; the other, once it acquires the lock, sees a batch
-    // that has already moved on and is refused rather than saving a second time.
-    const winners = [a, b].filter((r) => r.status() === 201);
-    expect(winners.length, "exactly one of two concurrent saves should succeed").toBe(1);
+    expect(a.status(), `first concurrent save — ${await a.text()}`).toBe(201);
+    expect(b.status(), `second concurrent save — ${await b.text()}`).toBe(201);
+    const [first, repeated] = await Promise.all([a.json(), b.json()]);
+    expect(first.saveReceipt.id).toBe(repeated.saveReceipt.id);
+    expect([first.replayed, repeated.replayed].sort()).toEqual([false, true]);
+    expect(scalar(`SELECT COUNT(*) FROM audit_logs WHERE entity_id=${literal(taskId)} AND action='testcase_proposals_applied';`)).toBe("1");
     expect(
       scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(createTitle)};`),
       "a race between two saves created the same test case twice",
@@ -2606,7 +2692,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const off = await asOwner.patch(url("/agents/zyra/settings"), { data: { capabilities: { testcaseStorage: false } }, failOnStatusCode: false });
     expect(off.status()).toBeLessThan(300);
     try {
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving with storage disabled — ${await res.text()}`).toBe(403);
       expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("in_review");
     } finally {
@@ -2666,14 +2752,14 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
    * "[Zyra] Severity and Component Are Missing in Generated Test Cases" — Zyra never asked the
    * model for these two fields, so every generated test case saved with both null regardless of
    * what the task-board draft carried. ZYR-A-71/72 cover the plain persistence path (a draft that
-   * already has the fields, and one that doesn't); ZYR-A-73/74 cover the "regenerating an
-   * already-linked test case" path, where an automatic redirect must never silently overwrite a
-   * human-set value — see processZyraSaveEntriesSequential/Batched's "only fill if blank" comment.
+   * already has the fields, and one that doesn't). ZYR-A-73/74 prove that a reviewed create remains
+   * a create even when its source ticket already has linked cases; only an explicit update may
+   * change those existing cases.
    */
   test("ZYR-A-71 a task-board draft's severity and component are persisted on save", async () => {
     const draftTitle = `E2E severity component ${Date.now()}`;
     const taskId = seedTask({ drafts: 1, draftOverrides: [{ title: draftTitle, severity: "High", component: "Auth" }] });
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+    const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
     expect(res.status(), `saving the draft — ${await res.text()}`).toBe(201);
     expect(scalar(`SELECT severity FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(draftTitle)};`)).toBe("High");
     expect(scalar(`SELECT component FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(draftTitle)};`)).toBe("Auth");
@@ -2682,13 +2768,13 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
   test("ZYR-A-72 a task-board draft with no severity or component still saves — both stay null, not a failure", async () => {
     const draftTitle = `E2E no severity component ${Date.now()}`;
     const taskId = seedTask({ drafts: 1, draftOverrides: [{ title: draftTitle }] });
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+    const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
     expect(res.status(), `saving the draft — ${await res.text()}`).toBe(201);
     expect(scalar(`SELECT severity FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(draftTitle)};`)).toBe("");
     expect(scalar(`SELECT component FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(draftTitle)};`)).toBe("");
   });
 
-  test("ZYR-A-73 regenerating an already-linked test case never overwrites its already-set severity/component with a fresh draft guess", async () => {
+  test("ZYR-A-73 a create sharing a source ticket preserves the original case and its human-set severity/component", async () => {
     const jiraIssueKey = `E2E-ZYRA-${Date.now()}`;
     const created = await asOwner.post(url("/testcases"), {
       data: { title: "E2E already-linked case", priority: "P2", jiraIssueKey, severity: "Critical", component: "Payments" },
@@ -2699,11 +2785,13 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     try {
       const draftTitle = `E2E regenerated content ${Date.now()}`;
       const taskId = seedTask({ drafts: 1, jiraIssueKey, draftOverrides: [{ title: draftTitle, severity: "Low", component: "Billing" }] });
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving the regenerated draft — ${await res.text()}`).toBe(201);
-      // Content is genuinely regenerated (this is a real redirect-to-update, not a no-op)...
-      expect(scalar(`SELECT title FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe(draftTitle);
-      // ...but severity/component were already set by a human and must survive untouched.
+      const applied = await res.json();
+      expect(applied.testcases[0].id).not.toBe(testcaseId);
+      expect(applied.testcases[0]).toMatchObject({ title: draftTitle, severity: "Low", component: "Billing" });
+      expect(scalar(`SELECT title FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("E2E already-linked case");
+      // The original case's complete human-authored content remains unchanged.
       expect(scalar(`SELECT severity FROM testcases WHERE id = ${literal(testcaseId)};`), "an already-set severity must never be overwritten by a regenerated draft").toBe("Critical");
       expect(scalar(`SELECT component FROM testcases WHERE id = ${literal(testcaseId)};`), "an already-set component must never be overwritten by a regenerated draft").toBe("Payments");
     } finally {
@@ -2711,7 +2799,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     }
   });
 
-  test("ZYR-A-74 regenerating an already-linked test case with no severity/component yet fills them in from the fresh draft", async () => {
+  test("ZYR-A-74 a reviewed create carries its own severity/component without filling unrelated linked case fields", async () => {
     const jiraIssueKey = `E2E-ZYRA-${Date.now()}`;
     const created = await asOwner.post(url("/testcases"), {
       data: { title: "E2E blank severity component case", priority: "P2", jiraIssueKey },
@@ -2721,26 +2809,21 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const testcaseId = (await created.json()).id;
     try {
       const taskId = seedTask({ drafts: 1, jiraIssueKey, draftOverrides: [{ severity: "Medium", component: "Search" }] });
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving the regenerated draft — ${await res.text()}`).toBe(201);
-      expect(scalar(`SELECT severity FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("Medium");
-      expect(scalar(`SELECT component FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("Search");
+      const applied = await res.json();
+      expect(applied.testcases[0].id).not.toBe(testcaseId);
+      expect(applied.testcases[0]).toMatchObject({ severity: "Medium", component: "Search" });
+      expect(scalar(`SELECT severity FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("");
+      expect(scalar(`SELECT component FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("");
     } finally {
       await asOwner.delete(url(`/testcases/${testcaseId}`), { failOnStatusCode: false });
     }
   });
 
-  /*
-   * Zyra regeneration silently wiped an already-linked case's existing citations. draft.sourceRefs
-   * was always written as a real (possibly empty) array, so updateTestCaseWithClient's
-   * `COALESCE($28::jsonb, source_refs)` always took the new value and never fell back to what the
-   * row already had — an ungrounded re-run (no citations resolved this turn) erased them outright.
-   * Same "only fill if blank" protection severity/component get in ZYR-A-73 above, now extended to
-   * source_refs. Invisible before the repository table's Context column existed (nothing rendered
-   * source_refs after creation); ZYR-A-89/90 pin both directions now that it's a real user-facing
-   * regression.
-   */
-  test("ZYR-A-89 regenerating an already-linked test case with no new citations never wipes its existing ones", async () => {
+  /* A create never retargets an existing ticket-linked case at Save. The reviewed new case's
+   * citations are applied exactly; the original case's citations remain its own reviewed history. */
+  test("ZYR-A-89 a reviewed create with no citations never wipes an existing linked case citations", async () => {
     const jiraIssueKey = `E2E-ZYRA-${Date.now()}`;
     const existingCitation = { type: "testcase", id: `E2E-CITED-${Date.now()}`, title: "E2E previously cited case" };
     const created = await asOwner.post(url("/testcases"), {
@@ -2754,11 +2837,12 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       // draftOverrides omits sourceRefs entirely — the same shape a task-board draft (no chat
       // pipeline, no citations ever attached) always has.
       const taskId = seedTask({ drafts: 1, jiraIssueKey, draftOverrides: [{ title: draftTitle }] });
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving the regenerated draft — ${await res.text()}`).toBe(201);
-      // Content is genuinely regenerated (this is a real redirect-to-update, not a no-op)...
-      expect(scalar(`SELECT title FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe(draftTitle);
-      // ...but the citation this case already had must survive untouched.
+      const applied = await res.json();
+      expect(applied.testcases[0].id).not.toBe(testcaseId);
+      expect(applied.testcases[0].title).toBe(draftTitle);
+      expect(scalar(`SELECT title FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("E2E already-cited case");
       const after = await (await asOwner.get(url(`/testcases/${testcaseId}`))).json();
       expect(after.sourceRefs, "an ungrounded regeneration must never wipe citations the case already had").toEqual([existingCitation]);
     } finally {
@@ -2766,7 +2850,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     }
   });
 
-  test("ZYR-A-90 regenerating an already-linked test case with freshly resolved citations replaces the stale ones", async () => {
+  test("ZYR-A-90 a reviewed create uses its new citations while the source-linked original stays unchanged", async () => {
     const jiraIssueKey = `E2E-ZYRA-${Date.now()}`;
     const staleCitation = { type: "testcase", id: `E2E-STALE-${Date.now()}`, title: "E2E stale citation" };
     const created = await asOwner.post(url("/testcases"), {
@@ -2778,10 +2862,13 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     try {
       const freshCitation = { type: "bug", id: `E2E-FRESH-${Date.now()}`, title: "E2E fresh citation" };
       const taskId = seedTask({ drafts: 1, jiraIssueKey, draftOverrides: [{ sourceRefs: [freshCitation] }] });
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving the regenerated draft — ${await res.text()}`).toBe(201);
+      const applied = await res.json();
+      expect(applied.testcases[0].id).not.toBe(testcaseId);
+      expect(applied.testcases[0].sourceRefs).toEqual([freshCitation]);
       const after = await (await asOwner.get(url(`/testcases/${testcaseId}`))).json();
-      expect(after.sourceRefs, "a regeneration that actually resolved citations must overwrite the stale ones, not just add to them").toEqual([freshCitation]);
+      expect(after.sourceRefs, "a reviewed create must never redirect into a different linked case").toEqual([staleCitation]);
     } finally {
       await asOwner.delete(url(`/testcases/${testcaseId}`), { failOnStatusCode: false });
     }
@@ -3145,9 +3232,12 @@ test.describe("zyra chat — citations (fake provider)", () => {
 
     await createFolderDoc("General note", generalMarker, "general");
     const approvedMemoryId = await createFolderDoc("Approved memory", approvedMemoryMarker, "ai_memory");
+    const memoryBeforeReview = await asOwner.get(`/api/projects/${tenant!.mainProjectId}/knowledge-base/documents/${approvedMemoryId}`);
+    expect(memoryBeforeReview.ok()).toBeTruthy();
+    const memoryRevision = (await memoryBeforeReview.json()).editRevision;
     const approveRes = await asOwner.patch(
       `/api/projects/${tenant!.mainProjectId}/knowledge-base/documents/${approvedMemoryId}/approve-ai-memory`,
-      { failOnStatusCode: false },
+      { data: { expectedRevision: memoryRevision }, failOnStatusCode: false },
     );
     expect(approveRes.status(), `approving the memory doc — ${await approveRes.text()}`).toBe(200);
     // Left in the default "draft" status deliberately — never approved (and never rejected either,
@@ -3325,9 +3415,9 @@ test.describe("zyra chat — citations (fake provider)", () => {
   // couldn't stop existing without a hard delete, and a hard-deleted suite would make the save's INSERT
   // fail loudly on the FK. Now the row still exists (just filtered out of every list), so the FK is
   // satisfied and the old code would have silently written a suite_id that looks deleted everywhere
-  // else. Per Yuvraj's resolution (Q11): fall back to unassigned rather than failing the batch, and
-  // note the fallback in the batch's own activity_log.
-  test("ZYR-A-68 a create draft's staged suite falls back to unassigned (not a failed save) if the suite is soft-deleted before Save", async () => {
+  // else. The exact review contract now rejects that stale decision and lets the human explicitly
+  // review the new state and choose an unassigned destination.
+  test("ZYR-A-68 deleting a staged suite invalidates the review; explicit unassigned publication remains available", async () => {
     await allocateFakeAiKey();
     const suiteName = `E2E Suite Deleted Before Save ${Date.now()}`;
     const suiteRes = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/suites`, {
@@ -3373,6 +3463,7 @@ test.describe("zyra chat — citations (fake provider)", () => {
       `SELECT generated_payload->0->'draft'->>'suiteId' FROM ai_generation_requests WHERE id = ${literal(taskId)};`,
     );
     expect(stagedSuiteId, "the draft must have resolved the suite by name before this test deletes it").toBe(suiteId);
+    const reviewed = await readZyraProposal(asOwner, url(`/tasks/${taskId}/save`));
 
     // The suite is deleted (soft, per this fix) BETWEEN staging and Save — the exact window Q11 is
     // about. moveToDefault is the mode that matters here: it does not touch the testcases, only the
@@ -3383,8 +3474,11 @@ test.describe("zyra chat — citations (fake provider)", () => {
     });
     expect(deleteRes.ok(), `deleting the suite — ${await deleteRes.text()}`).toBeTruthy();
 
-    const saveRes = await asOwner.post(url(`/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
-    expect(saveRes.status(), `saving despite the deleted suite — ${await saveRes.text()}`).toBeLessThan(300);
+    const stale = await asOwner.post(url(`/tasks/${taskId}/save`), { data: { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [0] }, failOnStatusCode: false });
+    expect(stale.status(), `the deleted suite changed the reviewed dependencies — ${await stale.text()}`).toBe(409);
+    expect(scalar(`SELECT saved_count FROM ai_generation_requests WHERE id=${literal(taskId)};`)).toBe("0");
+    const saveRes = await saveReviewedZyraTask(asOwner, url(`/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0], suiteId: null }, failOnStatusCode: false });
+    expect(saveRes.status(), `the human explicitly chooses unassigned after reviewing again — ${await saveRes.text()}`).toBe(201);
     const saved = await saveRes.json();
     expect(saved.savedCount, "the batch must still save, not fail outright").toBe(1);
     expect(saved.testcases).toHaveLength(1);
@@ -3393,14 +3487,7 @@ test.describe("zyra chat — citations (fake provider)", () => {
     const persistedSuiteId = scalar(`SELECT suite_id FROM testcases WHERE id = ${literal(saved.testcases[0].id)};`);
     expect(persistedSuiteId, "the new test case must land unassigned, not pointing at the deleted suite").toBe("");
 
-    const activityLog = JSON.parse(scalar(`SELECT activity_log::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`)) as Array<{
-      title?: string;
-      detail?: string;
-    }>;
-    expect(
-      activityLog.some((entry) => /no longer available/i.test(entry.title || "")),
-      `the fallback must be noted on the batch's own activity log — got ${JSON.stringify(activityLog)}`,
-    ).toBe(true);
+    expect(saved.saveReceipt.applyParameters).toMatchObject({ suiteIdProvided: true, suiteId: null });
   });
 
   // Zyra context integrity, Phase 3/4 — resolveOrCreateSuiteByName (legacy.service.ts) is the
@@ -3557,7 +3644,7 @@ test.describe("zyra chat — citations (fake provider)", () => {
     );
     expect(taskId, "the create turn must have staged a review batch").toBeTruthy();
 
-    const saveRes = await asOwner.post(url(`/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
+    const saveRes = await saveReviewedZyraTask(asOwner, url(`/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
     expect(saveRes.status(), `saving — ${await saveRes.text()}`).toBeLessThan(300);
     const saved = await saveRes.json();
     expect(saved.testcases).toHaveLength(1);
@@ -3585,7 +3672,7 @@ test.describe("zyra chat — citations (fake provider)", () => {
     const taskId = scalar(
       `SELECT id FROM ai_generation_requests WHERE chat_session_id = ${literal(sessionId)} AND task_status = 'in_review' ORDER BY created_at DESC LIMIT 1;`,
     );
-    const saveRes = await asOwner.post(url(`/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
+    const saveRes = await saveReviewedZyraTask(asOwner, url(`/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
     const saved = await saveRes.json();
     expect(
       scalar(`SELECT severity FROM testcases WHERE id = ${literal(saved.testcases[0].id)};`),
@@ -3613,7 +3700,7 @@ test.describe("zyra chat — citations (fake provider)", () => {
     const taskId = scalar(
       `SELECT id FROM ai_generation_requests WHERE chat_session_id = ${literal(sessionId)} AND task_status = 'in_review' ORDER BY created_at DESC LIMIT 1;`,
     );
-    const saveRes = await asOwner.post(url(`/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
+    const saveRes = await saveReviewedZyraTask(asOwner, url(`/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
     const saved = await saveRes.json();
     expect(saved.testcases).toHaveLength(2);
     expect(scalar(`SELECT component FROM testcases WHERE id = ${literal(saved.testcases[0].id)};`)).toBe("");
@@ -3761,7 +3848,7 @@ test.describe("zyra chat — citations (fake provider)", () => {
     expect(storedSteps(tc.id).map((s) => s.expectedResult)).toEqual(["test", "tes", "The previous photo is still shown"]);
 
     const reviewId = scalar(`SELECT id FROM ai_generation_requests WHERE chat_session_id = ${literal(sessionId)} ORDER BY created_at DESC LIMIT 1;`);
-    const saved = await asOwner.post(url(`/tasks/${reviewId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+    const saved = await saveReviewedZyraTask(asOwner, url(`/tasks/${reviewId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
     expect(saved.status(), `saving the staged update — ${await saved.text()}`).toBe(201);
     expect(storedSteps(tc.id)).toEqual(improved.map(({ action, expectedResult }) => ({ action, expectedResult })));
   });
@@ -5163,7 +5250,7 @@ test.describe("zyra task-board — ticket auto-comment (fake provider)", () => {
   }
 
   async function save(taskId: string, selectedDraftIndexes?: number[]): Promise<APIResponse> {
-    return asOwner.post(url(`/tasks/${taskId}/save`), {
+    return saveReviewedZyraTask(asOwner, url(`/tasks/${taskId}/save`), {
       data: selectedDraftIndexes ? { selectedDraftIndexes } : {},
       failOnStatusCode: false,
     });

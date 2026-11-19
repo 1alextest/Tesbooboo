@@ -1,3 +1,4 @@
+import { createTestcaseFixtureResponse } from "./testcase-approval";
 import { pbkdf2Sync, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -120,7 +121,7 @@ export async function createTestCase(
   data: { title?: string; status?: string; priority?: string; suiteId?: string } = {},
 ): Promise<{ id: string; title: string }> {
   const title = data.title ?? `E2E Screens Case ${uniqueSuffix()}`;
-  const res = await api.post(`/api/projects/${projectId}/testcases`, {
+  const res = await createTestcaseFixtureResponse(api, `/api/projects/${projectId}/testcases`, {
     data: { ...data, title },
   });
   const created = await res.json();

@@ -30,6 +30,7 @@ import {
   updateSuite,
   deleteSuite,
   getTestCase,
+  approveTestCase,
   createTestCase,
   updateTestCase,
   deleteTestCase,
@@ -69,6 +70,7 @@ const CONTEXT_TYPE_LABEL: Record<ZyraSourceRef["type"], string> = {
   bug: "Bug",
 };
 import { RepositoryTestCaseTable, type RepoTcSort, type RepoTcSortColumn } from "@/components/testcases/RepositoryTestCaseTable";
+import { TestCaseApprovalReview, type TestCaseApprovalSnapshot } from "@/components/testcases/TestCaseApprovalReview";
 import { useTopBarSlots } from "@/components/TopBarSlots";
 import { Breadcrumbs } from "@/components/workflows";
 import {
@@ -115,6 +117,7 @@ const MAX_PAGE_SIZE = 500;
 const BULK_NO_CHANGE = "";
 const DEFAULT_PAGE_SIZE = 25;
 const TESTCASE_STATUSES = ["Draft", "In Review", "Approved", "Deprecated", "Archived"];
+const EDITABLE_TESTCASE_STATUSES = TESTCASE_STATUSES.filter((value) => value !== "Approved");
 // "Not set" is a real stored value (a case nobody has prioritised yet, e.g. one migrated from a tool
 // whose priority was blank). It is last so it never reads as a rank, and sorts after P3.
 const TESTCASE_PRIORITIES = ["P0", "P1", "P2", "P3", "Not set"];
@@ -404,6 +407,7 @@ export default function TestCasesPage() {
   const [panelTab, setPanelTab] = useState<PanelTab>("overview");
   const [panelTestcaseId, setPanelTestcaseId] = useState<string | null>(null);
   const [panelLoading, setPanelLoading] = useState(false);
+  const panelLoadRequestRef = useRef(0);
   const [panelSaving, setPanelSaving] = useState(false);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [panelSuccess, setPanelSuccess] = useState<string | null>(null);
@@ -441,6 +445,9 @@ export default function TestCasesPage() {
   const [panelOriginalStatus, setPanelOriginalStatus] = useState<string | null>(null);
   const [panelOriginalSuiteId, setPanelOriginalSuiteId] = useState<string | null>(null);
   const [panelEditRevision, setPanelEditRevision] = useState<string | null>(null);
+  const [loadedFormFingerprint, setLoadedFormFingerprint] = useState<string | null>(null);
+  const [approvalReview, setApprovalReview] = useState<{ id: string; editRevision: string; approvalRevision: string; snapshot: TestCaseApprovalSnapshot } | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   // Bugs filed against this test case (edit mode only — a case being created has none yet).
   const [panelBugs, setPanelBugs] = useState<BugItem[]>([]);
@@ -1015,8 +1022,62 @@ export default function TestCasesPage() {
     setPanelSourceRefs(Array.isArray(data.sourceRefs) ? (data.sourceRefs as ZyraSourceRef[]) : []);
   }
 
+  function editorFingerprint(data: Record<string, unknown>, fields: Record<string, unknown>, tags: string[]): string {
+    const textKeys = ["title", "description", "preconditions", "postconditions", "testData", "estimatedDuration", "attachments", "type", "priority", "automationStatus", "component", "severity", "technique", "suiteId"];
+    return JSON.stringify({
+      text: textKeys.map((key) => String(data[key] ?? "")),
+      status: String(data.status ?? "Draft"),
+      steps: parseSteps(data.steps),
+      reviewViews: Array.isArray(data.reviewViews) ? data.reviewViews.map(String) : [],
+      fields: Object.entries(fields).sort(([a], [b]) => a.localeCompare(b)),
+      tags: [...tags].sort(),
+    });
+  }
+
+  function hasUnsavedReviewChanges(): boolean {
+    return !loadedFormFingerprint || loadedFormFingerprint !== editorFingerprint({
+      title, description, preconditions, postconditions, testData, estimatedDuration, attachments,
+      type, priority, status, automationStatus, component, severity, technique, suiteId, steps, reviewViews,
+    }, customFieldValues, panelTagIds);
+  }
+
+  async function openApprovalReview() {
+    if (!panelTestcaseId || panelSaving || hasUnsavedReviewChanges()) return;
+    setPanelSaving(true);
+    setPanelError(null);
+    try {
+      const data = await getTestCase(projectId, panelTestcaseId);
+      const snapshot = data.approvalSnapshot as TestCaseApprovalSnapshot | undefined;
+      if (typeof data.editRevision !== "string" || typeof data.approvalRevision !== "string" || !snapshot?.case
+          || !Array.isArray(snapshot.customFields) || !Array.isArray(snapshot.customTags)) {
+        throw new Error("The complete reviewed version is unavailable. Reload the case before approving it.");
+      }
+      setApprovalError(null);
+      setApprovalReview({ id: panelTestcaseId, editRevision: data.editRevision, approvalRevision: data.approvalRevision, snapshot });
+    } catch (error) {
+      setPanelError(error instanceof Error ? error.message : "Could not load the version for review.");
+    } finally { setPanelSaving(false); }
+  }
+
+  async function submitApprovalReview() {
+    if (!approvalReview || panelSaving) return;
+    setPanelSaving(true);
+    try {
+      await approveTestCase(projectId, approvalReview.id, approvalReview.editRevision, approvalReview.approvalRevision);
+      const reviewedId = approvalReview.id;
+      setApprovalReview(null);
+      await loadSuitesAndSummary();
+      await loadSelectedSuiteCases();
+      await openViewPanel(reviewedId);
+      setPanelSuccess("The reviewed version was approved.");
+    } catch (error) {
+      setApprovalError(error instanceof Error ? error.message : "Could not confirm approval. Reload the case to check its current state.");
+    } finally { setPanelSaving(false); }
+  }
+
   function resetForm(defaultSuiteId?: string | null) {
     setPanelEditRevision(null);
+    setLoadedFormFingerprint(null);
     setTitle("");
     setDescription("");
     setPreconditions("");
@@ -1053,6 +1114,7 @@ export default function TestCasesPage() {
   }
 
   async function openCreatePanel() {
+    panelLoadRequestRef.current += 1;
     setPanelError(null);
     setPanelTestcaseId(null);
     setPanelMode("create");
@@ -1061,6 +1123,7 @@ export default function TestCasesPage() {
   }
 
   async function openCreatePanelForSuite(targetSuiteId: string) {
+    panelLoadRequestRef.current += 1;
     setPanelError(null);
     setPanelTestcaseId(null);
     setPanelMode("create");
@@ -1069,6 +1132,7 @@ export default function TestCasesPage() {
   }
 
   async function openViewPanel(testcaseId: string) {
+    const requestId = ++panelLoadRequestRef.current;
     setPanelError(null);
     setPanelLoading(true);
     setPanelTestcaseId(testcaseId);
@@ -1083,31 +1147,36 @@ export default function TestCasesPage() {
     setPanelOriginalSuiteId(null);
     setPanelEditRevision(null);
     setCustomFieldErrors({});
+    setLoadedFormFingerprint(null);
     setSelectedSourceRef(null);
     try {
       const [data, customFields, bugs, tags] = await Promise.all([
         getTestCase(projectId, testcaseId),
-        getCustomFieldValues(projectId, testcaseId).catch(() => []),
+        getCustomFieldValues(projectId, testcaseId),
         listBugs(projectId, { testcaseId }).catch(() => []),
-        getTestCaseTags(projectId, testcaseId).catch(() => []),
+        getTestCaseTags(projectId, testcaseId),
       ]);
+      if (requestId !== panelLoadRequestRef.current) return;
       fillFormFromTestCase(data);
       setPanelCustomFields(customFields);
       setCustomFieldValues(Object.fromEntries(customFields.map((f) => [f.id, f.value])));
       setPanelBugs(bugs);
       setPanelTagIds(tags.map((t) => t.id));
+      setLoadedFormFingerprint(editorFingerprint(data, Object.fromEntries(customFields.map((f) => [f.id, f.value])), tags.map((t) => t.id)));
     } catch {
-      setPanelError("Failed to load test case details.");
+      if (requestId === panelLoadRequestRef.current) setPanelError("Failed to load the complete test case details. Reload before editing or approving.");
     } finally {
-      setPanelLoading(false);
+      if (requestId === panelLoadRequestRef.current) setPanelLoading(false);
     }
   }
 
   function closePanel() {
+    panelLoadRequestRef.current += 1;
     setPanelMode("closed");
     setPanelTestcaseId(null);
     setPanelError(null);
     setPanelEditRevision(null);
+    setApprovalReview(null);
     setSelectedSourceRef(null);
   }
 
@@ -1646,7 +1715,7 @@ export default function TestCasesPage() {
           attachments,
           type,
           priority,
-          status,
+          status: status === "Approved" ? "In Review" : status,
           automationStatus,
           component,
           severity,
@@ -1669,7 +1738,7 @@ export default function TestCasesPage() {
         // refetched. loadSelectedSuiteCases() still runs for real: the filters above just changed,
         // so the list it fetches is genuinely different, not just "one row added" — that can't be
         // patched client-side. setSuiteCasesPage(1) above already resets the page it's sliced to.
-        applyTestCasesPatch(applySingleCaseDelta(suites, repoSummary, status, effectiveSuiteId, 1));
+        applyTestCasesPatch(applySingleCaseDelta(suites, repoSummary, status === "Approved" ? "In Review" : status, effectiveSuiteId, 1));
         await loadSelectedSuiteCases();
         if (submitAction === "create-next") {
           resetForm(effectiveSuiteId ?? activeSuiteId);
@@ -1694,7 +1763,7 @@ export default function TestCasesPage() {
           attachments,
           type,
           priority,
-          status,
+          status: status === "Approved" ? "In Review" : status,
           automationStatus,
           component,
           severity,
@@ -1723,7 +1792,7 @@ export default function TestCasesPage() {
           applyTestCasesPatch(
             applyTestCaseEditDelta(suites, repoSummary, {
               oldStatus: panelOriginalStatus,
-              newStatus: status,
+              newStatus: status === "Approved" ? "In Review" : status,
               oldSuiteId: panelOriginalSuiteId,
               newSuiteId: suiteId || null,
             })
@@ -2759,7 +2828,7 @@ export default function TestCasesPage() {
                         <Field>
                           <FieldLabel>Status</FieldLabel>
                           <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-                            {TESTCASE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                            {EDITABLE_TESTCASE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                           </Select>
                         </Field>
                         <Field>
@@ -2928,7 +2997,8 @@ export default function TestCasesPage() {
                             <Field>
                               <FieldLabel>Status</FieldLabel>
                               <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-                                {TESTCASE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                                {status === "Approved" && <option value="Approved" disabled>Approved — changes require review</option>}
+                                {EDITABLE_TESTCASE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                               </Select>
                             </Field>
                             <Field>
@@ -3141,6 +3211,13 @@ export default function TestCasesPage() {
                       </Button>
                     )}
                     <Button variant="secondary" onClick={closePanel} disabled={panelSaving}>Cancel</Button>
+                    {panelMode === "edit" && status !== "Archived" && (
+                      <Button type="button" variant="secondary" onClick={() => void openApprovalReview()}
+                        disabled={panelSaving || panelLoading || hasUnsavedReviewChanges()}
+                        title={hasUnsavedReviewChanges() ? "Save your changes before reviewing this version" : "Review the exact saved content and its dependencies"}>
+                        Review for approval
+                      </Button>
+                    )}
                   </div>
                   {panelMode === "edit" && panelTestcaseId && (
                     <div className="flex items-center gap-2">
@@ -3358,7 +3435,7 @@ export default function TestCasesPage() {
               <FieldLabel>Status</FieldLabel>
               <Select value={bulkStatus} disabled={bulkSaving} onChange={(e) => setBulkStatus(e.target.value)}>
                 <option value={BULK_NO_CHANGE}>Leave unchanged</option>
-                {TESTCASE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                {EDITABLE_TESTCASE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
               </Select>
             </Field>
             <Field>
@@ -3525,6 +3602,14 @@ export default function TestCasesPage() {
           );
         }}
       />
+
+      {approvalReview && <TestCaseApprovalReview
+        snapshot={approvalReview.snapshot}
+        busy={panelSaving}
+        error={approvalError}
+        onApprove={() => void submitApprovalReview()}
+        onClose={() => setApprovalReview(null)}
+      />}
 
       {importToast && (
         <div className="fixed bottom-5 right-5 z-[60] rounded-[var(--radius-control)] bg-[var(--toast-surface)] px-4 py-2.5 text-sm text-[var(--toast-foreground)] shadow-lg">

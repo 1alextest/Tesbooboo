@@ -1,3 +1,4 @@
+import { approveTestcase } from "../utils/testcase-approval";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, test, type APIRequestContext } from "@playwright/test";
@@ -316,7 +317,7 @@ test.describe("project analytics counters", () => {
   test("RPT-A-02 a soft-deleted test case leaves the counters, and a soft-deleted execution leaves the status map", { tag: '@tesbo.testId("TES-TC-462")' }, async () => {
     const before = await getJson(asOwner, `/api/projects/${fixture.projectId}/analytics`);
 
-    const throwaway = await seedTestCase(asOwner, fixture.projectId, { title: "E2E Reports soon-deleted case" });
+    const throwaway = await seedTestCase(asOwner, fixture.projectId, { title: "E2E Reports soon-deleted case", status: "Approved" });
     const run = await seedRun(asOwner, fixture.projectId, { name: `E2E Reports Delete Run ${Date.now()}` });
     await addRunCases(asOwner, run.id, [throwaway.id]);
     const [execution] = await listRunExecutions(asOwner, run.id);
@@ -377,7 +378,7 @@ async function seedRunWithStatuses(projectId: string, statuses: string[]): Promi
   const stamp = Date.now();
   const cases: SeededCase[] = [];
   for (let i = 0; i < statuses.length; i++) {
-    cases.push(await seedTestCase(asOwner, projectId, { title: `E2E Reports breakdown case ${stamp}-${i}` }));
+    cases.push(await seedTestCase(asOwner, projectId, { title: `E2E Reports breakdown case ${stamp}-${i}`, status: "Approved" }));
   }
   const run = await seedRun(asOwner, projectId, { name: `E2E Reports breakdown run ${stamp}` });
   await addRunCases(asOwner, run.id, cases.map((c) => c.id));
@@ -611,7 +612,7 @@ test.describe("execution report grouping", () => {
 
   test("RPT-A-17 a status outside the six reported buckets is counted as Untested", { tag: '@tesbo.testId("TES-TC-477")' }, async () => {
     const run = await seedRun(asOwner, fixture.projectId, { name: `E2E Reports Odd Status Run ${Date.now()}` });
-    const throwaway = await seedTestCase(asOwner, fixture.projectId, { title: "E2E Reports odd-status case" });
+    const throwaway = await seedTestCase(asOwner, fixture.projectId, { title: "E2E Reports odd-status case", status: "Approved" });
     try {
       await addRunCases(asOwner, run.id, [throwaway.id]);
       const [execution] = await listRunExecutions(asOwner, run.id);
@@ -678,6 +679,7 @@ test.describe("traceability matrix", () => {
   test("RPT-A-22 a soft-deleted case leaves the matrix, and a soft-deleted execution empties its result", { tag: '@tesbo.testId("TES-TC-482")' }, async () => {
     const throwaway = await seedTestCase(asOwner, fixture.projectId, {
       title: "E2E Reports matrix soft-delete case",
+      status: "Approved",
     });
     const run = await seedRun(asOwner, fixture.projectId, { name: `E2E Reports Matrix Run ${Date.now()}` });
     try {
@@ -935,6 +937,7 @@ test.describe("reports overview", () => {
      */
     const run = await seedRun(asOwner, fixture.projectId, { name: `E2E Reports Skip Retest Run ${Date.now()}` });
     try {
+      await approveTestcase(asOwner, fixture.projectId, fixture.cases.lowFlake.id);
       await addRunCases(asOwner, run.id, [
         fixture.cases.flaky.id,
         fixture.cases.stable.id,
@@ -960,6 +963,8 @@ test.describe("reports overview", () => {
       // Passed / (Passed + Failed + Blocked) = 1/1 = 100% — Skipped never reaches this ratio.
       expect(row.passRate).toBe(100);
     } finally {
+      const restored = await asOwner.put(`/api/projects/${fixture.projectId}/testcases/${fixture.cases.lowFlake.id}`, { data: { status: "Draft" } });
+      expect(restored.ok(), await restored.text()).toBe(true);
       await asOwner.delete(`/api/cycles/${run.id}`, { failOnStatusCode: false });
     }
   });
@@ -1050,6 +1055,7 @@ test.describe("AI insights", () => {
     // Four runs, one flip -> 1/3 = 0.33, which is Medium: between the 0.25 and 0.5 thresholds.
     const mediumCase = await seedTestCase(asOwner, fixture.projectId, {
       title: "E2E Reports medium flake",
+      status: "Approved",
       suiteId: fixture.betaSuiteId,
     });
     const runs: SeededRun[] = [];

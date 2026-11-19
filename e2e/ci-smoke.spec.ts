@@ -1,3 +1,5 @@
+import { issueMcpTestToken } from "./utils/mcp-access";
+import { createTestcaseFixtureResponse } from "./utils/testcase-approval";
 import { expect, request as newRequest, test, type APIRequestContext, type Page, type Route, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
 import { hashPasswordForSeed } from "./utils/password";
@@ -45,7 +47,7 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
     });
     expect(login.ok(), await login.text()).toBeTruthy();
 
-    const testcaseResponse = await request.post(`${base}/testcases`, { data: { title: "CI authorization control", status: "Approved" } });
+    const testcaseResponse = await createTestcaseFixtureResponse(request, `${base}/testcases`, { data: { title: "CI authorization control", status: "Approved" } });
     expect(testcaseResponse.ok(), await testcaseResponse.text()).toBeTruthy();
     testcaseId = (await testcaseResponse.json()).id;
     const cycleResponse = await request.post(`${base}/cycles`, { data: { name: "CI authorization control" } });
@@ -79,7 +81,7 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
     await denied(nonmember, 404);
     const tokens: Record<string, string> = {};
     for (const scope of ["read", "write"]) {
-      const response = await request.post(`${base}/apikeys`, { data: { name: `CI bug ${scope}`, scopes: [scope] } });
+      const response = await issueMcpTestToken(request, `${base}/apikeys`, { data: { name: `CI bug ${scope}`, scopes: [scope] } });
       expect(response.ok(), await response.text()).toBeTruthy();
       const token = await response.json();
       tokenIds.push(token.id);
@@ -113,6 +115,8 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
     await denied(request, 404);
     await db.query("UPDATE projects SET archived_at = NULL WHERE id = $1", [projectId]);
 
+    const executionBeforeBugReports = (await persisted()).execution;
+    expect(executionBeforeBugReports[0]).toMatchObject({ status: "Passed", executed_by: ownerId });
     for (const transport of ["REST", "MCP"]) {
       const response = await anonymous.post(transport === "REST" ? `${base}/bugs` : `${base}/mcp`, {
         headers: { Authorization: `Bearer ${tokens.write}` },
@@ -125,7 +129,9 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
       bugs.push(created.id);
       expect(created).toMatchObject({ reportedBy: ownerId });
       expect(created.links).toEqual(expect.arrayContaining([expect.objectContaining(body.links[0])]));
-      expect((await persisted()).execution[0]).toMatchObject({ status: "Failed", executed_by: ownerId });
+      // Reporting a defect is separate from observing a test outcome. Preserve the whole
+      // execution, including its actor, timestamp, actual result and history.
+      expect((await persisted()).execution).toEqual(executionBeforeBugReports);
     }
     await verifyHistoryImportText(request, nonmember, anonymous, db, api, projectId);
   } finally {
@@ -167,7 +173,7 @@ async function verifyHistoryImportText(
   });
   try {
     for (let i = 0; i < 2; i++) {
-      const created = await request.post(`${base}/testcases`, { data: { title: `CI history text ${i}`, status: "Approved" } });
+      const created = await createTestcaseFixtureResponse(request, `${base}/testcases`, { data: { title: `CI history text ${i}`, status: "Approved" } });
       expect(created.ok(), await created.text()).toBeTruthy();
       cases.push(await created.json());
     }
@@ -304,7 +310,7 @@ async function verifyBugLinkReadIsolation(
   foreign: { testcaseId: string; cycleId: string; executionId: string }
 ) {
   const base = `${api}/api/projects/${projectId}`;
-  const response = await request.post(`${base}/apikeys`, { data: { name: "CI bug-link read isolation", scopes: ["read"] } });
+  const response = await issueMcpTestToken(request, `${base}/apikeys`, { data: { name: "CI bug-link read isolation", scopes: ["read"] } });
   expect(response.ok(), await response.text()).toBeTruthy();
   const token = await response.json();
   const headers = { Authorization: `Bearer ${token.token}` };
@@ -385,7 +391,7 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
     const foreignProject = (await foreignResponse.json()).id;
     const targets: Array<{ testcaseId: string; cycleId: string; executionId: string }> = [];
     for (const [index, project] of [projectId, projectId, foreignProject].entries()) {
-      const caseResponse = await request.post(`${api}/api/projects/${project}/testcases`, { data: { title: `CI relationship case ${index}`, status: "Approved" } });
+      const caseResponse = await createTestcaseFixtureResponse(request, `${api}/api/projects/${project}/testcases`, { data: { title: `CI relationship case ${index}`, status: "Approved" } });
       expect(caseResponse.ok(), await caseResponse.text()).toBeTruthy();
       const testcaseId = (await caseResponse.json()).id;
       cases.push({ id: testcaseId, project });
@@ -400,7 +406,7 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
       targets.push({ testcaseId, cycleId, executionId });
     }
     const [first, second, foreign] = targets;
-    const tokenResponse = await request.post(`${base}/apikeys`, { data: { name: "CI relationship writer", scopes: ["write"] } });
+    const tokenResponse = await issueMcpTestToken(request, `${base}/apikeys`, { data: { name: "CI relationship writer", scopes: ["write"] } });
     expect(tokenResponse.ok(), await tokenResponse.text()).toBeTruthy();
     const token = await tokenResponse.json(); tokenId = token.id;
     const headers = { Authorization: `Bearer ${token.token}` };
@@ -455,10 +461,12 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
       }
     }
 
-    // Positive controls: real MCP create/add/edit, normal manual auto-failure, no link-row churn,
+    // Positive controls: real MCP create/add/edit preserve the observed result and link identity,
     // then metadata edits preserving deleted history and strict refusal after explicit removal.
     const passed = await request.patch(`${api}/api/cycles/${first.cycleId}/executions/${first.executionId}`, { data: { status: "Passed" } });
     expect(passed.ok(), await passed.text()).toBeTruthy();
+    const executionBeforeLinks = (await db.query("SELECT * FROM executions WHERE id = $1", [first.executionId])).rows;
+    expect(executionBeforeLinks[0]).toMatchObject({ status: "Passed", executed_by: ownerId });
     const mcp = async (name: string, args: Record<string, unknown>) => {
       const response = await tokenClient.post(`${base}/mcp`, { headers, data: { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name, arguments: args } } });
       expect(response.ok(), await response.text()).toBeTruthy();
@@ -469,12 +477,13 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
     const reported = await mcp("create_bug", { title: "CI valid relationship report", links: [first] });
     bugs.push(reported.id);
     expect(reported.links).toEqual([expect.objectContaining(first)]);
-    expect((await db.query("SELECT status FROM executions WHERE id = $1", [first.executionId])).rows[0].status).toBe("Failed");
+    expect((await db.query("SELECT * FROM executions WHERE id = $1", [first.executionId])).rows).toEqual(executionBeforeLinks);
     const linked = await mcp("link_testcase_to_bug", { bugId: bug.id, ...first });
     const original = (await db.query("SELECT * FROM bug_links WHERE bug_id = $1 ORDER BY id", [bug.id])).rows;
     const edited = await mcp("update_bug", { bugId: bug.id, title: "CI valid metadata edit", links: linked.links });
     expect(edited.links).toEqual(linked.links);
     expect((await db.query("SELECT * FROM bug_links WHERE bug_id = $1 ORDER BY id", [bug.id])).rows).toEqual(original);
+    expect((await db.query("SELECT * FROM executions WHERE id = $1", [first.executionId])).rows).toEqual(executionBeforeLinks);
     expect((await request.delete(`${api}/api/cycles/${first.cycleId}`)).ok()).toBeTruthy();
     const historical = await mcp("update_bug", { bugId: bug.id, title: "CI historical metadata edit", links: edited.links });
     expect(historical.links).toEqual(expect.arrayContaining([expect.objectContaining({ ...first, cycleName: expect.stringContaining("(deleted)") })]));
@@ -541,7 +550,7 @@ async function verifyBrowserMutationResponseLoss(page: Page, api: string, web: s
   await db.connect();
   try {
     const title = "CI lost browser create acknowledgement";
-    const testcaseResponse = await request.post(`${base}/testcases`, { data: { title, status: "Approved" } });
+    const testcaseResponse = await createTestcaseFixtureResponse(request, `${base}/testcases`, { data: { title, status: "Approved" } });
     expect(testcaseResponse.ok(), await testcaseResponse.text()).toBeTruthy();
     const testcase = await testcaseResponse.json();
     caseId = testcase.id;
@@ -647,7 +656,7 @@ test("history import, bug authorization and finalized automation preserve persis
     for (const surface of ["drawer", "full-page"]) {
       for (const status of ["pass", "fail"]) {
         const title = `CI sealed ${surface} ${status}`;
-        const testcaseResponse = await request.post(`${base}/testcases`, { data: { title, status: "Approved" } });
+        const testcaseResponse = await createTestcaseFixtureResponse(request, `${base}/testcases`, { data: { title, status: "Approved" } });
         expect(testcaseResponse.ok(), await testcaseResponse.text()).toBeTruthy();
         const testcase = await testcaseResponse.json();
         cases.push(testcase.id);

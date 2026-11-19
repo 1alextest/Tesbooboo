@@ -1,3 +1,4 @@
+import { createTestcaseFixtureResponse } from "./testcase-approval";
 import { expect, request as newRequest, type Page, type TestInfo } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -23,7 +24,7 @@ export async function verifyProductionReporter(page: Page, api: string, web: str
   await db.connect();
   try {
     for (const title of ["reporter pass", "reporter failure", "reporter skip"]) {
-      const response = await request.post(`${base}/testcases`, { data: { title, status: "Approved" } });
+      const response = await createTestcaseFixtureResponse(request, `${base}/testcases`, { data: { title, status: "Approved" } });
       expect(response.ok(), await response.text()).toBeTruthy();
       cases.push(await response.json());
     }

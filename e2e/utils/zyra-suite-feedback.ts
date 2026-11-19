@@ -74,7 +74,7 @@ export async function verifyZyraSuiteTurn(input: {
     expect(activity.filter((entry) => entry.title === "An operation failed unexpectedly")).toHaveLength(failed ? 1 : 0);
     const after = await state();
     expect(after.cases).toEqual(before.cases);
-    expect(after.reviews).toEqual(before.reviews);
+    expect(after.reviews, "an empty suite creates no testcase proposal or selected-apply receipt").toEqual(before.reviews);
     const newlyCreated = after.suites.filter((suite) => !before.suites.some((old) => old.id === suite.id));
     expect(after.suites.filter((suite) => before.suites.some((old) => old.id === suite.id))).toEqual(before.suites);
     expect(newlyCreated.map((suite) => suite.name)).toEqual(mode === "partial" || mode === "created" ? [names[0]] : []);

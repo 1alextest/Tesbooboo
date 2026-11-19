@@ -1,3 +1,4 @@
+import { approveTestcase, createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, request as newRequestContext, test } from "@playwright/test";
@@ -9,7 +10,7 @@ const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.js
 /** Creates a test case in the shared project and adds it to the run; returns the case id. */
 async function addCase(request: any, runId: string): Promise<string> {
   const tc = await (
-    await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Run Case ${Date.now()}`, status: "Approved" } })
+    await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Run Case ${Date.now()}`, status: "Approved" } })
   ).json();
   const res = await request.post(`/api/cycles/${runId}/testcases`, { data: { testcaseIds: [tc.id] } });
   expect(res.ok()).toBeTruthy();
@@ -102,12 +103,12 @@ test.describe("test cycle / run CRUD", () => {
       })
     ).json();
     const testcaseA = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, {
         data: { title: `E2E Cycle Case A ${Date.now()}`, status: "Approved" },
       })
     ).json();
     const testcaseB = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, {
         data: { title: `E2E Cycle Case B ${Date.now()}`, status: "Approved" },
       })
     ).json();
@@ -154,7 +155,7 @@ test.describe("test cycle / run CRUD", () => {
       })
     ).json();
     const testcase = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, {
         data: { title: `E2E From-Cases Source ${Date.now()}`, status: "Approved" },
       })
     ).json();
@@ -247,7 +248,7 @@ test.describe("linking test cases to a run at scale", () => {
         data: {
           testcases: Array.from({ length: CASE_COUNT }, (_, i) => ({
             title: `E2E Bulk Link Case ${stamp}-${i}`,
-            status: "Approved",
+            status: "Draft",
           })),
         },
       })
@@ -256,6 +257,11 @@ test.describe("linking test cases to a run at scale", () => {
 
     try {
       expect(created.createdCount).toBe(CASE_COUNT);
+      // Review the fixture before measuring admission. Creating rows with a status label
+      // cannot substitute for current human approval of the exact saved content.
+      for (let offset = 0; offset < testcaseIds.length; offset += 8) {
+        await Promise.all(testcaseIds.slice(offset, offset + 8).map((id) => approveTestcase(request, ctx.projectId, id)));
+      }
 
       const addRes = await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds } });
       expect(addRes.ok()).toBeTruthy();
@@ -331,7 +337,7 @@ test.describe("adding test cases to a run", () => {
      */
     const testcaseIds: string[] = [];
     for (let i = 0; i < count; i++) {
-      const res = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+      const res = await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, {
         data: { title: `E2E RunCase ${stamp} #${String(i + 1).padStart(3, "0")}`, status: "Approved" },
       });
       testcaseIds.push((await res.json()).id as string);
@@ -685,12 +691,13 @@ test.describe("list-cycles bucket counts", () => {
     const statuses = ["Passed", "Failed", "Blocked", "Skipped", "Retest", "Untested"];
     const created = await (
       await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-create`, {
-        data: { testcases: statuses.map((_, i) => ({ title: `E2E Bucket Sum Case ${stamp}-${i}`, status: "Approved" })) },
+        data: { testcases: statuses.map((_, i) => ({ title: `E2E Bucket Sum Case ${stamp}-${i}`, status: "Draft" })) },
       })
     ).json();
     const testcaseIds: string[] = created.created.map((c: { id: string }) => c.id);
 
     try {
+      for (const testcaseId of testcaseIds) await approveTestcase(request, ctx.projectId, testcaseId);
       await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds } });
       const executions = await (await request.get(`/api/cycles/${cycle.id}/executions`)).json();
       for (let i = 0; i < statuses.length; i++) {
@@ -751,7 +758,7 @@ test.describe("cycle / cycle_item soft-delete (hard-delete remediation Phase 1)"
       await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Soft-Delete Run ${Date.now()}` } })
     ).json();
     const testcase = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Soft-Delete Run Case ${Date.now()}` } })
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Soft-Delete Run Case ${Date.now()}`, status: "Approved" } })
     ).json();
     await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
     const cycleItemId = scalar(`SELECT id FROM cycle_items WHERE cycle_id = ${literal(cycle.id)} AND testcase_id = ${literal(testcase.id)};`);
@@ -787,7 +794,7 @@ test.describe("cycle / cycle_item soft-delete (hard-delete remediation Phase 1)"
       await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Soft-Delete Item ${Date.now()}` } })
     ).json();
     const testcase = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Soft-Delete Item Case ${Date.now()}` } })
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Soft-Delete Item Case ${Date.now()}`, status: "Approved" } })
     ).json();
     await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
     const cycleItemId = scalar(`SELECT id FROM cycle_items WHERE cycle_id = ${literal(cycle.id)} AND testcase_id = ${literal(testcase.id)};`);
@@ -825,6 +832,7 @@ test.describe("cycle / cycle_item soft-delete (hard-delete remediation Phase 1)"
     const testcaseIds: string[] = created.created.map((c: { id: string }) => c.id);
 
     try {
+      for (const testcaseId of testcaseIds) await approveTestcase(request, ctx.projectId, testcaseId);
       await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds } });
       const cycleItemIds = column(
         `SELECT id FROM cycle_items WHERE cycle_id = ${literal(cycle.id)} ORDER BY position;`,
@@ -878,7 +886,7 @@ test.describe("cycle / cycle_item soft-delete (hard-delete remediation Phase 1)"
       await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Soft-Delete ReAdd ${Date.now()}` } })
     ).json();
     const testcase = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Soft-Delete ReAdd Case ${Date.now()}` } })
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Soft-Delete ReAdd Case ${Date.now()}`, status: "Approved" } })
     ).json();
 
     try {
@@ -963,7 +971,7 @@ test.describe("cycles read-path gap sweep (hard-delete remediation Phase 2)", ()
       await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Export Gate ${Date.now()}` } })
     ).json();
     const testcase = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Export Gate Case ${Date.now()}` } })
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Export Gate Case ${Date.now()}`, status: "Approved" } })
     ).json();
     await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
 

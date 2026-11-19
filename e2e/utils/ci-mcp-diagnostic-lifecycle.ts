@@ -1,6 +1,6 @@
 import { expect, test, type Page, type Request, type Route, type TestInfo } from "@playwright/test";
 
-/** Reuse an issued synthetic token and real app/session; only response delivery and the clock are controlled. */
+/** Reuse an explicitly approved synthetic read token and real app/session; only response delivery and the clock are controlled. */
 export async function verifyMcpDiagnosticLifecycle(source: Page, api: string, web: string, projectId: string, otherProjectId: string, secret: string, testInfo: TestInfo) {
   const browser = source.context().browser();
   expect(browser, "isolated smoke must own its browser").not.toBeNull();
@@ -40,6 +40,16 @@ export async function verifyMcpDiagnosticLifecycle(source: Page, api: string, we
     return { request, release, finished, handler };
   }
   try {
+    const discovery = await context.request.post(endpoint, {
+      headers: { Authorization: `Bearer ${secret}` },
+      data: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+    });
+    expect(discovery.ok(), await discovery.text()).toBe(true);
+    const catalog = await discovery.json();
+    expect(catalog.error).toBeUndefined();
+    expect(catalog.result.tools).toHaveLength(24);
+    expect(catalog.result.tools.map((tool: { name: string }) => tool.name)).toContain("list_projects");
+    expect(catalog.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("create_testcase");
     await page.clock.install();
     await page.goto(`${web}/projects/${projectId}/settings/api-tokens`);
     await expect(card()).toContainText(endpoint);
@@ -61,7 +71,7 @@ export async function verifyMcpDiagnosticLifecycle(source: Page, api: string, we
         await capture("mcp-browser-project-read-timeout-with-cleared-input");
       } finally { held.release(); await page.unroute(endpoint, held.handler); }
       await start();
-      await expect(card().getByRole("status")).toContainText("Read permission and project identity verified; 58 MCP tools advertised");
+      await expect(card().getByRole("status")).toContainText("Read permission and project identity verified; 24 MCP tools advertised");
       await expect(input()).toHaveValue("");
       await expect(card()).toContainText("Write permissions and reporting were not tested");
       // Capture the whole actual success card, not an unrelated viewport above its status.

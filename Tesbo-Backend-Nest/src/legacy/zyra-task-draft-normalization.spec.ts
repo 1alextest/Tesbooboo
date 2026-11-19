@@ -29,8 +29,9 @@ process.env.SECRETS_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
  * draft}` for create), carrying none of `title`/`priority`/`stepsJson`/etc directly.
  *
  * formatAiTask now normalizes each generated_payload entry per-item before returning `drafts`:
- * a FLAT entry (no `opType` key — task-board's own shape) passes through completely untouched; a
- * WRAPPED entry is normalized via chatDraftRow/chatTestcaseRow — the exact same normalization
+ * A coherent review normalizes FLAT and WRAPPED creates into their native operation fields while
+ * retaining generation tags/techniques as frozen review metadata. Update/archive entries render
+ * their target from that same database snapshot via chatDraftRow/chatTestcaseRow — the normalization
  * applyZyraChatOperations already uses for the chat surface — not a second copy of that logic.
  *
  * Exercised here via zyraTask() (the one GET that all three frontend surfaces' underlying data
@@ -75,7 +76,7 @@ function mockAuth(svc: LegacyService): void {
   jest.spyOn(svc as unknown as { requireProjectAccess: (...a: unknown[]) => Promise<unknown> }, "requireProjectAccess").mockResolvedValue({});
 }
 
-function baseRow(generatedPayload: Body[]): Body {
+function baseRow(generatedPayload: Body[], targets: Body[] = []): Body {
   return {
     id: TASK_ID,
     provider: "zyra_archive_sweep",
@@ -90,6 +91,13 @@ function baseRow(generatedPayload: Body[]): Body {
     // normalizeJsonArray (legacy.service.ts:628) only ever checks Array.isArray, it never JSON.parses
     // — so the mock must match that shape, not stringify it.
     generated_payload: generatedPayload,
+    proposal_snapshot: {
+      taskId: TASK_ID, projectId: PROJECT_ID, taskStatus: "in_review", version: 0,
+      targetBinding: "coherent_review_read", operations: generatedPayload,
+      sourceLinks: { jiraIssueKeys: [], linearIssueKeys: [], notionPageIds: [], jira: [], linear: [], notion: [] },
+      targets: targets.map(testcase => ({ testcaseId: testcase.id, testcase, editRevision: "a".repeat(64), approvalRevision: "b".repeat(64), snapshot: { case: testcase } })),
+      dependencies: { revision: 0, customFields: [], customTags: [], suites: [] },
+    },
     saved_count: 0,
     save_events: "[]",
     created_at: "2026-09-01T00:00:00.000Z",
@@ -124,7 +132,7 @@ const ACTIVE_TESTCASE = {
 describe("formatAiTask — normalizing non-create generated_payload entries (via zyraTask)", () => {
   afterEach(() => jest.restoreAllMocks());
 
-  it("a flat task-board create draft (no opType key) passes through completely untouched — tags included", async () => {
+  it("a flat task-board create draft preserves its content and tags in the exact normalized review", async () => {
     const { svc, dbQuery } = makeLegacy();
     const flatDraft = { title: "Checkout flow", priority: "P1", stepsJson: "[]", expectedSummary: "Order completes", preconditions: "", tags: ["regression", "checkout"] };
     dbQuery.mockResolvedValueOnce({ rows: [baseRow([flatDraft])] });
@@ -132,7 +140,9 @@ describe("formatAiTask — normalizing non-create generated_payload entries (via
 
     const task = await svc.zyraTask(PROJECT_ID, "u1", TASK_ID);
 
-    expect(task.drafts).toEqual([flatDraft]);
+    expect(task.drafts).toEqual([expect.objectContaining(flatDraft)]);
+    expect(task.proposalSnapshot.operations[0].reviewMetadata.tags).toEqual(flatDraft.tags);
+    expect(task.proposalSnapshot.operations[0].draft.automationTags.split(",")).toEqual(expect.arrayContaining(flatDraft.tags));
     expect(dbQuery).toHaveBeenCalledTimes(1); // no extra lookup for a flat entry
   });
 
@@ -152,8 +162,7 @@ describe("formatAiTask — normalizing non-create generated_payload entries (via
   it("a wrapped archive entry resolves the CURRENT test case and shows its real title/priority — not a blank card", async () => {
     const { svc, dbQuery } = makeLegacy();
     const archiveEntry = { opType: "archive", testcaseId: TESTCASE_ID, externalId: "EAD-TC-1", fields: { status: "Archived" }, reason: "Linked Jira ticket EAD-11215 is Done." };
-    dbQuery.mockResolvedValueOnce({ rows: [baseRow([archiveEntry])] }); // zyraTask's own SELECT
-    dbQuery.mockResolvedValueOnce({ rows: [ACTIVE_TESTCASE] }); // getTestCase
+    dbQuery.mockResolvedValueOnce({ rows: [baseRow([archiveEntry], [ACTIVE_TESTCASE])] });
     mockAuth(svc);
 
     const task = await svc.zyraTask(PROJECT_ID, "u1", TASK_ID);
@@ -166,13 +175,13 @@ describe("formatAiTask — normalizing non-create generated_payload entries (via
       action: "proposed-archive",
       reason: "Linked Jira ticket EAD-11215 is Done."
     });
+    expect(dbQuery).toHaveBeenCalledTimes(1); // The card and approval hash share the same target snapshot.
   });
 
   it("a wrapped update entry merges `fields` on top of the current row — action = proposed-update", async () => {
     const { svc, dbQuery } = makeLegacy();
     const updateEntry = { opType: "update", testcaseId: TESTCASE_ID, externalId: "EAD-TC-1", fields: { priority: "P0" }, reason: "Bumped priority per feedback" };
-    dbQuery.mockResolvedValueOnce({ rows: [baseRow([updateEntry])] });
-    dbQuery.mockResolvedValueOnce({ rows: [ACTIVE_TESTCASE] });
+    dbQuery.mockResolvedValueOnce({ rows: [baseRow([updateEntry], [ACTIVE_TESTCASE])] });
     mockAuth(svc);
 
     const task = await svc.zyraTask(PROJECT_ID, "u1", TASK_ID);
@@ -184,7 +193,6 @@ describe("formatAiTask — normalizing non-create generated_payload entries (via
     const { svc, dbQuery } = makeLegacy();
     const archiveEntry = { opType: "archive", testcaseId: TESTCASE_ID, externalId: "EAD-TC-1", fields: { status: "Archived" }, reason: "Ticket is done." };
     dbQuery.mockResolvedValueOnce({ rows: [baseRow([archiveEntry])] });
-    dbQuery.mockResolvedValueOnce({ rows: [] }); // getTestCase finds nothing -> throws NotFoundException internally
     mockAuth(svc);
 
     const task = await svc.zyraTask(PROJECT_ID, "u1", TASK_ID);
@@ -198,8 +206,7 @@ describe("formatAiTask — normalizing non-create generated_payload entries (via
   it("a test case already archived by someone else still resolves normally (status shows the merged/post-save state)", async () => {
     const { svc, dbQuery } = makeLegacy();
     const archiveEntry = { opType: "archive", testcaseId: TESTCASE_ID, externalId: "EAD-TC-1", fields: { status: "Archived" }, reason: "Ticket is done." };
-    dbQuery.mockResolvedValueOnce({ rows: [baseRow([archiveEntry])] });
-    dbQuery.mockResolvedValueOnce({ rows: [{ ...ACTIVE_TESTCASE, status: "Archived" }] }); // already archived by someone else
+    dbQuery.mockResolvedValueOnce({ rows: [baseRow([archiveEntry], [{ ...ACTIVE_TESTCASE, status: "Archived" }])] });
     mockAuth(svc);
 
     const task = await svc.zyraTask(PROJECT_ID, "u1", TASK_ID);
@@ -211,8 +218,7 @@ describe("formatAiTask — normalizing non-create generated_payload entries (via
   it("a wrapped entry with no reason text (empty string) doesn't crash — reason comes back empty, not undefined", async () => {
     const { svc, dbQuery } = makeLegacy();
     const archiveEntry = { opType: "archive", testcaseId: TESTCASE_ID, externalId: "EAD-TC-1", fields: { status: "Archived" }, reason: "" };
-    dbQuery.mockResolvedValueOnce({ rows: [baseRow([archiveEntry])] });
-    dbQuery.mockResolvedValueOnce({ rows: [ACTIVE_TESTCASE] });
+    dbQuery.mockResolvedValueOnce({ rows: [baseRow([archiveEntry], [ACTIVE_TESTCASE])] });
     mockAuth(svc);
 
     const task = await svc.zyraTask(PROJECT_ID, "u1", TASK_ID);
@@ -228,7 +234,8 @@ describe("formatAiTask — normalizing non-create generated_payload entries (via
 
     const task = await svc.zyraTask(PROJECT_ID, "u1", TASK_ID);
 
-    expect(task.drafts[0]).toEqual(weird);
+    expect(task.drafts[0]).toMatchObject(weird);
+    expect(task.proposalSnapshot.operations[0].opType).toBe("move_to_suite");
     expect(dbQuery).toHaveBeenCalledTimes(1);
   });
 
@@ -236,14 +243,13 @@ describe("formatAiTask — normalizing non-create generated_payload entries (via
     const { svc, dbQuery } = makeLegacy();
     const flatDraft = { title: "Checkout flow", priority: "P1", stepsJson: "[]", expectedSummary: "", preconditions: "", tags: [] };
     const archiveEntry = { opType: "archive", testcaseId: TESTCASE_ID, externalId: "EAD-TC-1", fields: { status: "Archived" }, reason: "Ticket is done." };
-    dbQuery.mockResolvedValueOnce({ rows: [baseRow([flatDraft, archiveEntry])] });
-    dbQuery.mockResolvedValueOnce({ rows: [ACTIVE_TESTCASE] });
+    dbQuery.mockResolvedValueOnce({ rows: [baseRow([flatDraft, archiveEntry], [ACTIVE_TESTCASE])] });
     mockAuth(svc);
 
     const task = await svc.zyraTask(PROJECT_ID, "u1", TASK_ID);
 
     expect(task.drafts).toHaveLength(2);
-    expect(task.drafts[0]).toEqual(flatDraft);
+    expect(task.drafts[0]).toMatchObject(flatDraft);
     expect(task.drafts[1]).toMatchObject({ title: "Login with valid credentials", action: "proposed-archive" });
   });
 });
@@ -309,8 +315,7 @@ describe("chatDraftRow techniques allowlist — via zyraTask's wrapped-create no
   it("a wrapped archive/update preview never carries techniques — [] every time, since these aren't generation-time drafts", async () => {
     const { svc, dbQuery } = makeLegacy();
     const archiveEntry = { opType: "archive", testcaseId: TESTCASE_ID, externalId: "EAD-TC-1", fields: { status: "Archived" }, reason: "Ticket is done." };
-    dbQuery.mockResolvedValueOnce({ rows: [baseRow([archiveEntry])] });
-    dbQuery.mockResolvedValueOnce({ rows: [ACTIVE_TESTCASE] });
+    dbQuery.mockResolvedValueOnce({ rows: [baseRow([archiveEntry], [ACTIVE_TESTCASE])] });
     mockAuth(svc);
 
     const task = await svc.zyraTask(PROJECT_ID, "u1", TASK_ID);
@@ -326,7 +331,8 @@ describe("chatDraftRow techniques allowlist — via zyraTask's wrapped-create no
 
     const task = await svc.zyraTask(PROJECT_ID, "u1", TASK_ID);
 
-    expect(task.drafts[0]).toEqual(flatDraft);
+    expect(task.drafts[0]).toMatchObject(flatDraft);
+    expect(task.proposalSnapshot.operations[0].reviewMetadata.techniques).toEqual(flatDraft.techniques);
   });
 });
 
@@ -373,8 +379,7 @@ describe("chatDraftRow/chatTestcaseRow severity+component — via zyraTask's wra
   it("a wrapped archive/update preview shows the EXISTING test case's real severity/component, not blank", async () => {
     const { svc, dbQuery } = makeLegacy();
     const updateEntry = { opType: "update", testcaseId: TESTCASE_ID, externalId: "EAD-TC-1", fields: { priority: "P0" }, reason: "Bumped priority per feedback" };
-    dbQuery.mockResolvedValueOnce({ rows: [baseRow([updateEntry])] });
-    dbQuery.mockResolvedValueOnce({ rows: [{ ...ACTIVE_TESTCASE, severity: "Medium", component: "Auth" }] });
+    dbQuery.mockResolvedValueOnce({ rows: [baseRow([updateEntry], [{ ...ACTIVE_TESTCASE, severity: "Medium", component: "Auth" }])] });
     mockAuth(svc);
 
     const task = await svc.zyraTask(PROJECT_ID, "u1", TASK_ID);
@@ -390,6 +395,6 @@ describe("chatDraftRow/chatTestcaseRow severity+component — via zyraTask's wra
 
     const task = await svc.zyraTask(PROJECT_ID, "u1", TASK_ID);
 
-    expect(task.drafts[0]).toEqual(flatDraft);
+    expect(task.drafts[0]).toMatchObject(flatDraft);
   });
 });

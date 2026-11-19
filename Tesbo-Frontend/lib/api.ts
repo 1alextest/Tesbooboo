@@ -8,6 +8,14 @@ type RequestInitWithBody = Omit<RequestInit, "body"> & { body?: unknown };
 
 type ApiErrorBody = { error?: string; detail?: string; message?: string; errors?: { field?: string; message?: string }[] };
 
+/** Preserve HTTP disposition so callers can distinguish denied reads from unavailable data. */
+export class ApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 /**
  * A response with no `error`/`errors`/`message` body is never something the endpoint chose to say
  * to a user — every hand-written throw in the backend sets one (see legacy.service.ts's
@@ -142,7 +150,7 @@ async function apiRequest<T = unknown>(path: string, options: RequestInitWithBod
   });
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as ApiErrorBody;
-    throw new Error(formatApiError(res.status, err));
+    throw new ApiError(res.status, formatApiError(res.status, err));
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();
@@ -1015,7 +1023,7 @@ export async function listAiGenerationHistory(
 export async function trackAiGenerationSaved(
   projectId: string,
   requestId: string,
-  data: { suiteId?: string; testcaseIds: string[] }
+  data: { expectedProposalRevision: string; selectedDraftIndexes: number[]; suiteId?: string | null; suiteName?: string }
 ): Promise<void> {
   await api(`/api/projects/${projectId}/ai/generation-history/${requestId}/save`, {
     method: "POST",
@@ -1044,6 +1052,9 @@ export interface ZyraTask {
   /** Full Notion page ids (not the short display keys) queued as Zyra context. */
   notionPageIds?: string[];
   drafts: AiGeneratedDraft[];
+  /** Exact server revision of the reviewable operations and their target context. */
+  proposalRevision?: string;
+  proposalSnapshot?: Record<string, unknown>;
   sources: Array<{ type: string; title: string; detail: string }>;
   activities: Array<{ actor: "user" | "agent" | string; stage: string; title: string; detail: string; createdAt: string; kind?: string }>;
   tokenUsage: { input: number; output: number; total: number };
@@ -1497,13 +1508,15 @@ export async function retryZyraTicketComment(projectId: string, taskId: string, 
 export async function saveZyraTask(
   projectId: string,
   taskId: string,
-  data: { selectedDraftIndexes: number[]; suiteId?: string; suiteName?: string }
+  data: { expectedProposalRevision: string; selectedDraftIndexes: number[]; suiteId?: string | null; suiteName?: string }
 ): Promise<{
   savedCount: number;
   suiteId: string | null;
   testcases: { id: string; externalId: string; title: string; createdAt: string }[];
-  /** Chat-staged batches only: drafts left un-saved by a partial selection, still pending review. */
+  /** Unselected proposals remain pending review for every producer. */
   remaining?: number;
+  replayed?: boolean;
+  saveReceipt?: Record<string, unknown>;
 }> {
   return api(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}/save`, {
     method: "POST",
@@ -1521,6 +1534,21 @@ export async function addProjectMember(projectId: string, data: { userId: string
 
 export async function removeProjectMember(projectId: string, userId: string): Promise<void> {
   await api(`/api/projects/${projectId}/members/${userId}`, { method: "DELETE" });
+}
+
+export type McpClientGrant = {
+  tokenId: string;
+  clientName: string;
+  scopes: Array<"read" | "write">;
+  allowedTools: string[] | null;
+  expiresAt: string | null;
+};
+export type ProjectMcpAccess = { enabled: boolean; revision: number; clients: McpClientGrant[] };
+export async function getProjectMcpAccess(projectId: string): Promise<ProjectMcpAccess> {
+  return api(`/api/projects/${projectId}/mcp-access`);
+}
+export async function updateProjectMcpAccess(projectId: string, access: ProjectMcpAccess): Promise<ProjectMcpAccess> {
+  return api(`/api/projects/${projectId}/mcp-access`, { method: "PUT", body: access });
 }
 
 export interface ApiToken {
@@ -1608,6 +1636,8 @@ export interface TestCaseListItem {
   automationStatus: string;
   automationTags?: string;
   status: string;
+  /** A current exact human receipt; a historical Approved label alone is insufficient. */
+  approvalCurrent?: boolean;
   suiteId: string | null;
   ownerId: string | null;
   updatedAt: string;
@@ -1697,6 +1727,17 @@ export async function listTestCases(
 
 export async function getTestCase(projectId: string, testcaseId: string): Promise<Record<string, unknown>> {
   return api(`/api/projects/${projectId}/testcases/${testcaseId}`);
+}
+
+export async function approveTestCase(
+  projectId: string,
+  testcaseId: string,
+  expectedRevision: string,
+  expectedApprovalRevision: string,
+): Promise<Record<string, unknown>> {
+  return api(`/api/projects/${projectId}/testcases/${testcaseId}/approve`, {
+    method: "POST", body: { expectedRevision, expectedApprovalRevision },
+  });
 }
 
 export async function createTestCase(projectId: string, data: Record<string, unknown>): Promise<{ id: string; externalId: string; title: string; createdAt: string }> {
@@ -3992,6 +4033,10 @@ export interface KnowledgeDocument {
   updatedBy: string | null;
   reviewedBy: string | null;
   reviewedAt: string | null;
+  /** Native exact-row precondition; absent only on an older server. */
+  editRevision?: string;
+  reviewedVersionId?: string | null;
+  reviewBinding?: "none" | "legacy_unverified" | "exact_snapshot";
   isDeleted: boolean;
   createdAt: string;
   updatedAt: string;
@@ -4030,6 +4075,8 @@ export interface KnowledgeDocumentVersion {
   title: string;
   createdBy: string | null;
   createdAt: string;
+  snapshotKind?: "autosave" | "submitted" | "approved" | "rejected";
+  snapshotMetadata?: Record<string, unknown>;
 }
 
 // Folders
@@ -4187,7 +4234,7 @@ export function getKnowledgeDocumentHistory(
 export function updateKnowledgeDocument(
   projectId: string,
   documentId: string,
-  data: Partial<{ title: string; contentJson: unknown; contentHtml: string; contentText: string; documentType: string; status: string }>
+  data: Partial<{ title: string; contentJson: unknown; contentHtml: string; contentText: string; documentType: string; status: string; expectedRevision: string }>
 ): Promise<KnowledgeDocument> {
   return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}`, { method: "PATCH", body: data });
 }
@@ -4230,19 +4277,19 @@ export function listKnowledgeDocumentVersions(
   return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/versions`);
 }
 
-export function restoreKnowledgeDocumentVersion(projectId: string, documentId: string, versionId: string): Promise<KnowledgeDocument> {
+export function restoreKnowledgeDocumentVersion(projectId: string, documentId: string, versionId: string, expectedRevision?: string): Promise<KnowledgeDocument> {
   return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/restore-version`, {
     method: "POST",
-    body: { versionId },
+    body: { versionId, expectedRevision },
   });
 }
 
-export function approveAiMemory(projectId: string, documentId: string): Promise<KnowledgeDocument> {
-  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/approve-ai-memory`, { method: "PATCH" });
+export function approveAiMemory(projectId: string, documentId: string, expectedRevision: string): Promise<KnowledgeDocument> {
+  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/approve-ai-memory`, { method: "PATCH", body: { expectedRevision } });
 }
 
-export function rejectAiMemory(projectId: string, documentId: string): Promise<KnowledgeDocument> {
-  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/reject-ai-memory`, { method: "PATCH" });
+export function rejectAiMemory(projectId: string, documentId: string, expectedRevision: string): Promise<KnowledgeDocument> {
+  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/reject-ai-memory`, { method: "PATCH", body: { expectedRevision } });
 }
 
 // Document comments
