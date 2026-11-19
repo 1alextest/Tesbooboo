@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { request, type APIRequestContext } from "@playwright/test";
-import { waitForOtpInLogs } from "./utils/backend-logs";
+import { waitForOtpEmail } from "./utils/email-outbox";
 import { env } from "./utils/env";
 import { hashPasswordForSeed } from "./utils/password";
 import { exec } from "./utils/psql";
@@ -111,11 +111,11 @@ async function tryLogin(api: APIRequestContext, account: Account): Promise<boole
 }
 
 // Best-effort: returns null instead of throwing so the caller can fall back to a DB seed when the
-// OTP went out as a real email instead of landing in the container's stdout. With the backend's
-// default EMAIL_DELIVERY_MODE=log that no longer happens — the code is printed whether or not a
-// Postmark token is configured — so this path, not the DB seed, is what normally runs.
+// code is not in the test outbox (outbox disabled, or delivery is live so the OTP left as a real
+// email). With EMAIL_DELIVERY_MODE=log and EMAIL_OUTBOX_ENABLED=1 — what the e2e stack sets — this
+// path, not the DB seed, is what normally runs.
 async function tryScrapeOtpFromDockerLogs(email: string): Promise<string | null> {
-  return waitForOtpInLogs(email);
+  return waitForOtpEmail(email);
 }
 
 async function provisionUserViaOtp(api: APIRequestContext, account: Account): Promise<boolean> {
@@ -181,12 +181,12 @@ function provisionUserViaDatabaseSeed(account: Account): void {
 
 async function provisionUser(api: APIRequestContext, account: Account): Promise<void> {
   /*
-   * The OTP path reads the code out of the backend container's stdout, so it exists only against
-   * this machine's compose stack. Against a deployed target there is no such log: the attempt would
-   * spend one of signup/start's five rate-limited attempts, wait out waitForOtpInLogs' 8s deadline,
-   * and then fall through to the database seed anyway — per tenant, seven times over. Skip straight
-   * to the seed, which is what actually works there now that psql.ts can reach a remote database
-   * without Docker.
+   * The OTP path reads the code from the backend's test-only email outbox, which only the
+   * disposable e2e stack enables. Against a deployed target the endpoint is absent: the attempt
+   * would spend one of signup/start's five rate-limited attempts, wait out waitForOtpEmail's 8s
+   * deadline, and then fall through to the database seed anyway — per tenant, seven times over.
+   * Skip straight to the seed, which is what actually works there now that psql.ts can reach a
+   * remote database without Docker.
    */
   const canScrapeOtp = env.targetIsLocal && !account.seedDirectly;
   const provisionedViaOtp = canScrapeOtp ? await provisionUserViaOtp(api, account) : false;

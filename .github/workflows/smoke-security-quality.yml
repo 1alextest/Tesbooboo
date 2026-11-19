@@ -41,6 +41,9 @@ jobs:
       REDIS_URL: redis://localhost:6379
       SECRETS_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
       EMAIL_DELIVERY_MODE: log
+      # Disposable stack: let the e2e helpers read OTP codes and invite/reset links from the
+      # test-only email outbox rather than the backend log.
+      EMAIL_OUTBOX_ENABLED: "1"
       ANALYTICS_REPORT_ENABLED: "false"
       FRONTEND_URL: http://127.0.0.1:3000
       NEXT_PUBLIC_API_URL: http://127.0.0.1:7000
@@ -214,6 +217,18 @@ jobs:
           selection="a created schedule|a schedule is updated|a due schedule|the schedule routes refuse|a schedule needs a name|a one-time schedule refuses|a one-time schedule with a future|a recurring schedule needs no Run At|a daily schedule|a weekly schedule|local rules refuse|a fired daily schedule|runs on demand without shifting|edited and run on demand|Schedule Run — the form|SWP-06"
           npx playwright test -c playwright.config.ts api/execution-ops.spec.ts ui/cycles.spec.ts ui/screens-sweep.spec.ts --workers=10 --output=test-results-schedules -g "$selection" --list
           npx playwright test -c playwright.config.ts api/execution-ops.spec.ts ui/cycles.spec.ts ui/screens-sweep.spec.ts --workers=10 --output=test-results-schedules -g "$selection"
+      - name: Verify log-mode email is recorded in the test outbox
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-email
+        run: |
+          # The outbox replaced the container log as the suite's mailbox: an OTP code or reset link
+          # now exists only there, never in stdout. These tests prove the recorded value is the real
+          # one (it completes a sign-in / resets a password), and the invite link resolves. The
+          # delivery-policy assertions in the same file skip without docker logs.
+          selection="an OTP is recorded in the test outbox|a wrong code is still rejected when the right one is in the outbox|the accept link is recorded in the outbox|ACU-07|ACU-08|ACU-10"
+          npx playwright test -c playwright.config.ts api/email-delivery.spec.ts ui/account.spec.ts --workers=10 --output=test-results-email -g "$selection" --list
+          npx playwright test -c playwright.config.ts api/email-delivery.spec.ts ui/account.spec.ts --workers=10 --output=test-results-email -g "$selection"
       - name: Verify bulk execution actions from the run table
         working-directory: e2e
         env:

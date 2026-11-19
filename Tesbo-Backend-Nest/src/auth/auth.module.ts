@@ -4,6 +4,8 @@ import { AuthController } from "./auth.controller";
 import { ActivityMiddleware } from "./activity.middleware";
 import { AuthMiddleware } from "./auth.middleware";
 import { AuthService } from "./auth.service";
+import { EmailOutboxController } from "./email-outbox.controller";
+import { EmailOutboxService } from "./email-outbox.service";
 import { EmailService } from "./email.service";
 import { LoginLockoutService } from "./login-lockout.service";
 import { OtpService } from "./otp.service";
@@ -15,11 +17,12 @@ import { WelcomeEmailModule } from "../welcome-email/welcome-email.module";
 
 @Module({
   imports: [AdminModule, WelcomeEmailModule],
-  controllers: [AuthController],
+  controllers: [AuthController, EmailOutboxController],
   providers: [
     AuthService,
     AuthMiddleware,
     EmailService,
+    EmailOutboxService,
     LoginLockoutService,
     OtpService,
     PasswordService,

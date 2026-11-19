@@ -1356,6 +1356,24 @@ function normalizeAnthropicMessagesUrl(baseUrl?: string | null): string {
   return `${trimmed}/v1/messages`;
 }
 
+/**
+ * Returns a provider URL only when it is absolute http(s) with no embedded credentials.
+ *
+ * A workspace may point a provider at a self-hosted gateway, so the host cannot be allow-listed
+ * without breaking a supported setup. What can be refused is everything that is not an HTTP call at
+ * all: another scheme, or a URL whose credentials would be silently attached to the request.
+ */
+function requireHttpProviderUrl(value: string): string {
+  const parsed = new URL(value);
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error(`Unsupported AI provider URL scheme: ${parsed.protocol}`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("AI provider URL must not embed credentials");
+  }
+  return value;
+}
+
 function normalizeModelsListUrl(provider: string, baseUrl?: string | null): string {
   const resolved = resolveProviderBaseUrl(provider, baseUrl);
   if (providerWire(provider) === "azure") {
@@ -2553,11 +2571,18 @@ export class LegacyService implements OnModuleInit {
     return { key: null, reason: "No active workspace AI key is available for this project." };
   }
 
-  private buildAnthropicAuthHeaders(apiKey: string, authHeaderName: string | null, authScheme: string | null): Record<string, string> {
-    const headers: Record<string, string> = {
+  /*
+   * Provider auth headers are built with `Headers`, not a plain object. `authHeaderName` comes from
+   * a workspace's provider configuration, and assigning an arbitrary string as an object key is a
+   * prototype-pollution shape (`__proto__`, `constructor`) as well as a way to smuggle a malformed
+   * header name past fetch. Headers.set validates the name and stores it as an entry, so the
+   * configured name can only ever be a header.
+   */
+  private buildAnthropicAuthHeaders(apiKey: string, authHeaderName: string | null, authScheme: string | null): Headers {
+    const headers = new Headers({
       "Content-Type": "application/json",
       "anthropic-version": "2023-06-01"
-    };
+    });
     // Strip any accidental "Bearer " prefix that may have been stored with the key
     const cleanKey = String(apiKey || "").replace(/^bearer\s+/i, "").trim();
     // "Authorization" is the legacy DB default for known providers — treat it the same as null.
@@ -2565,21 +2590,23 @@ export class LegacyService implements OnModuleInit {
     const hasCustomHeader = authHeaderName && authHeaderName.toLowerCase() !== "authorization";
     if (hasCustomHeader) {
       const scheme = authScheme ? String(authScheme).trim() : "";
-      headers[String(authHeaderName)] = scheme ? `${scheme} ${cleanKey}` : cleanKey;
+      headers.set(String(authHeaderName), scheme ? `${scheme} ${cleanKey}` : cleanKey);
     } else {
-      headers["x-api-key"] = cleanKey;
+      headers.set("x-api-key", cleanKey);
     }
     return headers;
   }
 
   // Single place that knows how each wire authenticates. Custom providers keep their
   // explicit header/scheme overrides; catalog providers get their wire's convention.
-  private providerAuthHeaders(provider: string, apiKey: string, authHeaderName: string | null, authScheme: string | null): Record<string, string> {
+  private providerAuthHeaders(provider: string, apiKey: string, authHeaderName: string | null, authScheme: string | null): Headers {
     const wire = providerWire(provider);
     if (wire === "anthropic") return this.buildAnthropicAuthHeaders(apiKey, authHeaderName, authScheme);
     if (wire === "azure") {
       // Azure authenticates with a bare api-key header — not Bearer.
-      return { "Content-Type": "application/json", [authHeaderName || "api-key"]: apiKey };
+      const headers = new Headers({ "Content-Type": "application/json" });
+      headers.set(authHeaderName || "api-key", apiKey);
+      return headers;
     }
     return this.buildBearerAuthHeaders(apiKey, authHeaderName, authScheme);
   }
@@ -2948,7 +2975,9 @@ export class LegacyService implements OnModuleInit {
     const projectIds: string[] = Array.isArray(body.projectIds) ? body.projectIds.filter(Boolean) : [];
 
     if (!email) throw new BadRequestException({ error: "email is required" });
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    // Bounded quantifiers: the unbounded form backtracks polynomially on a long address, and this
+    // is straight from the invitation request body.
+    if (email.length > 320 || !/^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{1,63}$/.test(email))
       throw new BadRequestException({ error: "invalid email address" });
 
     // Permission checks
@@ -3519,11 +3548,11 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
-  private buildBearerAuthHeaders(apiKey: string, authHeaderName: string | null, authScheme: string | null): Record<string, string> {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
+  private buildBearerAuthHeaders(apiKey: string, authHeaderName: string | null, authScheme: string | null): Headers {
+    const headers = new Headers({ "Content-Type": "application/json" });
     const name = authHeaderName || "Authorization";
     const scheme = authScheme == null ? "Bearer" : String(authScheme).trim();
-    headers[name] = scheme ? `${scheme} ${apiKey}` : apiKey;
+    headers.set(name, scheme ? `${scheme} ${apiKey}` : apiKey);
     return headers;
   }
 
@@ -3534,7 +3563,10 @@ export class LegacyService implements OnModuleInit {
     authHeaderName: string | null,
     authScheme: string | null
   ): Promise<Array<{ id: string; displayName: string }>> {
-    const url = normalizeModelsListUrl(provider, baseUrl);
+    // The base URL is workspace-configurable (self-hosted gateways are a supported setup), so it is
+    // checked before use: only absolute http(s), never a scheme fetch would treat as local file
+    // access, and never with credentials embedded in the URL.
+    const url = requireHttpProviderUrl(normalizeModelsListUrl(provider, baseUrl));
     const headers = this.providerAuthHeaders(provider, apiKey, authHeaderName, authScheme);
 
     const rows: Body[] = [];
@@ -8889,6 +8921,9 @@ export class LegacyService implements OnModuleInit {
 
   /** Validates a batch of comment files before anything is stored — all or nothing, like bug evidence. */
   private async assertBugCommentFiles(organizationId: string, files: Array<{ originalname: string; size: number }>, existing: number) {
+    // Runtime type check: this method is called with caller-supplied multipart files, and a
+    // non-array would make the count below read a string's length instead of a file count.
+    if (!Array.isArray(files)) throw new BadRequestException({ error: "files must be a list" });
     if (existing + files.length > LegacyService.BUG_COMMENT_MAX_ATTACHMENTS) {
       throw new BadRequestException({
         error: `A comment can have at most ${LegacyService.BUG_COMMENT_MAX_ATTACHMENTS} attachments.`
@@ -9005,7 +9040,9 @@ export class LegacyService implements OnModuleInit {
     const bug = await this.bugInProject(projectId, bugId);
     const text = LegacyService.bugCommentText(body?.body);
     const parentCommentId = await this.bugCommentParent(bugId, body?.parentCommentId);
-    const uploads = files ?? [];
+    // Multipart is outside the type system; a non-array must not be treated as a file list.
+    if (!Array.isArray(files)) throw new BadRequestException({ error: "files must be a list" });
+    const uploads = files;
     await this.assertBugCommentFiles(String(project.organization_id), uploads, 0);
 
     // The parent is re-checked in the INSERT itself, so a thread deleted since bugCommentParent
@@ -9096,7 +9133,9 @@ export class LegacyService implements OnModuleInit {
     // the bug's evidence is simply not found here.
     const removing = current.filter((file) => removeIds.includes(String(file.id)));
     if (removing.length !== removeIds.length) throw new NotFoundException({ error: "Attachment not found" });
-    const uploads = files ?? [];
+    // Multipart is outside the type system; a non-array must not be treated as a file list.
+    if (!Array.isArray(files)) throw new BadRequestException({ error: "files must be a list" });
+    const uploads = files;
     await this.assertBugCommentFiles(String(project.organization_id), uploads, current.length - removing.length);
 
     const textChanged = text !== null && text !== String(comment.body);
@@ -9412,7 +9451,10 @@ export class LegacyService implements OnModuleInit {
     // is not authorization.
     const uid = this.requireUser(userId);
     const project = await this.requireProjectAccess(uid, projectId);
-    if (!files || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
+    // Array.isArray, not just a length check: multipart parsing is outside our types, so a single
+    // field or a malformed payload can arrive as a non-array and `.length` would then read a string
+    // length and count it as files.
+    if (!Array.isArray(files) || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
     if (!isUuid(bugId)) throw new NotFoundException({ error: "Bug not found" });
     const bug = await this.db.query("SELECT b.id, b.title FROM bugs b WHERE b.id = $1 AND b.project_id = $2 AND b.deleted_at IS NULL", [bugId, projectId]);
     if (!bug.rows[0]) throw new NotFoundException({ error: "Bug not found" });
@@ -9532,7 +9574,10 @@ export class LegacyService implements OnModuleInit {
     files: Array<{ buffer: Buffer; originalname: string; mimetype: string; size: number }>
   ) {
     const uid = this.requireUser(actorId);
-    if (!files || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
+    // Array.isArray, not just a length check: multipart parsing is outside our types, so a single
+    // field or a malformed payload can arrive as a non-array and `.length` would then read a string
+    // length and count it as files.
+    if (!Array.isArray(files) || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
     const execution = await this.executionOwner(cycleId, executionId);
     const projectId = String(execution.project_id);
     await this.requireProjectAccess(uid, projectId);
@@ -15685,7 +15730,13 @@ export class LegacyService implements OnModuleInit {
       if (!choice) throw new BadRequestException({ error: "Unknown option for this question." });
     } else {
       if (!latest?.options || latest.options.answeredId) return null;
-      const typed = message.trim().replace(/[.!)\s]+$/, "");
+      // Trailing punctuation is trimmed with a scan instead of `/[.!)\s]+$/`: the message is
+      // caller-supplied, and a long run of those characters makes the regex backtrack polynomially.
+      const typedText = message.trim();
+      let typedEnd = typedText.length;
+      const isTrailingChoicePunct = (ch: string) => ch === "." || ch === "!" || ch === ")" || /\s/.test(ch);
+      while (typedEnd > 0 && isTrailingChoicePunct(typedText[typedEnd - 1])) typedEnd -= 1;
+      const typed = typedText.slice(0, typedEnd);
       choice = /^\d{1,2}$/.test(typed)
         ? choices[Number(typed) - 1]
         : choices.find((option) => String(option.label || "").trim().toLowerCase() === typed.toLowerCase());
@@ -25859,7 +25910,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     // to drop silently, staging an update whose rewritten values had all been lost. Known spellings
     // are folded onto the real key first; a key already given in its canonical form wins.
     const stepAliases = new Set(["steps", "testSteps", "stepList"]);
-    const normalized: Body = {};
+    // Null-prototype map: the keys are derived from model output, and a plain object would let a
+    // "__proto__" key mutate Object.prototype instead of being stored as an ignored field.
+    const normalized: Body = Object.create(null);
     for (const [rawKey, value] of Object.entries(fields || {})) {
       const camel = rawKey.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
       const key = stepAliases.has(camel) ? "stepsJson" : camel;

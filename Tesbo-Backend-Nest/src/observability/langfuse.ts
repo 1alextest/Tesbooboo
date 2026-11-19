@@ -48,7 +48,18 @@ function resolveConfig(): { publicKey: string; secretKey: string; baseUrl: strin
     return null;
   }
   const allowCloud = String(process.env.LANGFUSE_ALLOW_CLOUD || "").toLowerCase() === "true";
-  if (/cloud\.langfuse\.com/i.test(baseUrl) && !allowCloud) {
+  // Host comparison, not a substring search. The guard exists to stop customer prompts reaching
+  // Langfuse Cloud by accident, so it answers "is this host cloud?" from the parsed hostname. An
+  // unparseable base URL cannot be used for tracing at all, so it is treated as cloud: tracing stays
+  // off unless the operator explicitly allowed cloud delivery.
+  let pointsAtCloud = true;
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    pointsAtCloud = host === "cloud.langfuse.com" || host.endsWith(".cloud.langfuse.com");
+  } catch {
+    // Keep the conservative answer: refuse rather than guess.
+  }
+  if (pointsAtCloud && !allowCloud) {
     logger.warn("Tracing off: LANGFUSE_BASE_URL points at Langfuse Cloud. Set LANGFUSE_ALLOW_CLOUD=true to send customer data there deliberately.");
     return null;
   }

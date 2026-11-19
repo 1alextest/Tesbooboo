@@ -584,12 +584,15 @@ export class CustomFieldsService {
         errors.push({ field: definitionId, message: "Cannot set a value for an archived field" });
         continue;
       }
+      // Key the result by the definition's own id, not the map key the caller supplied. The
+      // lookup above already proved they match; this keeps a caller-controlled string out of a
+      // property write (a "__proto__" key would otherwise replace the object's prototype).
       if (isEmptyValue(raw)) {
-        normalized[definitionId] = null;
+        normalized[definition.id] = null;
         continue;
       }
       try {
-        normalized[definitionId] = validateAndNormalizeValue(definitionId, definition.field_type, definition.config || {}, raw);
+        normalized[definition.id] = validateAndNormalizeValue(definition.id, definition.field_type, definition.config || {}, raw);
       } catch (err) {
         if (err instanceof BadRequestException) {
           const response = err.getResponse() as { message?: string };

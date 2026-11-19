@@ -108,3 +108,37 @@ describe("StorageService.verify", () => {
     });
   });
 });
+
+describe("StorageService local path confinement", () => {
+  let dir = "";
+  let outside = "";
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "tesbo-storage-root-"));
+    outside = fs.mkdtempSync(path.join(os.tmpdir(), "tesbo-storage-outside-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+
+  it("refuses a key that resolves outside the upload directory", async () => {
+    // Keys are generated server-side today, but this is the boundary that turns one into a
+    // filesystem path for every read, write and delete. A mistake there must fail loudly rather
+    // than read, overwrite or unlink a file next to the upload directory.
+    const service = new StorageService(localConfig(dir) as never);
+    const escape = path.relative(dir, path.join(outside, "stolen.txt"));
+
+    await expect(service.put(escape, Buffer.from("x"), "text/plain")).rejects.toThrow(/escapes the upload directory/);
+    expect(fs.existsSync(path.join(outside, "stolen.txt"))).toBe(false);
+    await expect(service.getBuffer("../outside.txt")).rejects.toThrow(/escapes the upload directory/);
+    await expect(service.delete(escape)).rejects.toThrow(/escapes the upload directory/);
+  });
+
+  it("still reads and writes a normal nested key", async () => {
+    const service = new StorageService(localConfig(dir) as never);
+    await service.put("executions/project/run/file.txt", Buffer.from("ok"), "text/plain");
+    await expect(service.getBuffer("executions/project/run/file.txt")).resolves.toEqual(Buffer.from("ok"));
+  });
+});

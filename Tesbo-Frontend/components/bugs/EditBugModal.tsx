@@ -20,6 +20,7 @@ import SelfLoggedTrackerField, { type SelfLoggedSystem } from "@/components/Self
 import IssuePickerModal from "@/components/IssuePickerModal";
 import BugEvidenceField, { type EvidenceMode } from "@/components/BugEvidenceField";
 import { BUG_PRIORITIES, BUG_SEVERITIES } from "@/components/bugs/BugBadges";
+import { safeExternalUrl } from "@/lib/validation";
 
 type EditBugModalProps = {
   projectId: string;
@@ -324,12 +325,17 @@ export default function EditBugModal({
           onUrlChange={(value) => { setTrackingChanged(true); setEditUrl(value); }}
           renderUrlField={(system, defaultField) => {
             if (system === "OTHER") return defaultField;
+            // Only an absolute http(s) URL becomes a link; a value carrying javascript:/data: is
+            // rendered as plain text. Encoding the validated value keeps the attribute free of
+            // characters a URL cannot carry.
+            const issueHref = safeExternalUrl(editSelectedIssue?.url || editUrl);
+            const href = issueHref ? encodeURI(issueHref) : undefined;
             return (
               <div className="mt-2 space-y-1">
                 <div className="flex items-center justify-between gap-2 rounded-[var(--radius-control)] border border-[var(--border)] px-3 py-2 text-[13px]">
-                  {editSelectedIssue ? (
+                  {editSelectedIssue && href ? (
                     <a
-                      href={editSelectedIssue.url || editUrl || undefined}
+                      href={href}
                       target="_blank"
                       rel="noreferrer"
                       className="truncate text-[var(--foreground)] hover:underline"
@@ -337,6 +343,11 @@ export default function EditBugModal({
                       {editSelectedIssue.key}
                       {editSelectedIssue.summary ? ` — ${editSelectedIssue.summary}` : ""}
                     </a>
+                  ) : editSelectedIssue ? (
+                    <span className="truncate text-[var(--foreground)]">
+                      {editSelectedIssue.key}
+                      {editSelectedIssue.summary ? ` — ${editSelectedIssue.summary}` : ""}
+                    </span>
                   ) : (
                     <span className="text-[var(--muted)]">No issue selected.</span>
                   )}
