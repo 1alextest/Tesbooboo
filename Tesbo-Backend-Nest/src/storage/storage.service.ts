@@ -44,6 +44,13 @@ export class StorageService {
    * overwrite or unlink a file outside `UPLOAD_DIR`.
    */
   private localPath(key: string): string {
+    // Keys are generated here from project/entity UUIDs and a sanitized extension. This allowlist
+    // states that contract at the boundary — letters, digits, slash, underscore, hyphen and one
+    // dot before the suffix — so a key carrying anything else (a traversal segment, a drive
+    // letter, a NUL) is refused before any path is built.
+    if (!/^[A-Za-z0-9/_-]+(?:\.[a-z0-9]{1,10})?$/.test(key)) {
+      throw new Error("Storage key contains unsupported characters");
+    }
     // The root keeps its trailing separator and the resolved candidate is checked with a single
     // startsWith against it — the containment check the static analysis models (resolved path,
     // compared against a root), and one that also rejects a sibling directory whose name merely
@@ -76,7 +83,14 @@ export class StorageService {
     }
     const fullPath = this.localPath(key);
     await fs.promises.mkdir(path.dirname(fullPath), { recursive: true });
-    await fs.promises.writeFile(fullPath, body);
+    // One handle for the write, closed in a finally: a failed write cannot leak it, and the path is
+    // the already-validated one (allowlisted key, confined under UPLOAD_DIR).
+    const handle = await fs.promises.open(fullPath, "w");
+    try {
+      await handle.writeFile(body);
+    } finally {
+      await handle.close();
+    }
   }
 
   async exists(key: string): Promise<boolean> {
