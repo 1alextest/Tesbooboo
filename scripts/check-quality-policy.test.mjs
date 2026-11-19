@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { validateLintBaseline } from "./check-quality-policy.mjs";
+import { validateLintBaseline, validateLintBaselineShape } from "./check-quality-policy.mjs";
 import { resolveBase, changedPaths, readGitFile } from "./git-quality.mjs";
 
 test("lint allowances may shrink or retire but may not grow or move to another file/rule", () => {
@@ -17,6 +17,17 @@ test("lint allowances may shrink or retire but may not grow or move to another f
 test("invalid and zero allowances cannot silently disable a quality check", () => {
   for (const current of [null, [], 1, { "a.ts": [] }, { "a.ts": { unsafe: 0 } }, { "a.ts": { unsafe: -1 } }, { "a.ts": { unsafe: "2" } }]) {
     assert.ok(validateLintBaseline(current, {}).length);
+  }
+});
+
+test("a first baseline is held to structural checks, not the predecessor comparison it cannot have", () => {
+  // The base carries no lint baseline on a first promotion, so validateLintBaseline would reject
+  // every entry as expansion against an implicit zero. The bootstrap path validates the file's
+  // shape instead and records the scope for review; it must still reject malformed allowances.
+  const first = { "a.ts": { unsafe: 2 } };
+  assert.deepEqual(validateLintBaselineShape(first), []);
+  for (const current of [null, [], 1, { "a.ts": [] }, { "a.ts": { unsafe: 0 } }, { "a.ts": { unsafe: -1 } }, { "a.ts": { unsafe: "2" } }, { "": { unsafe: 1 } }]) {
+    assert.ok(validateLintBaselineShape(current).length, JSON.stringify(current));
   }
 });
 
