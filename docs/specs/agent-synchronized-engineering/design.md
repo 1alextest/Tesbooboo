@@ -17,7 +17,7 @@ Do **not** introduce a new chat assistant, a shadow test case writer, a disconne
 
 Source inspection pinned to `0c54b8ed28c9dec51ed0ca3bbb3cd3b7b8ab12d8` (not a deployed-build claim): `Tesbo-Backend-Nest/src/mcp/mcp.tools.ts`, `mcp.service.ts`, `docs/FEATURE_DOCUMENTATION.md`, and `graph-change-review.controller.ts`.
 
-- Existing MCP: `create_testcase`, `update_testcase`, `sourceRefs`, `link_requirement_to_testcase`, `create_knowledge_document`, `update_knowledge_document`, graph change capture/history, behavior model drafts. The source currently registers 58 tools; this is **not** proof the deployed client sees them.
+- Existing MCP: `create_testcase`, `update_testcase`, `sourceRefs`, `link_requirement_to_testcase`, `create_knowledge_document`, `update_knowledge_document`, graph change capture/history, behavior model drafts. The source currently registers 59 tools; this is **not** proof the deployed client sees them.
 - Existing `link_requirement_to_testcase` accepts **exactly one** `jiraIssueKey`, `linearIssueKey`, or `notionPageId`. It does not accept a native Tesbo requirement ID. The `get_requirement_matrix` endpoint largely reports cases/runs/bugs; external Requirements UI counts linked non-deleted cases, which is not executed coverage.
 - Existing KB `requirement_note` and feature-requirements templates can hold content, but do not constitute a first-class native requirement object with accepted criteria/revision-aware typed testcase edges.
 - The KB already owns documents, folders, version history and files; the MCP source includes KB **document/folder** tools but does **not** advertise binary file-upload tools.

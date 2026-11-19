@@ -17,7 +17,7 @@
  *   node scripts/mcp-deploy-check.mjs
  *
  * Optional:
- *   EXPECTED_TOOL_COUNT=58   informational; a mismatch is a warning, because the catalog evolves.
+ *   EXPECTED_TOOL_COUNT=59   informational; a mismatch is a warning, because the catalog evolves.
  *   TESBO_API_HEALTH_URL     defaults to <origin>/api/health derived from TESBO_MCP_URL.
  *
  * Exit code is 1 on any failed requirement. The token is never printed, and server error text is

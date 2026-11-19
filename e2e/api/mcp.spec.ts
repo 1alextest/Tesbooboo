@@ -209,8 +209,8 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
     const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {} });
     expect(init.result.serverInfo.name).toBe("tesbo-mcp");
     const catalog = (await rpc("tools/list")).result.tools as Array<{ name: string }>;
-    expect(catalog).toHaveLength(58);
-    expect(new Set(catalog.map(item => item.name)).size).toBe(58);
+    expect(catalog).toHaveLength(59);
+    expect(new Set(catalog.map(item => item.name)).size).toBe(59);
     expect(catalog.map(item => item.name)).toContain("list_qa_graph_changes");
     expect(catalog.map(item => item.name)).toEqual(
       expect.arrayContaining([
@@ -219,6 +219,7 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
         "link_behavior_model_case",
         "get_behavior_model_coverage",
         "archive_behavior_model",
+        "run_behavior_model",
       ]),
     );
     const foreign = await rpc("tools/list", {}, `/api/projects/${tenant!.secondProjectId}/mcp`);
@@ -312,6 +313,40 @@ test("disposable MCP agent create read update archive lifecycle preserves projec
     const coverage = await call("get_behavior_model_coverage", { modelId });
     expect(coverage).toMatchObject({ coverageAssertion: "none", executionAssertion: "none" });
     expect(coverage.links.map((row: { testcaseId: string }) => row.testcaseId)).toContain(caseId);
+
+    // Governed run over MCP. The tool cannot approve — an agent cannot become its own reviewer —
+    // so an unapproved revision is refused, and approval happens through the product first.
+    const unapprovedRun = await rejected("run_behavior_model", { modelId, revisionId: savedRevision.id });
+    expect(unapprovedRun.message).toMatch(/Approve this revision/i);
+    const approveRevision = await owner.post(
+      `/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${savedRevision.id}/approve`,
+      { data: { expectedHash: savedRevision.contentHash } }
+    );
+    expect(approveRevision.status(), await approveRevision.text()).toBe(201);
+    const unapprovedCaseRun = await rejected("run_behavior_model", { modelId, revisionId: savedRevision.id, caseIds: [caseId] });
+    expect(unapprovedCaseRun.message).toMatch(/Approve/i);
+    const approveCase = await owner.post(`${caseUrl(caseId!)}/approve`, {
+      data: { expectedRevision: amended.editRevision }
+    });
+    expect(approveCase.status(), await approveCase.text()).toBe(200);
+
+    const governedRun = await call("run_behavior_model", { modelId, revisionId: savedRevision.id, caseIds: [caseId] });
+    expect(governedRun).toMatchObject({
+      coverageAssertion: "none",
+      executionAssertion: "governed-run",
+      requested: 1,
+      added: 1,
+      skipped: 0,
+      run: { id: governedRun.cycleId }
+    });
+    expect(governedRun.manifest.cases[0]).toMatchObject({ testcaseId: caseId, sources: ["linked"] });
+    // Remove the native run chain so the lifecycle's "no new run or execution" proof still holds.
+    exec(
+      `DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id = ${literal(governedRun.cycleId)});`
+    );
+    exec(`DELETE FROM cycle_items WHERE cycle_id = ${literal(governedRun.cycleId)};`);
+    exec(`DELETE FROM cycles WHERE id = ${literal(governedRun.cycleId)};`);
+
     expect((await call("archive_behavior_model", { modelId })).ok).toBe(true);
     const archivedCoverage = await rejected("get_behavior_model_coverage", { modelId });
     expect(archivedCoverage.message).toMatch(/not found/i);
@@ -611,9 +646,9 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
       } }>;
       const names = tools.map(t => t.name);
       // Exact source/deployment contract. A 50-tool client cache is not proof
-      // that this server is current, nor can 58 source tools prove stage deployed.
-      expect(names, "freshly initialized deployed catalog").toHaveLength(58);
-      expect(new Set(names).size, "MCP names must be unique").toBe(58);
+      // that this server is current, nor can 59 source tools prove stage deployed.
+      expect(names, "freshly initialized deployed catalog").toHaveLength(59);
+      expect(new Set(names).size, "MCP names must be unique").toBe(59);
       for (const name of [
         "list_qa_graph_changes",
         "capture_qa_graph_change",
@@ -622,7 +657,8 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
         "save_behavior_model_revision",
         "link_behavior_model_case",
         "get_behavior_model_coverage",
-        "archive_behavior_model"
+        "archive_behavior_model",
+        "run_behavior_model"
       ]) {
         expect(names).toContain(name);
       }

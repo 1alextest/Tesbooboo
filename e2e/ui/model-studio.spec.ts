@@ -189,6 +189,14 @@ test("a reviewer approves the revision, creates a draft case and starts a govern
     await expect(runsAfter.getByRole("link", { name: /Model run:/ }).first()).toBeVisible();
     const observed = runsAfter.getByRole("list", { name: "Observed results by element" });
     await expect(observed).toContainText("Passed 1");
+
+    // The native run page shows the model basis it came from and links back to the studio model.
+    await page.goto(`/projects/${ctx.projectId}/cycles/${cycleId}`);
+    const provenance = page.getByTestId("run-model-provenance");
+    await expect(provenance).toContainText("Started from model");
+    await expect(provenance).toContainText(name);
+    await expect(provenance).toContainText("rev 1");
+    await expect(provenance.getByRole("link", { name })).toHaveAttribute("href", /\/model-studio\?model=/);
   } finally {
     /*
      * The run references the generated case, and the API delete of a cycle is a SOFT delete — its

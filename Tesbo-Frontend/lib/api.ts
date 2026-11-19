@@ -5081,3 +5081,25 @@ export async function dispatchModelStudioRun(
     body: data
   });
 }
+
+/** A governed run's model basis, read by the native run page; null for an ordinary run. */
+export type ModelStudioRunProvenance = {
+  id: string;
+  modelId: string;
+  modelName: string;
+  modelRevisionId: string;
+  revisionNumber: number;
+  contentHash: string;
+  approvalId: string;
+  approvedAt: string | null;
+  approvedBy: string | null;
+  dispatchedAt: string;
+  caseCount: number;
+};
+
+export async function getModelStudioRunProvenance(
+  projectId: string,
+  cycleId: string
+): Promise<ModelStudioRunProvenance | null> {
+  return api(`/api/projects/${projectId}/model-studio/runs/by-cycle/${cycleId}`);
+}

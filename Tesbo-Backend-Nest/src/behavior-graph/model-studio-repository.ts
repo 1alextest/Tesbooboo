@@ -818,6 +818,44 @@ export class ModelStudioRepository {
       }));
   }
 
+  /**
+   * Provenance for a native Test Run that a model dispatched, or null for an ordinary run.
+   *
+   * The run detail page reads this so the model basis is visible where the results are, not only
+   * from the studio. A cycle the project never dispatched from a model — or a cycle id from another
+   * project — answers null; the caller renders nothing rather than an error.
+   */
+  async runProvenanceForUser(userId: string | null | undefined, projectId: string, cycleId: string) {
+    await this.access(userId, projectId);
+    if (!UUID.test(cycleId)) return null;
+    const res = await this.db.query(
+      `SELECT mr.id, mr.model_id, mr.model_revision_id, mr.content_hash, mr.approval_id, mr.created_at,
+              m.name AS model_name, r.revision_number, a.approved_at, a.approved_by,
+              jsonb_array_length(COALESCE(mr.manifest->'cases', '[]'::jsonb)) AS case_count
+       FROM mbt_model_runs mr
+       JOIN mbt_models m ON m.id = mr.model_id AND m.project_id = mr.project_id
+       JOIN mbt_model_revisions r ON r.id = mr.model_revision_id AND r.project_id = mr.project_id
+       LEFT JOIN mbt_model_approvals a ON a.id = mr.approval_id
+       WHERE mr.cycle_id = $1 AND mr.project_id = $2`,
+      [cycleId, projectId]
+    );
+    const row = res.rows[0];
+    if (!row) return null;
+    return {
+      id: row.id,
+      modelId: row.model_id,
+      modelName: row.model_name,
+      modelRevisionId: row.model_revision_id,
+      revisionNumber: Number(row.revision_number),
+      contentHash: row.content_hash,
+      approvalId: row.approval_id,
+      approvedAt: row.approved_at,
+      approvedBy: row.approved_by ?? null,
+      dispatchedAt: row.created_at,
+      caseCount: Number(row.case_count)
+    };
+  }
+
   async coverageForUser(userId: string | null | undefined, projectId: string, modelId: string) {
     await this.access(userId, projectId);
     if (!UUID.test(modelId)) throw new NotFoundException({ error: "Model not found" });

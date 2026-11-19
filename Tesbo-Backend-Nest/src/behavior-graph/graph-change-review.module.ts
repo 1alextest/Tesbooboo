@@ -22,6 +22,7 @@ import { ModelStudioPreview } from "./model-studio-preview";
 import { ModelStudioPreviewController } from "./model-studio-preview.controller";
 import { ModelStudioRepository } from "./model-studio-repository";
 import { ModelStudioModelsController } from "./model-studio-models.controller";
+import { ModelStudioRunsController } from "./model-studio-runs.controller";
 
 /** Server-admin configuration only. No filesystem root comes from REST/MCP. */
 export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistry {
@@ -51,7 +52,12 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
 
 @Module({
   imports: [LegacyModule, StorageModule, BullModule.registerQueue({ name: GRAPH_QA_RECOVERY_QUEUE })],
-  controllers: [GraphChangeReviewController, ModelStudioPreviewController, ModelStudioModelsController],
+  controllers: [
+    GraphChangeReviewController,
+    ModelStudioPreviewController,
+    ModelStudioModelsController,
+    ModelStudioRunsController
+  ],
   providers: [
     CurrentCacheGraphReader,
     ModelStudioPreview,
