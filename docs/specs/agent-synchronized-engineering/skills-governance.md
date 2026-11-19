@@ -1,0 +1,118 @@
+# ASER — Governed Skills Library and Effective Skill Assignments
+**State:** Proposed contract for specification review, not implemented. **Scope:** Tesbo project/workspace authoring governance; no change to authoritative product behavior until explicit approval and implementation.
+**Relationship to existing work:** Reconcile first with `docs/reviews/governed-asset-evolution-reconciliation.md` (noncanonical v0.5), the eight original Tesbo canonical specs, existing Knowledge Base/versioning, case approval, Zyra and MCP. This is an ASER proposal, **not** a new ninth canonical spec, a second AI agent, or an independent skill database.
+
+## 1. User jobs, actual categories and orthogonal axes
+A human project/workspace owner assigns governed instructions to the modules and narrower contexts that agents author. Agents consult those instructions when proposing requirements, test cases, manuals, policies, tasks/issues, and files/evidence. Humans govern which instructions are active. Skills themselves are also authored under a *skills-authoring meta-skill*.
+
+**Classification dimensions must not be conflated:**
+- `module`: requirements | test_cases | user_manuals | policies | tasks_issues | files_evidence | skills.
+- `subtype` within a module: requirements functional/nonfunctional/business/technical/regulatory; tests manual/automated/API/security/performance/accessibility; manuals end-user/staff/admin/support/developer/operations; policies product/business/organizational/security/regulatory/customer-facing; tasks work/bug/investigation/change; files evidence/source/test data/attachments; skills authoring/distillation/evaluation/maintenance.
+- `audience`: internal, external, partner, public, mixed (multiple audience bindings allowed).
+- `authority_origin`: internal decision, contractual, regulator/statute, standard, external provider; **not** synonymous with whether a policy is externally published.
+- `exposure`: private/restricted/shared/public, independently governed by native authorization and information classification.
+- `applicability`: workspace/project, system/module/feature, actor, operation, jurisdiction/locale, environment, phase and product domain, as supported/verified.
+Examples: an internal operator manual with an external legal source; an external-facing privacy policy that is internally approved; a customer manual for administrators only. A label must not grant public access or normative authority.
+
+## 2. Canonical owner and records
+Reuse the current Tesbo KB document/attachment owner for authored text, stable identity and history *if* actual implementation investigation proves it satisfies immutable snapshot, lock and permission invariants. Add typed governance metadata and indexed assignment relations only where necessary. Never duplicate byte stores or let a graph projection become the authority.
+
+Each **skill identity** has stable `skillId`, name, purpose, origin (native/imported), provenance, owning scope, owner, compatibility constraints and zero or more immutable version records. Each **skill version** has `skillVersionId`, parent/head reference, revision number/content digest, normative instructions, references/assets, creation actor and source evidence, supported modules/subtypes, applicability predicate, dependencies, anti-patterns, examples/counterexamples, required input/output contract, validation/evaluation evidence, and status. A newly created skill is a **candidate**, not an active instruction. Version sequence and draft-iteration sequence are distinct; rejected/abandoned candidates never become published versions.
+
+A **skill assignment** is a *separate governed record*: `assignmentId`, exact `skillId+approvedVersionId`, target workspace/project/module/subtype/context predicate, priority or composition rule, active/inactive state, effective interval, assignment policy/approval receipt, actor and immutable history. Disabling one assignment does not delete/inactivate the underlying skill or silently disable its use in other contexts. Global skill availability, version approval, binding activation, and per-project applicability are four different facts.
+
+An artifact revision and Change Packet record the exact **resolved effective skill set**: assignment IDs and versions, skill version IDs, digests, resolution outcome (matched/not applicable/conflict/unavailable) and timestamp/revision. A later skill or assignment change cannot rewrite historical provenance.
+
+## 3. Authorized operations: separate creation from governance
+| Operation | Agent via project MCP | Authorized interactive human |
+| --- | --- | --- |
+| `list_skills`/`get_skill`/read approved and allowed candidates | YES, per visibility | YES |
+| `resolve_effective_skills` for its bound operation/context | YES, read-only | YES |
+| `create_skill_candidate` (new identity, draft only) | YES, least-privilege | YES |
+| `propose_skill_version` (successor/branch, draft only) | YES, with base-version precondition | YES |
+| Alter an existing skill-version payload, including one's own submitted candidate | **NO**; create another candidate/draft-iteration record | **NO**; immutable revisions |
+| Approve/publish skill candidate or its successor | **NO** | YES with separate trusted review action |
+| Assign/reassign a module to a skill/version | **NO** | YES with review |
+| Activate/deactivate an assignment, default, precedence or policy | **NO** | YES |
+| Change meta-skill, governance constraints, trust/role policy, or revoke approvals | **NO** | Governance administrator through an authorized independent process |
+
+**Hard boundary:** MCP bearer tokens and any agent-operable REST token must have *no mutation path* to approve, assign, activate/deactivate, retire/revoke, reorder/priority-change or edit historical skill versions, including a token issued by a human owner. A human-owned service token is not proof of interactive human assent. Publish/assignment methods require separate trusted interactive authorization and durable review receipt, including CSRF/session/re-authentication or equivalent controls appropriate to the action, plus separation of duties where policy requires. Do not rely on a client-provided `isHuman`, role name, header, review flag, or a prompt instruction.
+
+MCP may expose only additive candidate submissions, strictly project-scoped and audited. Submitted candidates are inert for effective-skill resolution, including when an agent explicitly references their IDs. Candidate display/preview never makes them authoritative. Skill proposals may be rejected/withdrawn without deleting history. An agent may be granted access to propose skills but never to promote or route them.
+
+## 4. Governing Skills itself: protected bootstrap
+A governed **skill-authoring meta-skill** tells agents how to structure a candidate: goal, scope/trigger, reusable principle, context-specific application, required evidence, invariants, prohibited assumptions, input/output examples and counterexamples, admissible exceptions, validation/evaluation and review receipt. **Principle-based generalisation** means distilling the transferable reasoning/failure mechanism, not importing application-specific conclusions or merely accumulating incident instructions.
+
+The root meta-skill plus its promotion rules are **human-governed and server-protected**. Changes use a separately reviewed successor with independent approver(s), version pin, executable negative fixtures and a non-self-referential trust anchor (e.g. reviewed release/security policy). An agent-created meta-skill candidate cannot validate, approve, supersede, enable or assign itself. There is no automatic `skills -> skills -> ...` recursion: resolve the designated approved root once per authoring operation; reject unresolved cycles or self-dependencies.
+
+Projects may extend the portable core with versioned, lower-precedence project adapters. Adapters cannot relax root security, provenance, required evaluation or approval constraints. An external agent instruction (`AGENTS.md`/`CLAUDE.md`) is only a trigger; it never supersedes the server-enforced effective assignment.
+
+## 5. Resolution, composition and changes mid-flight
+The effective-skill resolver takes **server-verified** project/workspace, module/subtype, operation, audience, context/scope, current authority version and principal. It returns immutable skills in a deterministic order and an input digest. Candidate-only, inactive, expired, revoked, inaccessible, incompatible-engine or unrelated-context skills do not become active. If no skill is assigned, record `UNASSIGNED` (and refuse governed writes where the module policy requires a skill); never silently select a library "latest".
+
+Multiple active skills are legal only when their *composition* is explicitly approved: e.g. portable testing core + project adapter + security specialization. Encode precedence, applicability, required vs optional, compatible versions and conflicts. Validate no contradictory required rules, invalid inheritance, cycles, duplicate effective owners or privilege-escalating adapter. Ambiguous matches fail closed with `SKILL_ASSIGNMENT_CONFLICT`, not arbitrary lexicographic selection.
+
+A proposal pins the effective skill set at creation. Recheck at submission, approval and publication. If an assignment changes or a version is revoked during work, leave the candidate/revision and evidence intact; mark `SKILL_CONTEXT_STALE` and require reassessment/rebase or an authorized explicit grandfathering decision. Historical records remain bound to the versions actually used. For exceptional urgent disabling/revocation, policy defines effect on in-flight proposals, downstream agents and previously published artifacts; no silent retroactive rewrite.
+
+## 6. Trust, confidentiality and external inputs
+Read skill text and attachments as *instructions only if* they come from an approved, assigned version. Imported skills, reference examples, linked files and KB content are **untrusted data**, including content that claims to be a higher-priority policy. Quarantine candidate uploads and prevent them from injecting secret-exfiltration instructions, tool calls, hidden overrides, network destinations or capability expansion into active agent contexts. A formatter or preview must not execute embedded code, scripts, HTML or untrusted tool invocations. Keep secrets out of prompts, audit and exported receipts.
+
+Use separate authenticated project/org scope for listing, creation, reading and assignment management. A public manual or policy label must not expose private source notes or history; review access to candidate drafts and diff metadata separately. Audit actor/source, exact before/after assignment, version hash, reviewer decision, and rejected authorization attempts. Validate cache keys/ETags against project, context, assignment-head and role; invalidate on approval/assignment/revocation events. Explicitly expire offline copies.
+
+## 7. User interface and API surface
+**Skills Library** navigation: categorized search/filter by module/subtype/audience/owner; skill detail with stable ID, version timeline, source and artifacts, draft comparisons, effective usage/assignments, review status, evaluation evidence and dependencies; create-candidate and propose-next-version surfaces for permitted actors. Never make an active binding editable from the agent-facing library UI.
+
+**Skill Assignments** governance view: project/workspace module rows (including manual internal/external and policy internal/external), exact pinned version, effective rules, active toggle, precedence, compatibility warnings, preview of the resolved skill set, provenance, change history, staged approval. This is human-only. Provide a clear `No active skill` state, not misleading "configured" or defaulting to draft.
+
+**MCP proposal (not yet implemented)**: read-only `list_skills`, `get_skill`, `resolve_effective_skills`, `list_skill_versions`; additive write `create_skill_candidate`, `propose_skill_version`. No MCP assignment or promotion tools. REST/GraphQL other endpoints must also enforce this boundary server-side. Pin version/digest on `create_requirement_draft`, `create_testcase_candidate`, `propose_manual_revision`, `propose_policy_revision`, `propose_work_item`, `attach_evidence`, and Change Packets where applicable. Reuse Tesbo's existing native writer/approval services; these are conceptual contracts, not claims of current endpoint names.
+
+**Compatibility and progress:** project tokens may currently expose broad `read/write` and some KB/case writers can save directly. Do not claim skill governance is safe by adding new MCP tools while older REST/MCP writers bypass it. Inventory every entry point and sequence enforcement rollout/migration, including existing draft/publication paths, integrations, imports, background jobs, Zyra, third-party adapters and old clients.
+
+## 8. Evaluation and quality without self-certification
+Every candidate skill should carry a testable sample set: conforming, nonconforming, adversarial input, counterexample and valid not-applicable case; version-to-version diff; expected vs observed results; who evaluated and where. Score improvements on quality and false positives, omission/novel harm, format validity, source fidelity, agent ability to comply, cost/latency and dependency drift. A candidate passing template checks is **not** proof of effectiveness. Promotion criteria and thresholds are set by governed human policy, not by the candidate itself. Held-out evaluation must not be contaminated by the authoring agent's examples; record UNKNOWN where evidence is unavailable.
+
+## 9. Selected acceptance scenarios for this domain
+| ID | Independent test / falsifier | Expected |
+| --- | --- | --- |
+| SK-E2E-01 | Agent creates skill for Requirements | New draft, read back; no assignment or effective change |
+| SK-E2E-02 | Agent proposes v2 of active v1 | v1 remains immutable/active, v2 candidate inert |
+| SK-E2E-03 | Agent with admin-owned MCP token tries assign/activate/approve via MCP and REST | All denied, no state change, audit receipt |
+| SK-E2E-04 | Authorized human approves v2 but does not assign it | Approved yet v1 remains effective |
+| SK-E2E-05 | Human switches module binding v1->v2; in-flight proposal authored under v1 | Current binding resolves v2, proposal flagged stale, history still pins v1 |
+| SK-E2E-06 | Inactive external-manual skill and active internal-manual skill | Correct audience only; inactive never selected |
+| SK-E2E-07 | External-facing policy with internal authority and private supporting evidence | Authority/exposure/audience independent, no private data leakage |
+| SK-E2E-08 | Overlapping active skills with contradictory instructions | Conflict surfaced, no arbitrary auto-choice |
+| SK-E2E-09 | Unauthorized adapter claims to override root meta-skill | Rejected and not loaded as governing instruction |
+| SK-E2E-10 | Agent proposes a weaker meta-skill and immediately references it | Candidate never establishes its own authority |
+| SK-E2E-11 | Assignment revocation mid-flight and stale/offline catalog | Block/reassess, not silent use of removed skill |
+| SK-E2E-12 | Replay same proposal idempotency key with changed content | Conflict, no duplicate/mutation |
+| SK-E2E-13 | Two distinct agents propose same skill successor concurrently | No lost revision; explicit conflict or parallel candidates |
+| SK-E2E-14 | Rogue skill attachment embeds tool/secret instructions | Treated as untrusted, not executed or loaded as approved |
+| SK-E2E-15 | Changed skill published after prior test-case execution | Past test/run/history remains pinned to original revision |
+| SK-E2E-16 | A skill with no approved binding for a governed write | Visible unassigned and blocked or explicitly authorized exception |
+| SK-E2E-17 | A project-specific adapter depends on incompatible core skill | Fail closed with dependency diagnostic |
+| SK-E2E-18 | Human attempts to publish modified payload after review | Must obtain fresh approval of new hash |
+| SK-E2E-19 | Legacy REST or Zyra direct write bypasses skill enforcement | Rejected or recorded under a specifically allowed transition policy; no invisible bypass |
+| SK-E2E-20 | Candidate skill says "pass" but held-out bad cases fail | Evaluation remains FAIL/UNPROVEN; cannot self-approve |
+| SK-E2E-21 | Stored skill body contains unauthorized cross-project links | Rejected on write/read resolution; no cross-project disclosure |
+| SK-E2E-22 | Requirement type has both general skill and subtype-specific skill | Deterministic explicit composition with no silent override |
+
+These are **proposed acceptance tests**, not executed tests.
+
+## 10. Reconciliation/implementation gates
+1. Prove reuse against prior Tesbo governed-asset evolution spec, eight canonical specs, native KB history and MCP writer surfaces, and any existing "skills" concepts. Document exact reuse/extend/new decision per invariant.
+2. Preserve per-item stable identity, independent revisions, granular field/link audit and approved current state.
+3. Write human-only authorization boundary **before** exposing candidate skills via MCP; test against human-owned machine tokens and alternative REST paths.
+4. Implement deterministic resolver, including conflict, missing, revoked and stale paths; derive cache invalidation from actual assignment owner.
+5. Integrate active-version pins and invalidation with existing Change Packet, Zyra review, graph history and notifications.
+6. Add UI and accessibility support for library/version/assignment management and manual/policy subtypes, preserving current native component patterns.
+7. Run backend DB/permission tests, actual UI tests, and disposable-project MCP create->read->propose->review lifecycle on same known deployment/tool catalog. No production writes for verification.
+8. Independent assurance teams review this **specification**; implementation/release sign-off requires separate actual test evidence and White/Graph closeout.
+
+## 11. Decisions needing authoritative specification review
+- Exact canonical storage choice and whether current KB version snapshots can be immutable at publication without a shadow skill table.
+- Approved precedence/combination grammar and rule conflict detection (machine-validatable subset vs human review for semantic contradictions).
+- Whether a project is allowed to operate with no active assigned skill, and per-module default behavior.
+- Human-only interactive approval design; independent authority boundaries for root-meta changes and initial bootstrap.
+- Controlled migration path for existing authored cases and documents with no historical skill pin.
+- Historical export/retention and allowed read visibility across workspace/global/project scopes.
