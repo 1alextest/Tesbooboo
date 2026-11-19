@@ -1019,12 +1019,14 @@ by whom, and what happened — the atomic unit all run/plan progress rollups are
 - **Auto bug-filing on Failed**: changing status to `Failed` (via inline dropdown or the detail panel) automatically opens the "File a bug" dialog, pre-filled with a "Failed: <test case title>" draft title; the tester can create a new bug (optionally routed to Jira/Linear/self-logged/Tesbo-native, with file or BetterBugs evidence) or link the execution to an already-existing bug (`addBugLink`) instead of creating a duplicate. Can be skipped.
 - **"Log bug" row action** — available on every row regardless of current status (magnifier/bug icon), not just after a Failed transition.
 - **Assignee** — `assigneeId` is part of the execution record and is **displayed** (avatar + name) in both the table row and the detail drawer, but there is **no UI control anywhere to set or change it**. `updateExecution()`'s payload type supports `assigneeId`, yet neither the inline-status handler nor the drawer's Save handler ever sends it. In practice, an execution can only ever be assigned via a direct API call (or some other, out-of-scope, automation path) — there is no manual "assign to teammate" workflow in the product today.
+  - **Updated 2026-11-19 (superseded):** the detail drawer has an `Assigned to` select — including a disabled option for an assignee who is no longer a member, so a Save cannot silently clear a real assignment — and the run table's multi-selection offers **Assign to**. Both path through `updateExecution` / `bulk-assign`. The paragraph above is the historical audit.
 - **Evidence attachments** — `POST /api/cycles/:cycleId/executions/:executionId/attachments` (multipart, up to 10 files, size-limited by `MAX_UPLOAD_SIZE`/50MB default) and `GET .../attachments` are fully implemented backend features (stores to `attachments` table with `entity_type='execution'`, logs a `execution_evidence_uploaded` activity entry) but have **zero frontend callers** — no `lib/api.ts` wrapper function exists for them and no component references them. Execution-level evidence upload/download is effectively a backend-only, UI-inaccessible feature today (bug evidence upload is the analogous feature that *does* have full UI, via the "File a bug" dialog).
+  - **Updated 2026-11-19 (superseded):** `ExecutionEvidencePanel` renders upload, grouped screenshots/video/traces/logs, download and inline viewing in both the run detail drawer and the standalone execute page, with a per-row evidence count. The paragraph above is the historical audit.
 - **Test case fallback rendering**: title falls back `snapshot_title → 'Untitled test case'`; if the underlying test case has since been archived/soft-deleted (`testcases.deleted_at`), the executions query's `LEFT JOIN ... AND t.deleted_at IS NULL` means priority/type/description/steps/etc. all render blank (`—`) even though the execution row itself still exists and is fully editable.
 - Tabs on the run detail table: All / Passed / Failed / Blocked / Skipped / Pending (Pending buckets both `Untested` and `Retest`), each with a live count badge; free-text search by title/external ID; client-side pagination (10/page).
 
 **Edge cases / validation worth testing:**
-- PATCH an execution's status to an arbitrary non-enum string via direct API (e.g. `"WontFix"`) — persists with no server-side validation; confirm how the UI renders an unrecognized status (falls through to the default/neutral tone).
+- PATCH an execution's status to an arbitrary non-enum string via direct API (e.g. `"WontFix"`) — persists with no server-side validation; confirm how the UI renders an unrecognized status (falls through to the default/neutral tone). **Updated 2026-11-19:** `updateExecution` now refuses a value outside `EXECUTION_STATUSES` with 400, and the automation ingest maps `pass|fail|skip` to the canonical values at its boundary, so this no longer persists.
 - Update an execution on a run that is `Planning` or `Completed` via direct API — succeeds despite the UI hiding the control, since there is no server-side run-status gate.
 - Set `assigneeId` via direct API to a user who has since been removed from the project/workspace — the UI's `memberNames` lookup (built from current project members) would silently show "Unassigned" instead of erroring, since it can't resolve the stale ID.
 - Mark Failed → open bug dialog → close/skip without filing — execution stays `Failed` with no bug link; re-opening later and clicking "Log bug" should still work.
@@ -1173,6 +1175,7 @@ full authenticated app.
 - Warning copy in the modal: "This link is publicly accessible. Anyone with it can view the test run results, execution statuses, and test case details."
 - **Public viewer page** (`/share/:token`, no auth) — fetches `GET /api/public/shared-runs/:token` (run header: name/description/status/environment/build/created/started/ended) and `GET /api/public/shared-runs/:token/executions` (full execution list) in parallel.
   - Renders: run title + status badge, 5 metric cards (Total/Passed/Failed/Skipped/Pending — note Blocked is *not* one of the metric cards even though it's tracked and shown in the donut chart), an SVG donut chart, and a table of Test Case ID / Title / Priority / Type / Status.
+    - **Updated 2026-11-19 (superseded):** the run report's metric cards now include **Blocked**, as does the shared run report.
   - Any failure (disabled share, unknown token) shows a generic "Link Not Available" screen — no distinction in the UI between "token never existed" and "sharing was turned off," which matches the backend (`publicCycle`/`publicCycleExecutions` both throw the same `NotFoundException({ error: "Shared run not found" })` for either case, via `WHERE share_token = $1 AND share_enabled = true`).
 - **Access control note — the public executions endpoint returns materially more data than the public page renders.** `getPublicSharedExecutions`/`publicCycleExecutions` calls the *exact same* `executions()` query used inside the authenticated app, which includes `assigneeId`, `actualResult`, `executedAt`, `defectKey`, `defectUrl`, `description`, `preconditions`, `postconditions`, `steps`, `testData`, `automationStatus`, `automationTags` — none of that is filtered or redacted before being returned to an anonymous caller. The rendered `/share/:token` page only displays ID/title/priority/type/status, but anyone can call the JSON endpoint directly (e.g. via curl/devtools network tab) and read the full actual-result text, defect key/URL, assignee's raw user ID, and complete test steps/preconditions/test data for every case in the run. This is a meaningful over-exposure risk for any org that considers actual-result notes or defect links sensitive, since the sharing UI's copy ("view...execution statuses and test case details") doesn't disclose that defect/assignee/full-step data is also reachable.
 - `publicCycle()` similarly returns the *entire* `cycles` row (`SELECT *`) including `project_id`, `plan_id`, `owner_id` (raw UUIDs) — internal identifiers leaked to an anonymous caller, beyond what the public page renders.
@@ -1295,7 +1298,7 @@ requiring a full external issue tracker.
 
 **Features & actions:**
 - Create a bug (`POST /api/projects/:projectId/bugs`): title (required; server defaults to `"Untitled bug"` if blank/omitted — the *frontend* blocks empty titles, the API does not), description, severity, links array (see Bug Linking section), `externalUrl`/`integrationProvider`/`integrationIssueKey` (external-tracker reference), `betterbugsUrl` (evidence link). `reported_by` is set to the authenticated caller automatically (or the API token's owning user for MCP calls); `status` defaults to `"Open"`.
-- List bugs for a project (`GET /api/projects/:projectId/bugs`), newest first; supports optional `status` and `cycleId` query filters server-side — **note: no frontend caller ever passes these**, so they are only reachable via direct API/MCP use, not through the UI.
+- List bugs for a project (`GET /api/projects/:projectId/bugs`), newest first; supports optional `status` and `cycleId` query filters server-side — **note: no frontend caller ever passes these**, so they are only reachable via direct API/MCP use, not through the UI. **Updated 2026-11-19:** the run detail drawer and the standalone execute page now pass `testcaseId` + `cycleId` when reading an execution's linked bugs; the Bugs page still filters its already-loaded list client-side, and `status` is still not sent by any caller.
 - Get a single bug (`GET /api/bugs/:bugId`) — returns the bug plus its resolved `links` (with joined test case/run titles) and `attachments`.
 - Update a bug (`PATCH /api/bugs/:bugId`) — partial update of title/description/status/severity/externalUrl/integrationProvider/integrationIssueKey/betterbugsUrl/links.
 - Delete a bug (`DELETE /api/bugs/:bugId`) — hard delete, no confirmation server-side (UI has a confirm modal).
@@ -1591,9 +1594,9 @@ same project-scoped API token system used elsewhere in the platform.
 
 Scope covered: workspace-wide dashboard, project-level dashboard, the six-tab Reports & Insights
 page (Overview, Execution Report, Traceability, Repository, AI Insights, Trends), the cross-source
-Ticket/Requirements summary, the project Activity feed, and the (unimplemented) Notifications
-feature. All backend logic lives in the "legacy" module — there is no separate reports/analytics
-service or controller.
+Ticket/Requirements summary, the project Activity feed, and Notifications (implemented since this
+audit — see the superseded snapshot in that section). All backend logic lives in the "legacy"
+module — there is no separate reports/analytics service or controller.
 
 ---
 
@@ -2250,6 +2253,11 @@ entity types, without needing to check each entity's own edit history separately
 ---
 
 ### Notifications
+
+> **Superseded snapshot (updated 2026-11-19):** notifications are implemented — a `notifications`
+> table, a paginated `GET /api/notifications` with unread counts and cursor paging,
+> `POST /api/notifications/:id/read` and mark-all-read, and a TopBar bell with a badge and dropdown.
+> The audit text below records the original state and is kept as history.
 
 **What it is:** A notification bell icon in the global top bar — currently **entirely
 unimplemented** on both backend and frontend. This is a stub/placeholder feature, not a working
@@ -3659,7 +3667,7 @@ not a full test suite.
 |---|---|
 | **Bulk Execution Actions** (`bulk-assign`, `bulk-status`) | Controller methods are literally empty (`{}`); no frontend caller, no bulk-select UI on the executions table at all. |
 | **Recurring Run Scheduling** (`/cycles/schedules`) | Full DB schema + full frontend CRUD UI exist, but all four backend endpoints are disconnected stubs — a created schedule vanishes from the list instantly; no scheduler/worker exists to execute one even if it persisted. |
-| **Notifications** (bell icon) | `GET /api/notifications` hardcodes `[]`; mark-as-read is a no-op; the bell icon has no handler, no badge, no dropdown. |
+| **Notifications** (bell icon) | `GET /api/notifications` hardcodes `[]`; mark-as-read is a no-op; the bell icon has no handler, no badge, no dropdown. **Updated 2026-11-19:** implemented — paging, unread counts, per-item and mark-all read, and a working TopBar dropdown. |
 | **AI Script Review** (`/ai/review-script`) | Hardcoded `{status:"passed", summary:"", categories:[], validatedSteps:[]}` for any input; no frontend caller. |
 | **Tesbo Reports** (automated CI test-run ingestion, `/tesbo-reports/*`) | Six GET stubs return empty/static payloads; the frontend has a fully-typed client for ~20 more endpoints (ingestion, alerts, sharing, settings) that **no page or component calls** — the feature is unreachable from the UI in either direction. |
 | **`cycles/:cycleId/report/summary`** | Real per-run status buckets from the shared execution-count definition; 404 for a foreign/missing run. |
