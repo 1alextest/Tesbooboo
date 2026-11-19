@@ -1,4 +1,4 @@
-# ASER — Requirements v0.2 (Skills Governance Integration)
+# ASER — Requirements v0.3 (governed human-and-agent delivery integration)
 
 **State:** Draft for independent specification challenge. These are **proposed** requirements, not assertions that Tesbo implements them.
 
