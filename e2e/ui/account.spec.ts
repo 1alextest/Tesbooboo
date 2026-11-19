@@ -45,8 +45,13 @@ import {
  * (#current-password, #new-password, #confirm-new-password).
  */
 
-/** Distinct from FIXTURE_PASSWORD, and satisfies validatePasswordValue (upper, lower, digit, 8+). */
-const NEW_PASSWORD = "E2E-Account-Next-7k2!";
+/**
+ * Distinct from FIXTURE_PASSWORD, and within the whole policy: upper, lower and a digit, and at
+ * most 16 characters. The length matters — the reset inputs carry maxLength=16, so a longer value
+ * is silently truncated by the browser while the test would then try to log in with the untruncated
+ * string.
+ */
+const NEW_PASSWORD = "New-Account-7k2!";
 
 test.describe("account screen and password reset (UI)", () => {
   let tenant: RbacTenant | null = null;
@@ -356,15 +361,17 @@ test.describe("account screen and password reset (UI)", () => {
     await page.getByRole("button", { name: /^Reset password$/i }).click();
     await expect(page.getByText("Password must be at least 8 characters", { exact: true })).toBeVisible();
 
-    // Long enough but no uppercase and no digit.
+    // Long enough but no uppercase and no digit. Scoped to the alert: the field hint under the
+    // input also mentions "uppercase", and an unscoped text locator matches both (strict mode).
     await page.locator("#password").fill("alllowercase");
     await page.locator("#confirmPassword").fill("alllowercase");
     await page.getByRole("button", { name: /^Reset password$/i }).click();
-    await expect(page.getByText(/uppercase|number/i)).toBeVisible();
+    await expect(page.getByRole("alert").filter({ hasText: /uppercase|number/i })).toBeVisible();
 
-    // Mismatched confirmation.
+    // Mismatched confirmation. Same length as NEW_PASSWORD on purpose: the inputs cap at 16
+    // characters, so a longer suffix would be truncated to an exact match and no error would show.
     await page.locator("#password").fill(NEW_PASSWORD);
-    await page.locator("#confirmPassword").fill(`${NEW_PASSWORD}-different`);
+    await page.locator("#confirmPassword").fill("New-Account-7k3!");
     await page.getByRole("button", { name: /^Reset password$/i }).click();
     await expect(page.getByText(/do not match|don't match/i)).toBeVisible();
 
