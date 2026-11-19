@@ -6863,6 +6863,25 @@ export class LegacyService implements OnModuleInit {
   }
 
   /**
+   * `POST /api/projects/:projectId/cycles/from-cases` — a run plus the cases it was given.
+   *
+   * The route was wired to plain `createCycleForUser`, which reads no case ids, so a caller that
+   * supplied `testcaseIds` got an empty run and no error. docs/automation-integration-plan.md
+   * files this as trap 3, and e2e/api/cycles.spec.ts pinned the alias behaviour so that changing
+   * it would be a deliberate, visible edit rather than an accidental contract shift.
+   *
+   * It reuses the writer the MCP `create_cycle_from_testcases` tool already uses, so the run and
+   * its cases commit together: a Draft/Demoted case refuses the whole request (409, no orphan
+   * run), ids that do not resolve inside this project are reported in `skipped` instead of being
+   * silently dropped, and a duplicate id attaches once (`requested` counts the list as sent). The
+   * response keeps the cycle row at the top level for existing callers and appends the counts.
+   */
+  async createCycleFromCasesForUser(userId: string | null | undefined, projectId: string, body: Body) {
+    const { cycle, requested, added, skipped } = await this.createCycleWithTestcasesForUser(userId, projectId, body);
+    return { ...(cycle as Body), requested, added, skipped };
+  }
+
+  /**
    * A due schedule creates a new native Test Run cloned from the run it points at.
    *
    * It deliberately does not write into the scheduled run's own executions: a repeated nightly run

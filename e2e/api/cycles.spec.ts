@@ -139,14 +139,15 @@ test.describe("test cycle / run CRUD", () => {
     }
   });
 
-  test("from-plan and from-cases creation are aliases for plain create — neither seeds cycle_items", { tag: '@tesbo.testId("TES-TC-173")' }, async ({
+  test("from-cases seeds the run with its cases; from-plan still only links the plan", { tag: '@tesbo.testId("TES-TC-173")' }, async ({
     request,
   }) => {
-    // KNOWN GAP (documented, not test.fail() — a functional no-op, not a security issue):
-    // legacy.controller.ts:363-370 routes createCycleFromPlan/createCycleFromCases to the exact
-    // same legacy.createCycle(projectId, body) as the plain endpoint. Despite the names, neither
-    // actually copies items from the plan or the given case IDs into cycle_items — pinned here so
-    // a future "fix" is a deliberate, visible change rather than an accidental behavior shift.
+    // History: all three cycle-create routes were aliases of plain createCycle() and read neither
+    // `planId`'s items nor `testcaseIds` — docs/automation-integration-plan.md trap 3. The alias
+    // was pinned here so a fix would be a deliberate, visible change. `from-cases` now uses the
+    // same atomic Approved-only writer as the MCP create_cycle_from_testcases tool; `from-plan`
+    // deliberately still only records plan_id, because cloning a plan's items is a separate
+    // semantic change that no caller has asked for.
     const plan = await (
       await request.post(`/api/projects/${ctx.projectId}/plans`, {
         data: { name: `E2E From-Plan Source ${Date.now()}` },
@@ -154,7 +155,7 @@ test.describe("test cycle / run CRUD", () => {
     ).json();
     const testcase = await (
       await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-        data: { title: `E2E From-Cases Source ${Date.now()}` },
+        data: { title: `E2E From-Cases Source ${Date.now()}`, status: "Approved" },
       })
     ).json();
     await request.post(`/api/plans/${plan.id}/items`, { data: { testcaseId: testcase.id } });
@@ -164,13 +165,19 @@ test.describe("test cycle / run CRUD", () => {
         data: { name: `E2E From-Plan Cycle ${Date.now()}`, planId: plan.id },
       })
     ).json();
-    const fromCasesCycle = await (
-      await request.post(`/api/projects/${ctx.projectId}/cycles/from-cases`, {
-        data: { name: `E2E From-Cases Cycle ${Date.now()}`, testcaseIds: [testcase.id] },
-      })
-    ).json();
+    const fromCasesRes = await request.post(`/api/projects/${ctx.projectId}/cycles/from-cases`, {
+      data: { name: `E2E From-Cases Cycle ${Date.now()}`, testcaseIds: [testcase.id] },
+    });
+    expect(fromCasesRes.status(), await fromCasesRes.text()).toBe(201);
+    const fromCasesCycle = await fromCasesRes.json();
 
     try {
+      // The counts describe what happened to the request rather than leaving the caller to diff
+      // the execution list against what it asked for.
+      expect(fromCasesCycle.requested).toBe(1);
+      expect(fromCasesCycle.added).toBe(1);
+      expect(fromCasesCycle.skipped).toBe(0);
+
       const fromPlanExecutions = await (
         await request.get(`/api/cycles/${fromPlanCycle.id}/executions`)
       ).json();
@@ -178,12 +185,41 @@ test.describe("test cycle / run CRUD", () => {
         await request.get(`/api/cycles/${fromCasesCycle.id}/executions`)
       ).json();
       expect(fromPlanExecutions).toHaveLength(0);
-      expect(fromCasesExecutions).toHaveLength(0);
+      expect(fromCasesExecutions).toHaveLength(1);
+      expect(fromCasesExecutions[0].testcaseId).toBe(testcase.id);
     } finally {
       await request.delete(`/api/cycles/${fromPlanCycle.id}`, { failOnStatusCode: false });
       await request.delete(`/api/cycles/${fromCasesCycle.id}`, { failOnStatusCode: false });
       await request.delete(`/api/plans/${plan.id}`, { failOnStatusCode: false });
       await request.delete(`/api/projects/${ctx.projectId}/testcases/${testcase.id}`, {
+        failOnStatusCode: false,
+      });
+    }
+  });
+
+  test("from-cases refuses a Draft case without leaving a run behind", { tag: '@tesbo.testId("TES-TC-3042")' }, async ({ request }) => {
+    // The seed path applies the run-approval invariant at the transaction boundary: if the writer
+    // created the run before rejecting the cases, a caller would be left with an orphan run and no
+    // way to tell it from an intentional empty one.
+    const draft = await (
+      await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+        data: { title: `E2E From-Cases Draft ${Date.now()}`, status: "Draft" },
+      })
+    ).json();
+
+    try {
+      const res = await request.post(`/api/projects/${ctx.projectId}/cycles/from-cases`, {
+        data: { name: `E2E From-Cases Draft Cycle ${Date.now()}`, testcaseIds: [draft.id] },
+        failOnStatusCode: false,
+      });
+      expect(res.status()).toBe(409);
+      const body = await res.json();
+      expect(body.error).toContain("Only Approved test cases can be added to a test run");
+
+      const runs = await (await request.get(`/api/projects/${ctx.projectId}/cycles`)).json();
+      expect(runs.some((run: { name: string }) => run.name.includes("Draft Cycle"))).toBe(false);
+    } finally {
+      await request.delete(`/api/projects/${ctx.projectId}/testcases/${draft.id}`, {
         failOnStatusCode: false,
       });
     }
