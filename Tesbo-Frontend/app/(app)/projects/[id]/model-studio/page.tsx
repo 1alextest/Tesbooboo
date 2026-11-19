@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useParams } from "@/lib/routeParams";
 import {
@@ -76,7 +77,11 @@ function MappingStalenessNote({ staleness }: { staleness: ModelStudioCoverage["m
 
 export default function ModelStudioPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const projectId = params.id as string;
+  // `?model=` deep-links from a governed run's provenance line. When it names a model in this
+  // project, that model is selected; otherwise the existing first-model default applies.
+  const requestedModelId = searchParams.get("model") ?? "";
   const [models, setModels] = useState<ModelStudioModel[]>([]);
   const [selectedModelId, setSelectedModelId] = useState("");
   const [detail, setDetail] = useState<ModelStudioDetail | null>(null);
@@ -115,7 +120,10 @@ export default function ModelStudioPage() {
         if (!active) return;
         setError(null);
         setModels(rows);
-        setSelectedModelId((current) => (rows.some((row) => row.id === current) ? current : rows[0]?.id || ""));
+        setSelectedModelId((current) => {
+          if (requestedModelId && rows.some((row) => row.id === requestedModelId)) return requestedModelId;
+          return rows.some((row) => row.id === current) ? current : rows[0]?.id || "";
+        });
       })
       .catch((cause) => {
         if (active) setError(cause instanceof Error ? cause.message : "Could not load models.");
@@ -126,7 +134,7 @@ export default function ModelStudioPage() {
     return () => {
       active = false;
     };
-  }, [projectId, reloadToken]);
+  }, [projectId, reloadToken, requestedModelId]);
 
   useEffect(() => {
     if (!selectedModelId) return;

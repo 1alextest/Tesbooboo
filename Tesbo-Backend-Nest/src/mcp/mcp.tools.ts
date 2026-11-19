@@ -407,6 +407,49 @@ export function buildMcpTools(): McpTool[] {
       }
     },
     {
+      name: "run_behavior_model",
+      description:
+        "Start a native Test Run from a model's current, HUMAN-APPROVED revision. This tool cannot approve: the revision must already carry an approval receipt whose content hash matches, or the call is refused with MODEL_NOT_APPROVED; saving a newer revision moves the basis and refuses an earlier one with SUPERSEDED_REVISION. Only cases belonging to the revision (generated from its proposals or linked to it) and already Approved can enter the run — others are refused by id, never silently dropped. The run is an ordinary Tesbo Test Run, subject to plan write locks; its results are case outcomes, not proof that the modeled behavior is correct. Requires write scope.",
+      requiredScope: "write",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["modelId", "revisionId"],
+        properties: {
+          modelId: { type: "string", format: "uuid", description: "Model id" },
+          revisionId: { type: "string", format: "uuid", description: "Current head revision id" },
+          caseIds: {
+            type: "array",
+            items: { type: "string", format: "uuid" },
+            minItems: 1,
+            maxItems: 200,
+            description: "Cases to dispatch. Omit to include every eligible case of the revision."
+          },
+          name: { type: "string", minLength: 1, maxLength: 255, description: "Test run name" },
+          environment: { type: "string", maxLength: 128, description: "Test run environment" },
+          buildVersion: { type: "string", maxLength: 128, description: "Build or release identifier" }
+        }
+      },
+      handler: async (args, ctx) => {
+        try {
+          return await modelStudio(ctx).dispatchRunForUser(
+            ctx.userId,
+            ctx.projectId,
+            String(args.modelId),
+            String(args.revisionId),
+            {
+              caseIds: args.caseIds,
+              name: args.name,
+              environment: args.environment,
+              buildVersion: args.buildVersion
+            }
+          );
+        } catch (error) {
+          rethrowModelError(error);
+        }
+      }
+    },
+    {
       name: "list_qa_graph_changes",
       description:
         "Read-only QA graph history for the token's existing project: committed changes, source-scope discontinuities, changed node/edge IDs and candidate native test case IDs. Cached links and source declarations do not establish coverage, execution, failure or approval. No code scan or test write is performed. Optional limit 1–100 and exclusive beforeId cursor.",

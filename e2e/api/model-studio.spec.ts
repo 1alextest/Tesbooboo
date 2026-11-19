@@ -511,6 +511,7 @@ test.describe("persisted Model Studio revisions and mappings", () => {
     let caseId = "";
     let foreignCaseId = "";
     let cycleId = "";
+    let ordinaryRunId = "";
     const dispatchUrl = (revisionId: string) => `${base}/${modelId}/revisions/${revisionId}/runs`;
     try {
       const created = await owner.post(base, { data: { name: `E2E run model ${Date.now()}`, model: MODEL } });
@@ -589,6 +590,25 @@ test.describe("persisted Model Studio revisions and mappings", () => {
       ).toBe(1);
       expect(Number(scalar(`SELECT COUNT(*)::int FROM mbt_model_runs WHERE cycle_id = ${literal(cycleId)};`))).toBe(1);
 
+      // The run page reads the model basis by cycle id; an ordinary run answers null.
+      const provenance = await owner.get(`/api/projects/${projectId}/model-studio/runs/by-cycle/${cycleId}`);
+      expect(provenance.status(), await provenance.text()).toBe(200);
+      expect(await provenance.json()).toMatchObject({
+        provenance: {
+          modelId,
+          modelRevisionId: revision.id,
+          revisionNumber: 1,
+          caseCount: 1
+        }
+      });
+      const ordinaryRun = await (
+        await owner.post(`/api/projects/${projectId}/cycles`, { data: { name: `E2E ordinary run ${Date.now()}` } })
+      ).json();
+      ordinaryRunId = ordinaryRun.id;
+      const noProvenance = await owner.get(`/api/projects/${projectId}/model-studio/runs/by-cycle/${ordinaryRunId}`);
+      expect(noProvenance.status()).toBe(200);
+      expect(await noProvenance.json()).toEqual({ provenance: null });
+
       // Dispatch is project-scoped: an anonymous caller is refused, and the model is not reachable
       // through another project even by a member of both.
       const anon = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
@@ -660,6 +680,7 @@ test.describe("persisted Model Studio revisions and mappings", () => {
       expect((await superseded.json()).code).toBe("SUPERSEDED_REVISION");
     } finally {
       if (cycleId) await owner.delete(`/api/cycles/${cycleId}`, { failOnStatusCode: false });
+      if (ordinaryRunId) await owner.delete(`/api/cycles/${ordinaryRunId}`, { failOnStatusCode: false });
       for (const id of [caseId, foreignCaseId]) {
         if (id) await owner.delete(`/api/projects/${projectId}/testcases/${id}`, { failOnStatusCode: false });
       }

@@ -37,6 +37,7 @@ import {
 } from "@tabler/icons-react";
 import {
   getTestRun,
+  getModelStudioRunProvenance,
   updateTestRun,
   listCycleExecutions,
   updateExecution,
@@ -56,6 +57,7 @@ import {
   type TestCaseListItem,
   type SuiteNode,
   type BugItem,
+  type ModelStudioRunProvenance,
 } from "@/lib/api";
 import { computePassRate, computeExecutionProgress } from "@/lib/executionMetrics";
 import { formatDate } from "@/lib/date";
@@ -398,6 +400,7 @@ export default function TestRunDetailPage() {
   }, [setTopBarFilled]);
 
   const [run, setRun] = useState<TestRunDetail | null>(null);
+  const [modelProvenance, setModelProvenance] = useState<ModelStudioRunProvenance | null>(null);
   const [executions, setExecutions] = useState<ExecutionItem[]>([]);
   // Keyed by testcaseId because that is what the remove endpoints take.
   const [selectedRunCaseIds, setSelectedRunCaseIds] = useState<Set<string>>(new Set());
@@ -413,6 +416,23 @@ export default function TestRunDetailPage() {
   const [bulkStatusUpdating, setBulkStatusUpdating] = useState(false);
   const [bulkStatusError, setBulkStatusError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  /*
+   * Governed-run provenance. This page knows only its cycle id; an ordinary run answers null and
+   * nothing renders. A failed lookup is treated as "no provenance" rather than blocking the run.
+   */
+  useEffect(() => {
+    let active = true;
+    void getModelStudioRunProvenance(projectId, cycleId)
+      .then((value) => {
+        if (active) setModelProvenance(value);
+      })
+      .catch(() => {
+        if (active) setModelProvenance(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [projectId, cycleId]);
   const memberNames = useMemo(
     () => Object.fromEntries(members.map((m) => [m.userId, m.name || m.email || "Unknown user"])),
     [members]
@@ -1210,6 +1230,30 @@ export default function TestRunDetailPage() {
             <div className="mt-2">
               <AutomationRunProvenance run={run} />
             </div>
+          )}
+          {/*
+            * A governed run's model basis, shown where its results are. An ordinary run has no
+            * provenance row, so nothing renders and the header is unchanged.
+            */}
+          {modelProvenance && (
+            <p
+              className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--muted)]"
+              data-testid="run-model-provenance"
+            >
+              <IconTag size={13} stroke={1.75} className="text-[var(--muted-soft)]" />
+              Started from model{" "}
+              <Link
+                href={`/projects/${projectId}/model-studio?model=${modelProvenance.modelId}`}
+                className="text-[var(--accent-light)] hover:underline"
+              >
+                {modelProvenance.modelName}
+              </Link>
+              {" · rev "}
+              {modelProvenance.revisionNumber}
+              {modelProvenance.approvedAt ? ` · approved ${formatDate(modelProvenance.approvedAt)}` : ""}
+              {" · "}
+              {modelProvenance.caseCount} case{modelProvenance.caseCount === 1 ? "" : "s"}
+            </p>
           )}
           <div className="mt-2.5 flex flex-wrap items-center gap-4">
             {planName && (
