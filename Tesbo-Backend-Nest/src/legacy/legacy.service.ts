@@ -1867,7 +1867,7 @@ export class LegacyService implements OnModuleInit {
       );
       if (!locked.rows[0]) throw new NotFoundException({ error: "Test case not found" });
       // A fresh statement after acquiring the row lock observes a dependency writer that
-      // committed while we waited. V154 serializes every native dependency writer here.
+      // committed while we waited. V155 serializes every native dependency writer here.
       const reviewed = await client.query(
         `SELECT testcases.*, testcase_approval_snapshot(id) AS snapshot, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision,
                 ${TESTCASE_APPROVAL_REVISION_SQL} AS semantic_revision
@@ -5262,9 +5262,33 @@ export class LegacyService implements OnModuleInit {
     if (found.rows.length !== ids.length) throw error();
   }
 
-  async createTestCase(projectId: string, actorId: string | null | undefined, body: Body) {
+  async createTestCase(
+    projectId: string, actorId: string | null | undefined, body: Body,
+    transaction?: { client: PoolClient; afterCommit: Array<() => Promise<void>> }
+  ) {
     const uid = this.requireUser(actorId);
     this.assertTestcaseFieldLengths(body);
+    if (transaction) {
+      // Internal composition only: model provenance and its native Draft must commit together.
+      // The shared writer still owns suite locking, id allocation, fields and tags. Publish
+      // external cache/index effects only after the caller's outer transaction commits.
+      try {
+        const created = await this.insertTestCaseWithClient(transaction.client, projectId, uid, body);
+        await this.logProjectActivity(projectId, uid, "testcase_created", "testcase", created.id,
+          `${created.external_id} - ${created.title}`, { after: toCamel(created) }, transaction.client);
+        transaction.afterCommit.push(async () => {
+          await this.suitesCache.invalidate(projectId);
+          await this.testcasesListCache.invalidate(projectId);
+          this.enqueueTestcaseEmbedding(projectId, created.id, "created");
+        });
+        return toCamel(created);
+      } catch (error) {
+        // Retrying a failed statement inside the same PostgreSQL transaction cannot recover it.
+        // The allocation lock prevents generated-id collisions; the outer caller owns rollback.
+        if ((error as { code?: string })?.code === "22001") this.rethrowTruncationAs400(error);
+        throw error;
+      }
+    }
     // nextExternalId reads MAX(trailing number) + 1 in a separate statement from the INSERT below,
     // so two creates racing in the same project both read the same MAX and both try to write
     // "<KEY>-TC-<n>". idx_testcases_project_external then rejects the loser, and the caller got a
@@ -6973,19 +6997,22 @@ export class LegacyService implements OnModuleInit {
    * same Approved-only writer, plan lineage and run locking as REST instead.
    */
   async createCycleWithTestcasesForUser(
-    userId: string | null | undefined, projectId: string, body: Body
+    userId: string | null | undefined, projectId: string, body: Body, runner?: PoolClient
   ): Promise<{ cycle: ReturnType<typeof toCamel>; requested: number; added: number; skipped: number }> {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     const raw = body.testcaseIds || (body.testcaseId ? [body.testcaseId] : []);
     const requested = normalizeJsonArray(raw).length;
     const ids = [...new Set(normalizeJsonArray(raw).map((id) => String(id)).filter((id) => isUuid(id)))];
-    return this.db.transaction(async (client) => {
+    const create = async (client: PoolClient) => {
       const cycle = await this.createCycle(projectId, body, client);
       const results = ids.length
         ? await this.insertApprovedCycleItems(client, projectId, cycle.id, ids)
         : { rows: [] };
       return { cycle, requested, added: results.rows.length, skipped: requested - results.rows.length };
-    });
+    };
+    // An internal owner may append provenance to the same transaction. Public REST/MCP callers
+    // still receive this method's ordinary self-contained atomic run-creation boundary.
+    return runner ? create(runner) : this.db.transaction(create);
   }
 
   /**
@@ -8322,9 +8349,6 @@ export class LegacyService implements OnModuleInit {
       attachments: normalizeJsonArray(row.attachments).map(toCamel)
     }));
   }
-
-  // Bug associations preserve execution outcomes. A verified result is recorded through
-  // the explicit native result writer, never inferred from creating or linking a bug.
 
   /**
    * Linking a bug to a test case in a run marks that execution Failed — the reverse path.

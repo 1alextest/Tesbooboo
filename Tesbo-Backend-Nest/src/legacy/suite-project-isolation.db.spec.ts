@@ -71,7 +71,10 @@ const url = process.env.DATABASE_URL ?? "";
     for (const row of before.cases) {
       const next = after.cases.find((entry) => entry.id === row.id), history = after.versions.filter((entry) => entry.testcase_id === row.id);
       if (local.includes(row.id)) {
-        expect(next).toEqual({ ...row, ...(mode === "moveToDefault" ? { suite_id: null } : { deleted_at: expect.any(Date), deleted_by: owner, updated_by: owner }), updated_at: expect.any(Date) });
+        // V155 invalidates semantic review when the suite or deletion state changes. Unselected
+        // and foreign cases below must retain their exact previous revision as well as content.
+        expect(next).toEqual({ ...row, ...(mode === "moveToDefault" ? { suite_id: null } : { deleted_at: expect.any(Date), deleted_by: owner, updated_by: owner }),
+          review_dependency_revision: String(BigInt(row.review_dependency_revision) + 1n), updated_at: expect.any(Date) });
         expect(history).toHaveLength(1); expect(history[0].snapshot).toMatchObject({ id: row.id, suite_id: row.suite_id, deleted_at: null });
       } else { expect(next).toEqual(row); expect(history).toEqual(before.versions.filter((entry) => entry.testcase_id === row.id)); }
     }

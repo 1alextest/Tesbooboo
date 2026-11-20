@@ -3,6 +3,7 @@ import { expect, request as newRequest, test, type Page, type Request, type Test
 import { Client } from "pg";
 import { hashPasswordForSeed } from "./password";
 import { verifySuiteDeleteScope } from "./ci-suite-delete-scope";
+import { approveMcpTestClient } from "./mcp-access";
 
 /** Existing bulk API/UI contract on the disposable smoke stack, with a truly separate tenant. */
 export async function verifyTestcaseBulkScope(page: Page, api: string, web: string, projectId: string, ownerId: string, testInfo: TestInfo) {
@@ -36,13 +37,14 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       history: (await db.query("SELECT * FROM testcase_versions WHERE testcase_id=ANY($1::uuid[]) ORDER BY testcase_id,version", [ids])).rows,
     });
     const activity = async () => (await db.query("SELECT * FROM audit_logs WHERE project_id=$1 AND action=ANY($2::text[]) ORDER BY created_at,id", [projectId, ["testcase_bulk_updated", "testcase_bulk_deleted"]])).rows;
-    const expectPreserved = (before: Awaited<ReturnType<typeof state>>, after: Awaited<ReturnType<typeof state>>, selected: string[]) => {
+    const expectPreserved = (before: Awaited<ReturnType<typeof state>>, after: Awaited<ReturnType<typeof state>>, selected: string[], unchangedHistory: string[] = []) => {
       for (const row of before.cases.filter((item) => !selected.includes(item.id))) {
         expect(after.cases.find((item) => item.id === row.id)).toEqual(row);
         expect(after.history.filter((item) => item.testcase_id === row.id)).toEqual(before.history.filter((item) => item.testcase_id === row.id));
       }
       for (const id of selected) {
         const previous = before.history.filter((item) => item.testcase_id === id), next = after.history.filter((item) => item.testcase_id === id);
+        if (unchangedHistory.includes(id)) { expect(next).toEqual(previous); continue; }
         expect(next.slice(0, previous.length)).toEqual(previous); expect(next).toHaveLength(previous.length + 1);
         expect(next.at(-1)).toMatchObject({ changed_by: ownerId });
       }
@@ -50,14 +52,16 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
     const tokenByScope: Record<string, string> = {};
     for (const scope of ["read", "write"]) {
       const issued = await post(`${base}/apikeys`, { name: `CI Bulk ${scope}`, scopes: [scope] }); tokens.push(issued.id); tokenByScope[scope] = issued.token;
+      await approveMcpTestClient(page.request, projectId, issued, api);
     }
+    const nextContentRevision = (row: { review_dependency_revision: string }) => String(BigInt(row.review_dependency_revision) + 1n);
     const endpoint = (kind: string) => `${base}/testcases/bulk-${kind}`;
     const projectResponse = await page.request.get(base); expect(projectResponse.ok()).toBeTruthy();
     const project = await projectResponse.json(); expect(project).toMatchObject({ id: projectId, key: expect.any(String) });
     // Reuse the canonical route for stale-target and refresh-recovery journeys.
     const repositoryUrl = `${web}/projects/${encodeURIComponent(project.key)}/testcases`;
 
-    await test.step("genuine anonymous, nonmember and read-only bearer requests are refused before any row/history/activity write", async () => {
+    await test.step("genuine anonymous, nonmember and bearer requests are refused before any row/history/activity write", async () => {
       expect((await page.request.get(`${api}/api/projects/${foreignProject}/testcases/${foreign.id}`)).status()).toBe(404);
       expect((await other.get(`${api}/api/projects/${foreignProject}/testcases/${foreign.id}`)).ok()).toBeTruthy();
       const before = await state(), events = await activity();
@@ -65,9 +69,11 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
         const data = { testcaseIds: [first.id, foreign.id], priority: "P0" };
         for (const [client, status, headers] of [
           [machine, 400, {}], [other, 404, {}], [machine, 403, { Authorization: `Bearer ${tokenByScope.read}` }],
+          [machine, 403, { Authorization: `Bearer ${tokenByScope.write}` }],
         ] as const) {
           const response = await client.post(endpoint(kind), { data, headers });
           expect(response.status(), await response.text()).toBe(status); expect(await state()).toEqual(before); expect(await activity()).toEqual(events);
+          if ("Authorization" in headers) expect(await response.json()).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
         }
       }
     });
@@ -77,30 +83,44 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       const response = await page.request.post(endpoint("update"), { data: { testcaseIds: [first.id, foreign.id, deleted.id, randomUUID(), first.id], priority: "P0" } });
       expect(response.ok(), await response.text()).toBeTruthy();
       const after = await state(); expectPreserved(before, after, [first.id]);
-      expect(after.cases.find((item) => item.id === first.id)).toEqual({ ...before.cases.find((item) => item.id === first.id), priority: "P0", updated_by: ownerId, updated_at: expect.any(Date) });
+      const original = before.cases.find((item) => item.id === first.id);
+      expect(after.cases.find((item) => item.id === first.id)).toEqual({ ...original, priority: "P0", updated_by: ownerId, updated_at: expect.any(Date), review_dependency_revision: nextContentRevision(original) });
       const events = await activity(); expect(events).toHaveLength(1); expect(events[0].diff).toMatchObject({ testcaseIds: [first.id], requestedCount: 5 });
     });
 
-    await test.step("foreign/unknown/deleted and empty REST selections remain no-ops, including a cookie-free Write token", async () => {
+    await test.step("human foreign/unknown/deleted and empty REST selections remain no-ops while machine publication is refused", async () => {
       const before = await state();
       for (const kind of ["update", "delete"]) {
         for (const testcaseIds of [[foreign.id, deleted.id, randomUUID()], []]) {
-          const response = await machine.post(endpoint(kind), { headers: { Authorization: `Bearer ${tokenByScope.write}` }, data: { testcaseIds, priority: "P0" } });
+          const eventsBefore = await activity();
+          const refused = await machine.post(endpoint(kind), { headers: { Authorization: `Bearer ${tokenByScope.write}` }, data: { testcaseIds, priority: "P0" } });
+          expect(refused.status(), await refused.text()).toBe(403);
+          expect(await refused.json()).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
+          expect(await state()).toEqual(before); expect(await activity()).toEqual(eventsBefore);
+          const response = await page.request.post(endpoint(kind), { data: { testcaseIds, priority: "P0" } });
           expect(response.ok(), await response.text()).toBeTruthy(); expect(await state()).toEqual(before);
-          const events = await activity(); expect(events.at(-1).diff.testcaseIds).toEqual([]);
+          const events = await activity();
+          if (testcaseIds.length) {
+            expect(events.slice(0, eventsBefore.length)).toEqual(eventsBefore); expect(events).toHaveLength(eventsBefore.length + 1);
+            expect(events.at(-1).diff).toMatchObject({ testcaseIds: [], requestedCount: testcaseIds.length });
+          } else expect(events).toEqual(eventsBefore);
         }
       }
     });
 
-    await test.step("MCP preserves indexed per-item outcomes through the same bulk writer", async () => {
-      const before = await state();
-      const response = await machine.post(`${base}/mcp`, {
-        headers: { Authorization: `Bearer ${tokenByScope.write}` },
-        data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "bulk_update_testcases", arguments: { testcaseIds: [first.id, foreign.id], priority: "P1" } } },
-      });
-      expect(response.status()).toBe(201); const rpc = await response.json(); expect(rpc.error).toBeUndefined();
-      expect(JSON.parse(rpc.result.content[0].text)).toMatchObject({ total: 2, succeeded: 1, failed: 1, results: expect.arrayContaining([{ id: first.id, ok: true }, { id: foreign.id, ok: false, error: "Test case not found in this project" }]) });
-      expectPreserved(before, await state(), [first.id]);
+    await test.step("consented MCP clients cannot publish mixed or empty bulk selections through retired tools", async () => {
+      const before = await state(), events = await activity();
+      for (const name of ["bulk_update_testcases", "bulk_archive_testcases"]) {
+        for (const testcaseIds of [[first.id, foreign.id, deleted.id, randomUUID(), first.id], []]) {
+          const response = await machine.post(`${base}/mcp`, {
+            headers: { Authorization: `Bearer ${tokenByScope.write}` },
+            data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: { testcaseIds, priority: "P1" } } },
+          });
+          expect(response.status()).toBe(201); const rpc = await response.json(); expect(rpc.result).toBeUndefined();
+          expect(rpc.error).toMatchObject({ code: -32003, data: { code: "HUMAN_PUBLICATION_REQUIRED" } });
+          expect(await state()).toEqual(before); expect(await activity()).toEqual(events);
+        }
+      }
     });
 
     await test.step("the existing bulk modal updates local cases, survives a controlled refusal and reloads authoritative state", async () => {
@@ -134,19 +154,30 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       const saved = page.waitForResponse((response) => response.url() === endpoint("update") && response.request().method() === "POST");
       await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await saved).ok()).toBeTruthy();
       await expect(modal).toBeHidden();
-      const after = await state(); expectPreserved(before, after, [first.id, second.id]);
-      for (const id of [first.id, second.id]) expect(after.cases.find((row) => row.id === id)).toMatchObject({ priority: "P0", suite_id: suite.id, description: "Preserve bulk body", owner_id: ownerId });
+      // The refused MCP call left the first case at P0. Repeating that field value only
+      // updates bookkeeping; the V150/V155 triggers preserve both history and content revision.
+      const after = await state(); expectPreserved(before, after, [first.id, second.id], [first.id]);
+      for (const id of [first.id, second.id]) {
+        const original = before.cases.find((row) => row.id === id);
+        expect(after.cases.find((row) => row.id === id)).toEqual({ ...original, priority: "P0", updated_by: ownerId, updated_at: expect.any(Date),
+          review_dependency_revision: id === first.id ? original.review_dependency_revision : nextContentRevision(original) });
+      }
       await page.reload();
       for (const title of [first.title, second.title]) await expect(page.getByRole("row").filter({ has: page.getByRole("button", { name: title, exact: true }) })).toContainText("P0");
       await expect(page.locator("body")).not.toContainText(foreign.title);
       await testInfo.attach("bulk-local-update-after-reload", { body: await page.screenshot(), contentType: "image/png" });
     });
 
-    await test.step("a cookie-free bearer mixed delete preserves the foreign case and the same UI can delete the remaining local selection", async () => {
-      const before = await state();
-      const response = await machine.post(endpoint("delete"), { headers: { Authorization: `Bearer ${tokenByScope.write}` }, data: { testcaseIds: [first.id, foreign.id, deleted.id, randomUUID(), first.id] } });
+    await test.step("machine mixed deletion is refused while the human REST and UI paths preserve the foreign case", async () => {
+      const before = await state(), eventsBefore = await activity();
+      const data = { testcaseIds: [first.id, foreign.id, deleted.id, randomUUID(), first.id] };
+      const refused = await machine.post(endpoint("delete"), { headers: { Authorization: `Bearer ${tokenByScope.write}` }, data });
+      expect(refused.status(), await refused.text()).toBe(403); expect(await refused.json()).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
+      expect(await state()).toEqual(before); expect(await activity()).toEqual(eventsBefore);
+      const response = await page.request.post(endpoint("delete"), { data });
       expect(response.ok(), await response.text()).toBeTruthy(); const after = await state(); expectPreserved(before, after, [first.id]);
-      expect(after.cases.find((row) => row.id === first.id)).toMatchObject({ deleted_at: expect.any(Date), deleted_by: ownerId });
+      const original = before.cases.find((row) => row.id === first.id);
+      expect(after.cases.find((row) => row.id === first.id)).toEqual({ ...original, deleted_at: expect.any(Date), deleted_by: ownerId, updated_by: ownerId, updated_at: expect.any(Date), review_dependency_revision: nextContentRevision(original) });
       const events = await activity(); expect(events.at(-1).diff).toMatchObject({ testcaseIds: [first.id], requestedCount: 5 });
       await page.reload(); await expect(page.getByRole("button", { name: first.title, exact: true })).toHaveCount(0);
       await page.getByRole("checkbox", { name: `Select ${second.title}`, exact: true }).check();
@@ -161,7 +192,9 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       await expect(modal).toBeHidden(); await page.reload();
       await expect(page.getByRole("button", { name: second.title, exact: true })).toHaveCount(0);
       await expect(page.getByRole("button", { name: control.title, exact: true })).toBeVisible();
-      expectPreserved(after, await state(), [second.id]);
+      const final = await state(); expectPreserved(after, final, [second.id]);
+      const previous = after.cases.find((row) => row.id === second.id);
+      expect(final.cases.find((row) => row.id === second.id)).toEqual({ ...previous, deleted_at: expect.any(Date), deleted_by: ownerId, updated_by: ownerId, updated_at: expect.any(Date), review_dependency_revision: nextContentRevision(previous) });
       expect((await other.get(`${api}/api/projects/${foreignProject}/testcases/${foreign.id}`)).ok()).toBeTruthy();
       await testInfo.attach("bulk-delete-keeps-unselected-local-and-foreign-records", { body: await page.screenshot(), contentType: "image/png" });
     });
@@ -187,42 +220,41 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       for (const body of [ordinary, { testcases: [] }, { testcases: [{ title: "x".repeat(513) }] }]) {
         const denied = await other.post(path, { data: body }); expect(denied.status(), await denied.text()).toBe(404);
         expect(await fullState()).toEqual(before);
+        const machineDenied = await machine.post(path, { headers: { Authorization: `Bearer ${tokenByScope.write}` }, data: body });
+        expect(machineDenied.status(), await machineDenied.text()).toBe(403);
+        expect(await machineDenied.json()).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
+        expect(await fullState()).toEqual(before);
       }
       expect((await machine.post(path, { data: ordinary })).status()).toBe(400); expect(await fullState()).toEqual(before);
       expect((await machine.post(path, { headers: { Authorization: `Bearer ${tokenByScope.read}` }, data: ordinary })).status()).toBe(403);
       expect(await fullState()).toEqual(before);
-      // The member's token is still checked against membership and active workspace by the
-      // existing guard; do not change that contract or assume MCP calls this REST batch writer.
       const deniedForeign = await page.request.post(`${api}/api/projects/${foreignProject}/testcases/bulk-create`, { data: ordinary });
       expect(deniedForeign.status(), await deniedForeign.text()).toBe(404); expect(await fullState()).toEqual(before);
       const empty = await page.request.post(path, { data: { testcases: [] } }); expect(empty.ok()).toBeTruthy();
       expect(await empty.json()).toEqual({ created: [], createdCount: 0 }); expect(await fullState()).toEqual(before);
-      const createdIds: string[] = [];
-      for (const bearer of [false, true]) {
-        const response = await (bearer ? machine : page.request).post(path, {
-          ...(bearer ? { headers: { Authorization: `Bearer ${tokenByScope.write}` } } : {}),
-          data: { testcases: [{ title: `CI Bulk Created ${bearer ? "Token" : "Session"}`, suiteId: suite.id, priority: "P1" }] },
-        });
-        expect(response.status(), await response.text()).toBe(201); const result = await response.json();
-        expect(result).toMatchObject({ createdCount: 1, created: [expect.objectContaining({ projectId, createdBy: ownerId, updatedBy: ownerId, suiteId: suite.id, priority: "P1" })] });
-        createdIds.push(result.created[0].id);
-      }
+      const titles = ["CI Bulk Created Session", "CI Bulk Created Session Two"];
+      const response = await page.request.post(path, { data: { testcases: titles.map((title) => ({ title, suiteId: suite.id, priority: "P1" })) } });
+      expect(response.status(), await response.text()).toBe(201); const result = await response.json();
+      expect(result.createdCount).toBe(2); expect(result.created).toHaveLength(2);
+      expect(result.created).toEqual(expect.arrayContaining(titles.map((title) => expect.objectContaining({ title, projectId, createdBy: ownerId, updatedBy: ownerId, suiteId: suite.id, priority: "P1" }))));
+      const createdIds: string[] = result.created.map((row: { id: string }) => row.id);
+      expect(new Set(createdIds).size).toBe(2);
       const after = await fullState();
       expect(after.cases.filter((row) => !createdIds.includes(row.id))).toEqual(before.cases);
       expect(after.history).toEqual(before.history);
       for (const row of before.audit) expect(after.audit.find((item) => item.id === row.id)).toEqual(row);
       const addedEvents = after.audit.filter((row) => !before.audit.some((old) => old.id === row.id));
-      expect(addedEvents).toHaveLength(2);
-      expect(addedEvents.map((row) => row.action)).toEqual(["testcase_bulk_created", "testcase_bulk_created"]);
-      for (const row of addedEvents) expect(row).toMatchObject({ project_id: projectId, actor_id: ownerId, diff: { count: 1, testcaseIds: [expect.any(String)] } });
+      expect(addedEvents).toHaveLength(1);
+      expect(addedEvents[0]).toMatchObject({ action: "testcase_bulk_created", project_id: projectId, actor_id: ownerId, diff: { count: 2, testcaseIds: expect.arrayContaining(createdIds) } });
+      expect(addedEvents[0].diff.testcaseIds).toHaveLength(2);
       await page.goto(`${web}/projects/${projectId}/testcases`); await page.reload();
       await expect(page.getByRole("button", { name: "CI Bulk Created Session", exact: true })).toBeVisible();
-      await expect(page.getByRole("button", { name: "CI Bulk Created Token", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "CI Bulk Created Session Two", exact: true })).toBeVisible();
       await expect(page.locator("body")).not.toContainText("CI must not create in another tenant");
-      await testInfo.attach("bulk-create-authorized-session-and-token-readback", { body: await page.screenshot(), contentType: "image/png" });
+      await testInfo.attach("bulk-create-human-batch-readback-machine-refused", { body: await page.screenshot(), contentType: "image/png" });
     });
 
-    await test.step("shared Suite assignment checks reject invalid targets through genuine sessions, Write tokens and MCP", async () => {
+    await test.step("human Suite assignment validates targets while machine publication remains refused through REST and MCP", async () => {
       const foreignSuiteResponse = await other.post(`${api}/api/projects/${foreignProject}/suites`, { data: { name: "CI PRIVATE assignment target" } });
       expect(foreignSuiteResponse.ok(), await foreignSuiteResponse.text()).toBeTruthy();
       const foreignSuite = (await foreignSuiteResponse.json()).id;
@@ -247,8 +279,10 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
                   ? { testcases: [{ title: deniedTitle, suiteId: suite.id }, { title: deniedTitle, suiteId: target }] }
                   : writer === "bulk-update" ? { testcaseIds: [control.id, foreign.id], suiteId: target, priority: "P0" } : { title: deniedTitle, suiteId: target },
               });
-            expect(response.status(), await response.text()).toBe(400);
-            expect(await response.json()).toMatchObject({ error: "suiteId must reference an active suite in this project" });
+            expect(response.status(), await response.text()).toBe(bearer ? 403 : 400);
+            expect(await response.json()).toMatchObject(bearer
+              ? { code: "HUMAN_PUBLICATION_REQUIRED" }
+              : { error: "suiteId must reference an active suite in this project" });
             expect(await snapshot()).toEqual(before);
           }
         }
@@ -256,10 +290,8 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
           const response = await machine.post(`${base}/mcp`, { headers: { Authorization: `Bearer ${tokenByScope.write}` }, data: {
             jsonrpc: "2.0", id: 54, method: "tools/call", params: { name, arguments: { title: deniedTitle, testcaseId: control.id, testcaseIds: [control.id], suiteId: target } },
           } });
-          expect(response.status()).toBe(201); const rpc = await response.json();
-          // Invalid shared field input refuses the operation through MCP's existing error envelope;
-          // the earlier mixed-ID test still proves its unchanged per-item ownership outcomes.
-          expect(rpc.error).toMatchObject({ message: "suiteId must reference an active suite in this project" });
+          expect(response.status()).toBe(201); const rpc = await response.json(); expect(rpc.result).toBeUndefined();
+          expect(rpc.error).toMatchObject({ code: -32003, data: { code: "HUMAN_PUBLICATION_REQUIRED" } });
           expect(await snapshot()).toEqual(before);
         }
       }
@@ -293,7 +325,8 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
       const saved = page.waitForResponse((item) => item.url() === endpoint("update") && item.request().method() === "POST");
       await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await saved).ok()).toBeTruthy();
       await expect(modal).toBeHidden(); const after = await state(); expectPreserved(before, after, [control.id]);
-      expect(after.cases.find((row) => row.id === control.id)).toMatchObject({ suite_id: valid.id, priority: "P2", description: "Preserve bulk body", owner_id: ownerId });
+      const original = before.cases.find((row) => row.id === control.id);
+      expect(after.cases.find((row) => row.id === control.id)).toEqual({ ...original, suite_id: valid.id, updated_by: ownerId, updated_at: expect.any(Date), review_dependency_revision: nextContentRevision(original) });
       await page.reload();
       // Suite is not a default table column. Prove membership through the actual tree/list UI.
       await page.getByRole("button", { name: valid.name, exact: true }).click();
@@ -337,7 +370,11 @@ export async function verifyTestcaseBulkScope(page: Page, api: string, web: stri
           await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await saved).ok()).toBeTruthy();
           const after = await state(); expectPreserved(before, after, [control.id]);
           const updated = after.cases.find((row) => row.id === control.id);
-          expect(updated).toMatchObject(scenario === "update" ? { priority: "P1" } : scenario === "move" ? { suite_id: null } : scenario === "list-refresh" ? { priority: "P2" } : scenario === "archive" ? { status: "Archived", deleted_at: null } : { deleted_at: expect.any(Date), deleted_by: ownerId });
+          const original = before.cases.find((row) => row.id === control.id);
+          expect(updated).toEqual({ ...original,
+            ...(scenario === "update" ? { priority: "P1" } : scenario === "move" ? { suite_id: null } : scenario === "list-refresh" ? { priority: "P2" } : scenario === "archive" ? { status: "Archived", deleted_at: null } : { deleted_at: expect.any(Date), deleted_by: ownerId }),
+            updated_by: ownerId, updated_at: expect.any(Date),
+            review_dependency_revision: scenario === "archive" ? original.review_dependency_revision : nextContentRevision(original) });
           const nextEvents = await activity(); expect(nextEvents).toHaveLength(events.length + 1);
           expect(nextEvents.at(-1).diff.testcaseIds).toEqual([control.id]);
           await expect(modal).toBeHidden();

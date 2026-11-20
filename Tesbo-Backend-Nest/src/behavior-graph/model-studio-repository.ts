@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException } from "@nestjs/common";
+import type { PoolClient } from "pg";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
 import { TESTCASE_EDIT_REVISION_SQL } from "../legacy/testcase-edit-revision";
@@ -37,12 +38,12 @@ export class ModelStudioRepository {
    * An archived model is retired for every surface, not only the list. Reads and writes keyed by a
    * revision id would otherwise keep answering for a model the project can no longer see.
    */
-  private async requireActiveModel(modelId: string, projectId: string) {
-    const model = await this.db.query(
-      "SELECT id FROM mbt_models WHERE id = $1 AND project_id = $2 AND archived_at IS NULL",
-      [modelId, projectId]
-    );
+  private async requireActiveModel(modelId: string, projectId: string, runner?: PoolClient) {
+    const sql = `SELECT id, name FROM mbt_models WHERE id = $1 AND project_id = $2 AND archived_at IS NULL${runner ? " FOR SHARE" : ""}`;
+    const params = [modelId, projectId];
+    const model = runner ? await runner.query(sql, params) : await this.db.query(sql, params);
     if (!model.rows[0]) throw new NotFoundException({ error: "Model not found" });
+    return model.rows[0];
   }
 
   private validate(content: unknown) {
@@ -272,6 +273,9 @@ export class ModelStudioRepository {
       throw new BadRequestException({ error: "expectedHash must be the revision contentHash that was reviewed" });
     }
     const result = await this.db.transaction(async (client) => {
+      // Parent before revision locks: saving a new head and archiving the model cannot race
+      // the decision's current/active check, or invert dispatch's model → revision order.
+      await this.requireActiveModel(modelId, projectId, client);
       const revision = await client.query(
         `SELECT r.* FROM mbt_model_revisions r
          JOIN mbt_models m ON m.id = r.model_id AND m.project_id = r.project_id AND m.archived_at IS NULL
@@ -335,42 +339,44 @@ export class ModelStudioRepository {
     for (const value of [modelId, revisionId]) {
       if (!UUID.test(value)) throw new NotFoundException({ error: "Model revision not found" });
     }
-    const revision = await this.db.query(
-      `SELECT r.*, m.name AS model_name FROM mbt_model_revisions r
-       JOIN mbt_models m ON m.id = r.model_id AND m.project_id = r.project_id AND m.archived_at IS NULL
-       WHERE r.id = $1 AND r.model_id = $2 AND r.project_id = $3`,
-      [revisionId, modelId, projectId]
-    );
-    const row = revision.rows[0];
-    if (!row) throw new NotFoundException({ error: "Model revision not found" });
-    const approved = await this.db.query(
-      "SELECT 1 FROM mbt_model_approvals WHERE model_revision_id = $1 AND project_id = $2",
-      [revisionId, projectId]
-    );
-    if (!approved.rows[0]) {
-      throw new ConflictException({
-        code: "MODEL_NOT_APPROVED",
-        error: "Approve this revision before creating cases from its proposals"
-      });
-    }
-    const digests = Array.isArray(body?.digests) ? [...new Set(body.digests.map((digest: unknown) => String(digest)))] : [];
-    if (!digests.length || digests.length > 64) {
-      throw new BadRequestException({ error: "digests must name between 1 and 64 proposed paths" });
-    }
-    const options = this.generationOptions(body, row);
-    const generated = generateModelPaths({
-      definition: row.content as PreviewDefinition,
-      revisionId: row.id,
-      contentHash: row.content_hash,
-      options
-    });
-    const byDigest = new Map(generated.paths.map((path) => [path.digest, path]));
-    const unknown = digests.filter((digest) => !byDigest.has(digest));
-    if (unknown.length) {
-      throw new BadRequestException({ error: `Unknown or stale path digest(s): ${unknown.join(", ")}` });
-    }
-    const labels = new Map((row.content as PreviewDefinition).states.map((state) => [state.id, state.label]));
+    const afterCommit: Array<() => Promise<void>> = [];
     const cases = await this.db.transaction(async (client) => {
+      await this.requireActiveModel(modelId, projectId, client);
+      const revision = await client.query(
+        `SELECT r.*, m.name AS model_name FROM mbt_model_revisions r
+         JOIN mbt_models m ON m.id = r.model_id AND m.project_id = r.project_id AND m.archived_at IS NULL
+         WHERE r.id = $1 AND r.model_id = $2 AND r.project_id = $3`,
+        [revisionId, modelId, projectId]
+      );
+      const row = revision.rows[0];
+      if (!row) throw new NotFoundException({ error: "Model revision not found" });
+      const approved = await client.query(
+        "SELECT content_hash FROM mbt_model_approvals WHERE model_revision_id = $1 AND project_id = $2 FOR SHARE",
+        [revisionId, projectId]
+      );
+      if (!approved.rows[0] || String(approved.rows[0].content_hash) !== String(row.content_hash)) {
+        throw new ConflictException({
+          code: "MODEL_NOT_APPROVED",
+          error: "Approve this revision before creating cases from its proposals"
+        });
+      }
+      const digests = Array.isArray(body?.digests) ? [...new Set(body.digests.map((digest: unknown) => String(digest)))] : [];
+      if (!digests.length || digests.length > 64) {
+        throw new BadRequestException({ error: "digests must name between 1 and 64 proposed paths" });
+      }
+      const options = this.generationOptions(body, row);
+      const generated = generateModelPaths({
+        definition: row.content as PreviewDefinition,
+        revisionId: row.id,
+        contentHash: row.content_hash,
+        options
+      });
+      const byDigest = new Map(generated.paths.map((path) => [path.digest, path]));
+      const unknown = digests.filter((digest) => !byDigest.has(digest));
+      if (unknown.length) {
+        throw new BadRequestException({ error: `Unknown or stale path digest(s): ${unknown.join(", ")}` });
+      }
+      const labels = new Map((row.content as PreviewDefinition).states.map((state) => [state.id, state.label]));
       // Same revision + digest must not be generated twice concurrently; the advisory lock is
       // transaction-scoped and only serializes callers of this method.
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [
@@ -399,7 +405,9 @@ export class ModelStudioRepository {
           createdCases.push({ digest, testcaseId: existing.rows[0].testcase_id, created: false });
           continue;
         }
-        const created = await this.legacy.createTestCase(projectId, userId, this.generatedCaseBody(row, path, labels));
+        const created = await this.legacy.createTestCase(
+          projectId, userId, this.generatedCaseBody(row, path, labels), { client, afterCommit }
+        );
         await client.query(
           `INSERT INTO mbt_generated_cases (project_id, model_id, model_revision_id, path_digest, testcase_id, created_by, element_ids)
            VALUES ($1,$2,$3,$4,$5,$6,$7)`,
@@ -409,6 +417,7 @@ export class ModelStudioRepository {
       }
       return createdCases;
     });
+    for (const effect of afterCommit) await effect();
     return {
       modelId,
       revisionId,
@@ -450,8 +459,15 @@ export class ModelStudioRepository {
     for (const value of [modelId, revisionId]) {
       if (!UUID.test(value)) throw new NotFoundException({ error: "Model revision not found" });
     }
-    await this.requireActiveModel(modelId, projectId);
-    const revision = await this.db.query(
+    return this.db.transaction(client => this.linkCase(client, userId, projectId, modelId, revisionId, body));
+  }
+
+  private async linkCase(
+    client: PoolClient, userId: string | null | undefined, projectId: string,
+    modelId: string, revisionId: string, body: Body
+  ) {
+    await this.requireActiveModel(modelId, projectId, client);
+    const revision = await client.query(
       "SELECT * FROM mbt_model_revisions WHERE id = $1 AND model_id = $2 AND project_id = $3",
       [revisionId, modelId, projectId]
     );
@@ -468,21 +484,21 @@ export class ModelStudioRepository {
 
     const testcaseId = String(body?.testcaseId ?? "");
     if (!UUID.test(testcaseId)) throw new BadRequestException({ error: "testcaseId must be a test case id" });
-    const testcase = await this.db.query("SELECT id FROM testcases WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL", [testcaseId, projectId]);
+    const testcase = await client.query("SELECT id FROM testcases WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL", [testcaseId, projectId]);
     if (!testcase.rows[0]) throw new NotFoundException({ error: "Test case not found" });
     const testcaseRevision = body?.testcaseRevision;
     if (testcaseRevision !== undefined && (typeof testcaseRevision !== "string" || !HASH.test(testcaseRevision))) {
       throw new BadRequestException({ error: "testcaseRevision must be the case editRevision or omitted" });
     }
 
-    const inserted = await this.db.query(
+    const inserted = await client.query(
       `INSERT INTO mbt_model_case_links (project_id, model_id, model_revision_id, testcase_id, testcase_revision, element_ids, created_by)
        VALUES ($1,$2,$3,$4,$5,$6::text[],$7)
        ON CONFLICT (model_revision_id, testcase_id, element_ids) DO NOTHING
        RETURNING *`,
       [projectId, modelId, revisionId, testcaseId, testcaseRevision ?? null, unique, userId]
     );
-    const row = inserted.rows[0] ?? (await this.db.query(
+    const row = inserted.rows[0] ?? (await client.query(
       "SELECT * FROM mbt_model_case_links WHERE model_revision_id = $1 AND testcase_id = $2 AND element_ids = $3::text[]",
       [revisionId, testcaseId, unique]
     )).rows[0];
@@ -494,13 +510,15 @@ export class ModelStudioRepository {
     if (![modelId, revisionId, linkId].every((value) => UUID.test(value))) {
       throw new NotFoundException({ error: "Model link not found" });
     }
-    await this.requireActiveModel(modelId, projectId);
-    const removed = await this.db.query(
-      "DELETE FROM mbt_model_case_links WHERE id = $1 AND model_id = $2 AND model_revision_id = $3 AND project_id = $4",
-      [linkId, modelId, revisionId, projectId]
-    );
-    if (!removed.rowCount) throw new NotFoundException({ error: "Model link not found" });
-    return { ok: true };
+    return this.db.transaction(async client => {
+      await this.requireActiveModel(modelId, projectId, client);
+      const removed = await client.query(
+        "DELETE FROM mbt_model_case_links WHERE id = $1 AND model_id = $2 AND model_revision_id = $3 AND project_id = $4",
+        [linkId, modelId, revisionId, projectId]
+      );
+      if (!removed.rowCount) throw new NotFoundException({ error: "Model link not found" });
+      return { ok: true };
+    });
   }
 
   /**
@@ -516,9 +534,9 @@ export class ModelStudioRepository {
    *  - only Approved, non-deleted cases can be attached — the native Approved-only writer remains
    *    authoritative, and this method refuses up front with the same rule.
    *
-   * The run is created by the same atomic writer every other run-creation path uses. The dispatch
-   * manifest is recorded afterwards; if that insert fails, the just-created run is removed again so
-   * a governed run never exists without its provenance.
+   * The same native writer creates the run, memberships and executions inside this transaction.
+   * Its manifest commits with them. The active model and relied-on mappings stay locked until
+   * commit, so a concurrent revision/archive/unlink cannot leave a run based on stale authority.
    */
   async dispatchRunForUser(
     userId: string | null | undefined,
@@ -531,19 +549,22 @@ export class ModelStudioRepository {
     for (const value of [modelId, revisionId]) {
       if (!UUID.test(value)) throw new NotFoundException({ error: "Model revision not found" });
     }
-    const model = await this.db.query(
-      "SELECT id, name FROM mbt_models WHERE id = $1 AND project_id = $2 AND archived_at IS NULL",
-      [modelId, projectId]
-    );
-    if (!model.rows[0]) throw new NotFoundException({ error: "Model not found" });
-    const revision = await this.db.query(
+    return this.db.transaction(client => this.dispatchRun(client, userId, projectId, modelId, revisionId, body));
+  }
+
+  private async dispatchRun(
+    client: PoolClient, userId: string | null | undefined, projectId: string,
+    modelId: string, revisionId: string, body: Body
+  ) {
+    const model = await this.requireActiveModel(modelId, projectId, client);
+    const revision = await client.query(
       "SELECT * FROM mbt_model_revisions WHERE id = $1 AND model_id = $2 AND project_id = $3",
       [revisionId, modelId, projectId]
     );
     const revisionRow = revision.rows[0];
     if (!revisionRow) throw new NotFoundException({ error: "Model revision not found" });
 
-    const head = await this.db.query(
+    const head = await client.query(
       "SELECT id FROM mbt_model_revisions WHERE model_id = $1 AND project_id = $2 ORDER BY revision_number DESC LIMIT 1",
       [modelId, projectId]
     );
@@ -553,8 +574,8 @@ export class ModelStudioRepository {
         error: "Only the model's current revision can start a run. Save a revision, approve it, then run it."
       });
     }
-    const approval = await this.db.query(
-      "SELECT * FROM mbt_model_approvals WHERE model_revision_id = $1 AND project_id = $2",
+    const approval = await client.query(
+      "SELECT * FROM mbt_model_approvals WHERE model_revision_id = $1 AND project_id = $2 FOR SHARE",
       [revisionId, projectId]
     );
     if (!approval.rows[0] || String(approval.rows[0].content_hash) !== String(revisionRow.content_hash)) {
@@ -564,18 +585,20 @@ export class ModelStudioRepository {
       });
     }
 
-    const generated = await this.db.query(
+    const generated = await client.query(
       `SELECT g.testcase_id, g.path_digest, g.element_ids, t.title, t.status, t.deleted_at IS NOT NULL AS deleted
        FROM mbt_generated_cases g
        JOIN testcases t ON t.id = g.testcase_id
-       WHERE g.model_revision_id = $1 AND g.project_id = $2`,
+       WHERE g.model_revision_id = $1 AND g.project_id = $2
+       ORDER BY g.testcase_id, g.id FOR SHARE OF g`,
       [revisionId, projectId]
     );
-    const linked = await this.db.query(
+    const linked = await client.query(
       `SELECT l.testcase_id, l.element_ids, t.title, t.status, t.deleted_at IS NOT NULL AS deleted
        FROM mbt_model_case_links l
        JOIN testcases t ON t.id = l.testcase_id
-       WHERE l.model_revision_id = $1 AND l.project_id = $2`,
+       WHERE l.model_revision_id = $1 AND l.project_id = $2
+       ORDER BY l.testcase_id, l.id FOR SHARE OF l`,
       [revisionId, projectId]
     );
     type EligibleCase = {
@@ -629,6 +652,24 @@ export class ModelStudioRepository {
         error: `These cases do not belong to this model revision: ${unknown.join(", ")}`
       });
     }
+    // Mapping locks preserve the actual basis; case locks are acquired once, in stable order,
+    // before refreshing authored data. A case edit that was already in flight must finish before
+    // eligibility/title are read, and cannot change them again before the native snapshot commits.
+    await client.query(
+      "SELECT id FROM testcases WHERE project_id = $1 AND id = ANY($2::uuid[]) ORDER BY id FOR SHARE",
+      [projectId, requested]
+    );
+    const currentCases = await client.query(
+      "SELECT id, title, status, deleted_at IS NOT NULL AS deleted FROM testcases WHERE project_id = $1 AND id = ANY($2::uuid[])",
+      [projectId, requested]
+    );
+    const currentById = new Map(currentCases.rows.map(row => [String(row.id), row]));
+    for (const id of requested) {
+      const entry = eligible.get(id) as EligibleCase, current = currentById.get(id);
+      entry.deleted = !current || current.deleted === true;
+      entry.status = String(current?.status ?? "");
+      entry.title = String(current?.title ?? "Untitled test case");
+    }
     const ineligible = requested.filter((id) => {
       const entry = eligible.get(id) as EligibleCase;
       return entry.deleted || entry.status !== "Approved";
@@ -647,17 +688,16 @@ export class ModelStudioRepository {
       });
     }
 
-    const defaultName = `Model run: ${String(model.rows[0].name)} r${Number(revisionRow.revision_number)}`.slice(0, 255);
+    const defaultName = `Model run: ${String(model.name)} r${Number(revisionRow.revision_number)}`.slice(0, 255);
     const created = await this.legacy.createCycleWithTestcasesForUser(userId, projectId, {
       name: body?.name === undefined || body?.name === "" ? defaultName : String(body.name),
       environment: body?.environment,
       buildVersion: body?.buildVersion,
       testcaseIds: requested
-    });
+    }, client);
     if (created.added !== requested.length) {
-      // A case was demoted, deleted or moved between the eligibility read and the atomic writer's
-      // approval check. Nothing partial is kept: the run it created is removed again.
-      await this.legacy.deleteCycle(String(created.cycle.id), userId).catch(() => undefined);
+      // Refuse inside the outer transaction: even an unexpected partial attach rolls back the
+      // run, memberships and executions. There is no fallible compensating deletion afterward.
       throw new ConflictException({
         code: "CASE_NOT_APPROVED",
         error: "A selected case is no longer Approved. Nothing was created; review the cases and try again."
@@ -679,29 +719,23 @@ export class ModelStudioRepository {
         };
       })
     };
-    let runRow: Body;
-    try {
-      const inserted = await this.db.query(
-        `INSERT INTO mbt_model_runs
-           (project_id, model_id, model_revision_id, approval_id, content_hash, cycle_id, created_by, manifest)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-         RETURNING *`,
-        [
-          projectId,
-          modelId,
-          revisionId,
-          approval.rows[0].id,
-          revisionRow.content_hash,
-          created.cycle.id,
-          userId,
-          JSON.stringify(manifest)
-        ]
-      );
-      runRow = inserted.rows[0];
-    } catch (error) {
-      await this.legacy.deleteCycle(String(created.cycle.id), userId).catch(() => undefined);
-      throw error;
-    }
+    const inserted = await client.query(
+      `INSERT INTO mbt_model_runs
+         (project_id, model_id, model_revision_id, approval_id, content_hash, cycle_id, created_by, manifest)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING *`,
+      [
+        projectId,
+        modelId,
+        revisionId,
+        approval.rows[0].id,
+        revisionRow.content_hash,
+        created.cycle.id,
+        userId,
+        JSON.stringify(manifest)
+      ]
+    );
+    const runRow: Body = inserted.rows[0];
     return {
       ...this.modelRunView(runRow, created.cycle, manifest),
       requested: created.requested,

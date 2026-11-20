@@ -124,3 +124,39 @@ test("independent documents have independent ordering and failure state", async 
   assert.equal(await b.save(1, async () => "other document"), "other document");
   pending.resolve("first document"); assert.equal(await writing, "first document");
 });
+
+test("a queued edit keeps its document's acknowledged revision after navigation opens another writer", async () => {
+  const a = new DocumentWriteQueue(), b = new DocumentWriteQueue(), ack = deferred(), started = deferred();
+  a.initialize({ id: "A", editRevision: "a0" });
+  const first = a.save(1, async () => { started.resolve(); return ack.promise; });
+  await started.promise;
+  const revisions = [];
+  const next = a.save(2, async () => {
+    revisions.push(a.acknowledged);
+    return { id: "A", editRevision: "a2" };
+  });
+  a.close();
+  b.initialize({ id: "B", editRevision: "b0" });
+  ack.resolve({ id: "A", editRevision: "a1" });
+  await Promise.all([first, next]);
+  assert.deepEqual(revisions, [{ id: "A", editRevision: "a1" }]);
+  assert.deepEqual(a.acknowledged, { id: "A", editRevision: "a2" });
+  assert.deepEqual(b.acknowledged, { id: "B", editRevision: "b0" });
+});
+
+test("a failed ACK retains the last known base until a later explicit readback succeeds", async () => {
+  const queue = new DocumentWriteQueue();
+  queue.initialize({ id: "A", editRevision: "a0" });
+  await assert.rejects(queue.save(1, async () => { throw new Error("lost ACK"); }), /lost ACK/);
+  assert.equal(queue.needsReadback, true);
+  assert.deepEqual(queue.acknowledged, { id: "A", editRevision: "a0" });
+  let readbacks = 0;
+  const confirmed = await queue.save(1, async () => {
+    assert.equal(queue.needsReadback, true);
+    readbacks++;
+    return { id: "A", editRevision: "a1" };
+  });
+  assert.equal(readbacks, 1);
+  assert.equal(queue.needsReadback, false);
+  assert.deepEqual(queue.acknowledged, confirmed);
+});

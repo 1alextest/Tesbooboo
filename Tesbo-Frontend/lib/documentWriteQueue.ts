@@ -8,6 +8,21 @@ export class DocumentWriteQueue<Result> {
   private failure: unknown;
   private restoring = false;
   private closed = false;
+  private acknowledgedResult: Result | undefined;
+  private reconciliationRequired = false;
+
+  /** Acknowledged server state belongs to this document, even after its page navigates away. */
+  initialize(result: Result): void {
+    this.acknowledgedResult = result;
+  }
+
+  get acknowledged(): Result | undefined {
+    return this.acknowledgedResult;
+  }
+
+  get needsReadback(): boolean {
+    return this.reconciliationRequired;
+  }
 
   /** Capture when an edit/explicit action occurs, not when its debounce eventually fires. */
   capture(): number {
@@ -45,8 +60,12 @@ export class DocumentWriteQueue<Result> {
       // unconfirmed). A NEW edit or explicit action after the failure captures the new generation.
       if (generation !== this.generation) throw this.failure;
       try {
-        return await write(); // Exactly one invocation; no automatic resubmission/retry.
+        const result = await write(); // Exactly one invocation; no automatic resubmission/retry.
+        this.acknowledgedResult = result;
+        this.reconciliationRequired = false;
+        return result;
       } catch (error) {
+        this.reconciliationRequired = true;
         this.failure = error;
         this.generation++;
         throw error;

@@ -1,5 +1,6 @@
 import { expect, request as pwRequest, test } from "@playwright/test";
-import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
+import { randomUUID } from "node:crypto";
+import { approveTestcase, createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import { loginAs, provisionRbacTenant } from "../utils/rbac-tenant";
 import { env } from "../utils/env";
 import { exec, literal, scalar } from "../utils/psql";
@@ -557,7 +558,7 @@ test.describe("persisted Model Studio revisions and mappings", () => {
       // Approve the case, then dispatch it.
       const caseRow = await (await owner.get(`/api/projects/${projectId}/testcases/${caseId}`)).json();
       const caseApproved = await owner.post(`/api/projects/${projectId}/testcases/${caseId}/approve`, {
-        data: { expectedRevision: caseRow.editRevision }
+        data: { expectedRevision: caseRow.editRevision, expectedApprovalRevision: caseRow.approvalRevision }
       });
       // The approval endpoint answers 200 (it updates and returns the case + receipt).
       expect(caseApproved.status(), await caseApproved.text()).toBe(200);
@@ -652,7 +653,7 @@ test.describe("persisted Model Studio revisions and mappings", () => {
 
       // A case that belongs to no part of this revision is refused by id, not silently dropped.
       const foreignCase = await (
-        await owner.post(`/api/projects/${projectId}/testcases`, {
+        await createTestcaseFixtureResponse(owner, `/api/projects/${projectId}/testcases`, {
           data: { title: `E2E unrelated case ${Date.now()}`, status: "Approved" }
         })
       ).json();
@@ -686,6 +687,83 @@ test.describe("persisted Model Studio revisions and mappings", () => {
         if (id) await owner.delete(`/api/projects/${projectId}/testcases/${id}`, { failOnStatusCode: false });
       }
       if (modelId) exec(`DELETE FROM mbt_models WHERE id = ${literal(modelId)} AND project_id = ${literal(projectId)};`);
+      await owner.dispose();
+    }
+  });
+
+  test("failed model provenance writes leave no native Draft or run and a valid retry succeeds", async () => {
+    // Store-failure injection changes a trigger only in the isolated migrated CI database. The
+    // trigger itself is scoped to this fixture model; no shared/customer database is modified.
+    test.skip(!/\/tesbo_ci(?:\?|$)/.test(env.dbUrl ?? ""), "requires the isolated CI database for provenance fault injection");
+    const tenant = await provisionRbacTenant("model-studio");
+    test.skip(!tenant, "requires direct SQL control for the disposable tenant");
+    const projectId = tenant!.mainProjectId, owner = await loginAs(tenant!.owner);
+    const base = `/api/projects/${projectId}/model-studio/models`;
+    let modelId = "", caseId = "", cycleId = "", removeFailure: (() => void) | undefined;
+    const installFailure = (table: "mbt_generated_cases" | "mbt_model_runs") => {
+      const name = `e2e_model_fault_${randomUUID().replaceAll("-", "")}`;
+      exec(`CREATE FUNCTION ${name}() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION 'Fixture model provenance unavailable'; END; $$;
+        CREATE TRIGGER ${name} BEFORE INSERT ON ${table} FOR EACH ROW
+          WHEN (NEW.model_id = ${literal(modelId)}::uuid) EXECUTE FUNCTION ${name}();`);
+      return () => exec(`DROP TRIGGER IF EXISTS ${name} ON ${table}; DROP FUNCTION IF EXISTS ${name}();`);
+    };
+    const candidateCounts = () => scalar(`SELECT jsonb_build_object(
+      'cases', (SELECT COUNT(*) FROM testcases WHERE project_id=${literal(projectId)}),
+      'mappings', (SELECT COUNT(*) FROM mbt_generated_cases WHERE model_id=${literal(modelId)}),
+      'audits', (SELECT COUNT(*) FROM audit_logs WHERE project_id=${literal(projectId)} AND action='testcase_created'))::text;`);
+    const runCounts = () => scalar(`SELECT jsonb_build_object(
+      'cycles', (SELECT COUNT(*) FROM cycles WHERE project_id=${literal(projectId)}),
+      'items', (SELECT COUNT(*) FROM cycle_items ci JOIN cycles c ON c.id=ci.cycle_id WHERE c.project_id=${literal(projectId)}),
+      'executions', (SELECT COUNT(*) FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id JOIN cycles c ON c.id=ci.cycle_id WHERE c.project_id=${literal(projectId)}),
+      'manifests', (SELECT COUNT(*) FROM mbt_model_runs WHERE model_id=${literal(modelId)}))::text;`);
+    try {
+      const created = await owner.post(base, { data: { name: `E2E atomic model ${Date.now()}`, model: MODEL } });
+      expect(created.status(), await created.text()).toBe(201);
+      const model = await created.json(); modelId = model.id;
+      const revision = model.latestRevision, revisionUrl = `${base}/${modelId}/revisions/${revision.id}`;
+      const approved = await owner.post(`${revisionUrl}/approve`, { data: { expectedHash: revision.contentHash } });
+      expect(approved.status(), await approved.text()).toBe(201);
+      const generation = { strategy: "edge_coverage", maxPaths: 10, maxDepth: 8 };
+      const proposed = await owner.post(`${revisionUrl}/generate`, { data: generation });
+      expect(proposed.status(), await proposed.text()).toBe(200);
+      const digest = (await proposed.json()).paths[0].digest;
+      const candidatesBody = { ...generation, digests: [digest] };
+      const beforeCandidates = candidateCounts();
+      removeFailure = installFailure("mbt_generated_cases");
+      const failedCandidate = await owner.post(`${revisionUrl}/candidates`, { data: candidatesBody, failOnStatusCode: false });
+      expect(failedCandidate.status()).toBe(500);
+      expect(candidateCounts()).toBe(beforeCandidates);
+      removeFailure(); removeFailure = undefined;
+
+      const candidates = await owner.post(`${revisionUrl}/candidates`, { data: candidatesBody });
+      expect(candidates.status(), await candidates.text()).toBe(201);
+      const batch = await candidates.json(); caseId = batch.cases[0].testcaseId;
+      expect(batch).toMatchObject({ created: 1, skipped: 0 });
+      await approveTestcase(owner,projectId,caseId);
+      const beforeRuns = runCounts();
+      removeFailure = installFailure("mbt_model_runs");
+      const failedRun = await owner.post(`${revisionUrl}/runs`, {
+        data: { caseIds: [caseId], name: "Provenance failure leaves no run" }, failOnStatusCode: false
+      });
+      expect(failedRun.status()).toBe(500);
+      expect(runCounts()).toBe(beforeRuns); // Includes soft-deleted rows: compensation is insufficient.
+      removeFailure(); removeFailure = undefined;
+
+      const dispatched = await owner.post(`${revisionUrl}/runs`, { data: { caseIds: [caseId] } });
+      expect(dispatched.status(), await dispatched.text()).toBe(201);
+      const run = await dispatched.json(); cycleId = run.cycleId;
+      expect(run).toMatchObject({ added: 1, skipped: 0, contentHash: revision.contentHash });
+      expect(run.manifest.cases).toEqual([expect.objectContaining({ testcaseId: caseId, pathDigest: digest })]);
+      const executions = await owner.get(`/api/cycles/${cycleId}/executions`);
+      expect(executions.status(), await executions.text()).toBe(200);
+      expect(await executions.json()).toHaveLength(1);
+      expect(Number(scalar(`SELECT COUNT(*) FROM mbt_model_runs WHERE cycle_id=${literal(cycleId)};`))).toBe(1);
+    } finally {
+      removeFailure?.();
+      if (cycleId) await owner.delete(`/api/cycles/${cycleId}`, { failOnStatusCode: false });
+      if (caseId) await owner.delete(`/api/projects/${projectId}/testcases/${caseId}`, { failOnStatusCode: false });
+      if (modelId) exec(`DELETE FROM mbt_models WHERE id=${literal(modelId)} AND project_id=${literal(projectId)};`);
       await owner.dispose();
     }
   });

@@ -229,19 +229,49 @@ export async function verifyDocumentWrites(page: Page, api: string, web: string,
         await capture("document-uncertain-save-blocks-queued-restore");
         await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
         await page.keyboard.press("Escape");
-        // Check the real saved state before a NEW explicit action. No automatic mutation retry.
-        const readback = await page.request.get(doc.url);
-        expect((await readback.json()).contentText).toBe("Retained draft after uncertain ACK");
-        const saved = page.waitForResponse((response) => doc.isSave(response.request()));
+        // A NEW explicit Save checks the actual persisted state. The identical committed draft
+        // is acknowledged without issuing another PATCH or adding duplicate history.
+        const readback = page.waitForResponse((response) => response.url() === doc.url && response.request().method() === "GET");
         await doubleClickSynchronously(save());
-        expect((await saved).ok()).toBeTruthy();
+        const confirmed = await readback;
+        expect(confirmed.ok(), await confirmed.text()).toBeTruthy();
+        expect((await confirmed.json()).contentText).toBe("Retained draft after uncertain ACK");
         await expect(page.getByText("Saved", { exact: true })).toBeVisible();
-        expect(count(doc.url, "PATCH")).toBe(2);
+        expect(count(doc.url, "PATCH")).toBe(1);
+        expect(await state(doc.id)).toEqual(committed);
         const retryDialog = await confirmPanel();
         await retryDialog.getByRole("button", { name: "Restore", exact: true }).click();
         await restored(doc);
         expect(count(doc.restoreUrl, "POST")).toBe(1);
         await expectNoRequest(page, doc.isWrite);
+      } finally { await gate.close(); }
+    });
+
+    await checked("an explicit save after a lost ACK preserves a different concurrent server edit and the local draft", async () => {
+      const doc = await fixture("uncertain save conflict");
+      await open(doc);
+      const gate = await hold(page, doc.url, "PATCH", "ack", true);
+      try {
+        await editor().fill("Local draft retained through conflict");
+        await save().click(); await gate.ready;
+        await gate.finish();
+        await expect(page.getByText("Unsaved changes", { exact: true })).toBeVisible();
+        const current = await page.request.get(doc.url);
+        expect(current.ok(), await current.text()).toBeTruthy();
+        const concurrent = await page.request.patch(doc.url, { data: {
+          ...content("Concurrent server edit must survive"), expectedRevision: (await current.json()).editRevision,
+        } });
+        expect(concurrent.ok(), await concurrent.text()).toBeTruthy();
+        const before = await state(doc.id);
+        const readback = page.waitForResponse((response) => response.url() === doc.url && response.request().method() === "GET");
+        await doubleClickSynchronously(save()); await readback;
+        await expect(page.getByText(/This document changed while the save was unconfirmed/)).toBeVisible();
+        await expect(editor()).toHaveText("Local draft retained through conflict");
+        await expect(page.getByText("Unsaved changes", { exact: true })).toBeVisible();
+        await expectNoRequest(page, doc.isWrite);
+        expect(count(doc.url, "PATCH")).toBe(1);
+        expect(await state(doc.id)).toEqual(before);
+        await capture("document-uncertain-save-conflict-preserves-both-versions");
       } finally { await gate.close(); }
     });
 

@@ -115,9 +115,9 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
     await denied(request, 404);
     await db.query("UPDATE projects SET archived_at = NULL WHERE id = $1", [projectId]);
 
-    const executionBeforeBugReports = (await persisted()).execution;
-    expect(executionBeforeBugReports[0]).toMatchObject({ status: "Passed", executed_by: ownerId });
+    expect((await persisted()).execution[0]).toMatchObject({ status: "Passed", executed_by: ownerId });
     for (const transport of ["REST", "MCP"]) {
+      const before = await persisted();
       const response = await anonymous.post(transport === "REST" ? `${base}/bugs` : `${base}/mcp`, {
         headers: { Authorization: `Bearer ${tokens.write}` },
         data: transport === "REST" ? body : { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "create_bug", arguments: body } }
@@ -129,9 +129,19 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
       bugs.push(created.id);
       expect(created).toMatchObject({ reportedBy: ownerId });
       expect(created.links).toEqual(expect.arrayContaining([expect.objectContaining(body.links[0])]));
-      // Reverse path (Basecamp 10226284379 / 10221755377): a bug filed against a live run marks
-      // that execution Failed. Reporting through MCP is idempotent for the already-Failed row.
-      expect((await persisted()).execution[0]).toMatchObject({ status: "Failed", executed_by: ownerId });
+      const after = await persisted();
+      // A direct bug association marks this manual run's execution Failed. Linking an
+      // already-Failed execution is a no-op; sealed automated runs are covered separately.
+      expect(after.execution).toEqual(before.execution[0].status === "Failed" ? before.execution : [{
+        ...before.execution[0], status: "Failed", executed_by: ownerId,
+        executed_at: expect.any(Date), updated_at: expect.any(Date),
+      }]);
+      if (before.execution[0].status !== "Failed") {
+        expect(after.execution[0].executed_at.getTime()).toBeGreaterThanOrEqual(before.execution[0].executed_at.getTime());
+        expect(after.execution[0].updated_at.getTime()).toBeGreaterThanOrEqual(before.execution[0].updated_at.getTime());
+      }
+      expect(after.run).toEqual(before.run);
+      expect(after.snapshot).toEqual(before.snapshot);
     }
     await verifyHistoryImportText(request, nonmember, anonymous, db, api, projectId);
   } finally {

@@ -54,6 +54,13 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** PostgreSQL jsonb can return object keys in a different order from the editor. */
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  const ordered = (_key: string, value: unknown) => value && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value;
+  return JSON.stringify(left, ordered) === JSON.stringify(right, ordered);
+}
+
 function documentPayloadSize(payload: { contentJson: JSONContent; contentHtml: string; contentText: string } | null): number {
   if (!payload) return 0;
   return new Blob([JSON.stringify(payload.contentJson), payload.contentHtml, payload.contentText]).size;
@@ -225,7 +232,6 @@ export default function KnowledgeDocumentPage() {
   const [titleError, setTitleError] = useState<string | null>(null);
   const editRevision = useRef(0);
   const writerRef = useRef<DocumentWriteQueue<KnowledgeDocument> | null>(null);
-  const persistedDocRef = useRef<KnowledgeDocument | null>(null);
   // Synchronous double-submit guard for restore: state alone can't stop a second click that fires
   // before React re-renders the disabled button, so this is checked and set before any await.
   const restoreInFlightRef = useRef(false);
@@ -277,7 +283,7 @@ export default function KnowledgeDocumentPage() {
         };
         latestTitle.current = data.title;
         lastValidTitle.current = data.title;
-        persistedDocRef.current = data;
+        writerRef.current?.initialize(data);
         setReviewContextText(data.contentText ?? "");
         setDoc(data);
         setBreadcrumb(data.breadcrumb);
@@ -460,35 +466,29 @@ export default function KnowledgeDocumentPage() {
     if (visible) setSaveStatus("saving");
     try {
       const updated = await writer.save(revision, async () => {
-        try {
-          const saved = await updateKnowledgeDocument(projectId, documentId, {
-            title: nextTitle,
-            contentJson: payload?.contentJson,
-            contentHtml: payload?.contentHtml,
-            contentText: payload?.contentText,
-            expectedRevision: persistedDocRef.current?.editRevision,
-          });
-          // Advance inside the queue operation so the next save/review uses the committed base,
-          // even if React has not rendered the response or a review barrier is already waiting.
-          if (writerRef.current === writer) persistedDocRef.current = saved;
-          return saved;
-        } catch (error) {
-          /*
-           * A lost acknowledgement can leave the write committed while the browser never saw the
-           * new editRevision. Retrying with the stale revision would then fail the CAS check for
-           * ever. Re-read the document: when it already holds exactly what this save sent, adopt it
-           * as the committed result (an idempotent replay of our own write). A genuine concurrent
-           * edit differs, so the original failure still surfaces for it.
-           */
-          const current = await getKnowledgeDocument(projectId, documentId).catch(() => null);
-          const sameTitle = String(current?.title ?? "") === nextTitle;
-          const sameText = String(current?.contentText ?? "") === String(payload?.contentText ?? "");
-          if (current && sameTitle && sameText) {
-            if (writerRef.current === writer) persistedDocRef.current = current;
-            return current;
+        const acknowledged = writer.acknowledged;
+        if (writer.needsReadback) {
+          // A lost ACK may already have committed. Only a NEW explicit Save may reconcile it;
+          // debounced/queued edits never replay an uncertain mutation or adopt another edit.
+          if (!explicit) throw new Error("Check the saved document with Save before retrying your retained changes.");
+          const current = await getKnowledgeDocument(projectId, documentId);
+          if (current.title === nextTitle.trim() &&
+              sameJsonValue(current.contentJson, payload?.contentJson ?? null) &&
+              (current.contentHtml ?? "") === (payload?.contentHtml ?? "") &&
+              (current.contentText ?? "") === (payload?.contentText ?? "")) {
+            return current; // Exact desired content independently read back; no duplicate write.
           }
-          throw error;
+          if (!acknowledged?.editRevision || current.editRevision !== acknowledged.editRevision) {
+            throw new Error("This document changed while the save was unconfirmed. Your draft is still here. Copy your draft before reloading to compare with the saved document.");
+          }
         }
+        return updateKnowledgeDocument(projectId, documentId, {
+          title: nextTitle,
+          contentJson: payload?.contentJson,
+          contentHtml: payload?.contentHtml,
+          contentText: payload?.contentText,
+          expectedRevision: acknowledged?.editRevision,
+        });
       }, generation);
       if (!visible || !isMountedRef.current || writerRef.current !== writer || revision !== editRevision.current || restoreInFlightRef.current) return;
       setDoc(updated);
@@ -569,7 +569,7 @@ export default function KnowledgeDocumentPage() {
     try {
       // Drain earlier in-flight/queued writes before sending the restore. If one fails after this
       // confirmation, the queue rejects the barrier instead of blindly sending another mutation.
-      const updated = await writer.restore(() => restoreKnowledgeDocumentVersion(projectId, documentId, confirmTarget.versionId!, persistedDocRef.current?.editRevision));
+      const updated = await writer.restore(() => restoreKnowledgeDocumentVersion(projectId, documentId, confirmTarget.versionId!, writer.acknowledged?.editRevision));
       if (!isMountedRef.current || writerRef.current !== writer) return;
       latestContent.current = {
         contentJson: (updated.contentJson ?? null) as JSONContent,
@@ -578,7 +578,6 @@ export default function KnowledgeDocumentPage() {
       };
       latestTitle.current = updated.title;
       lastValidTitle.current = updated.title;
-      persistedDocRef.current = updated;
       setReviewContextText(updated.contentText ?? "");
       editRevision.current++;
       setDoc(updated);
@@ -630,14 +629,13 @@ export default function KnowledgeDocumentPage() {
     pending?.();
     try {
       const updated = await writer.restore(() => {
-        const saved = persistedDocRef.current;
+        const saved = writer.acknowledged;
         if (saved?.id !== documentId || !saved.editRevision) throw new Error("Reload this document before reviewing it.");
         return decision === "approved"
           ? approveAiMemory(projectId, documentId, saved.editRevision)
           : rejectAiMemory(projectId, documentId, saved.editRevision);
       });
       if (!isMountedRef.current || writerRef.current !== writer) return;
-      persistedDocRef.current = updated;
       setDoc(updated);
       setSaveStatus("saved");
       setError(null);
