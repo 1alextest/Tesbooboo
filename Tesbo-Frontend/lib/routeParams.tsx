@@ -172,7 +172,15 @@ export function RouteParamsProvider({ children }: { children: React.ReactNode })
           updateRetestRouteHint(window.localStorage, { userId, projectId: cached.projectId, sourceCycleId: cached.cycleId }, {
             projectRef: cached.projectKey ?? cached.projectId, cycleRef: cached.cycleRef ?? cached.cycleId,
           });
-        } catch { /* Navigation identity never becomes a server access or outcome decision. */ }
+        } catch {
+          // The hint's durable value is unknown after a failed write/readback. A UUID URL can
+          // still mount recovery after source deletion without matching a readable hint.
+          const recoveryPath = `/projects/${encodeURIComponent(cached.projectId)}/cycles/${encodeURIComponent(cached.cycleId)}`;
+          if (window.location.pathname !== recoveryPath) {
+            window.history.replaceState(window.history.state, "", `${recoveryPath}${window.location.search}${window.location.hash}`);
+          }
+          return;
+        }
       }
       window.history.replaceState(window.history.state, "", `${next.join("/")}${window.location.search}${window.location.hash}`);
     }

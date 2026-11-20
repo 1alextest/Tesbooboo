@@ -32,6 +32,23 @@
     {
       "path": "native-backend-terminal-review.md",
       "sha256": "176333d40caca586ea0ff8875d66897546635017b5a824d7e9faca7c2701f1d0"
+    },
+    {
+      "path": "native-ui-remediation-review.md",
+      "sha256": "b8314c1de775c5be731795caa22c7d9cc28a0a93f33c2039916f46e2bac606af"
+    },
+    {
+      "path": "native-ui-storage-recovery-review.md",
+      "sha256": "0a07b5cf9f041b8238670aff8170191bb9e7604a0056c23cd995acf358c41b4a"
+    },
+    {
+      "path": "native-v38-reconciliation-publication.md",
+      "sha256": "2642e12a8fb288be9bc71e98d2e75de77b25958d80b43e4e80d0b7dbd934a8a8"
+    },
+    {
+      "path": "native-v38-reconciliation.md.json",
+      "sha256": "46b4a2bb7ab1876baa78f34c2c1c65dff2d935c13130f615f166a447e8e75163",
+      "originalReportSha256": "78b33b5c354fb53bdcbf2cd638ed303bd2785946c58dea2c049f73e123a693fa"
     }
   ]
 }

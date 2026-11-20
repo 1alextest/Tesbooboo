@@ -1839,90 +1839,149 @@ test.describe("native manual retest — reviewed selection and recovery", () => 
     } finally { await cleanup(api, source); }
   });
 
-  test("a deleted source with no server outcome reloads only through its current user's pending intent", async ({ page, browser }) => {
-    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
-    const source = await fixture(api);
-    let posts = 0;
-    let original: Record<string, unknown> = {};
-    let holdResolution = true;
-    let releaseResolution!: () => void;
-    const resolutionGate = new Promise<void>(resolve => { releaseResolution = resolve; });
-    const withoutIntent = await browser.newContext({ baseURL: env.webBaseUrl, storageState: STATE_PATH });
-    try {
-      await page.route("**/api/route-resolve?*", async route => {
-        if (!holdResolution || new URL(route.request().url()).searchParams.get("cycle") !== source.cycleId) { await route.continue(); return; }
-        const response = await route.fetch();
-        expect(response.status(), await response.text()).toBe(200);
-        await resolutionGate;
-        await route.fulfill({ response });
-      });
-      await page.route(`**/api/cycles/${source.cycleId}/retests`, async route => {
-        if (route.request().method() !== "POST") { await route.continue(); return; }
-        posts += 1;
-        original = route.request().postDataJSON();
-        await route.abort("failed");
-      });
-      const dialog = await openPreview(page, source);
-      await expect(page).toHaveURL(new RegExp(`/cycles/${source.cycleId}$`));
-      await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeEnabled();
-      await dialog.getByRole("button", { name: "Create retest", exact: true }).click();
-      await expect(dialog).toContainText("The earlier request may still be running");
-      expect((await savedIntent(page, source.cycleId))?.value.routeHint).toEqual({ projectRef: source.projectId, cycleRef: source.cycleId });
-      // Canonicalization can finish after the uncertain POST. Enrich only its route hint; the
-      // original request must remain byte-for-byte available for cancellation and exact replay.
-      holdResolution = false;
-      releaseResolution();
-      await expect(page).toHaveURL(/\/cycles\/[^/]+-RUN-\d+$/);
-      const sourceUrl = page.url();
-      const saved = await savedIntent(page, source.cycleId);
-      expect(saved?.value.request).toEqual(original);
-      expect(saved?.value.routeHint).toEqual({
-        projectRef: decodeURIComponent(new URL(sourceUrl).pathname.split("/")[2]),
-        cycleRef: decodeURIComponent(new URL(sourceUrl).pathname.split("/")[4]),
-      });
-      expect(await children(api, source.cycleId)).toEqual([]);
-      const deleted = await api.delete(`/api/cycles/${source.cycleId}`);
-      expect(deleted.ok(), await deleted.text()).toBeTruthy();
-      const resolveQuery = new URLSearchParams({ project: saved!.value.routeHint.projectRef, cycle: saved!.value.routeHint.cycleRef });
-      expect((await api.get(`/api/route-resolve?${resolveQuery}`)).status()).toBe(404);
+  for (const hintPersistence of ["available", "write-failure", "readback-failure"] as const) {
+    test(`a deleted source with no server outcome reloads only through its current user's pending intent${hintPersistence === "available" ? "" : ` after hint ${hintPersistence}`}`, async ({ page, browser }) => {
+      const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+      const source = await fixture(api);
+      let posts = 0;
+      let original: Record<string, unknown> = {};
+      let holdResolution = true;
+      let releaseResolution!: () => void;
+      const resolutionGate = new Promise<void>(resolve => { releaseResolution = resolve; });
+      const withoutIntent = await browser.newContext({ baseURL: env.webBaseUrl, storageState: STATE_PATH });
+      try {
+        await page.route("**/api/route-resolve?*", async route => {
+          if (!holdResolution || new URL(route.request().url()).searchParams.get("cycle") !== source.cycleId) { await route.continue(); return; }
+          const response = await route.fetch();
+          expect(response.status(), await response.text()).toBe(200);
+          await resolutionGate;
+          await route.fulfill({ response });
+        });
+        await page.route(`**/api/cycles/${source.cycleId}/retests`, async route => {
+          if (route.request().method() !== "POST") { await route.continue(); return; }
+          posts += 1;
+          original = route.request().postDataJSON();
+          await route.abort("failed");
+        });
+        const dialog = await openPreview(page, source);
+        await expect(page).toHaveURL(new RegExp(`/cycles/${source.cycleId}$`));
+        const uuidUrl = page.url();
+        await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeEnabled();
+        await dialog.getByRole("button", { name: "Create retest", exact: true }).click();
+        await expect(dialog).toContainText("The earlier request may still be running");
+        const originalIntent = await savedIntent(page, source.cycleId);
+        expect(originalIntent?.value.routeHint).toEqual({ projectRef: source.projectId, cycleRef: source.cycleId });
+        if (hintPersistence !== "available") {
+          // The initial durable request already exists. Fail only its later URL-hint enrichment,
+          // either before the write or during readback after the real storage write succeeded.
+          await page.evaluate(({ storageKey, sourceId, failureMode }) => {
+            const originalSet = Storage.prototype.setItem;
+            const originalGet = Storage.prototype.getItem;
+            const state = {
+              writes: 0, readbacks: 0, failNextRead: false,
+              restore() { Storage.prototype.setItem = originalSet; Storage.prototype.getItem = originalGet; },
+            };
+            (window as unknown as { retestHintStorageFault: typeof state }).retestHintStorageFault = state;
+            Storage.prototype.setItem = function(key, value) {
+              if (this === localStorage && key === storageKey && JSON.parse(value).routeHint?.cycleRef !== sourceId) {
+                state.writes += 1;
+                if (failureMode === "write-failure") throw new DOMException("Hint storage write unavailable", "QuotaExceededError");
+                originalSet.call(this, key, value);
+                state.failNextRead = true;
+                return;
+              }
+              originalSet.call(this, key, value);
+            };
+            Storage.prototype.getItem = function(key) {
+              if (this === localStorage && key === storageKey && state.failNextRead) {
+                state.failNextRead = false;
+                state.readbacks += 1;
+                throw new DOMException("Hint storage readback unavailable", "SecurityError");
+              }
+              return originalGet.call(this, key);
+            };
+          }, { storageKey: originalIntent!.key, sourceId: source.cycleId, failureMode: hintPersistence });
+        }
+        // Canonicalization can finish after the uncertain POST. Enrich only its route hint; the
+        // original request must remain unchanged for cancellation and exact replay.
+        holdResolution = false;
+        releaseResolution();
+        if (hintPersistence === "available") {
+          await expect(page).toHaveURL(/\/cycles\/[^/]+-RUN-\d+$/);
+        } else {
+          await expect.poll(() => page.evaluate(() => (window as unknown as { retestHintStorageFault: { writes: number } }).retestHintStorageFault.writes)).toBeGreaterThan(0);
+          if (hintPersistence === "readback-failure") {
+            expect(await page.evaluate(() => (window as unknown as { retestHintStorageFault: { readbacks: number } }).retestHintStorageFault.readbacks)).toBeGreaterThan(0);
+          }
+          await expect(page).toHaveURL(uuidUrl);
+          await page.evaluate(() => (window as unknown as { retestHintStorageFault: { restore: () => void } }).retestHintStorageFault.restore());
+        }
+        const sourceUrl = page.url();
+        const saved = await savedIntent(page, source.cycleId);
+        expect(saved?.value.request).toEqual(original);
+        expect(saved?.value).toMatchObject({
+          version: originalIntent!.value.version, userId: originalIntent!.value.userId,
+          projectId: source.projectId, sourceCycleId: source.cycleId,
+        });
+        if (hintPersistence === "write-failure") expect(saved).toEqual(originalIntent);
+        else {
+          expect(saved?.value.routeHint.cycleRef).toMatch(/-RUN-\d+$/);
+          if (hintPersistence === "available") expect(saved?.value.routeHint).toEqual({
+            projectRef: decodeURIComponent(new URL(sourceUrl).pathname.split("/")[2]),
+            cycleRef: decodeURIComponent(new URL(sourceUrl).pathname.split("/")[4]),
+          });
+        }
+        expect(await children(api, source.cycleId)).toEqual([]);
+        const deleted = await api.delete(`/api/cycles/${source.cycleId}`);
+        expect(deleted.ok(), await deleted.text()).toBeTruthy();
+        const resolveQuery = new URLSearchParams({ project: saved!.value.routeHint.projectRef, cycle: saved!.value.routeHint.cycleRef });
+        expect((await api.get(`/api/route-resolve?${resolveQuery}`)).status()).toBe(404);
 
-      // The same authenticated user in a browser with no pending intent keeps the normal 404 UI.
-      const otherPage = await withoutIntent.newPage();
-      await otherPage.goto(sourceUrl);
-      await expect(otherPage.getByRole("heading", { name: "Page not found", exact: true })).toBeVisible();
-      const foreignUser = "00000000-0000-4000-8000-000000000099";
-      await otherPage.evaluate(({ savedValue, foreignId }) => {
-        localStorage.setItem(`tesbo:retest:${foreignId}:${savedValue.projectId}:${savedValue.sourceCycleId}`, JSON.stringify({ ...savedValue, userId: foreignId }));
-      }, { savedValue: saved!.value, foreignId: foreignUser });
-      await otherPage.reload();
-      await expect(otherPage.getByRole("heading", { name: "Page not found", exact: true })).toBeVisible();
-      await expect(otherPage.getByTestId("retest-recovery-banner")).toHaveCount(0);
+        // A readable URL keeps the resolver's not-found UI; UUID URLs can mount the unavailable
+        // Run without a hint. Neither browser may discover another user's pending recovery state.
+        const otherPage = await withoutIntent.newPage();
+        await otherPage.goto(sourceUrl);
+        if (hintPersistence === "available") await expect(otherPage.getByRole("heading", { name: "Page not found", exact: true })).toBeVisible();
+        else await expect(otherPage.getByRole("region", { name: "Run unavailable", exact: true })).toBeVisible();
+        await expect(otherPage.getByTestId("retest-recovery-banner")).toHaveCount(0);
+        const foreignUser = "00000000-0000-4000-8000-000000000099";
+        await otherPage.evaluate(({ savedValue, foreignId }) => {
+          localStorage.setItem(`tesbo:retest:${foreignId}:${savedValue.projectId}:${savedValue.sourceCycleId}`, JSON.stringify({ ...savedValue, userId: foreignId }));
+        }, { savedValue: saved!.value, foreignId: foreignUser });
+        await otherPage.reload();
+        if (hintPersistence === "available") await expect(otherPage.getByRole("heading", { name: "Page not found", exact: true })).toBeVisible();
+        else await expect(otherPage.getByRole("region", { name: "Run unavailable", exact: true })).toBeVisible();
+        await expect(otherPage.getByTestId("retest-recovery-banner")).toHaveCount(0);
 
-      await page.reload();
-      await expect(page).toHaveURL(sourceUrl);
-      await expect(page.getByRole("region", { name: "Run unavailable", exact: true })).toBeVisible();
-      const banner = page.getByTestId("retest-recovery-banner");
-      await expect(banner).toContainText("A retest request is awaiting confirmation.");
-      await banner.getByRole("button", { name: "Review retest request", exact: true }).click();
-      await expect(dialog.getByRole("button", { name: "Stop request and review again", exact: true })).toBeEnabled();
-      await dialog.getByRole("button", { name: "Stop request and review again", exact: true }).click();
-      await expect(dialog).toContainText("This saved request was stopped. It cannot create a Run");
-      await expect(dialog.getByRole("button", { name: "Review again", exact: true })).toHaveCount(0);
-      expect(await savedIntent(page, source.cycleId)).toBeNull();
-      const outcome = await api.get(`/api/cycles/${source.cycleId}/retests/requests/${original.requestKey}`);
-      expect(outcome.status(), await outcome.text()).toBe(200);
-      expect(await outcome.json()).toMatchObject({ outcome: "cancelled", sourceCycleId: source.cycleId, requestKey: original.requestKey });
-      const late = await api.post(`/api/cycles/${source.cycleId}/retests`, { data: original, failOnStatusCode: false });
-      expect(late.status(), await late.text()).toBe(409);
-      expect((await late.json()).code).toBe("RETEST_REQUEST_CANCELLED");
-      expect(posts).toBe(1);
-    } finally {
-      releaseResolution();
-      await withoutIntent.close();
-      await cleanUpRun(api, source.cycleId, source.testcaseIds);
-      await api.dispose();
-    }
-  });
+        await page.reload();
+        await expect(page).toHaveURL(sourceUrl);
+        await expect(page.getByRole("region", { name: "Run unavailable", exact: true })).toBeVisible();
+        const banner = page.getByTestId("retest-recovery-banner");
+        await expect(banner).toContainText("A retest request is awaiting confirmation.");
+        await banner.getByRole("button", { name: "Review retest request", exact: true }).click();
+        await expect(dialog.getByRole("button", { name: "Stop request and review again", exact: true })).toBeEnabled();
+        await dialog.getByRole("button", { name: "Stop request and review again", exact: true }).click();
+        await expect(dialog).toContainText("This saved request was stopped. It cannot create a Run");
+        await expect(dialog.getByRole("button", { name: "Review again", exact: true })).toHaveCount(0);
+        expect(await savedIntent(page, source.cycleId)).toBeNull();
+        const outcome = await api.get(`/api/cycles/${source.cycleId}/retests/requests/${original.requestKey}`);
+        expect(outcome.status(), await outcome.text()).toBe(200);
+        expect(await outcome.json()).toMatchObject({ outcome: "cancelled", sourceCycleId: source.cycleId, requestKey: original.requestKey });
+        const late = await api.post(`/api/cycles/${source.cycleId}/retests`, { data: original, failOnStatusCode: false });
+        expect(late.status(), await late.text()).toBe(409);
+        expect((await late.json()).code).toBe("RETEST_REQUEST_CANCELLED");
+        const runs = await api.get(`/api/projects/${source.projectId}/cycles`);
+        expect(runs.status(), await runs.text()).toBe(200);
+        expect((await runs.json()).filter((run: { name: string }) => run.name === original.name)).toEqual([]);
+        expect(posts).toBe(1);
+      } finally {
+        releaseResolution();
+        await withoutIntent.close();
+        await cleanUpRun(api, source.cycleId, source.testcaseIds);
+        await api.dispose();
+      }
+    });
+  }
 
   test("keyboard focus stays in the dialog through preview reload, uncertain submit, and recovery reload", async ({ page }) => {
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });

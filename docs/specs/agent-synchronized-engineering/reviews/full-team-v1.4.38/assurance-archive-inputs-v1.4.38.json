@@ -1,0 +1,2324 @@
+{
+  "record_kind": "Final archive byte verification",
+  "final_input": "input-v38-candidate2",
+  "final_input_manifest_sha256": "a5da721acc5c8ce39948c42ec8cc2345ea3778278642b63dc58430fa6575531a",
+  "archive_path": "deliverables/Tesbo_Assurance_v1.4.38.tar.xz",
+  "archive_written": true,
+  "member_count": 384,
+  "uncompressed_member_bytes": 33481681,
+  "snapshot_manifest_count": 12,
+  "all_member_manifest_includes_internal_manifest": true,
+  "files": [
+    {
+      "path": "ASSEMBLY-COMPLETION.json",
+      "bytes": 4119,
+      "sha256": "2dfa5d093adf6878171230b1fd77acf0467705040556468eda05632f382e1491",
+      "origin": "Generated deterministically by the evidence assembly script"
+    },
+    {
+      "path": "MANIFEST.json",
+      "bytes": 112669,
+      "sha256": "bbe465eb57913cacccab4f0daa95d13e4f2cfa9bc7ee673d300e012008f43654",
+      "origin": "Generated deterministically by the evidence assembly script"
+    },
+    {
+      "path": "README.md",
+      "bytes": 11621,
+      "sha256": "58857f2c324da2484fa9a160ac98911b01be4e1f15736728dadd93ed6315a79d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/assurance-archive-README-v1.4.38.md"
+    },
+    {
+      "path": "SOURCE-IDENTITIES.json",
+      "bytes": 17606,
+      "sha256": "195ed15d81c6b2e2e40ec6d11cd34a5985407355717e32856bd4f1d93133ed25",
+      "origin": "Generated deterministically by the evidence assembly script"
+    },
+    {
+      "path": "baseline-latest/canonical/00_README.md",
+      "bytes": 146513,
+      "sha256": "3c0b9657de6bac6c49b16b4e5dec6f7480441d41a0ab21a1d63bb4e09167613d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-latest/canonical/00_README.md"
+    },
+    {
+      "path": "baseline-latest/canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 201630,
+      "sha256": "5b9ac91f4f6cab4e159c742c0b7f9c1c42bf2b01dad4379a8a2d65008406e037",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-latest/canonical/01_PRODUCT_REQUIREMENTS.md"
+    },
+    {
+      "path": "baseline-latest/canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 125410,
+      "sha256": "22548d7d7e3d0dc637cd14e96a0b86bd8edab0a41db3862d9668f0105b050dd8",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-latest/canonical/02_WORKFLOW_AND_UX_SPEC.md"
+    },
+    {
+      "path": "baseline-latest/canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 321935,
+      "sha256": "0a05e039e32f809b07e6be2f809dcde6acad659394e57e1ea672a9602e9e1d3f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-latest/canonical/03_TECHNICAL_DESIGN.md"
+    },
+    {
+      "path": "baseline-latest/canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 163169,
+      "sha256": "332fef0d87e7bcdb9fd8e7d30122c32d0c13d4ca705ce91e1a2bbabe6317bc6f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-latest/canonical/04_MCP_API_CONTRACTS.md"
+    },
+    {
+      "path": "baseline-latest/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 317678,
+      "sha256": "fe5a19d707e678ff51a3ff7572a9c23a4042c211a11e9938cbedb3c6226c8676",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-latest/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+    },
+    {
+      "path": "baseline-latest/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 112893,
+      "sha256": "82cd4670b97a145690ed38bdff366b7b708fc0824b7d1d5ca248ea39ef40019e",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-latest/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md"
+    },
+    {
+      "path": "baseline-latest/canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 113528,
+      "sha256": "e7ac408cd937ad93afdb601c98bfaef9228807bb53954fc25afefc4e2e2c266a",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-latest/canonical/07_UI_DESIGN_TASKS.md"
+    },
+    {
+      "path": "baseline-latest/manifest.json",
+      "bytes": 2557,
+      "sha256": "441fad307dfa4235785aad43fe9d852f9781ef1a3de466460da266f71b9d9db3",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-latest/manifest.json"
+    },
+    {
+      "path": "baseline-latest/views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 22931,
+      "sha256": "a2eaeaa1b072609552fe9ad556ce06d1b5044df9557562aa2f81b4208efeaaf3",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-latest/views/AGENT_RULE_TEMPLATE.md"
+    },
+    {
+      "path": "baseline-latest/views/README.md",
+      "bytes": 33180,
+      "sha256": "df7aca3925ca274e8e57aab0cb17c18f826e13273fd95b3dc687b678a7e10ce6",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-latest/views/README.md"
+    },
+    {
+      "path": "baseline-latest/views/design.md",
+      "bytes": 105022,
+      "sha256": "78581281f26f8931bf4074d1e9e059d099c4d074f8a413c9779e204123b8b034",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-latest/views/design.md"
+    },
+    {
+      "path": "baseline-latest/views/implementation-plan.md",
+      "bytes": 79904,
+      "sha256": "189435dd13ad77a32e16e86f98212ef2f8840fe3112cc5726757fb05d6023594",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-latest/views/implementation-plan.md"
+    },
+    {
+      "path": "baseline-latest/views/requirements.md",
+      "bytes": 79393,
+      "sha256": "a6adf5c48bf081986d65604b265b3e9a401a58db42d64225c7660f0b64615801",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-latest/views/requirements.md"
+    },
+    {
+      "path": "baseline-latest/views/skills-governance.md",
+      "bytes": 52463,
+      "sha256": "a40f7871713673b662b3850b59d6c483e90d0f2490b52b887e319d8b1727fb56",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-latest/views/skills-governance.md"
+    },
+    {
+      "path": "baseline-v34/canonical/00_README.md",
+      "bytes": 149453,
+      "sha256": "dfdc9812777ff4be000dbbe69c6e200f37b20da3d1d0341f96d3270c609e5b29",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v34/canonical/00_README.md"
+    },
+    {
+      "path": "baseline-v34/canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 205100,
+      "sha256": "b7ba6b1cb7a4e5bd6e042a3265701c88c1282e7e60bb3056914c18cd201f186b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v34/canonical/01_PRODUCT_REQUIREMENTS.md"
+    },
+    {
+      "path": "baseline-v34/canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 130455,
+      "sha256": "cac79a2587569d9d3a5a9ea080181a2efebf9da6e2b0ebdc99c56ef3666bcaea",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v34/canonical/02_WORKFLOW_AND_UX_SPEC.md"
+    },
+    {
+      "path": "baseline-v34/canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 339991,
+      "sha256": "e287764354e802649377ec919f33824aa203208316760d38c0a19f4f013aae78",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v34/canonical/03_TECHNICAL_DESIGN.md"
+    },
+    {
+      "path": "baseline-v34/canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 168900,
+      "sha256": "f20fa5ae712bfe3416dea4d56909e55570a56f0a40525e78ab92853bb594beab",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v34/canonical/04_MCP_API_CONTRACTS.md"
+    },
+    {
+      "path": "baseline-v34/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 331982,
+      "sha256": "97bd618c52d1e1ccafa9b2d3f3924854ddfef4f8e1cca1688e4d69bcb4994d7f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v34/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+    },
+    {
+      "path": "baseline-v34/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 117179,
+      "sha256": "58f0f5612c0154887b03b509fdc359d4292d438302331a1c5c002955cf5e5c9f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v34/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md"
+    },
+    {
+      "path": "baseline-v34/canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 119700,
+      "sha256": "9672278db49b9da6ce8a981f5d508fbd3e7fd425baadd72b375acd913358f4c5",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v34/canonical/07_UI_DESIGN_TASKS.md"
+    },
+    {
+      "path": "baseline-v34/views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 38287,
+      "sha256": "9ebba70f961f14bfe91e80a340d93d6729d20c6935187a9b3114217bc257e012",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v34/views/AGENT_RULE_TEMPLATE.md"
+    },
+    {
+      "path": "baseline-v34/views/README.md",
+      "bytes": 38282,
+      "sha256": "62e6e115f5f93f299a42de0c8201c74d112c6412aeeaf223d51351f0de65d2cf",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v34/views/README.md"
+    },
+    {
+      "path": "baseline-v34/views/design.md",
+      "bytes": 131273,
+      "sha256": "35147b7c30757e304ca849d5ca1a3af0ef0b6d117779a9cbd94f883f34e5e8ea",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v34/views/design.md"
+    },
+    {
+      "path": "baseline-v34/views/implementation-plan.md",
+      "bytes": 99686,
+      "sha256": "5c7f1749fd3e4f14b93df3b4afdcd193f3cb3af1446011411f3ded64879f4c61",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v34/views/implementation-plan.md"
+    },
+    {
+      "path": "baseline-v34/views/requirements.md",
+      "bytes": 88012,
+      "sha256": "abacf0e73c7b9f56730cd6b5e83f8b5b98311bdac0d3a541d592e8098f200477",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v34/views/requirements.md"
+    },
+    {
+      "path": "baseline-v34/views/skills-governance.md",
+      "bytes": 64130,
+      "sha256": "d5088978f6e5439801a7d477b62196c293d317e79a609ac60678fc64c13d300d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v34/views/skills-governance.md"
+    },
+    {
+      "path": "baseline-v37/canonical/00_README.md",
+      "bytes": 158115,
+      "sha256": "11b13253ae857c17ebfb3ba940757a616e0a9a902e8b767e74609e0f3a64e446",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v37/canonical/00_README.md"
+    },
+    {
+      "path": "baseline-v37/canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 217849,
+      "sha256": "fb62ba97dfefc96b4f121a534744e8c9735ba1158f5fbacc4ee3bbc0d4ded1b1",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v37/canonical/01_PRODUCT_REQUIREMENTS.md"
+    },
+    {
+      "path": "baseline-v37/canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 137830,
+      "sha256": "8f791e6ac643ff8c2686577b48fbe640ddacb03473789e7672bf8c389a2c2bd7",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v37/canonical/02_WORKFLOW_AND_UX_SPEC.md"
+    },
+    {
+      "path": "baseline-v37/canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 374663,
+      "sha256": "d06cde915dcc2d268d68c913278248190560b90136de7da223b8bfc65e1333ef",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v37/canonical/03_TECHNICAL_DESIGN.md"
+    },
+    {
+      "path": "baseline-v37/canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 178604,
+      "sha256": "21d4f5300ed9f9aff427c7c1293fc956c23c343f99bfc1bed5e25f406e0f737d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v37/canonical/04_MCP_API_CONTRACTS.md"
+    },
+    {
+      "path": "baseline-v37/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 373571,
+      "sha256": "affe294c0aa55b89cb17d09abdcff923124a0a1ef1d3f18dbcd3a3997f778935",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v37/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+    },
+    {
+      "path": "baseline-v37/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 122065,
+      "sha256": "d283804d17b70337f6386f25879146fe42569f59737629f64b37f4ab6abb7a82",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v37/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md"
+    },
+    {
+      "path": "baseline-v37/canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 125460,
+      "sha256": "cc7c525d400a94c55a1524159c5fb2fc93e9e000bb2d1343f568f68050e10d3f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v37/canonical/07_UI_DESIGN_TASKS.md"
+    },
+    {
+      "path": "baseline-v37/views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 38287,
+      "sha256": "9ebba70f961f14bfe91e80a340d93d6729d20c6935187a9b3114217bc257e012",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v37/views/AGENT_RULE_TEMPLATE.md"
+    },
+    {
+      "path": "baseline-v37/views/README.md",
+      "bytes": 40230,
+      "sha256": "ebbdd6cc3876f84f7e5daaa5a671344d91759edd6acbb1617b2b9272df0678e2",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v37/views/README.md"
+    },
+    {
+      "path": "baseline-v37/views/design.md",
+      "bytes": 131426,
+      "sha256": "d6f0ce0a5659b300ae12f2140749cac03df33c90dd29538daed55adf4a420c35",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v37/views/design.md"
+    },
+    {
+      "path": "baseline-v37/views/implementation-plan.md",
+      "bytes": 112985,
+      "sha256": "3cdcc68901e0c5ad4ac181560806057ceee9656641e4306a9ad10368f50bae33",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v37/views/implementation-plan.md"
+    },
+    {
+      "path": "baseline-v37/views/requirements.md",
+      "bytes": 88012,
+      "sha256": "abacf0e73c7b9f56730cd6b5e83f8b5b98311bdac0d3a541d592e8098f200477",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v37/views/requirements.md"
+    },
+    {
+      "path": "baseline-v37/views/skills-governance.md",
+      "bytes": 64130,
+      "sha256": "d5088978f6e5439801a7d477b62196c293d317e79a609ac60678fc64c13d300d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/baseline-v37/views/skills-governance.md"
+    },
+    {
+      "path": "input-v30/RUN-CONTEXT.md",
+      "bytes": 3847,
+      "sha256": "a3df0f0c9d9e1b85b405f7261f1ca93ab2c76e3b8d79cce65a20a0078505422b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/RUN-CONTEXT.md"
+    },
+    {
+      "path": "input-v30/canonical/00_README.md",
+      "bytes": 146019,
+      "sha256": "a1a4da547c43565784d243e59736cf54499d0451784994ce97d70dcf41685cc8",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/canonical/00_README.md"
+    },
+    {
+      "path": "input-v30/canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 200662,
+      "sha256": "7ad64293f9e79055e9baf81e23b03a9aeb4902f0c647499a495198b0326313c7",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/canonical/01_PRODUCT_REQUIREMENTS.md"
+    },
+    {
+      "path": "input-v30/canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 124594,
+      "sha256": "1ae62875f14316ead43e98cc73a45494eaf8725ff409f2ed2cc9a756d0706062",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/canonical/02_WORKFLOW_AND_UX_SPEC.md"
+    },
+    {
+      "path": "input-v30/canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 319394,
+      "sha256": "4a9fb5f7e34dfc57e516b1a1a40e00e0149eb887e36e8b5c52d98fd6cb68159c",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/canonical/03_TECHNICAL_DESIGN.md"
+    },
+    {
+      "path": "input-v30/canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 161921,
+      "sha256": "0589dd4c970eab7d5f683bff82cd4ac97d394573ec7a7dd2ee93073fff8b67ff",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/canonical/04_MCP_API_CONTRACTS.md"
+    },
+    {
+      "path": "input-v30/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 315374,
+      "sha256": "980a02dce6b541075bdc0fa56873dbf5d4a266d35e718f03f594755340f0cba5",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+    },
+    {
+      "path": "input-v30/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 112349,
+      "sha256": "f4a91ff83bb9fe02c9e58db2ea7c6d322384cab9891d78b6888003407d156e68",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md"
+    },
+    {
+      "path": "input-v30/canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 112886,
+      "sha256": "739c6125d196aadfcd04be97cd668e21d02a79fc4142da2ad445c6931f6054c9",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/canonical/07_UI_DESIGN_TASKS.md"
+    },
+    {
+      "path": "input-v30/manifest.json",
+      "bytes": 3027,
+      "sha256": "ae3db8d23eb916c1b6f403050d073ca6c6a95aad506e7b4a4bfacc100eb004ed",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/manifest.json"
+    },
+    {
+      "path": "input-v30/views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 22932,
+      "sha256": "e59fbe134e7946c3d9d8f5a341674af1eb7549e2e427c2e8f4c0043b2d2cea55",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/views/AGENT_RULE_TEMPLATE.md"
+    },
+    {
+      "path": "input-v30/views/README.md",
+      "bytes": 33181,
+      "sha256": "bf02adc7f0336b5278ff56768dea79c6e3cf911341b6f883829ee4573ec18973",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/views/README.md"
+    },
+    {
+      "path": "input-v30/views/design.md",
+      "bytes": 100435,
+      "sha256": "2642cf4fe489c6695ec2c05dccc44d5fd82a2149556586da4292700f78266e7d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/views/design.md"
+    },
+    {
+      "path": "input-v30/views/implementation-plan.md",
+      "bytes": 76827,
+      "sha256": "c470db8876dd54631010ae3c8061aedc853634ec857a3d0898d29c0ccdf3b701",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/views/implementation-plan.md"
+    },
+    {
+      "path": "input-v30/views/requirements.md",
+      "bytes": 75893,
+      "sha256": "b10c9d7a713823f0d8be696e250dbc9e94581d4e5ac3bb770a5fb38caaf2142a",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/views/requirements.md"
+    },
+    {
+      "path": "input-v30/views/skills-governance.md",
+      "bytes": 50802,
+      "sha256": "38d7b592d0066589c06ae6f0dd5913c9e7d0c15e513c5a2b9e00883518502923",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v30/views/skills-governance.md"
+    },
+    {
+      "path": "input-v31-candidate2/RUN-CONTEXT.md",
+      "bytes": 6091,
+      "sha256": "53c83612de22a2d3f7ba7c487de1650ddf8ab0374a54443dd32c4ca7ef360c05",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/RUN-CONTEXT.md"
+    },
+    {
+      "path": "input-v31-candidate2/canonical/00_README.md",
+      "bytes": 148445,
+      "sha256": "e20407d8d190ada2a4f73853b4f77fbd06f9966d74695bbbeb79ad0882a59178",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/canonical/00_README.md"
+    },
+    {
+      "path": "input-v31-candidate2/canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 202621,
+      "sha256": "67cd7ea20d92c87334327d5e079d78280f6ebdb59c45341866ccf3aa94589697",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/canonical/01_PRODUCT_REQUIREMENTS.md"
+    },
+    {
+      "path": "input-v31-candidate2/canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 125835,
+      "sha256": "449a85bf8a996d80b33a902a2feb94abc34c8f1d37b3cca41361a6ff6aa4c24f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/canonical/02_WORKFLOW_AND_UX_SPEC.md"
+    },
+    {
+      "path": "input-v31-candidate2/canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 329168,
+      "sha256": "c2dda5122409cdb115c6631d971f8c48d4fb4a7413595aad5fad5d428d6f3398",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/canonical/03_TECHNICAL_DESIGN.md"
+    },
+    {
+      "path": "input-v31-candidate2/canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 163727,
+      "sha256": "4376d65205227dab27159a2309075165965e39850caf9008adc7214b749e2576",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/canonical/04_MCP_API_CONTRACTS.md"
+    },
+    {
+      "path": "input-v31-candidate2/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 319643,
+      "sha256": "35041baaec8ed2988b888259513d7db093394e7b01d9e1c590f372ae55929dad",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+    },
+    {
+      "path": "input-v31-candidate2/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 117918,
+      "sha256": "7f0e8e7b23ca1bab0e6336f5e4f63a23befa0cf3992b83727801f598d9f365ab",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md"
+    },
+    {
+      "path": "input-v31-candidate2/canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 114179,
+      "sha256": "fbcfa7030cf4d27c474fec1eaa33b0ef88eaead4510980fac764dcf926494a5c",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/canonical/07_UI_DESIGN_TASKS.md"
+    },
+    {
+      "path": "input-v31-candidate2/manifest.json",
+      "bytes": 3114,
+      "sha256": "6a7c4604a53ab86be8a864e1feef7a1c9fd7983482148e34e86c881cc548694c",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/manifest.json"
+    },
+    {
+      "path": "input-v31-candidate2/views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 23591,
+      "sha256": "e242adfc72b3c65a3badab2b1c8e53a4cc12035c9ecce88c951770b71b016003",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/views/AGENT_RULE_TEMPLATE.md"
+    },
+    {
+      "path": "input-v31-candidate2/views/README.md",
+      "bytes": 35009,
+      "sha256": "f2f2f8e49971a3294faa9dacdf06e7393d16f3a3f10483343481e5e223d16878",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/views/README.md"
+    },
+    {
+      "path": "input-v31-candidate2/views/design.md",
+      "bytes": 109661,
+      "sha256": "08d5c72fb36af75b14e268da32b1416925bcc074771a357062a070903cd4138b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/views/design.md"
+    },
+    {
+      "path": "input-v31-candidate2/views/implementation-plan.md",
+      "bytes": 80536,
+      "sha256": "5469f1fb10bb1e718669b72664f108aaa46ebaac9448e6745316ebd871ab4cd4",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/views/implementation-plan.md"
+    },
+    {
+      "path": "input-v31-candidate2/views/requirements.md",
+      "bytes": 77300,
+      "sha256": "c630178ad5543341f9ba64fc8ed67ff8babea5c02a208f0ab42f22f46a530fa2",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/views/requirements.md"
+    },
+    {
+      "path": "input-v31-candidate2/views/skills-governance.md",
+      "bytes": 52826,
+      "sha256": "f0340846e6163f354f5bba6441a38c0b45864aae7f5bf13222abccc069762a1f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate2/views/skills-governance.md"
+    },
+    {
+      "path": "input-v31-candidate3/RUN-CONTEXT.md",
+      "bytes": 7306,
+      "sha256": "f29eeaf277bb28e21304fa8898ac986e550b3a4f8fb124b786783e3b03c801f2",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/RUN-CONTEXT.md"
+    },
+    {
+      "path": "input-v31-candidate3/canonical/00_README.md",
+      "bytes": 149070,
+      "sha256": "05ac962a8dce467a2d65899a8bddce5c70770609e4d50f2083b809f48c75df55",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/canonical/00_README.md"
+    },
+    {
+      "path": "input-v31-candidate3/canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 204423,
+      "sha256": "f08205f97c7b1199b5f59ff909585d9c7d352aad1e4c12d82518a44a88dbbaac",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/canonical/01_PRODUCT_REQUIREMENTS.md"
+    },
+    {
+      "path": "input-v31-candidate3/canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 126629,
+      "sha256": "12479ed02be5f1e029e76ea39d4664a43bab99b959629cb019138bc0601f81e6",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/canonical/02_WORKFLOW_AND_UX_SPEC.md"
+    },
+    {
+      "path": "input-v31-candidate3/canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 334111,
+      "sha256": "a3ea13de30f6dbfcb561f07726ec9badc281614d7177ea9eee48e396236b247b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/canonical/03_TECHNICAL_DESIGN.md"
+    },
+    {
+      "path": "input-v31-candidate3/canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 164695,
+      "sha256": "f6e8da4360854c73e928c1bb8a89caf08fb6fb0b69701e0cc4c513a495d0c72e",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/canonical/04_MCP_API_CONTRACTS.md"
+    },
+    {
+      "path": "input-v31-candidate3/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 322533,
+      "sha256": "e72d9c782e69c96d7e3f020313a19fe1b2d1d5a80572f561b04b1ea47cc1d6c3",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+    },
+    {
+      "path": "input-v31-candidate3/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 119581,
+      "sha256": "3428dda297c69da5d9354e21e0b379280681925469d270e584b6fe2b06536772",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md"
+    },
+    {
+      "path": "input-v31-candidate3/canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 114722,
+      "sha256": "fd2042f5d3582826a1f0c7fdb082f01404d6e82a222410c62bc90035dd24dc09",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/canonical/07_UI_DESIGN_TASKS.md"
+    },
+    {
+      "path": "input-v31-candidate3/manifest.json",
+      "bytes": 3276,
+      "sha256": "7af22eba9961a157916cdcca8cd1692ddf6848df4c75342bda00fc8f95bb7804",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/manifest.json"
+    },
+    {
+      "path": "input-v31-candidate3/views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 23591,
+      "sha256": "e242adfc72b3c65a3badab2b1c8e53a4cc12035c9ecce88c951770b71b016003",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/views/AGENT_RULE_TEMPLATE.md"
+    },
+    {
+      "path": "input-v31-candidate3/views/README.md",
+      "bytes": 35009,
+      "sha256": "f2f2f8e49971a3294faa9dacdf06e7393d16f3a3f10483343481e5e223d16878",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/views/README.md"
+    },
+    {
+      "path": "input-v31-candidate3/views/design.md",
+      "bytes": 114603,
+      "sha256": "8c8969cec5261440fd3d6b345ca9994a09a6828d70384aa5c45dff06022e52ab",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/views/design.md"
+    },
+    {
+      "path": "input-v31-candidate3/views/implementation-plan.md",
+      "bytes": 86603,
+      "sha256": "03316fcc8af0fef82ebbdf0438294415948097b76f5df6ac5701f083e84516d1",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/views/implementation-plan.md"
+    },
+    {
+      "path": "input-v31-candidate3/views/requirements.md",
+      "bytes": 80810,
+      "sha256": "cef09d2e4bf7133a9bec9392b77f060084ed384caa6f9e060318f970d4c2e8c3",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/views/requirements.md"
+    },
+    {
+      "path": "input-v31-candidate3/views/skills-governance.md",
+      "bytes": 54488,
+      "sha256": "035cb09381d4d02457c3cd8e3dcef8bb7edef5a6190c12ec66f1db7872637427",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31-candidate3/views/skills-governance.md"
+    },
+    {
+      "path": "input-v31/RUN-CONTEXT.md",
+      "bytes": 4868,
+      "sha256": "26891c7b92f4765053b5ef71d82bacd6c93eafc6a25447c3e6795e9b5ef7a308",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/RUN-CONTEXT.md"
+    },
+    {
+      "path": "input-v31/canonical/00_README.md",
+      "bytes": 147872,
+      "sha256": "bc083e8bc70142471cd39d8fd6432b2c2be95a5cc82cda61f00b388fcabfca28",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/canonical/00_README.md"
+    },
+    {
+      "path": "input-v31/canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 201979,
+      "sha256": "73df26eacd034ef021ec0d51479f99b151dba036d9c3c2d5212a4099635f1f54",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/canonical/01_PRODUCT_REQUIREMENTS.md"
+    },
+    {
+      "path": "input-v31/canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 125801,
+      "sha256": "e6538634b43d08309c83e544a887c4611b8dff4397bb037c76e42510fa9bcc32",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/canonical/02_WORKFLOW_AND_UX_SPEC.md"
+    },
+    {
+      "path": "input-v31/canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 325567,
+      "sha256": "b5f114f8930c130c1bd93b641cbd6582c0541aeffd88ef4b1297cab2aa4e6d55",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/canonical/03_TECHNICAL_DESIGN.md"
+    },
+    {
+      "path": "input-v31/canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 163666,
+      "sha256": "e237354100f232439022b117ba8c5db61a1edcce097274ea9db4a37179fc20dc",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/canonical/04_MCP_API_CONTRACTS.md"
+    },
+    {
+      "path": "input-v31/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 319365,
+      "sha256": "aae5ff494c501d31fe915aeff9f8bd12a9cdf1e372159a818d514bb335ed9cc6",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+    },
+    {
+      "path": "input-v31/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 113398,
+      "sha256": "f93bc2898acb62b684b14ab41456a7d0ab6e84591ea4f9561ff664f749c1a6ef",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md"
+    },
+    {
+      "path": "input-v31/canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 113941,
+      "sha256": "3eb6b324e2162c16752c873599e4f9bc0b2b8617a1591acef4b0d0b974c22802",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/canonical/07_UI_DESIGN_TASKS.md"
+    },
+    {
+      "path": "input-v31/manifest.json",
+      "bytes": 3008,
+      "sha256": "b628462508a61355954bc3701142b7ca5e244c73fc622bb8407f7f1886734c0a",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/manifest.json"
+    },
+    {
+      "path": "input-v31/views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 23591,
+      "sha256": "e242adfc72b3c65a3badab2b1c8e53a4cc12035c9ecce88c951770b71b016003",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/views/AGENT_RULE_TEMPLATE.md"
+    },
+    {
+      "path": "input-v31/views/README.md",
+      "bytes": 34265,
+      "sha256": "a3817b8043316d6fa62d338b4e60d149b9c22351731349353ac5eb185d1dde9e",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/views/README.md"
+    },
+    {
+      "path": "input-v31/views/design.md",
+      "bytes": 105988,
+      "sha256": "aca69cbc5ff19ca48a20d0f7a214e79740e2408235d2590dd9703ae6cc669db8",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/views/design.md"
+    },
+    {
+      "path": "input-v31/views/implementation-plan.md",
+      "bytes": 80536,
+      "sha256": "5469f1fb10bb1e718669b72664f108aaa46ebaac9448e6745316ebd871ab4cd4",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/views/implementation-plan.md"
+    },
+    {
+      "path": "input-v31/views/requirements.md",
+      "bytes": 77233,
+      "sha256": "f2e47a752a777048525f845b51042e8863aba32d0e0110f5f4c25b0296bea4aa",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/views/requirements.md"
+    },
+    {
+      "path": "input-v31/views/skills-governance.md",
+      "bytes": 52408,
+      "sha256": "eca8fa47a005cb79f03ff7860dee0c7a5320240da2aa57d14fd15b0c6070697c",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v31/views/skills-governance.md"
+    },
+    {
+      "path": "input-v32-candidate1/RUN-CONTEXT.md",
+      "bytes": 8472,
+      "sha256": "370f72543c5a65f3ee25326ddc4412661c5a585e6b211eeacc180bf4b50e50c6",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/RUN-CONTEXT.md"
+    },
+    {
+      "path": "input-v32-candidate1/canonical/00_README.md",
+      "bytes": 150137,
+      "sha256": "9d6fd78460f9c369f806da5cf0d6f41e351599469d11d2a073611f17230b0043",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/canonical/00_README.md"
+    },
+    {
+      "path": "input-v32-candidate1/canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 205390,
+      "sha256": "009184a14956bd32f748cdc50a7ff629026e3a61b1c9e55648860f66582540c0",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/canonical/01_PRODUCT_REQUIREMENTS.md"
+    },
+    {
+      "path": "input-v32-candidate1/canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 127844,
+      "sha256": "23d9120c7aaa320f458fc51284388966e3e2a8945d929c9ef9730f10338425a9",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/canonical/02_WORKFLOW_AND_UX_SPEC.md"
+    },
+    {
+      "path": "input-v32-candidate1/canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 338465,
+      "sha256": "0fbdd2bffbc534e4be40df61fae5a095191ba920129c546a930c60e3b27b9921",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/canonical/03_TECHNICAL_DESIGN.md"
+    },
+    {
+      "path": "input-v32-candidate1/canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 167066,
+      "sha256": "182aed015f69079f0a78d0c1420319729b7baecf8f8d6c0a1859d7463a48d1bd",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/canonical/04_MCP_API_CONTRACTS.md"
+    },
+    {
+      "path": "input-v32-candidate1/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 326139,
+      "sha256": "a1e6a3f82b2725961a7501995d2cc8e40365afae4f5a7ee9a9d4dfd34bba6cfe",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+    },
+    {
+      "path": "input-v32-candidate1/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 120124,
+      "sha256": "cf96798db8e48d161cc971313ed8e82c65d46dee8185a9c5d9d104d282bbe16c",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md"
+    },
+    {
+      "path": "input-v32-candidate1/canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 116063,
+      "sha256": "c1270b7008e56bd5b44bfb53c11c6dadfc6ebaae6ba15d3e86b30b0b790cb45c",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/canonical/07_UI_DESIGN_TASKS.md"
+    },
+    {
+      "path": "input-v32-candidate1/manifest.json",
+      "bytes": 3308,
+      "sha256": "4f406b91251b85b2cd0def05fef9ce950481daa6b7b030762aed49998ac747f9",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/manifest.json"
+    },
+    {
+      "path": "input-v32-candidate1/views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 24259,
+      "sha256": "a51ba3cb8cb8f9cd7a5dcbd0e127e2098c5bdac708635fb080f4b8b2f21e3704",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/views/AGENT_RULE_TEMPLATE.md"
+    },
+    {
+      "path": "input-v32-candidate1/views/README.md",
+      "bytes": 35768,
+      "sha256": "a9660807de7b1df968a0691bfc0567366b39fc42e3922e2ff068eb8bde3f37e5",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/views/README.md"
+    },
+    {
+      "path": "input-v32-candidate1/views/design.md",
+      "bytes": 118965,
+      "sha256": "806cfbdef4e04a03884f000a65493cc814930f2e31639e103f71663baf0ae0bb",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/views/design.md"
+    },
+    {
+      "path": "input-v32-candidate1/views/implementation-plan.md",
+      "bytes": 89553,
+      "sha256": "937dd2197e9abe3043443634cadbe92e524e16756a2c05540b51b9b8a902926e",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/views/implementation-plan.md"
+    },
+    {
+      "path": "input-v32-candidate1/views/requirements.md",
+      "bytes": 81785,
+      "sha256": "920d10da6fc91cf23beb978ee9a1e276585beab78f43230d7cf4f903d199e977",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/views/requirements.md"
+    },
+    {
+      "path": "input-v32-candidate1/views/skills-governance.md",
+      "bytes": 55495,
+      "sha256": "3f5db629089dd0d2aed6ce7f68d06dec11975c13211ea56637174a921400d753",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate1/views/skills-governance.md"
+    },
+    {
+      "path": "input-v32-candidate2/RUN-CONTEXT.md",
+      "bytes": 9070,
+      "sha256": "553e119b4f0674ba8c542e3b60a4c0b1d3396cf1ab5383dfc29517def66b61fa",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/RUN-CONTEXT.md"
+    },
+    {
+      "path": "input-v32-candidate2/canonical/00_README.md",
+      "bytes": 150137,
+      "sha256": "9d6fd78460f9c369f806da5cf0d6f41e351599469d11d2a073611f17230b0043",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/canonical/00_README.md"
+    },
+    {
+      "path": "input-v32-candidate2/canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 205390,
+      "sha256": "009184a14956bd32f748cdc50a7ff629026e3a61b1c9e55648860f66582540c0",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/canonical/01_PRODUCT_REQUIREMENTS.md"
+    },
+    {
+      "path": "input-v32-candidate2/canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 127844,
+      "sha256": "23d9120c7aaa320f458fc51284388966e3e2a8945d929c9ef9730f10338425a9",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/canonical/02_WORKFLOW_AND_UX_SPEC.md"
+    },
+    {
+      "path": "input-v32-candidate2/canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 345878,
+      "sha256": "075b5a92dd5c7d5af1747679be31785e66461bc7facf5d8d5704bd442a2e17ed",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/canonical/03_TECHNICAL_DESIGN.md"
+    },
+    {
+      "path": "input-v32-candidate2/canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 167660,
+      "sha256": "ed22d394781e21db39b16e024c7546898e5b5050a05bce858b400cc9623b324e",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/canonical/04_MCP_API_CONTRACTS.md"
+    },
+    {
+      "path": "input-v32-candidate2/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 331116,
+      "sha256": "22489b32c40a5f1d5d713b58b08b9e01132e7e31efa1e9921db6d18abcfea9f0",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+    },
+    {
+      "path": "input-v32-candidate2/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 120124,
+      "sha256": "cf96798db8e48d161cc971313ed8e82c65d46dee8185a9c5d9d104d282bbe16c",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md"
+    },
+    {
+      "path": "input-v32-candidate2/canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 119611,
+      "sha256": "cdc7981a0772de52164344d6cb7756756a224afa021cbfcbdc64bc0b7840c355",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/canonical/07_UI_DESIGN_TASKS.md"
+    },
+    {
+      "path": "input-v32-candidate2/manifest.json",
+      "bytes": 3308,
+      "sha256": "e531935a62da0cabe61085f9f21696e8c2ab5a2c8a6a6f80fc4cbd68995ad9c0",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/manifest.json"
+    },
+    {
+      "path": "input-v32-candidate2/views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 24259,
+      "sha256": "a51ba3cb8cb8f9cd7a5dcbd0e127e2098c5bdac708635fb080f4b8b2f21e3704",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/views/AGENT_RULE_TEMPLATE.md"
+    },
+    {
+      "path": "input-v32-candidate2/views/README.md",
+      "bytes": 35768,
+      "sha256": "a9660807de7b1df968a0691bfc0567366b39fc42e3922e2ff068eb8bde3f37e5",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/views/README.md"
+    },
+    {
+      "path": "input-v32-candidate2/views/design.md",
+      "bytes": 128029,
+      "sha256": "d9b8db28ab29e696be1162e444594bbfc6529bdf300a9e5f98094ef02fe88154",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/views/design.md"
+    },
+    {
+      "path": "input-v32-candidate2/views/implementation-plan.md",
+      "bytes": 92745,
+      "sha256": "5f649ee62592b18241428ace18d9a50a94d482f93c7de1a01ffab9855af98c3f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/views/implementation-plan.md"
+    },
+    {
+      "path": "input-v32-candidate2/views/requirements.md",
+      "bytes": 81785,
+      "sha256": "920d10da6fc91cf23beb978ee9a1e276585beab78f43230d7cf4f903d199e977",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/views/requirements.md"
+    },
+    {
+      "path": "input-v32-candidate2/views/skills-governance.md",
+      "bytes": 55865,
+      "sha256": "b2d2efbe7de787f5a1e233ba089d8eb891c1ed68697cb777921d6950ae64f209",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v32-candidate2/views/skills-governance.md"
+    },
+    {
+      "path": "input-v35-candidate1/RUN-CONTEXT.md",
+      "bytes": 6394,
+      "sha256": "335a5675c6d49ed4fc97504b309d85306454e99dac3d2dfa8a3c16ab08671d3d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/RUN-CONTEXT.md"
+    },
+    {
+      "path": "input-v35-candidate1/canonical/00_README.md",
+      "bytes": 153417,
+      "sha256": "4d8f0363751ffa75872c9d5b50051c8d0cb13d5c915d326e27a17590989447b1",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/canonical/00_README.md"
+    },
+    {
+      "path": "input-v35-candidate1/canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 212308,
+      "sha256": "3ab878654564a3670e2e63c556ba8a73f0bc2064852047d76bfbc30c4165d947",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/canonical/01_PRODUCT_REQUIREMENTS.md"
+    },
+    {
+      "path": "input-v35-candidate1/canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 132907,
+      "sha256": "656223bdf3b9debd886e141d18561234a19013e3b13017928f34957996d336c1",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/canonical/02_WORKFLOW_AND_UX_SPEC.md"
+    },
+    {
+      "path": "input-v35-candidate1/canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 369299,
+      "sha256": "3b6b00ca207e7fbc037512bf6444042d1d269af72b38d8d431c8601b6bccdc33",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/canonical/03_TECHNICAL_DESIGN.md"
+    },
+    {
+      "path": "input-v35-candidate1/canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 173409,
+      "sha256": "8162c9da4196e2149595ca524af1b1c75d256f8c46cdd6ac516193db226bcd3d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/canonical/04_MCP_API_CONTRACTS.md"
+    },
+    {
+      "path": "input-v35-candidate1/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 348191,
+      "sha256": "21a006ff62d88f2a21d83980d830eca7d8e3ddce5b3614922b6c6c3731fa6f4e",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+    },
+    {
+      "path": "input-v35-candidate1/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 124428,
+      "sha256": "fab13200b0151fd29a5d7d2d95d16aec800aa913174dc2f7f7fb0664ee5a2119",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md"
+    },
+    {
+      "path": "input-v35-candidate1/canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 125801,
+      "sha256": "fd5ff74f77078783e7db23282348f6adc9493b4964bd700972c6098b03279a72",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/canonical/07_UI_DESIGN_TASKS.md"
+    },
+    {
+      "path": "input-v35-candidate1/manifest.json",
+      "bytes": 3225,
+      "sha256": "b5cb419188c3525c6a8bef56aba3beb57e0bacb13f3ce5783f4d44b94df1203d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/manifest.json"
+    },
+    {
+      "path": "input-v35-candidate1/views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 40325,
+      "sha256": "5285707b86af0cf12d543a92b01b3e55bb78e3aa44455b377d5e3d870a922fec",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/views/AGENT_RULE_TEMPLATE.md"
+    },
+    {
+      "path": "input-v35-candidate1/views/README.md",
+      "bytes": 41503,
+      "sha256": "32545ff46fa278223ea095c984c5868537951630a3ac2beaac9c8933fe12c4e4",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/views/README.md"
+    },
+    {
+      "path": "input-v35-candidate1/views/design.md",
+      "bytes": 156659,
+      "sha256": "58b1b0d7106f4f915fc10cf6083dbac746e9e010110b6f697245bb57d5d1b701",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/views/design.md"
+    },
+    {
+      "path": "input-v35-candidate1/views/implementation-plan.md",
+      "bytes": 115212,
+      "sha256": "b907c9ac924fb8cdbe5cb8cfcf6cc4b7cc16af997ccc8ff805c280a4b8f62450",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/views/implementation-plan.md"
+    },
+    {
+      "path": "input-v35-candidate1/views/requirements.md",
+      "bytes": 91128,
+      "sha256": "04e839dc2be0d3a0c8f7ad512688d639cb3c287944584a06c3c43db5725c83d4",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/views/requirements.md"
+    },
+    {
+      "path": "input-v35-candidate1/views/skills-governance.md",
+      "bytes": 71352,
+      "sha256": "bf8ba6dbd1cd889fae9d28033389cf88887c4dbf5918f34b9ce6fb6d456cfd23",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate1/views/skills-governance.md"
+    },
+    {
+      "path": "input-v35-candidate2/RUN-CONTEXT.md",
+      "bytes": 6843,
+      "sha256": "d8cb220b99dd2bcbc7f8a284eeef0bd06b5357f071b2e8162e54d88e644ba112",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/RUN-CONTEXT.md"
+    },
+    {
+      "path": "input-v35-candidate2/canonical/00_README.md",
+      "bytes": 154018,
+      "sha256": "36d9de1a9ea596e8ffb995236064de989105a70782d08e1efb6c3ef1deac952b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/canonical/00_README.md"
+    },
+    {
+      "path": "input-v35-candidate2/canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 212308,
+      "sha256": "3ab878654564a3670e2e63c556ba8a73f0bc2064852047d76bfbc30c4165d947",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/canonical/01_PRODUCT_REQUIREMENTS.md"
+    },
+    {
+      "path": "input-v35-candidate2/canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 132907,
+      "sha256": "656223bdf3b9debd886e141d18561234a19013e3b13017928f34957996d336c1",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/canonical/02_WORKFLOW_AND_UX_SPEC.md"
+    },
+    {
+      "path": "input-v35-candidate2/canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 369299,
+      "sha256": "3b6b00ca207e7fbc037512bf6444042d1d269af72b38d8d431c8601b6bccdc33",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/canonical/03_TECHNICAL_DESIGN.md"
+    },
+    {
+      "path": "input-v35-candidate2/canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 173409,
+      "sha256": "8162c9da4196e2149595ca524af1b1c75d256f8c46cdd6ac516193db226bcd3d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/canonical/04_MCP_API_CONTRACTS.md"
+    },
+    {
+      "path": "input-v35-candidate2/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 348191,
+      "sha256": "21a006ff62d88f2a21d83980d830eca7d8e3ddce5b3614922b6c6c3731fa6f4e",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+    },
+    {
+      "path": "input-v35-candidate2/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 124428,
+      "sha256": "fab13200b0151fd29a5d7d2d95d16aec800aa913174dc2f7f7fb0664ee5a2119",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md"
+    },
+    {
+      "path": "input-v35-candidate2/canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 125801,
+      "sha256": "fd5ff74f77078783e7db23282348f6adc9493b4964bd700972c6098b03279a72",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/canonical/07_UI_DESIGN_TASKS.md"
+    },
+    {
+      "path": "input-v35-candidate2/manifest.json",
+      "bytes": 3331,
+      "sha256": "311423fa8cdafc3c94d9a6df62280ec9c6fcf7e350583ad46c15cbe757362a82",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/manifest.json"
+    },
+    {
+      "path": "input-v35-candidate2/views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 40325,
+      "sha256": "5285707b86af0cf12d543a92b01b3e55bb78e3aa44455b377d5e3d870a922fec",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/views/AGENT_RULE_TEMPLATE.md"
+    },
+    {
+      "path": "input-v35-candidate2/views/README.md",
+      "bytes": 42104,
+      "sha256": "39729e7df754b9f1a37373b76c496ff807762554133d93293d7186c9ca8b80e9",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/views/README.md"
+    },
+    {
+      "path": "input-v35-candidate2/views/design.md",
+      "bytes": 156659,
+      "sha256": "58b1b0d7106f4f915fc10cf6083dbac746e9e010110b6f697245bb57d5d1b701",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/views/design.md"
+    },
+    {
+      "path": "input-v35-candidate2/views/implementation-plan.md",
+      "bytes": 115212,
+      "sha256": "b907c9ac924fb8cdbe5cb8cfcf6cc4b7cc16af997ccc8ff805c280a4b8f62450",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/views/implementation-plan.md"
+    },
+    {
+      "path": "input-v35-candidate2/views/requirements.md",
+      "bytes": 91128,
+      "sha256": "04e839dc2be0d3a0c8f7ad512688d639cb3c287944584a06c3c43db5725c83d4",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/views/requirements.md"
+    },
+    {
+      "path": "input-v35-candidate2/views/skills-governance.md",
+      "bytes": 71352,
+      "sha256": "bf8ba6dbd1cd889fae9d28033389cf88887c4dbf5918f34b9ce6fb6d456cfd23",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate2/views/skills-governance.md"
+    },
+    {
+      "path": "input-v35-candidate3/RUN-CONTEXT.md",
+      "bytes": 7182,
+      "sha256": "f6b96b890ea5b723694b1dac8284d4ce2b9fa6dc10cfbde6b35fd150edb5050c",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/RUN-CONTEXT.md"
+    },
+    {
+      "path": "input-v35-candidate3/canonical/00_README.md",
+      "bytes": 154018,
+      "sha256": "36d9de1a9ea596e8ffb995236064de989105a70782d08e1efb6c3ef1deac952b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/canonical/00_README.md"
+    },
+    {
+      "path": "input-v35-candidate3/canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 212308,
+      "sha256": "3ab878654564a3670e2e63c556ba8a73f0bc2064852047d76bfbc30c4165d947",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/canonical/01_PRODUCT_REQUIREMENTS.md"
+    },
+    {
+      "path": "input-v35-candidate3/canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 132907,
+      "sha256": "656223bdf3b9debd886e141d18561234a19013e3b13017928f34957996d336c1",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/canonical/02_WORKFLOW_AND_UX_SPEC.md"
+    },
+    {
+      "path": "input-v35-candidate3/canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 369299,
+      "sha256": "3b6b00ca207e7fbc037512bf6444042d1d269af72b38d8d431c8601b6bccdc33",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/canonical/03_TECHNICAL_DESIGN.md"
+    },
+    {
+      "path": "input-v35-candidate3/canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 173409,
+      "sha256": "8162c9da4196e2149595ca524af1b1c75d256f8c46cdd6ac516193db226bcd3d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/canonical/04_MCP_API_CONTRACTS.md"
+    },
+    {
+      "path": "input-v35-candidate3/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 348191,
+      "sha256": "21a006ff62d88f2a21d83980d830eca7d8e3ddce5b3614922b6c6c3731fa6f4e",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+    },
+    {
+      "path": "input-v35-candidate3/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 124428,
+      "sha256": "fab13200b0151fd29a5d7d2d95d16aec800aa913174dc2f7f7fb0664ee5a2119",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md"
+    },
+    {
+      "path": "input-v35-candidate3/canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 125872,
+      "sha256": "fd70beba16d6c541ba05eca3c7110883c1eeb114cd3e20870ed88993a09a7fb7",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/canonical/07_UI_DESIGN_TASKS.md"
+    },
+    {
+      "path": "input-v35-candidate3/manifest.json",
+      "bytes": 3331,
+      "sha256": "346d0452c9d722869f7c1e0ef57fb5fb498aba7e646f89c3e987ee78b41c52c6",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/manifest.json"
+    },
+    {
+      "path": "input-v35-candidate3/views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 40325,
+      "sha256": "5285707b86af0cf12d543a92b01b3e55bb78e3aa44455b377d5e3d870a922fec",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/views/AGENT_RULE_TEMPLATE.md"
+    },
+    {
+      "path": "input-v35-candidate3/views/README.md",
+      "bytes": 42104,
+      "sha256": "39729e7df754b9f1a37373b76c496ff807762554133d93293d7186c9ca8b80e9",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/views/README.md"
+    },
+    {
+      "path": "input-v35-candidate3/views/design.md",
+      "bytes": 156659,
+      "sha256": "58b1b0d7106f4f915fc10cf6083dbac746e9e010110b6f697245bb57d5d1b701",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/views/design.md"
+    },
+    {
+      "path": "input-v35-candidate3/views/implementation-plan.md",
+      "bytes": 115212,
+      "sha256": "b907c9ac924fb8cdbe5cb8cfcf6cc4b7cc16af997ccc8ff805c280a4b8f62450",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/views/implementation-plan.md"
+    },
+    {
+      "path": "input-v35-candidate3/views/requirements.md",
+      "bytes": 91128,
+      "sha256": "04e839dc2be0d3a0c8f7ad512688d639cb3c287944584a06c3c43db5725c83d4",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/views/requirements.md"
+    },
+    {
+      "path": "input-v35-candidate3/views/skills-governance.md",
+      "bytes": 71352,
+      "sha256": "bf8ba6dbd1cd889fae9d28033389cf88887c4dbf5918f34b9ce6fb6d456cfd23",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v35-candidate3/views/skills-governance.md"
+    },
+    {
+      "path": "input-v38-candidate1/RUN-CONTEXT.md",
+      "bytes": 8251,
+      "sha256": "7ccc9912d98c0256dd73de07c51ef337b609b9983a67534d36eb0b29f665c58a",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/RUN-CONTEXT.md"
+    },
+    {
+      "path": "input-v38-candidate1/canonical/00_README.md",
+      "bytes": 165131,
+      "sha256": "046740c0d5a2143593947084aab9bad97aeeb6aca2248fc77b890f8d193b1e57",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/canonical/00_README.md"
+    },
+    {
+      "path": "input-v38-candidate1/canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 227675,
+      "sha256": "19e5bbff86646719f707db16615127567d3af02f4d6b6d628da0bee175171607",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/canonical/01_PRODUCT_REQUIREMENTS.md"
+    },
+    {
+      "path": "input-v38-candidate1/canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 142900,
+      "sha256": "a3248327c291fcfb2d76176cb5723709973bc490bef89f66834a8d84588ba710",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/canonical/02_WORKFLOW_AND_UX_SPEC.md"
+    },
+    {
+      "path": "input-v38-candidate1/canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 407849,
+      "sha256": "6fa31cab5106cc6c72e0ed1bd52a2e503fd474279833784ab2a72fb5bb5609f8",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/canonical/03_TECHNICAL_DESIGN.md"
+    },
+    {
+      "path": "input-v38-candidate1/canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 186695,
+      "sha256": "a36b996feb928393d67974c373c503e7798cd049b829551a20a15a2c612cecc9",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/canonical/04_MCP_API_CONTRACTS.md"
+    },
+    {
+      "path": "input-v38-candidate1/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 392397,
+      "sha256": "26914139df223ee45f03d5e8a027c411b7241c8c4fac23fb43df34a0a18f4165",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+    },
+    {
+      "path": "input-v38-candidate1/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 131932,
+      "sha256": "fb759b4768c174bf74b0444d8fcc3e1e7a8057af766a813633d597bba31b871d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md"
+    },
+    {
+      "path": "input-v38-candidate1/canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 134250,
+      "sha256": "4c2b4e8464c810d563b16d18dc754e2b6d8be5a9b5ee4f82580587206caea4bf",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/canonical/07_UI_DESIGN_TASKS.md"
+    },
+    {
+      "path": "input-v38-candidate1/manifest.json",
+      "bytes": 3290,
+      "sha256": "8fba7e2f9baf3b888fdbbb183c1f3858c59cdd7e18f604e63f82ed4215def8b0",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/manifest.json"
+    },
+    {
+      "path": "input-v38-candidate1/views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 43020,
+      "sha256": "4d7a9e45ed6b627602f0670a6ff8f78148fe740280969e93df642ac5037af111",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/views/AGENT_RULE_TEMPLATE.md"
+    },
+    {
+      "path": "input-v38-candidate1/views/README.md",
+      "bytes": 46799,
+      "sha256": "1df7503adc67d95d108d6b0f8b967c3263f3c2ee135b47c551bb8dff24e30cf6",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/views/README.md"
+    },
+    {
+      "path": "input-v38-candidate1/views/design.md",
+      "bytes": 162618,
+      "sha256": "42b044548c028c2ad0fd865e737a0524770a1d3b61fbf5e5ec732cf4b8c0f487",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/views/design.md"
+    },
+    {
+      "path": "input-v38-candidate1/views/implementation-plan.md",
+      "bytes": 141983,
+      "sha256": "7457d5195695d3154cc8411287be898a2a2916ea736a3df3e4847fe63bcea0f1",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/views/implementation-plan.md"
+    },
+    {
+      "path": "input-v38-candidate1/views/requirements.md",
+      "bytes": 95674,
+      "sha256": "17715eaca32392557d111a1512985931b73f77f5c930a0cb5e412d7743a06b64",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/views/requirements.md"
+    },
+    {
+      "path": "input-v38-candidate1/views/skills-governance.md",
+      "bytes": 74047,
+      "sha256": "9ed0b9885b968b2ff43361642309db679d803f4150166d00e4bdc1fb96ed3cfe",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate1/views/skills-governance.md"
+    },
+    {
+      "path": "input-v38-candidate2/RUN-CONTEXT.md",
+      "bytes": 9284,
+      "sha256": "c783a18bc793b45a930ad3648074f2f5249dfb85f700e1fff58d2c91e14b0288",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/RUN-CONTEXT.md"
+    },
+    {
+      "path": "input-v38-candidate2/canonical/00_README.md",
+      "bytes": 165131,
+      "sha256": "046740c0d5a2143593947084aab9bad97aeeb6aca2248fc77b890f8d193b1e57",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/canonical/00_README.md"
+    },
+    {
+      "path": "input-v38-candidate2/canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 227675,
+      "sha256": "19e5bbff86646719f707db16615127567d3af02f4d6b6d628da0bee175171607",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/canonical/01_PRODUCT_REQUIREMENTS.md"
+    },
+    {
+      "path": "input-v38-candidate2/canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 142900,
+      "sha256": "a3248327c291fcfb2d76176cb5723709973bc490bef89f66834a8d84588ba710",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/canonical/02_WORKFLOW_AND_UX_SPEC.md"
+    },
+    {
+      "path": "input-v38-candidate2/canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 407849,
+      "sha256": "6fa31cab5106cc6c72e0ed1bd52a2e503fd474279833784ab2a72fb5bb5609f8",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/canonical/03_TECHNICAL_DESIGN.md"
+    },
+    {
+      "path": "input-v38-candidate2/canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 186695,
+      "sha256": "a36b996feb928393d67974c373c503e7798cd049b829551a20a15a2c612cecc9",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/canonical/04_MCP_API_CONTRACTS.md"
+    },
+    {
+      "path": "input-v38-candidate2/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 392397,
+      "sha256": "26914139df223ee45f03d5e8a027c411b7241c8c4fac23fb43df34a0a18f4165",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+    },
+    {
+      "path": "input-v38-candidate2/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 131932,
+      "sha256": "fb759b4768c174bf74b0444d8fcc3e1e7a8057af766a813633d597bba31b871d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md"
+    },
+    {
+      "path": "input-v38-candidate2/canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 134250,
+      "sha256": "4c2b4e8464c810d563b16d18dc754e2b6d8be5a9b5ee4f82580587206caea4bf",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/canonical/07_UI_DESIGN_TASKS.md"
+    },
+    {
+      "path": "input-v38-candidate2/manifest.json",
+      "bytes": 3398,
+      "sha256": "a5da721acc5c8ce39948c42ec8cc2345ea3778278642b63dc58430fa6575531a",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/manifest.json"
+    },
+    {
+      "path": "input-v38-candidate2/views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 43020,
+      "sha256": "4d7a9e45ed6b627602f0670a6ff8f78148fe740280969e93df642ac5037af111",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/views/AGENT_RULE_TEMPLATE.md"
+    },
+    {
+      "path": "input-v38-candidate2/views/README.md",
+      "bytes": 46799,
+      "sha256": "1df7503adc67d95d108d6b0f8b967c3263f3c2ee135b47c551bb8dff24e30cf6",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/views/README.md"
+    },
+    {
+      "path": "input-v38-candidate2/views/design.md",
+      "bytes": 162618,
+      "sha256": "42b044548c028c2ad0fd865e737a0524770a1d3b61fbf5e5ec732cf4b8c0f487",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/views/design.md"
+    },
+    {
+      "path": "input-v38-candidate2/views/implementation-plan.md",
+      "bytes": 143684,
+      "sha256": "e721edc05f48a81a606def4aae9ab75f0e50ceefe2497e2a5f59b68b3ec14d60",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/views/implementation-plan.md"
+    },
+    {
+      "path": "input-v38-candidate2/views/requirements.md",
+      "bytes": 95674,
+      "sha256": "17715eaca32392557d111a1512985931b73f77f5c930a0cb5e412d7743a06b64",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/views/requirements.md"
+    },
+    {
+      "path": "input-v38-candidate2/views/skills-governance.md",
+      "bytes": 75748,
+      "sha256": "4cec61661eff9afe398cc146e7766a75c59e28e40d286f16ed3e16ccae5dd475",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/input-v38-candidate2/views/skills-governance.md"
+    },
+    {
+      "path": "method-inputs/README.md",
+      "bytes": 1622,
+      "sha256": "43bff94615c2c23d8bac62145bbb3da1c14210e0bddad48be35348463ec5d979",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/method-inputs/README.md"
+    },
+    {
+      "path": "method-inputs/manifest.json",
+      "bytes": 900,
+      "sha256": "4127b0516ea6fd1626823e9febe2826f857fb56e89cf42311042783c2aeed426",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/method-inputs/manifest.json"
+    },
+    {
+      "path": "method-inputs/repository-d83549c8/manifest.json",
+      "bytes": 4699,
+      "sha256": "c508317a49c153769324659d384406fe5e6ceebd68c4bb0f7e62177cb058b55d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/method-inputs/repository-d83549c8/manifest.json"
+    },
+    {
+      "path": "method-source-supplement/graph-indirect-manifest.json",
+      "bytes": 594,
+      "sha256": "a71de039e57f3e7ce08f50de870ad3fc0285644e3fb3e4848cce4458ab7e9153",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/method-source-supplement/graph-indirect-manifest.json"
+    },
+    {
+      "path": "method-source-supplement/manifest.json",
+      "bytes": 352,
+      "sha256": "0c89239161f08210eb98b004dd9c1bce9dd972684d003bb80222a2d88ee42572",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/method-source-supplement/manifest.json"
+    },
+    {
+      "path": "prior-receipts/blue-a-v1.md",
+      "bytes": 55095,
+      "sha256": "b2e9b6d971f6b6ed17543df24c2207d8bbfc6ad7dbd0249590c2866b0925b187",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/prior-receipts/blue-a-v1.md"
+    },
+    {
+      "path": "prior-receipts/blue-b-v1.md",
+      "bytes": 57883,
+      "sha256": "ff8746f141d0e2f076cc2e6f459e75710a727b3e37829c6c7e995897b8bf8b3a",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/prior-receipts/blue-b-v1.md"
+    },
+    {
+      "path": "prior-receipts/elephant-gold-v1.md",
+      "bytes": 17171,
+      "sha256": "d08df4410a0a5301a1df75a43faa3e2fe578ac0d561a82f15806412f0936dc0a",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/prior-receipts/elephant-gold-v1.md"
+    },
+    {
+      "path": "prior-receipts/grey-inventory-v1.md",
+      "bytes": 76351,
+      "sha256": "4a97ea981b63298f704ff569c354a09e08b78b94b228da696a14e884599e700e",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/prior-receipts/grey-inventory-v1.md"
+    },
+    {
+      "path": "prior-receipts/red-a-v1.md",
+      "bytes": 17564,
+      "sha256": "3b4ef853857beea9b1ba6b690230a9e678b4a694c4481fe6afe76daf25ce4d5a",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/prior-receipts/red-a-v1.md"
+    },
+    {
+      "path": "prior-receipts/red-b-v1.md",
+      "bytes": 15686,
+      "sha256": "e88e346dcae77291f83c6204adb2e74987f97e9a3e22ec95b49ccf565f99947a",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/prior-receipts/red-b-v1.md"
+    },
+    {
+      "path": "prior-receipts/security-v1.md",
+      "bytes": 16813,
+      "sha256": "1177e62e0d1bfbc78ae9cba844585a8dbecdeb0451f641a2bfcb09b81aef6c42",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/prior-receipts/security-v1.md"
+    },
+    {
+      "path": "publish/2026-11-19-full-team-continuation.md",
+      "bytes": 31431,
+      "sha256": "537cb182d7080241b97cea6c325cd33c3f64d1ba4c588e1c126f61d2e135f476",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/publish/2026-11-19-full-team-continuation.md"
+    },
+    {
+      "path": "receipts/blue-v31-original.md",
+      "bytes": 41626,
+      "sha256": "1c8f1d06b858349f1f6c4440dfb514759f723f2cea21bbe63a58ae19ef99b2a8",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/blue-v31-original.md"
+    },
+    {
+      "path": "receipts/elephant-v32-original.md",
+      "bytes": 44923,
+      "sha256": "fc4aad59ffb628ae2ad8cc8908005b4356a26aea0b803867e90691ceaf8fdcde",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/elephant-v32-original.md"
+    },
+    {
+      "path": "receipts/graph-v32-closeout.freeze.json",
+      "bytes": 4511,
+      "sha256": "eb976596f561aa35f886b0068efb878f62e2d41c654bb9a42d27950284f9a15e",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/graph-v32-closeout.freeze.json"
+    },
+    {
+      "path": "receipts/graph-v32-closeout.md",
+      "bytes": 44608,
+      "sha256": "90f15a7aa1b9630849755b01d0e1336b8ca111caea31621b80b6565d83e0d3d0",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/graph-v32-closeout.md"
+    },
+    {
+      "path": "receipts/graph-v35-candidate2-prefix.freeze.json",
+      "bytes": 450,
+      "sha256": "379f5beb0ab1bcb8234642650060e44929e88a70b0103c5bf3d66b2651c06612",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/graph-v35-candidate2-prefix.freeze.json"
+    },
+    {
+      "path": "receipts/graph-v35-closeout.freeze.json",
+      "bytes": 3609,
+      "sha256": "d5b4acdb59f0b4c520701fa52b5a6ddb859148652efee8128a4418e96c789f57",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/graph-v35-closeout.freeze.json"
+    },
+    {
+      "path": "receipts/graph-v35-closeout.md",
+      "bytes": 43945,
+      "sha256": "2c30eabac9e1ea6971f04e26e59fd8de0f9b57e2af79f401f1d264c3a92c5020",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/graph-v35-closeout.md"
+    },
+    {
+      "path": "receipts/graph-v38-closeout.freeze.json",
+      "bytes": 6500,
+      "sha256": "30ab3c4a12821eeb3014521eb9d4c3ad70db4cf4990c376a387dd3d1455e1776",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/graph-v38-closeout.freeze.json"
+    },
+    {
+      "path": "receipts/graph-v38-closeout.md",
+      "bytes": 39816,
+      "sha256": "41b3849a6af11cebb1373ee12ad7bf1e59fbcfeb096e1178fff7ced617fc8769",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/graph-v38-closeout.md"
+    },
+    {
+      "path": "receipts/green-v31-original-freeze.json",
+      "bytes": 929,
+      "sha256": "32ee9a905de3469d686b54dd30fe2563c5979f2422c949e390e9176f229b8602",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/green-v31-original-freeze.json"
+    },
+    {
+      "path": "receipts/green-v31-original.md",
+      "bytes": 44568,
+      "sha256": "e89136894ec30d48e34a1695b636aa343d1cbb5964a8b8ca54412d27580c87c4",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/green-v31-original.md"
+    },
+    {
+      "path": "receipts/green-v32-final-delta.freeze.json",
+      "bytes": 1034,
+      "sha256": "cc723e5b1fc3c34e3e0284726df53094044543eaca03545d7b85df443bcdb34c",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/green-v32-final-delta.freeze.json"
+    },
+    {
+      "path": "receipts/green-v32-final-delta.md",
+      "bytes": 24929,
+      "sha256": "359ed4b67244f126d2f683af5bc28b7842aa32a59172f66e272007562dba2a12",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/green-v32-final-delta.md"
+    },
+    {
+      "path": "receipts/green-v35-final-delta.freeze.json",
+      "bytes": 1474,
+      "sha256": "3a549e9a6312ff0ebddc2e0b4cae7a1ff8c6e775afa6698dfbd85fb2a7c58928",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/green-v35-final-delta.freeze.json"
+    },
+    {
+      "path": "receipts/green-v35-final-delta.md",
+      "bytes": 22579,
+      "sha256": "7bf4cc2be8a85f603a1d3c5478602e921da8a4a693a1ca0ce7cba3d9fb2ee3ac",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/green-v35-final-delta.md"
+    },
+    {
+      "path": "receipts/green-v38-final-delta.freeze.json",
+      "bytes": 3136,
+      "sha256": "8ec9015f299fccaf3142063931405aaf55f475ade59020a4837842416e402521",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/green-v38-final-delta.freeze.json"
+    },
+    {
+      "path": "receipts/green-v38-final-delta.md",
+      "bytes": 24750,
+      "sha256": "d0504c0e4a32b02a14a3b61b82a6786b034b6173387d58387c381efc9b6c43e7",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/green-v38-final-delta.md"
+    },
+    {
+      "path": "receipts/grey-v30-original.md",
+      "bytes": 76033,
+      "sha256": "edc63c7d4705964799347ab602c9f5a5ce7c3bf4b34a21dde50cc069fda75601",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/grey-v30-original.md"
+    },
+    {
+      "path": "receipts/grey-v31-delta.md",
+      "bytes": 35658,
+      "sha256": "ee31ccfcbc8e70c8a5a4e408da46465549b351f3302c713d0d960d592d1c7653",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/grey-v31-delta.md"
+    },
+    {
+      "path": "receipts/purple-v32-original.md",
+      "bytes": 35400,
+      "sha256": "8c27ba8b1bcbfc956afca580d21f4872803dc10f07f556434519195635005610",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/purple-v32-original.md"
+    },
+    {
+      "path": "receipts/qa-v31-original.md",
+      "bytes": 55557,
+      "sha256": "dabbed1a4032d4f6075000e91c190566e341f6a69286b4950fd3a6b862887530",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/qa-v31-original.md"
+    },
+    {
+      "path": "receipts/qa-v32-informed-reconciliation.md",
+      "bytes": 37966,
+      "sha256": "baedd7a2664dbca14148c666cbd17c919edc69fcdd2af4b650393d3e35d4b8e6",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/qa-v32-informed-reconciliation.md"
+    },
+    {
+      "path": "receipts/red-security-cross-review-verification.json",
+      "bytes": 8622,
+      "sha256": "99023fc6d248233f0853e79cfd061b57f42b607553542b47e578086a08254d60",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/red-security-cross-review-verification.json"
+    },
+    {
+      "path": "receipts/red-security-cross-review.md",
+      "bytes": 23560,
+      "sha256": "ae8086b73f08e0161fe0d3892b949ab65d688c4a98afbc91caccd925df354d67",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/red-security-cross-review.md"
+    },
+    {
+      "path": "receipts/red-v31-original.freeze.json",
+      "bytes": 556,
+      "sha256": "6269f19dc240c4ab133994769d77f19ad108035abace00e6f87aa38a05484718",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/red-v31-original.freeze.json"
+    },
+    {
+      "path": "receipts/red-v31-original.md",
+      "bytes": 45245,
+      "sha256": "f42491896c72e9fd185cc63e8160d8a0db3bb53c4623a0b5404bd4fa28ce445d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/red-v31-original.md"
+    },
+    {
+      "path": "receipts/red-v31-reconciliation-verification.json",
+      "bytes": 494,
+      "sha256": "f21134ccc9a1d7f3c707839b4088412f848b4c28efa895d2e410c7eb09564251",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/red-v31-reconciliation-verification.json"
+    },
+    {
+      "path": "receipts/security-v32-original.freeze.json",
+      "bytes": 560,
+      "sha256": "a7636e769127cf2714f307211e558f64d58b31f70f1703c17c3b1d0bff7fccc6",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/security-v32-original.freeze.json"
+    },
+    {
+      "path": "receipts/security-v32-original.md",
+      "bytes": 35860,
+      "sha256": "fe8b65e8210ac37d6a0f65634a856957904748cd8f92bf897894ff6bf161b4c7",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/security-v32-original.md"
+    },
+    {
+      "path": "receipts/white-pregate-v30.md",
+      "bytes": 34658,
+      "sha256": "11063e1887893be406e113705ec2b05cf6523e5f84b55ddd1c962306dd13dc9e",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/white-pregate-v30.md"
+    },
+    {
+      "path": "receipts/white-v35-final-gate.freeze.json",
+      "bytes": 934,
+      "sha256": "71e3399baa67c82674b8683d743c53cfd3f0fff8f2bce16e30f0e5ae6f67fedd",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/white-v35-final-gate.freeze.json"
+    },
+    {
+      "path": "receipts/white-v35-final-gate.md",
+      "bytes": 44403,
+      "sha256": "76a80f20aa8755d7cfaa65492efed20303e879b4604d7384fe71a1b2750b8d96",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/white-v35-final-gate.md"
+    },
+    {
+      "path": "receipts/white-v38-final-delta.freeze.json",
+      "bytes": 4316,
+      "sha256": "70eeee4e5f15a11a8b867921f8ad133deeb623a4b512652c8d2e2f699ea20764",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/white-v38-final-delta.freeze.json"
+    },
+    {
+      "path": "receipts/white-v38-final-delta.md",
+      "bytes": 35663,
+      "sha256": "801e062323df817465d688d982e9a5b5cb7216d103853d9223710895dfb862f0",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/receipts/white-v38-final-delta.md"
+    },
+    {
+      "path": "remote-264380/views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 22931,
+      "sha256": "a2eaeaa1b072609552fe9ad556ce06d1b5044df9557562aa2f81b4208efeaaf3",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/remote-264380/views/AGENT_RULE_TEMPLATE.md"
+    },
+    {
+      "path": "remote-264380/views/README.md",
+      "bytes": 33180,
+      "sha256": "df7aca3925ca274e8e57aab0cb17c18f826e13273fd95b3dc687b678a7e10ce6",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/remote-264380/views/README.md"
+    },
+    {
+      "path": "remote-264380/views/design.md",
+      "bytes": 100434,
+      "sha256": "1d8ee44f9a3885c1ebdd5613cb0adeffb415745295b4738f0389de22bc1ee4f2",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/remote-264380/views/design.md"
+    },
+    {
+      "path": "remote-264380/views/implementation-plan.md",
+      "bytes": 76826,
+      "sha256": "3286dcc6110c5afe63e11c13e03da0dbf75f8804c14d4106f59c11f87894c42d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/remote-264380/views/implementation-plan.md"
+    },
+    {
+      "path": "remote-264380/views/requirements.md",
+      "bytes": 75892,
+      "sha256": "98262f4c3e8ee07d6fd31cae24941a765138908e351d629542d02b2556141b2c",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/remote-264380/views/requirements.md"
+    },
+    {
+      "path": "remote-264380/views/skills-governance.md",
+      "bytes": 50801,
+      "sha256": "e79bca4b9b9506eb1c571b2d6989f81555d0e6c930d6a41155840a18f857aac7",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/remote-264380/views/skills-governance.md"
+    },
+    {
+      "path": "remote-ac49/reviews/2026-11-19-gex-integration-gate.md",
+      "bytes": 12360,
+      "sha256": "b334269318fafc523c8f7804644a4c1ac1a5e1255e19bd0d1d91b59e423e6377",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/remote-ac49/reviews/2026-11-19-gex-integration-gate.md"
+    },
+    {
+      "path": "remote-ac49/reviews/2026-11-19-skills-portability.md",
+      "bytes": 25453,
+      "sha256": "155b231324c42d964f424d89875300bc6562313c59990f1c6e1cde8f4a4f92f3",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/remote-ac49/reviews/2026-11-19-skills-portability.md"
+    },
+    {
+      "path": "remote-ac49/reviews/2026-11-20-full-lens-source-inspection.md",
+      "bytes": 15428,
+      "sha256": "16d647810f1fb4cc0d3a11688ec90f5224807d67237436d098d9a6be91d8d19e",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/remote-ac49/reviews/2026-11-20-full-lens-source-inspection.md"
+    },
+    {
+      "path": "remote-ac49/reviews/2026-11-20-semantic-skill-diagnostic.md",
+      "bytes": 9805,
+      "sha256": "1768866c91c00d5683a4785b4a1fc27658531126ff9d507f2e92fb13637a3d66",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/remote-ac49/reviews/2026-11-20-semantic-skill-diagnostic.md"
+    },
+    {
+      "path": "verification/README.md",
+      "bytes": 3425,
+      "sha256": "99e4c59ed3785ff9872507a30848ff2999290916deae4d36923c599c4b1b4c06",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/README.md"
+    },
+    {
+      "path": "verification/assemble_assurance_archive.py",
+      "bytes": 25704,
+      "sha256": "f5d1296547fa9087446439df3e6a98bd640b006ce8e54e8d7f440fa012c27d74",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/assemble_assurance_archive.py"
+    },
+    {
+      "path": "verification/assembly-v38-builder-delta.json",
+      "bytes": 1030,
+      "sha256": "750ab6713bcc179777139e66562a5fca675f9dc5fb8cd2a503d1de72b09a3edd",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/assembly-v38-builder-delta.json"
+    },
+    {
+      "path": "verification/assurance-archive-README-v1.4.38.md",
+      "bytes": 11621,
+      "sha256": "58857f2c324da2484fa9a160ac98911b01be4e1f15736728dadd93ed6315a79d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/assurance-archive-README-v1.4.38.md"
+    },
+    {
+      "path": "verification/b07-to-merged-development.json",
+      "bytes": 2243,
+      "sha256": "4ae8a37579331ddd6b19867b5d3821e3099cb3cee447936c37b1f5199e8ef922",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/b07-to-merged-development.json"
+    },
+    {
+      "path": "verification/build_specifications_archive.py",
+      "bytes": 8145,
+      "sha256": "7b165d2eca963653659cf0c29dca77fbd7dea85f6645f406e4074a6eb0170484",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/build_specifications_archive.py"
+    },
+    {
+      "path": "verification/candidate1-document-check.json",
+      "bytes": 10377,
+      "sha256": "2cb48be9141c18dd2b0a5e3ca2ff3ab1ceea892e1fa6d0b0041be9e81038c49f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/candidate1-document-check.json"
+    },
+    {
+      "path": "verification/candidate2-document-check.json",
+      "bytes": 10753,
+      "sha256": "cf173e7e4f372af58f77c7ec1797a7b8c1788b1c7898ffde5e7aab711912b98f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/candidate2-document-check.json"
+    },
+    {
+      "path": "verification/candidate3-document-check.json",
+      "bytes": 10753,
+      "sha256": "d58b7070d7c41f3d660be647452ac29de888b8a4e2060252ef107287e659e76b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/candidate3-document-check.json"
+    },
+    {
+      "path": "verification/candidate32-document-check.json",
+      "bytes": 11348,
+      "sha256": "bbd714fb6a087415bbb5c07f1549f89d3a529af16f0c3ce8836958e89e3deff5",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/candidate32-document-check.json"
+    },
+    {
+      "path": "verification/candidate32-final-document-check.json",
+      "bytes": 11284,
+      "sha256": "3168d03300d9ed83991271b04d3eed66e21f1502210900d6eff1420cd0280e73",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/candidate32-final-document-check.json"
+    },
+    {
+      "path": "verification/candidate35-final-delta.json",
+      "bytes": 393,
+      "sha256": "de597561ffb9f8dacfbedbb128970c41c1fd408034997fd4382dbc2b81772aef",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/candidate35-final-delta.json"
+    },
+    {
+      "path": "verification/candidate35-final-document-check.json",
+      "bytes": 12128,
+      "sha256": "936b28a86652da240ae9cd113df0826a8b6e6164c7604839eb3d833fcc8cc1fb",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/candidate35-final-document-check.json"
+    },
+    {
+      "path": "verification/candidate35-final2-document-check.json",
+      "bytes": 12128,
+      "sha256": "5efb0f5fd94d19ebe3504ee0a4ce30c06843a62d13c3088398e8a3d1926c7504",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/candidate35-final2-document-check.json"
+    },
+    {
+      "path": "verification/candidate35-final3-delta.json",
+      "bytes": 476,
+      "sha256": "dee383f4f774413f9d4d146db9f7e8c48bf8c189074db9c610a19a96c0641db9",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/candidate35-final3-delta.json"
+    },
+    {
+      "path": "verification/candidate35-final3-document-check.json",
+      "bytes": 12128,
+      "sha256": "10a4098a30930dc6385e6415b907b4f39064449f005eef85afe31a857e51ee66",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/candidate35-final3-document-check.json"
+    },
+    {
+      "path": "verification/candidate38-document-check.json",
+      "bytes": 19797,
+      "sha256": "cdb02ddda788cb1e23ad5f4dc9391e42cfa3855ca59f80607681a2f539cc2389",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/candidate38-document-check.json"
+    },
+    {
+      "path": "verification/candidate38-final-delta.json",
+      "bytes": 1212,
+      "sha256": "4cbe3a8bb0364e3c72e2564cfefa54964bce284de0b60ab4bd22229ecfc1e5a1",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/candidate38-final-delta.json"
+    },
+    {
+      "path": "verification/candidate38-final-document-check.json",
+      "bytes": 20841,
+      "sha256": "ecc0a035e34a039095d6cd249d4738b8acdc55572a22c98bdf95984ce671c42b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/candidate38-final-document-check.json"
+    },
+    {
+      "path": "verification/candidate38-final2-document-check.json",
+      "bytes": 20876,
+      "sha256": "243697dd183edd78a38266dc2141caddb92fd1a0f8007165d9c1f6e10c332946",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/candidate38-final2-document-check.json"
+    },
+    {
+      "path": "verification/canonical-library-reconciliation.json",
+      "bytes": 3509,
+      "sha256": "d5dd2577e8cb635e4e34828cea7c3ef5f9b59b5f2b888451fd38c745dde94806",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/canonical-library-reconciliation.json"
+    },
+    {
+      "path": "verification/canonical-link-audit.json",
+      "bytes": 3,
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/canonical-link-audit.json"
+    },
+    {
+      "path": "verification/commit-citation-rule-reproduction.json",
+      "bytes": 1323,
+      "sha256": "8999bafc441706afe1eb51b862927ed1bfdb97a519b49c20206ed31fcd0be828",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/commit-citation-rule-reproduction.json"
+    },
+    {
+      "path": "verification/documentation-ci-ac49-observation.json",
+      "bytes": 5693,
+      "sha256": "9e5b73c51c6d5ad84f2987200949f78c363a591c6001f9b3474297153db03527",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/documentation-ci-ac49-observation.json"
+    },
+    {
+      "path": "verification/early-view-copy-provenance-correction.json",
+      "bytes": 2858,
+      "sha256": "6e98fd52de5e8259b5451d8ded165da380f6c9667ba2b00501a480ccdf9c08e7",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/early-view-copy-provenance-correction.json"
+    },
+    {
+      "path": "verification/elephant-invocation.json",
+      "bytes": 1799,
+      "sha256": "f92d48cd737d6a5131c9d1f313c4a9b3ec3653df35fc0e704943c08bd515a1a0",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/elephant-invocation.json"
+    },
+    {
+      "path": "verification/final-artifact-inputs-v1.4.38-candidate1.json",
+      "bytes": 6179,
+      "sha256": "bd38831bfc7e279fdb4c735f124952c42819cd963de99e47aac5a7df6b8d7c19",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/final-artifact-inputs-v1.4.38-candidate1.json"
+    },
+    {
+      "path": "verification/final-artifact-inputs-v1.4.38.json",
+      "bytes": 6179,
+      "sha256": "96461efe9ad157ff58d89f5fb945e781189655368bbf7dbd727b16c5f1b6c1fb",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/final-artifact-inputs-v1.4.38.json"
+    },
+    {
+      "path": "verification/final-artifact-inputs.json",
+      "bytes": 6179,
+      "sha256": "a9b6f478141d0c28e96aeec4c7a92e74cf98aa7628559e95d04c0949d2525719",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/final-artifact-inputs.json"
+    },
+    {
+      "path": "verification/graph-v32-charter-integrity.json",
+      "bytes": 20097,
+      "sha256": "343d7c4db45b41edeea37520be468f1aebf02eefebab46a3e71d0aa1d44c405e",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/graph-v32-charter-integrity.json"
+    },
+    {
+      "path": "verification/graph-v32-document-check.json",
+      "bytes": 11348,
+      "sha256": "7edf1f69c0deac4c68eb79d8f6a5780567562363b9e892aac0fe64ef491b5528",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/graph-v32-document-check.json"
+    },
+    {
+      "path": "verification/graph-v32-input-integrity.json",
+      "bytes": 17545,
+      "sha256": "af469e209097e543c76be48df11b90763cf8aace49137aae4372242c1f0ed1e1",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/graph-v32-input-integrity.json"
+    },
+    {
+      "path": "verification/graph-v35-candidate3-delta-check.json",
+      "bytes": 1160,
+      "sha256": "7a859fbc57feb0b9a601952ace090ab139b2d04bd787e0a25359d86419ac3b72",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/graph-v35-candidate3-delta-check.json"
+    },
+    {
+      "path": "verification/graph-v35-candidate3-document-check.json",
+      "bytes": 12128,
+      "sha256": "10a4098a30930dc6385e6415b907b4f39064449f005eef85afe31a857e51ee66",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/graph-v35-candidate3-document-check.json"
+    },
+    {
+      "path": "verification/graph-v35-document-check.json",
+      "bytes": 12128,
+      "sha256": "5efb0f5fd94d19ebe3504ee0a4ce30c06843a62d13c3088398e8a3d1926c7504",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/graph-v35-document-check.json"
+    },
+    {
+      "path": "verification/graph-v35-input-integrity.json",
+      "bytes": 4427,
+      "sha256": "f81f4a7060364a2f879b0b16fed0c072def57897f3714cabb59007d81b1c4b75",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/graph-v35-input-integrity.json"
+    },
+    {
+      "path": "verification/graph-v38-candidate1-checks.freeze.json",
+      "bytes": 2719,
+      "sha256": "0b3aa5f18077ed7b9d1b8f48490e4cfbcaab84e81849dfa17c617dfc740c0559",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/graph-v38-candidate1-checks.freeze.json"
+    },
+    {
+      "path": "verification/graph-v38-candidate1-verifier.py",
+      "bytes": 23963,
+      "sha256": "b69036bdd7c8000c68c75fc00c7a6b37dfb52615e17424a36fdb410d04b30a0b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/graph-v38-candidate1-verifier.py"
+    },
+    {
+      "path": "verification/graph-v38-candidate2-delta-check.json",
+      "bytes": 5568,
+      "sha256": "05f5d2b619072e5ddba2c54f35d4573e67c2e6c7c200cec6f9f041169877dd7c",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/graph-v38-candidate2-delta-check.json"
+    },
+    {
+      "path": "verification/graph-v38-document-check.json",
+      "bytes": 19797,
+      "sha256": "cdb02ddda788cb1e23ad5f4dc9391e42cfa3855ca59f80607681a2f539cc2389",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/graph-v38-document-check.json"
+    },
+    {
+      "path": "verification/graph-v38-final2-document-check.json",
+      "bytes": 20876,
+      "sha256": "243697dd183edd78a38266dc2141caddb92fd1a0f8007165d9c1f6e10c332946",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/graph-v38-final2-document-check.json"
+    },
+    {
+      "path": "verification/graph-v38-incoming37-archive-integrity.json",
+      "bytes": 2301,
+      "sha256": "638c8644a4ff92ed5e90156f2d65b48f9458ef28806a7de46bd7eb5731bae770",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/graph-v38-incoming37-archive-integrity.json"
+    },
+    {
+      "path": "verification/graph-v38-input-integrity.json",
+      "bytes": 12472,
+      "sha256": "1fd0ecd04dd2bb92eaa666a54ec3ad25cb458e6fd677ff19a657c54e45d00d3f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/graph-v38-input-integrity.json"
+    },
+    {
+      "path": "verification/graph-v38-source-tree-comparison.json",
+      "bytes": 1369,
+      "sha256": "79b874061466541a3840314f9b82631044af65e01b51bc0f059f61399b554d82",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/graph-v38-source-tree-comparison.json"
+    },
+    {
+      "path": "verification/green-document-check.json",
+      "bytes": 10695,
+      "sha256": "c48d61e49e7fa02f18f461b729d3fd6654b972c1d3b9e17cf23c64a70cc395d1",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/green-document-check.json"
+    },
+    {
+      "path": "verification/green-supplement-check.json",
+      "bytes": 5684,
+      "sha256": "add33e9a6baed109681cbfef422bbc0482a2ef393058932af057455e4e4616b9",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/green-supplement-check.json"
+    },
+    {
+      "path": "verification/green-v32-final-document-check.json",
+      "bytes": 11284,
+      "sha256": "3168d03300d9ed83991271b04d3eed66e21f1502210900d6eff1420cd0280e73",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/green-v32-final-document-check.json"
+    },
+    {
+      "path": "verification/green-v35-candidate1-document-check.json",
+      "bytes": 12128,
+      "sha256": "936b28a86652da240ae9cd113df0826a8b6e6164c7604839eb3d833fcc8cc1fb",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/green-v35-candidate1-document-check.json"
+    },
+    {
+      "path": "verification/green-v35-document-check.json",
+      "bytes": 12128,
+      "sha256": "5efb0f5fd94d19ebe3504ee0a4ce30c06843a62d13c3088398e8a3d1926c7504",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/green-v35-document-check.json"
+    },
+    {
+      "path": "verification/green-v38-candidate1-document-check.json",
+      "bytes": 19797,
+      "sha256": "cdb02ddda788cb1e23ad5f4dc9391e42cfa3855ca59f80607681a2f539cc2389",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/green-v38-candidate1-document-check.json"
+    },
+    {
+      "path": "verification/green-v38-candidate1-preservation-source-check.json",
+      "bytes": 12970,
+      "sha256": "85b366f6a447ae20ae8b4b1059e1c6079a75f677ea9ca7dca2dd1eab39f106b4",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/green-v38-candidate1-preservation-source-check.json"
+    },
+    {
+      "path": "verification/green-v38-candidate1-v6-negative-control.json",
+      "bytes": 23583,
+      "sha256": "39d440cab6774cdfec57fd42e75b22d6654f6f465cb8b9faa80c25646ffdb67d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/green-v38-candidate1-v6-negative-control.json"
+    },
+    {
+      "path": "verification/green-v38-candidate2-narrow-delta-check.json",
+      "bytes": 759,
+      "sha256": "874d22832f1596a64e8c88e3ffd58036d21aed052d666a3db4ffedbbfea93d87",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/green-v38-candidate2-narrow-delta-check.json"
+    },
+    {
+      "path": "verification/green-v38-candidate2-v5-document-check.json",
+      "bytes": 20841,
+      "sha256": "ecc0a035e34a039095d6cd249d4738b8acdc55572a22c98bdf95984ce671c42b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/green-v38-candidate2-v5-document-check.json"
+    },
+    {
+      "path": "verification/green-v38-document-check.json",
+      "bytes": 20876,
+      "sha256": "243697dd183edd78a38266dc2141caddb92fd1a0f8007165d9c1f6e10c332946",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/green-v38-document-check.json"
+    },
+    {
+      "path": "verification/green-v38-preservation-source-check.json",
+      "bytes": 12970,
+      "sha256": "85b366f6a447ae20ae8b4b1059e1c6079a75f677ea9ca7dca2dd1eab39f106b4",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/green-v38-preservation-source-check.json"
+    },
+    {
+      "path": "verification/implementation-ci-b07-observation.json",
+      "bytes": 13180,
+      "sha256": "724a2f8ea77b218feea65512dbaa3de566ea3989f92732ae3b9f8e17cbaebd00",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/implementation-ci-b07-observation.json"
+    },
+    {
+      "path": "verification/implementation-ci-e3d0-observation.json",
+      "bytes": 14487,
+      "sha256": "1c7c611737f67fadf8b26827347a57d67fbf8207579ade4a51f6289a178a6d38",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/implementation-ci-e3d0-observation.json"
+    },
+    {
+      "path": "verification/implementation-e3-to-b07-comparison.json",
+      "bytes": 772,
+      "sha256": "89c2e1ce1f45183ee0908150fcc63b0be4a860d773ae8c0c73a7f24f5b16be04",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/implementation-e3-to-b07-comparison.json"
+    },
+    {
+      "path": "verification/implementation-tree-1fe10058.json",
+      "bytes": 363036,
+      "sha256": "02540ab77d9be791e653b851ec189e43c6fbac35d720469c26c049e6d04450ff",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/implementation-tree-1fe10058.json"
+    },
+    {
+      "path": "verification/implementation-tree-419c2efa.json",
+      "bytes": 441221,
+      "sha256": "47c2148671dcc67b3b4c6a7a15acbc56a5a04ff745d25de7a88be785c37fff6d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/implementation-tree-419c2efa.json"
+    },
+    {
+      "path": "verification/implementation-tree-b07def32.json",
+      "bytes": 361841,
+      "sha256": "b3e7d7022874903ae64e8d0e9a7cc90442bfb528a805997b382d6944bc7bb72b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/implementation-tree-b07def32.json"
+    },
+    {
+      "path": "verification/implementation-tree-e3d0ebcb.json",
+      "bytes": 441221,
+      "sha256": "97e63ddd3c611f2242da5d75d158ccb702b75abe5f1521d6be4b9993cc26f53f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/implementation-tree-e3d0ebcb.json"
+    },
+    {
+      "path": "verification/incoming-pr169-executable-preflight.md",
+      "bytes": 4095,
+      "sha256": "fc5438e10162860753b06bb52c5de97f917d258484acaf77d89e938e37441e67",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/incoming-pr169-executable-preflight.md"
+    },
+    {
+      "path": "verification/incoming-pr169-semantic-remediation.md",
+      "bytes": 4889,
+      "sha256": "1988ddce6905ba9bffe14447621e2a4b5b6b64930fe1b72c34bd0da05ddee0b3",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/incoming-pr169-semantic-remediation.md"
+    },
+    {
+      "path": "verification/incoming34-ac49-preservation-check.json",
+      "bytes": 13728,
+      "sha256": "cec4e85d757744fd6cc56a7be9cf3e86051e726697ea9756c038e4c0670df5f6",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/incoming34-ac49-preservation-check.json"
+    },
+    {
+      "path": "verification/incoming37-pr169-preservation-check.json",
+      "bytes": 8389,
+      "sha256": "e916c8c61be757540c1f7704c7c2a9986f1b197c075543378a96cfcea9547427",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/incoming37-pr169-preservation-check.json"
+    },
+    {
+      "path": "verification/incoming37-pr169-preservation-final-check.json",
+      "bytes": 8604,
+      "sha256": "e6cddce6782b07267b6937e89ae51a2c8d73e1bb98f436f30f42d3ecc70b7f13",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/incoming37-pr169-preservation-final-check.json"
+    },
+    {
+      "path": "verification/initial-v31-structure.json",
+      "bytes": 1921,
+      "sha256": "bb44096a1f23ce1949d974f272203603a85b7f3f8d8f4e0f40d782e81bb81aad",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/initial-v31-structure.json"
+    },
+    {
+      "path": "verification/merge35-ledger-initial.json",
+      "bytes": 1470,
+      "sha256": "67261a66497df28efd043108d4401907bb120fdcceea8da3493ec0f2aa2659f5",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/merge35-ledger-initial.json"
+    },
+    {
+      "path": "verification/merge35-resolution-ledger.json",
+      "bytes": 14988,
+      "sha256": "22564a0c23d4d9bd597e277b89e83a0f89aa7000dc4bfac3141dc92a0af80220",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/merge35-resolution-ledger.json"
+    },
+    {
+      "path": "verification/merge38-resolution-ledger.json",
+      "bytes": 7084,
+      "sha256": "1f60ec51686e1e8b54913207a9f2e17fecdfa300cd286844bdb7098c5681834b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/merge38-resolution-ledger.json"
+    },
+    {
+      "path": "verification/method-charter-source-manifest.json",
+      "bytes": 43517,
+      "sha256": "9b6b125d3eee2738f07d89c6a1c8bd6df04e9558a295682a821dac92087c7b2f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/method-charter-source-manifest.json"
+    },
+    {
+      "path": "verification/pr169-bddd-to-c07.json",
+      "bytes": 673,
+      "sha256": "d2d8ab0da7c6ea3dc6b0809cd4c2a5ce96b44870038550ef6723f83d16263236",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/pr169-bddd-to-c07.json"
+    },
+    {
+      "path": "verification/pr169-incoming-review-manifest.json",
+      "bytes": 813,
+      "sha256": "d52db8b9891876036efaadcdaba0f46eb936b7117d277120c25a79685069498a",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/pr169-incoming-review-manifest.json"
+    },
+    {
+      "path": "verification/pr169-view-manifest.json",
+      "bytes": 1333,
+      "sha256": "5a17892c5708f2d08e07ae048997a8c0e1c32f8efde1ec301dc81906c614a025",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/pr169-view-manifest.json"
+    },
+    {
+      "path": "verification/publication-v38-merged-parent-checkpoint.json",
+      "bytes": 1342,
+      "sha256": "56897b224d45328f71cef2b70467f679b6edbee3537d6e5e7324cb440e4ce50d",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/publication-v38-merged-parent-checkpoint.json"
+    },
+    {
+      "path": "verification/reconcile38-current-qualifications.json",
+      "bytes": 8749,
+      "sha256": "0a22fea79ca5f6c3b6db334476e1905923298e33242ca82c3d3fa0581d25ade4",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/reconcile38-current-qualifications.json"
+    },
+    {
+      "path": "verification/remote-ac49-b07-inputs.json",
+      "bytes": 5268,
+      "sha256": "3fa635d2f4b900fcb9b998cfa31a4fe043eaa689d7fb42476a2096a4053f1d8f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/remote-ac49-b07-inputs.json"
+    },
+    {
+      "path": "verification/remote-delta-inputs.json",
+      "bytes": 3330,
+      "sha256": "2653daa624d3a458e455dfb53cfd3bde64ac92d68205498ba000a462be8cab5f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/remote-delta-inputs.json"
+    },
+    {
+      "path": "verification/remote-impl-compare.json",
+      "bytes": 31270,
+      "sha256": "0bcc302c062a6c77ab58635343c402cb655b6852b04294d7fea3a581e3c440d5",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/remote-impl-compare.json"
+    },
+    {
+      "path": "verification/remote-reconciliation-ledger.json",
+      "bytes": 1854,
+      "sha256": "6c8366dee9772234b14b65fdabf263a32e4394276ff8bf456808191c8a35a14e",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/remote-reconciliation-ledger.json"
+    },
+    {
+      "path": "verification/remote-spec-compare.json",
+      "bytes": 61753,
+      "sha256": "50d439351aa201a52518108bbb09c98ca253ced753eee5b2f9431ff0b78031de",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/remote-spec-compare.json"
+    },
+    {
+      "path": "verification/security-v32-document-check.json",
+      "bytes": 11348,
+      "sha256": "bbd714fb6a087415bbb5c07f1549f89d3a529af16f0c3ce8836958e89e3deff5",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/security-v32-document-check.json"
+    },
+    {
+      "path": "verification/security-v32-source-integrity.json",
+      "bytes": 658,
+      "sha256": "fafe6b26692e6fdfa3b6370ee4eb3530c166b3ae24f4d68ad0413568d88cb16b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/security-v32-source-integrity.json"
+    },
+    {
+      "path": "verification/source419-frontend-manifest.json",
+      "bytes": 64218,
+      "sha256": "25886fd5f94fd83fa91949c9ae8104867a55c61152b837529907dc0bc066532a",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/source419-frontend-manifest.json"
+    },
+    {
+      "path": "verification/source419-manifest.json",
+      "bytes": 152717,
+      "sha256": "28f720e0abc0883264cb34e76665661a7c64ea569c0176f3245ac80ef05b0c85",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/source419-manifest.json"
+    },
+    {
+      "path": "verification/source419-scope-note.md",
+      "bytes": 783,
+      "sha256": "10828be2ba5e851dd083229763de84e36d918d763268c5758206a3b08e7a20af",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/source419-scope-note.md"
+    },
+    {
+      "path": "verification/v4-verifier-selfcheck.json",
+      "bytes": 2457,
+      "sha256": "221b1f363af8f86f52decb322d040cc490a37027dd27926016ced48e1e54a77e",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/v4-verifier-selfcheck.json"
+    },
+    {
+      "path": "verification/v5-detects-candidate1-sk-mirror-gap.json",
+      "bytes": 23548,
+      "sha256": "8a65843a0afe4b26eeb69ba1a2ee475ff07bbbdf58af9f981cb824dbaaf840e2",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/v5-detects-candidate1-sk-mirror-gap.json"
+    },
+    {
+      "path": "verification/v6-count-unit-correction.json",
+      "bytes": 2893,
+      "sha256": "5185c442fc5c20662cca469f23322b1597575665ba5a35c4bda4d4b287f13e6f",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/v6-count-unit-correction.json"
+    },
+    {
+      "path": "verification/verify_spec_package.py",
+      "bytes": 8565,
+      "sha256": "94f19e6e30e078c34b660fffa51655e8b6d4e4bce5c3343ae33bd49a8aae7ddc",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/verify_spec_package.py"
+    },
+    {
+      "path": "verification/verify_spec_package_v2.py",
+      "bytes": 10063,
+      "sha256": "ba9a2423f04559e14ef65dc53d9f1b5cea7baf032cdd492a3bc5b05459cfcf44",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/verify_spec_package_v2.py"
+    },
+    {
+      "path": "verification/verify_spec_package_v3.py",
+      "bytes": 11344,
+      "sha256": "cf2ba2c9e041b0a6dee004a943f66d7fc613a97acb2d1ff48c731cb6e9bea717",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/verify_spec_package_v3.py"
+    },
+    {
+      "path": "verification/verify_spec_package_v4.py",
+      "bytes": 23963,
+      "sha256": "b69036bdd7c8000c68c75fc00c7a6b37dfb52615e17424a36fdb410d04b30a0b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/verify_spec_package_v4.py"
+    },
+    {
+      "path": "verification/verify_spec_package_v5.py",
+      "bytes": 24734,
+      "sha256": "dd88a376d3836951aff43b7e0077f917c2bbcfabe961c9f683a72d72be37bda5",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/verify_spec_package_v5.py"
+    },
+    {
+      "path": "verification/verify_spec_package_v6.py",
+      "bytes": 24795,
+      "sha256": "32f2d44be474ff162354c18f493aa4c79a16546e9fdd51a5bf56c78e65bcc402",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/verify_spec_package_v6.py"
+    },
+    {
+      "path": "verification/white-v35-gate-binding.json",
+      "bytes": 40316,
+      "sha256": "3092999c5d747090feb4e6426f9bb3895300647f51d5a55ce655a30102552c1a",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/white-v35-gate-binding.json"
+    },
+    {
+      "path": "verification/white-v38-candidate1-sk-alias-finding.json",
+      "bytes": 9847,
+      "sha256": "884fc6f0af20b24f928f8597e4f0936e5caf672cb8b5a77c50da7ce199af029b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/white-v38-candidate1-sk-alias-finding.json"
+    },
+    {
+      "path": "verification/white-v38-candidate2-binding.json",
+      "bytes": 11728,
+      "sha256": "17807f582796f283a7b8217d0817feb2906ccf6dba5104353dbfa81c9771fb2b",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/white-v38-candidate2-binding.json"
+    },
+    {
+      "path": "verification/white-v38-delta-binding.json",
+      "bytes": 27123,
+      "sha256": "cc46985fdae414efc70e42ffd1de1b9a8a5f2b4a63dff59a4a5ceeb981d0d2c1",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/white-v38-delta-binding.json"
+    },
+    {
+      "path": "verification/working-document-check.json",
+      "bytes": 10375,
+      "sha256": "51f95bbcc422707739bacc20ba318d63054a280dd7797dc439a5d2281b120bd2",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/working-document-check.json"
+    },
+    {
+      "path": "verification/working-v32-document-check.json",
+      "bytes": 11093,
+      "sha256": "85cb826d8a01e30726af40dabfd7623c3a61278a6df6b9986a4691cc90d02a2c",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/working-v32-document-check.json"
+    },
+    {
+      "path": "verification/working-v35-document-check.json",
+      "bytes": 11939,
+      "sha256": "9b0c588307aa4c34de0e4594af41fdac25147c0d1ab9ba73844bb6c76f036194",
+      "original_absolute_path": "/workspace/scratch/40f0abd3bdbc/verification/working-v35-document-check.json"
+    }
+  ],
+  "archive": {
+    "archive_bytes": 954936,
+    "archive_sha256": "d3b0b05f932153a22c735d90cb16b7c9066dd8d31d822372496a7dec6fc93a6f",
+    "member_count": 384,
+    "member_bytes": 33481681,
+    "every_member_verified": true
+  }
+}

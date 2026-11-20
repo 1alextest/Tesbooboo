@@ -1,0 +1,182 @@
+{
+  "record_kind": "Final proposed documentation delivery identities; not release, runtime or architecture-freeze approval",
+  "revision": "1.4.38",
+  "status": "PROPOSED / NOT FROZEN",
+  "canonical_save": {
+    "local_path": "/workspace/scratch/40f0abd3bdbc/deliverables/Tesbo_Specifications_v1.4.38.zip",
+    "purpose": "replace_library_file",
+    "status": "succeeded",
+    "file_id": "file_00000000903881f58aee5b3961ccfe2a",
+    "library_file_id": "libfile_fde3_f-ab7b146b72588191b8a51735ae46d0b4_4ee04b678f8481919580c594fcc15a5b",
+    "file_name": "Tesbo_Specifications_v1.4.38.zip",
+    "local_metadata_applied": true,
+    "path": "/creating a testing tool to make my job easier/Tesbo_Specifications_v1.4.38.zip",
+    "current_version_number": 18
+  },
+  "replaced_canonical_parent": {
+    "revision": "1.4.37",
+    "version": 17,
+    "sha256": "1ed8afd0a978ab9b257c10d61549f6085c7f1f593713a26b0ae56a4540562848"
+  },
+  "canonical_archive": {
+    "path": "deliverables/Tesbo_Specifications_v1.4.38.zip",
+    "bytes": 615130,
+    "sha256": "38d29265bf04e3707e6d814850316a40d354748f0e6bf639704b5b680b2ec114",
+    "member_count": 8,
+    "uncompressed_member_bytes": 1788829
+  },
+  "final_review_input": {
+    "path": "input-v38-candidate2",
+    "manifest_sha256": "a5da721acc5c8ce39948c42ec8cc2345ea3778278642b63dc58430fa6575531a"
+  },
+  "evidence_archive": {
+    "archive_bytes": 954936,
+    "archive_sha256": "d3b0b05f932153a22c735d90cb16b7c9066dd8d31d822372496a7dec6fc93a6f",
+    "member_count": 384,
+    "member_bytes": 33481681,
+    "every_member_verified": true
+  },
+  "all_member_record": {
+    "path": "assurance-archive-inputs-v1.4.38.json",
+    "sha256": "b21611bd339020a4783ae60a89dd4b8b8ad753d42a33251a0e02f0ebb7379fd0"
+  },
+  "report": {
+    "path": "../2026-11-19-full-team-continuation.md",
+    "bytes": 31431,
+    "sha256": "537cb182d7080241b97cea6c325cd33c3f64d1ba4c588e1c126f61d2e135f476"
+  },
+  "document_verification": {
+    "verifier": "v6",
+    "assertions": 102,
+    "passed": true,
+    "count_units": {
+      "ASER_unique_definitions": 125,
+      "GEX_AC_unique_ids": 8,
+      "GA_unique_ids": 5,
+      "GA_cumulative_assertion_rows": 15,
+      "SEM_unique_aliases": 8,
+      "SEM_cumulative_assertion_rows": 16,
+      "SK_unique_aliases": 4,
+      "SK_cumulative_assertion_rows": 8,
+      "DISC_unique_aliases": 5,
+      "DISC_cumulative_assertion_rows": 10
+    }
+  },
+  "git_publication": {
+    "repository": "1alextest/Tesbooboo",
+    "branch": "docs/full-team-canonical-v1438-20261120",
+    "parent_commit": "ed71aa544108760f711ed4cb1bb7b7ba008ef417",
+    "predecessor_pull_request": 169,
+    "predecessor_merged_externally": true,
+    "reviewed_parent_commit": "c07d4c2a16912ca71fbc319aec9a23e68a452edd",
+    "identical_parent_tree": "cebc4464b80256900fddf1ce429a6b17bfef4227",
+    "commit_identity": "The containing Git commit and draft PR for this branch identify the delivery; no circular self-commit hash is embedded."
+  },
+  "receipt_files": [
+    {
+      "path": "receipts/blue-v31-original.md",
+      "bytes": 41626,
+      "sha256": "1c8f1d06b858349f1f6c4440dfb514759f723f2cea21bbe63a58ae19ef99b2a8"
+    },
+    {
+      "path": "receipts/elephant-v32-original.md",
+      "bytes": 44923,
+      "sha256": "fc4aad59ffb628ae2ad8cc8908005b4356a26aea0b803867e90691ceaf8fdcde"
+    },
+    {
+      "path": "receipts/graph-v32-closeout.md",
+      "bytes": 44608,
+      "sha256": "90f15a7aa1b9630849755b01d0e1336b8ca111caea31621b80b6565d83e0d3d0"
+    },
+    {
+      "path": "receipts/graph-v35-closeout.md",
+      "bytes": 43945,
+      "sha256": "2c30eabac9e1ea6971f04e26e59fd8de0f9b57e2af79f401f1d264c3a92c5020"
+    },
+    {
+      "path": "receipts/graph-v38-closeout.md",
+      "bytes": 39816,
+      "sha256": "41b3849a6af11cebb1373ee12ad7bf1e59fbcfeb096e1178fff7ced617fc8769"
+    },
+    {
+      "path": "receipts/green-v31-original.md",
+      "bytes": 44568,
+      "sha256": "e89136894ec30d48e34a1695b636aa343d1cbb5964a8b8ca54412d27580c87c4"
+    },
+    {
+      "path": "receipts/green-v32-final-delta.md",
+      "bytes": 24929,
+      "sha256": "359ed4b67244f126d2f683af5bc28b7842aa32a59172f66e272007562dba2a12"
+    },
+    {
+      "path": "receipts/green-v35-final-delta.md",
+      "bytes": 22579,
+      "sha256": "7bf4cc2be8a85f603a1d3c5478602e921da8a4a693a1ca0ce7cba3d9fb2ee3ac"
+    },
+    {
+      "path": "receipts/green-v38-final-delta.md",
+      "bytes": 24750,
+      "sha256": "d0504c0e4a32b02a14a3b61b82a6786b034b6173387d58387c381efc9b6c43e7"
+    },
+    {
+      "path": "receipts/grey-v30-original.md",
+      "bytes": 76033,
+      "sha256": "edc63c7d4705964799347ab602c9f5a5ce7c3bf4b34a21dde50cc069fda75601"
+    },
+    {
+      "path": "receipts/grey-v31-delta.md",
+      "bytes": 35658,
+      "sha256": "ee31ccfcbc8e70c8a5a4e408da46465549b351f3302c713d0d960d592d1c7653"
+    },
+    {
+      "path": "receipts/purple-v32-original.md",
+      "bytes": 35400,
+      "sha256": "8c27ba8b1bcbfc956afca580d21f4872803dc10f07f556434519195635005610"
+    },
+    {
+      "path": "receipts/qa-v31-original.md",
+      "bytes": 55557,
+      "sha256": "dabbed1a4032d4f6075000e91c190566e341f6a69286b4950fd3a6b862887530"
+    },
+    {
+      "path": "receipts/qa-v32-informed-reconciliation.md",
+      "bytes": 37966,
+      "sha256": "baedd7a2664dbca14148c666cbd17c919edc69fcdd2af4b650393d3e35d4b8e6"
+    },
+    {
+      "path": "receipts/red-security-cross-review.md",
+      "bytes": 23560,
+      "sha256": "ae8086b73f08e0161fe0d3892b949ab65d688c4a98afbc91caccd925df354d67"
+    },
+    {
+      "path": "receipts/red-v31-original.md",
+      "bytes": 45245,
+      "sha256": "f42491896c72e9fd185cc63e8160d8a0db3bb53c4623a0b5404bd4fa28ce445d"
+    },
+    {
+      "path": "receipts/security-v32-original.md",
+      "bytes": 35860,
+      "sha256": "fe8b65e8210ac37d6a0f65634a856957904748cd8f92bf897894ff6bf161b4c7"
+    },
+    {
+      "path": "receipts/white-pregate-v30.md",
+      "bytes": 34658,
+      "sha256": "11063e1887893be406e113705ec2b05cf6523e5f84b55ddd1c962306dd13dc9e"
+    },
+    {
+      "path": "receipts/white-v35-final-gate.md",
+      "bytes": 44403,
+      "sha256": "76a80f20aa8755d7cfaa65492efed20303e879b4604d7384fe71a1b2750b8d96"
+    },
+    {
+      "path": "receipts/white-v38-final-delta.md",
+      "bytes": 35663,
+      "sha256": "801e062323df817465d688d982e9a5b5cb7216d103853d9223710895dfb862f0"
+    }
+  ],
+  "limits": "All original and informed scopes remain explicit. FinalGreen/Graph/White bindC2; automatedGraphNOTCALCULATED; current productacceptanceNOTRUN. Separate old CI owns its actual tests. Publication CI belongs to the exact subsequent commit.",
+  "post_review_publication_checkpoint": {
+    "path": "publication-v38-merged-parent-checkpoint.json",
+    "sha256": "56897b224d45328f71cef2b70467f679b6edbee3537d6e5e7324cb440e4ce50d"
+  }
+}
