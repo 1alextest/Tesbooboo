@@ -15,7 +15,7 @@ Do **not** introduce a new chat assistant, a shadow test case writer, a disconne
 
 ## 2. Current evidence and actual gaps
 
-Source inspection pinned to `0c54b8ed28c9dec51ed0ca3bbb3cd3b7b8ab12d8` (not a deployed-build claim): `Tesbo-Backend-Nest/src/mcp/mcp.tools.ts`, `mcp.service.ts`, `docs/FEATURE_DOCUMENTATION.md`, and `graph-change-review.controller.ts`.
+Source inspection pinned to [the inspected Git commit](https://github.com/1alextest/Tesbooboo/commit/0c54b8ed28c9dec51ed0ca3bbb3cd3b7b8ab12d8) (not a deployed-build claim): `Tesbo-Backend-Nest/src/mcp/mcp.tools.ts`, `mcp.service.ts`, `docs/FEATURE_DOCUMENTATION.md`, and `graph-change-review.controller.ts`.
 
 - Existing MCP: `create_testcase`, `update_testcase`, `sourceRefs`, `link_requirement_to_testcase`, `create_knowledge_document`, `update_knowledge_document`, graph change capture/history, behavior model drafts. The source currently registers 59 tools; this is **not** proof the deployed client sees them.
 - Existing `link_requirement_to_testcase` accepts **exactly one** `jiraIssueKey`, `linearIssueKey`, or `notionPageId`. It does not accept a native Tesbo requirement ID. The `get_requirement_matrix` endpoint largely reports cases/runs/bugs; external Requirements UI counts linked non-deleted cases, which is not executed coverage.
