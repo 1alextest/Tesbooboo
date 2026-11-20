@@ -1,12 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, request as pwRequest, test } from "@playwright/test";
+import { expect, request as pwRequest, test, type Locator, type Page } from "@playwright/test";
 import { env } from "../utils/env";
 import { approveTestcase } from "../utils/testcase-approval";
 import { literal, scalar } from "../utils/psql";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 const STATE_PATH = path.join(__dirname, "../.auth/state.json");
+
+/** The row's inline status select; the run page renders its filter selects above the table. */
+function executionStatus(page: Page, title: string): Locator {
+  return page.getByRole("row", { name: title }).getByRole("combobox");
+}
 
 async function setUpCycleWithOneCase(title: string) {
   const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
@@ -53,7 +58,7 @@ test.describe("auto bug-filing on Failed", () => {
 
     try {
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}`);
-      await page.getByRole("combobox").first().selectOption("Failed");
+      await executionStatus(page, title).selectOption("Failed");
 
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeVisible();
       const titleInput = page.getByPlaceholder("Brief summary of the bug…");
@@ -110,7 +115,7 @@ test.describe("auto bug-filing on Failed", () => {
 
       // Fail the first case, pick a non-default severity, and skip — the dialog must not carry
       // that choice over into the next execution's report.
-      await page.getByRole("combobox").first().selectOption("Failed");
+      await executionStatus(page, titleA).selectOption("Failed");
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeVisible();
       const severitySelect = page.getByRole("combobox", { name: "Severity" });
 
@@ -124,7 +129,7 @@ test.describe("auto bug-filing on Failed", () => {
 
       // Fail the second case — its dialog must reset to Not selected, not inherit "Low". Severity is not
       // required, so File Bug works without picking one.
-      await page.getByRole("combobox").nth(1).selectOption("Failed");
+      await executionStatus(page, titleB).selectOption("Failed");
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "Severity" })).toHaveValue("");
       await expect(page.getByRole("button", { name: "Report Bug", exact: true })).toBeEnabled();
@@ -168,7 +173,7 @@ test.describe("auto bug-filing on Failed", () => {
 
     try {
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}`);
-      await page.getByRole("combobox").first().selectOption("Failed");
+      await executionStatus(page, title).selectOption("Failed");
 
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeVisible();
       await page.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -220,7 +225,7 @@ test.describe("auto bug-filing on Failed", () => {
 
     try {
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}`);
-      await page.getByRole("combobox").first().selectOption("Failed");
+      await executionStatus(page, title).selectOption("Failed");
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeVisible();
 
       // Ten: the most a bug takes (it used to be twelve, before a bug was capped at ten files).
@@ -1971,7 +1976,7 @@ test.describe("run detail — progress, defects and the bug modal", () => {
 
       // The inline status control is a <select>, and marking Failed is what opens this modal — the
       // same pattern the passing tests at the top of this file use.
-      await page.getByRole("combobox").first().selectOption("Failed");
+      await executionStatus(page, testcase.title).selectOption("Failed");
 
       await expect(page.getByText("Report a Bug", { exact: true })).toBeVisible();
       await expect(page.getByLabel("Severity")).toBeVisible();
@@ -2002,7 +2007,7 @@ test.describe("run detail — progress, defects and the bug modal", () => {
     try {
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}`);
       await expect(page.getByText(testcase.title).first()).toBeVisible();
-      await page.getByRole("combobox").first().selectOption("Failed");
+      await executionStatus(page, testcase.title).selectOption("Failed");
       await expect(page.getByText("Report a Bug", { exact: true })).toBeVisible();
 
       const assign = page.getByLabel("Assign to");
@@ -2030,7 +2035,7 @@ test.describe("run detail — progress, defects and the bug modal", () => {
 
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}`);
       await expect(page.getByText(testcase.title).first()).toBeVisible();
-      await page.getByRole("combobox").first().selectOption("Failed");
+      await executionStatus(page, testcase.title).selectOption("Failed");
       await expect(page.getByText("Report a Bug", { exact: true })).toBeVisible();
 
       await page.getByLabel("Assign to").selectOption(me.userId);

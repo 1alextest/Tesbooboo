@@ -280,6 +280,13 @@ export function seedJiraRequirements(
     `SELECT id FROM integration_connections WHERE organization_id = ${literal(organizationId)} AND provider = 'jira';`,
   );
   if (!connectionId) throw new Error("Could not resolve the seeded Jira integration connection");
+  // The page treats a provider as connected only when this project is mapped to it; synced
+  // tickets alone do not make the source usable.
+  exec(
+    `INSERT INTO jira_project_mappings (jira_connection_id, project_id, jira_project_id, jira_project_key, jira_project_name) ` +
+      `VALUES (${literal(connectionId)}, ${literal(projectId)}, 'e2e-screens', 'E2E', 'E2E screens') ` +
+      `ON CONFLICT DO NOTHING;`,
+  );
 
   const values = keys
     .map(
@@ -310,6 +317,11 @@ export function seedLinearRequirements(
     `SELECT id FROM integration_connections WHERE organization_id = ${literal(organizationId)} AND provider = 'linear';`,
   );
   if (!connectionId) throw new Error("Could not resolve the seeded Linear integration connection");
+  exec(
+    `INSERT INTO linear_project_mappings (integration_connection_id, project_id, linear_team_id, linear_team_key, linear_team_name) ` +
+      `VALUES (${literal(connectionId)}, ${literal(projectId)}, 'e2e-screens', 'E2E', 'E2E screens') ` +
+      `ON CONFLICT DO NOTHING;`,
+  );
 
   const values = keys
     .map(
