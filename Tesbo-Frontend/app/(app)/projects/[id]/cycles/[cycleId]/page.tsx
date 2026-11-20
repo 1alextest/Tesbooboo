@@ -2286,7 +2286,7 @@ export default function TestRunDetailPage() {
               <Button onClick={handlePanelSave} disabled={panelSaving}>
                 {panelSaving ? "Saving…" : "Save"}
               </Button>
-              <Button variant="secondary" onClick={() => openBugDialogFor(panelExecution)}>
+              <Button variant="secondary" onClick={() => openBugDialogFor(panelExecution)} data-testid="panel-log-bug">
                 <IconBug size={14} />
                 Log bug
               </Button>

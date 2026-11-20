@@ -1938,7 +1938,9 @@ test.describe("run detail — progress, defects and the bug modal", () => {
 
       // Choose a local value without submitting the explicit result writer, then report a finding.
       await page.getByRole("group", { name: "Execution status" }).getByRole("button", { name: "Failed", exact: true }).click();
-      await page.getByRole("button", { name: "Log bug" }).click();
+      // The drawer's own action: the row has an icon with the same title, and the case title
+      // contains "Log bug" as text, so a bare role/name locator is ambiguous.
+      await page.getByTestId("panel-log-bug").click();
 
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeVisible();
       const bugTitle = `E2E No-Save Log Bug ${Date.now()}`;
