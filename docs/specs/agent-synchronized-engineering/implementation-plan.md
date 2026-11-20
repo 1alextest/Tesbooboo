@@ -35,6 +35,23 @@
 
 **Independence:** all milestones have separate source-code review, authenticated API/MCP/DB/UI tests and role/permission negative tests; actual assurance team review of the **specification** is separate from implementer desk testing. The absence of an installed team runner must be labelled BLOCKED rather than simulated as executed.
 
+### Proposed GEX continuation of existing I0–I8 — not a parallel phase plan
+
+The outcome is *observed change → scoped code-dependency analysis → reasoned impacted native cases and unknowns → selected verification → original runner evidence → authorized QA/human decision*. Its implementation reuses existing F1–F6 and I3-Q; the proposed GEX labels are navigation tags, not new FR/T owners, schemas or Tesbo repositories.
+
+| GEX | Integrate with current owner | Independent outcome to prove |
+| --- | --- | --- |
+| 01 | I1/F1, FR-115/116; existing source binding/history, Zyra review | Hookless source commit appears through reconciliation; local uncommitted event has separate trust tier; restart recovers gaps |
+| 02 | I1/F1 + I4/F4, FR-116/118; existing observation graph | Scoped supported-language AST dependencies and explicit parser/dynamic/selection unknowns, with byte-backed identities |
+| 03 | I4/F4; FR-117/MBT-C Model Studio | Accepted model/guard/data/composed semantics are versioned, bounded and distinct from code observation; unsupported semantics refuse |
+| 04 | I4/F4; FR-118/119; `deriveQaReviewCandidates` | Direct/transitive candidates and unlinked/unknown scope explained against current native cases; no trust laundering or silent drop |
+| 05 | I3/F3 + I4/F4; model generator, shared native proposal workflow | Repeatable proposals, case matching, negative/recovery obligations, human approval and zero duplicate official publication |
+| 06 | I3-Q, T-201–207, native Run and external executor | Actual target action/assertion, build/oracle/fixture, immutable original report and linked retest; native model dispatch alone is insufficient |
+| 07 | I4/F4 + I6/F5; FR-118/119, evidence and run projections | Traceable obligation numerator/denominator, historical vs current, missing bytes/build and authorization-aware coverage |
+| 08 | I2/F2 + I3/F3 + I5/F5; Zyra/MCP/T-422 governance | One readable Change Packet, seven-domain applicability, honest actor evidence and human decisions; original case-free task loop remains mandatory |
+
+**Deployment/correctness gates:** Inspect current graph, model, notification, MCP, Run, file and review code/migrations at each implementation head. PR #167 remains separately open and owns some native model/run and P-07/P-18 corrective work; do not duplicate or silently supersede it. For each vertical slice, exercise denial/no-write, valid access, interrupted/restarted observer, stale source/model, parser uncertainty, duplicate/delayed event, source/target build mismatch, real attempt/evidence and authentic reviewer workflow. Model/workload budgets and weighted-selection value are measured rather than guessed. Old green CI or successful scenario discovery is not a release proof.
+
 ## Work package S — Skills Library and human-only governance substrate (bounded security foundation before agent writes)
 
 **Scope:** Reconcile existing proposed governed test/requirement/skill assets in `docs/reviews/governed-asset-evolution-reconciliation.md` against the eight Tesbo canonical specs and actual KB versions/ACL, case approval, Zyra, MCP and graph writers. Implement only a justified incremental extension. Inventory and lock all user/agent/REST/MCP/import/background/legacy publication entrances **before** claiming the guard can be enforced.
@@ -109,6 +126,9 @@ The *specification* is the review target; the teams' methodology is not being re
 - **Operations:** tool schema/version deployed identity, notification idempotency, rollback/cancel/retry, audit and history.
 - **Documentation:** descriptions match verified source and current UI; unimplemented features explicitly labeled proposed.
 
+- **Graph-extension falsifiers:** watcher/provider outage, duplicate/reordered/cancelled events, renamed/deleted source, unsupported/dynamic parse, direct/transitive/unlinked consumers, source/model/guard contradiction, cyclic/bounded path generation, existing-case equivalence and no duplicate write, native dispatch without target assertions, stale build/old Passed history, unavailable evidence bytes, foreign-project graph edge, revoked source binding and accessible role-specific UI.
+- **Evidence rule:** register new outcomes as ASE-FLOW-17..28 in the existing scenario matrix; map each to original FR/T/MBT/QA IDs under P-14 before canonical acceptance. Proposed tests, static source selection and prior successful CI do not constitute executed acceptance of these outcomes.
+
 ## Non-authorized actions in this PR
 
 Do not modify production tenants, delete/migrate live data, mark tests passed, claim target E2E verified, silently revise approved policies, assume all 58 source tools are deployed, alter agent charters, or merge before review and green checks. No actual assurance-team execution is recorded by writing this plan.
@@ -144,6 +164,14 @@ Do not modify production tenants, delete/migrate live data, mark tests passed, c
 - Integrate deployment/source/incident facts into existing reports, preserving provider attribution. Define DORA change lead time, deployment frequency, failed-deployment recovery time, change fail rate and deployment rework rate; avoid combining throughput and instability into a false safety score.
 - Add human-level time-to-understand, review effort, unmatched code changes, missing artifacts, inaccurate agent assertions, production defects and release rework only when observable.
 - Tests: blank deployment integration yields NO_DATA; failed release not excluded; rework deployment counted under explicit rule; clock normalization and period denominator; no causality claim from one snapshot.
+
+**GEX integration under F1:** first prove provider and optional local watcher observations remain distinct from immutable Git capture; support add/modify/delete/rename, missed-hook reconciliation, stale/out-of-order delivery and verifiable incremental/full source re-index without client-controlled server roots. Reuse current graph history and project source binding. An unhandled language, repository scope or dynamic relation is UNKNOWN, not a false no-impact candidate.
+
+**GEX integration under F4:** extend FR-117 Model Studio's current sequential generator only through versioned guarded/data/composed capabilities, then link verified source dependency paths to existing accepted model/requirement/case relationships under FR-118/119. Preserve original source/oracle/edge revisions, explicit unlinked candidate disclosure, coverage denominator and no duplicate native case creation. The internal Tesbo CI impact planner is not a new target-project graph owner.
+
+**GEX integration under F3/I3-Q:** native model-run creation is dispatch only. Join model obligations to the independently assigned executor with its own driver, original report bytes, verified assertions/build/fixture/oracle, separate retest attempt and exact human selection/review. Require real target proofs for conformance. Skill assignment and authoring governance do not arise from a watcher, graph path or code-derived test result.
+
+**Integration exits in order:** (1) source revision without agent is visible or explicitly UNKNOWN; (2) code-dependency links nominate native cases and preserve unlinked impact gaps; (3) bounded accepted behavior models propose nonduplicative scenarios; (4) target runner returns verifiable outcomes and coverage basis; (5) one source→QA→original evidence→retest→decision journey is proven in a disposable project. Different increments may ship partial capabilities, each labelled with unsupported semantics and unexecuted obligations; I3-Q cannot be skipped.
 
 **I1-I7 acceptance fixtures:** `requirements.md` R-ASE-37..48 and ASE-FLOW-01..16. These are **proposed tests**, not CI E2E executions or a new official canonical QA numbering authority. Bind every implementing task to existing original Tesbo FR/T/QA IDs after reading the current eight-file baseline.
 

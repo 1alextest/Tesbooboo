@@ -88,6 +88,27 @@ Measure project outcomes in two axes: delivery throughput and instability, plus 
 
 No application code, schemas, migrations, MCP catalog, user data or production configuration is changed by this documentation PR. The same eight canonical files now contain the 1.4.28 integration amendment and complete requirement/owner/task/proof crosswalk. These six repository files remain subordinate views. [The prior governed-asset evolution review](../../reviews/governed-asset-evolution-reconciliation.md) and earlier source receipts retain their historical scope; they do not override the current amendment or establish implementation/freeze.
 
+## Proposed GEX graph-continuation crosswalk — 19 November 2026
+
+**Status: PROPOSED, NOT CANONICAL-FROZEN, NOT IMPLEMENTED BY THIS DOCUMENT.** GEX-01..08 are capability/navigation tags, not new functional-requirement numbers, modules, Graph databases, or independent authority. Reconcile this delta into the **same eight** canonical 00–07 specifications under P-14 when exact v1.4.28 original bytes are available. The eight-file ZIP was identified in the Project Library but raw bytes could not be read or written in this session; **the canonical ZIP is unchanged**. These six repository documents are subordinate integration views.
+
+| GEX capability | Existing authoritative owner / identifiers | Existing capability → missing verified extension |
+| --- | --- | --- |
+| GEX-01 source observation | FR-115/116, T-455/456, R-ASE-37/45; project source bindings, pinned Git capture and graph history | Manual authorized capture and recovery of notifications exist. Optional local watch/provider reconciliation, interruption recovery and exact source-generation history are not an always-on observer today. |
+| GEX-02 code dependencies | FR-116/118, T-426/455; implementation observation graph, graph comparison, current CI impact selector | Byte-scoped source declarations exist, but complete AST-based import/call/data/event/API/test dependency mapping for arbitrary target projects is unproven. Tesbo's CI test-impact selector is not customer-project semantic coverage. |
+| GEX-03 expected behavior | FR-117 / existing MBT-C/MBT-AC; Model Studio revision and graph services | Approved sequential model revisions and bounded path proposals exist. Guards, data/variable effects, composed models and independently accepted advanced semantics remain proposed. |
+| GEX-04 code→test impact | FR-118/119, T-457/458, R-ASE-19/40; native graph/case reference reader | Current `deriveQaReviewCandidates` uses changed cases/cached requirements and explicit references; there is no general verified code-callgraph-to-native-case traversal. |
+| GEX-05 scenario discovery | FR-117 generator, native Test Cases, FR-027–037 shared staging/review | Deterministic bounded path proposals and Draft conversion exist; accepted guard/data/negative-path obligations, duplicate-case checks and safe budgets are not yet proven. |
+| GEX-06 model-guided execution | Native Tasks, Runs/Executions, T-201–207/T-301–308, model `run_behavior_model`; I3-Q | Governed model dispatch creates a native Test Run. It is **not** execution of a target action or assertion. Reuse original external executor/report/evidence/retest loop, not another runner. |
+| GEX-07 verified coverage | FR-118/119, native attempt/evidence/defect owners; model run manifests | Model mapping and recorded case result rollups are distinct from witnessed behavior. Build/oracle/fixture/element and retrievable evidence must support any conformance claim. |
+| GEX-08 agents and humans | R-ASE-01..48, FR-115 Change Packet, Zyra/MCP, T-422/D-14 Skills | Existing human-governed case/model/publication controls persist. Model and source work joins the same seven-domain applicability/approval loop; original case-free I3-Q remains its own mandatory exit. |
+
+**One graph architecture:** implementation dependencies, independently accepted behavior and traceability/evidence are distinct *views over existing owners*, not a mandate for three stores. Every relation has type, evidence grade, revision and scope; a source-observed edge is not an approved behavior oracle, a linked case is not verified coverage and a generated path is not a passed result. Supported/unknown/partial must remain visible.
+
+**Research only, no automatic dependency decision:** GraphWalker (https://graphwalker.github.io/graphwalker-rs/model-based-testing.html), CodeGraphContext watching (https://codegraphcontext.github.io/CodeGraphContext/watching/), and TDAD graph impact analysis (https://arxiv.org/html/2603.17973v1) inform requirements but are not adopted engines, performance guarantees or Tesbo authorization surfaces. Confirm license, support, language/graph fit and reproducible local evidence before adding a dependency.
+
+**Pinned source truth:** `development@6897f989`. PR #167 is OPEN and contains partially validated governance/model/run fixes also touching this repository's implementation plan; preserve and reconcile it before merge. No deployment, live target test or team-run assurance is asserted by this documentation change.
+
 ## Current integration details
 
 | Truth / label | One authoritative owner and canonical work | Integration decision |

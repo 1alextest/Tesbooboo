@@ -40,6 +40,8 @@ Agent-generated case changes enter **FR-027–037 shared unpublished staging**, 
 
 **Acceptance:** Source code change proposes a negative-path case and a regression update; reviewer can accept either, reject either, and see exactly which persisted approved case changed. An unapproved case cannot enter an approved-only run through REST/MCP/automation.
 
+**GEX-03/05/06 extension (proposed):** Reuse FR-117 Model Studio and native case/review/run owners for bounded, deterministic *scenario proposals* from independently accepted expectation revisions. Capability/version metadata distinguishes supported sequential models from proposed guarded/variable/data/composed models; unsupported semantics are refused, not silently simplified. Match existing canonical cases before requesting a new case. A path proposal, published/approved case, selected run and genuinely executed target observation are different records. Generated candidates pin model revision, source of expected behavior, options/digest, fixture assumptions and approvals; never self-publish or set a result.
+
 ## R-ASE-07 — Manuals and technical documents
 
 Tesbo shall distinguish internal staff/operator/admin/support/developer documentation from external/end-user/partner documentation and independently govern audience, access/exposure, authority and product/feature applicability; internal/external is not a two-value replacement for manual type. Each document subtype may resolve distinct approved skills. Tesbo shall support versioned user-manual content with audience/screen/feature applicability, preserved document identity, section-level diff where feasible, reviewer status, and links to affected requirement/behavior. Use the existing Knowledge Base as canonical document owner. Distinguish observed/verified behavior from documentation inferred from code.
@@ -88,6 +90,8 @@ Capture independently: observed source commit/revision, declared expected behavi
 
 **Acceptance:** Code passing local/unit/E2E tests does not change a production-deployment verification status. If the target build is unknown, show it as unknown.
 
+**GEX-07 extension (proposed):** Verification history shall distinguish modeled obligations, linked cases, admitted selections, actually executed attempts, outcome observations and independently verified conformance. Evidence pins exact target build/environment, accepted model/oracle revision, guard/data/actor fixture, original runner receipt, artifact-byte state and decision principal. The denominator and excluded/unknown obligation scope are explicit. An older Passed case, graph edge or governed native Run does not constitute evidence for a newer code/model revision.
+
 ## R-ASE-15 — Agent instructions as portable trigger
 
 Publish a short, app-agnostic `AGENTS.md`/`CLAUDE.md` rule that fetches the exact active governing skills (including approved meta-skill when proposing a new skill), refuses absent/conflicting required assignments, and triggers applicable Tesbo updates for any development iteration, chooses the bound project securely, queries capabilities and existing records, respects authority/approval, records disposition of every domain, and closes with truthful links/gaps. Its content shall be phrased as general principles with context-sensitive decisions, not fixed Tesbo/Nesberry business answers.
@@ -117,6 +121,8 @@ All reads/writes shall honor project/organization memberships, immutable skill h
 When the underlying source, policy, requirement or manual changes, the existing graph/change-review machinery shall identify affected linked artifacts and signal **review candidates** with freshness/provenance labels, including absent, uncertain and indirect links. A link is not proof of coverage.
 
 **Acceptance:** Changing a requirement revision marks affected case mapping stale pending review; a change with no evidence-backed edge is not invented as a definite impact.
+
+**GEX-02/04 extension (proposed):** For changed source declarations and verified AST-level supported dependency relationships, derive direct/transitive *review candidates* using the existing graph and FR-118/119 link owners; annotate source span, relationship direction/type, parser/model version, origin, freshness and why each native case or uncovered obligation is implicated. Unsupported languages, dynamic dispatch, missing consumers, stale/incomplete parser scope and absent code-to-case bridges remain explicitly UNKNOWN/INCOMPLETE. An empty list cannot mean `no affected tests` without a fully reconciled declared scope. Impact ranking is advisory and must not suppress high-risk, unknown or independently required regression obligations.
 
 ## R-ASE-20 — Observable work completion
 
@@ -211,6 +217,8 @@ Tesbo shall support multiple **optional** authenticated change observers, includ
 
 **Acceptance:** A commit pushed without any agent hook produces a visible unmatched change or missing-observation gap through the configured provider reconciliation; duplicate/out-of-order PR callbacks do not duplicate Change Packets; a deleted source binding cannot silently capture another project.
 
+**GEX-01 extension (proposed):** Authorized optional *local* watchers can report provisional add/edit/delete/rename events, but must not submit trusted server checkout paths, immutable Git attestations, accepted behavior or approvals. Provider source revision reconciliation remains independently available without a running agent. Recovery handles missed notifications, atomic-write replacements, offline intervals, restarts, force-pushes, renamed/deleted files, selection/ref changes, duplicate/out-of-order events and scope/authorization drift. Source snapshots remain pinned to verified Git objects; event coalescing must not erase distinct material revisions, and a partial/inaccessible scan cannot become a complete no-change certificate.
+
 ## R-ASE-38 — Verified agent activity and understandable progress
 Tesbo shall provide one attributable human-readable activity timeline for an application change, using existing Zyra agent sessions/tasks, graph observations, native logs and authorized external agent event adapters. Each event explicitly distinguishes `tesbo_observed`, `provider_attested`, `agent_reported`, `derived_inference` and `unobserved`; record source, authenticated actor vs delegated agent, time, context/revision, status, retained evidence and privacy scope. Do not claim visibility into local/remote tool actions Tesbo never observed, reconstruct hidden agent reasoning or expose private context to unauthorized reviewers. Support liveness, interruption and unknown status without treating silence as success.
 
@@ -226,10 +234,14 @@ Before recommending publication or release, Tesbo shall be able to check typed r
 
 **Acceptance:** A coding agent implements a permission behavior forbidden by an approved policy; Tesbo flags the contradiction rather than generating a matching "requirement" and passing its own check. A missing requirement does not automatically prove one should exist or that the code is invalid.
 
+**GEX-03/04/07 extension (proposed):** Consistency checks compare three distinct, revision-aware axes: observed source structure, independently accepted expected behavior and witnessed execution/evidence. A correct Git blob is not a semantically correct implementation; an agent-suggested transition is not an approved oracle; a graph-to-case link is not execution coverage. Proposed guarded models, bounded variable/data effects and composed journeys must undergo accepted-oracle review and capability validation before use in verification. Preserve disagreement, incomplete source, missing links and changed/stale basis as explicit review items.
+
 ## R-ASE-41 — One role-sensitive Change Workspace
 The existing Tesbo project/Zyra/graph shall expose a single navigable, role-authorized view of the change, with common immutable record identities and revision links. Developer, solo creator, QA, BA/product, PM, policy/security, support/operations and authorized executive views use the same underlying records, customized to their decisions—not different record stores. Show observed agent activity versus self-report, dependencies, requirements/policy impact, test and documentation draft/review state, task owners, release blockers and next actionable review steps. A user must be able to drill into evidence and return to context without a raw log or a separate agent product.
 
 **Acceptance:** Three role views on the same Change Packet show consistent revision IDs, differentiated visibility and no cross-role confidentiality leaks. A low-knowledge reviewer can answer what changed, why, who is accountable and what remains unproven.
+
+**GEX-04/08 extension (proposed):** Present change→affected dependency→potentially affected requirement/model element→existing native case or unknown gap→subsequent original execution/evidence as one authorized, navigable explanation. Show observed/inferred/accepted status, direct/transitive provenance, limitations and next allowed reviewer action. Never fabricate additional native records to complete the diagram, leak another project, or mistake a proposed path for a runnable case.
 
 ## R-ASE-42 — Evidence-aware release readiness and human decision
 Tesbo shall provide a **computed, explainable release-readiness projection** bound to a specific source/PR/commit, build/deployment candidate, approval and evidence scope. Its `readiness` is `not_assessed|insufficient_evidence|blocked|ready_for_authorized_decision`, with reason codes and freshness. Human decision, deployment observation and post-deployment verification are separate axes. `released_with_known_risks` is a derived presentation of an observed deployment plus its exact authorized risk decision, never the only release state or a pre-deployment readiness value. Assessment phase is explicit: pre-deployment evidence concerns the tested candidate build; post-deployment acceptance requires the observed deployed build and smoke/monitoring evidence. Do not require future production evidence to approve an initial deployment, or infer it from that approval. Evidence inputs shall include approved expectation versions, coverage scope, case/run approval, executed selections and results, observed target-build identity, blocking defects, policy conflicts, unresolved changes, rollout/rollback plan and responsible release owner. A green CI check or count of linked cases cannot by itself make an application "safe" or verified. Original human controlled publication (P-07) stays in force pending any separately ratified amendment.
@@ -250,6 +262,8 @@ Tesbo shall calculate or ingest **source-grounded** delivery measures with expos
 For relevant sources and agents, define receipt identities, source/event version, capability flags, clock skew, out-of-order status, event loss and retry/cancellation. Tesbo shall use native graph history and notification writers to deliver change candidates and review tasks with idempotency, dead-letter/recovery and observable queue age. Do not require an always-running local coding agent; provider reconciliation and manual resync must be possible where permitted.
 
 **Acceptance:** A code change observed by provider after the agent process exited still appears in impact review; reconnecting two clients with the same event does not duplicate a requirement; dropped notifications remain visible as pending/failed delivery.
+
+**GEX operational scope (proposed):** Watched sources, parser inventory, dependency traversal, model exploration, scenario generation, tenant fanout and data/evidence checks shall have measurable configurable work/size/depth/latency budgets, cancellation, backpressure and honest partial receipts. No `complete` status after timeout/budget exhaustion. Set baseline recall/false-negative and false-positive measures against independently authored/held-out target changes before claiming faster regression selection or a quantified improvement; avoid extrapolating published third-party benchmarks.
 
 ## R-ASE-46 — Privacy and least-privilege agent trace visibility
 Tesbo shall distinguish operational trace metadata from optional sensitive prompt/tool payloads. Session logs, evidence, skill text, source snippets and externally linked files obey project/role/retention/redaction/access rules. Access to a high-level release summary does not grant access to private agent prompts, documents, secrets or protected QA evidence; collection and retention of detailed agent traces shall be configurable and bounded.
@@ -287,6 +301,21 @@ Agents may begin with spontaneous feature development, a defect fix, a requireme
 | ASE-FLOW-16 | Lost hooks, out-of-order provider events, duplicate agent submission | Dedupe, freshness gaps, bounded retries and no false complete/approved records |
 
 **Evidence gate:** these rows are implementation acceptance requirements, not executed tests or formal assurance-team verdicts. These same scoped scenario IDs are now carried in canonical revision 1.4.28 alongside the preserved FR/T/QA/AC and MBT namespaces; definitions, integration trace and execution state remain separate.
+
+| ASE-FLOW-17 | No agent/watch process runs while an authorized source commit lands | Provider reconciliation finds the change or records source-gap/UNKNOWN; no fabricated unchanged state |
+| ASE-FLOW-18 | Local file save/atomic rename before commit | Provisional watcher signal remains distinct from pinned Git capture; no client path accepted as server source authority |
+| ASE-FLOW-19 | Delete/rename, source selection change or forced branch movement | Version/tombstone/discontinuity is visible; historical links preserved; no false no-impact |
+| ASE-FLOW-20 | Unsupported AST or dynamic call prevents complete mapping | Partial/unknown parser scope and possibly affected tests remain visible, not an empty safe-to-skip claim |
+| ASE-FLOW-21 | Change has direct, transitive, explicit native-case and unlinked consumers | Candidate paths and missing links have truthful, typed explanations; no invented case coverage |
+| ASE-FLOW-22 | Implementation violates accepted model guard or policy | Expected revision stays independent; contradiction is referred for human decision |
+| ASE-FLOW-23 | Bounded guarded/data/composed model with invalid and cyclic paths | Supported semantics generate reproducible proposals, unsupported semantics refuse, traversal budget cannot certify full coverage |
+| ASE-FLOW-24 | Generated scenario overlaps an existing native case | Identify existing case and request review; avoid duplicate publication or undocumented semantic equivalence |
+| ASE-FLOW-25 | Model approved but case stale/Draft or no executor is available | Native run admission respects approved/revision eligibility, no target-executed status without a runner |
+| ASE-FLOW-26 | Case Passed on previous build, missing evidence bytes or new expected model | Historical result remains intact; new obligation stays stale/unverified |
+| ASE-FLOW-27 | Missed provider events, repeated/delayed callbacks, cancelled long scan | Reconciliation has bounded recovery and one canonical history, no duplicate official writes |
+| ASE-FLOW-28 | Unauthorized cross-project relation or multi-repository request on single-binding deployment | Cross-project denial; honest unsupported/partial multi-source status and preserved binding generations |
+
+**GEX acceptance note:** ASE-FLOW-17..28 extend the **existing** planned suite, not a second native test-case repository. All outcomes are PROPOSED / NOT RUN; preserve ASE-FLOW-01..16, all historical QA/MBT IDs and P-14 canonical ownership. Independent assurance teams are given objective and sources, not these as preselected findings or prescribed test steps.
 
 ## Skills governance executable acceptance scenarios (proposed, not run)
 See [skills-governance.md](skills-governance.md) `SK-E2E-01..28` for the authorization, lifecycle, audience, composition, concurrency, stale-binding and malicious-candidate test contract. Those scenarios are required in the disposable-project gate; source-spec text alone is not execution evidence.

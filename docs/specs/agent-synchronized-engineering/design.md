@@ -227,6 +227,14 @@ No implementation or current deployment claim is implied by this section.
 - Source-change detection may suggest *review*, never directly mutate approved requirements/testcases/policies or set release readiness to ready. Capture acknowledgments and queue delivery use the existing graph history/notifications and outbox/worker substrate, backed by replay and dead-letter monitoring.
 - Multi-repository/dependency scopes are configured explicitly; report `impact_incomplete` for unbound sibling repos. Historical captures are never rewritten by later source events.
 
+### GEX-01/02 extension — observe, index and reconcile without new graph ownership
+
+Use the existing `ProjectSourceGraphCoordinator`, `project-source-binding`, `LocalPinnedGitSourceReader`, `implementation-source-verifier`, `current-cache-graph.history` and `graph-comparison-gate` as their true currently implemented owners. The present authorized capture reads pinned local Git; it is **not** an always-running local watcher or general per-project code semantic graph. Extend the existing binding/history and event/queue adapters rather than install a second graph database or alternate recording authority.
+
+Maintain three independent origins: (A) optional working-tree event, marked provisional/possibly uncommitted; (B) authenticated repository/CI/deploy provider event bound to the original stable source-binding configuration generation; (C) server-authorized immutable pinned-Git byte capture, after binding/membership/ref revalidation. Only (C) supplies verified Git bytes; neither (A) nor (B) approves expected behavior or target test outcomes. Local watchers have explicit opt-in, scoped permission, ignore/race/debounce constraints and no ability to select server filesystem roots.
+
+For a declared supported parser/language profile, source observations may project imports, calls, symbols, data dependencies, API/routes, event consumers and test reference declarations. Node/edge origin records project/repo/binding generation/ref/commit/tree, parser and schema version, exact file/line/digest and observed-vs-inferred classification. Handle dynamic/reflection edges as UNKNOWN, not absent. Re-index bounded changed source with dependency invalidation and periodically reconcile from the last verifiable provider/revision checkpoint; support a bounded full rebuild. Deletes/renames, changed source selections, branch rewrites, restart, missed events and unknown inventory completeness produce explicit discontinuity or gap records. No zero-impact conclusion follows from a partial index.
+
 ## 12. Agent activity, claims and the human Change Workspace — GitLab precedent
 **Existing owner:** Zyra's sessions/task/activity, graph review and native change linkage; no separate assistant/agent database. Externally connected coding agents may publish authenticated telemetry or scoped MCP calls without being granted UI-human powers.
 
@@ -268,6 +276,18 @@ A read-only cross-artifact analyzer operates on typed **approved source obligati
 
 **Completeness boundaries:** first inventory material user goals, actors, states, interfaces, upstream/downstream consumers and negative/recovery paths. Maintain a denominator of assessed vs missing/unverified scope. All change candidates point to canonical records and existing graph; none automatically reclassifies historical executions. Report coverage separately for authored cases, approved cases, execution, deployed target validation and currently reviewed requirement revision. Re-run bounded consistency on relevant source/policy/requirement/skill head changes.
 
+### GEX-03..07 extension — one implementation/behavior/evidence graph composition
+
+**One existing set of owners; three logical views:** implementation/source observations (FR-116), human-accepted expected behavior (FR-117 Model Studio), and canonical typed relationships plus QA/evidence records (FR-118/119 and native cases/runs/tasks/bugs/files). Compose authorized reads by exact project/revision; do not store equivalent source, requirement, model, test execution or Bug facts in new independent tables. Each edge has a type/direction, originating owner and version, provenance/trust tier, lifecycle, ACL and freshness. Proposed/inferred `could_affect`, source-declared `calls` and human-accepted `maps_to_model` do not become verified `covers` edges through traversal.
+
+**Impact:** compare only comparable source scope, follow justified direct and transitive dependency paths and bridge to a native case only through a verified/accepted mapping. Keep source-only changes and unlinked modules visible as gaps. The current `qa-review-candidates.ts` uses changed cached requirement and case references, not a general source-to-test dependency map. Tesbo's internal `scripts/test-impact.mjs` remains a separate CI selection heuristic; treat its output as comparative selection evidence, not canonical source graph truth. Optional weighted ranks need versioned rationale, calibration, and an independent missed-regression benchmark; they must not silently prune unknown, critical or policy-required tests.
+
+**Model semantics:** reuse immutable model revisions, `ModelStudioPreview` and `model-studio-generator`. The current sequential parser rejects guards/effects, so richer guarded conditions, constrained variable/data effects, negative/recovery obligations and composable submodels need versioned syntax and deterministic safe evaluation. Model expressions are bounded inert data, never arbitrary scripts/network/credentials. Define initial/exit/shared state and model identity before cross-model traversal. Concurrent/time/distributed semantics remain unsupported unless separately proved. Proposed behavior inferred from code must not self-authorize the oracle. Bound path count, depth, state/data explosion and runtime, report incomplete exploration and preserve input/seed/strategy/digest for replay.
+
+**Discovery and execution:** match proposed cases against native case identities and reviewed semantic basis; a model path is not a new case until human-approved native publication. Governed `run_behavior_model` dispatch creates a native Run with manifest, **not a target execution**. Reuse I3-Q's existing assigned executor/driver → original immutable report/evidence → analysis → distinct retest → human-selected apply. For model-guided execution require supported action resolver, fixture/data setup, assertion/oracle, exact tested build/environment and actual runner observation; unsupported adapters yield blocked/unverified, never fabricated Passed/Failed.
+
+**Coverage:** key the denominator to accepted model revision, obligation (state/transition/guard/data/journey), target build, environment and relevant actor/fixture scope. Report structurally modeled, mapped, selected, attempted, independently witnessed conformant, failed, historical, stale and unknown separately. A native result alone is not verified model conformance; a previous Passed result is historical for a new source/model revision. Evidence-byte availability, actual assertion, human approval and build provenance remain independent axes. Preserve `coverageAssertion: none` until a capability-specific proof actually supports a narrower assertion. Never mutate an old attempt or auto-change a Bug-linked execution verdict.
+
 ## 15. Release readiness, after-release outcomes and DORA-style metrics
 **Reuse:** existing runs/executions/bugs, reports/dashboards, project releases and Graph/Zyra change review as applicable; extend one project-level role-sensitive reporting projection. Do **not** invent a new release-authority database or allow an LLM to determine whether production is "safe."
 
@@ -299,6 +319,15 @@ A read-only cross-artifact analyzer operates on typed **approved source obligati
 | D-ASE-REL-02 | Smoke fails after deploy; rollback succeeds | Original CI result remains historical; incident/recovery tracked on correct build |
 | D-ASE-GOV-01 | Native Copilot in owner browser session tries assigning skill | Server denies delegated action lacking exact interactive human consent |
 | D-ASE-PRIV-01 | PM views general release status | No private prompt, secret, legal attachment or draft history leak |
+
+| D-ASE-GEX-01 | Local watcher stops; authorized provider change occurs | Reconciliation catches change or records UNKNOWN; no fictional unchanged status |
+| D-ASE-GEX-02 | Changed function has indirect/unknown consumers, source map partial | Explicit incomplete impact and candidate paths, not certified zero affected tests |
+| D-ASE-GEX-03 | Source file renamed/deleted or branch changes mid-index | History/discontinuity preserved; unsafe partial capture refused |
+| D-ASE-GEX-04 | Source-declared behavior contradicts approved guard/policy | Human review of contradiction; no automatic new accepted model |
+| D-ASE-GEX-05 | Cyclic guard/data path exhausts generation budget | Bounded refusal/partial proposal and honest denominator |
+| D-ASE-GEX-06 | Model dispatch succeeded but no runner executed target assertions | Run remains unexecuted; zero verified behavioral coverage |
+| D-ASE-GEX-07 | Wrong build, old case Passed, missing evidence bytes | Historical facts preserved, new obligation unverified |
+| D-ASE-GEX-08 | Client forges source root/model relation or crosses project | Authorization denial and no protected record/evidence alteration |
 
 **Minimum proof:** backend authorization/db/queue checks + real project MCP and native UI, provider event fixture, source/deploy identity, independent QA observed evidence and at least two role-specific user journeys. Executed proof and independent assurance-team review remain separate from this proposed design.
 

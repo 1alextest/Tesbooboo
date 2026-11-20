@@ -156,6 +156,8 @@ The governed Skills Library exists to make the **entire Tesbo human-and-agent de
 - A **consistency analyzer** compares observed/inferred behavior against independently authorized requirements/policies; its output is a review candidate, not a newly approved normative source.
 - A **release-readiness calculation** combines independently sourced status/evidence and human decisions, never an AI certification or automatic proof of defect-free software.
 
+**GEX boundary:** an observed code dependency, model path, optional watcher or scored impact suggestion may inform a test-design *candidate*. None creates an effective governed skill, authorization for a script/executor, approved requirement, automatically published case, native Passed result or certified coverage. Imported GraphWalker/CodeGraphContext/TDAD-style packages require ordinary dependency/skills review and stay inert until authorized. Independent agents receive an outcome and source context, not an expected finding list or scripted assurance answer. The canonical T-422/D-14 effective-skill resolver and P-07/P-18 controls remain unchanged.
+
 ### 13.2 Governing skill resolution in a multi-step composite workflow
 Before authoring, the agent retrieves approved effective skill IDs, immutable version IDs and digests per **applicable** module and subtype. Server-side compound operations check each sub-operation's skill constraints, project scope, changed content revision and native writer. A requirements skill cannot silently govern test-case publication, and the skills-authoring meta-skill cannot override project P-07 approval, P-18 external MCP consent or actual run evidence.
 
@@ -178,6 +180,11 @@ Compare candidate skills using held-out task fixtures, failure patterns, omissio
 | SK-E2E-26 | Requirements skill conflicts with actual approved policy | Skill format is not a policy override; consistency checker raises authoritative conflict |
 | SK-E2E-27 | Post-release metrics worsen after a skill upgrade | Historical skill and release facts remain accurate; no fabricated skill effectiveness or silent version rollback |
 | SK-E2E-28 | External source event arrives without any agent session | Source revision may enter graph review, but no fictional agent skill-use or action history is attached |
+
+| SK-E2E-29 | An approved testing skill is used when graph impact has missing code-to-case links | Skill-guided candidate design is allowed, but UNKNOWN remains visible; no unreviewed new requirement/case or fake coverage |
+| SK-E2E-30 | A skill/tool claims a native model run was automatically executed successfully | Without original target action/assertion receipt, verified build/oracle/fixture and evidence, coverage stays unverified; no skill can self-certify |
+
+GEX work extends this **same** governed skills test suite; it does not create another Skills/Graph authority.
 
 **Implementation boundary:** P-14 remains authoritative. Canonical revision 1.4.28 now contains these proposed contracts in the same eight files; this view is not an independent specification owner. Undecided authority/root recovery and operating policies still gate implementation. No actual MCP/REST capability or skill authority is granted by this text.
 

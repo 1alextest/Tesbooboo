@@ -32,6 +32,14 @@
 >
 > **Completion:** This work is not record-complete until the seven-domain applicability assessment and truthful Tesbo synchronization receipt exist. A blocked domain remains visible as a blocker/exception, never silently passes.
 
+### Proposed GEX observation/impact behavior for supported clients
+
+When a deployed Tesbo client actually advertises graph-context and impact capabilities, retrieve the **outcome-level** reasoned source→dependency→accepted behavior→native case/evidence mapping with original source versions, known scope, unsupported/UNKNOWN and available reviewer actions. Give independent agents a goal and grounded context; **do not give them preselected results, force a checklist of steps, prescribe which faults must be found or treat a risk hypothesis as a finding**. Agents should select their own defensible test strategies and explain authentic outcomes.
+
+An optional client watcher records provisional working-tree activity, not trusted server source bytes or accepted requirements. Use authoritative provider/pinned Git reconciliation when available; do not smuggle local paths or model assertions into privileged capture. Distinguish model proposal, Draft case, approved case, governed Run dispatch, executed attempt and verified behavior. A graph-generated path cannot mark Passed, and lack of a code-to-case bridge is a review gap, not permission to skip regression. Original I3-Q task/assigned driver/original report/retest/human apply continues without any mandatory model-first phase.
+
+Independent assurance teams remain on their **original charters**; provide exact spec/source and desired outcome without seeded diagnoses. A draft author reviewing their own text is not a completed independent team run.
+
 ## Notes for installing this rule
 
 - Paste the block above (without the blockquote markup if desired) into the application's existing `AGENTS.md` or `CLAUDE.md`; do not overwrite existing security/test rules.
