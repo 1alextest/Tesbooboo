@@ -62,3 +62,35 @@ test('incomplete source data fails closed', () => {
   assert.equal(evaluateAssuranceReviews({changedFiles,head:'missing',author:'author',reviews:[]}).status,'blocked');
   assert.equal(evaluateAssuranceReviews({changedFiles:undefined,head,author:'author',reviews:[]}).status,'blocked');
 });
+
+test('the live GitHub gate checks evidence on the exact PR head, not a previous branch or PR text', async () => {
+  const { run } = await import('./assurance-pr-gate.mjs');
+  const previous = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(String(url));
+    const data = String(url).includes('/pulls/7/files?')
+      ? changedFiles.map(filename => ({ filename }))
+      : String(url).includes('/pulls/7/reviews?') ? valid
+      : String(url).endsWith('/pulls/7') ? { head: { sha: head }, user: { login: 'author' }, draft: false }
+      : { type: 'file', size: 200 };
+    return { ok: true, json: async () => data };
+  };
+  try {
+    const outcome = await run({ repository: 'example/tesbo', prNumber: 7, token: 'not-a-real-token' });
+    assert.equal(outcome.status, 'review_provisionally_verified');
+    assert.equal(urls.filter(u => u.includes('/contents/')).length, 2);
+    assert.equal(urls.every(u => !u.includes('ref=development')), true);
+    assert.equal(urls.filter(u => u.includes('/contents/')).every(u => u.endsWith('ref='+head)), true);
+  } finally { globalThis.fetch = previous; }
+});
+
+test('unavailable GitHub review evidence blocks, never counts as an empty approved set', async () => {
+  const { run } = await import('./assurance-pr-gate.mjs');
+  const previous = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 403 });
+  try {
+    await assert.rejects(run({ repository: 'example/tesbo', prNumber: 7, token: 'not-a-real-token' }),
+      /GitHub review evidence fetch failed: 403/);
+  } finally { globalThis.fetch = previous; }
+});
