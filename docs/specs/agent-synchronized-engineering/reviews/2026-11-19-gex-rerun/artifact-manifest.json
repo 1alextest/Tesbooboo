@@ -1,11 +1,11 @@
 {
   "run": "GEX-ASER-2026-11-19",
-  "scope": "Delivered supporting evidence; this manifest excludes itself. Primary review members retain their own frozen manifest.",
+  "scope": "Supporting evidence; original v16/36 review unchanged, later canonical, publication and CI maintenance separately attributed.",
   "files": [
     {
       "path": "README.md",
-      "bytes": 4976,
-      "sha256": "30a4760c31579f9d08960fb3eca813478042670103e8f17796db89f8be16ff0f"
+      "bytes": 7746,
+      "sha256": "68047784f3af1421ec63c201535f25dddbf77116cd6b1a0821965daadf4f83f5"
     },
     {
       "path": "ac49-reconciliation-analysis.md",
@@ -49,8 +49,8 @@
     },
     {
       "path": "input-transitions/README.md",
-      "bytes": 1216,
-      "sha256": "b8d2a20ca5e1a7ed4e1bbd534c5eec5caaa407de0ca4c2b3a171dcd7a2d61995"
+      "bytes": 1550,
+      "sha256": "d4937036278cd537e7910d5db2cdaa677336e94768ad64bf577e9f2e8b9e81b1"
     },
     {
       "path": "input-transitions/reconstruction-receipt.json",
@@ -404,8 +404,33 @@
     },
     {
       "path": "post-review-publication/README.md",
-      "bytes": 1540,
-      "sha256": "7024130455e7a9dfd3556d646171afab2c0f9d5a85457374553ef7ef0cdcda25"
+      "bytes": 4215,
+      "sha256": "3350b920e652028e21a6d0a12bc540023df171296b88200323acaee6ea1e98f5"
+    },
+    {
+      "path": "post-review-publication/canonical38-scope.json",
+      "bytes": 2140,
+      "sha256": "270a0683b8e79dfff532405af352ab94251b39c7166b030db4857023b382e1bb"
+    },
+    {
+      "path": "post-review-publication/ci-concurrent-identity.json",
+      "bytes": 433,
+      "sha256": "dfae03c1625fa4074ceb89b45073e02cb21e296014cfe108a936f98560c31228"
+    },
+    {
+      "path": "post-review-publication/pr169-delta-merge.md",
+      "bytes": 2481,
+      "sha256": "5fc5e33d541fe964e524e063a78c9c3030ee5709fa33b954353ee097e9553edc"
+    },
+    {
+      "path": "post-review-publication/pr169-reconciliation.json",
+      "bytes": 2136,
+      "sha256": "6796aa0efc300adc21d2c3adcaed1ef3d82da323705b10e8c851b78c2b810fea"
+    },
+    {
+      "path": "post-review-publication/pr169-view-reconciliation.patch",
+      "bytes": 7361,
+      "sha256": "268362038a62323f8cb9b4023167b5354fa5102a6e8a8d1184a72a845f8cd548"
     },
     {
       "path": "post-review-publication/preservation.json",
