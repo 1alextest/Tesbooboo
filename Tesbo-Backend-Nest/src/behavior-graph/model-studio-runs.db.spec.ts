@@ -302,6 +302,41 @@ function latch() {
     )).rows[0]).toEqual({ item_removed: true, execution_removed: true, status: "Passed" });
   });
 
+  it("counts each native result once when one case has multiple valid model mappings", async () => {
+    const basis = await ready(), s = services();
+    // The original link maps start/finish/done; the additional distinct link is legitimate.
+    await s.repository.linkCaseForUser(user,project,basis.modelId,basis.revisionId,{
+      testcaseId: basis.testcaseId, elementIds: ["finish"]
+    });
+
+    const createPassedOccurrence = async (name: string) => {
+      const run = await s.legacy.createCycleWithTestcasesForUser(user,project,{
+        name, testcaseIds: [basis.testcaseId]
+      });
+      const executions = await s.legacy.executionsForUser(run.cycle.id,user);
+      expect(executions).toHaveLength(1);
+      await s.legacy.updateExecution(executions[0].id,user,{ status: "Passed" },{
+        expectedCycleId: run.cycle.id
+      });
+    };
+
+    await createPassedOccurrence("Distinct source observation one");
+    const first = await s.repository.coverageForUser(user,project,basis.modelId);
+    expect(first.links).toHaveLength(2);
+    expect(first.elements.find((row: Body) => row.id === "finish")?.linkedCases).toBe(1);
+    expect(first.caseEvidence).toEqual([expect.objectContaining({
+      testcaseId: basis.testcaseId, statusCounts: { Passed: 1 }
+    })]);
+
+    await createPassedOccurrence("Distinct source observation two");
+    const second = await s.repository.coverageForUser(user,project,basis.modelId);
+    expect(second.links).toHaveLength(2);
+    expect(second.caseEvidence).toEqual([expect.objectContaining({
+      testcaseId: basis.testcaseId, statusCounts: { Passed: 2 }
+    })]);
+    // Two native executions legitimately count twice. A second model link does not.
+  });
+
   it("keeps a legacy manifest UNKNOWN even when today's native occurrence has a passing result", async () => {
     const basis = await ready(), s = services(), original = await dispatch(s,basis);
     const native = await s.legacy.createCycleWithTestcasesForUser(user,project,{
