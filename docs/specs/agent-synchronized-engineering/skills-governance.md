@@ -186,7 +186,7 @@ Compare candidate skills using held-out task fixtures, failure patterns, omissio
 
 GEX work extends this **same** governed skills test suite; it does not create another Skills/Graph authority.
 
-**Implementation boundary:** P-14 remains authoritative. Canonical revision 1.4.28 now contains these proposed contracts in the same eight files; this view is not an independent specification owner. Undecided authority/root recovery and operating policies still gate implementation. No actual MCP/REST capability or skill authority is granted by this text.
+**Implementation boundary:** P-14 remains authoritative. Canonical revision 1.4.28 contains the previously reconciled Skills contracts through SK-E2E-28. The GEX additions (SK-E2E-29/30 and source/impact clarification) are a separate **unratified proposal for the next in-place eight-file update**; this view is not an independent specification owner. Undecided authority/root recovery and operating policies still gate implementation. No actual MCP/REST capability or skill authority is granted by this text.
 
 ## 14. Integration of all authoring and retrieval consumers
 

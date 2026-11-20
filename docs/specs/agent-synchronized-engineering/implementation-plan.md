@@ -173,7 +173,7 @@ Do not modify production tenants, delete/migrate live data, mark tests passed, c
 
 **Integration exits in order:** (1) source revision without agent is visible or explicitly UNKNOWN; (2) code-dependency links nominate native cases and preserve unlinked impact gaps; (3) bounded accepted behavior models propose nonduplicative scenarios; (4) target runner returns verifiable outcomes and coverage basis; (5) one source→QA→original evidence→retest→decision journey is proven in a disposable project. Different increments may ship partial capabilities, each labelled with unsupported semantics and unexecuted obligations; I3-Q cannot be skipped.
 
-**I1-I7 acceptance fixtures:** `requirements.md` R-ASE-37..48 and ASE-FLOW-01..16. These are **proposed tests**, not CI E2E executions or a new official canonical QA numbering authority. Bind every implementing task to existing original Tesbo FR/T/QA IDs after reading the current eight-file baseline.
+**I1-I7 acceptance fixtures:** `requirements.md` R-ASE-37..48 and canonical-baseline ASE-FLOW-01..16, plus proposed GEX ASE-FLOW-17..28. These are **proposed tests**, not CI E2E executions or a new official canonical QA numbering authority. Bind every implementing task to existing original Tesbo FR/T/QA IDs after reading the current eight-file baseline.
 
 ## Skills quality/acceptance and cross-module release gates
 1. **Version and assignment separation:** candidate/version, approval and effective binding are different states; older effective version remains active until independently authorized assignment changes.

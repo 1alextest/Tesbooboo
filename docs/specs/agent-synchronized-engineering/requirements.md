@@ -318,7 +318,7 @@ Agents may begin with spontaneous feature development, a defect fix, a requireme
 **GEX acceptance note:** ASE-FLOW-17..28 extend the **existing** planned suite, not a second native test-case repository. All outcomes are PROPOSED / NOT RUN; preserve ASE-FLOW-01..16, all historical QA/MBT IDs and P-14 canonical ownership. Independent assurance teams are given objective and sources, not these as preselected findings or prescribed test steps.
 
 ## Skills governance executable acceptance scenarios (proposed, not run)
-See [skills-governance.md](skills-governance.md) `SK-E2E-01..28` for the authorization, lifecycle, audience, composition, concurrency, stale-binding and malicious-candidate test contract. Those scenarios are required in the disposable-project gate; source-spec text alone is not execution evidence.
+See [skills-governance.md](skills-governance.md) `SK-E2E-01..28` (canonical baseline) and the additional proposed `SK-E2E-29..30` for the authorization, lifecycle, audience, composition, concurrency, stale-binding and malicious-candidate test contract. Those scenarios are required in the disposable-project gate; source-spec text alone is not execution evidence.
 
 ## Scenario-based cross-domain acceptance suite
 
