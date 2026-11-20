@@ -1,8 +1,8 @@
 # Agent-Synchronized Engineering Records (ASER) — Integrated specification view
 
-**Canonical home:** Tesbo specification package revision **1.4.34 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
+**Canonical home:** Tesbo specification package revision **1.4.36 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
 
-**Status:** Proposed integration design for canonical revision 1.4.34; NOT FROZEN. Existing native capabilities, specified extensions and unverified source artifacts retain separate maturity labels. The new assurance rerun must identify its actual input snapshot and scope; no earlier review or scenario count certifies this amendment.
+**Status:** Proposed integration design for canonical revision 1.4.29; NOT FROZEN. Existing native capabilities, specified extensions and unverified source artifacts retain separate maturity labels. The new assurance rerun must identify its actual input snapshot and scope; no earlier review or scenario count certifies this amendment.
 **Target repository/branch:** `1alextest/Tesbooboo` / `development`.
 **Purpose:** Tesbo is the shared human-and-agent engineering assurance and delivery platform: help QA, BA, developers, PM, policy/security reviewers and release owners understand what AI agents did, reconcile what an application should do with what actually changed, verify real behavior, and release faster with defensible evidence. Keep the code and its relevant engineering records evolving together for every relevant change.
 
@@ -164,35 +164,63 @@ The v1.4.28 baseline contained 48 requirement mappings, 75 planned ASER scenario
 
 The current substrate and the target guarantees are distinct. The source-convergence table in `design.md` and proof allocation in `implementation-plan.md` identify current model-selection, native/provenance transaction, true-principal, exact-mapping, source-entitlement and feedback-history work, plus existing Requirements/Bug-result input-integrity prerequisites. Documentation names that work; it does not close the source findings or make the governed graph implemented. Approval remains separate from activation, dispatch separate from target execution, and a source-based review separate from runtime/visual verification.
 
+
+## Current canonical reconciliation — revision 1.4.34
+
+The current eight-file package preserves concurrent 1.4.30–1.4.33 additions and the separately reviewed GEX source-convergence corrections. Graph Analytics remains a proposed Reports projection with initial Change impact/Coverage gaps, existing native owners, state-appropriate handoff and AI-independent deterministic ordering. Broader investigation/prediction remains gated. Canonical 02/03/04/05/07 own the exact interface, data, authority and proof obligations. The prior 125 total refers to the ASER core inventory.
+
+
+**Selection and analytical scope qualification:** The 1.4.31 sentence about model dispatch selecting an active revision applies to **CURRENT** applicability only. Model applicability/CAS generation and T-422 effective Skill assignment generation belong to distinct native owners. Authorized Draft inspection/preview and explicit HISTORICAL selection retain MBT-C02's selected revision, consent, retirement, mapping and permission rules; neither owner silently substitutes for the other. Current-generation checks do not discard legitimate historical work. The initial Graph Analytics Reports slice is Change impact and Coverage gaps. Later diagnosis/stability and optional prediction remain separately gated capabilities, not implied initial UI features. Insufficient or unqualified evidence requires abstention from quantitative defect probability; qualitative hypotheses, explicitly uncalibrated relative heuristics and deterministic/manual prioritization may remain informative without probability or coverage claims. Calling a result advisory does not waive evidence admission.
+
+**Method and evaluation version boundary:** Canonical 06's incoming portable trigger/adoption wording is preserved as an unvalidated candidate. It changes the method text compared with the earlier frozen trial candidate. The completed incumbent/candidate exercise used the original fixed v1–v7 wording on two independently selected synthetic briefs; both arms met their contracts, with no demonstrated superiority. It does not discharge the stricter 1.4.30/31 discovery qualification or validate this successor, the extra contextual wording, a runtime Skill, prediction, or real-user benefit. The original team charters and original outputs remain unchanged. No candidate Skill is installed, approved or activated by this document.
+
+**Proof inventory accounting:** Retain the 125 ASER core definitions (15 ASE-E2E, 54 ASE-FLOW, 40 SK-E2E, 16 ASE-INT), eight incoming GEX-AC obligations and five current GA-AC checks. The 1.4.33 GA-AC table supersedes the four 1.4.32 prose summaries; do not count them twice. The separate GEX-SEM-01..08 and proposed SK-E2E-41..44 labels remain aliases with explicit new fixture assertions allocated below, not twelve more canonical definitions. All product/runtime proof obligations remain NOT RUN in this review. Mechanical checks and isolated helper/query probes retain their narrower identities and cannot satisfy these scenarios.
+
+
+## Published portability integration and current authority — 1.4.35
+
+The published 1.4.34 canonical predecessor and ac49fa6 repository review are preserved as distinct historical work. The following inherited clauses are subordinate projections of the named canonical owners. Original source packages and raw reviewer receipts retain their own provenance. Neither their assessment nor this run establishes comparative efficacy or installed methods.
+
+### Inherited portability obligations — canonical 00
+
+### Current source-fit boundary for the intelligent graph proposal
+
+The source at `6897f989b055a955280f810c7daace86f74057fa` supplies bounded graph/source capture, sequential model preview/path proposals and native case/run substrate. Separate active model selection, universal true-human approval, unpublished graph-case staging, atomic native effects with provenance, durable exact mapping history, source entitlements and immutable learning feedback still require the convergence work in canonical 03/05. Existing Requirements lookup and Bug/result side effects also affect the trustworthiness of graph inputs. Do not present those target guarantees as already implemented. This remains a proposed, NOT FROZEN documentation amendment with no new runtime or deployment certification.
+
 ### Recovered method evidence and bounded portability
 
 The supplementary source review recovered two complete text bodies named `manual-test-authoring` (285 and 525 lines), with distinct immutable hashes. This recovers the bodies inspected; it does not establish repository lineage, installation, effective assignment, or the absent referenced companion package. The experimental `product-testing` package is still not available as a complete verified input. Keep those sources inert. Canonical 06 now makes the import/profile and native-lifecycle boundaries explicit; canonical 03/04 identify the context-resolution and output-adapter admission contract; canonical 05 extends existing proof obligations without adding acceptance IDs. The original eight-file ownership and original team charters are unchanged.
 
 Application-neutral responsibility boundaries are supported by source/document review and independently chosen conceptual counterexamples. That evidence does not demonstrate better discovery, complete cross-application efficacy, live enforcement or an installed Skill. Preserve the original frozen reviewer receipts and label later reconciliation as informed. A scoped UI/workbook profile is a legitimate outcome; no universal testing method or mandatory AI mechanism is implied.
 
-### Reconciliation with published canonical revisions 1.4.30 and 1.4.31
 
-## Revision 1.4.30 — portability corrections
-
-Canonical 06 defines discovery during routine reviews, optional contextual lenses, and portable adoption guarantees. Canonical 03 binds those guarantees to Tesbo. Canonical 05 defines a separately adjudicated discovery comparison and drift recovery evidence. The remaining product contracts and historical receipts retain their scope. This revision is NOT FROZEN and makes no installed Skill or runtime claim.
+**Current controlling reconciliation:** Canonical revision1.4.35 owns this proposal. Retain the v11 corrections for separate Model CURRENT and effective Skill assignment, explicit Draft/HISTORICAL work, quantitative abstention, intentional prepared Runs, corrected evidence propagation and externally delivered notifications. The GEX-SEM and GEX-DISC assertions now have existing canonical proof owners while their labels remain aliases; older “awaiting canonical reconciliation” statements are historical. Keep 125 ASER definitions, eight GEX-AC obligations and five GA-AC checks distinct. No runtime, visual, human-governance, efficacy or method-activation claim follows. The six views remain subordinate to the same eight canonical files.
 
 
-## Revision 1.4.31 — graph contracts and assurance findings
+### Publication checkpoint — external implementation and documentation merges
 
-Revision scope: T-455–458 graph, Model Studio and T-422 Skill governance. Existing record owners remain authoritative. [Portable review method](06_IMPLEMENTATION_AGENT_BRIEF.md#portable-method-for-discovery-and-principle-distillation). Graph analytics draw on [TestDino's discussion](https://testdino.com/blog/graph-in-software-testing) as a design input. All new proof obligations are NOT RUN. The package remains NOT FROZEN.
+After the v12 specification review froze, GitHub reported PR168 merged as f43013473b3a8b725bb547187e21b4459d0e8838 and PR167 merged as 1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea (implementation head b07def32b725cfa3b71f34d001bbbdc94ed38226). Development now includes both, and the old documentation branch was removed externally. This supersedes earlier statements that those PRs remain open/unmerged. The present work prepares a documentation follow-up on that merged parent and preserves its product changes; it did not perform either merge or verify deployment.
 
-**Current reconciliation boundary:** canonical revision 1.4.32 preserves the published 1.4.30/31 obligations and the source-convergence and imported-method refinements above. Earlier subordinate draft wording does not supersede that current canonical contract. All architecture/authority, implementation, runtime, visual and method-efficacy gates retain their recorded scope.
-
-
-### Retained published Graph Analytics proposal
-
-Add Graph Analytics as a project reporting view. Start with Change impact and Coverage gaps. See canonical 02 for journeys, 03/04 for data boundaries, 05 for acceptance, and 07 for the proposed UI. This is a specification change, with implementation and runtime evidence pending.
-
-**Historical integration boundary:** the prepared 1.4.33 v7 candidate preserved the published 1.4.32 Graph Analytics proposal and reviewed portability corrections. Its exact receipts remain historical; the current canonical authority and later incoming amendments are stated below.
+The original source findings and team receipts remain bound to 6897f989b055a955280f810c7daace86f74057fa. Their original OPEN or RELEASE-BLOCK dispositions are not automatically current defects or release judgments about the merged implementation. The separately authored native integration closure and its exact evidence own implementation claims. Newly merged documents report narrower repairs in human approval, native transactions, result-preserving Bug association, requirement lookup states and reviewed document history. Those claims require their own exact-source/runtime evidence; this documentation rerun does not silently re-certify them or rewrite its earlier observations. The broader graph reasoning, effective Skill assignment/resolution, source-event reconciliation, original external QA loop and empirical method benefit retain their explicit unimplemented/unqualified or admission status in that implementation record. Retained proposed contracts continue to govern future work.
 
 
-### Retained published Graph Analytics assurance amendments (1.4.33)
+## Current canonical36 reconciliation of published35 Graph Analytics closure
 
-Graph Analytics remains a project Reports view with Change impact and Coverage gaps. This amendment supersedes inconsistent v1.4.32 action and acceptance wording. Canonical 02 owns the journey, 03 the projection, 04 its access and handoff, 05 its verification, and 07 its presentation. Failure investigation and stability remain later scope. Runtime, comparative effectiveness and rendered evidence remain pending.
+The published35 material below is retained through its canonical owners and remains proposed/NOT FROZEN. Evidence-stage and outcome are separate; model-only filtering is explicitly narrower than the full authorized obligation basis. The named DMIS workflow is a scoped pilot, not a portable method prerequisite. Source checkout observations and merged implementation evidence remain attributed to their actual separate reviews. The current run does not inherit their runtime or approval claims.
 
-**Current canonical authority:** revision 1.4.34 preserves the complete published 1.4.33 and the assessed portability correction. The historical 125 ASER and eight GEX-AC definition rows remain unchanged; five GA-AC acceptance rows supersede the four earlier summaries. GEX-SEM and GEX-DISC remain noncanonical subordinate proposals. Incoming Graph Analytics refinements and later DISC content do not inherit earlier cold, UI, runtime or empirical review. All remain subject to their declared gates; the package is NOT FROZEN.
+### Inherited Graph Analytics closure — canonical00
+
+This amendment governs Graph Analytics where earlier chapters differ. It resolves specification findings, with runtime proof pending. The first implementation slice is the DMIS approval-to-posting workflow using native Reports, change review, Cases, Runs and Evidence. The package remains NOT FROZEN.
+
+
+### Inherited Graph Analytics closure — canonical02
+
+For the DMIS approval-rule change, current-build approval PASS plus prior-build posting PASS leaves current posting unverified. Current matching posting FAIL with admissible evidence removes the missing-evidence label and shows an open discrepancy with native QA triage. Current matching posting PASS meets the selected posting obligation, without automatically acknowledging or closing a native impact. A missing or inadmissible receipt never establishes a verified result. A finding spanning two native impacts shows both statuses and requires selecting the intended impact before any follow-up action.
+
+
+### Inherited Graph Analytics closure — canonical07
+
+Show evidence stage and outcome independently. On verified FAIL, route to native QA triage; on verified PASS, show posting evidence and preserve impact workflow. Give unknown criticality an explicit label and filter. Display each authorized native impact's status and make action target selection explicit. Show only permission-safe freshness and recovery detail, with a scope explanation for model-only coverage. Rendered and accessibility proof remain pending.
+
+
+Current canonical authority is revision1.4.36. Preserve all earlier v14 qualifications for method/mode selection, native partial preparation, source-pin versus merged-parent status and existing proof aliases. Original cold signatures remain bound to their exact snapshots; the final informed review binds current bytes. The five GA-AC definitions are extended, not duplicated or executed.

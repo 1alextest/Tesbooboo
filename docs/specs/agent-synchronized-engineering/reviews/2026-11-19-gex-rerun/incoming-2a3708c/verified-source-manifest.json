@@ -1,0 +1,35 @@
+{
+  "commit": "2a3708cec25acca0261dcb2461106a8ce0faf036",
+  "files": [
+    {
+      "path": "docs/specs/agent-synchronized-engineering/design.md",
+      "sha": "3b9f066d733cc01c69c5443b6d168e7a96ca7714",
+      "sha256": "78581281f26f8931bf4074d1e9e059d099c4d074f8a413c9779e204123b8b034",
+      "bytes": 105022
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/implementation-plan.md",
+      "sha": "b18b52f4faba6667ef061de9697edb0031e43787",
+      "sha256": "189435dd13ad77a32e16e86f98212ef2f8840fe3112cc5726757fb05d6023594",
+      "bytes": 79904
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/requirements.md",
+      "sha": "b490cdf2dfe4ea7fab65864fa0303b9ab14f547a",
+      "sha256": "a6adf5c48bf081986d65604b265b3e9a401a58db42d64225c7660f0b64615801",
+      "bytes": 79393
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/reviews/2026-11-19-gex-integration-gate.md",
+      "sha": "8be03adc5da4aaef9f22cae2c09aa763ad1c9133",
+      "sha256": "81032875422ae508ac72c96bbf637e041331801e0c4ff9ca3d4d50b910de37d9",
+      "bytes": 9001
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "sha": "673470c1d6c81f9d05a8ce7af3e33573d5e46f10",
+      "sha256": "4b1e7227f7bee41ac1f25afa72b167706c7494f7d8429561e36624108ae024ec",
+      "bytes": 55493
+    }
+  ]
+}

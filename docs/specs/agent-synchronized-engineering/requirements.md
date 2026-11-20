@@ -1,6 +1,6 @@
 # ASER — Requirements v0.4 (canonical integration view)
 
-**Canonical home:** Tesbo specification package revision **1.4.34 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
+**Canonical home:** Tesbo specification package revision **1.4.36 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
 
 **State:** Proposed requirements, mapped individually to canonical owners, tasks and falsifiers in `05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md` revision 1.4.29. The 48 R-ASE identifiers are preserved as a scoped namespace in the same canonical package; existing FR/AC/T/QA identifiers are not renumbered.
 
@@ -142,7 +142,7 @@ When the underlying source, policy, requirement or manual changes, the existing 
 
 **GEX uncovered behavior and weak-test gap discovery (R-ASE-19; proposed):** Graph analysis must distinguish missing behavior obligations, missing/weak *expected-result assertions*, missing test design, Draft-only case, Approved but unexecuted case, manually executed result, agent-reported result, genuine observed result and evidence that is stale for current requirement/build. Detect meaningful negative/forbidden and missing/omitted behaviors even if line, edge, path or mutation coverage appears high; code-less projects remain supported. Record independent normative source vs implementation inference, semantic duplicate possibility and explicit unknown. A question about an undescribed expected behavior becomes a clarification candidate, not a fabricated requirement or defect.
 
-### GEX semantic obligations and consequences (R-ASE-19/40; proposed, not yet canonical)
+### GEX semantic obligations and consequences (R-ASE-19/40; proposed canonical clarification)
 
 The **existing** graph shall support authorized, revision-scoped interpretation of what a linked source *means* to a user, operator or system: actor and audience; goal; normative obligation versus descriptive instruction versus implementation observation; triggering conditions; permissions; state/guard and forbidden effects; upstream prerequisites; downstream effects; exception/recovery behavior; effective scope/time; and evidence provenance. The graph must connect approved **Policies** (normative rules and decision/enforcement provenance) and **User Manuals** (audience-specific procedures and intended user-visible behavior) to requirements, code observations, behavior-model revisions, native cases, runs, defects, tasks and evidence *without transferring authority across edges*. Manuals can reveal potential missing expectations but never independently override an approved policy; external mandates are authority only when separately validated in their governing scope. Conflicts, expired versions, contested meanings and missing links are explicit review candidates rather than resolved by LLM confidence.
 
@@ -154,7 +154,7 @@ Across existing native histories and authorized graph views, support (a) **root-
 
 **Acceptance:** High structural coverage with a missing approved business obligation remains a gap; a graph-selected path never becomes an executed or Passed result without genuine evidence; a single failed test does not establish a root cause or flakiness; a risk model with unverified labels/low sample size must abstain; a bounded traversal cannot silently discard a required forbidden-transition check. AI may generate evidence-linked hypotheses and experiment proposals but never authority, official defects or test verdicts by inference alone.
 
-### GEX semantic discovery refinement (R-ASE-07/08/09/19/40; proposed, P-14 pending)
+### GEX semantic discovery refinement (R-ASE-07/08/09/19/40; proposed canonical clarification)
 
 **Competing applicable obligations (DISC-01):** When several separately approved rules appear applicable to one actor/action, reconcile documented authority, scope, jurisdiction, exceptions and effective periods independently. A genuine overlap with incompatible effects remains `unresolved_conflict` with both exact sources and an accountable authorized decision owner until a valid precedence or exception decision is supplied. Do not infer that the newest, externally sourced, most specific-looking, or AI-preferred text automatically wins. Do not mistake two concurrent revisions of one identity for two independent valid policy authorities.
 
@@ -442,6 +442,53 @@ See [skills-governance.md](skills-governance.md) `SK-E2E-01..28` (v1.4.28 baseli
 
 The same R-ASE and MBT contracts govern reuse. Existing model/source/native case/run code requires the concrete convergence in the design and implementation plan before CURRENT selection, true-human approval, unpublished AI candidate handling, atomic provenance, mapping history, source entitlement or immutable learning can be claimed. Existing matching/lookup and Bug/result side effects must not become false learning labels. This clarifies implementation admission for retained requirements; it creates no new requirement, graph or approval owner.
 
+
+## Concurrent canonical 1.4.30–1.4.33 integration
+
+The following mirrors incoming canonical obligations; the corresponding numbered canonical file controls their meaning. They remain proposed and do not establish runtime, authority, method benefit or rendered evidence.
+
+### Preserved canonical revision 1.4.31 — graph contracts and assurance findings
+
+Extend FR-115–119 and FR-124 through exact-revision typed relationships to governing policy obligations and user-manual sections. For each applicable obligation, show the approving authority, scope and effective interval. A manual explains intended operation and is linked as guidance. Conflicting requirements, policy, observed behavior and manuals remain visible and require an accountable disposition. A reviewed change may create linked review candidates for affected policies, guides or tests. Publication remains with the respective native owner.
+
+Graph analysis may rank root-cause hypotheses, surface inconsistent execution cohorts and prioritize defect investigation. Root-cause confirmation requires independent distinguishing evidence and an authorized disposition. Risk scores and inconsistency flags are informational. They cannot change test verdicts, defect status or release approval.
+
+
+### Preserved canonical revision 1.4.32 — Graph Analytics
+
+Extend FR-115–119 and FR-124 with a ranked, permission-scoped Graph Analytics view. Explain the meaning of a relationship, its applicable obligation or guidance, the plausible consequence of a change, evidence strength, alternatives where material, and the next verification step. Initial views are Change impact and Coverage gaps. Later failure investigation and stability use the same reporting surface and existing analytics owners.
+
+
+### Preserved canonical revision 1.4.33 — Graph Analytics assurance amendments
+
+FR-115–119 and FR-121–124 apply. Each finding explains the affected outcome, exact obligation or evidence basis, relationship direction, plausible consequence, uncertainty and next check. An effective approved policy or requirement can establish an obligation without a model. Manual guidance, observed behavior and inferred dependencies retain their separate meaning. Where applicable, a finding links to the existing FR-119 impact and its current status. Viewing or drafting leaves acknowledgment and closure to that workflow.
+
+
+### Current reconciliation qualification
+
+
+**Selection and analytical scope qualification:** The 1.4.31 sentence about model dispatch selecting an active revision applies to **CURRENT** applicability only. Model applicability/CAS generation and T-422 effective Skill assignment generation belong to distinct native owners. Authorized Draft inspection/preview and explicit HISTORICAL selection retain MBT-C02's selected revision, consent, retirement, mapping and permission rules; neither owner silently substitutes for the other. Current-generation checks do not discard legitimate historical work. The initial Graph Analytics Reports slice is Change impact and Coverage gaps. Later diagnosis/stability and optional prediction remain separately gated capabilities, not implied initial UI features. Insufficient or unqualified evidence requires abstention from quantitative defect probability; qualitative hypotheses, explicitly uncalibrated relative heuristics and deterministic/manual prioritization may remain informative without probability or coverage claims. Calling a result advisory does not waive evidence admission.
+
+**Method and evaluation version boundary:** Canonical 06's incoming portable trigger/adoption wording is preserved as an unvalidated candidate. It changes the method text compared with the earlier frozen trial candidate. The completed incumbent/candidate exercise used the original fixed v1–v7 wording on two independently selected synthetic briefs; both arms met their contracts, with no demonstrated superiority. It does not discharge the stricter 1.4.30/31 discovery qualification or validate this successor, the extra contextual wording, a runtime Skill, prediction, or real-user benefit. The original team charters and original outputs remain unchanged. No candidate Skill is installed, approved or activated by this document.
+
+**Proof inventory accounting:** Retain the 125 ASER core definitions (15 ASE-E2E, 54 ASE-FLOW, 40 SK-E2E, 16 ASE-INT), eight incoming GEX-AC obligations and five current GA-AC checks. The 1.4.33 GA-AC table supersedes the four 1.4.32 prose summaries; do not count them twice. The separate GEX-SEM-01..08 and proposed SK-E2E-41..44 labels remain aliases with explicit new fixture assertions allocated below, not twelve more canonical definitions. All product/runtime proof obligations remain NOT RUN in this review. Mechanical checks and isolated helper/query probes retain their narrower identities and cannot satisfy these scenarios.
+
+
+### Current DISC reconciliation status
+
+Canonical01/03/05 now retain the late concurrent DISC clarification. GEX-DISC labels map to existing proof owners and remain NOT RUN; author desk records are not this run’s independent receipts. No new graph/authority store, scenario count or method-benefit credit follows.
+
+
+## Published portability integration and current authority — 1.4.35
+
+The published 1.4.34 canonical predecessor and ac49fa6 repository review are preserved as distinct historical work. The following inherited clauses are subordinate projections of the named canonical owners. Original source packages and raw reviewer receipts retain their own provenance. Neither their assessment nor this run establishes comparative efficacy or installed methods.
+
+### Inherited portability obligations — canonical 01
+
+### Reuse requires preserving the retained user contract
+
+Reuse of existing graph, model, case, run, feedback and source services means extending their actual guarantees to the accepted contract, not treating existing status fields or transaction wrappers as proof. CURRENT model applicability is independent of draft creation and approval; machine identity remains distinct from human assent; source access is independently entitled; a generated candidate remains unpublished until authorized apply; native effects and required provenance commit together. Missing lookup data, historical mapping uncertainty and side-finding associations cannot become learned coverage or execution truth. Canonical 03 specifies source convergence and canonical 05 assigns proof to the existing requirements and test families; no new requirement identity or authority is introduced here.
+
 ### Method portability preserves the target contract
 
 Reuse an imported method only within an explicit supported authoring/output profile. Separate reusable test-design reasoning from target actors, interfaces, artifact formats, classification vocabulary and lifecycle operations. A target without accounts, a browser, a repository, a formal model or an automated driver must not acquire fabricated prerequisites. Technique applicability follows the actual obligation and supported capability; a narrow specialist method may legitimately be not applicable.
@@ -450,26 +497,17 @@ The method must preserve an accepted current restriction, release window or user
 
 Native definition status, execution outcome, approval, active applicability and presentation layout remain independent. Imported workbook conventions cannot renumber canonical case identities, reset prior attempts, promote a Draft, overwrite relied-on revisions or bypass native selected review/apply. These are refinements of existing T-422, native case/history and accepted-oracle requirements, not new record owners.
 
-### Reconciliation with published canonical revisions 1.4.30 and 1.4.31
 
-## Revision 1.4.31 — graph contracts and assurance findings
-
-Extend FR-115–119 and FR-124 through exact-revision typed relationships to governing policy obligations and user-manual sections. For each applicable obligation, show the approving authority, scope and effective interval. A manual explains intended operation and is linked as guidance. Conflicting requirements, policy, observed behavior and manuals remain visible and require an accountable disposition. A reviewed change may create linked review candidates for affected policies, guides or tests. Publication remains with the respective native owner.
-
-Graph analysis may rank root-cause hypotheses, surface inconsistent execution cohorts and prioritize defect investigation. Root-cause confirmation requires independent distinguishing evidence and an authorized disposition. Risk scores and inconsistency flags are informational. They cannot change test verdicts, defect status or release approval.
-
-**Current reconciliation boundary:** canonical revision 1.4.32 preserves the published 1.4.30/31 obligations and the source-convergence and imported-method refinements above. Earlier subordinate draft wording does not supersede that current canonical contract. All architecture/authority, implementation, runtime, visual and method-efficacy gates retain their recorded scope.
+**Current controlling reconciliation:** Canonical revision1.4.35 owns this proposal. Retain the v11 corrections for separate Model CURRENT and effective Skill assignment, explicit Draft/HISTORICAL work, quantitative abstention, intentional prepared Runs, corrected evidence propagation and externally delivered notifications. The GEX-SEM and GEX-DISC assertions now have existing canonical proof owners while their labels remain aliases; older “awaiting canonical reconciliation” statements are historical. Keep 125 ASER definitions, eight GEX-AC obligations and five GA-AC checks distinct. No runtime, visual, human-governance, efficacy or method-activation claim follows. The six views remain subordinate to the same eight canonical files.
 
 
-### Retained published Graph Analytics proposal
+## Current canonical36 reconciliation of published35 Graph Analytics closure
 
-Extend FR-115–119 and FR-124 with a ranked, permission-scoped Graph Analytics view. Explain the meaning of a relationship, its applicable obligation or guidance, the plausible consequence of a change, evidence strength, alternatives where material, and the next verification step. Initial views are Change impact and Coverage gaps. Later failure investigation and stability use the same reporting surface and existing analytics owners.
+The published35 material below is retained through its canonical owners and remains proposed/NOT FROZEN. Evidence-stage and outcome are separate; model-only filtering is explicitly narrower than the full authorized obligation basis. The named DMIS workflow is a scoped pilot, not a portable method prerequisite. Source checkout observations and merged implementation evidence remain attributed to their actual separate reviews. The current run does not inherit their runtime or approval claims.
 
-**Historical integration boundary:** the prepared 1.4.33 v7 candidate preserved the published 1.4.32 Graph Analytics proposal and reviewed portability corrections. Its exact receipts remain historical; the current canonical authority and later incoming amendments are stated below.
+### Inherited Graph Analytics closure — canonical01
+
+FR-115–119 and FR-121–124 require approved applicable policy and requirement obligations in the selected scope, including those outside an active model. Keep distinct native impact records and dispositions. Evidence sufficiency and observed outcome are independent. Verified failure leaves the discrepancy visible for native QA triage. A supported no-impact conclusion only applies within a documented, assessed dependency frontier and comparable authorized baselines.
 
 
-### Retained published Graph Analytics assurance amendments (1.4.33)
-
-FR-115–119 and FR-121–124 apply. Each finding explains the affected outcome, exact obligation or evidence basis, relationship direction, plausible consequence, uncertainty and next check. An effective approved policy or requirement can establish an obligation without a model. Manual guidance, observed behavior and inferred dependencies retain their separate meaning. Where applicable, a finding links to the existing FR-119 impact and its current status. Viewing or drafting leaves acknowledgment and closure to that workflow.
-
-**Current canonical authority:** revision 1.4.34 preserves the complete published 1.4.33 and the assessed portability correction. The historical 125 ASER and eight GEX-AC definition rows remain unchanged; five GA-AC acceptance rows supersede the four earlier summaries. GEX-SEM and GEX-DISC remain noncanonical subordinate proposals. Incoming Graph Analytics refinements and later DISC content do not inherit earlier cold, UI, runtime or empirical review. All remain subject to their declared gates; the package is NOT FROZEN.
+Current canonical authority is revision1.4.36. Preserve all earlier v14 qualifications for method/mode selection, native partial preparation, source-pin versus merged-parent status and existing proof aliases. Original cold signatures remain bound to their exact snapshots; the final informed review binds current bytes. The five GA-AC definitions are extended, not duplicated or executed.

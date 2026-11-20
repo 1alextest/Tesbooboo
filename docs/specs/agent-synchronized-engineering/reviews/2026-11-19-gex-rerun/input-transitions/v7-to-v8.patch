@@ -1,0 +1,795 @@
+--- a/canonical/00_README.md
++++ b/canonical/00_README.md
+@@ -1,6 +1,6 @@
+ # Tesbo: Shared Human-and-Agent Engineering Platform — Specification Package
+ 
+-**Revision:** 1.4.29 — 19 November 2026; governed graph reasoning and principle-based learning; NOT FROZEN 
++**Revision:** 1.4.34 — GEX-ASER-2026-11-19 reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN 
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Status:** source-informed proposals plus scoped native preview increments; NOT FROZEN; no package-wide completion or deployment certification.
+ **Historical v1.4.27 working proposed baseline:** 124 FR, 12 NFR, 93 AC, 91 implementation tasks and 490 planned QA checks (QA-448–490 NOT RUN; owner approval pending). **Previous v1.4.19 proposed baseline:** 114 FR, 12 NFR, 81 AC, 83 tasks and 447 planned QA checks. **Previous v1.4.18 baseline:** 105 FR, 12 NFR, 72 AC, 77 tasks and 423 planned QA checks. The new QA-404–423 are NOT RUN; historical execution/coverage claims retain their original dates and limitations. This document amendment does not certify application behavior.
+@@ -700,6 +700,40 @@
+ 
+ Affected implementation remains gated on source fit, exact contracts, authority decisions, permitted execution and runtime/UI evidence. Record the new cold review and subsequent deltas in the existing review record; preserve every original receipt and its limits. No freeze or completion follows merely from this amendment.
+ 
++
++## Revision 1.4.30 — portability corrections
++
++Canonical 06 defines discovery during routine reviews, optional contextual lenses, and portable adoption guarantees. Canonical 03 binds those guarantees to Tesbo. Canonical 05 defines a separately adjudicated discovery comparison and drift recovery evidence. The remaining product contracts and historical receipts retain their scope. This revision is NOT FROZEN and makes no installed Skill or runtime claim.
++
++
++## Revision 1.4.31 — graph contracts and assurance findings
++
++Revision scope: T-455–458 graph, Model Studio and T-422 Skill governance. Existing record owners remain authoritative. [Portable review method](06_IMPLEMENTATION_AGENT_BRIEF.md#portable-method-for-discovery-and-principle-distillation). Graph analytics draw on [TestDino's discussion](https://testdino.com/blog/graph-in-software-testing) as a design input. All new proof obligations are NOT RUN. The package remains NOT FROZEN.
++
++
++## Revision 1.4.32 — Graph Analytics
++
++Add Graph Analytics as a project reporting view. Start with Change impact and Coverage gaps. See canonical 02 for journeys, 03/04 for data boundaries, 05 for acceptance, and 07 for the proposed UI. This is a specification change, with implementation and runtime evidence pending.
++
++
++## Revision 1.4.33 — Graph Analytics assurance amendments
++
++Graph Analytics remains a project Reports view with Change impact and Coverage gaps. This amendment supersedes inconsistent v1.4.32 action and acceptance wording. Canonical 02 owns the journey, 03 the projection, 04 its access and handoff, 05 its verification, and 07 its presentation. Failure investigation and stability remain later scope. Runtime, comparative effectiveness and rendered evidence remain pending.
++
++
++## Revision 1.4.34 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the incoming 1.4.33 canonical bodies and reconciles the separately reviewed GEX v7 corrections. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
++
+ ### Current source-fit boundary for the intelligent graph proposal
+ 
+ The source at `6897f989b055a955280f810c7daace86f74057fa` supplies bounded graph/source capture, sequential model preview/path proposals and native case/run substrate. Separate active model selection, universal true-human approval, unpublished graph-case staging, atomic native effects with provenance, durable exact mapping history, source entitlements and immutable learning feedback still require the convergence work in canonical 03/05. Existing Requirements lookup and Bug/result side effects also affect the trustworthiness of graph inputs. Do not present those target guarantees as already implemented. This remains a proposed, NOT FROZEN documentation amendment with no new runtime or deployment certification.
++
++
++**Selection and analytical scope qualification:** The 1.4.31 sentence about model dispatch selecting an active revision applies to **CURRENT** applicability only. Model applicability/CAS generation and T-422 effective Skill assignment generation belong to distinct native owners. Authorized Draft inspection/preview and explicit HISTORICAL selection retain MBT-C02's selected revision, consent, retirement, mapping and permission rules; neither owner silently substitutes for the other. Current-generation checks do not discard legitimate historical work. The initial Graph Analytics Reports slice is Change impact and Coverage gaps. Later diagnosis/stability and optional prediction remain separately gated capabilities, not implied initial UI features. Insufficient or unqualified evidence requires abstention from quantitative defect probability; qualitative hypotheses, explicitly uncalibrated relative heuristics and deterministic/manual prioritization may remain informative without probability or coverage claims. Calling a result advisory does not waive evidence admission.
++
++
++**Method and evaluation version boundary:** Canonical 06's incoming portable trigger/adoption wording is preserved as an unvalidated candidate. It changes the method text compared with the earlier frozen trial candidate. The completed incumbent/candidate exercise used the original fixed v1–v7 wording on two independently selected synthetic briefs; both arms met their contracts, with no demonstrated superiority. It does not discharge the stricter 1.4.30/31 discovery qualification or validate this successor, the extra contextual wording, a runtime Skill, prediction, or real-user benefit. The original team charters and original outputs remain unchanged. No candidate Skill is installed, approved or activated by this document.
++
++
++**Proof inventory accounting:** Retain the 125 ASER core definitions (15 ASE-E2E, 54 ASE-FLOW, 40 SK-E2E, 16 ASE-INT), eight incoming GEX-AC obligations and five current GA-AC checks. The 1.4.33 GA-AC table supersedes the four 1.4.32 prose summaries; do not count them twice. The separate GEX-SEM-01..08 and proposed SK-E2E-41..44 labels remain aliases with explicit new fixture assertions allocated below, not twelve more canonical definitions. All product/runtime proof obligations remain NOT RUN in this review. Mechanical checks and isolated helper/query probes retain their narrower identities and cannot satisfy these scenarios.
+--- a/canonical/01_PRODUCT_REQUIREMENTS.md
++++ b/canonical/01_PRODUCT_REQUIREMENTS.md
+@@ -1,7 +1,7 @@
+ # Product Requirements — Shared Human-and-Agent Engineering Workflow
+ 
+ **Document ID:** TESBO-PRD-001  
+-**Revision:** 1.4.29 — 19 November 2026; governed graph reasoning and principle-based learning; NOT FROZEN 
++**Revision:** 1.4.34 — GEX-ASER-2026-11-19 reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN 
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Priority terms:** **MUST** = acceptance requirement; **SHOULD** = planned but can be staged; **MAY** = optional/future.  
+ **Application context:** project-agnostic, multi-project QA management and agent-orchestrated execution. DMIS/ODPEM is an initial web pilot only, never a product-specific requirement or default tenant.
+@@ -1028,6 +1028,28 @@
+ 
+ Feedback may improve source reconciliation, behavioral hypotheses, case-design methods or optional prioritization. Record which layer changed. Keep a stable comparator, independent cases, counterexamples, source/skill/model versions, costs and human quality judgment. Preserve genuine failures and previous attempts. New evidence or an alternate model is not by itself proof of a better skill. Canonical 06 owns the agnostic distillation process; canonical 05 contains the extended existing acceptance suites, with no executed result implied.
+ 
++
++## Revision 1.4.31 — graph contracts and assurance findings
++
++Extend FR-115–119 and FR-124 through exact-revision typed relationships to governing policy obligations and user-manual sections. For each applicable obligation, show the approving authority, scope and effective interval. A manual explains intended operation and is linked as guidance. Conflicting requirements, policy, observed behavior and manuals remain visible and require an accountable disposition. A reviewed change may create linked review candidates for affected policies, guides or tests. Publication remains with the respective native owner.
++
++Graph analysis may rank root-cause hypotheses, surface inconsistent execution cohorts and prioritize defect investigation. Root-cause confirmation requires independent distinguishing evidence and an authorized disposition. Risk scores and inconsistency flags are informational. They cannot change test verdicts, defect status or release approval.
++
++
++## Revision 1.4.32 — Graph Analytics
++
++Extend FR-115–119 and FR-124 with a ranked, permission-scoped Graph Analytics view. Explain the meaning of a relationship, its applicable obligation or guidance, the plausible consequence of a change, evidence strength, alternatives where material, and the next verification step. Initial views are Change impact and Coverage gaps. Later failure investigation and stability use the same reporting surface and existing analytics owners.
++
++
++## Revision 1.4.33 — Graph Analytics assurance amendments
++
++FR-115–119 and FR-121–124 apply. Each finding explains the affected outcome, exact obligation or evidence basis, relationship direction, plausible consequence, uncertainty and next check. An effective approved policy or requirement can establish an obligation without a model. Manual guidance, observed behavior and inferred dependencies retain their separate meaning. Where applicable, a finding links to the existing FR-119 impact and its current status. Viewing or drafting leaves acknowledgment and closure to that workflow.
++
++
++## Revision 1.4.34 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the incoming 1.4.33 canonical bodies and reconciles the separately reviewed GEX v7 corrections. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
++
+ ### Reuse requires preserving the retained user contract
+ 
+ Reuse of existing graph, model, case, run, feedback and source services means extending their actual guarantees to the accepted contract, not treating existing status fields or transaction wrappers as proof. CURRENT model applicability is independent of draft creation and approval; machine identity remains distinct from human assent; source access is independently entitled; a generated candidate remains unpublished until authorized apply; native effects and required provenance commit together. Missing lookup data, historical mapping uncertainty and side-finding associations cannot become learned coverage or execution truth. Canonical 03 specifies source convergence and canonical 05 assigns proof to the existing requirements and test families; no new requirement identity or authority is introduced here.
+--- a/canonical/02_WORKFLOW_AND_UX_SPEC.md
++++ b/canonical/02_WORKFLOW_AND_UX_SPEC.md
+@@ -1,6 +1,6 @@
+ # Functional Workflow and UX Specification
+ 
+-**Document ID:** TESBO-FS-002 | **Revision:** 1.4.29 — 19 November 2026; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** proposed workflow plus scoped native preview; NOT FROZEN.
++**Document ID:** TESBO-FS-002 | **Revision:** 1.4.34 — GEX-ASER-2026-11-19 reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** proposed workflow plus scoped native preview; NOT FROZEN.
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ 
+ **Interaction/ownership doctrine (P-01–P-20):** One Copilot presents Tesbo-owned sessions and linked QA artifacts; never embed another product's standalone project/chat hierarchy. Imported UI primitives must retain Tesbo's real project/session routes, current auth, violet tokens, accessible focus/keyboard conventions, and source-linked task/review views. Users can switch project/session/provider without moving or cloning KB files, reports or approved cases. Third-party demo flows are references only.
+@@ -738,6 +738,40 @@
+ 
+ The tester's feedback is a proposal about an interpretation unless explicitly submitted as an authorized source amendment. UI controls must make that distinction comprehensible. Navigation retains selected project, revision, filters, return location and unsaved work. Real rendering, keyboard/assistive-technology behavior, comprehension, latency and full execution remain acceptance work; no screenshot or synthetic walkthrough is a human study.
+ 
++
++## Revision 1.4.31 — graph contracts and assurance findings
++
++After an approved workflow changes, show impacted policy obligations, manual sections and tests with exact revisions, evidence, uncertainty and a link to the existing review action. Provide a visible discrepancy path when guidance and governing rules diverge.
++
++For active Skill degradation, the responsible operator sees affected scope, current and candidate fallback, the alert and its evidence, pending work disposition and post-action effective version. An ordinary author sees whether guidance changed and whether a proposal is historical or needs regeneration, subject to access. For unknown external side effects, expose the attempted action and evidence, whether reconciliation is possible, and the disposition before another mutating attempt.
++
++
++## Revision 1.4.32 — Graph Analytics
++
++Open project Reports → Graph Analytics → Change impact. Select a change or compare revisions where available. Read a ranked list, open a finding and inspect its exact source, typed relationships, downstream consequence and related policy, manual and cases. Switch to Coverage gaps to distinguish absent approved coverage, missing execution and missing evidence. From detail, open the native record or stage a targeted retest through existing review. Back returns to the same filters and selected scope. Model editing stays in Model Studio.
++
++Example: an opening-balance approval rule change may affect posting. Show which approved rule governs approval, which manual section explains it and why approval evidence alone leaves posting unresolved. Offer a native retest draft for the posting step. Label inferred consequences as hypotheses.
++
++
++## Revision 1.4.33 — Graph Analytics assurance amendments
++
++Choose the native action from the evidence state.
++
++| State | Next action |
++| --- | --- |
++| Applicable obligation with no approved case | Search and reuse a case or stage a case/mapping proposal for review. |
++| Approved case with no selected-cohort attempt | Prepare a native run with explicit scope and dispatch. |
++| Attempt lacks required evidence | Recover the original receipt where possible or prepare a distinct attempt for review. |
++| Unclear obligation, incomplete indexing or inaccessible evidence | Clarify, refresh or route to the accountable owner using permitted context. Hold any unsupported test or coverage conclusion. |
++| Verified obligation or supported no impact | Inspect evidence. No write is required. |
++
++A targeted retest is run preparation for an eligible approved case. Only explicit authorized native dispatch creates a run. Reuse an existing follow-up operation only when its original task/report prerequisites exist. For graph-only findings use the approved-case preparation or case/mapping proposal above, with no fabricated prior attempt. Native review, rejection, stale access and recovery remain visible in Reports; only accepted matching evidence changes the gap. In the DMIS example an older posting pass and current approval pass leave current posting unverified. A matching verified posting receipt resolves only that obligation.
++
++
++## Revision 1.4.34 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the incoming 1.4.33 canonical bodies and reconciles the separately reviewed GEX v7 corrections. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
++
+ ### Current-versus-draft and honest recovery on existing surfaces
+ 
+ Keep the Model Studio authoring head visibly separate from its active approved basis. Drafting or approving a successor must leave legitimate work on the active revision available until distinct authorized activation. Expose historical mapping/removal and uncertain publication through existing native history/receipt views. A failed linked-case query shows unavailable or stale knowledge; it must not offer “no coverage” as a confirmed fact. Recording a side finding preserves the original execution result and performer. Capture a correction without requiring optional regeneration, and retain both outputs when regeneration is chosen. These are target interactions requiring source convergence and authentic Before/After verification, not claims about today's rendered UI.
+--- a/canonical/03_TECHNICAL_DESIGN.md
++++ b/canonical/03_TECHNICAL_DESIGN.md
+@@ -1,6 +1,6 @@
+ # Technical Architecture and Data Design
+ 
+-**Document ID:** TESBO-TD-003 | **Revision:** 1.4.29 — 19 November 2026; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** source-informed design plus scoped native increments; NOT FROZEN.
++**Document ID:** TESBO-TD-003 | **Revision:** 1.4.34 — GEX-ASER-2026-11-19 reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** source-informed design plus scoped native increments; NOT FROZEN.
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Stack:** existing Next.js, NestJS, PostgreSQL/pgvector, Redis/BullMQ and Railway fork.  
+ **Audited fork:** T-454 source verification `1alextest/Tesbooboo@5989e5e2c646666ed087a7885389b2ffce4bad42` (development); prior historical audit `124f1280afd7ee0e400755796ac46ba9f956b05f`. Production SHA/migrations were not verified.  
+@@ -1449,7 +1449,7 @@
+ A proposal pins the effective skill set at creation. Recheck at submission, approval and publication. If an assignment changes or a version is revoked during work, leave the candidate/revision and evidence intact; mark `SKILL_CONTEXT_STALE` and require reassessment/rebase or an independently authorized, scoped and expiring exception under actual project policy. Historical records remain bound to the versions actually used. For exceptional urgent disabling/revocation, policy defines effect on in-flight proposals, downstream agents and previously published artifacts; no silent retroactive rewrite.
+ 
+ ### 6. Trust, confidentiality and external inputs
+-Read skill text and attachments as *instructions only if* they come from an approved, assigned version. Imported skills, reference examples, linked files and KB content are **untrusted data**, including content that claims to be a higher-priority policy. Quarantine candidate uploads and prevent them from injecting secret-exfiltration instructions, tool calls, hidden overrides, network destinations or capability expansion into active agent contexts. A formatter or preview must not execute embedded code, scripts, HTML or untrusted tool invocations. Keep secrets out of prompts, audit and exported receipts.
++Read governing Skill components as *instructions only if* they come from an approved, assigned version. Imported skills, reference examples, linked files and KB content are **untrusted data**, including content that claims to be a higher-priority policy. Quarantine candidate uploads and prevent them from injecting secret-exfiltration instructions, tool calls, hidden overrides, network destinations or capability expansion into active agent contexts. A formatter or preview must not execute embedded code, scripts, HTML or untrusted tool invocations. Keep secrets out of prompts, audit and exported receipts.
+ 
+ Use separate authenticated project/org scope for listing, creation, reading and assignment management. A public manual or policy label must not expose private source notes or history; review access to candidate drafts and diff metadata separately. Audit actor/source, exact before/after assignment, version hash, reviewer decision, and rejected authorization attempts. Validate cache keys/ETags against project, context, assignment-head and role; invalidate on approval/assignment/revocation events. Explicitly expire offline copies.
+ 
+@@ -1598,19 +1598,60 @@
+ 
+ **Reasoning runtime and changeable behavior:** The **code/server** owns project scope, authentication, immutable revisions, graph schema, parser/index capability, node/edge/actor validation, execution/approval gates and tool authorization. The **effective Skill** may change how already permitted AI capabilities choose query lenses and hypotheses, analyze user context, inspect state/role/upstream/downstream relationships, choose which test technique best applies, evaluate case strength, produce manual-versus-agent scenario candidates and narrate gaps. **AI model/version** is a separately recorded execution dependency; switching it is neither an automatic skill revision nor a native graph migration. A skill must not declare a nonexistent tool, open an arbitrary network endpoint, load an unreviewed script, change a SQL query/schema or command an agent to mark an execution passed. A controlled Skill-version rollout changes behavior *within implemented contract capabilities*, without redeploying code for every wording/heuristic adjustment.
+ 
+-**Choose the change boundary from evidence:** Apply the [principle-first method](06_IMPLEMENTATION_AGENT_BRIEF.md#principle-distillation-and-contextual-instantiation) before selecting a mechanism. Where the intended behavior is exact, stable and already representable, prefer the existing deterministic contract or configuration. Where contextual interpretation is material, bounded skill-guided AI may propose useful alternatives if grounding, cost, error handling and human review fit the task. A missing parser/tool/permission needs an implementation or authority decision, not stronger prompting. Pin inputs and retain outputs for comparison; repeated LLM calls may vary even when the input manifest is unchanged.
++**Choose the change boundary from evidence:** Apply the [principle-first method](06_IMPLEMENTATION_AGENT_BRIEF.md#portable-method-for-discovery-and-principle-distillation) before selecting a mechanism. Where the intended behavior is exact, stable and already representable, prefer the existing deterministic contract or configuration. Where contextual interpretation is material, bounded skill-guided AI may propose useful alternatives if grounding, cost, error handling and human review fit the task. A missing parser/tool/permission needs an implementation or authority decision, not stronger prompting. Pin inputs and retain outputs for comparison; repeated LLM calls may vary even when the input manifest is unchanged.
+ 
+ **Minimal trusted input/output contract:** Input binds principal/project and request intent, task mode, effective Skill IDs/version hashes and composition order, known target model/source/build context when applicable, *selected authorized graph subgraph* with exact revisions and truncated/missing edge disclosure, current native Case/model/requirement IDs, explicit expected-oracle authority and resource budget. Output is a **bounded structured proposal**: testable user outcome, relevant actors/context, traceable known edges and hypothesis edges separately, lifecycle/transitions including forbidden effects, upstream and downstream ripple, candidate missing/weak conditions, existing Case matches, manual/automated execution feasibility, evidence/source links and uncertainty flags. Each fact cites a retrievable canonical owner; hallucinated links are quarantined, not auto-written. No large unrestricted raw graph dumps; use permission-filtered, selective bounded retrieval and cached snapshots with freshness.
+ 
+ **Learning/proposal loop:** Capture original QA corrections/rejected duplicate case reasons, actual manual/agent results, verified defect outcomes, revised model predictions and source change observations. Material changes yield an **immutable candidate skill version, graph hypothesis or native Case/model proposal**, each tied to feedback/evidence, accepted source rules and project scope. A candidate cannot promote itself, re-author its own gold labels or treat observed bad behavior as expected. Human owner decides applicability; held-out, project/temporal-split trial compares candidate/champion on missed critical scenarios, test clarity/oracle precision, semantic duplicate rate, actual defect finds where proven, downstream/negative coverage, user effort and confidentiality. Keep exact graph/prompt/LLM/Skill/evaluation versions and rollback on drift; not every local feedback item becomes a universal rule. Add no parallel experiment/run/case data store without verified absence of a suitable current record owner.
+ 
+-**Failure modes:** grounding absent → explicit unknown; prompt injection in source/doc/graph text → inert data and native tool constraints; excessive graph expansion → bounded partial result; stale model/Skill → revision conflict and review; contradictory effective Skills → conflict rather than arbitrary precedence; repeated low-value suggestions → detect semantic duplication and learn rejections without altering old cases; forged agent report → no human/manual result claim; output with no accepted oracle → clarification not expected-result fabrication. Source event truth, approval boundary, model-run dispatch, original evidence and P-07/P-18 permissions remain unchanged. Original independent team charters remain unchanged. The same eight canonical files receive the 1.4.29 amendment; matching subordinate views do not replace their authority.
++**Failure modes:** grounding absent → explicit unknown; prompt injection in source/doc/graph text → inert data and native tool constraints; excessive graph expansion → bounded partial result; stale model/Skill → revision conflict and review; contradictory effective Skills → conflict rather than arbitrary precedence; repeated low-value suggestions → detect semantic duplication and learn rejections without altering old cases; forged agent report → no human/manual result claim; output with no accepted oracle → clarification not expected-result fabrication. Source event truth, approval boundary, model-run dispatch, original evidence and P-07/P-18 permissions remain unchanged. Original independent team charters remain unchanged. The same eight canonical files receive the 1.4.29 amendment; this subordinate view does not replace them.
+ 
+ ### Evaluation reproducibility and abstention
+ 
+ Pin authorized input snapshots, retrieval/tool manifests, accepted oracle, effective method versions/digests, model identifier/configuration, sampling settings where available and captured outputs. Re-evaluation can compare the same input conditions; identical language-model output is not guaranteed. A deterministic structural generator's repeatability must not be attributed to stochastic semantic analysis. Do not reconstruct inaccessible historical content or expose private material solely to reproduce a prior result.
+ 
+ Cold start can use ordinary approved rules and human test-design judgment. AI absence, insufficient evidence or a valid simpler mechanism must yield a truthful bounded outcome. Before adoption, compare the proposed method with the smallest adequate existing workflow and test its limits. Separate observed correlation from a claim that a method caused fewer defects. Apply the operational principles in canonical 06 through the existing governed method owner; they are not a self-activating platform pack.
++
++
++## Revision 1.4.30 — bind portable guidance to Tesbo
++
++The reusable method lives in canonical 06. The older draft discovery manifest's user-type, module and context keys are optional Tesbo lenses, not portable input requirements. Resolve actors, events, boundaries and decisions from the authorized target evidence. Preserve existing Tesbo review and activation owners. Bind approved audience and purpose to evaluation inputs and derived outputs, including across projects. Where persistent content cannot be retained, use a permitted reference or redacted receipt and surface evidence loss. Keep immutable history subject to the applicable retention and access policy.
++
++Before admitting either candidate source Skill, pin its exact source and dependencies and reconcile its oracle guidance. Accepted requirements or policy establish normative expectations. Shipped behavior establishes observations. Contradictions require clarification or an authorized decision. For active governed guidance, define degradation signals, a responsible responder, a stop or rollback action, and a check that the fallback actually took effect.
++
++
++## Revision 1.4.31 — graph contracts and assurance findings
++
++Model dispatch resolves the active approved revision and its assignment generation in the native owner. A new draft leaves that pointer intact. The pinned latest-head-only MCP implementation is an interim limitation. Until changed and verified, do not claim dispatch of an active older revision.
++
++Skill rollback creates a new assignment generation referencing a still-eligible immutable version. The generation is pinned to queued work and rechecked at start, resume, result delivery and protected apply. An obsolete generation cannot publish current output. Retained results are historical where permitted. Select a compatible authorized fallback or pause governed reliance. Ordinary observations remain independently retainable. Use scope-specific signals, predeclared thresholds and windows, a responder and escalation route. Verify convergence of the resolver, caches, queues and user surfaces. Reference attachments remain data even when bundled; independently approved governing components must be typed and pinned separately.
++
++Indexes bind repository generation, durable provider cursor and extraction profile. A rebuild publishes only after a fenced compare-and-set against current generation and verified catch-up. Detect lost or stale cursors in the background and label incomplete results. Cross-profile diffs are labeled extraction changes unless both snapshots are recomputed comparably.
++
++Coverage: bind model revision, cohort, eligible obligations and evidence stage. Report unique covered nodes, transitions, guard outcomes and a declared finite path set separately as numerator/denominator. Zero eligible obligations is N/A. Report unknown, excluded, unreachable with justification, and unexamined scope. Bound search by depth, cycle visits, states, paths and resource budget. Preserve deterministic enumeration, stop reason and frontier. AI may prioritize eligible obligations with a rationale; the engine enforces bounds and computes coverage.
++
++Diagnosis: tie hypotheses to exact builds, attempts, edges and competing explanations. Flakiness requires mixed outcomes in a sufficiently comparable cohort with case/build/configuration/environment and retry lineage preserved; exclude or separately label infrastructure failures and sparse cohorts. Defect-risk models require point-in-time inputs, temporal holdout, baseline, calibration, precision/recall and minimum sample policy. Keep uncalibrated or insufficient-evidence results advisory and explicit.
++
++
++## Revision 1.4.32 — Graph Analytics
++
++Reuse the native Reports shell and existing authorized graph, traceability, metrics, and proposal owners. Graph Analytics is a project-scoped read projection and reuses canonical evidence and review operations. Rank from declared factors and a stable tie-breaker. Existing governed Skill reasoning may explain evidence and prioritize follow-up within scope. Pin source/model/Skill versions and keep calculated coverage separate from generated explanations. Preserve an actionable evidence-backed list when AI is unavailable.
++
++
++## Revision 1.4.33 — Graph Analytics assurance amendments
++
++Reports is the UI owner, the project graph/change-review owner supplies exact comparisons and FR-119 impact handles, Model Studio supplies selected approved model obligations, Requirements/Policy supply approved obligations without a model, and native Cases/Runs/Evidence supply exact mappings and attempt evidence. Pinned source readers are narrower: Zyra history lists linked runs, Model Studio uses latest saved revision in coverage, and legacy reports count execution at suite level. Extend existing owners to meet the contract before relying on those readers.
++
++For v1 rank authorized candidates lexicographically by critical obligation flag, accepted applicability (confirmed before inferred before unresolved within each flag), direct before downstream when applicability ties, then stable finding identity. Resolve criticality from approved project policy where available and display unknown criticality separately rather than assigning it an invented score. Expose critical, unresolved and unexamined items via explicit filters/status even if outside the first page. Deduplicate the same obligation/consequence in the same comparison while preserving supporting paths. Pin the ranking version and explain the factors per row. AI can explain or recommend a next check; deterministic ordering and counts survive AI loss.
++
++Count unique eligible authorized obligations per selected revision/effective scope, evidence stage and build/environment cohort. Model counts use the selected approved model basis; approved requirements/policies provide an obligation basis in projects without models. Show stage-specific numerator and denominator, exclusions, incomplete frontier and unknown basis. Complete scope with zero eligible is N/A. Partial counts are labeled partial and prohibited from implying a complete denominator. Retries and older/out-of-cohort passes cannot inflate coverage.
++
++Use existing telemetry for an opaque correlation ID, report snapshot, source generation/cursor, extraction/ranking versions, freshness lag and safe degradation category. Reports owner handles projection symptoms, upstream graph owner handles index recovery, and optional AI owner handles explanation failures. Set project operational thresholds before rollout. Verify recovery by reading the current authorized snapshot and matching its upstream generation; avoid logging sensitive graph material.
++
++
++## Revision 1.4.34 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the incoming 1.4.33 canonical bodies and reconciles the separately reviewed GEX v7 corrections. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
+ 
+ ### Source-to-target convergence before governed graph reliance
+ 
+@@ -1664,3 +1705,8 @@
+ **Separate learning evidence from generation:** Tester corrections, rejected suggestions, original case versions, before/after expected observations, reviewer rationale and genuine execution outcomes are append-only attributable learning evidence independent of regenerated candidates. Regeneration, deduplication, case replacement, Skill rollback or model switch must not erase or relabel that history. A correction may produce a proposal, but only the existing exact human review and separate activation process can change the effective guidance. A candidate's performance must be assessed against independent outcomes rather than its own regenerated examples.
+ 
+ **Authority and scope:** Normative precedence is determined by the actual approved owner and applicable jurisdiction/effective scope, not by an artifact type's name alone. A manual cannot override a binding policy; neither may an analyst assume every item named Policy is binding or applicable. AI interpretation, causal hypotheses, optional statistical prediction and deterministic traversal are distinct mechanisms and may be introduced incrementally. Insufficient labels, absent capability or an unjustified learning need supports a manual/deterministic/no-prediction outcome. Preserve every real attempt and declared aggregation grain; do not conflate relationship multiplicity with observations or predictions with confirmed defects.
++
++
++**Selection and analytical scope qualification:** The 1.4.31 sentence about model dispatch selecting an active revision applies to **CURRENT** applicability only. Model applicability/CAS generation and T-422 effective Skill assignment generation belong to distinct native owners. Authorized Draft inspection/preview and explicit HISTORICAL selection retain MBT-C02's selected revision, consent, retirement, mapping and permission rules; neither owner silently substitutes for the other. Current-generation checks do not discard legitimate historical work. The initial Graph Analytics Reports slice is Change impact and Coverage gaps. Later diagnosis/stability and optional prediction remain separately gated capabilities, not implied initial UI features. Insufficient or unqualified evidence requires abstention from quantitative defect probability; qualitative hypotheses, explicitly uncalibrated relative heuristics and deterministic/manual prioritization may remain informative without probability or coverage claims. Calling a result advisory does not waive evidence admission.
++
++**Canonical-label correction:** The older 1.4.29 Failure modes paragraph uses “subordinate view” in this file. Canonical 03 is the authoritative technical-design owner; only the six repository ASER documents are subordinate views. The old wording is retained as history and is superseded by this clarification.
+--- a/canonical/04_MCP_API_CONTRACTS.md
++++ b/canonical/04_MCP_API_CONTRACTS.md
+@@ -1,6 +1,6 @@
+ # Proposed MCP / REST Contracts and Integration Security
+ 
+-**Document ID:** TESBO-API-004 | **Revision:** 1.4.29 — 19 November 2026; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** mixed proposed and scoped native contracts; NOT FROZEN. PROPOSED labels remain proposals.
++**Document ID:** TESBO-API-004 | **Revision:** 1.4.34 — GEX-ASER-2026-11-19 reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** mixed proposed and scoped native contracts; NOT FROZEN. PROPOSED labels remain proposals.
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Important:** Names, JSON payloads and paths labeled `PROPOSED` below are **not existing routes**. Discover/confirm their implementation after engineering work. Source audit found current Tesbo MCP at `/api/projects/:projectId/mcp` and `/api/mcp` through JSON-RPC 2.0 and a `tsbo_` bearer token.
+ 
+@@ -1039,6 +1039,37 @@
+ 
+ Apply existing ASER-C06 resource, cancellation, timeout, queue, retention and disclosure controls to retrieval, expansion, inference and optional active probing. An approved numeric envelope is an implementation prerequisite; missing values do not authorize unbounded work. Exhaustion returns a partial or blocked affected assessment with preserved completed receipts, not a zero-impact/no-defect conclusion. Reauthorization after asynchronous delay is mandatory. Running a model means only its evidenced native operation; dispatch is not a target assertion. Human testimony, agent self-report, witnessed automation and retrievable bytes retain their distinct provenance and practical limits.
+ 
++
++## Revision 1.4.31 — graph contracts and assurance findings
++
++Extend existing graph, Model Studio and Skill operations. Return selected revision, active assignment generation, source generation/cursor/extraction profile where applicable, comparable-scope status, evidence-stage and bounded coverage counts. Existing readers return authorized policy and manual object/version handles and typed relationship provenance. Unknown scope, inactive guidance and historical results remain distinguishable.
++
++Enforce permitted purpose and recipient before sending data to tool, provider or evaluator, including telemetry; minimize and redact. Recheck source and derived-output access during async processing, readback and promotion. On evidence loss, prevent rehydration, retain permitted historical receipts, and hold current reliance unless re-evaluated with authorized evidence. Approved bundled references cannot confer instructions or authority.
++
++An executor lease fences Tesbo writes, not external effects. If a dispatched target mutation may have happened, use approved target readback or a target idempotency key to reconcile before retry. Without that capability retain UNKNOWN and require authorized disposition before another mutating attempt.
++
++
++## Revision 1.4.32 — Graph Analytics
++
++Graph Analytics clients reuse authorized graph and reporting readers or extend their typed responses where necessary. Bind every row and drill-down to project, comparison or evidence scope, source revisions, freshness, evidence stage and relationship provenance. Return permitted record handles and status for unsupported or partial results. Pagination and aggregate counts obey the same authorization as details. Retest drafts use existing native proposal and review contracts.
++
++
++## Revision 1.4.33 — Graph Analytics assurance amendments
++
++Readers authorize the projection before traversal, deduplication, ranking, counts or AI context. Restricted material must not affect visible facets, ranks, paths, placeholders, cursors, snippets or signals. Pin an opaque snapshot and cursor to principal/project, filter, exact comparison/revisions, source generation, extraction/ranking versions and evidence cohort. List, counts, details and actions share that scope. Reauthorize each access. Permit old snapshots only while access remains valid and show them as historical; otherwise invalidate and require explicit refresh. Fence late responses on route, access or snapshot change.
++
++Return each finding's permitted citations, effective authority, edge direction/class, uncertainty and observation vs hypothesis. AI explanations bind citations, expected-model revision where applicable, runtime model and Skill assignment generation; recheck access/purpose before provider submission, result delivery and reuse. Keep imported content inert. Reject obsolete explanations as current.
++
++Bind native handoff to finding, snapshot, impact ID when present, action, case/oracle revision, build/environment and any genuine prior receipt. Recheck terms and permission at stage, readback and submission. Stale inputs require explicit reselection; recover a lost committed response from the existing idempotent receipt path. A handoff cannot dispatch or close an impact implicitly.
++
++
++## Revision 1.4.34 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the incoming 1.4.33 canonical bodies and reconciles the separately reviewed GEX v7 corrections. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
++
+ ### Source-convergence boundary for existing operations
+ 
+ The inspected model approval, path-to-case, model-run and source-binding operations are existing interfaces with narrower guarantees, not implementations of every proposed ASER-C contract. Apply the canonical 03 convergence plan below the UI/REST/MCP/native-AI entry points: trusted actual principal and exact human assent; independent source entitlement; shared unpublished staging; one actual native transaction for selected effects, mandatory provenance, commitment and audit; authoritative uncertain-outcome readback; family-owned current selection; exact versioned mapping/removal history. A wrapper transaction around a separately committing writer does not satisfy atomicity. No new endpoint/tool is declared by this clarification, and an old client must not fall back to latest, fabricated success or a permissive writer when a required contract is unavailable. Historical unknowns remain truthful. Canonical 05 records required allowed/denied/fault/race proofs; all are unexecuted here.
++
++
++**Selection and analytical scope qualification:** The 1.4.31 sentence about model dispatch selecting an active revision applies to **CURRENT** applicability only. Model applicability/CAS generation and T-422 effective Skill assignment generation belong to distinct native owners. Authorized Draft inspection/preview and explicit HISTORICAL selection retain MBT-C02's selected revision, consent, retirement, mapping and permission rules; neither owner silently substitutes for the other. Current-generation checks do not discard legitimate historical work. The initial Graph Analytics Reports slice is Change impact and Coverage gaps. Later diagnosis/stability and optional prediction remain separately gated capabilities, not implied initial UI features. Insufficient or unqualified evidence requires abstention from quantitative defect probability; qualitative hypotheses, explicitly uncalibrated relative heuristics and deterministic/manual prioritization may remain informative without probability or coverage claims. Calling a result advisory does not waive evidence admission.
+--- a/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md
++++ b/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md
+@@ -1,6 +1,6 @@
+ # Implementation Backlog, Engineering Tasks and QA Acceptance Plan
+ 
+-**Document ID:** TESBO-PLAN-005 | **Revision:** 1.4.29 — 19 November 2026; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** plan plus scoped implementation receipts; unverified backlog/QA entries remain NOT RUN; NOT FROZEN.
++**Document ID:** TESBO-PLAN-005 | **Revision:** 1.4.34 — GEX-ASER-2026-11-19 reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** plan plus scoped implementation receipts; unverified backlog/QA entries remain NOT RUN; NOT FROZEN.
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Repository:** `1alextest/Tesbooboo`, feature branch first, never direct Railway production promotion.  
+ **Execution tool:** engineer/coding agent may be OpenCode; this plan does **not** replace the separate OpenCode+Chrome MCP QA execution workflow.
+@@ -1315,7 +1315,7 @@
+ 
+ **Scope:** Reconcile existing proposed governed test/requirement/skill assets in `docs/reviews/governed-asset-evolution-reconciliation.md` against the eight Tesbo canonical specs and actual KB versions/ACL, case approval, Zyra, MCP and graph writers. Implement only a justified incremental extension. Inventory and lock all user/agent/REST/MCP/import/background/legacy publication entrances **before** claiming the guard can be enforced.
+ 
+-**Slice S0 (no agent-write exposure):** Implement the **minimum** immutable/versioned effective-skill reader, human-controlled assignment and protected bootstrapped Skills-authoring meta-skill required for integrated milestone I3. Full library search/evaluation and advanced UI should not hold back I1/I2 source/agent visibility, but no new governed agent writer may bypass active assigned skills or approved publication. Extend immutable skill identity + version history and public metadata read by authorized clients, authenticated context resolver with deterministic approved active assignments (module, subtype, audience, workspace/project), explicit unassigned/conflict behavior, and a protected bootstrapped Skills-authoring meta-skill. Define human governance authentication and separation of duties; implement revoke/disable, rollback-as-new-version, concurrency, cache invalidation, stale-work handling, ACL and audit. Human-only assignment API and UI must be denied to every MCP/machine principal, including tokens owned by admins.
++**Slice S0 (no agent-write exposure):** Implement the **minimum** immutable/versioned effective-skill reader, human-controlled assignment and protected bootstrapped Skills-authoring meta-skill required for integrated milestone I3. Full library search/evaluation and advanced UI should not hold back I1/I2 source/agent visibility, but no new governed agent writer may bypass active assigned skills or approved publication. Extend immutable skill identity + version history and public metadata read by authorized clients, authenticated context resolver with deterministic approved active assignments (module, subtype, audience, workspace/project), explicit unassigned/conflict behavior, and a protected bootstrapped Skills-authoring meta-skill. Define human governance authentication and separation of duties; implement revoke/disable, rollback-as-new-assignment-generation, concurrency, cache invalidation, stale-work handling, ACL and audit. Human-only assignment API and UI must be denied to every MCP/machine principal, including tokens owned by admins.
+ 
+ **Slice S1 (candidate-only):** Extend D-14 QA Standards & Playbooks with Skills Library and Assignments subviews, plus MCP `list/get/resolve`, `create_skill_candidate`, `propose_skill_version` through existing native domain boundaries, with immutable and idempotent candidate receipts. Candidates remain inert, unavailable for authoritative resolution regardless of ID or author. No agent activation, assignment, approval, priority or active-version edits through *any* route. Protect against candidate instruction injection and secret/data leakage.
+ 
+@@ -1778,6 +1778,56 @@
+ 
+ Rerun the original teams against an immutable input set using the unchanged authoritative charters. Give outcomes and grounded sources; withhold author diagnosis, expected verdicts and other cold reviewers' findings. Freeze first-pass outputs before synthesis, then label later reviews as informed deltas. Use actual membership/quorum and Graph/White sequencing; do not invent extra teams or report formal runtime/human sign-off from a model review. Preserve prior findings and new scope limits. Historical 49-journey and 75-definition receipts do not count as a review of this expanded direction.
+ 
++
++## Revision 1.4.30 — portable method qualification
++
++Track method discovery evidence separately from Tesbo runtime acceptance. Before exposure, an independent evaluator records who selected the tasks and criteria, exact incumbent and candidate versions, task/evidence versions, permitted tool access and budgets, exposure checks, rubric and promotion threshold. Use unseen cases from dissimilar products with at least an undisclosed judgment gap, a simpler deterministic or no-change outcome, and conflicting or insufficient evidence. Give both arms equivalent authorized inputs and hold original outputs before synthesis. Record consequential discoveries, missed gaps, unsupported findings, effort, authority or evidence violations and regressions per case. Promotion requires predeclared thresholds and no material authority or evidence regression. Inconclusive trials stay on hold.
++
++For Tesbo runtime qualification, exercise active guidance degradation through detection, accountable response, stop or rollback and observable recovery. Verify restricted evidence is not exposed by the retained record and that history remains attributable. Method trial and runtime scenario status: NOT RUN.
++
++
++## Revision 1.4.31 — graph contracts and assurance findings
++
++Add these acceptance obligations to existing owners. Status for each is NOT RUN.
++
++| Proof | Existing owner | Observable acceptance |
++|---|---|---|
++| GEX-AC-01 | FR-115–119 / T-455–458 | Link policy and manual revisions, change one, show affected records and conflicts, deny restricted reads, require native approval before publication. |
++| GEX-AC-02 | Model Studio | Approve and activate A, save B, dispatch A, then concurrently change the active pointer and verify exact generation fencing. |
++| GEX-AC-03 | T-422 / SK-E2E-05/11/39 | Trigger degradation while work is queued and in flight. Confirm operator signal, eligible fallback and effective readback or pause. Stale results cannot replace current outputs. Historical evidence remains attributable and permitted. |
++| GEX-AC-04 | T-422 / SK-E2E-14 | Approved Skill bundles an inert reference. Revoke a sealed evaluation source while work is delayed. Verify no unauthorized transfer or readback and hold the affected verdict. |
++| GEX-AC-05 | T-455/456 | Lose an event during a binding rotation and finish an obsolete rebuild late. Verify stale detection, fencing, operator recovery and current convergence. Reindex unchanged source with another profile and distinguish extraction changes. |
++| GEX-AC-06 | T-201–207/301–308 | Target accepts an action, executor loses lease before reporting. Prove a single target effect where reconciliable and UNKNOWN with blocked mutating retry otherwise. |
++| GEX-AC-07 | FR-117/124 | Hand-calculate node, edge, guard and finite path coverage; prove unknown and bounded frontier handling. Compare diagnosis, flaky cohort and risk ranking against independent labeled controls. |
++| GEX-AC-08 | T-422 / portable method qualification | Pre-register equivalent access, fixed material dependencies or declared factors, independent arm-masked scoring where feasible, disagreement handling, repeated trials and uncertainty/sample rules. Keep the incumbent uncontaminated. Hold inconclusive promotion. |
++
++These obligations supplement the historical 125 planned definitions. The authoritative SK-E2E scenario rows are in this file. Model-calibration evidence and discovery trials do not substitute for independent Tesbo runtime acceptance.
++
++
++## Revision 1.4.32 — Graph Analytics
++
++Add planned acceptance to FR-115–119/124 and existing GEX proof. GA-AC-01 shows the DMIS approval-to-posting finding and carries authorized record links and exact scope into the native retest draft. GA-AC-02 separates no approved test, no run, missing evidence, stale, partial and unavailable states, including AI unavailable. GA-AC-03 verifies filters and deep links restore scope, permission changes remove cached detail and counts, and keyboard and narrow-width users get equivalent list and graph evidence. GA-AC-04 verifies the new report integrates with existing AI Insights and Traceability without duplicating their metrics. All four are NOT RUN.
++
++
++## Revision 1.4.33 — Graph Analytics assurance amendments
++
++The following split supersedes the v1.4.32 GA-AC summaries. All are NOT RUN.
++
++| Check | Existing owner | Fixture and expected/forbidden outcome |
++| --- | --- | --- |
++| GA-AC-01 · FR-119/121/122 | Graph change review + Cases/Runs/Evidence | DMIS conflicting manual, expired policy, approved current policy, current approval pass and older posting pass. Posting stays unverified through rejection, revision drift and revoked staging. Recover one receipt after lost reply, no implicit run or acknowledgment. Only a verified matching posting attempt resolves its gap. |
++| GA-AC-02 · FR-115–118/122 | Graph, Model Studio, Requirements/Policy | Independently count a modeled A/ newer draft B fixture and an approved requirement-only project, with duplicate retries, old-build pass, partial frontier and zero eligible. Match denominator and stages across surfaces; assert valid next action, no false complete count. Tie and critical/unknown fixtures retain canonical order during AI loss. |
++| GA-AC-03 · FR-123 | Reports + authorization/graph readers | With two principals, vary hidden edges; visible results stay equivalent. Revoke between pages, detail, queued AI and submission; deny stale/cross-principal cursors and prevent late data leakage. Publish a refresh mid-pagination, switch projects, exercise hard reload and Back/Forward; no mixed scope or duplicates. Verify keyboard, screen reader, 320 CSS px, 200% zoom and focus fallback after row removal. |
++| GA-AC-04 · FR-124 | Reports + independent QA adjudicator | Compare legacy Traceability/AI Insights and GA on equivalent inputs, including another project and no-impact, omitted dependency, contrary authority and downstream-failure controls. Record critical misses, false positives, quality of next action, time and total review effort against predeclared criteria. Withhold benefit claims pending results. Check contrasting suite execution vs obligation coverage and both export entry points, plus preserved six native exports. |
++| GA-AC-05 · T-455/456 and Reports | Index and Reports owners | Trace stale, partial, failed refresh and AI-only degradation to permitted correlations and responder. Recover upstream generation and prove current list/count/detail convergence without a clean-empty claim or silently rebased draft. |
++
++Record exact implementation revision, owner, fixture, actual evidence and disposition against each proof. Keep package unfrozen pending required independent closure and runtime proof.
++
++
++## Revision 1.4.34 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the incoming 1.4.33 canonical bodies and reconciles the separately reviewed GEX v7 corrections. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
++
+ ### Source-convergence proof allocation — definitions, not executed closure
+ 
+ The source-to-target convergence table in canonical 03 is part of the existing FR-117/118/119, T-422, source-binding and native authoring/execution work. Reconcile the pinned source before making stronger current-state, human-governance, atomicity or learning claims. The existing IDs below are extended with explicit discriminating fixtures; this does not add another scenario family or change the 125-definition ASER total.
+@@ -1824,3 +1874,12 @@
+ **Measurement boundary:** Start with useful read-only interpretation on approved policy/manual/requirement and authentic evidence, including code-free work. Compare deterministic/manual/no-change and justified assisted alternatives on separately selected cases. Measure unique actionable gaps, claim/path accuracy, missed obligations, human review effort, cost, privacy and rollback. If optional prediction or causal analysis is evaluated, use its own appropriate independently grounded labels and criteria; a common graph does not confer causal validity. The above engineering fixtures are not instructions to a cold reviewer about which findings to discover.
+ 
+ **Cross-PR and delivery admission:** PR #167 is a separate unmerged proposed implementation, not current-development or runtime evidence. Reconcile the exact current heads and overlapping owner/approval/transaction contracts before merge or reliance; preserve valid incoming implementation and docs. The current canonical recovery and actual team receipts supersede older access/NOT RUN checkpoints only for their evidenced scope. Every unresolved scanner finding needs actual rule/path disposition and fresh checks on the final tree; never broaden exclusions or infer security from another PR. Current-source review remains pinned to development `6897f989b055a955280f810c7daace86f74057fa` until explicitly re-bound.
++
++
++**Selection and analytical scope qualification:** The 1.4.31 sentence about model dispatch selecting an active revision applies to **CURRENT** applicability only. Model applicability/CAS generation and T-422 effective Skill assignment generation belong to distinct native owners. Authorized Draft inspection/preview and explicit HISTORICAL selection retain MBT-C02's selected revision, consent, retirement, mapping and permission rules; neither owner silently substitutes for the other. Current-generation checks do not discard legitimate historical work. The initial Graph Analytics Reports slice is Change impact and Coverage gaps. Later diagnosis/stability and optional prediction remain separately gated capabilities, not implied initial UI features. Insufficient or unqualified evidence requires abstention from quantitative defect probability; qualitative hypotheses, explicitly uncalibrated relative heuristics and deterministic/manual prioritization may remain informative without probability or coverage claims. Calling a result advisory does not waive evidence admission.
++
++
++**Method and evaluation version boundary:** Canonical 06's incoming portable trigger/adoption wording is preserved as an unvalidated candidate. It changes the method text compared with the earlier frozen trial candidate. The completed incumbent/candidate exercise used the original fixed v1–v7 wording on two independently selected synthetic briefs; both arms met their contracts, with no demonstrated superiority. It does not discharge the stricter 1.4.30/31 discovery qualification or validate this successor, the extra contextual wording, a runtime Skill, prediction, or real-user benefit. The original team charters and original outputs remain unchanged. No candidate Skill is installed, approved or activated by this document.
++
++
++**Proof inventory accounting:** Retain the 125 ASER core definitions (15 ASE-E2E, 54 ASE-FLOW, 40 SK-E2E, 16 ASE-INT), eight incoming GEX-AC obligations and five current GA-AC checks. The 1.4.33 GA-AC table supersedes the four 1.4.32 prose summaries; do not count them twice. The separate GEX-SEM-01..08 and proposed SK-E2E-41..44 labels remain aliases with explicit new fixture assertions allocated below, not twelve more canonical definitions. All product/runtime proof obligations remain NOT RUN in this review. Mechanical checks and isolated helper/query probes retain their narrower identities and cannot satisfy these scenarios.
+--- a/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md
++++ b/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md
+@@ -1,6 +1,6 @@
+ # Implementation Agent Brief — OpenCode / Claude Code / Codex
+ 
+-**Revision:** 1.4.29 — 19 November 2026; governed graph reasoning and principle-based learning; NOT FROZEN 
++**Revision:** 1.4.34 — GEX-ASER-2026-11-19 reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN 
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Target:** `1alextest/Tesbooboo`; never substitute upstream for the owner's fork.  
+ **Status:** engineering instructions plus scoped implementation receipts; no package-wide completion or production deployment claim; NOT FROZEN.
+@@ -551,7 +551,11 @@
+ 
+ Separate stable enforcement from variable reasoning. Skill changes can alter interpretation, selection and explanation within available contracts; they cannot create parsers, tools, permissions, approvals or executed evidence. Preserve exact input/method/model/output provenance and incomplete scope; do not promise deterministic language-model replay. Triage feedback, retain rejected trials, independently evaluate candidates and use the existing approval/activation/rollback owner. No active guidance or historical attempt is silently rewritten.
+ 
+-### Principle distillation and contextual instantiation
++### Portable method for discovery and principle distillation
++
++Apply this method when assessing whether an existing or proposed capability achieves its intended outcome, including routine status, conformance and completeness reviews. Trace a bounded, consequential outcome from initiating actor or event through the decision, needed evidence, action and consequence. Include one relevant exception or handoff where evidence permits. Ask what judgment remains unsupported, who makes it today, and which existing capabilities could help. Record the gap, supported no-change, or insufficient evidence. A feature request, known defect or suggested mechanism is unnecessary to trigger this step.
++
++Choose discovery lenses from the context. Human roles, machine actors, scheduled jobs, events, contracts and handoffs may each be useful. User type, module and context are optional lenses. Inspect or reuse evidence only for an authorized purpose and audience. Carry restrictions into derived outputs. Use permitted references or redaction where appropriate and report unresolved or inaccessible evidence explicitly.
+ 
+ **Purpose and status:** This is a candidate refinement of the existing operating method, owned by this canonical brief; canonical 03 owns the corresponding governed evaluation mechanism. It makes the existing discovery, reuse, outcome, authority and lesson-learning principles operational. It does not alter original team charters or install, approve or activate a Skill. A user direction can expose an opportunity without proving a reviewer violated a rule or that the proposed solution is universally desirable.
+ 
+@@ -565,7 +569,7 @@
+ | Discover capabilities across ownership boundaries | New behavior or repeated work is proposed. Inspect relevant existing code, tools, methods, decisions and neighboring modules, including capabilities exposed through another surface. | Compare semantic responsibility and contracts; choose reuse, extension or explicit composition before a new identity. Record owner, evidence, maturity and remaining gap. | Similar names are not equivalence; a source artifact is not an installed capability; unavailable evidence is not absence. A distinct responsibility can justify a new owner. |
+ | Separate the variable decision from stable invariants | Behavior needs to change over time. Inspect which decisions vary, why, who owns them and which guarantees must remain stable. | Locate change at the smallest sufficient level: data/configuration, explicit rules, governed reasoning method, model, implementation or authority decision. Record what changes, what enforces invariants, and how to undo the change. | A method cannot add an absent parser/tool, grant permission or replace durable enforcement. Some changes genuinely require code or a new approved contract. |
+ | Select a mechanism using task evidence | Several approaches could meet the outcome. Compare relevant ambiguity, repeatability, risk, latency/cost, explainability, available tools and maintenance needs. | Compare plausible alternatives, including existing/manual behavior and no change. Use probabilistic interpretation only when its expected benefit and bounded failure handling fit the task; preserve the rationale and uncertainty. | Exact stable decisions can remain deterministic. Rules/configuration, clarification, deferral or `N/A` may be correct. No universal requirement to add AI, a skill or a new service follows. |
+-| Keep expectation, observation, inference and authority independent | A method interprets content, proposes behavior or evaluates its own outputs. Inspect source authority, revision, observation provenance and the accountable decision owner. | Label each claim, retain contradictions and missing evidence, and route material proposals to the existing owner. Evaluate against an independently grounded expectation. | Confidence and agreement do not authorize a decision. Observed faulty behavior must not become its own expected result; authentic observations remain retainable even when authoring is blocked. |
++| Keep expectation, observation, inference and authority independent | A method interprets content, proposes behavior or evaluates its own outputs. Inspect source authority, revision, observation provenance and the accountable decision owner. | Label each claim, retain contradictions and missing evidence, and route material proposals to the accountable authority; record an unresolved authority gap and defer adoption if ownership is absent or disputed. Evaluate against an independently grounded expectation. | Confidence and agreement do not authorize a decision. Observed faulty behavior must not become its own expected result; authentic observations remain retainable even when authoring is blocked. |
+ | Triage feedback before generalizing | A reviewer correction or real outcome suggests an improvement. Inspect the original input/output, version, context, reason and alternative explanations. | Distinguish a project fact or oracle gap, configuration issue, reusable method gap, implementation defect and evaluation/measurement error. Propose the smallest supported correction with applicability and disconfirming evidence. | A single case can motivate a candidate, not a universal conclusion. Retain local exceptions; do not train on an agent's answer as though it were independent truth. |
+ | Test transfer and regression, not agreement | A candidate method is proposed for broader reliance. Use frozen inputs, independent judgments, dissimilar contexts, counterexamples and tasks that were not used to author the candidate. | Compare candidate and current method on useful outcomes, misses, false claims, human effort and preserved constraints; retain exact versions, outputs, failed trials and `UNKNOWN`. Include a legitimate no-change/deterministic outcome and an insufficient-evidence case. | A consistent document or flattering model score does not establish real-product benefit. Repeated LLM outputs may vary; preserve runs and uncertainty rather than promise deterministic replay. |
+ | Verify that the method was applied | A review or closeout makes a completeness claim. Inspect actual source/review receipts and the material decisions, alternatives and unexamined scope. | Record what was considered, why relevant checks were skipped, who independently reviewed, and what evidence supports the bounded conclusion. Preserve original findings before informed reconciliation. | A named role or instruction is not an executed review; a missing receipt is an evidence gap, not proof of a particular mental error. No quota of findings or preferred solution is required. |
+@@ -574,8 +578,9 @@
+ 
+ **Illustrations only:** An approved fixed eligibility rule may warrant existing deterministic validation; an interpretation-heavy support review may warrant governed guidance over attributed evidence; an already adequate export filter may warrant no change; contradictory unapproved workflow descriptions may require clarification. Derive each real decision from that target's evidence. These examples are not held-out evaluation tasks or proof that the candidate method transfers.
+ 
+-**Promotion record:** Use the existing candidate/version/evaluation/assignment owners to retain the source lesson, causal confidence, affected existing rule, applicability, alternatives, evidence needed to falsify the proposal, evaluated inputs/outputs, independent verdict and remaining limits. Separate skill changes from model, data, tool and code changes when attributing effects. Human review and separate activation, monitoring and rollback remain mandatory for governed reliance. This authoring refinement remains **unvalidated for improved discovery** until a discriminating independent evaluation supports that claim.
+-
++**Portable adoption rule:** Record the source lesson, causal confidence, affected rule, scope, alternatives, evaluation and limits. Attribute effects separately to method, model, data, tools and code. Apply review proportionate to impact, retain the adopted revision and define an observable failure signal, responsible responder and safe fallback. Record absent or disputed authority and defer reliance until resolved. A reviewed handbook or controlled configuration can supply these guarantees.
++
++**Tesbo binding:** Use the existing candidate, version, evaluation and assignment owners. Governed reliance retains human review, separate activation, monitoring and rollback. The candidate remains unvalidated for improved discovery pending the comparison in canonical 05.
+ 
+ ### Independent application and review boundary
+ 
+@@ -584,3 +589,26 @@
+ A cold specialist receives the desired outcome, frozen target artifacts, actual source/environment bindings and its unchanged charter. It derives its own questions, scope, journeys, evidence and conclusions. Withhold author diagnosis, expected findings, prior reviewer findings and answer keys until its original output is frozen. Later synthesis or correction review is labeled informed. Preserve disagreements and missing proof rather than pressure agents into consensus. Specific authored manual cases still need executable steps and observable expected results; this does not justify planting a discovery path in an independent exploratory brief.
+ 
+ Distinguish a review of an explicit new requirement from an experiment on discovery. To test whether a general method improves opportunity discovery, use separately selected unexposed tasks and independent criteria, including valid simpler/no-change/UNKNOWN outcomes. Report synthetic, source, runtime and human evidence separately. A successful bounded exercise supports only its observed scope and cannot guarantee that a past opportunity would never be missed.
++
++
++## Revision 1.4.31 — graph contracts and assurance findings
++
++The portable method entry trigger applies within declared candidate trials until authorized adoption. The incumbent arm receives only its own method. Keep the portable rule domain-neutral: trace the outcome and unsupported decision, identify existing capabilities, evaluate feasible alternatives and preserve authority and evidence. In Tesbo, trace policies and manuals through their native versions. Treat analytics as hypotheses and respect qualification and activation gates.
++
++
++## Revision 1.4.32 — Graph Analytics
++
++Ground Graph Analytics in the existing Reports route and components at the implementation head. Inspect actual AI Insights, Traceability and detail-panel behavior before changing components. Keep the reusable review question domain-neutral: what decision does the person need to make, which evidence supports it, and what action follows? Use the existing governed reasoning method for graph explanations. No new standalone Skill identity is required for this slice.
++
++
++## Revision 1.4.33 — Graph Analytics assurance amendments
++
++Before implementation, map existing controller/service/component owners for snapshot reads, authority, metrics, proposal and run preparation. Audit the implementation-head Reports route, ReportsNav, AI Insights, Traceability and both export entry points. Do not infer support from similarly named readers. Keep the reusable review rule portable: verify that a displayed decision survives partial evidence, changed authorization and the transition into the accountable workflow.
++
++
++## Revision 1.4.34 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the incoming 1.4.33 canonical bodies and reconciles the separately reviewed GEX v7 corrections. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
++
++
++**Method and evaluation version boundary:** Canonical 06's incoming portable trigger/adoption wording is preserved as an unvalidated candidate. It changes the method text compared with the earlier frozen trial candidate. The completed incumbent/candidate exercise used the original fixed v1–v7 wording on two independently selected synthetic briefs; both arms met their contracts, with no demonstrated superiority. It does not discharge the stricter 1.4.30/31 discovery qualification or validate this successor, the extra contextual wording, a runtime Skill, prediction, or real-user benefit. The original team charters and original outputs remain unchanged. No candidate Skill is installed, approved or activated by this document.
+--- a/canonical/07_UI_DESIGN_TASKS.md
++++ b/canonical/07_UI_DESIGN_TASKS.md
+@@ -1,6 +1,6 @@
+ # UI/UX Design Tasks and Screen Specifications
+ 
+-**Document ID:** TESBO-UX-007 | **Revision:** 1.4.29 — 19 November 2026; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** proposed extensions plus limited native inspector; full graphical UI/AT and independent sign-off remain open; NOT FROZEN.
++**Document ID:** TESBO-UX-007 | **Revision:** 1.4.34 — GEX-ASER-2026-11-19 reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** proposed extensions plus limited native inspector; full graphical UI/AT and independent sign-off remain open; NOT FROZEN.
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ 
+ **Platform UI rule:** Project settings determine target kind/adapter, allowed test actions, test-case templates/fields and suite hierarchy, imported-source mapping, issue tracker and evidence classification. DMIS labels and web browser affordances are pilot fixtures, not universal UI controls. A project with no case import or issue tracker sees no required workbook/GitLab fields. Unsupported target adapters show `NOT_SUPPORTED` with no mock execution.
+@@ -690,8 +690,46 @@
+ 
+ Prefer progressive detail: the tester sees the decision, supporting reason and next action; evidence/revision diagnostics are available when needed to assess trust. A generic user need not understand parser internals to author a case. Keep source facts, proposals and accepted records distinguishable without relying on color alone. Verify focus, keyboard navigation, screen-reader labeling, reflow and error/recovery against the actual interface. Comprehension and perceived usefulness need appropriate user evidence; an expert/synthetic walkthrough is labeled accordingly.
+ 
++
++## Revision 1.4.31 — graph contracts and assurance findings
++
++Extend existing graph/list and review surfaces with policy obligation and manual section links, exact revision, relationship rationale and conflict or unavailable state. Preserve project and permission scope. Show evidence stage, denominator and truncation for coverage. Investigation views distinguish hypotheses, cohort limitations and confirmed dispositions. Show an effective Skill readback and a scoped degradation/recovery state with permitted actions for operators. Validate screen placement and accessible equivalents against actual source and runtime before sign-off.
++
++
++## Revision 1.4.32 — Graph Analytics
++
++### Existing source and proposed design
++
++Baseline inspected at Tesbo commit 6897f989: `Tesbo-Frontend/app/(app)/projects/[id]/reports/page.tsx` and `Tesbo-Frontend/components/reports/ReportsNav.tsx`.
++
++| Before, from source | Proposed | Why |
++| --- | --- | --- |
++| Reports already contains Traceability and AI Insights | Add Graph Analytics within Reports as a deep-linkable view. Cross-link to the existing reports where they answer the next question. | Keep a single reporting entry point and preserve the existing division of work. |
++| AI Insights advertises risk, flaky tests and gaps | Start Graph Analytics with Change impact and Coverage gaps. Reuse existing stability and risk metrics when later adding graph-driven investigations. | The additional value is explaining consequences and supplying evidence for a decision. |
++| Reports has shared navigation, loading and header controls | Reuse shell and tokens. Put scope filters over an actionable list and reveal evidence details on selection. | Familiar interaction and a clear path from finding to action. |
++
++Header: project breadcrumb, Graph Analytics title, comparison scope, source freshness. Views: Change impact and Coverage gaps. Filters: affected component or workflow, evidence stage and relevance to the selected change. List: what changed or is missing, why it matters, status and one primary action. On narrow layouts use the same content in one column. Details show source revisions, applicable obligations, downstream consequences, confidence limits and links to records. A graph is optional detail with an equivalent ordered relationship and evidence list.
++
++Keep filters, focus and row selection stable on return. Announce loading, failed refresh and changed counts without moving focus. Distinguish empty results, incomplete indexing, unavailable sources and insufficient evidence. Use text alongside color. Avoid movement on filtering, sorting and keyboard navigation. An occasional evidence panel may use the existing transition to communicate its origin, with immediate reduced-motion behavior. Status or evidence never depends on hover or animation.
++
++Design basis: Purple design assurance task, scope and truth checks, plus Emil Kowalski's design engineering and motion-restraint guidance. Source inspected only. Rendered Before/After, responsive accessibility checks and final component parity remain pending.
++
++
++## Revision 1.4.33 — Graph Analytics assurance amendments
++
++Proposed route: existing project Reports with URL view=graph-analytics and explicit impact/coverage subview plus permission-safe scope handles. Reload and Back/Forward restore scope. Invalid or unavailable scope shows a scoped recovery action without silently selecting latest. Fence late project and filter results. Use adaptive Reports navigation with programmatic active state and a labeled inline evidence region. Move focus to the detail heading on explicit open and return it to the initiating row or list heading if removed. Preserve reading order at narrow width and zoom. Announce refresh, error and result counts without disruptive motion.
++
++Present evidence stage, index completeness, selected revisions/as-of and AI availability independently. Label the legacy suite metric as suite execution coverage wherever it appears in this view or omit it here. Graph Analytics obligation counts retain their own scope and denominator. First release omits Graph Analytics export at both shared entry points and sends no export request for these views. Preserve all six existing report exports. Rendered Before/After and assistive technology verification stay pending.
++
++
++## Revision 1.4.34 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the incoming 1.4.33 canonical bodies and reconciles the separately reviewed GEX v7 corrections. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
++
+ ### Source-grounded interaction migration
+ 
+ Before changing the existing Model Studio, Requirements, native Run/Bug and feedback surfaces, capture their actual permitted Before state and map current controls to the canonical 03 convergence plan. Distinguish latest draft from active approved revision; permit continued work on the active basis; show unavailable matching instead of confirmed absence; retain original result/history when a side finding is linked; and let correction capture succeed independently of optional regeneration. Preserve navigation, selected scope, drafts, focus and role-safe recovery across these changes. Source inspection does not establish visual parity, accessibility or user comprehension; those gates remain NOT VERIFIED until the actual interface is observed.
+ 
+ For Model Studio, bind generated proposals, errors and delayed write notices to their original project/model/revision/request, including switches after proposals have already loaded. Preserve or discard them under that explicit context; never relabel A output beneath selected model B. The mapping picker distinguishes unavailable lookup with recovery from a successful empty list. Reuse proven native request-fencing patterns where applicable and verify the actual delayed-response, cancellation, focus and selection behavior under MBT-AC-39/ASE-INT-13/14. Source guards on persistence do not prove truthful display.
++
++The Reports Graph Analytics projection and Model Studio source-convergence corrections apply to their respective existing surfaces. Neither is an approved rendered mockup. Preserve both export-entry exclusions for new Graph Analytics views and the six existing native export types; original navigation, authentic UI and accessibility proof remain required.
+--- a/views/AGENT_RULE_TEMPLATE.md
++++ b/views/AGENT_RULE_TEMPLATE.md
+@@ -1,6 +1,6 @@
+ # Portable Tesbo synchronization rule — AGENTS.md / CLAUDE.md template
+ 
+-**Canonical home:** Tesbo specification package revision **1.4.29 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
++**Canonical home:** Tesbo specification package revision **1.4.34 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
+ 
+ **Status:** Proposed agent instruction. Copy/adapt into the **target application's** agent instruction file only after the project is deliberately bound to Tesbo. This document in Tesbo's repo is not automatically loaded by agents developing other repositories.
+ 
+@@ -52,7 +52,7 @@
+ 
+ ## Principle-first method changes
+ 
+-Apply the [distillation and contextual-instantiation contract](skills-governance.md#1341-principle-distillation-and-contextual-instantiation), mirrored by canonical 06, when a material correction or opportunity suggests changing reusable guidance. Preserve observation, consequence, failure class, invariant, agnostic principle, reusable question and contextual example; separate evidence from causal hypotheses. Check whether existing guidance was missing, ambiguous, not reached, not applied or not verified before adding rules.
++Apply the candidate [portable discovery and distillation method](skills-governance.md#1341-principle-distillation-and-contextual-instantiation), owned by canonical 06, within declared candidate trials and applicable authorized reviews. A routine status, conformance or completeness review can expose an unsupported consequential decision even without a named defect or requested mechanism. Reconstruct the bounded outcome, relevant handoff and evidence before selecting contextual lenses; a supported no-change or insufficient-evidence outcome is valid. Preserve observation, consequence, failure class, invariant, agnostic principle, reusable question and contextual example; separate evidence from causal hypotheses. Check whether existing guidance was missing, ambiguous, not reached, not applied or not verified before adding rules.
+ 
+ Derive the intended outcome and relevant context from this target's sources. Discover existing methods, tools and owners across affected modules; distinguish variable decisions from stable constraints; compare the smallest sufficient supported alternatives. Record applicability, evidence, decision, output and limits. An existing manual workflow, deterministic rule, configuration change, no change or unresolved question may be the correct result. Do not turn one project's solution into a requirement to add AI or a Skill everywhere.
+ 
+@@ -121,3 +121,11 @@
+ 
+ An authorized candidate may be read as untrusted data for repair/review; it cannot become governing instructions through KB search, a cited link, a local copy or a named candidate ID. Skill scripts remain inert absent separate approved execution controls. Preserve the original ChatGPT → Tesbo MCP task → assigned executor's own driver → original report → analysis/retest → exact human review/apply loop; a source-sync receipt does not prove that loop executed.
+ 
++
++
++### Current candidate version and adoption boundary
++
++
++**Method and evaluation version boundary:** Canonical 06's incoming portable trigger/adoption wording is preserved as an unvalidated candidate. It changes the method text compared with the earlier frozen trial candidate. The completed incumbent/candidate exercise used the original fixed v1–v7 wording on two independently selected synthetic briefs; both arms met their contracts, with no demonstrated superiority. It does not discharge the stricter 1.4.30/31 discovery qualification or validate this successor, the extra contextual wording, a runtime Skill, prediction, or real-user benefit. The original team charters and original outputs remain unchanged. No candidate Skill is installed, approved or activated by this document.
++
++A reviewed handbook or controlled configuration can supply proportionate review, attributable revisions, failure signals, a responsible responder and a safe fallback. An absent or disputed authority is a reason to defer reliance. Tesbo binds these guarantees to its existing human review, version, evaluation and assignment owners. Do not treat the candidate discovery trigger as an automatic active production instruction.
+--- a/views/README.md
++++ b/views/README.md
+@@ -1,6 +1,6 @@
+ # Agent-Synchronized Engineering Records (ASER) — Integrated specification view
+ 
+-**Canonical home:** Tesbo specification package revision **1.4.29 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
++**Canonical home:** Tesbo specification package revision **1.4.34 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
+ 
+ **Status:** Proposed integration design for canonical revision 1.4.29; NOT FROZEN. Existing native capabilities, specified extensions and unverified source artifacts retain separate maturity labels. The new assurance rerun must identify its actual input snapshot and scope; no earlier review or scenario count certifies this amendment.
+ **Target repository/branch:** `1alextest/Tesbooboo` / `development`.
+@@ -163,3 +163,15 @@
+ ### Source-fit clarification
+ 
+ The current substrate and the target guarantees are distinct. The source-convergence table in `design.md` and proof allocation in `implementation-plan.md` identify current model-selection, native/provenance transaction, true-principal, exact-mapping, source-entitlement and feedback-history work, plus existing Requirements/Bug-result input-integrity prerequisites. Documentation names that work; it does not close the source findings or make the governed graph implemented. Approval remains separate from activation, dispatch separate from target execution, and a source-based review separate from runtime/visual verification.
++
++
++## Current canonical reconciliation — revision 1.4.34
++
++The current eight-file package preserves concurrent 1.4.30–1.4.33 additions and the separately reviewed GEX source-convergence corrections. Graph Analytics remains a proposed Reports projection with initial Change impact/Coverage gaps, existing native owners, state-appropriate handoff and AI-independent deterministic ordering. Broader investigation/prediction remains gated. Canonical 02/03/04/05/07 own the exact interface, data, authority and proof obligations. The prior 125 total refers to the ASER core inventory.
++
++
++**Selection and analytical scope qualification:** The 1.4.31 sentence about model dispatch selecting an active revision applies to **CURRENT** applicability only. Model applicability/CAS generation and T-422 effective Skill assignment generation belong to distinct native owners. Authorized Draft inspection/preview and explicit HISTORICAL selection retain MBT-C02's selected revision, consent, retirement, mapping and permission rules; neither owner silently substitutes for the other. Current-generation checks do not discard legitimate historical work. The initial Graph Analytics Reports slice is Change impact and Coverage gaps. Later diagnosis/stability and optional prediction remain separately gated capabilities, not implied initial UI features. Insufficient or unqualified evidence requires abstention from quantitative defect probability; qualitative hypotheses, explicitly uncalibrated relative heuristics and deterministic/manual prioritization may remain informative without probability or coverage claims. Calling a result advisory does not waive evidence admission.
++
++**Method and evaluation version boundary:** Canonical 06's incoming portable trigger/adoption wording is preserved as an unvalidated candidate. It changes the method text compared with the earlier frozen trial candidate. The completed incumbent/candidate exercise used the original fixed v1–v7 wording on two independently selected synthetic briefs; both arms met their contracts, with no demonstrated superiority. It does not discharge the stricter 1.4.30/31 discovery qualification or validate this successor, the extra contextual wording, a runtime Skill, prediction, or real-user benefit. The original team charters and original outputs remain unchanged. No candidate Skill is installed, approved or activated by this document.
++
++**Proof inventory accounting:** Retain the 125 ASER core definitions (15 ASE-E2E, 54 ASE-FLOW, 40 SK-E2E, 16 ASE-INT), eight incoming GEX-AC obligations and five current GA-AC checks. The 1.4.33 GA-AC table supersedes the four 1.4.32 prose summaries; do not count them twice. The separate GEX-SEM-01..08 and proposed SK-E2E-41..44 labels remain aliases with explicit new fixture assertions allocated below, not twelve more canonical definitions. All product/runtime proof obligations remain NOT RUN in this review. Mechanical checks and isolated helper/query probes retain their narrower identities and cannot satisfy these scenarios.
+--- a/views/design.md
++++ b/views/design.md
+@@ -1,6 +1,6 @@
+ # ASER — Reuse-first technical design v0.4 (canonical integration view)
+ 
+-**Canonical home:** Tesbo specification package revision **1.4.29 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
++**Canonical home:** Tesbo specification package revision **1.4.34 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
+ 
+ **Status:** Architecture proposal only. Existing source owners must be re-verified at implementation head. No migration approved by this document.
+ 
+@@ -629,3 +629,53 @@
+ 
+ 
+ **Concurrent semantic clarification ownership:** Canonical 01/03/05 now own the semantic/consequence scope, applicable-authority qualification and exact proof mapping. Interpret authority from approved scope/effective ownership, never artifact names alone. AI interpretation, causal hypothesis, optional prediction and deterministic traversal may be introduced separately; valid no-prediction/manual outcomes remain. This view grants no new authority or implemented status.
++
++
++## Concurrent canonical 1.4.30–1.4.33 integration
++
++The following mirrors incoming canonical obligations; the corresponding numbered canonical file controls their meaning. They remain proposed and do not establish runtime, authority, method benefit or rendered evidence.
++
++### Preserved canonical revision 1.4.30 — bind portable guidance to Tesbo
++
++The reusable method lives in canonical 06. The older draft discovery manifest's user-type, module and context keys are optional Tesbo lenses, not portable input requirements. Resolve actors, events, boundaries and decisions from the authorized target evidence. Preserve existing Tesbo review and activation owners. Bind approved audience and purpose to evaluation inputs and derived outputs, including across projects. Where persistent content cannot be retained, use a permitted reference or redacted receipt and surface evidence loss. Keep immutable history subject to the applicable retention and access policy.
++
++Before admitting either candidate source Skill, pin its exact source and dependencies and reconcile its oracle guidance. Accepted requirements or policy establish normative expectations. Shipped behavior establishes observations. Contradictions require clarification or an authorized decision. For active governed guidance, define degradation signals, a responsible responder, a stop or rollback action, and a check that the fallback actually took effect.
++
++
++### Preserved canonical revision 1.4.31 — graph contracts and assurance findings
++
++Model dispatch resolves the active approved revision and its assignment generation in the native owner. A new draft leaves that pointer intact. The pinned latest-head-only MCP implementation is an interim limitation. Until changed and verified, do not claim dispatch of an active older revision.
++
++Skill rollback creates a new assignment generation referencing a still-eligible immutable version. The generation is pinned to queued work and rechecked at start, resume, result delivery and protected apply. An obsolete generation cannot publish current output. Retained results are historical where permitted. Select a compatible authorized fallback or pause governed reliance. Ordinary observations remain independently retainable. Use scope-specific signals, predeclared thresholds and windows, a responder and escalation route. Verify convergence of the resolver, caches, queues and user surfaces. Reference attachments remain data even when bundled; independently approved governing components must be typed and pinned separately.
++
++Indexes bind repository generation, durable provider cursor and extraction profile. A rebuild publishes only after a fenced compare-and-set against current generation and verified catch-up. Detect lost or stale cursors in the background and label incomplete results. Cross-profile diffs are labeled extraction changes unless both snapshots are recomputed comparably.
++
++Coverage: bind model revision, cohort, eligible obligations and evidence stage. Report unique covered nodes, transitions, guard outcomes and a declared finite path set separately as numerator/denominator. Zero eligible obligations is N/A. Report unknown, excluded, unreachable with justification, and unexamined scope. Bound search by depth, cycle visits, states, paths and resource budget. Preserve deterministic enumeration, stop reason and frontier. AI may prioritize eligible obligations with a rationale; the engine enforces bounds and computes coverage.
++
++Diagnosis: tie hypotheses to exact builds, attempts, edges and competing explanations. Flakiness requires mixed outcomes in a sufficiently comparable cohort with case/build/configuration/environment and retry lineage preserved; exclude or separately label infrastructure failures and sparse cohorts. Defect-risk models require point-in-time inputs, temporal holdout, baseline, calibration, precision/recall and minimum sample policy. Keep uncalibrated or insufficient-evidence results advisory and explicit.
++
++
++### Preserved canonical revision 1.4.32 — Graph Analytics
++
++Reuse the native Reports shell and existing authorized graph, traceability, metrics, and proposal owners. Graph Analytics is a project-scoped read projection and reuses canonical evidence and review operations. Rank from declared factors and a stable tie-breaker. Existing governed Skill reasoning may explain evidence and prioritize follow-up within scope. Pin source/model/Skill versions and keep calculated coverage separate from generated explanations. Preserve an actionable evidence-backed list when AI is unavailable.
++
++
++### Preserved canonical revision 1.4.33 — Graph Analytics assurance amendments
++
++Reports is the UI owner, the project graph/change-review owner supplies exact comparisons and FR-119 impact handles, Model Studio supplies selected approved model obligations, Requirements/Policy supply approved obligations without a model, and native Cases/Runs/Evidence supply exact mappings and attempt evidence. Pinned source readers are narrower: Zyra history lists linked runs, Model Studio uses latest saved revision in coverage, and legacy reports count execution at suite level. Extend existing owners to meet the contract before relying on those readers.
++
++For v1 rank authorized candidates lexicographically by critical obligation flag, accepted applicability (confirmed before inferred before unresolved within each flag), direct before downstream when applicability ties, then stable finding identity. Resolve criticality from approved project policy where available and display unknown criticality separately rather than assigning it an invented score. Expose critical, unresolved and unexamined items via explicit filters/status even if outside the first page. Deduplicate the same obligation/consequence in the same comparison while preserving supporting paths. Pin the ranking version and explain the factors per row. AI can explain or recommend a next check; deterministic ordering and counts survive AI loss.
++
++Count unique eligible authorized obligations per selected revision/effective scope, evidence stage and build/environment cohort. Model counts use the selected approved model basis; approved requirements/policies provide an obligation basis in projects without models. Show stage-specific numerator and denominator, exclusions, incomplete frontier and unknown basis. Complete scope with zero eligible is N/A. Partial counts are labeled partial and prohibited from implying a complete denominator. Retries and older/out-of-cohort passes cannot inflate coverage.
++
++Use existing telemetry for an opaque correlation ID, report snapshot, source generation/cursor, extraction/ranking versions, freshness lag and safe degradation category. Reports owner handles projection symptoms, upstream graph owner handles index recovery, and optional AI owner handles explanation failures. Set project operational thresholds before rollout. Verify recovery by reading the current authorized snapshot and matching its upstream generation; avoid logging sensitive graph material.
++
++
++### Current reconciliation qualification
++
++
++**Selection and analytical scope qualification:** The 1.4.31 sentence about model dispatch selecting an active revision applies to **CURRENT** applicability only. Model applicability/CAS generation and T-422 effective Skill assignment generation belong to distinct native owners. Authorized Draft inspection/preview and explicit HISTORICAL selection retain MBT-C02's selected revision, consent, retirement, mapping and permission rules; neither owner silently substitutes for the other. Current-generation checks do not discard legitimate historical work. The initial Graph Analytics Reports slice is Change impact and Coverage gaps. Later diagnosis/stability and optional prediction remain separately gated capabilities, not implied initial UI features. Insufficient or unqualified evidence requires abstention from quantitative defect probability; qualitative hypotheses, explicitly uncalibrated relative heuristics and deterministic/manual prioritization may remain informative without probability or coverage claims. Calling a result advisory does not waive evidence admission.
++
++**Method and evaluation version boundary:** Canonical 06's incoming portable trigger/adoption wording is preserved as an unvalidated candidate. It changes the method text compared with the earlier frozen trial candidate. The completed incumbent/candidate exercise used the original fixed v1–v7 wording on two independently selected synthetic briefs; both arms met their contracts, with no demonstrated superiority. It does not discharge the stricter 1.4.30/31 discovery qualification or validate this successor, the extra contextual wording, a runtime Skill, prediction, or real-user benefit. The original team charters and original outputs remain unchanged. No candidate Skill is installed, approved or activated by this document.
++
++**Proof inventory accounting:** Retain the 125 ASER core definitions (15 ASE-E2E, 54 ASE-FLOW, 40 SK-E2E, 16 ASE-INT), eight incoming GEX-AC obligations and five current GA-AC checks. The 1.4.33 GA-AC table supersedes the four 1.4.32 prose summaries; do not count them twice. The separate GEX-SEM-01..08 and proposed SK-E2E-41..44 labels remain aliases with explicit new fixture assertions allocated below, not twelve more canonical definitions. All product/runtime proof obligations remain NOT RUN in this review. Mechanical checks and isolated helper/query probes retain their narrower identities and cannot satisfy these scenarios.
+--- a/views/implementation-plan.md
++++ b/views/implementation-plan.md
+@@ -1,6 +1,6 @@
+ # ASER — Implementation roadmap and assurance plan
+ 
+-**Canonical home:** Tesbo specification package revision **1.4.29 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
++**Canonical home:** Tesbo specification package revision **1.4.34 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
+ 
+ **State:** Proposed; not a delivery report. Do not merge unimplemented acceptance statements into deployment claims. Use Tesbo `development` → reviewed PR → green checks; never write directly to `main`.
+ 
+@@ -449,3 +449,62 @@
+ **Measurement boundary:** Start with useful read-only interpretation on approved policy/manual/requirement and authentic evidence, including code-free work. Compare deterministic/manual/no-change and justified assisted alternatives on separately selected cases. Measure unique actionable gaps, claim/path accuracy, missed obligations, human review effort, cost, privacy and rollback. If optional prediction or causal analysis is evaluated, use its own appropriate independently grounded labels and criteria; a common graph does not confer causal validity. The above engineering fixtures are not instructions to a cold reviewer about which findings to discover.
+ 
+ **Cross-PR and delivery admission:** PR #167 is a separate unmerged proposed implementation, not current-development or runtime evidence. Reconcile the exact current heads and overlapping owner/approval/transaction contracts before merge or reliance; preserve valid incoming implementation and docs. The current canonical recovery and actual team receipts supersede older access/NOT RUN checkpoints only for their evidenced scope. Every unresolved scanner finding needs actual rule/path disposition and fresh checks on the final tree; never broaden exclusions or infer security from another PR. Current-source review remains pinned to development `6897f989b055a955280f810c7daace86f74057fa` until explicitly re-bound.
++
++
++## Concurrent canonical 1.4.30–1.4.33 integration
++
++The following mirrors incoming canonical obligations; the corresponding numbered canonical file controls their meaning. They remain proposed and do not establish runtime, authority, method benefit or rendered evidence.
++
++### Preserved canonical revision 1.4.30 — portable method qualification
++
++Track method discovery evidence separately from Tesbo runtime acceptance. Before exposure, an independent evaluator records who selected the tasks and criteria, exact incumbent and candidate versions, task/evidence versions, permitted tool access and budgets, exposure checks, rubric and promotion threshold. Use unseen cases from dissimilar products with at least an undisclosed judgment gap, a simpler deterministic or no-change outcome, and conflicting or insufficient evidence. Give both arms equivalent authorized inputs and hold original outputs before synthesis. Record consequential discoveries, missed gaps, unsupported findings, effort, authority or evidence violations and regressions per case. Promotion requires predeclared thresholds and no material authority or evidence regression. Inconclusive trials stay on hold.
++
++For Tesbo runtime qualification, exercise active guidance degradation through detection, accountable response, stop or rollback and observable recovery. Verify restricted evidence is not exposed by the retained record and that history remains attributable. Method trial and runtime scenario status: NOT RUN.
++
++
++### Preserved canonical revision 1.4.31 — graph contracts and assurance findings
++
++Add these acceptance obligations to existing owners. Status for each is NOT RUN.
++
++| Proof | Existing owner | Observable acceptance |
++|---|---|---|
++| GEX-AC-01 | FR-115–119 / T-455–458 | Link policy and manual revisions, change one, show affected records and conflicts, deny restricted reads, require native approval before publication. |
++| GEX-AC-02 | Model Studio | Approve and activate A, save B, dispatch A, then concurrently change the active pointer and verify exact generation fencing. |
++| GEX-AC-03 | T-422 / SK-E2E-05/11/39 | Trigger degradation while work is queued and in flight. Confirm operator signal, eligible fallback and effective readback or pause. Stale results cannot replace current outputs. Historical evidence remains attributable and permitted. |
++| GEX-AC-04 | T-422 / SK-E2E-14 | Approved Skill bundles an inert reference. Revoke a sealed evaluation source while work is delayed. Verify no unauthorized transfer or readback and hold the affected verdict. |
++| GEX-AC-05 | T-455/456 | Lose an event during a binding rotation and finish an obsolete rebuild late. Verify stale detection, fencing, operator recovery and current convergence. Reindex unchanged source with another profile and distinguish extraction changes. |
++| GEX-AC-06 | T-201–207/301–308 | Target accepts an action, executor loses lease before reporting. Prove a single target effect where reconciliable and UNKNOWN with blocked mutating retry otherwise. |
++| GEX-AC-07 | FR-117/124 | Hand-calculate node, edge, guard and finite path coverage; prove unknown and bounded frontier handling. Compare diagnosis, flaky cohort and risk ranking against independent labeled controls. |
++| GEX-AC-08 | T-422 / portable method qualification | Pre-register equivalent access, fixed material dependencies or declared factors, independent arm-masked scoring where feasible, disagreement handling, repeated trials and uncertainty/sample rules. Keep the incumbent uncontaminated. Hold inconclusive promotion. |
++
++These obligations supplement the historical 125 planned definitions. The authoritative SK-E2E scenario rows are in this file. Model-calibration evidence and discovery trials do not substitute for independent Tesbo runtime acceptance.
++
++
++### Preserved canonical revision 1.4.32 — Graph Analytics
++
++Add planned acceptance to FR-115–119/124 and existing GEX proof. GA-AC-01 shows the DMIS approval-to-posting finding and carries authorized record links and exact scope into the native retest draft. GA-AC-02 separates no approved test, no run, missing evidence, stale, partial and unavailable states, including AI unavailable. GA-AC-03 verifies filters and deep links restore scope, permission changes remove cached detail and counts, and keyboard and narrow-width users get equivalent list and graph evidence. GA-AC-04 verifies the new report integrates with existing AI Insights and Traceability without duplicating their metrics. All four are NOT RUN.
++
++
++### Preserved canonical revision 1.4.33 — Graph Analytics assurance amendments
++
++The following split supersedes the v1.4.32 GA-AC summaries. All are NOT RUN.
++
++| Check | Existing owner | Fixture and expected/forbidden outcome |
++| --- | --- | --- |
++| GA-AC-01 · FR-119/121/122 | Graph change review + Cases/Runs/Evidence | DMIS conflicting manual, expired policy, approved current policy, current approval pass and older posting pass. Posting stays unverified through rejection, revision drift and revoked staging. Recover one receipt after lost reply, no implicit run or acknowledgment. Only a verified matching posting attempt resolves its gap. |
++| GA-AC-02 · FR-115–118/122 | Graph, Model Studio, Requirements/Policy | Independently count a modeled A/ newer draft B fixture and an approved requirement-only project, with duplicate retries, old-build pass, partial frontier and zero eligible. Match denominator and stages across surfaces; assert valid next action, no false complete count. Tie and critical/unknown fixtures retain canonical order during AI loss. |
++| GA-AC-03 · FR-123 | Reports + authorization/graph readers | With two principals, vary hidden edges; visible results stay equivalent. Revoke between pages, detail, queued AI and submission; deny stale/cross-principal cursors and prevent late data leakage. Publish a refresh mid-pagination, switch projects, exercise hard reload and Back/Forward; no mixed scope or duplicates. Verify keyboard, screen reader, 320 CSS px, 200% zoom and focus fallback after row removal. |
++| GA-AC-04 · FR-124 | Reports + independent QA adjudicator | Compare legacy Traceability/AI Insights and GA on equivalent inputs, including another project and no-impact, omitted dependency, contrary authority and downstream-failure controls. Record critical misses, false positives, quality of next action, time and total review effort against predeclared criteria. Withhold benefit claims pending results. Check contrasting suite execution vs obligation coverage and both export entry points, plus preserved six native exports. |
++| GA-AC-05 · T-455/456 and Reports | Index and Reports owners | Trace stale, partial, failed refresh and AI-only degradation to permitted correlations and responder. Recover upstream generation and prove current list/count/detail convergence without a clean-empty claim or silently rebased draft. |
++
++Record exact implementation revision, owner, fixture, actual evidence and disposition against each proof. Keep package unfrozen pending required independent closure and runtime proof.
++
++
++### Current reconciliation qualification
++
++
++**Selection and analytical scope qualification:** The 1.4.31 sentence about model dispatch selecting an active revision applies to **CURRENT** applicability only. Model applicability/CAS generation and T-422 effective Skill assignment generation belong to distinct native owners. Authorized Draft inspection/preview and explicit HISTORICAL selection retain MBT-C02's selected revision, consent, retirement, mapping and permission rules; neither owner silently substitutes for the other. Current-generation checks do not discard legitimate historical work. The initial Graph Analytics Reports slice is Change impact and Coverage gaps. Later diagnosis/stability and optional prediction remain separately gated capabilities, not implied initial UI features. Insufficient or unqualified evidence requires abstention from quantitative defect probability; qualitative hypotheses, explicitly uncalibrated relative heuristics and deterministic/manual prioritization may remain informative without probability or coverage claims. Calling a result advisory does not waive evidence admission.
++
++**Method and evaluation version boundary:** Canonical 06's incoming portable trigger/adoption wording is preserved as an unvalidated candidate. It changes the method text compared with the earlier frozen trial candidate. The completed incumbent/candidate exercise used the original fixed v1–v7 wording on two independently selected synthetic briefs; both arms met their contracts, with no demonstrated superiority. It does not discharge the stricter 1.4.30/31 discovery qualification or validate this successor, the extra contextual wording, a runtime Skill, prediction, or real-user benefit. The original team charters and original outputs remain unchanged. No candidate Skill is installed, approved or activated by this document.
++
++**Proof inventory accounting:** Retain the 125 ASER core definitions (15 ASE-E2E, 54 ASE-FLOW, 40 SK-E2E, 16 ASE-INT), eight incoming GEX-AC obligations and five current GA-AC checks. The 1.4.33 GA-AC table supersedes the four 1.4.32 prose summaries; do not count them twice. The separate GEX-SEM-01..08 and proposed SK-E2E-41..44 labels remain aliases with explicit new fixture assertions allocated below, not twelve more canonical definitions. All product/runtime proof obligations remain NOT RUN in this review. Mechanical checks and isolated helper/query probes retain their narrower identities and cannot satisfy these scenarios.
+--- a/views/requirements.md
++++ b/views/requirements.md
+@@ -1,6 +1,6 @@
+ # ASER — Requirements v0.4 (canonical integration view)
+ 
+-**Canonical home:** Tesbo specification package revision **1.4.29 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
++**Canonical home:** Tesbo specification package revision **1.4.34 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
+ 
+ **State:** Proposed requirements, mapped individually to canonical owners, tasks and falsifiers in `05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md` revision 1.4.29. The 48 R-ASE identifiers are preserved as a scoped namespace in the same canonical package; existing FR/AC/T/QA identifiers are not renumbered.
+ 
+@@ -427,3 +427,34 @@
+ ### Source-fit application of the retained requirements
+ 
+ The same R-ASE and MBT contracts govern reuse. Existing model/source/native case/run code requires the concrete convergence in the design and implementation plan before CURRENT selection, true-human approval, unpublished AI candidate handling, atomic provenance, mapping history, source entitlement or immutable learning can be claimed. Existing matching/lookup and Bug/result side effects must not become false learning labels. This clarifies implementation admission for retained requirements; it creates no new requirement, graph or approval owner.
++
++
++## Concurrent canonical 1.4.30–1.4.33 integration
++
++The following mirrors incoming canonical obligations; the corresponding numbered canonical file controls their meaning. They remain proposed and do not establish runtime, authority, method benefit or rendered evidence.
++
++### Preserved canonical revision 1.4.31 — graph contracts and assurance findings
++
++Extend FR-115–119 and FR-124 through exact-revision typed relationships to governing policy obligations and user-manual sections. For each applicable obligation, show the approving authority, scope and effective interval. A manual explains intended operation and is linked as guidance. Conflicting requirements, policy, observed behavior and manuals remain visible and require an accountable disposition. A reviewed change may create linked review candidates for affected policies, guides or tests. Publication remains with the respective native owner.
++
++Graph analysis may rank root-cause hypotheses, surface inconsistent execution cohorts and prioritize defect investigation. Root-cause confirmation requires independent distinguishing evidence and an authorized disposition. Risk scores and inconsistency flags are informational. They cannot change test verdicts, defect status or release approval.
++
++
++### Preserved canonical revision 1.4.32 — Graph Analytics
++
++Extend FR-115–119 and FR-124 with a ranked, permission-scoped Graph Analytics view. Explain the meaning of a relationship, its applicable obligation or guidance, the plausible consequence of a change, evidence strength, alternatives where material, and the next verification step. Initial views are Change impact and Coverage gaps. Later failure investigation and stability use the same reporting surface and existing analytics owners.
++
++
++### Preserved canonical revision 1.4.33 — Graph Analytics assurance amendments
++
++FR-115–119 and FR-121–124 apply. Each finding explains the affected outcome, exact obligation or evidence basis, relationship direction, plausible consequence, uncertainty and next check. An effective approved policy or requirement can establish an obligation without a model. Manual guidance, observed behavior and inferred dependencies retain their separate meaning. Where applicable, a finding links to the existing FR-119 impact and its current status. Viewing or drafting leaves acknowledgment and closure to that workflow.
++
++
++### Current reconciliation qualification
++
++
++**Selection and analytical scope qualification:** The 1.4.31 sentence about model dispatch selecting an active revision applies to **CURRENT** applicability only. Model applicability/CAS generation and T-422 effective Skill assignment generation belong to distinct native owners. Authorized Draft inspection/preview and explicit HISTORICAL selection retain MBT-C02's selected revision, consent, retirement, mapping and permission rules; neither owner silently substitutes for the other. Current-generation checks do not discard legitimate historical work. The initial Graph Analytics Reports slice is Change impact and Coverage gaps. Later diagnosis/stability and optional prediction remain separately gated capabilities, not implied initial UI features. Insufficient or unqualified evidence requires abstention from quantitative defect probability; qualitative hypotheses, explicitly uncalibrated relative heuristics and deterministic/manual prioritization may remain informative without probability or coverage claims. Calling a result advisory does not waive evidence admission.
++
++**Method and evaluation version boundary:** Canonical 06's incoming portable trigger/adoption wording is preserved as an unvalidated candidate. It changes the method text compared with the earlier frozen trial candidate. The completed incumbent/candidate exercise used the original fixed v1–v7 wording on two independently selected synthetic briefs; both arms met their contracts, with no demonstrated superiority. It does not discharge the stricter 1.4.30/31 discovery qualification or validate this successor, the extra contextual wording, a runtime Skill, prediction, or real-user benefit. The original team charters and original outputs remain unchanged. No candidate Skill is installed, approved or activated by this document.
++
++**Proof inventory accounting:** Retain the 125 ASER core definitions (15 ASE-E2E, 54 ASE-FLOW, 40 SK-E2E, 16 ASE-INT), eight incoming GEX-AC obligations and five current GA-AC checks. The 1.4.33 GA-AC table supersedes the four 1.4.32 prose summaries; do not count them twice. The separate GEX-SEM-01..08 and proposed SK-E2E-41..44 labels remain aliases with explicit new fixture assertions allocated below, not twelve more canonical definitions. All product/runtime proof obligations remain NOT RUN in this review. Mechanical checks and isolated helper/query probes retain their narrower identities and cannot satisfy these scenarios.
+--- a/views/skills-governance.md
++++ b/views/skills-governance.md
+@@ -1,6 +1,6 @@
+ # ASER — Governed Skills Library and Effective Skill Assignments
+ 
+-**Canonical home:** Tesbo specification package revision **1.4.29 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
++**Canonical home:** Tesbo specification package revision **1.4.34 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
+ 
+ **State:** Proposed contract for specification review, not implemented. **Scope:** Tesbo project/workspace authoring governance; no change to authoritative product behavior until explicit approval and implementation.
+ **Relationship to existing work:** Extend the logical contracts already reconciled in the same eight canonical files at 1.4.28 through the proposed 1.4.29 amendment, retaining `docs/reviews/governed-asset-evolution-reconciliation.md` (noncanonical v0.5) and earlier evidence at their original scope. Reuse Knowledge Base identity/versioning, case approval, Zyra and MCP where actual source fit is verified. This creates no ninth canonical spec, second AI agent or independent skill database.
+@@ -175,7 +175,11 @@
+ 
+ ### 13.4.1 Principle distillation and contextual instantiation
+ 
+-**Purpose and status:** This is a candidate refinement of the existing operating method, mirrored in canonical 06; canonical 03 owns the corresponding governed evaluation mechanism. It makes the existing discovery, reuse, outcome, authority and lesson-learning principles operational. It does not alter original team charters or install, approve or activate a Skill. A user direction can expose an opportunity without proving a reviewer violated a rule or that the proposed solution is universally desirable.
++Apply this method when assessing whether an existing or proposed capability achieves its intended outcome, including routine status, conformance and completeness reviews. Trace a bounded, consequential outcome from initiating actor or event through the decision, needed evidence, action and consequence. Include one relevant exception or handoff where evidence permits. Ask what judgment remains unsupported, who makes it today, and which existing capabilities could help. Record the gap, supported no-change, or insufficient evidence. A feature request, known defect or suggested mechanism is unnecessary to trigger this step.
++
++Choose discovery lenses from the context. Human roles, machine actors, scheduled jobs, events, contracts and handoffs may each be useful. User type, module and context are optional lenses. Inspect or reuse evidence only for an authorized purpose and audience. Carry restrictions into derived outputs. Use permitted references or redaction where appropriate and report unresolved or inaccessible evidence explicitly.
++
++**Purpose and status:** This is a candidate refinement of the existing operating method, owned by this canonical brief; canonical 03 owns the corresponding governed evaluation mechanism. It makes the existing discovery, reuse, outcome, authority and lesson-learning principles operational. It does not alter original team charters or install, approve or activate a Skill. A user direction can expose an opportunity without proving a reviewer violated a rule or that the proposed solution is universally desirable.
+ 
+ For a material correction, missed opportunity, false alarm or repeated friction, preserve **observation → consequence → failure class → invariant → agnostic principle → reusable question → context-specific example**. Label the observed evidence and causal hypothesis separately. First classify whether guidance was missing, ambiguous, not reached, not applied, or its result not checked; use `UNRESOLVED` if the record cannot distinguish these. Compare against existing guidance and repair its owner rather than adding another overlapping checklist. Feature-specific facts and examples stay in the case record; recurring reasoning belongs in the reusable method.
+ 
+@@ -187,7 +191,7 @@
+ | Discover capabilities across ownership boundaries | New behavior or repeated work is proposed. Inspect relevant existing code, tools, methods, decisions and neighboring modules, including capabilities exposed through another surface. | Compare semantic responsibility and contracts; choose reuse, extension or explicit composition before a new identity. Record owner, evidence, maturity and remaining gap. | Similar names are not equivalence; a source artifact is not an installed capability; unavailable evidence is not absence. A distinct responsibility can justify a new owner. |
+ | Separate the variable decision from stable invariants | Behavior needs to change over time. Inspect which decisions vary, why, who owns them and which guarantees must remain stable. | Locate change at the smallest sufficient level: data/configuration, explicit rules, governed reasoning method, model, implementation or authority decision. Record what changes, what enforces invariants, and how to undo the change. | A method cannot add an absent parser/tool, grant permission or replace durable enforcement. Some changes genuinely require code or a new approved contract. |
+ | Select a mechanism using task evidence | Several approaches could meet the outcome. Compare relevant ambiguity, repeatability, risk, latency/cost, explainability, available tools and maintenance needs. | Compare plausible alternatives, including existing/manual behavior and no change. Use probabilistic interpretation only when its expected benefit and bounded failure handling fit the task; preserve the rationale and uncertainty. | Exact stable decisions can remain deterministic. Rules/configuration, clarification, deferral or `N/A` may be correct. No universal requirement to add AI, a skill or a new service follows. |
+-| Keep expectation, observation, inference and authority independent | A method interprets content, proposes behavior or evaluates its own outputs. Inspect source authority, revision, observation provenance and the accountable decision owner. | Label each claim, retain contradictions and missing evidence, and route material proposals to the existing owner. Evaluate against an independently grounded expectation. | Confidence and agreement do not authorize a decision. Observed faulty behavior must not become its own expected result; authentic observations remain retainable even when authoring is blocked. |
++| Keep expectation, observation, inference and authority independent | A method interprets content, proposes behavior or evaluates its own outputs. Inspect source authority, revision, observation provenance and the accountable decision owner. | Label each claim, retain contradictions and missing evidence, and route material proposals to the accountable authority; record an unresolved authority gap and defer adoption if ownership is absent or disputed. Evaluate against an independently grounded expectation. | Confidence and agreement do not authorize a decision. Observed faulty behavior must not become its own expected result; authentic observations remain retainable even when authoring is blocked. |
+ | Triage feedback before generalizing | A reviewer correction or real outcome suggests an improvement. Inspect the original input/output, version, context, reason and alternative explanations. | Distinguish a project fact or oracle gap, configuration issue, reusable method gap, implementation defect and evaluation/measurement error. Propose the smallest supported correction with applicability and disconfirming evidence. | A single case can motivate a candidate, not a universal conclusion. Retain local exceptions; do not train on an agent's answer as though it were independent truth. |
+ | Test transfer and regression, not agreement | A candidate method is proposed for broader reliance. Use frozen inputs, independent judgments, dissimilar contexts, counterexamples and tasks that were not used to author the candidate. | Compare candidate and current method on useful outcomes, misses, false claims, human effort and preserved constraints; retain exact versions, outputs, failed trials and `UNKNOWN`. Include a legitimate no-change/deterministic outcome and an insufficient-evidence case. | A consistent document or flattering model score does not establish real-product benefit. Repeated LLM outputs may vary; preserve runs and uncertainty rather than promise deterministic replay. |
+ | Verify that the method was applied | A review or closeout makes a completeness claim. Inspect actual source/review receipts and the material decisions, alternatives and unexamined scope. | Record what was considered, why relevant checks were skipped, who independently reviewed, and what evidence supports the bounded conclusion. Preserve original findings before informed reconciliation. | A named role or instruction is not an executed review; a missing receipt is an evidence gap, not proof of a particular mental error. No quota of findings or preferred solution is required. |
+@@ -196,7 +200,10 @@
+ 
+ **Illustrations only:** An approved fixed eligibility rule may warrant existing deterministic validation; an interpretation-heavy support review may warrant governed guidance over attributed evidence; an already adequate export filter may warrant no change; contradictory unapproved workflow descriptions may require clarification. Derive each real decision from that target's evidence. These examples are not held-out evaluation tasks or proof that the candidate method transfers.
+ 
+-**Promotion record:** Use the existing candidate/version/evaluation/assignment owners to retain the source lesson, causal confidence, affected existing rule, applicability, alternatives, evidence needed to falsify the proposal, evaluated inputs/outputs, independent verdict and remaining limits. Separate skill changes from model, data, tool and code changes when attributing effects. Human review and separate activation, monitoring and rollback remain mandatory for governed reliance. This authoring refinement remains **unvalidated for improved discovery** until a discriminating independent evaluation supports that claim.
++**Portable adoption rule:** Record the source lesson, causal confidence, affected rule, scope, alternatives, evaluation and limits. Attribute effects separately to method, model, data, tools and code. Apply review proportionate to impact, retain the adopted revision and define an observable failure signal, responsible responder and safe fallback. Record absent or disputed authority and defer reliance until resolved. A reviewed handbook or controlled configuration can supply these guarantees.
++
++**Tesbo binding:** Use the existing candidate, version, evaluation and assignment owners. Governed reliance retains human review, separate activation, monitoring and rollback. The candidate remains unvalidated for improved discovery pending the comparison in canonical 05.
++
+ 
+ ### AI-powered graph analysis method and skill-composition proposal (GEX; NOT ACTIVE)
+ 
+@@ -280,3 +287,13 @@
+ 
+ 
+ **Method-version boundary:** The semantic and outcome-first discussion above is contextual application of the fixed candidate principles in canonical 06, not an amendment to an original assurance charter or a newly installed method. The bounded independent transfer trial used its own frozen candidate bytes; it supplies no efficacy evidence for additional wording or broader semantic/predictive scope. See the current review record for the actual trial and final-target receipts.
++
++
++### Current canonical portability and qualification
++
++
++**Method and evaluation version boundary:** Canonical 06's incoming portable trigger/adoption wording is preserved as an unvalidated candidate. It changes the method text compared with the earlier frozen trial candidate. The completed incumbent/candidate exercise used the original fixed v1–v7 wording on two independently selected synthetic briefs; both arms met their contracts, with no demonstrated superiority. It does not discharge the stricter 1.4.30/31 discovery qualification or validate this successor, the extra contextual wording, a runtime Skill, prediction, or real-user benefit. The original team charters and original outputs remain unchanged. No candidate Skill is installed, approved or activated by this document.
++
++**Selection and analytical scope qualification:** The 1.4.31 sentence about model dispatch selecting an active revision applies to **CURRENT** applicability only. Model applicability/CAS generation and T-422 effective Skill assignment generation belong to distinct native owners. Authorized Draft inspection/preview and explicit HISTORICAL selection retain MBT-C02's selected revision, consent, retirement, mapping and permission rules; neither owner silently substitutes for the other. Current-generation checks do not discard legitimate historical work. The initial Graph Analytics Reports slice is Change impact and Coverage gaps. Later diagnosis/stability and optional prediction remain separately gated capabilities, not implied initial UI features. Insufficient or unqualified evidence requires abstention from quantitative defect probability; qualitative hypotheses, explicitly uncalibrated relative heuristics and deterministic/manual prioritization may remain informative without probability or coverage claims. Calling a result advisory does not waive evidence admission.
++
++**Proof inventory accounting:** Retain the 125 ASER core definitions (15 ASE-E2E, 54 ASE-FLOW, 40 SK-E2E, 16 ASE-INT), eight incoming GEX-AC obligations and five current GA-AC checks. The 1.4.33 GA-AC table supersedes the four 1.4.32 prose summaries; do not count them twice. The separate GEX-SEM-01..08 and proposed SK-E2E-41..44 labels remain aliases with explicit new fixture assertions allocated below, not twelve more canonical definitions. All product/runtime proof obligations remain NOT RUN in this review. Mechanical checks and isolated helper/query probes retain their narrower identities and cannot satisfy these scenarios.

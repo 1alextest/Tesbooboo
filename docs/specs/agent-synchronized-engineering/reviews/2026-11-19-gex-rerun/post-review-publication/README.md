@@ -1,0 +1,7 @@
+# Later canonical publication — outside the full v16 rerun
+
+After the reviewed1.4.36 package had been saved and the manual Graph receipt frozen, the same canonical item advanced externally to1.4.37. The read-only preservation check confirms all eight reviewed36 bodies survive after the exact current-header substitution. The appended changes are preserved in the accompanying diffs; they are source data, not another normative specification or a new approval from this run.
+
+The added Graph Analytics clauses address an independently grounded completeness witness, reviewed-equivalence withdrawal and unresolved partitions, verified-versus-met counts, publication epochs and operational bounds, initial human-session-only access, scoped atomic handoff commitments, historical knowledge cutoff and synthetic-pilot meaning. These are material additions. Their separate review history cannot be inferred from their presence, and the completed full-team v16 receipts do not silently cover them.
+
+The same current canonical item is preserved without another competing rewrite. The exact1.4.36 archive remains the replayable target of this completed run; its fourteen-file manifest and actual review evidence are immutable. The six views in this follow-up are the reviewed36 projections and do not claim to be a completed37 projection. The newer canonical controls where it adds or qualifies a contract. Reconcile future implementation against the actual chosen revision and its applicable proof, not an unqualified “latest passed” label.

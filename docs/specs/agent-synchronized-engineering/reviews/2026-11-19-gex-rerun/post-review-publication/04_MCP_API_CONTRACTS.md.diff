@@ -1,0 +1,23 @@
+--- reviewed36
++++ concurrent37
+@@ -1,6 +1,6 @@
+ # Proposed MCP / REST Contracts and Integration Security
+ 
+-**Document ID:** TESBO-API-004 | **Revision:** 1.4.36 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** mixed proposed and scoped native contracts; NOT FROZEN. PROPOSED labels remain proposals.
++**Document ID:** TESBO-API-004 | **Revision:** 1.4.37 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** mixed proposed and scoped native contracts; NOT FROZEN. PROPOSED labels remain proposals.
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Important:** Names, JSON payloads and paths labeled `PROPOSED` below are **not existing routes**. Discover/confirm their implementation after engineering work. Source audit found current Tesbo MCP at `/api/projects/:projectId/mcp` and `/api/mcp` through JSON-RPC 2.0 and a `tsbo_` bearer token.
+ 
+@@ -1111,3 +1111,12 @@
+ 
+ 
+ **Current36 integration boundary:** The published35 Graph Analytics closure contracts are preserved and govern mixed model/policy/requirement obligation scope, distinct evidence sufficiency and observed PASS/FAIL, per-impact actions, total ranking, authorized-visible snapshot identity and current-authority rollover. Their new fixtures extend the same five GA-AC checks and remain NOT RUN. The DMIS approval-to-posting workflow is the named pilot context, not a universal actor/schema/method or a claimed live test. The incoming short source-checkout claim belongs to its separate review; this run's inspected source remains6897 and its delivery parent is1fe. Earlier current-state statements are historical when this latest explicit qualification differs. This chapter preserves the independently reviewed CURRENT/HISTORICAL, separate Skill assignment, prepared-Run and source-status qualifications above. No empirical benefit, deployment, activation or implementation acceptance is inherited.
++
++
++## Revision 1.4.37 — Graph Analytics review resolution
++
++Initial Graph Analytics entry uses authorized native human project sessions. Existing read-only API tokens receive no graph metadata under AC-092; later credentialed surfaces require explicit grant contracts. Bind cursors, caches and receipts to effective grant and authorized visible scope. Internal index identity never directly governs visible cursor expiry. A hidden-only update preserves continuation and visible freshness. Authorized visible changes preserve a clearly pinned historical view if still allowed, or require explicit refresh. Permission loss invalidates subsequent access. Recheck at deferred delivery for both AI and native attachment reads.
++
++Use the native handoff write owner for an atomic operation commitment and final authority check. Scope key to project, effective principal/grant, action and operation identity, with immutable canonical input fingerprint and authorized receipt retention. Simultaneous exact requests converge on one commitment; changed payload conflicts. Revoked authority before commitment yields no effect. Lost/expired receipts require authorized readback or explicit unresolved outcome before retry. These rules also apply to model-free handoffs. No implicit dispatch or impact disposition.
++
++Historical replay defaults to the recorded decision and its knowledge cutoff. Authorized retrospective recomputation is labeled separately and pins later corrections plus original effective scope; neither silently becomes current reliance.
