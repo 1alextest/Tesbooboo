@@ -215,7 +215,14 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
         expect(await writing).toBeInstanceOf(policy === "read-only" || policy === "managed memory" ? BadRequestException : policy === "deleted" ? NotFoundException : ForbiddenException);
         expect(await state()).toEqual({ ...before, doc: expected });
         expect(f.activity).not.toHaveBeenCalled(); expect(f.embedding).not.toHaveBeenCalled(); expect(f.notice).not.toHaveBeenCalled();
-      } finally { await blocker.query("ROLLBACK"); await writing; await blocker.end(); }
+      } finally {
+        await blocker.query("ROLLBACK"); await writing;
+        // The committed out-of-band rename above is the evidence this test needs, but the title is
+        // how Zyra identifies its memory document: leaving it in place would hand every later test
+        // in this shared project a second, newer "Zyra AI Memory" holding this fixture's body.
+        if (policy === "managed memory") await setup.query("UPDATE knowledge_documents SET title = 'Concurrent managed-memory control' WHERE id = $1", [documentId]);
+        await blocker.end();
+      }
     }, 15_000);
   });
 
