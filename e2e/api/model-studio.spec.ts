@@ -729,7 +729,7 @@ test.describe("persisted Model Studio revisions and mappings", () => {
       ] })]);
       const history = scalar(`SELECT to_jsonb(m)::text FROM mbt_model_runs m WHERE m.cycle_id=${literal(originalRun.cycleId)};`);
 
-      const edit = await owner.patch(caseUrl, { data: { title: "Changed reviewed mapping condition", expectedRevision: original.editRevision } });
+      const edit = await owner.put(caseUrl, { data: { title: "Changed reviewed mapping condition", expectedRevision: original.editRevision } });
       expect(edit.ok(), await edit.text()).toBe(true);
       const current = await approveTestcase(owner,projectId,caseId);
       expect(current.editRevision).not.toBe(original.editRevision);
