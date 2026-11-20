@@ -2090,6 +2090,8 @@ test.describe("knowledge base (UI)", () => {
     const receipt = await (await api.get(kbUrl(`/documents/${doc.id}/versions/${persisted.reviewedVersionId}`))).json();
     expect(receipt).toMatchObject({ snapshotKind: "approved", contentText: updatedText });
     expect(receipt.contentJson).toEqual(persisted.contentJson);
+    // History lives in the header's "More actions" menu, like every other View history journey.
+    await page.getByRole("button", { name: "More actions" }).click();
     await page.getByRole("button", { name: "View history" }).click();
     await expect(page.getByText(/^Approved exact version /)).toBeVisible();
   });
