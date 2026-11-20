@@ -171,6 +171,8 @@ An imported skill is an inert candidate. It does not become active because an ex
 ### 13.4 Quality and learning boundaries
 Compare candidate skills using held-out task fixtures, failure patterns, omission rates, evidence fidelity, false positives, human corrections and cost/latency, without letting agent-authored evaluation examples self-prove improvement. Correlate project changes with DORA throughput/instability and review effort only as a measurement **hypothesis**, never as direct proof that a specific skill reduced defects. Skill effectiveness should use actual authoring and QA outcome receipts.
 
+**Graph-learning governance and manual testing quality:** The T-422/D-14 Skills owner supports test design for human-manual, exploratory, mobile/Appium, browser/Playwright, API, security, accessibility, performance and CI contexts without privileging one executor. Governed techniques guide clear setup, Actions and observable Expected Results, relevant risks, negative/forbidden/boundary scenarios, semantic uniqueness and accepted-review boundaries. Repeated QA edits, rejected duplicates, improved oracles, human execution observations and defect feedback may produce a **candidate Skills revision** or a project graph quality hypothesis; only separately authorized existing human workflows may promote/assign/activate a skill, approve a testcase, revise expected behavior or alter verification status. Evaluation must compare independently adjudicated human-executable case quality, behavior-gap novelty, false negatives, real-defect evidence, maintenance and reviewer effort—not auto-generated test counts or the same model's training cases. Cross-project learning shares only approved generalized guidance, not private raw records or inferred permissions. No unexplained "quality score" grants authority.
+
 ### 13.5 Skills-and-integration acceptance
 | ID | Scenario | Expected proof |
 | --- | --- | --- |
@@ -183,6 +185,11 @@ Compare candidate skills using held-out task fixtures, failure patterns, omissio
 
 | SK-E2E-29 | An approved testing skill is used when graph impact has missing code-to-case links | Skill-guided candidate design is allowed, but UNKNOWN remains visible; no unreviewed new requirement/case or fake coverage |
 | SK-E2E-30 | A skill/tool claims a native model run was automatically executed successfully | Without original target action/assertion receipt, verified build/oracle/fixture and evidence, coverage stays unverified; no skill can self-certify |
+
+| SK-E2E-31 | Tester corrects a weak manual case's action/expected results | Candidate improvement and original correction reason/version persisted; active skill/case does not change without human review |
+| SK-E2E-32 | A meaningful case cannot be automated | Correct manual-testing method, legitimate human execution and distinct evidence class; no artificial automated failure |
+| SK-E2E-33 | Learned testing method appears strong only on self-generated examples | Held-out independent human quality and real-defect evaluation blocks unjustified promotion |
+| SK-E2E-34 | Code-derived behavior conflicts with approved policy but ML gives high confidence | Existing accepted oracle stays authoritative, model/skill candidate inert and conflict visible |
 
 GEX work extends this **same** governed skills test suite; it does not create another Skills/Graph authority.
 

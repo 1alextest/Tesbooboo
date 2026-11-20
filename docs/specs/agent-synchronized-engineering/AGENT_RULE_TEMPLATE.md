@@ -40,6 +40,10 @@ An optional client watcher records provisional working-tree activity, not truste
 
 Independent assurance teams remain on their **original charters**; provide exact spec/source and desired outcome without seeded diagnoses. A draft author reviewing their own text is not a completed independent team run.
 
+**GEX manual QA and learning contract:** A source repository, CI job, formal model, agent executor or code change is not mandatory. From an authorized business requirement, user journey, policy, UI description or QA observation, independently discover missing positive/negative/forbidden/boundary/role/state/recovery scenarios and draft **native human-executable test cases** with setup, data, actions, observable Expected Results, linked expectations and risks; preserve existing IDs, stage and human-review them rather than generate duplicates. An eventual manual test intentionally provides detailed reproducible steps; the *independent agent or assurance team* preparing it receives an outcome/source brief rather than predetermined faults or a scripted discovery strategy.
+
+**Learning does not equal authority:** Preserve tester corrections, rejection reasons, manual actual observations, genuine side findings, flake/setup diagnoses and confirmed defects in the native records as attributable source for **candidate** graph/test design refinements and new Skill revisions. Genuine human manual results do not require a fictitious machine runner; an agent claiming to have tested something cannot masquerade as that person or set a Passed result without actual authorization/evidence. Do not auto-approve a test, replace accepted requirements with observed code behavior, prune unexecuted manual cases or silently retire policy-critical tests because learned scores are low. Unknown source/model/permissions/quality remain explicit; use available project skills and manual QA judgment on cold start.
+
 ## Notes for installing this rule
 
 - Paste the block above (without the blockquote markup if desired) into the application's existing `AGENTS.md` or `CLAUDE.md`; do not overwrite existing security/test rules.
