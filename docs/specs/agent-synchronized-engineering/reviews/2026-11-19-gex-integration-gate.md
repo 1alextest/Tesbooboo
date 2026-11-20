@@ -29,3 +29,19 @@ Use the original unmodified team charters. For each *actual* reviewer, collect: 
 ## Integration exit
 
 Do not mark this package frozen, ready for merge, deployable or independently assured until GEX-GATE-01..06 are dispositioned with actual evidence. Retain manual tests even without code/CI; retain human/external-run evidence distinction; no graph prediction, test count or AI confidence substitutes for approved expected behavior or actual verification. Learning candidates cannot bypass the active effective Skill assignment and protected human decision.
+
+
+## Later source-reconciliation addendum (author desk review; NOT independent team execution)
+
+This section records findings against PR #168 head `264380c28a6844e9a349968d9317f7a6b33daccf`, while preserving the earlier checkpoint above as historical evidence.
+
+| Finding | Current source evidence | Required disposition |
+| --- | --- | --- |
+| GEX-GATE-07 — historical recovery statement needs reconciliation | README now says the exact v1.4.28 eight-file ZIP was recovered with SHA-256 `6094687758ebf1e5dfa3c6ed8e2209b8967a190523815ba1e1197d11867374ef`; the earlier review describes an unsuccessful attempt. | Verify recovered original bytes, comprehensive eight-file 1.4.29 delta, unchanged owners/IDs, and ratification. The earlier *access* blocker may have been removed; P-14 validation/review is not therefore complete. |
+| GEX-GATE-08 — proposed reasoning is not deployed intelligence | README proposes AI graph reasoning and composing the source `manual-test-authoring` method with possible `graph-qa-reasoning` profile; installation/active assignment is explicitly unverified. | Read exact skill digest and effective assignment; independently prove human-reproducible code-free manual cases, state/forbidden transitions, upstream/downstream effects, weak-oracle detection, unknown impact and nonduplicate publication. |
+| GEX-GATE-09 — contradictory candidate expected-result guidance | README identifies earlier `manual-test-authoring` advice to prefer observed application behavior over requirements. | Fix the skill candidate before approval: approved version-pinned expectation remains the oracle; implementation behavior is evidence or a discrepancy. Prove against an intentionally wrong implementation. |
+| GEX-GATE-10 — skill cannot grant underlying capabilities | Skills govern method/context selection, not authority, parser capability, persisted graph edges, approvals or runner execution. | Negative REST/MCP and prompt-injection checks: a malicious skill/edge cannot fabricate coverage, cross projects, change an active assignment or invoke an unavailable tool. |
+| GEX-GATE-11 — learning needs independent measurement | Source describes revision-pinned corrections, cold-start reasoning and optional ML hypotheses, not proven gains. | Compare held-out manual QA, stale source, negative path, side finding and linked retest across baseline and candidate skill versions; capture false negatives, human review burden, actor evidence and rollback. |
+| GEX-GATE-12 — overlapping branches remain distinct | PR #167 and #168 are both open; their plans/approval contracts overlap. | Reconcile exact heads and every changed owner/link, rerun current-tree CI and narrow secrets analysis, then execute *unchanged* assurance team charters against pinned canonical content. |
+
+**Independent team status: NOT RUN by this addendum.** These are author-desk challenges, not Blue/Red/Green/White/QA/Security/Grey/Purple/Graph/Elephant-Gold verdicts. Freeze each genuine reviewer's first-pass findings before feedback, and preserve non-results rather than synthesizing a PASS. No deployment, canonical freeze or merge is authorized by this review.
