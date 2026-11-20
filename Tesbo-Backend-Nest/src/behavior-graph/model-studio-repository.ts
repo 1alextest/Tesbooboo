@@ -1055,7 +1055,7 @@ export class ModelStudioRepository {
     // "what have these cases actually done" half of the honest coverage split; it is not model
     // verification and does not prove the modeled behavior is correct.
     const evidenceRows = await this.db.query(
-      `SELECT l.testcase_id, e.status, COUNT(*)::int AS count, MAX(e.updated_at) AS last_at
+      `SELECT l.testcase_id, e.status, COUNT(DISTINCT e.id)::int AS count, MAX(e.updated_at) AS last_at
        FROM mbt_model_case_links l
        JOIN testcases t ON t.id = l.testcase_id AND t.deleted_at IS NULL
        JOIN cycle_items ci ON ci.testcase_id = l.testcase_id
@@ -1088,13 +1088,20 @@ export class ModelStudioRepository {
       }
       evidenceByCase.set(key, entry);
     }
-    const caseEvidence = linkRows.rows
-      .filter((row) => row.testcase_deleted !== true)
-      .map((row) => ({
+    // Multiple accepted links for one case are distinct mappings, not distinct native results.
+    // Keep every mapping in 'links', but show only one evidence summary per testcase identity.
+    const caseEvidence: Body[] = [];
+    const emittedCaseIds = new Set<string>();
+    for (const row of linkRows.rows) {
+      const caseId = String(row.testcase_id);
+      if (row.testcase_deleted === true || emittedCaseIds.has(caseId)) continue;
+      emittedCaseIds.add(caseId);
+      caseEvidence.push({
         testcaseId: row.testcase_id,
         testcaseTitle: row.testcase_title ?? "Deleted test case",
-        ...(evidenceByCase.get(String(row.testcase_id)) ?? { statusCounts: {}, latestStatus: null, latestAt: null })
-      }));
+        ...(evidenceByCase.get(caseId) ?? { statusCounts: {}, latestStatus: null, latestAt: null })
+      });
+    }
 
     const runEvidence = await this.governedRunEvidenceFor(String(revision.rows[0].id), projectId);
     const governedRuns = await this.governedRunsFor(String(revision.rows[0].id), projectId, runEvidence);
