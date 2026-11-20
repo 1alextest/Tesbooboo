@@ -141,9 +141,9 @@ def main():
         if frozen.count(source_git) < 2 or frozen.count(method_git) < 1:
             raise AssertionError("Pinned Git object identifiers missing from frozen Blue receipt")
         original_lines = (
-            "- **Application source:** 1alextest/Tesbooboo at " + source_git + ", read exclusively through Git objects.\\n"
-            "- **Method source:** NesberryEnterprise/Nesberry at the supplied recovered " + method_git + " root.\\n"
-            "2. Git object resolution: **" + source_git + " resolves as a commit**.\\n"
+            "- **Application source:** 1alextest/Tesbooboo at " + source_git + ", read exclusively through Git objects.\n"
+            "- **Method source:** NesberryEnterprise/Nesberry at the supplied recovered " + method_git + " root.\n"
+            "2. Git object resolution: **" + source_git + " resolves as a commit**.\n"
         )
         baseline_blue = scan(args.image, default_config, root,
                              {str(blue_receipt): original_lines}, "blue-commits-default")
@@ -160,9 +160,9 @@ def main():
             ("blue-outside-path", "src/blue-a-v1.md", original_lines, 3, "sourcegraph-access-token"),
             ("blue-nested-path", "src/" + str(blue_receipt), original_lines, 3, "sourcegraph-access-token"),
             ("blue-suffix", str(blue_receipt) + ".extra", original_lines, 3, "sourcegraph-access-token"),
-            ("blue-new-sha", str(blue_receipt), "Original source " + other_git + "\\n", 1, "sourcegraph-access-token"),
-            ("blue-original-plus-new-sha", str(blue_receipt), "Original source " + source_git + " and new " + other_git + "\\n", 1, "sourcegraph-access-token"),
-            ("blue-provider-token", str(blue_receipt), "Provider sample " + provider + "\\n", 1, "github-pat"),
+            ("blue-new-sha", str(blue_receipt), "Original source " + other_git + "\n", 1, "sourcegraph-access-token"),
+            ("blue-original-plus-new-sha", str(blue_receipt), "Original source " + source_git + " and new " + other_git + "\n", 1, "sourcegraph-access-token"),
+            ("blue-provider-token", str(blue_receipt), "Provider sample " + provider + "\n", 1, "github-pat"),
         ]
         for label, path, content, expected_count, rule in neighbor_cases:
             result = scan(args.image, config, root, {path: content}, label)
