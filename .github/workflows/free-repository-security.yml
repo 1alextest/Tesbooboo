@@ -31,5 +31,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Scan current repository contents for secrets
+        # .gitleaks.toml extends the default rule set and allowlists one false-positive shape:
+        # file-path-to-SHA-256 maps in retained assurance receipts. Every other default rule and
+        # every other path is still scanned.
         run: |
-          docker run --rm -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks:latest dir /repo --redact --exit-code 1
+          docker run --rm -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks:latest dir /repo --config /repo/.gitleaks.toml --redact --exit-code 1

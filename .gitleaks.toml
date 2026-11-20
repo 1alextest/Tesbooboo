@@ -1,0 +1,14 @@
+# Default gitleaks rules, plus one precise allowlist for retained assurance receipts.
+#
+# The independent-review evidence under docs/specs/agent-synchronized-engineering/reviews/
+# records file-name-to-SHA-256 maps. A key such as "Tesbo-Frontend/lib/api.ts" or
+# "04_MCP_API_CONTRACTS.md" followed by a 64-character hex digest trips generic-api-key even
+# though the value is a content hash, not a credential. The allowlist matches only that shape:
+# an evidence file path ending in a known extension, mapped to a lowercase SHA-256 digest.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "File path to SHA-256 maps in retained assurance receipts are integrity hashes, not credentials"
+regexTarget = "match"
+regexes = ['''[A-Za-z0-9_./()\[\] -]+\.(?:md|ts|tsx|js|mjs|cjs|json|sql)": "[0-9a-f]{64}"''']
