@@ -221,6 +221,14 @@ Do not modify production tenants, delete/migrate live data, mark tests passed, c
 8. **All write entrances covered:** regression tests exercise direct UI/REST/MCP, Zyra, imports, automation and older client routes rather than assuming a new Skills module implicitly gates them.
 9. **Green quality checks are distinct from deployment:** no actual implementation E2E/test/review claim until authenticated runtime checks and independent sign-off exist.
 
+### PR #167/#168 integration and security verification gate (2026-11-19 checkpoint)
+
+The two Tesbo PRs change overlapping integration surfaces. PR #167 owns the current security, MCP principal/consent, reviewed publication, transaction and recovery implementation. PR #168 is a proposed subordinate graph/Skill documentation extension. Keep #167's implementation and tested invariants authoritative until any later proposal is independently reviewed and deliberately implemented; **do not treat a documentation-only PR as deployment evidence**.
+
+Before #168 can be marked ready: (1) reconcile the eight canonical 1.4.29 files from verified exact original bytes with P-14 owner receipts; (2) diff both PRs against the updated `development` head, not their shared historic merge base; (3) preserve #167's native authorization, source/provenance and human-review rules; (4) resolve PR #168's current-tree secret finding using its actual location/rule or verified upstream mitigation, without broad scanner exclusion; (5) prove approved-versus-activated lookup, race revalidation and correction-history invariants through proposed SK-E2E-41..44 or canonically assigned equivalents; (6) obtain genuine independent, source-pinned team receipts rather than a self-authored role simulation; (7) pass fresh CI after final reconciliation.
+
+A failed security check is a merge blocker even for documents until its underlying match is identified and disposed of correctly. A passing PR #167 check does not certify the different #168 tree. GitHub's `mergeable` flag is not a sufficient release gate. Record remaining proof as BLOCKED/NOT RUN rather than infer success.
+
 ### Specification assurance rerun obligation
 After any material Skills-governance spec revision run each of the established teams against the **spec itself** (Blue reuse, Red premises, Green seams, White completeness, QA lifecycle, Grey user journeys, Security trust boundary, Purple UX, Graph evidence, Elephant-Gold cold read) with Simulation performed as Grey’s declared G0/G1 activity, not an invented additional formal team. Record per-role evidence, falsifiers, findings, unresolved risks and outcome in a review receipt. **Charter-guided desk inspection by the specification author is NOT independently executed agent/team review**; log that distinction if no delegated independent-run capability is available. Do not modify the team charters to lead them to expected answers.
 
