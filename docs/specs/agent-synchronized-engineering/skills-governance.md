@@ -244,7 +244,7 @@ Operationalize the relevant principle with **when it applies, evidence to inspec
 
 GEX work extends this **same** governed skills test suite; it does not create another Skills/Graph authority.
 
-**Implementation boundary:** P-14 remains authoritative. Revision 1.4.28 contains Skills contracts through SK-E2E-28; the same eight-file 1.4.29 proposal adds SK-E2E-29..44 and the cross-module reasoning/distillation guidance. This view does not independently ratify that amendment. Root recovery, effective authority, deployment capability and independent evaluation remain gates. No actual MCP/REST capability, installed skill or activation authority is granted by this text.
+**Implementation boundary:** P-14 remains authoritative. Revision 1.4.28 contains Skills contracts through SK-E2E-28; the eight-file 1.4.29 proposal contains SK-E2E-29..40 and cross-module reasoning/distillation guidance. This subordinate amendment proposes SK-E2E-41..44 for P-14 canonical reconciliation and independent review; they are not yet authoritative canonical test IDs. This view does not independently ratify that amendment. Root recovery, effective authority, deployment capability and independent evaluation remain gates. No actual MCP/REST capability, installed skill or activation authority is granted by this text.
 
 ## 14. Integration of all authoring and retrieval consumers
 
