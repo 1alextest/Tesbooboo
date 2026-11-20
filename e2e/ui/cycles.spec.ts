@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, request as pwRequest, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { env } from "../utils/env";
 import { literal, scalar } from "../utils/psql";
+import { bulkCreateApprovedTestcases } from "../utils/testcase-approval";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 const STATE_PATH = path.join(__dirname, "../.auth/state.json");
@@ -20,13 +21,10 @@ async function seedRunWithStatuses(api: APIRequestContext, namePrefix: string, s
 
   let testcaseIds: string[] = [];
   if (statuses.length > 0) {
-    const created = await (
-      await api.post(`/api/projects/${ctx.projectId}/testcases/bulk-create`, {
-        data: {
-          testcases: statuses.map((_, i) => ({ title: `${namePrefix} Case ${stamp}-${i}`, status: "Approved" })),
-        },
-      })
-    ).json();
+    const created = await bulkCreateApprovedTestcases(
+      api, ctx.projectId,
+      statuses.map((_, i) => ({ title: `${namePrefix} Case ${stamp}-${i}` })),
+    );
     testcaseIds = created.created.map((c: { id: string }) => c.id);
     await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds } });
 
@@ -253,20 +251,14 @@ test.describe("Test Run — Priority/Type/Assignee filters", () => {
 
     // [0] P0/Security, assigned      [1] P1/Functional, assigned    [2] P1/Functional, unassigned
     // [3] P2/Regression, unassigned  [4] legacy priority string     [5] legacy type string
-    const created = await (
-      await api.post(`/api/projects/${ctx.projectId}/testcases/bulk-create`, {
-        data: {
-          testcases: [
-            { title: titles[0], priority: "P0", type: "Security", status: "Approved" },
-            { title: titles[1], priority: "P1", type: "Functional", status: "Approved" },
-            { title: titles[2], priority: "P1", type: "Functional", status: "Approved" },
-            { title: titles[3], priority: "P2", type: "Regression", status: "Approved" },
-            { title: titles[4], priority: LEGACY_PRIORITY, type: "Functional", status: "Approved" },
-            { title: titles[5], priority: "P2", type: LEGACY_TYPE, status: "Approved" },
-          ],
-        },
-      })
-    ).json();
+    const created = await bulkCreateApprovedTestcases(api, ctx.projectId, [
+      { title: titles[0], priority: "P0", type: "Security" },
+      { title: titles[1], priority: "P1", type: "Functional" },
+      { title: titles[2], priority: "P1", type: "Functional" },
+      { title: titles[3], priority: "P2", type: "Regression" },
+      { title: titles[4], priority: LEGACY_PRIORITY, type: "Functional" },
+      { title: titles[5], priority: "P2", type: LEGACY_TYPE },
+    ]);
     testcaseIds = created.created.map((c: { id: string }) => c.id);
     await api.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseIds } });
 
@@ -454,11 +446,7 @@ test.describe("Test Run — bulk status on a multi-selection", () => {
     ).json();
     cycleId = cycle.id;
 
-    const created = await (
-      await api.post(`/api/projects/${ctx.projectId}/testcases/bulk-create`, {
-        data: { testcases: titles.map((title) => ({ title, status: "Approved" })) },
-      })
-    ).json();
+    const created = await bulkCreateApprovedTestcases(api, ctx.projectId, titles.map((title) => ({ title })));
     testcaseIds = created.created.map((c: { id: string }) => c.id);
     await api.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseIds } });
   });
@@ -624,9 +612,7 @@ test.describe("Test Run table — ID/Priority/Test Case column sort", () => {
       { title: tcTitle.a, status: "Approved" },
       { title: tcTitle.m, status: "Approved" },
     ];
-    const created: { created: { id: string; title: string }[] } = await (
-      await api.post(`/api/projects/${ctx.projectId}/testcases/bulk-create`, { data: { testcases: rows } })
-    ).json();
+    const created = await bulkCreateApprovedTestcases(api, ctx.projectId, rows);
     testcaseIds = created.created.map((c) => c.id);
     const idByTitle = new Map(created.created.map((c) => [c.title, c.id]));
     // Added in this exact order, which is what "the existing order" (no sort selected) means below.
@@ -761,16 +747,10 @@ test.describe("Add Test Cases picker — suite filter", () => {
 
       const parentCaseTitle = `E2E Picker Parent Case ${stamp}`;
       const childCaseTitle = `E2E Picker Child Case ${stamp}`;
-      const created = await (
-        await api.post(`/api/projects/${ctx.projectId}/testcases/bulk-create`, {
-          data: {
-            testcases: [
-              { title: parentCaseTitle, status: "Approved", suiteId: parentSuiteId },
-              { title: childCaseTitle, status: "Approved", suiteId: childSuiteId },
-            ],
-          },
-        })
-      ).json();
+      const created = await bulkCreateApprovedTestcases(api, ctx.projectId, [
+        { title: parentCaseTitle, suiteId: parentSuiteId },
+        { title: childCaseTitle, suiteId: childSuiteId },
+      ]);
       testcaseIds = created.created.map((c: { id: string }) => c.id);
 
       const cycle = await (
@@ -853,9 +833,7 @@ test.describe("Test Run filters — concurrent updates, pagination boundary, and
       ...Array.from({ length: 11 }, (_, i) => ({ title: `E2E RunFiltersPage ${stamp}-${i}`, priority: "P2", status: "Approved" })),
       { title: `E2E RunFiltersPage ${stamp}-lone-p1`, priority: "P1", status: "Approved" },
     ];
-    const created = await (
-      await api.post(`/api/projects/${ctx.projectId}/testcases/bulk-create`, { data: { testcases: rows } })
-    ).json();
+    const created = await bulkCreateApprovedTestcases(api, ctx.projectId, rows);
     const testcaseIds: string[] = created.created.map((c: { id: string }) => c.id);
     try {
       await api.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseIds } });

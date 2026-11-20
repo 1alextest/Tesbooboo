@@ -43,6 +43,23 @@ export async function createApprovedTestcase(
   return approveTestcase(human, projectId, testcase.id);
 }
 
+/** Fixture setup through the real route: bulk-create as Draft, then exact human review for each case. */
+export async function bulkCreateApprovedTestcases(
+  human: APIRequestContext,
+  projectId: string,
+  testcases: Array<Record<string, unknown>>,
+  apiOrigin = "",
+): Promise<{ created: Array<{ id: string; [key: string]: any }>; createdCount: number }> {
+  const response = await human.post(`${apiOrigin}/api/projects/${projectId}/testcases/bulk-create`, {
+    // Approval is a decision about exact stored content, never a value on the create payload.
+    data: { testcases: testcases.map((row) => ({ ...row, status: "Draft" })) },
+  });
+  expect(response.ok(), await response.text()).toBeTruthy();
+  const created = await response.json();
+  for (const row of created.created) await approveTestcase(human, projectId, row.id, apiOrigin);
+  return created;
+}
+
 /** Fixture setup only: keep the create response while explicitly reviewing requested Approved fixtures. */
 export async function createTestcaseFixtureResponse(
   human: APIRequestContext,
