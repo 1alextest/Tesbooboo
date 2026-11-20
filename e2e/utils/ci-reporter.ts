@@ -1,4 +1,5 @@
 import { createTestcaseFixtureResponse } from "./testcase-approval";
+import { issueMcpTestToken } from "./mcp-access";
 import { expect, request as newRequest, type Page, type TestInfo } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -29,7 +30,7 @@ export async function verifyProductionReporter(page: Page, api: string, web: str
       cases.push(await response.json());
     }
     for (const scopes of [["read", "write"], ["read"]]) {
-      const response = await request.post(`${base}/apikeys`, { data: { name: `CI reporter ${scopes.join("+")}`, scopes } });
+      const response = await issueMcpTestToken(request, `${base}/apikeys`, { data: { name: `CI reporter ${scopes.join("+")}`, scopes } });
       expect(response.ok(), await response.text()).toBeTruthy();
       tokens.push(await response.json());
     }
@@ -134,7 +135,7 @@ test.skip('skipped reporter control', { tag: '@tesbo.testId("${cases[2].external
     expect(read.error).toBeUndefined();
     expect(JSON.parse(read.result.content[0].text)).toMatchObject({ id: failed.id, status: "Failed" });
     const readonly = await mcp(1, "record_execution_result", { executionId: failed.id, status: "Passed" });
-    expect(readonly.error).toBeDefined();
+    expect(readonly.error).toMatchObject({ code: -32002 });
     const denied = await anonymous.post(`${base}/automation/runs/${runId}/results`, {
       headers: { Authorization: `Bearer ${tokens[1].token}` }, data: { caseId: cases[1].externalId, status: "pass", retryCount: 1 }
     });
