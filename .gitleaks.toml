@@ -37,5 +37,5 @@ targetRules = ["sourcegraph-access-token"]
 condition = "AND"
 paths = ['''^(?:/repo/)?docs/specs/agent-synchronized-engineering/reviews/2026-11-19-gex-rerun/receipts/blue-a-v1\.md$''']
 regexTarget = "match"
-regexes = ['''^(?:6897f989b055a955280f(?:810c7daace86f74057fa)|d83549c85a4dcd047fb40(?:dc4fba4ec62737ab0fc))\s]
+regexes = ['''^(?:6897f989b055a955280f(?:810c7daace86f74057fa)|d83549c85a4dcd047fb40(?:dc4fba4ec62737ab0fc))
 '']
