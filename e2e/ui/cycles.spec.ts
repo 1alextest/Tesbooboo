@@ -250,7 +250,7 @@ test.describe("Test Run — Priority/Type/Assignee filters", () => {
   let executionIds: string[] = [];
   let memberId: string;
   const stamp = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
-  const LEGACY_TYPE = `LegacyImportedType${stamp}`;
+  const LEGACY_TYPE = `LegacyType${stamp}`;
   const LEGACY_PRIORITY = "P9Legacy";
   const titles = Array.from({ length: 6 }, (_, i) => `E2E RunFilters ${stamp}-${i}`);
 
@@ -1124,8 +1124,8 @@ test.describe("deleting a run from the UI (hard-delete remediation Phase 1)", ()
 /*
  * "Test Environment dropdown shows no options": project settings -> Test Environments saves into
  * projects.settings.testRunEnvironments, and GET /api/projects/:id hands `settings` back in whichever
- * jsonb shape it was stored in: a parsed OBJECT (written by a PATCH with an object, or by any jsonb_set
- * such as the Zyra agent config) or a JSON STRING (what the settings screen itself PATCHes). The Test
+ * jsonb shape it was stored in: a parsed OBJECT (written by the current settings API) or a legacy
+ * JSON STRING (stored by older builds that serialized the settings twice). The Test
  * Runs and Test Plan create-run dropdowns only understood the string form, so every project whose
  * settings were stored as an object showed a dropdown with just "Select environment" and could never
  * create a run. Both shapes are seeded here, each in its own disposable project so the shared project's
@@ -1147,7 +1147,7 @@ test.describe("Test Environment dropdown: runs list and test plan", () => {
     await api.dispose();
   });
 
-  /** A fresh project whose settings are PATCHed as `settings` (object => stored as a jsonb object, string => jsonb string). */
+  /** A fresh project whose optional settings go through the current, validating public writer. */
   async function seedProject(settings: unknown): Promise<string> {
     const stamp = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
     const response = await api.post("/api/projects", { data: { name: `E2E Env ${stamp}` } });
@@ -1161,18 +1161,59 @@ test.describe("Test Environment dropdown: runs list and test plan", () => {
     return created.id;
   }
 
+  /** Arrange old stored settings that the current writer normalizes or rejects, on this test's own project only. */
+  async function seedLegacyProjectSettings(projectId: string, settings: unknown): Promise<void> {
+    expect(projectIds).toContain(projectId);
+    expect(projectId).not.toBe(ctx.projectId);
+    const meResponse = await api.get("/api/auth/me");
+    expect(meResponse.status(), await meResponse.text()).toBe(200);
+    const me = await meResponse.json();
+    expect(typeof me.userId).toBe("string");
+    const updatedId = scalar(`
+      WITH updated AS (
+        UPDATE projects p SET settings = ${literal(JSON.stringify(settings))}::jsonb
+        WHERE p.id = ${literal(projectId)}::uuid
+          AND p.id <> ${literal(ctx.projectId)}::uuid
+          AND p.organization_id = ${literal(ctx.organizationId)}::uuid
+          AND p.archived_at IS NULL
+          AND EXISTS (
+            SELECT 1 FROM project_members pm
+            WHERE pm.project_id = p.id AND pm.user_id = ${literal(me.userId)}::uuid AND pm.role = 'owner'
+          )
+        RETURNING p.id
+      )
+      SELECT id::text FROM updated
+    `);
+    expect(updatedId).toBe(projectId);
+    const response = await api.get(`/api/projects/${projectId}`);
+    expect(response.status(), await response.text()).toBe(200);
+    const stored = await response.json();
+    expect(typeof stored.settings).toBe(typeof settings);
+    expect(stored.settings).toEqual(settings);
+  }
+
   /** The create/edit run modals render without role="dialog", so find the select by its placeholder option. */
   const envSelect = (page: Page) =>
     page.locator("select").filter({ has: page.locator("option", { hasText: "Select environment" }) });
   const optionNames = async (page: Page) => (await envSelect(page).locator("option").allTextContents()).map((t) => t.trim());
 
-  const SHAPES: Array<[string, () => unknown]> = [
-    ["an object", () => ({ testRunEnvironments: ENVS })],
-    ["a JSON string (as the settings screen saves it)", () => JSON.stringify({ testRunEnvironments: ENVS })],
+  const SHAPES: Array<[string, "current-object" | "legacy-string"]> = [
+    ["an object", "current-object"],
+    ["a legacy JSON string", "legacy-string"],
   ];
-  for (const [shape, settings] of SHAPES) {
+  for (const [shape, storage] of SHAPES) {
     test(`Create Test Run lists the configured environments and persists the choice (settings stored as ${shape})`, async ({ page }) => {
-      const projectId = await seedProject(settings());
+      const settings = { testRunEnvironments: ENVS };
+      const projectId = await seedProject(storage === "current-object" ? settings : undefined);
+      if (storage === "legacy-string") {
+        await seedLegacyProjectSettings(projectId, JSON.stringify(settings));
+      } else {
+        const response = await api.get(`/api/projects/${projectId}`);
+        expect(response.status(), await response.text()).toBe(200);
+        const stored = await response.json();
+        expect(typeof stored.settings).toBe("object");
+        expect(stored.settings).toEqual(settings);
+      }
       await page.goto(`/projects/${projectId}/cycles?create=1`);
       await expect(envSelect(page)).toBeVisible();
       await expect.poll(() => optionNames(page)).toEqual(["Select environment", "Staging", "Production"]);
@@ -1180,10 +1221,10 @@ test.describe("Test Environment dropdown: runs list and test plan", () => {
       const runName = `E2E EnvRun ${Date.now()}`;
       await page.locator('form input[type="text"]').first().fill(runName);
       // Nothing chosen yet: the form must not be submittable.
-      await expect(page.getByRole("button", { name: "Create Test Run", exact: true })).toBeDisabled();
+      await expect(page.locator("form").getByRole("button", { name: "Create Test Run", exact: true })).toBeDisabled();
       await envSelect(page).selectOption("Production");
       await expect(page.getByText("URL: https://prod.example.com")).toBeVisible();
-      await page.getByRole("button", { name: "Create Test Run", exact: true }).click();
+      await page.locator("form").getByRole("button", { name: "Create Test Run", exact: true }).click();
       await expect(page.getByText(runName, { exact: true })).toBeVisible();
 
       const runs: { name: string; environment: string }[] = await (await api.get(`/api/projects/${projectId}/cycles`)).json();
@@ -1196,12 +1237,12 @@ test.describe("Test Environment dropdown: runs list and test plan", () => {
     await page.goto(`/projects/${projectId}/cycles?create=1`);
     await expect.poll(() => optionNames(page)).toEqual(["Select environment"]);
     await page.locator('form input[type="text"]').first().fill("E2E EnvRun none");
-    await expect(page.getByRole("button", { name: "Create Test Run", exact: true })).toBeDisabled();
+    await expect(page.locator("form").getByRole("button", { name: "Create Test Run", exact: true })).toBeDisabled();
     await expect(page.locator("form").getByRole("link", { name: "Project settings", exact: true })).toHaveAttribute("href", /settings\?tab=testRuns/);
   });
 
   test("entries without a name or URL, and repeated names, are not offered", async ({ page }) => {
-    const projectId = await seedProject({
+    const settings = {
       testRunEnvironments: [
         { name: "Good", url: "https://good.example.com" },
         { name: "NoUrl", url: "   " },
@@ -1209,7 +1250,18 @@ test.describe("Test Environment dropdown: runs list and test plan", () => {
         { name: "Good", url: "https://dup.example.com" },
         null,
       ],
-    });
+    };
+    const projectId = await seedProject(undefined);
+    const beforeResponse = await api.get(`/api/projects/${projectId}`);
+    expect(beforeResponse.status(), await beforeResponse.text()).toBe(200);
+    const before = await beforeResponse.json();
+    const rejected = await api.patch(`/api/projects/${projectId}`, { data: { settings } });
+    expect(rejected.status(), await rejected.text()).toBe(400);
+    expect(await rejected.json()).toMatchObject({ error: "Environment URL is required" });
+    const afterResponse = await api.get(`/api/projects/${projectId}`);
+    expect(afterResponse.status(), await afterResponse.text()).toBe(200);
+    expect((await afterResponse.json()).settings).toEqual(before.settings);
+    await seedLegacyProjectSettings(projectId, settings);
     await page.goto(`/projects/${projectId}/cycles?create=1`);
     await expect.poll(() => optionNames(page)).toEqual(["Select environment", "Good"]);
   });
@@ -1251,13 +1303,13 @@ test.describe("Test Environment dropdown: runs list and test plan", () => {
     const projectId = await seedProject({ testRunEnvironments: ENVS });
     const plan = await (await api.post(`/api/projects/${projectId}/plans`, { data: { name: `E2E EnvPlan ${Date.now()}` } })).json();
     await page.goto(`/projects/${projectId}/plans/${plan.id}`);
-    await page.getByRole("button", { name: "Create test run" }).click();
+    await page.locator("header").getByRole("button", { name: "Create test run", exact: true }).click();
     await expect.poll(() => optionNames(page)).toEqual(["Select environment", "Staging", "Production"]);
     // The plan form pre-selects the first environment; the user can still switch.
     await envSelect(page).selectOption("Production");
     const runName = `E2E EnvPlanRun ${Date.now()}`;
     await page.locator('form input[type="text"]').first().fill(runName);
-    await page.getByRole("button", { name: "Create Test Run", exact: true }).click();
+    await page.locator("form").getByRole("button", { name: "Create Test Run", exact: true }).click();
     await expect(page.getByText(runName, { exact: true })).toBeVisible();
     const runs: { name: string; environment: string }[] = await (await api.get(`/api/projects/${projectId}/cycles`)).json();
     expect(runs.find((r) => r.name === runName)?.environment).toBe("Production");
@@ -1267,9 +1319,9 @@ test.describe("Test Environment dropdown: runs list and test plan", () => {
     const projectId = await seedProject(undefined);
     const plan = await (await api.post(`/api/projects/${projectId}/plans`, { data: { name: `E2E EnvPlanNone ${Date.now()}` } })).json();
     await page.goto(`/projects/${projectId}/plans/${plan.id}`);
-    await page.getByRole("button", { name: "Create test run" }).click();
+    await page.locator("header").getByRole("button", { name: "Create test run", exact: true }).click();
     await expect(page.getByText("No environments configured in project settings.")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Create Test Run", exact: true })).toBeDisabled();
+    await expect(page.locator("form").getByRole("button", { name: "Create Test Run", exact: true })).toBeDisabled();
   });
 });
 
@@ -2312,7 +2364,7 @@ test.describe("native manual retest — reviewed selection and recovery", () => 
           const disposition = outcome === "created"
             ? await api.post(`/api/cycles/${source.cycleId}/retests`, { data: original })
             : await api.post(`/api/cycles/${source.cycleId}/retests/requests/${original.requestKey}/cancel`, { data: original });
-          expect(disposition.status(), await disposition.text()).toBe(outcome === "created" ? 201 : 200);
+          expect(disposition.status(), await disposition.text()).toBe(201);
           const terminal = await disposition.json();
           expect(terminal).toMatchObject({ outcome, sourceCycleId: source.cycleId, requestKey: original.requestKey });
           if (outcome === "created") targetId = terminal.cycleId;
@@ -2365,4 +2417,101 @@ test.describe("native manual retest — reviewed selection and recovery", () => 
       });
     }
   }
+
+  test("a retest without an environment opens card Edit and keeps its history when settings are supplied", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    let projectId = "";
+    let source: Awaited<ReturnType<typeof fixture>> | undefined;
+    const pageErrors: string[] = [];
+    const onPageError = (error: Error) => pageErrors.push(error.message);
+    page.on("pageerror", onPageError);
+    try {
+      const suffix = `${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
+      const project = await api.post("/api/projects", { data: { name: `E2E Retest edit ${suffix}`.slice(0, 30), key: `RE${suffix}` } });
+      expect(project.status(), await project.text()).toBe(201);
+      projectId = (await project.json()).id;
+      const settings = await api.patch(`/api/projects/${projectId}`, { data: { settings: {
+        testRunEnvironments: [{ name: "Staging", url: "https://staging.example.com" }],
+      } } });
+      expect(settings.status(), await settings.text()).toBe(200);
+      source = await fixture(api, false, projectId);
+      const originalResponse = await api.get(`/api/cycles/${source.cycleId}/executions`);
+      expect(originalResponse.status(), await originalResponse.text()).toBe(200);
+      const originalObservations = await originalResponse.json();
+
+      const targetName = `E2E Retest optional settings ${suffix}`;
+      const dialog = await openPreview(page, source);
+      await dialog.getByLabel("Run name", { exact: true }).fill(targetName);
+      await dialog.getByLabel("Environment", { exact: true }).fill("");
+      await dialog.getByLabel("Build to test", { exact: true }).fill("");
+      await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeEnabled();
+      await dialog.getByRole("button", { name: "Create retest", exact: true }).click();
+      await expect(page.getByTestId("run-retest-origin")).toContainText(source.name);
+      const created = await children(api, source.cycleId);
+      expect(created).toHaveLength(1);
+      const targetId = created[0].id;
+      const beforeResponse = await api.get(`/api/cycles/${targetId}`);
+      expect(beforeResponse.status(), await beforeResponse.text()).toBe(200);
+      const before = await beforeResponse.json();
+      expect(before).toMatchObject({ id: targetId, name: targetName, environment: null, buildVersion: null, retestSourceCycleId: source.cycleId });
+      expect(before.retestManifest.targetRun).toEqual({ name: targetName, environment: null, buildVersion: null });
+
+      await page.goto(`/projects/${projectId}/cycles`);
+      const card = runCard(page, targetId);
+      await expect(card).toContainText(targetName);
+      await card.getByTitle("Edit run", { exact: true }).click();
+      await expect(page.getByRole("heading", { name: "Edit Test Run", exact: true })).toBeVisible();
+      const form = page.locator("form").filter({ has: page.getByRole("button", { name: "Save Changes", exact: true }) });
+      const environment = form.locator("select");
+      const description = form.locator("textarea");
+      const buildVersion = form.locator('input[type="text"]').last();
+      const save = form.getByRole("button", { name: "Save Changes", exact: true });
+      await expect(environment).toHaveValue("");
+      await expect(description).toHaveValue("");
+      await expect(buildVersion).toHaveValue("");
+      await expect(save).toBeDisabled();
+      expect(pageErrors).toEqual([]);
+
+      const savedDescription = "Environment supplied after the retest was created.";
+      const savedBuild = `edited-${suffix}`;
+      await description.fill(savedDescription);
+      await buildVersion.fill(savedBuild);
+      await expect(save).toBeDisabled();
+      await environment.selectOption("Staging");
+      await expect(save).toBeEnabled();
+      const savedResponse = page.waitForResponse(response => response.request().method() === "PATCH" && new URL(response.url()).pathname === `/api/cycles/${targetId}`);
+      await save.click();
+      const saved = await savedResponse;
+      expect(saved.status(), await saved.text()).toBe(200);
+      await expect(page.getByRole("heading", { name: "Edit Test Run", exact: true })).toBeHidden();
+      await expect(card).toContainText("Staging");
+
+      const afterResponse = await api.get(`/api/cycles/${targetId}`);
+      expect(afterResponse.status(), await afterResponse.text()).toBe(200);
+      const after = await afterResponse.json();
+      expect(after).toMatchObject({ id: targetId, name: targetName, environment: "Staging", description: savedDescription, buildVersion: savedBuild, retestSourceCycleId: source.cycleId });
+      expect(after.retestManifest).toEqual(before.retestManifest);
+      const sourceResponse = await api.get(`/api/cycles/${source.cycleId}/executions`);
+      expect(sourceResponse.status(), await sourceResponse.text()).toBe(200);
+      expect(await sourceResponse.json()).toEqual(originalObservations);
+
+      // Reopen from a fresh list read: normalization must preserve supplied values as well as
+      // keep the empty optional values safe for the ordinary Run editor.
+      await page.reload();
+      await runCard(page, targetId).getByTitle("Edit run", { exact: true }).click();
+      await expect(environment).toHaveValue("Staging");
+      await expect(description).toHaveValue(savedDescription);
+      await expect(buildVersion).toHaveValue(savedBuild);
+      await expect(save).toBeEnabled();
+      expect(pageErrors).toEqual([]);
+    } finally {
+      page.off("pageerror", onPageError);
+      if (source) {
+        for (const child of await children(api, source.cycleId)) await api.delete(`/api/cycles/${child.id}`, { failOnStatusCode: false });
+        await cleanUpRun(api, source.cycleId, source.testcaseIds, projectId);
+      }
+      if (projectId) await api.delete(`/api/projects/${projectId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
 });

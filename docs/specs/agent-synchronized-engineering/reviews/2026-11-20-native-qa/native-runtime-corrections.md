@@ -1,4 +1,4 @@
-# First native retest runtime findings and corrections
+# Native retest runtime findings and corrections
 
 ## Evidence boundary
 
@@ -13,6 +13,25 @@ Both runs passed all nine new native retest API scenarios and both retained-sour
 Before corrective publication, development advanced to [d74ddce2](https://github.com/1alextest/Tesbooboo/commit/d74ddce2d04241695164b5a8b4d9b341932cfdcc). An independent freshness review verified its two-file delta: native model evidence counts distinct execution IDs and emits one summary per testcase, preserving all mappings; one real-database regression distinguishes mapping fanout from two actual executions. Source and retest executions remain distinct observations. No native writer, retest disposition, approval, authorization or plan-admission contract changes. The next actual synthetic merge must carry its own checkout and database totals; the earlier 639 count is not projected onto it.
 
 The first evidence artifact is `ci-smoke-evidence`, ID `14612411648`, SHA256 `a70c6303e42e24dd033a19e9b30e252b54f2de7644d4aeebb6e4ed850fc6ef57`. The second artifact is ID `14612482982`, SHA256 `45e8f8f0ac8d2ccb09e1274893713dadbe33392c7c24ba4d1e491f7405748043`. The first artifact's six distinct successful native screenshots were visually inspected: selected-definition review, Untested destination, source observation in drawer and full page, deleted-source recovery, and custom-field definition comparison. Two other configured screenshots were not produced because their definition-edit fixtures failed. Final corrected-head screenshots and browser outcomes remain required.
+
+## Third runtime: corrected focus and fixtures
+
+[Smoke job 136177365716](https://github.com/1alextest/Tesbooboo/actions/runs/44703524270/job/136177365716) tested feature head `cab1c6928b32f6f7b74b30dbf75879ef127628be` in actual merge checkout `d5f1175644900b28845afdb4ed413c85f25454c0`. Its parents are development `d74ddce2d04241695164b5a8b4d9b341932cfdcc` and that feature head. All prerequisite smoke stages passed, but the complete impact selection remained red. Of 25 check runs, 24 passed and the smoke check failed.
+
+| Scope | Selected | Actual passes | Expected failure | Unexpected failures | Explicit skips | Not run |
+|---|---:|---:|---:|---:|---:|---:|
+| Native UI | 20 | 18 | 0 | 2 | 0 | 0 |
+| Native retest API | 9 | 9 | 0 | 0 | 0 | 0 |
+| Native retained-source resolver | 2 | 2 | 0 | 0 | 0 | 0 |
+| Complete impact selection | 260 | 198 | 1 | 50 | 2 | 9 |
+
+There were no flaky or unclassified results. All original sixteen native UI scenarios and both added created-terminal focus cases passed. Both cancelled-terminal cases stopped during setup: their POST returned the established HTTP 201 with a valid cancelled receipt, while the new fixture incorrectly expected 200. The controller has no 200 override, and the existing exact-201 API cancellation case passed. The corrected fixture requires exactly 201 in both POST branches; it retains the receipt identity, reload, keyboard-focus and delayed-create cancellation assertions. Those two focus assertions did not execute in this run. The earlier source-review receipts remain unchanged; this later finding is not retroactively erased.
+
+All nonbilling API files passed: cycles 47/47, executions 16/16, route resolution 18/18 and plans 13/13. Billing contributed 19 API and 16 UI unexpected failures. The two explicit skips are the existing Stripe Checkout/Portal write opt-ins. The pre-existing expected-failure billing-copy test stopped at the missing Billing heading, before its named copy assertion. Thirteen other legacy UI failures and nine cases blocked by their shared filter setup are classified below.
+
+The artifact is `ci-smoke-evidence`, ID `14615375446`, 77,394,100 bytes, SHA256 `caa6a9f440266167825415bcc4cfd8d6270c85359644f2f7619524e1a6d37c4c`. Its downloaded bytes were verified before extraction. All eight unique native screenshots belong to passing tests and received independent visual inspection: the earlier six views plus fresh review after stopping an uncertain request and changed-definition comparison. The captures show readable native content without observed overlap; comparison captures are at different scroll positions. They do not certify cancelled-terminal focus, other viewports, or a later head.
+
+On the same actual merge, behavioral quality passed 158 migrations and 640 real-database tests with zero database skips. API/MCP had 326 passes and eight existing gated skips; transactional coverage had 72 passes and 90 existing gated skips. Those separately gated Review Board suites also ran in the smoke prerequisites. Architecture passed 114 policy tests, 785 modules with no forbidden edges, no baseline expansion and no new clone. The default secret detectors and the exact-exception positive/negative controls also passed. These are cab1/d5f results, not certification of the next correction.
 
 ## Confirmed native corrections
 
@@ -39,6 +58,37 @@ The broad selection is retained because the new transaction-bound entitlement ch
 
 These are test corrections backed by concrete fixture or selector evidence. They are not evidence that every previously unreachable assertion will pass. Only the corrected full-file runtime can establish that.
 
+### Further concrete test repairs after the third run
+
+- The Run-filter fixture's noncanonical Type exceeded the existing 32-character limit. Its shorter unique value still tests noncanonical filtering. The prior Priority correction exposed this second setup error; the nine blocked cases are not counted as passes.
+- The Run/Plan environment cases matched several Create controls on the page. Form-owned submit controls and the Plan header entry action identify the intended controls while retaining exact option, disabled-state and persisted-environment assertions.
+- The existing-bug picker is titled `Link existing bugs`. The stale singular title prevented its real checkbox/Add Selected/link assertions from running.
+- The deterministic two-file automation fixtures have DOM text `Evidence(2)`. The preceding correction to exact `Evidence` was itself wrong; the accessibility snapshot's spaced presentation also cannot be used as the DOM exact-text selector. An isolated transpile/server render of the actual header confirmed `Evidence<span>(2)</span>`. The exact populated label preserves screenshot, trace download, no-spinner and once-only evidence-request assertions.
+- The current settings writer rejects malformed environments and normalizes a string input into a JSON object. Legacy reader coverage must therefore arrange actual old stored shapes through the existing bounded database fixture transport, rather than claiming that a successful current PATCH stored a string or admitting malformed input. Only freshly generated, owner-bound disposable projects are eligible; real API readback must confirm the exact legacy shape, and the current writer's refusal remains asserted. Shared project settings are not modified.
+
+The [complete failure/repair receipt](native-ui-second-ci-legacy-review.md) preserves the initial source freeze. Its [corrective addendum](native-ui-second-ci-legacy-addendum.md) supplies the final exact DOM selector and the portable CTE/SELECT fixture return, without changing any owner predicate. Independent fixture review confirms the final legacy prefix, real API readbacks and unchanged valid assertions. Existing cleanup remains attempted through the original owner; no new runtime cleanup success is claimed before CI.
+
+### Coupled nullable Run edit defect
+
+The native retest input deliberately permits an empty environment. The native request normalizer and shared creation helper persist it as null. The existing Run-list Edit handler then copies nullable metadata into controlled string inputs, and its render calls `environment.trim()`. The third run's ordinary Run-card trace contains `TypeError: Cannot read properties of null (reading 'trim')`.
+
+This is a pre-existing downstream defect, but the new retest operation can create the exact native object that reaches it. Independent scope review therefore classifies a minimal edit-form normalization as coupled. Normalize absent description, environment and build values only when initializing the form. Preserve stored null semantics, required environment on Edit save, permissions and the immutable retest manifest. Do not make an environment mandatory in retest or redesign the Run writer to avoid this defect.
+
+The [independent scope receipt](native-runtime-second-scope-review.md) binds the cab1 source and actual failure traces. The [cancellation fixture freeze](native-runtime-cancellation-fixture-freeze.json) records the earlier isolated exact-201 correction and its then-current collection; later additions do not rewrite that snapshot.
+
+The announced additional browser regression must create a real retest with no environment, assert its stored null, open that exact destination's Edit action without a page error, require an environment before Save, persist a configured choice, and prove source observations and historical retest data unchanged. The existing failed ordinary Run-card test is failing-first evidence for the same handler. The exact retest-to-Edit journey remains a source-supported inference until its new runtime executes.
+
+## Adjacent product findings retained
+
+These older owner implementations are unchanged from product baseline `1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea`. Their valid failing tests remain selected. A broad red selection does not itself authorize unrelated product changes.
+
+| Finding | Evidence and consequence | Proposed bounded follow-up |
+|---|---|---|
+| Existing remote tickets receive the hidden default Bug title | `Tesbo-Frontend/components/LogBugDialog.tsx:381-391` sends `bugTitle.trim()` for each selected issue. The mixed Tesbo/Jira/Linear regression receives the generic testcase title twice instead of the two remote summaries; the keys and existing Tesbo Bug title remain correct. | Separately repair the existing link writer to use each selected issue's summary, preserving provider/key/URL, exact execution links and partial-failure retries. Do not rename historical Bugs or build provider synchronization. Native retest preservation does not depend on importing new remote issues. |
+| A UUID project hard load makes duplicate reads | The trace records two successful project GETs and two member GETs. `Tesbo-Frontend/lib/projectPrefetch.ts:65-78` starts UUID reads immediately, then may start them again after a resolver callback checks a take-once map whose entries the consumer deletes. The trace proves duplication, but does not directly instrument that callback ordering. | Separately distinguish requests already started for a prefetch invocation from entries still waiting to be consumed. Add a held-resolver regression while preserving one-time consumption, expiry, explicit refetch and session gating. Do not replace the cache or weaken the exact-one assertions. |
+
+The page remains reachable and no current evidence connects the extra GETs to retest recovery failure. The remote writer is not used to preserve an existing source Bug. Both findings are adjacent under `AGENTS.md` principle 13. An attempt to file the remote-title finding through GitHub returned HTTP 410 because repository Issues are disabled; neither repository settings nor another tracking service was changed. Both findings remain actionable in this existing work record and the PR's Findings not fixed section.
+
 ## Billing prerequisite remains unresolved
 
 The workflow's disposable application has no Stripe secret, signing secret or configured price IDs. `AppConfigService.isStripeBillingEnabled` intentionally disables billing when the Stripe key is absent. `BillingService.requireStripeEnabled` then returns 503, the UI hides the billing surface, and `PlanLimitsService` exposes the documented unrestricted disabled-billing mode. The first run's 17 API billing failures and 15 UI billing-mode failures follow that prerequisite mismatch; the other two UI billing failures have separate name/route fixture causes above.
@@ -59,4 +109,6 @@ If a suitable test account is unavailable, a separate local provider-fixture inc
 
 ## Admission after corrections
 
-The final corrected collection resolves 260 selected tests out of 3,009 total tests, including 20 native UI scenarios. The original sixteen native scenarios and the separately reviewed legacy cycles prefix are preserved byte-for-byte; four terminal-focus cases account for the count increase. The next exact-head CI run must execute the same complete nine-file selection at `--workers=10 --retries=0`. The PR must report selected, executed, expected failures, unexpected failures, explicit skips and not-run counts separately, with its actual synthetic merge commit and environment. Type checks, collection and this record do not promote the implementation to verified or merge-ready. Merge remains contingent on the authorized complete green gate; production deployment and the external own-driver QA loop remain outside this increment.
+The final corrected collection resolves 261 selected tests out of 3,010 total tests, including 21 native UI scenarios. The prior twenty native scenarios, including the exact-201 correction, and the independently reviewed final legacy prefix are preserved byte-for-byte; one added nullable Run-edit journey accounts for the latest count increase. The [nullable-edit author freeze](native-ui-nullable-edit-freeze.json) binds the three-line product change, full test file and actual static/collection results. It retains the same eight screenshot attachments. The [independent nullable-edit review](native-ui-nullable-edit-review.md) found no source blocker and explicitly limits its runtime claim: environment/build nulls are forced by the new scenario, while historical null description remains source-inspected.
+
+The next exact-head CI run must execute the same complete nine-file selection at `--workers=10 --retries=0`. The PR must report selected, executed, expected failures, unexpected failures, explicit skips and not-run counts separately, with its actual synthetic merge commit and environment. Type checks, collection and this record do not promote the implementation to verified or merge-ready. Merge remains contingent on the authorized complete green gate; production deployment and the external own-driver QA loop remain outside this increment.

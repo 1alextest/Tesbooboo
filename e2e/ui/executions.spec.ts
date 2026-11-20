@@ -1912,7 +1912,7 @@ test.describe("run detail — progress, defects and the bug modal", () => {
       await page.getByRole("button", { name: "Yes, link existing" }).click();
       await page.getByRole("button", { name: "Existing Tesbo bug" }).click();
       await page.getByRole("button", { name: "Choose an existing bug…" }).click();
-      await expect(page.getByRole("heading", { name: "Link an existing bug" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Link existing bugs", exact: true })).toBeVisible();
       await page.getByPlaceholder("Search bugs by title…").fill(existingBugTitle);
       const picker = page.getByTestId("existing-bug-picker");
       await picker.getByText(existingBugTitle, { exact: true }).click();
@@ -2267,7 +2267,7 @@ test.describe("execution evidence and automation provenance", () => {
       await expect(page.getByText("2 retries")).toBeVisible();
 
       // Evidence, grouped by kind: the screenshot renders inline, the trace gets its own viewer.
-      await expect(page.getByText("Evidence", { exact: true })).toBeVisible();
+      await expect(page.getByText("Evidence(2)", { exact: true })).toBeVisible();
       await expect(page.getByRole("img", { name: "cart-failure.png" })).toBeVisible();
       await expect(page.getByText("cart-trace.zip")).toBeVisible();
 
@@ -2328,7 +2328,7 @@ test.describe("execution evidence and automation provenance", () => {
 
       // And it settled showing the evidence, not the spinner.
       await expect(page.getByText("Loading evidence…")).toHaveCount(0);
-      await expect(page.getByText("Evidence", { exact: true })).toBeVisible();
+      await expect(page.getByText("Evidence(2)", { exact: true })).toBeVisible();
     } finally {
       await cleanUp(runId, testcase.id);
     }
