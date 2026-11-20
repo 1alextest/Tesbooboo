@@ -130,6 +130,47 @@ def main():
                         raise AssertionError(f"{label}-{mode}: unexpected same-line suppression")
         print("PASS: 7 exact hash mappings and 9 denied neighbors, each checked with both configurations")
 
+        # Protect the frozen original Blue receipt without changing any reviewer
+        # evidence or disabling broader sourcegraph-access-token detection.
+        # Exact Git object identity for these two hashes was checked against
+        # their respective repository commit endpoints before this exception.
+        blue_receipt = Path("docs/specs/agent-synchronized-engineering/reviews/2026-11-19-gex-rerun/receipts/blue-a-v1.md")
+        source_git = "6897f989b055a955280f" + "810c7daace86f74057fa"
+        method_git = "d83549c85a4dcd047fb40" + "dc4fba4ec62737ab0fc"
+        frozen = (repo / blue_receipt).read_text(encoding="utf-8")
+        if frozen.count(source_git) < 2 or frozen.count(method_git) < 1:
+            raise AssertionError("Pinned Git object identifiers missing from frozen Blue receipt")
+        original_lines = (
+            "- **Application source:** 1alextest/Tesbooboo at " + source_git + ", read exclusively through Git objects.\\n"
+            "- **Method source:** NesberryEnterprise/Nesberry at the supplied recovered " + method_git + " root.\\n"
+            "2. Git object resolution: **" + source_git + " resolves as a commit**.\\n"
+        )
+        baseline_blue = scan(args.image, default_config, root,
+                             {str(blue_receipt): original_lines}, "blue-commits-default")
+        expected_blue = {(str(blue_receipt), "sourcegraph-access-token"): 3}
+        require_findings(baseline_blue, expected_blue, "blue-commits-default")
+        if len(baseline_blue) != 3:
+            raise AssertionError("Blue commit baseline has unexpected extra findings")
+        if scan(args.image, config, root, {str(blue_receipt): original_lines},
+                "blue-commits-corrected"):
+            raise AssertionError("Exact Git commit exception did not clear the reviewed matches")
+
+        other_git = hashlib.sha1(b"tesbo independently different sourcegraph control").hexdigest()
+        neighbor_cases = [
+            ("blue-outside-path", "src/blue-a-v1.md", original_lines, 3, "sourcegraph-access-token"),
+            ("blue-nested-path", "src/" + str(blue_receipt), original_lines, 3, "sourcegraph-access-token"),
+            ("blue-suffix", str(blue_receipt) + ".extra", original_lines, 3, "sourcegraph-access-token"),
+            ("blue-new-sha", str(blue_receipt), "Original source " + other_git + "\\n", 1, "sourcegraph-access-token"),
+            ("blue-original-plus-new-sha", str(blue_receipt), "Original source " + source_git + " and new " + other_git + "\\n", 1, "sourcegraph-access-token"),
+            ("blue-provider-token", str(blue_receipt), "Provider sample " + provider + "\\n", 1, "github-pat"),
+        ]
+        for label, path, content, expected_count, rule in neighbor_cases:
+            result = scan(args.image, config, root, {path: content}, label)
+            if result.count((path, rule)) != expected_count or len(result) != expected_count:
+                raise AssertionError(f"{label}: wrong allowed/denied count for {rule}")
+        print("PASS: two independently resolved pinned Git IDs excluded only in frozen Blue receipt; six denied neighbors", flush=True)
+
+
 
 if __name__ == "__main__":
     main()

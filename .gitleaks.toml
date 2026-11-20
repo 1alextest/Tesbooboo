@@ -27,3 +27,14 @@ condition = "AND"
 paths = ['''^(?:/repo/)?docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/native-green-profile-965a87a1-v3\.json$''']
 regexTarget = "match"
 regexes = ['''^(?:api\.ts": "b8f6f6fdf4ce97aca68824b9eae3b08d22cbdb6c0abf56989429f3f74b5a492d|04_MCP_API_CONTRACTS\.md": "5893a48fe504a8d5c6b47bb552c493685e950fab62d44334702a92edc7c9474d)"$''']
+
+# Both 40-character values below are independently resolved Git commit IDs,
+# not Sourcegraph credentials. Frozen Blue review receipt must remain unchanged.
+# Regex segmentation avoids adding new plain 40-hex tokens to this config.
+[[allowlists]]
+description = "Exact pinned Git commit objects in one immutable original Blue receipt"
+targetRules = ["sourcegraph-access-token"]
+condition = "AND"
+paths = ['''^(?:/repo/)?docs/specs/agent-synchronized-engineering/reviews/2026-11-19-gex-rerun/receipts/blue-a-v1\\.md$''']
+regexTarget = "match"
+regexes = ['''^(?:6897f989b055a955280f(?:810c7daace86f74057fa)|d83549c85a4dcd047fb40(?:dc4fba4ec62737ab0fc))$''']
