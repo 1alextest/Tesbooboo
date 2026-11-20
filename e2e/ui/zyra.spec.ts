@@ -11,6 +11,7 @@ import {
 import { startFakeAiServer, type FakeAiServer } from "../utils/fake-ai-server";
 import { verifyZyraReviewCloseFeedback } from "../utils/zyra-review-feedback";
 import { env } from "../utils/env";
+import { approveTestcase } from "../utils/testcase-approval";
 
 /*
  * The Agents screens: the agent picker, Zyra's chat, Zyra's settings, the task board, and the task
@@ -672,9 +673,18 @@ test.describe("zyra / agents (UI)", () => {
     let createdRunId: string | undefined;
     let uncertainRunId: string | undefined;
     try {
-      caseId = scalar(`INSERT INTO testcases(project_id,external_id,title,status)
-        VALUES (${literal(projectId)},${literal("ZYU-GR-TC")},${literal("E2E linked graph review")},'Approved')
-        RETURNING id;`);
+      const human = await loginAs(tenant!.owner);
+      try {
+        const created = await human.post(`/api/projects/${projectId}/testcases`, {
+          data: { title: "E2E linked graph review", status: "Draft" }
+        });
+        expect(created.status(), await created.text()).toBe(201);
+        const caseRow = await created.json() as { id: string };
+        caseId = caseRow.id;
+        await approveTestcase(human, projectId, caseId);
+      } finally {
+        await human.dispose();
+      }
       const nodeId = JSON.stringify(["test_case", projectId, caseId]);
       const capture = (revision: string) => JSON.stringify({
         snapshot: { projectId, revision, nodes: [], edges: [] },
