@@ -423,6 +423,15 @@ test("MCP-P07 disposable proposal review lifecycle preserves project and run bou
     expect(caseReview.approvalRevision).toMatch(/^[a-f0-9]{64}$/);
     const approvedCase = await approveTestcase(owner, projectId, caseId!);
     expect(approvedCase.status).toBe("Approved");
+    // Recording the approval changes the case's edit revision, so the accepted mapping has to be
+    // replaced—not replayed—on the approved basis before a governed run may use it.
+    const unlinked = await owner.delete(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${savedRevision.id}/links/${mapping.id}`);
+    expect(unlinked.ok(), await unlinked.text()).toBeTruthy();
+    const remapped = await call("link_behavior_model_case", {
+      modelId, revisionId: savedRevision.id, testcaseId: caseId, elementIds: ["start"],
+      testcaseRevision: approvedCase.editRevision
+    });
+    expect(remapped).toMatchObject({ testcaseId: caseId, testcaseRevision: approvedCase.editRevision });
 
     const governedRun = await call("run_behavior_model", { modelId, revisionId: savedRevision.id, caseIds: [caseId] });
     expect(governedRun).toMatchObject({
