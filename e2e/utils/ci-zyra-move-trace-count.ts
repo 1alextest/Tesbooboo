@@ -1,6 +1,6 @@
 import { expect, request as newRequest, test, type Page, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
-import { verifyMoveReviewPreview } from "./zyra-reviewed-moves";
+import { governingMoveRepositoryState, verifyMoveReviewPreview } from "./zyra-reviewed-moves";
 import { answerRepositorySnapshotSql } from "./zyra-answer-feedback";
 import { startFakeAiServer } from "./fake-ai-server";
 import { seedMoveRepository, settleMoveFixtures, type MoveRepositoryState } from "./zyra-move-feedback";
@@ -20,7 +20,11 @@ export async function verifyCiZyraMoveTraceCount(page: Page, api: string, web: s
     }
     const foreign = await seedMoveRepository(page.request, `${api}/api/projects/${otherProjectId}`, "foreign trace control");
     await settleMoveFixtures([...fixtures.values()].flatMap((fixture) => fixture.allIds.map((id) => ({ ...fixture, firstId: id, secondId: id }))), state);
-    await settleMoveFixtures([foreign], foreignState); const foreignBefore = await foreignState();
+    await settleMoveFixtures([foreign], foreignState);
+    // Worker-owned embedding bookkeeping flips asynchronously once the fake key is allocated; it
+    // is not a repository write, so the no-write comparisons project it away (same rule as
+    // governingMoveRepositoryState below).
+    const foreignBefore = governingMoveRepositoryState(await foreignState());
     const key = await page.request.post(`${api}/api/workspace/ai-keys`, { data: { name: `CI move trace ${projectId}`, provider: "openai",
       apiKey: "sk-ci-move-trace-not-a-real-key", baseUrl: ai.baseUrl.replace("host.docker.internal", "127.0.0.1") } });
     expect(key.status(), await key.text()).toBe(201); keyId = (await key.json()).id;
@@ -33,7 +37,7 @@ export async function verifyCiZyraMoveTraceCount(page: Page, api: string, web: s
           await verifyZyraMoveTraceCount({ request: page.request, ai, base, ownerId, language, count, fixture: fixtures.get(label)!, state,
             beforeApply: async (preview) => verifyMoveReviewPreview(page, web, projectId, preview, testInfo, `move-trace-${label}`),
             afterReply: async (evidence) => {
-              const foreignAfter = await foreignState(); expect(foreignAfter).toEqual(foreignBefore);
+              const foreignAfter = governingMoveRepositoryState(await foreignState()); expect(foreignAfter).toEqual(foreignBefore);
               await testInfo.attach(`move-trace-${label}-readback`, { body: JSON.stringify({ ...evidence, foreignBefore, foreignAfter }, null, 2), contentType: "application/json" });
             },
           });
@@ -48,19 +52,19 @@ export async function verifyCiZyraMoveTraceCount(page: Page, api: string, web: s
       const created = await page.request.post(`${base}/agents/zyra/chat/sessions`, { data: { title: "CI move trace refusals" } });
       expect(created.status(), await created.text()).toBe(201); const sessionId = (await created.json()).id;
       try {
-        const before = await state(), calls = ai.requests.length, fixture = fixtures.get("en-0")!;
+        const before = governingMoveRepositoryState(await state()), calls = ai.requests.length, fixture = fixtures.get("en-0")!;
         for (const [client, url, status] of [
           [anonymous, `${base}/agents/zyra/chat/sessions/${sessionId}/messages`, 400],
           [page.request, `${api}/api/projects/${otherProjectId}/agents/zyra/chat/sessions/${sessionId}/messages`, 404],
         ] as const) {
           const denied = await client.post(url, { data: { message: "Move the requested cases" } }); expect(denied.status(), await denied.text()).toBe(status);
         }
-        expect(ai.requests.length).toBe(calls); expect(await state()).toEqual(before);
+        expect(ai.requests.length).toBe(calls); expect(governingMoveRepositoryState(await state())).toEqual(before);
         ai.queueReply({ reply: "Moved the requested cases.", action: "move_to_suite", actionType: "suite", testcases: [],
           operations: [{ type: "move_to_suite", suiteId: fixture.destinationId, testcaseIds: fixture.allIds }] });
         const sent = await page.request.post(`${base}/agents/zyra/chat/sessions/${sessionId}/messages`, { data: { message: "Move the requested cases" } });
         expect(sent.ok(), await sent.text()).toBeTruthy(); expect((await sent.json()).message.content).toContain("Suite operations (create, move/assign) is currently disabled");
-        expect(ai.requests.length).toBe(calls + 1); expect(await state()).toEqual(before); expect(await foreignState()).toEqual(foreignBefore);
+        expect(ai.requests.length).toBe(calls + 1); expect(governingMoveRepositoryState(await state())).toEqual(before); expect(governingMoveRepositoryState(await foreignState())).toEqual(foreignBefore);
       } finally {
         const deleted = await page.request.delete(`${base}/agents/zyra/chat/sessions/${sessionId}`); expect(deleted.ok(), await deleted.text()).toBeTruthy();
         const restored = await page.request.patch(`${base}/agents/zyra/settings`, { data: { capabilities: { suiteOperations: true } } }); expect(restored.ok(), await restored.text()).toBeTruthy();

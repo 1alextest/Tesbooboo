@@ -25,7 +25,9 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
     }
   };
   async function post(path: string, data: Record<string, unknown>) {
-    const response = /\/testcases$/.test(path)
+    // Only the project testcase collection needs the review fixture; run-item endpoints such as
+    // /api/cycles/:id/testcases also end in "/testcases" and must be posted as-is.
+    const response = /\/projects\/[^/]+\/testcases$/.test(path)
       ? await createTestcaseFixtureResponse(page.request, path, { data })
       : /\/apikeys$/.test(path)
         ? await issueMcpTestToken(page.request, path, { data })

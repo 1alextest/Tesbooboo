@@ -11,7 +11,9 @@ export async function verifyPlanProjectLineage(page: Page, api: string, web: str
   const base = `${api}/api/projects/${projectId}`, other = `${api}/api/projects/${otherId}`;
   let tokenId: string | undefined;
   async function post(url: string, data: Record<string, unknown>) {
-    const response = /\/testcases$/.test(url)
+    // Only the project testcase collection needs the review fixture; run-item endpoints such as
+    // /api/cycles/:id/testcases also end in "/testcases" and must be posted as-is.
+    const response = /\/projects\/[^/]+\/testcases$/.test(url)
       ? await createTestcaseFixtureResponse(page.request, url, { data })
       : /\/apikeys$/.test(url)
         ? await issueMcpTestToken(page.request, url, { data })

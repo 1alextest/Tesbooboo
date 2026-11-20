@@ -1,6 +1,6 @@
 import { expect, request as newRequest, test, type Page, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
-import { verifyMoveReviewPreview } from "./zyra-reviewed-moves";
+import { governingMoveRepositoryState, verifyMoveReviewPreview } from "./zyra-reviewed-moves";
 import { answerRepositorySnapshotSql } from "./zyra-answer-feedback";
 import { startFakeAiServer } from "./fake-ai-server";
 import { seedMoveRepository, settleMoveFixtures, type MoveRepositoryState } from "./zyra-move-feedback";
@@ -21,7 +21,11 @@ export async function verifyCiZyraOverlappingMoveTrace(page: Page, api: string, 
     const foreign = await seedMoveRepository(page.request, `${api}/api/projects/${otherProjectId}`, "foreign overlapping-move control");
     await settleMoveFixtures([...fixtures.values()].flatMap(({ first, last }) => [first, last]
       .flatMap((group) => group.allIds.map((id) => ({ ...group, firstId: id, secondId: id })))), state);
-    await settleMoveFixtures([foreign], foreignState); const foreignBefore = await foreignState();
+    await settleMoveFixtures([foreign], foreignState);
+    // Worker-owned embedding bookkeeping flips asynchronously once the fake key is allocated; it
+    // is not a repository write, so the no-write comparisons project it away (same rule as
+    // governingMoveRepositoryState inside the per-scenario verification).
+    const foreignBefore = governingMoveRepositoryState(await foreignState());
     const key = await page.request.post(`${api}/api/workspace/ai-keys`, { data: { name: `CI overlapping move trace ${projectId}`, provider: "openai",
       apiKey: "sk-ci-overlapping-move-trace-not-a-real-key", baseUrl: ai.baseUrl.replace("host.docker.internal", "127.0.0.1") } });
     expect(key.status(), await key.text()).toBe(201); keyId = (await key.json()).id;
@@ -34,7 +38,7 @@ export async function verifyCiZyraOverlappingMoveTrace(page: Page, api: string, 
           await verifyZyraOverlappingMoveTrace({ request: page.request, ai, base, ownerId, language, mode, fixture: fixtures.get(label)!, state,
             beforeApply: async (preview) => verifyMoveReviewPreview(page, web, projectId, preview, testInfo, `overlapping-move-${label}`),
             afterReply: async (evidence) => {
-              const foreignAfter = await foreignState(); expect(foreignAfter).toEqual(foreignBefore);
+              const foreignAfter = governingMoveRepositoryState(await foreignState()); expect(foreignAfter).toEqual(foreignBefore);
               await testInfo.attach(`overlapping-move-${label}-readback`, { body: JSON.stringify({ ...evidence, foreignBefore, foreignAfter }, null, 2), contentType: "application/json" });
             },
           });
@@ -49,19 +53,19 @@ export async function verifyCiZyraOverlappingMoveTrace(page: Page, api: string, 
       const created = await page.request.post(`${base}/agents/zyra/chat/sessions`, { data: { title: "CI overlapping move refusals" } });
       expect(created.status(), await created.text()).toBe(201); const sessionId = (await created.json()).id;
       try {
-        const before = await state(), calls = ai.requests.length, fixture = fixtures.get("en-overlap")!;
+        const before = governingMoveRepositoryState(await state()), calls = ai.requests.length, fixture = fixtures.get("en-overlap")!;
         for (const [client, url, status] of [
           [anonymous, `${base}/agents/zyra/chat/sessions/${sessionId}/messages`, 400],
           [page.request, `${api}/api/projects/${otherProjectId}/agents/zyra/chat/sessions/${sessionId}/messages`, 404],
         ] as const) {
           const denied = await client.post(url, { data: { message: "Apply both requested suite moves" } }); expect(denied.status(), await denied.text()).toBe(status);
         }
-        expect(ai.requests.length).toBe(calls); expect(await state()).toEqual(before); expect(await foreignState()).toEqual(foreignBefore);
+        expect(ai.requests.length).toBe(calls); expect(governingMoveRepositoryState(await state())).toEqual(before); expect(governingMoveRepositoryState(await foreignState())).toEqual(foreignBefore);
         ai.queueReply({ reply: "Applied the requested suite moves.", action: "move_to_suite", actionType: "suite", testcases: [],
           operations: [fixture.first, fixture.last].map((group) => ({ type: "move_to_suite", suiteId: group.destinationId, testcaseIds: group.targetIds })) });
         const sent = await page.request.post(`${base}/agents/zyra/chat/sessions/${sessionId}/messages`, { data: { message: "Apply both requested suite moves" } });
         expect(sent.ok(), await sent.text()).toBeTruthy(); expect((await sent.json()).message.content).toContain("Suite operations (create, move/assign) is currently disabled");
-        expect(ai.requests.length).toBe(calls + 1); expect(await state()).toEqual(before); expect(await foreignState()).toEqual(foreignBefore);
+        expect(ai.requests.length).toBe(calls + 1); expect(governingMoveRepositoryState(await state())).toEqual(before); expect(governingMoveRepositoryState(await foreignState())).toEqual(foreignBefore);
       } finally {
         const deleted = await page.request.delete(`${base}/agents/zyra/chat/sessions/${sessionId}`, { failOnStatusCode: false }); expect(deleted.ok(), await deleted.text()).toBeTruthy();
         const restored = await page.request.patch(`${base}/agents/zyra/settings`, { data: { capabilities: { suiteOperations: true } } }); expect(restored.ok(), await restored.text()).toBeTruthy();
