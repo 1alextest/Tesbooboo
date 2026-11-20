@@ -124,7 +124,18 @@ test("a committed model run with a lost response stays blocked across reload unt
     await expect(runs.getByLabel("Run name (optional)")).toHaveValue(runName);
     await expect(runs.getByLabel("Environment (optional)")).toHaveValue("QA recovery");
     expect(postCount).toBe(1); expect(fixture.nativeCount(runName)).toBe("1");
+    await testInfo.attach("model-run-outcome-unknown-host-context", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+    // The application scrolls inside <main>; fullPage alone does not reveal offscreen controls.
+    // Keep the real shell and capture each claimed witness after scrolling it into the viewport.
+    await recovery.scrollIntoViewIfNeeded();
+    await expect(recovery.getByRole("alert")).toBeInViewport({ ratio: 1 });
+    await expect(recovery.getByRole("button", { name: "Inspect existing runs", exact: true })).toBeInViewport({ ratio: 1 });
     await testInfo.attach("model-run-outcome-unknown-after-reload", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+    await start.scrollIntoViewIfNeeded();
+    await expect(start).toBeInViewport({ ratio: 1 });
+    await expect(runs.getByLabel("Run name (optional)")).toBeInViewport({ ratio: 1 });
+    await expect(runs.getByLabel("Environment (optional)")).toBeInViewport({ ratio: 1 });
+    await testInfo.attach("model-run-outcome-unknown-retained-disabled-form", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
     await recovery.getByRole("button", { name: "Inspect existing runs", exact: true }).click();
     await expect(recovery).toContainText("Native run readback completed");
     await expect(recovery.getByRole("link", { name: runName, exact: true })).toHaveAttribute("href", `/projects/${ctx.projectId}/cycles/${cycleId}`);
@@ -158,6 +169,12 @@ test("a committed model run with a lost response stays blocked across reload unt
     await expect(recovery).toHaveCount(0);
     await expect(runs.getByRole("status")).toContainText("Using the native run you identified");
     await expect(runs).toHaveAttribute("aria-busy", "false");
+    await revisionSelect.scrollIntoViewIfNeeded();
+    await expect(revisionSelect).toBeInViewport({ ratio: 1 });
+    await testInfo.attach("model-run-reconciled-historical-revision-selector", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+    await runs.getByRole("status").scrollIntoViewIfNeeded();
+    await expect(runs.getByRole("status")).toBeInViewport({ ratio: 1 });
+    await expect(runs.getByRole("status").getByRole("link")).toBeInViewport({ ratio: 1 });
     await testInfo.attach("model-run-reconciled-historical-revision-retained", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
     const persisted = await api.get(`/api/cycles/${cycleId}/executions`);
     expect(persisted.ok(), await persisted.text()).toBeTruthy();
@@ -304,6 +321,12 @@ test("coverage loading and denial preserve the run draft and selected cases unti
     await expect(start).toBeDisabled();
     await start.evaluate((element) => (element as HTMLButtonElement).click());
     expect(postCount).toBe(0); expect(fixture.nativeCount(runName)).toBe("0"); expect(fixture.manifestCount()).toBe("0");
+    await start.scrollIntoViewIfNeeded();
+    await expect(runs.getByRole("alert")).toBeInViewport({ ratio: 1 });
+    await expect(runs.getByRole("button", { name: "Retry coverage", exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(runs.getByLabel("Run name (optional)")).toBeInViewport({ ratio: 1 });
+    await expect(runs.getByLabel("Environment (optional)")).toBeInViewport({ ratio: 1 });
+    await expect(start).toBeInViewport({ ratio: 1 });
     await testInfo.attach("model-coverage-unavailable-draft-retained", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
 
     coverageMode = "allowed";
@@ -320,6 +343,13 @@ test("coverage loading and denial preserve the run draft and selected cases unti
     await expect(runs.getByLabel("Environment (optional)")).toHaveValue("QA coverage recovery");
     await expect(start).toHaveText("Start run with 1 case"); await expect(start).toBeEnabled();
     expect(postCount).toBe(0);
+    await testInfo.attach("model-coverage-recovered-host-context", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+    await start.scrollIntoViewIfNeeded();
+    await expect(excluded).toBeInViewport({ ratio: 1 });
+    await expect(runs.getByRole("checkbox", { name: `Include ${fixture.name} case`, exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(runs.getByLabel("Run name (optional)")).toBeInViewport({ ratio: 1 });
+    await expect(runs.getByLabel("Environment (optional)")).toBeInViewport({ ratio: 1 });
+    await expect(start).toBeInViewport({ ratio: 1 });
     await testInfo.attach("model-coverage-recovered-selection-retained", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
     const dispatched = page.waitForResponse((entry) => entry.url() === fixture.runUrl && entry.request().method() === "POST");
     await start.click();
@@ -554,6 +584,12 @@ test("a reviewer approves the revision, creates a draft case and starts a govern
     await expect(runsAfter).toContainText("1 original occurrence unavailable");
     await expect(runsAfter).toContainText("Later native additions are not attributed to this model run");
     await expect(observed).toHaveCount(0);
+    await testInfo.attach("model-original-occurrence-unavailable-host-context", {
+      body: await page.screenshot({ fullPage: true }), contentType: "image/png"
+    });
+    await runsAfter.getByRole("heading", { name: "Governed runs", exact: true }).scrollIntoViewIfNeeded();
+    await expect(runsAfter.getByText("1 original occurrence unavailable", { exact: false })).toBeInViewport({ ratio: 1 });
+    await expect(runsAfter.getByText("Later native additions are not attributed to this model run", { exact: false })).toBeInViewport({ ratio: 1 });
     await testInfo.attach("model-original-occurrence-unavailable-after-native-readd", {
       body: await page.screenshot({ fullPage: true }), contentType: "image/png"
     });
@@ -567,6 +603,11 @@ test("a reviewer approves the revision, creates a draft case and starts a govern
     await expect(provenance).toContainText("1 originally dispatched case");
     await expect(provenance).toContainText("later additions are outside this model dispatch");
     await expect(provenance.getByRole("link", { name })).toHaveAttribute("href", /\/model-studio\?model=/);
+    await provenance.scrollIntoViewIfNeeded();
+    await expect(provenance).toBeInViewport({ ratio: 1 });
+    await testInfo.attach("model-native-run-original-dispatch-provenance", {
+      body: await page.screenshot({ fullPage: true }), contentType: "image/png"
+    });
   } finally {
     /*
      * The run references the generated case, and the API delete of a cycle is a SOFT delete — its

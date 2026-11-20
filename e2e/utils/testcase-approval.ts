@@ -21,7 +21,7 @@ export async function approveTestcase(
     },
     failOnStatusCode: false,
   });
-  expect(approval.ok(), await approval.text()).toBe(true);
+  expect(approval.status(), await approval.text()).toBe(200);
   const current = await human.get(endpoint);
   expect(current.status(), await current.text()).toBe(200);
   const saved = await current.json();

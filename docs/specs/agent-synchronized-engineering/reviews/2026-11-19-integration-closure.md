@@ -2,6 +2,14 @@
 
 **Status: implementation verification in progress; broader specification NOT FROZEN.**
 
+Latest completed runtime checkpoint: source `965a87a1`, tree-equivalent CI merge `e49fab4d`,
+passes the occurrence repair's PostgreSQL and all 19 Model Studio API/browser cases. Native
+suite-publication transport evidence closes SEC-NATIVE-01 narrowly. Aggregate smoke remains
+red at one incomplete positive approval fixture (18/19 MCP); later selected stages did not run.
+The following corrective revision supplies both exact approval hashes, improves screenshot
+positioning and narrows a concurrently introduced secret-scanner exception. Its CI is still
+required. Earlier sections below retain their historical pins and verdicts.
+
 This is an implementation evidence record under the existing ASER review owner, not a ninth specification or a new approval authority. It follows the owner's authorization to finish the integrated native-owner work, run the genuine assurance teams and continue the retained original QA loop. It does not authorize a production deployment, customer-environment mutation or operational Skill grant.
 
 ## Run context and immutable inputs
@@ -247,3 +255,84 @@ The authoring memo `i3-native-owner-fit.md` is retained as a concrete design inp
 Before publication, concurrent upstream `bd6df78d434012ffc11e9466dc0a996fb18d9f60` supplied the same account-cleanup correction through a successful `passwordWorks(FIXTURE_PASSWORD)` check before the restoration loop. Its account file is preserved byte-for-byte. The prior independent receipt remains an authentic record of the equivalent six-line local correction reviewed before reconciliation; it is not relabeled as the upstream bytes. The new reconciliation record binds the adopted upstream file. No concurrent work was overwritten.
 
 Local validation of the fixture delta: E2E TypeScript passes. Scoped ESLint finds the same existing unused `page` declaration at `e2e/ui/zyra.spec.ts:1470` in both immutable9519 and the corrected file, with no new diagnostic; it is not reported as a lint pass. A full local discovery attempt cannot load suite-wide tests because the CI-generated `.auth/context.json` files are absent. No service/setup was started to manufacture that state. The focused Model Studio discovery remains 19, and CI lists each actual selected stage after its isolated fixture setup.
+
+## Published965 runtime and bounded independent reconciliation
+
+Source `965a87a13d2669354598f8d4b912f36fdb148867` and actual CI merge
+`e49fab4df4043b621b7007e97d8646743f441b6b` have the identical complete tree
+`b3c497bdb7a43cd43e8d0535f663c542cba88186`. The merge parents are development
+`6897f989` and source965. Raw logs are retained under the supplemental integrity index;
+counts below are actual isolated CI execution and must not be added to overlapping probes.
+
+| Selected stage | Completed source965 result |
+| --- | --- |
+| Migrated PostgreSQL | 17 suites / 611 passed; 157 migrations and immediate repeat-migrate integrity passed |
+| HTTP/contracts and concurrency | 326 pass / 8 environment skips; 72 pass / 90 environment skips |
+| Isolated Review Board | All 98 environment-gated tests actually ran and passed in its dedicated stack |
+| Primary smoke; Zyra/graph | 19 passed; 21 passed |
+| Testcases and issue-key UI | 128 passed plus the separate one-case issue-key selection |
+| Notifications; admin; reports; requirement matrix | 52; 3; 3; 1 passed respectively |
+| Model Studio | 19 passed: 10 API and 9 UI, including original occurrence removal/re-add attribution |
+| Knowledge; schedules; email; bulk runs | 29; 19; 6; 11 passed respectively |
+| MCP | 18 passed / 1 failed; the positive lifecycle fixture omitted expectedApprovalRevision on both attempts |
+| Later approved-run, governed-change and native-compatibility stages | Not run after MCP failure |
+| Architecture | 114 tool tests; 780 modules; zero forbidden dependency violations |
+| Workflow aggregate | Seven passed; smoke and the current-tree secret scan failed |
+
+The independent Green occurrence probe ran the same 24 discriminating oracles against old
+and corrected production projections: old9519 had 2 pass / 22 fail, source965 had 24 pass.
+Those are oracle results, not 22 separately established defects. The independent receipt and
+disclosed author-member grounding bind the original manifest to exact native occurrence and
+snapshot identity, retain legacy UNKNOWN and removed-original unavailable semantics, and
+preserve ordinary native additions. The later addendum reconciles actual API/browser behavior;
+none of these results closes privileged historical rewrite or the full original I3 loop.
+
+The independent Security transport closeout observes the dedicated MCP-P07 test passing:
+four machine requests across both aliases and bearer REST preserve complete suite/case/audit
+state, while legitimate human partial edit and exact selected Save create the native Draft.
+SEC-NATIVE-01 is closed narrowly; SEC02's eight PostgreSQL cases retain closure. SEC03
+machine-origin provenance and action-bound human assent remain open.
+
+Independent Purple opened all actual source965 Model Studio images. Passing behavior did
+not establish complete visual evidence: several claimed controls were below the internal main
+scroll viewport. The capture-only follow-up retains every existing assertion and adds actual
+scrolling, full-overlap viewport guards and eleven named attachments. No synthetic DOM or
+layout is substituted. The next CI's actual images still require independent visual review.
+
+## Exact approval fixture and scanner correction awaiting their own run
+
+The MCP correction obtains a fresh human case-detail read, proves the edit revision agrees,
+validates its approvalRevision format and supplies both required hashes. Independent QA's
+finite census of twelve selected spec files and the shared helper found this one positive
+omission; malformed-context refusal cases remain intact. E2E types and focused MCP/Model
+lint passed locally. These source checks do not count as corrected transport execution.
+
+Concurrent commits `62f66ad3`, `be0240f4` and `0e52c233` are preserved. The last adopts the
+existing exact-review approval helper in the MCP lifecycle. Its single approval call and
+Approved readback remain; the shared helper now retains the original exact HTTP200
+requirement, and the scenario separately checks its amended edit revision before approval. Commit `be0240f4` classifies .gitleaks.toml as repository tooling. Commit `62f66ad3`
+introduced a global match-only hash exception despite its
+receipt-only comment; independent Security records SEC-NATIVE-04. This corrective revision
+keeps every default rule and restricts each exception to generic-api-key, an exact repository-root
+receipt filename, the complete detector match and independently verified historical digest.
+Old9519 profiles, original occurrence evidence and the new965 v3 profile have separate exact
+bindings. Arbitrary 64-hex values are not exempted.
+
+The existing secret job now resolves and logs one scanner image ID/digest and CLI version,
+then uses that exact image for both discrimination controls and the repository scan. The
+controls require seven known mappings to be found by an explicit default-only config and
+suppressed by the corrected config. Nine denied neighbors run with both configs: outside
+path, nested lookalike, unrelated filename, filename suffix, different digest, wrong historical
+digest, generic credential in an allowed file, provider credential in that file, and a second
+credential on the same line. Assertions inspect redacted rule/file/count results; scanner
+errors cannot count as expected findings. Actual scanner execution remains a CI obligation.
+
+The previous secret log reports five findings without identities. The candidate receipt-map
+explanation is independently source-backed, but is not relabeled as an observed report. The
+known source965 scanner digest was sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f;
+its CLI version was not printed. No local scanner or service execution is claimed.
+
+The separate White I3 owner-admission receipt accepts comparative design work with explicit
+gates and requests finite Blue/Red archaeology before physical allocation. It is retained as an
+actual independent review, not a native PR release vote. Current full CI, final QA/Purple,
+manual Graph and White final disposition remain open for their respective bounded scope.

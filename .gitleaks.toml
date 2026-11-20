@@ -1,14 +1,29 @@
-# Default gitleaks rules, plus one precise allowlist for retained assurance receipts.
-#
-# The independent-review evidence under docs/specs/agent-synchronized-engineering/reviews/
-# records file-name-to-SHA-256 maps. A key such as "Tesbo-Frontend/lib/api.ts" or
-# "04_MCP_API_CONTRACTS.md" followed by a 64-character hex digest trips generic-api-key even
-# though the value is a content hash, not a credential. The allowlist matches only that shape:
-# an evidence file path ending in a known extension, mapped to a lowercase SHA-256 digest.
+# These exact, independently verified content hashes are retained review evidence.
+# Both the repository-root path and the detector's complete match must agree.
+# Keep every default rule; a new receipt or digest requires a reviewed exception.
 [extend]
 useDefault = true
 
 [[allowlists]]
-description = "File path to SHA-256 maps in retained assurance receipts are integrity hashes, not credentials"
+description = "Verified source9519 and canonical contract hashes in the two retained Green profiles"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^(?:/repo/)?docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/native-green-profile-9519(?:-v2)?\.json$''']
 regexTarget = "match"
-regexes = ['''[A-Za-z0-9_./()\[\] -]+\.(?:md|ts|tsx|js|mjs|cjs|json|sql)": "[0-9a-f]{64}"''']
+regexes = ['''^(?:api\.ts": "962dcaf20576c2603f30c4b438bdbef9bf83ffb687024a9d89c65dc0ae468412|04_MCP_API_CONTRACTS\.md": "5893a48fe504a8d5c6b47bb552c493685e950fab62d44334702a92edc7c9474d)"$''']
+
+[[allowlists]]
+description = "Verified source965 API content hash in the original occurrence repair receipt"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^(?:/repo/)?docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/native-occurrence-repair-evidence\.json$''']
+regexTarget = "match"
+regexes = ['''^api\.ts": "b8f6f6fdf4ce97aca68824b9eae3b08d22cbdb6c0abf56989429f3f74b5a492d"$''']
+
+[[allowlists]]
+description = "Verified source965 and canonical contract hashes in the retained Green v3 profile"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^(?:/repo/)?docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/native-green-profile-965a87a1-v3\.json$''']
+regexTarget = "match"
+regexes = ['''^(?:api\.ts": "b8f6f6fdf4ce97aca68824b9eae3b08d22cbdb6c0abf56989429f3f74b5a492d|04_MCP_API_CONTRACTS\.md": "5893a48fe504a8d5c6b47bb552c493685e950fab62d44334702a92edc7c9474d)"$''']

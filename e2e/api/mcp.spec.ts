@@ -416,6 +416,11 @@ test("MCP-P07 disposable proposal review lifecycle preserves project and run bou
     expect(unapprovedCaseRun.message).toMatch(/Approve/i);
     // Approval is bound to both the edited content and the current approval basis; the fixture
     // helper reads both and performs the exact human review.
+    const reviewResponse = await owner.get(caseUrl(caseId!));
+    expect(reviewResponse.status(), await reviewResponse.text()).toBe(200);
+    const caseReview = await reviewResponse.json();
+    expect(caseReview.editRevision).toBe(amended.editRevision);
+    expect(caseReview.approvalRevision).toMatch(/^[a-f0-9]{64}$/);
     const approvedCase = await approveTestcase(owner, projectId, caseId!);
     expect(approvedCase.status).toBe("Approved");
 

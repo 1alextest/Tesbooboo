@@ -53,3 +53,14 @@ The exact original and repository SHA-256 values for the supplemental receipts, 
 
 
 The supplemental index also preserves `qa-selected-fixture-delta.md` and the authored `i3-native-owner-fit.md` memo with their actual provenance. The latter is design authoring, not an independent assurance vote; its physical alternatives remain unselected. Exact source/file pins and runtime limits remain in each artifact.
+
+## Source965 supplemental evidence
+
+The same reversible index now retains the actual source965 Green occurrence review/probes,
+its v3 trace profile and independent checker result, the disclosed author-member grounding,
+Security transport closeout, QA approval-fixture and upstream-account reconciliation,
+Purple's actual image review, and White's separate I3 owner-admission review. The actual CI
+logs retain their source965/mergee49 identities. Earlier receipt verdicts and raw scratch bytes
+are unchanged; later addenda record later evidence instead of rewriting earlier conclusions.
+The v3 trace check establishes declared binding integrity only, not semantic coverage or an
+executed Graph harness. Corrected screenshot and scanner runtime evidence is still pending.

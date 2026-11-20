@@ -1308,6 +1308,1281 @@
         }
       ],
       "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-occurrence-delta.md",
+      "original_sha256": "cc0c496dc6a6312f26821f2f3003eb8b390cbba376b777e391a717f18a2362f8",
+      "repository_sha256": "cc0c496dc6a6312f26821f2f3003eb8b390cbba376b777e391a717f18a2362f8",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-occurrence-delta-inputs.json",
+      "original_sha256": "afd4f1814ff04f6243ad7bdad0377edd889279bd5b5aa0794d19e5df4001f644",
+      "repository_sha256": "afd4f1814ff04f6243ad7bdad0377edd889279bd5b5aa0794d19e5df4001f644",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-occurrence-delta-probe.cjs",
+      "original_sha256": "e1a8dfc659eb6964ee9412b0dfe6544007c7e3affa4f97e01d8f9ef051619144",
+      "repository_sha256": "e1a8dfc659eb6964ee9412b0dfe6544007c7e3affa4f97e01d8f9ef051619144",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-occurrence-delta-probe.log",
+      "original_sha256": "c49675ff3ccb3337b205d1546d996830a6e5b04426d86bc33781d8fe6326ce17",
+      "repository_sha256": "c49675ff3ccb3337b205d1546d996830a6e5b04426d86bc33781d8fe6326ce17",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-occurrence-delta-before.log",
+      "original_sha256": "5b5ca45256d17672e23dbc4b5c78035fb1cdb1fa56546d8d7acd5ac190ae8dd5",
+      "repository_sha256": "ffa26fb8d12f3e946fc741a40feca62500f9081944ed67135147a2c0d9211528",
+      "restore_trailing_whitespace": [
+        {
+          "line": 41,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 53,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 71,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 83,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 101,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 113,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 130,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 132,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 149,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 151,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 168,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 170,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 186,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 188,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 206,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 218,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 236,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 248,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 266,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 278,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 296,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 308,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 326,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 338,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 356,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 368,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 386,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 398,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 416,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 429,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 447,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 460,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 476,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 478,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 495,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 497,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 514,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 521,
+          "restore_before_lf_hex": "2020"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-occurrence-binding-result.json",
+      "original_sha256": "7cb1b77ad179f717824405a3917880594224302ee4471b3d85b0d623027f5315",
+      "repository_sha256": "7cb1b77ad179f717824405a3917880594224302ee4471b3d85b0d623027f5315",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-occurrence-migrations.log",
+      "original_sha256": "4c5fc30013aa0ab07a01029afa37240ed97d865833a2a187340db1523dc0cbfc",
+      "repository_sha256": "4c5fc30013aa0ab07a01029afa37240ed97d865833a2a187340db1523dc0cbfc",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-root-occurrence-delta.md",
+      "original_sha256": "a52d363d4ff23f5228c847d47f456d9a1cfe2434aaabef5f5a7e9527b9c2b97c",
+      "repository_sha256": "a52d363d4ff23f5228c847d47f456d9a1cfe2434aaabef5f5a7e9527b9c2b97c",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "native-green-profile-965a87a1-v3.json",
+      "original_sha256": "09c507633a46ecd38eaf86d41665d1c8dc0c61d3d9ecb37e22a9a521d85d3875",
+      "repository_sha256": "09c507633a46ecd38eaf86d41665d1c8dc0c61d3d9ecb37e22a9a521d85d3875",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "native-green-profile-965a87a1-v3-result.json",
+      "original_sha256": "7cb1b77ad179f717824405a3917880594224302ee4471b3d85b0d623027f5315",
+      "repository_sha256": "7cb1b77ad179f717824405a3917880594224302ee4471b3d85b0d623027f5315",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "native-965-migrations.log",
+      "original_sha256": "4c5fc30013aa0ab07a01029afa37240ed97d865833a2a187340db1523dc0cbfc",
+      "repository_sha256": "4c5fc30013aa0ab07a01029afa37240ed97d865833a2a187340db1523dc0cbfc",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "purple-model-recovery-delta.md",
+      "original_sha256": "8fa805a79e909e49e022cfd67e432e36b2f9c06f3c2a8bb72d4a7cca96338468",
+      "repository_sha256": "8fa805a79e909e49e022cfd67e432e36b2f9c06f3c2a8bb72d4a7cca96338468",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "purple-model-recovery-inputs.json",
+      "original_sha256": "84c2064bba1a5ebf96ee25cbc1e54b7e417ecb8a1323db2e905d34e85f253a3e",
+      "repository_sha256": "84c2064bba1a5ebf96ee25cbc1e54b7e417ecb8a1323db2e905d34e85f253a3e",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "purple-model-recovery-capture-index.json",
+      "original_sha256": "bb5d7a9b6ee31896ebdcd3fb2579c029026b40b5aa05926f6fb25e819994fec6",
+      "repository_sha256": "bb5d7a9b6ee31896ebdcd3fb2579c029026b40b5aa05926f6fb25e819994fec6",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "qa-account-upstream-reconciliation.md",
+      "original_sha256": "7b2b9367946d56aa515cf88635b5523ccabc75e941fb4da813cf2b77af112f58",
+      "repository_sha256": "7b2b9367946d56aa515cf88635b5523ccabc75e941fb4da813cf2b77af112f58",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "qa-native-approval-fixture-delta.md",
+      "original_sha256": "d9a284dcacd6365c50771cb49a5c92607491776084d6b173fcdfa2af6570d636",
+      "repository_sha256": "d9a284dcacd6365c50771cb49a5c92607491776084d6b173fcdfa2af6570d636",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "security-native-transport-closeout.md",
+      "original_sha256": "57a88ea77ac3581906d43c103b886eb210501a1c2714dae1af9585ef0b96aa49",
+      "repository_sha256": "1970b9c404cb0f8e08b5f5df2cb6ffd91c313f268892831a3616d8bd2e6e8c7a",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 1
+    },
+    {
+      "file": "security-native-transport-closeout-inputs.json",
+      "original_sha256": "14315fddd22f8192b103824e04d817b07e280888a66af81bcc471c9d2bc6a1bf",
+      "repository_sha256": "14315fddd22f8192b103824e04d817b07e280888a66af81bcc471c9d2bc6a1bf",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "white-i3-owner-admission.md",
+      "original_sha256": "53e579cac2f94b2b35b54f7060259544a4c5cd5451bc034e9ad5d7c207f292ba",
+      "repository_sha256": "53e579cac2f94b2b35b54f7060259544a4c5cd5451bc034e9ad5d7c207f292ba",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "white-i3-owner-admission-inputs.json",
+      "original_sha256": "87bf29e1a3863bf5d4f207c96479eec558d898aa012fc1de11e44339df3efb91",
+      "repository_sha256": "87bf29e1a3863bf5d4f207c96479eec558d898aa012fc1de11e44339df3efb91",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "ci-965a87a1-database.log",
+      "original_sha256": "755f8d2dc9e42e095ab453b3fa0562a9d57d14297232e974fd90871a91996094",
+      "repository_sha256": "d104b4bc8d0dc247b18fd2b56fbca7d0903d888c01f0d8e801bef86e7d31ba54",
+      "restore_trailing_whitespace": [
+        {
+          "line": 220,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 224,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 227,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 229,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 231,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 233,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 235,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 298,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 300,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 303,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 305,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 308,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 311,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 319,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 322,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 329,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 332,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 497,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 500,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 515,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 518,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 564,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 592,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 596,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 598,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 609,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 610,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 612,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 614,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 622,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 623,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 625,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 635,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 637,
+          "restore_before_lf_hex": "2020"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "ci-965a87a1-architecture.log",
+      "original_sha256": "14535aa6b1695d6b32ed3d44d1913cd9628f5d7f7f1969b8f0ca57764f72b33f",
+      "repository_sha256": "4bfefb01c4d228fd4534ea864140b64d87f5e9d5a6184159461404389bd5a011",
+      "restore_trailing_whitespace": [
+        {
+          "line": 188,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 192,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 195,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 197,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 199,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 201,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 203,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 252,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 254,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 257,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 272,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 275,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 981,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 984,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 999,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1002,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1011,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1014,
+          "restore_before_lf_hex": "20"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "ci-965a87a1-http.log",
+      "original_sha256": "a5caa0ad5cb6985c2291dec1d5a2240841fd4300feebf9e3a8b101cb24b7c76e",
+      "repository_sha256": "fc8d118f90a4c7c2bfe09b7215d8d40d24ef58b7fb43e1e5c861f22088ab48d5",
+      "restore_trailing_whitespace": [
+        {
+          "line": 103,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 107,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 110,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 112,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 114,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 116,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 118,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 175,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 177,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 180,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 182,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 185,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 188,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 194,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 197,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 203,
+          "restore_before_lf_hex": "20"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "ci-965a87a1-concurrency.log",
+      "original_sha256": "ef92036d0c7cdc09ae61cdefb30b2495b7ea4dcb1b2e47e066d2494ef9f980cf",
+      "repository_sha256": "46762251fda589c98f030ea08a075f49134d9e5a36f115b9a9b5d29b2f67c071",
+      "restore_trailing_whitespace": [
+        {
+          "line": 103,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 107,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 110,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 112,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 114,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 116,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 118,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 177,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 179,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 182,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 184,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 187,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 190,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 196,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 199,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 222,
+          "restore_before_lf_hex": "20"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "ci-965a87a1-smoke.log",
+      "original_sha256": "489e65bb72addee8df4b7f864489f3cea9a76086bcba7c6b4a399fe366995081",
+      "repository_sha256": "31e2d1f44a34ed24fd617d37c0e2d578d50de7791f87bf90d60594ecdf69e085",
+      "restore_trailing_whitespace": [
+        {
+          "line": 308,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 312,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 315,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 317,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 319,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 321,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 323,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 426,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 428,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 431,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 433,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 436,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 439,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 441,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 444,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 445,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 448,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 634,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 637,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 837,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 868,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 870,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 873,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 875,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 878,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 881,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 883,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 886,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 893,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 902,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 903,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 904,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 907,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 972,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 973,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 975,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 978,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1009,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1011,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1014,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1016,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1019,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1127,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1201,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1203,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1205,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1207,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1209,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1274,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1276,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1278,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1281,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1313,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1333,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1401,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1403,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1425,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1604,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1606,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1735,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1752,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1754,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1756,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1852,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1854,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1907,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1953,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1955,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1959,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2006,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2008,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2012,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2056,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2058,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2060,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2120,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2122,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2142,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2217,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2219,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2249,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2314,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2316,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2336,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2396,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2398,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2409,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2466,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2468,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2480,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2543,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2545,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2566,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2567,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2568,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2569,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2571,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2573,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2576,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2585,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2587,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2589,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2591,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2593,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2596,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2605,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2607,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2609,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2683,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2863,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2865,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2876,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2877,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2879,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2881,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2889,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2890,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2892,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2902,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2904,
+          "restore_before_lf_hex": "2020"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "ci-965a87a1-gitleaks.log",
+      "original_sha256": "d04ac3521130de0dbc6ddf56680b00e66ad93ba440411e9766e62ddd2df2ae6e",
+      "repository_sha256": "39181ea07463ee207b12f6f629adaea5591386f24d1537e718c7b6e2e99e606d",
+      "restore_trailing_whitespace": [
+        {
+          "line": 102,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 106,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 109,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 111,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 113,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 115,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 117,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 157,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 163,
+          "restore_before_lf_hex": "20"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-occurrence-runtime-addendum.md",
+      "original_sha256": "6eb8a7e288c8338228017ccfd1c77726666f1aa75169b804d5878768860d76f0",
+      "repository_sha256": "6eb8a7e288c8338228017ccfd1c77726666f1aa75169b804d5878768860d76f0",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "purple-model-965-addendum.md",
+      "original_sha256": "66fe4fc6e0b582574bf8b2aa99320562051a3c24678791c69299575f218b132b",
+      "repository_sha256": "66fe4fc6e0b582574bf8b2aa99320562051a3c24678791c69299575f218b132b",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "purple-model-965-addendum-inputs.json",
+      "original_sha256": "862f4bfa4481dc701285096953374505a66a214074eab414f9229e5e7c9b713b",
+      "repository_sha256": "862f4bfa4481dc701285096953374505a66a214074eab414f9229e5e7c9b713b",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "purple-model-965-capture-index.json",
+      "original_sha256": "f539b78ff994463730a16656701428758213e0c56df5b0bff199f429c8fabfdb",
+      "repository_sha256": "f539b78ff994463730a16656701428758213e0c56df5b0bff199f429c8fabfdb",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "purple-model-965-capture-delta.patch",
+      "original_sha256": "05e4b88de6e3cd8655f132f83f63dca947b033e42b3ade5577b89ae81e2baa7b",
+      "repository_sha256": "3479144ed1bc550013a30c50b8412b5e66cc2f3bbd74a582297bc91a21253bd8",
+      "restore_trailing_whitespace": [
+        {
+          "line": 48,
+          "restore_before_lf_hex": "20"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "blue-i3-allocation-delta.md",
+      "original_sha256": "389ded7da4ce16218da0b5cbbb3d3fb01a1459c96f3820b5a804bf7dc1c7620a",
+      "repository_sha256": "47d7d1b6c3fbe64580c51f48ceb8ddfb32242cf4e68cd0e8a752057f9f65d776",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 1
+    },
+    {
+      "file": "blue-i3-allocation-inputs.json",
+      "original_sha256": "94b329718538d8006dd9cd9f9511bb50bce6a5c6e2e9895a0c3c564bff0897f6",
+      "repository_sha256": "94b329718538d8006dd9cd9f9511bb50bce6a5c6e2e9895a0c3c564bff0897f6",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "blue_i3_inventory.py",
+      "original_sha256": "c1f0825b777e2ae26bc1df6b590c0c6e9b190d70098cb1744accce67591f35cc",
+      "repository_sha256": "c1f0825b777e2ae26bc1df6b590c0c6e9b190d70098cb1744accce67591f35cc",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "qa-native-approval-upstream-reconciliation.md",
+      "original_sha256": "7c40cd297fc4e6e4ae4f964d7185f590b36ba75b18deaee2a5e9321ea0bf3aab",
+      "repository_sha256": "7c40cd297fc4e6e4ae4f964d7185f590b36ba75b18deaee2a5e9321ea0bf3aab",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "security-scanner-exception-source-addendum.md",
+      "original_sha256": "3d6655c0963f2cc15570b55952aa78ea4ffb785ddb04b0dfca918f8b34700ebb",
+      "repository_sha256": "5950edffa7b5f8444f6b674a104388bab4dd29c67589ed0e816e6936dd626f1f",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 1
+    },
+    {
+      "file": "security-scanner-exception-source-inputs.json",
+      "original_sha256": "e0a85ad5ad6a964c941e90395e3dfa029d84bd484fa18e02135b4d44adb1b845",
+      "repository_sha256": "e0a85ad5ad6a964c941e90395e3dfa029d84bd484fa18e02135b4d44adb1b845",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
     }
   ]
 }

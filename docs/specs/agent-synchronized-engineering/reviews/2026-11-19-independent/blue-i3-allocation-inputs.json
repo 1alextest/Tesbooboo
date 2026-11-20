@@ -1,0 +1,1480 @@
+{
+  "reviewer": "/root/blue_i3_allocation_delta",
+  "date": "2026-11-20",
+  "method_pin": "d83549c85a4dcd047fb40dc4fba4ec62737ab0fc",
+  "source_commit": "9519b56d3441dfec3a107db95ca602665454f407",
+  "source_tree": "31b5e09247237c29ef3d215ab60147c7e4f13ba7",
+  "source_clean": true,
+  "freshness_comparison_commit": "965a87a13d2669354598f8d4b912f36fdb148867",
+  "inputs": [
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/00_README.md",
+      "sha256": "43eb372cc28ce482b037301173e7afd783049db0e5fc1974d6afe75ac66cd0d2",
+      "bytes": 138450,
+      "scope": "section inventory and directly consulted relevant I3-Q/ASER clauses; not a full line-by-line audit"
+    },
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/01_PRODUCT_REQUIREMENTS.md",
+      "sha256": "515c2230b0c3859156a9532dd8d833a28705f53113f8d84cd00e1db96daa8cae",
+      "bytes": 194683,
+      "scope": "section inventory and directly consulted relevant I3-Q/ASER clauses; not a full line-by-line audit"
+    },
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/02_WORKFLOW_AND_UX_SPEC.md",
+      "sha256": "e7d01ba202da5572198e303416f4e3ea7a3956dbf99bd62b61acfe94e4639452",
+      "bytes": 120639,
+      "scope": "section inventory and directly consulted relevant I3-Q/ASER clauses; not a full line-by-line audit"
+    },
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/03_TECHNICAL_DESIGN.md",
+      "sha256": "22630a7bbfa3626354f3570e2f4018b42e696cedf2e72c862c1ef4c78550d5f3",
+      "bytes": 298441,
+      "scope": "section inventory and directly consulted relevant I3-Q/ASER clauses; not a full line-by-line audit"
+    },
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/04_MCP_API_CONTRACTS.md",
+      "sha256": "5893a48fe504a8d5c6b47bb552c493685e950fab62d44334702a92edc7c9474d",
+      "bytes": 156290,
+      "scope": "section inventory and directly consulted relevant I3-Q/ASER clauses; not a full line-by-line audit"
+    },
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "sha256": "854b03a1b138520269950cad9be31a6379692ad0ac70617e7a422eb543f35aa3",
+      "bytes": 299004,
+      "scope": "section inventory and directly consulted relevant I3-Q/ASER clauses; not a full line-by-line audit"
+    },
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "sha256": "823c73b774a5462b6a1ca6b4d2467c4a5b6d4901a02c642e89ad6a2edc981770",
+      "bytes": 99719,
+      "scope": "section inventory and directly consulted relevant I3-Q/ASER clauses; not a full line-by-line audit"
+    },
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/07_UI_DESIGN_TASKS.md",
+      "sha256": "72347025fc2530da6a3bd10d0d0b32af2ec4d3efd754f7c4fd31606c613a1980",
+      "bytes": 110240,
+      "scope": "section inventory and directly consulted relevant I3-Q/ASER clauses; not a full line-by-line audit"
+    },
+    {
+      "path": "tesbo-canonical-inputs/creating a testing tool to make my job easier/Tesbo_Existing_Application_Baseline_v1.0.md",
+      "sha256": "9a099788bf749f6cf991a314dc809c303d8aa90e5b90d46f0163eff96200d6cf",
+      "bytes": 175825,
+      "scope": "historical purpose, evidence/visual constraints and original-loop reconciliation consulted; no image or live audit"
+    },
+    {
+      "path": "assurance-method-inputs/.kiro/steering/teams/blue-team-charter.md",
+      "sha256": "bc2a6911bfafb99ef27431b50de23fdb6da1e8edee038f0f014cc97f208367b1",
+      "bytes": 21978,
+      "scope": "unchanged pinned method; Blue/orchestration/policies read; White applicable gate obligations"
+    },
+    {
+      "path": "assurance-method-inputs/.kiro/steering/teams/review-orchestration.md",
+      "sha256": "023a64168c5160a761b91e7496b8a35b89246baf7eda0ab62bac17a7fa44771e",
+      "bytes": 45631,
+      "scope": "unchanged pinned method; Blue/orchestration/policies read; White applicable gate obligations"
+    },
+    {
+      "path": "assurance-method-inputs/.kiro/steering/teams/white-team-charter.md",
+      "sha256": "5dd6af6c69e220f68b165419cc250473ad1415451f4e82bd9149074aac894e26",
+      "bytes": 14328,
+      "scope": "unchanged pinned method; Blue/orchestration/policies read; White applicable gate obligations"
+    },
+    {
+      "path": "assurance-method-inputs/docs/policies/governance/POL-GOVERNANCE-ASSURANCE-PORTABILITY/v001.md",
+      "sha256": "33c69cba82f7d98773e85a30fa1afff15cc0dbcec0d88302a0295ce06e2c8524",
+      "bytes": 5618,
+      "scope": "unchanged pinned method; Blue/orchestration/policies read; White applicable gate obligations"
+    },
+    {
+      "path": "assurance-method-inputs/docs/policies/governance/POL-GOVERNANCE-ASSURANCE-EVIDENCE/v001.md",
+      "sha256": "a6176c0c75342dfa6cbf66cf64e00b9a2940a47655f343e255b96f4fa58c5d52",
+      "bytes": 5821,
+      "scope": "unchanged pinned method; Blue/orchestration/policies read; White applicable gate obligations"
+    },
+    {
+      "path": "assurance-working/i3-native-owner-fit.md",
+      "sha256": "93a3364f9a56d8936dae1092645978a551e02df94a95c52d25dcea9c3dbd1720",
+      "bytes": 75121,
+      "scope": "new design or actual White delta input; does not constitute implementation proof"
+    },
+    {
+      "path": "assurance-working/white-i3-owner-admission.md",
+      "sha256": "53e579cac2f94b2b35b54f7060259544a4c5cd5451bc034e9ad5d7c207f292ba",
+      "bytes": 39384,
+      "scope": "new design or actual White delta input; does not constitute implementation proof"
+    },
+    {
+      "path": "assurance-working/white-i3-owner-admission-inputs.json",
+      "sha256": "87bf29e1a3863bf5d4f207c96479eec558d898aa012fc1de11e44339df3efb91",
+      "bytes": 34745,
+      "scope": "new design or actual White delta input; does not constitute implementation proof"
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/blue-a.md",
+      "sha256": "de0c7a52c993dbb0d1562604447b515310f816ecfe7ca425d8a54d2fde6a42c8",
+      "bytes": 83334,
+      "scope": "actual historical receipt; relevant ownership/negative-proof/qualified-finding scope consulted, not rerun"
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/blue-b.md",
+      "sha256": "bb941ff9c5eb8eb7ab99c46cbb3314001292772835d8f4f3d04953a9a300a502",
+      "bytes": 67743,
+      "scope": "actual historical receipt; relevant ownership/negative-proof/qualified-finding scope consulted, not rerun"
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/blue-reconciliation.md",
+      "sha256": "f9e51a1ee2df7c750771dbc35c00b38e80d967a3963bdec30c12aee3465d02f5",
+      "bytes": 6967,
+      "scope": "actual historical receipt; relevant ownership/negative-proof/qualified-finding scope consulted, not rerun"
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/red-independent.md",
+      "sha256": "a0110725a8bd99dc7af2afefabef6c5caa4f861c864e06285dea9a2a134d095e",
+      "bytes": 89467,
+      "scope": "actual historical receipt; relevant ownership/negative-proof/qualified-finding scope consulted, not rerun"
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/red-grounding-and-reconciliation.md",
+      "sha256": "b34bad8f645201a02bdad34fa50eb301ed49241d04f4b2e5f3cb0e3dc6dc2ed9",
+      "bytes": 19190,
+      "scope": "actual historical receipt; relevant ownership/negative-proof/qualified-finding scope consulted, not rerun"
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/grey-reconstruction-before-crosswalk.md",
+      "sha256": "711f42ed79922a9c59f222f35b8f85ba8cbdb53152efcc6aa5c304ead8bb4234",
+      "bytes": 13021,
+      "scope": "actual historical receipt; relevant ownership/negative-proof/qualified-finding scope consulted, not rerun"
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/grey-independent.md",
+      "sha256": "8293b29111bb2aa2904dc3197dc0f68870c80237e4f0b397cc7d482ef221b711",
+      "bytes": 90396,
+      "scope": "actual historical receipt; relevant ownership/negative-proof/qualified-finding scope consulted, not rerun"
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/grey-independent-challenge.md",
+      "sha256": "2ae410aa072cf470da0ccc76501084be6d1fe26c3e199a836fa30a1d2c9506ff",
+      "bytes": 37356,
+      "scope": "actual historical receipt; relevant ownership/negative-proof/qualified-finding scope consulted, not rerun"
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/white-prearchitecture.md",
+      "sha256": "484b068eae9015a2eb08451a28c3697ac812986d128c0820a4b9057010e877e4",
+      "bytes": 43785,
+      "scope": "actual historical receipt; relevant ownership/negative-proof/qualified-finding scope consulted, not rerun"
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/receipt-provenance.md",
+      "sha256": "bf3102fb74699b915f0f84f532354a09c78e2104bf9f8653055c21b63a2d2158",
+      "bytes": 6015,
+      "scope": "actual historical receipt; relevant ownership/negative-proof/qualified-finding scope consulted, not rerun"
+    },
+    {
+      "path": "tesbo-review-9519b56d/AGENTS.md",
+      "sha256": "38f5e4b02ba352d90c1f4268434616c85d22053e5e032598d00c8e994726421d",
+      "bytes": 11901,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/CLAUDE.md",
+      "sha256": "d82f42d90c90a7037b40ec03cc473d05655f820ebc13073a52b2d4696220119f",
+      "bytes": 18806,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V107_ai_generation_requests_system_actor.sql",
+      "sha256": "ca295d2fa92006a07e2f6c54cfe4029d29cc1c12f6eb7905eaecca4a05ca9f9f",
+      "bytes": 2697,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V108_ai_generation_requests_sweep_dedup.sql",
+      "sha256": "079e98ec68c42db98a9344152c0ba9a9f07938beb15c940527431d0f243d2d8b",
+      "bytes": 3123,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V109_notifications_dedupe_key.sql",
+      "sha256": "e4491ac9344b43405492e3fb2ed10c4c5083e5ef47bdbeca02856490daeb86db",
+      "bytes": 1677,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V115_attachments_soft_delete.sql",
+      "sha256": "6da88d224c6b804ba9aa8c3355eb471c2a57db05208bee67762706b4ab31237e",
+      "bytes": 821,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V116_zyra_chat_sessions_soft_delete.sql",
+      "sha256": "b55bbeb1e52af9997dcc4dd0fd744d3c058d7a6916f3d87b0f72c7b8e841fcb3",
+      "bytes": 1657,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V123_integration_ticket_comments.sql",
+      "sha256": "3ada01c7d5b45e96daaefecd4b9efa187b3af0f7846190836b9c0871b9c2ba40",
+      "bytes": 2895,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V132_zyra_generation_language.sql",
+      "sha256": "852ce936d50c360c17d6e572078672a99d978053a62f5f45f6d21bac364d075c",
+      "bytes": 1542,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V133_notion_integration.sql",
+      "sha256": "d464b2e39fc27073e09ec3c44b422fbd50094e5e244a7acd08b012101e5f71a5",
+      "bytes": 5684,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V135_project_scoped_run_task_seq.sql",
+      "sha256": "8059a162d691a63faf4178431ae129264533d273022c89571c4f70353b91ca31",
+      "bytes": 2464,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V157_native_testcase_proposal_review.sql",
+      "sha256": "cfd6a0091351f7f39807dd0a9832c706f31d712e0c64d2a61efae7f2f96e7c51",
+      "bytes": 7818,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V1_init_schema.sql",
+      "sha256": "4a64fb25c2b1f40701b16ab5bc64c0f9d050798a6dfcd42206ea563b58374e1f",
+      "bytes": 4924,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V2_test_cases_and_suites.sql",
+      "sha256": "9a9875f7bb2b743756d0e76efdfda3af76965bca13f2728fe35b90871a185a85",
+      "bytes": 6001,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V35_zyra_agent_tasks.sql",
+      "sha256": "9d54ed6bda3617b23761950229a9edfaa85d8485bf9f0177eb7455095e4abbd1",
+      "bytes": 733,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V36_zyra_activity_sources.sql",
+      "sha256": "14072201a7fd2bec63970bbc6f45fcd3e87d4aaf50ad00371225abf6c2d5e171",
+      "bytes": 185,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V40_rename_zyra_agent.sql",
+      "sha256": "fa2ed86b58cda5e98c75b6dff15aee445bb685cae78c1a2ed5c9b16a3fa44feb",
+      "bytes": 215,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V58_actors_identity.sql",
+      "sha256": "2295da8c84e7f7b9014a1ff1ec11f0952c3fbeae06ea9708598e218ed577cf9d",
+      "bytes": 2857,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V5_api_tokens_webhooks.sql",
+      "sha256": "2a15fd4764278a2946c74019f29aae70d6d40f5cf487214ada63a7647fa500e5",
+      "bytes": 1049,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V61_attachments_audit_logs_actor_fk.sql",
+      "sha256": "f4647e7fc511e4da330e0560fc9cb0caf7a2b9c3251c4d9a89da9d08cbaf2739",
+      "bytes": 557,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V65_mcp_agent_actor.sql",
+      "sha256": "373065d93ad0af0cafca7750e633a8a9b4eedd4f2c811f61bd9bd5896af7bb1f",
+      "bytes": 685,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V66_testcase_linear_link.sql",
+      "sha256": "017122f22c065b894f308ea4881b58bad4c9824d856a00c9e4317bdb9d41689c",
+      "bytes": 382,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V87_zyra_token_usage.sql",
+      "sha256": "58452fc8eac44e5795bcb4526cca4e1e89ddd81f6199d09b96cdc616512fd174",
+      "bytes": 2509,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V89_zyra_chat_review.sql",
+      "sha256": "31f19e63c46e6fb03f0eecbaae13c2de319149baf29b160fc7b27954b51eb5fb",
+      "bytes": 1197,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V8_ai_generation_history.sql",
+      "sha256": "0d4468bf96d124673e1b4c81fa1919967f2fd216ab4c85f696c67e2d2df11b3d",
+      "bytes": 1547,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/package.json",
+      "sha256": "02775ebb1bd47d325f6f2684b01d8da999f8c6f41466556aca30469355368b1b",
+      "bytes": 2709,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/auth/api-token-rest.guard.ts",
+      "sha256": "47d47da161c3012c9d764ddca070bdd75d4e76aa539490865c474d918ab102f8",
+      "bytes": 3433,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/auth/api-token.service.ts",
+      "sha256": "28959f0f009383cbb8f6fb24b9ca6d8164063b7bcfd23a32b36331901dfa7de5",
+      "bytes": 6987,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/automation/automation.service.ts",
+      "sha256": "7f65f3217e132a19daf8aa940b9c3fd315c1810e8ec0c67ca070c1f03f8b0ff0",
+      "bytes": 51842,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/common/human-review-principal.ts",
+      "sha256": "ddba247c680a53b4d091908061add30b04c8a2505fe6321bc58d93f20fde50c8",
+      "bytes": 515,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/common/testcase-publication.policy.ts",
+      "sha256": "90f2accd42b37f5c8476833cd362646728c681ac8a91b73c9c6424ce6d8203c0",
+      "bytes": 3064,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/legacy/legacy.controller.ts",
+      "sha256": "c5725581c49f0ab2f07ec663f2935acd425aec711d6f0d0050b96bdf47eda455",
+      "bytes": 111360,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+      "sha256": "e51f779469455c818bc274cf11be0716445c8a9558e80b0257336881bc8f8104",
+      "bytes": 1548859,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/legacy/notification-events.ts",
+      "sha256": "547e338568d32780fab9ef903a5baa76428f319601e24f16710870d1c3bc62bb",
+      "bytes": 14975,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/legacy/zyra-draft-stream.ts",
+      "sha256": "5e1ff3f3c26082797f7882b66022f5130d18344b8f6a9a66459d838ae09fc143",
+      "bytes": 7003,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/legacy/zyra-task-activity-ru.ts",
+      "sha256": "006979b13a72a43db15efad7316bd26b2362f0f62de191dfae999baecf38fb97",
+      "bytes": 11729,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/mcp/mcp.service.ts",
+      "sha256": "6a171831791944ab3ee1f85b1fe1f60a4210e4baa85791633a0fe4d2602b1533",
+      "bytes": 21691,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/mcp/mcp.tools.ts",
+      "sha256": "810177d5684fe7498e0068f8ef2ea9d23171add241b4e0d07d0807e3b2aeab85",
+      "bytes": 109070,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/plan-limits/plan-limits.service.ts",
+      "sha256": "c4404a3c9e0f690958f045fbeaf611f84be224a037a0a7e4e09feb21e308e547",
+      "bytes": 21758,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/rag/rag-ingestion.service.ts",
+      "sha256": "f9610c2c2d772f6c71abe28054debf156e6890bd9e3eb7bcab875d6c1113a3b5",
+      "bytes": 6845,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/storage/storage.service.ts",
+      "sha256": "f9b28def7397dbe16f842db02f241ad280a6ba43f46e21031f388afc6440133a",
+      "bytes": 7526,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/zyra-archive-sweep/zyra-archive-sweep.service.ts",
+      "sha256": "add0d06dca5a2cb4c63234ad9044964a452d0eca958ea10d370662edf6659b4a",
+      "bytes": 18326,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/AGENTS.md",
+      "sha256": "63f2c50380ed6303237cce215ce27af1d620d094c215e28d1b1538a3c070e3bb",
+      "bytes": 678,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/app/(app)/projects/[id]/agents/page.tsx",
+      "sha256": "4c32ecf1ae4f3e8bc006d5c4f45f1bb0b83c4429e8122b5e886c21f6ebbcc952",
+      "bytes": 17681,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/app/(app)/projects/[id]/agents/tasks/[taskId]/page.tsx",
+      "sha256": "8bd8b2a9dba9b21457718eafb157a31acb42214dceb0f2c2ed8cc579ef23cc0b",
+      "bytes": 49454,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/app/(app)/projects/[id]/agents/tasks/page.tsx",
+      "sha256": "f3a187dc8d641bde474ccf876c912002a023fba123f6a9e26b15e6d27872165d",
+      "bytes": 25709,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/app/(app)/projects/[id]/agents/zyra/page.tsx",
+      "sha256": "059daa5117a4595c1e9bb1713739b6fef465dd31660e058af2d517548e5c0446",
+      "bytes": 102962,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/app/(app)/projects/[id]/agents/zyra/settings/page.tsx",
+      "sha256": "d8623356b10dd5cd5a287dfbf3ba2fed287a0ed8e2461766fd86699c488e3e1b",
+      "bytes": 21290,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/app/(app)/projects/[id]/requirements/page.tsx",
+      "sha256": "43064607ce45a3e38b9c0ac0e4a1587fbd2875061147a31646a5033fb9c8cf5d",
+      "bytes": 64023,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/app/(app)/projects/[id]/testcases/[tcId]/page.tsx",
+      "sha256": "90c7cc39d82b4438108c138ca0ba7b9301bc2cc44c073bec7a7285ef7e15962d",
+      "bytes": 379,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/app/globals.css",
+      "sha256": "a756ae7d8c89af0e22fcece152a5c91cd7958305730e0673f084f739151f727d",
+      "bytes": 37046,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/components/TopBar.tsx",
+      "sha256": "524a0e828de3ae47f12fc680a3249523e3346364b8256bbe053f958c0ee13911",
+      "bytes": 29477,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/components/agents/ReviewBoard.tsx",
+      "sha256": "43c526a4bfd62df06db8a5a219f9028c7f0d0871394b68c93ea745f7732e0922",
+      "bytes": 32512,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/components/agents/TaskQuickViewPanel.tsx",
+      "sha256": "771177b354d1dc630a6562fc8973e924cb0eba3014818788c6fa4a4e325236b3",
+      "bytes": 22099,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/components/agents/ZyraChatReviewPanel.tsx",
+      "sha256": "373854562213bf9127b65634ff2944415cb2e81d226a4d298fd60e50c29b94c0",
+      "bytes": 26793,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/lib/api.ts",
+      "sha256": "962dcaf20576c2603f30c4b438bdbef9bf83ffb687024a9d89c65dc0ae468412",
+      "bytes": 186835,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/lib/zyraCacheSync.ts",
+      "sha256": "7f18aca9ef16019b811e51794d70e2b9fdef1840a8914f25e9da73f62195191c",
+      "bytes": 4299,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/package.json",
+      "sha256": "75f5759ed7776b065740e6f56d2392900a499ddf1d638adfba4acdacce7ca783",
+      "bytes": 1158,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    },
+    {
+      "path": "tesbo-review-9519b56d/package.json",
+      "sha256": "72736314bf5ebe869927d4165090311e77259e31d311311b214655ca8dbb89d7",
+      "bytes": 654,
+      "scope": "source discovery input; relevant cited functions/declarations or literal/caller inventory, not blanket whole-file correctness"
+    }
+  ],
+  "literal_census": {
+    "scope": "tracked backend production src/migrations and frontend; excludes .spec., __tests__, node_modules; comments retained; not external clients or runtime telemetry",
+    "occurrences": 115,
+    "files": 23,
+    "matches": [
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V107_ai_generation_requests_system_actor.sql",
+        "line": 4,
+        "text": "-- ai_generation_requests table Zyra's chat/task-board flows already use, by writing requested_by ="
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V107_ai_generation_requests_system_actor.sql",
+        "line": 35,
+        "text": "ALTER TABLE ai_generation_requests ALTER COLUMN requested_by DROP NOT NULL;"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V108_ai_generation_requests_sweep_dedup.sql",
+        "line": 20,
+        "text": "ALTER TABLE ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V108_ai_generation_requests_sweep_dedup.sql",
+        "line": 37,
+        "text": "CREATE UNIQUE INDEX idx_ai_generation_requests_sweep_archive_dedup"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V108_ai_generation_requests_sweep_dedup.sql",
+        "line": 38,
+        "text": "ON ai_generation_requests (sweep_testcase_id)"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V109_notifications_dedupe_key.sql",
+        "line": 8,
+        "text": "-- `ai_generation_requests.provider` (not a new column) was reused for the sweep's actor identity"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V116_zyra_chat_sessions_soft_delete.sql",
+        "line": 2,
+        "text": "-- today, and zyra_chat_messages.session_id / ai_generation_requests.chat_session_id are both"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V116_zyra_chat_sessions_soft_delete.sql",
+        "line": 22,
+        "text": "ALTER TABLE ai_generation_requests DROP CONSTRAINT ai_generation_requests_chat_session_id_fkey;"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V116_zyra_chat_sessions_soft_delete.sql",
+        "line": 23,
+        "text": "ALTER TABLE ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V116_zyra_chat_sessions_soft_delete.sql",
+        "line": 24,
+        "text": "ADD CONSTRAINT ai_generation_requests_chat_session_id_fkey FOREIGN KEY (chat_session_id) REFERENCES zyra_chat_sessions(id) ON DELETE RESTRICT;"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V123_integration_ticket_comments.sql",
+        "line": 9,
+        "text": "--      zyraSaveAttempt also writes into ai_generation_requests.save_events). Processing the same"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V123_integration_ticket_comments.sql",
+        "line": 24,
+        "text": "generation_request_id  UUID NOT NULL REFERENCES ai_generation_requests(id) ON DELETE CASCADE,"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V132_zyra_generation_language.sql",
+        "line": 21,
+        "text": "ALTER TABLE ai_generation_requests ADD COLUMN IF NOT EXISTS language VARCHAR(8) NOT NULL DEFAULT 'en';"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V133_notion_integration.sql",
+        "line": 76,
+        "text": "ALTER TABLE ai_generation_requests ADD COLUMN IF NOT EXISTS notion_page_ids JSONB DEFAULT '[]'::jsonb;"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V135_project_scoped_run_task_seq.sql",
+        "line": 3,
+        "text": "-- (cycles) and Zyra tasks (ai_generation_requests) only had a uuid. `seq` is the per-project number"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V135_project_scoped_run_task_seq.sql",
+        "line": 12,
+        "text": "ALTER TABLE ai_generation_requests ADD COLUMN IF NOT EXISTS seq INT;"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V135_project_scoped_run_task_seq.sql",
+        "line": 22,
+        "text": "FROM ai_generation_requests WHERE seq IS NULL"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V135_project_scoped_run_task_seq.sql",
+        "line": 24,
+        "text": "UPDATE ai_generation_requests SET seq = numbered.n FROM numbered WHERE ai_generation_requests.id = numbered.id;"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V135_project_scoped_run_task_seq.sql",
+        "line": 43,
+        "text": "DROP TRIGGER IF EXISTS ai_generation_requests_assign_seq ON ai_generation_requests;"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V135_project_scoped_run_task_seq.sql",
+        "line": 44,
+        "text": "CREATE TRIGGER ai_generation_requests_assign_seq BEFORE INSERT ON ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V135_project_scoped_run_task_seq.sql",
+        "line": 48,
+        "text": "CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_generation_requests_project_seq ON ai_generation_requests (project_id, seq);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V157_native_testcase_proposal_review.sql",
+        "line": 2,
+        "text": "ALTER TABLE ai_generation_requests ADD COLUMN proposal_revision BIGINT NOT NULL DEFAULT 0;"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V157_native_testcase_proposal_review.sql",
+        "line": 3,
+        "text": "ALTER TABLE ai_generation_requests ADD COLUMN proposal_request_key TEXT;"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V157_native_testcase_proposal_review.sql",
+        "line": 4,
+        "text": "ALTER TABLE ai_generation_requests ADD COLUMN proposal_request_digest CHAR(64);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V157_native_testcase_proposal_review.sql",
+        "line": 5,
+        "text": "ALTER TABLE ai_generation_requests ADD COLUMN proposal_provenance JSONB;"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V157_native_testcase_proposal_review.sql",
+        "line": 6,
+        "text": "CREATE UNIQUE INDEX idx_native_proposal_request ON ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V157_native_testcase_proposal_review.sql",
+        "line": 18,
+        "text": "CREATE TRIGGER native_proposal_revision BEFORE UPDATE ON ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V157_native_testcase_proposal_review.sql",
+        "line": 47,
+        "text": "CREATE TRIGGER native_proposal_history BEFORE UPDATE ON ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V157_native_testcase_proposal_review.sql",
+        "line": 110,
+        "text": ") FROM ai_generation_requests r JOIN projects p ON p.id=r.project_id WHERE r.id=request_id;"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V35_zyra_agent_tasks.sql",
+        "line": 1,
+        "text": "ALTER TABLE ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V35_zyra_agent_tasks.sql",
+        "line": 11,
+        "text": "CREATE INDEX IF NOT EXISTS idx_ai_generation_requests_agent_status"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V35_zyra_agent_tasks.sql",
+        "line": 12,
+        "text": "ON ai_generation_requests(project_id, agent_name, task_status, created_at DESC);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V36_zyra_activity_sources.sql",
+        "line": 1,
+        "text": "ALTER TABLE ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V40_rename_zyra_agent.sql",
+        "line": 1,
+        "text": "ALTER TABLE ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V40_rename_zyra_agent.sql",
+        "line": 4,
+        "text": "UPDATE ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V66_testcase_linear_link.sql",
+        "line": 6,
+        "text": "ALTER TABLE ai_generation_requests ADD COLUMN IF NOT EXISTS linear_issue_keys JSONB DEFAULT '[]'::jsonb;"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V87_zyra_token_usage.sql",
+        "line": 1,
+        "text": "-- Zyra Settings \"Token usage\" tile reads SUM(token_total) from ai_generation_requests, a table"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V87_zyra_token_usage.sql",
+        "line": 31,
+        "text": "-- (currently empty) table instead of ai_generation_requests. Chat-driven usage from before this"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V87_zyra_token_usage.sql",
+        "line": 43,
+        "text": "FROM ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V89_zyra_chat_review.sql",
+        "line": 4,
+        "text": "-- in `ai_generation_requests.generated_payload` and only commits them on an explicit Save; this links"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V89_zyra_chat_review.sql",
+        "line": 7,
+        "text": "ALTER TABLE ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V89_zyra_chat_review.sql",
+        "line": 14,
+        "text": "ADD COLUMN IF NOT EXISTS review_request_id UUID REFERENCES ai_generation_requests(id) ON DELETE SET NULL;"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V89_zyra_chat_review.sql",
+        "line": 16,
+        "text": "CREATE INDEX IF NOT EXISTS idx_ai_generation_requests_chat_session"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V89_zyra_chat_review.sql",
+        "line": 17,
+        "text": "ON ai_generation_requests(chat_session_id, created_at DESC);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V8_ai_generation_history.sql",
+        "line": 1,
+        "text": "CREATE TABLE ai_generation_requests ("
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V8_ai_generation_history.sql",
+        "line": 25,
+        "text": "CREATE INDEX idx_ai_generation_requests_project ON ai_generation_requests(project_id, created_at DESC);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V8_ai_generation_history.sql",
+        "line": 26,
+        "text": "CREATE INDEX idx_ai_generation_requests_requested_by ON ai_generation_requests(requested_by, created_at DESC);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 248,
+        "text": "// ai_generation_requests.provider value for a row staged by the archive sweep (sub-task C) rather"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 250,
+        "text": "// V107_ai_generation_requests_system_actor.sql's own reasoning for why `provider`, not a new"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 1484,
+        "text": "* the same checks, suite filing and storage as a whole batch \u2014 into ONE ai_generation_requests row:"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 1566,
+        "text": "\"SELECT generated_payload, saved_count FROM ai_generation_requests WHERE id = $1\","
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 1581,
+        "text": "const res = await client.query(\"SELECT task_status, generated_payload, activity_log FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE\", [reviewRequestId, projectId]);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 1591,
+        "text": "`UPDATE ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 2413,
+        "text": "\"UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb WHERE id = $1 AND project_id = $2\","
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 4132,
+        "text": "? await this.db.query(\"SELECT id, seq FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND agent_name = ANY($3::text[])\", [task, projectId, ZYRA_AGENT_NAMES])"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 4133,
+        "text": ": await this.db.query(\"SELECT id, seq FROM ai_generation_requests WHERE seq = $1 AND project_id = $2 AND agent_name = ANY($3::text[])\", [seq, projectId, ZYRA_AGENT_NAMES]);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 6527,
+        "text": "FROM ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 15328,
+        "text": "// Reads the zyra_token_usage ledger, not ai_generation_requests.token_total \u2014 that column"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 15345,
+        "text": "FROM ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 15353,
+        "text": "// ai_generation_requests row would before a user asked for anything."
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 15380,
+        "text": "FROM ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 15503,
+        "text": "* Cases\"): the tile summed `generated_count` over ai_generation_requests, a column only the"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 15617,
+        "text": "const prior = await client.query(\"SELECT id,proposal_request_digest FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3\", [projectId, principalKey, requestKey]);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 15637,
+        "text": "`INSERT INTO ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 15650,
+        "text": "const rows = await this.db.query(\"SELECT id FROM ai_generation_requests WHERE project_id=$1 AND task_status='in_review' ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3\", [projectId, pageNumber(query.limit, 25, 1, 100), pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER)]);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 15695,
+        "text": "const result = await runner.query(\"SELECT r.*,testcase_proposal_review_snapshot(r.id) AS proposal_snapshot FROM ai_generation_requests r WHERE r.id=$1 AND r.project_id=$2\", [taskId,projectId]);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 17701,
+        "text": "// then flushed into one ai_generation_requests row (chat_session_id-linked) at the end of this"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 17932,
+        "text": "// ai_generation_requests row(s), never auto-saving it."
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 18043,
+        "text": "`INSERT INTO ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 18145,
+        "text": "// every `ai_generation_requests` row an in-session create batch staged, re-verified live against"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 18159,
+        "text": "\"SELECT id, generated_payload FROM ai_generation_requests WHERE id = ANY($1::uuid[]) AND project_id = $2 AND task_status = 'in_review' ORDER BY id\","
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 18175,
+        "text": "// takes the same `ai_generation_requests` row lock first thing in its own transaction, so the two"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 18182,
+        "text": "\"SELECT generated_payload FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_status = 'in_review' FOR UPDATE\","
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 18195,
+        "text": "\"UPDATE ai_generation_requests SET generated_payload = $2::jsonb, updated_at = now() WHERE id = $1\","
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 19654,
+        "text": "// `reviewRequestId`: the ai_generation_requests row applyZyraChatOperations staged this batch's"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 19705,
+        "text": "* Locks only zyra_chat_sessions, never combined with ai_generation_requests in the same"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 19707,
+        "text": "* ai_generation_requests \u2192 zyra_chat_sessions order, see its own comment) by construction, since"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 19712,
+        "text": "* independently reachable ai_generation_requests row before this ever runs; only the chat"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 19900,
+        "text": "// applyZyraChatOperations itself records this batch's ai_generation_requests row as pending"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20169,
+        "text": "`INSERT INTO ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20221,
+        "text": "const res = await this.db.query<{ requested_by: string | null }>(\"SELECT requested_by FROM ai_generation_requests WHERE id = $1 AND project_id = $2\", [taskId, projectId]);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20240,
+        "text": "`UPDATE ai_generation_requests SET task_status = 'failed', activity_log = activity_log || $3::jsonb, updated_at = now()"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20253,
+        "text": "\"UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2\","
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20270,
+        "text": "const taskRes = await this.db.query(\"SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2\", [taskId, projectId]);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20297,
+        "text": "`UPDATE ai_generation_requests SET task_status = 'in_progress', activity_log = activity_log || $3::jsonb, updated_at = now()"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20368,
+        "text": "`UPDATE ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20395,
+        "text": "\"UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2\","
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20449,
+        "text": "`SELECT * FROM ai_generation_requests WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20464,
+        "text": "const existing = await this.db.query(\"SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2\", [taskId, projectId]);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20522,
+        "text": "`UPDATE ai_generation_requests SET task_status = 'todo', feedback = $3, activity_log = activity_log || $4::jsonb, updated_at = now(),"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20672,
+        "text": "`UPDATE ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20709,
+        "text": "\"UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2\","
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20759,
+        "text": "const existing = await client.query(\"SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE\", [taskId, projectId]);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20775,
+        "text": "`UPDATE ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20797,
+        "text": "const existing = await client.query(\"SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE\", [taskId, projectId]);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20825,
+        "text": "`UPDATE ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20845,
+        "text": "const existing = await this.db.query(\"SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2\", [taskId, projectId]);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20861,
+        "text": "`UPDATE ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20870,
+        "text": "const fresh = await this.db.query(\"SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2\", [taskId, projectId]);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20885,
+        "text": "// suite-tree project mutex first, then ai_generation_requests/target testcase rows and the"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20904,
+        "text": "const locked = await client.query(\"SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE\", [taskId,projectId]);"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 20992,
+        "text": "\"UPDATE ai_generation_requests SET generated_payload=$3::jsonb,generated_count=GREATEST(generated_count,saved_count+$5+$4),saved_count=saved_count+$5,save_events=save_events||$6::jsonb,activity_log=activity_log||$7::jsonb,task_status=$8,updated_at=now() WHERE id=$1 AND project_id=$2\","
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 22495,
+        "text": "* idx_ai_generation_requests_sweep_archive_dedup (V108) rejecting a second unresolved proposal for"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 22532,
+        "text": "`INSERT INTO ai_generation_requests"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "line": 22553,
+        "text": "String((err as { constraint?: string })?.constraint || \"\") === \"idx_ai_generation_requests_sweep_archive_dedup\";"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/zyra-draft-stream.ts",
+        "line": 19,
+        "text": "*     path (applyZyraChatOperations) into one ai_generation_requests row, so what the review panel"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/zyra-task-activity-ru.ts",
+        "line": 3,
+        "text": "* to a task whose language is \"ru\" (ai_generation_requests.language)."
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/rag/rag-ingestion.service.ts",
+        "line": 57,
+        "text": "// zyraBatchInsertTestCases (staged Zyra drafts, which write to ai_generation_requests, not"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/zyra-archive-sweep/zyra-archive-sweep.service.ts",
+        "line": 232,
+        "text": "// Same predicate idx_ai_generation_requests_sweep_archive_dedup (V108) enforces at the DB level"
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/zyra-archive-sweep/zyra-archive-sweep.service.ts",
+        "line": 236,
+        "text": "\"SELECT sweep_testcase_id FROM ai_generation_requests WHERE provider = 'zyra_archive_sweep' AND task_status <> 'done' AND sweep_testcase_id IS NOT NULL\","
+      },
+      {
+        "path": "Tesbo-Frontend/app/(app)/projects/[id]/requirements/page.tsx",
+        "line": 352,
+        "text": "// ai_generation_requests row still exists, but \"done\" is the case isLinked/tcCountFor already"
+      },
+      {
+        "path": "Tesbo-Frontend/lib/api.ts",
+        "line": 945,
+        "text": "// server-side normalization of a non-create ai_generation_requests.generated_payload item \u2014 see"
+      },
+      {
+        "path": "Tesbo-Frontend/lib/api.ts",
+        "line": 996,
+        "text": "// V107_ai_generation_requests_system_actor.sql. Not rendered anywhere today; kept honest for"
+      },
+      {
+        "path": "Tesbo-Frontend/lib/api.ts",
+        "line": 1047,
+        "text": "// stores in ai_generation_requests.provider."
+      },
+      {
+        "path": "Tesbo-Frontend/lib/api.ts",
+        "line": 1147,
+        "text": "/** The ai_generation_requests id this proposal is staged under \u2014 only set on a \"proposed-*\" row. */"
+      }
+    ]
+  },
+  "freshness": [
+    {
+      "path": "AGENTS.md",
+      "at_9519": "38f5e4b02ba352d90c1f4268434616c85d22053e5e032598d00c8e994726421d",
+      "at_965a87a1": "38f5e4b02ba352d90c1f4268434616c85d22053e5e032598d00c8e994726421d",
+      "byte_identical": true
+    },
+    {
+      "path": "CLAUDE.md",
+      "at_9519": "d82f42d90c90a7037b40ec03cc473d05655f820ebc13073a52b2d4696220119f",
+      "at_965a87a1": "d82f42d90c90a7037b40ec03cc473d05655f820ebc13073a52b2d4696220119f",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V107_ai_generation_requests_system_actor.sql",
+      "at_9519": "ca295d2fa92006a07e2f6c54cfe4029d29cc1c12f6eb7905eaecca4a05ca9f9f",
+      "at_965a87a1": "ca295d2fa92006a07e2f6c54cfe4029d29cc1c12f6eb7905eaecca4a05ca9f9f",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V108_ai_generation_requests_sweep_dedup.sql",
+      "at_9519": "079e98ec68c42db98a9344152c0ba9a9f07938beb15c940527431d0f243d2d8b",
+      "at_965a87a1": "079e98ec68c42db98a9344152c0ba9a9f07938beb15c940527431d0f243d2d8b",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V109_notifications_dedupe_key.sql",
+      "at_9519": "e4491ac9344b43405492e3fb2ed10c4c5083e5ef47bdbeca02856490daeb86db",
+      "at_965a87a1": "e4491ac9344b43405492e3fb2ed10c4c5083e5ef47bdbeca02856490daeb86db",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V115_attachments_soft_delete.sql",
+      "at_9519": "6da88d224c6b804ba9aa8c3355eb471c2a57db05208bee67762706b4ab31237e",
+      "at_965a87a1": "6da88d224c6b804ba9aa8c3355eb471c2a57db05208bee67762706b4ab31237e",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V116_zyra_chat_sessions_soft_delete.sql",
+      "at_9519": "b55bbeb1e52af9997dcc4dd0fd744d3c058d7a6916f3d87b0f72c7b8e841fcb3",
+      "at_965a87a1": "b55bbeb1e52af9997dcc4dd0fd744d3c058d7a6916f3d87b0f72c7b8e841fcb3",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V123_integration_ticket_comments.sql",
+      "at_9519": "3ada01c7d5b45e96daaefecd4b9efa187b3af0f7846190836b9c0871b9c2ba40",
+      "at_965a87a1": "3ada01c7d5b45e96daaefecd4b9efa187b3af0f7846190836b9c0871b9c2ba40",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V132_zyra_generation_language.sql",
+      "at_9519": "852ce936d50c360c17d6e572078672a99d978053a62f5f45f6d21bac364d075c",
+      "at_965a87a1": "852ce936d50c360c17d6e572078672a99d978053a62f5f45f6d21bac364d075c",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V133_notion_integration.sql",
+      "at_9519": "d464b2e39fc27073e09ec3c44b422fbd50094e5e244a7acd08b012101e5f71a5",
+      "at_965a87a1": "d464b2e39fc27073e09ec3c44b422fbd50094e5e244a7acd08b012101e5f71a5",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V135_project_scoped_run_task_seq.sql",
+      "at_9519": "8059a162d691a63faf4178431ae129264533d273022c89571c4f70353b91ca31",
+      "at_965a87a1": "8059a162d691a63faf4178431ae129264533d273022c89571c4f70353b91ca31",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V157_native_testcase_proposal_review.sql",
+      "at_9519": "cfd6a0091351f7f39807dd0a9832c706f31d712e0c64d2a61efae7f2f96e7c51",
+      "at_965a87a1": "cfd6a0091351f7f39807dd0a9832c706f31d712e0c64d2a61efae7f2f96e7c51",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V1_init_schema.sql",
+      "at_9519": "4a64fb25c2b1f40701b16ab5bc64c0f9d050798a6dfcd42206ea563b58374e1f",
+      "at_965a87a1": "4a64fb25c2b1f40701b16ab5bc64c0f9d050798a6dfcd42206ea563b58374e1f",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V2_test_cases_and_suites.sql",
+      "at_9519": "9a9875f7bb2b743756d0e76efdfda3af76965bca13f2728fe35b90871a185a85",
+      "at_965a87a1": "9a9875f7bb2b743756d0e76efdfda3af76965bca13f2728fe35b90871a185a85",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V35_zyra_agent_tasks.sql",
+      "at_9519": "9d54ed6bda3617b23761950229a9edfaa85d8485bf9f0177eb7455095e4abbd1",
+      "at_965a87a1": "9d54ed6bda3617b23761950229a9edfaa85d8485bf9f0177eb7455095e4abbd1",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V36_zyra_activity_sources.sql",
+      "at_9519": "14072201a7fd2bec63970bbc6f45fcd3e87d4aaf50ad00371225abf6c2d5e171",
+      "at_965a87a1": "14072201a7fd2bec63970bbc6f45fcd3e87d4aaf50ad00371225abf6c2d5e171",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V40_rename_zyra_agent.sql",
+      "at_9519": "fa2ed86b58cda5e98c75b6dff15aee445bb685cae78c1a2ed5c9b16a3fa44feb",
+      "at_965a87a1": "fa2ed86b58cda5e98c75b6dff15aee445bb685cae78c1a2ed5c9b16a3fa44feb",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V58_actors_identity.sql",
+      "at_9519": "2295da8c84e7f7b9014a1ff1ec11f0952c3fbeae06ea9708598e218ed577cf9d",
+      "at_965a87a1": "2295da8c84e7f7b9014a1ff1ec11f0952c3fbeae06ea9708598e218ed577cf9d",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V5_api_tokens_webhooks.sql",
+      "at_9519": "2a15fd4764278a2946c74019f29aae70d6d40f5cf487214ada63a7647fa500e5",
+      "at_965a87a1": "2a15fd4764278a2946c74019f29aae70d6d40f5cf487214ada63a7647fa500e5",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V61_attachments_audit_logs_actor_fk.sql",
+      "at_9519": "f4647e7fc511e4da330e0560fc9cb0caf7a2b9c3251c4d9a89da9d08cbaf2739",
+      "at_965a87a1": "f4647e7fc511e4da330e0560fc9cb0caf7a2b9c3251c4d9a89da9d08cbaf2739",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V65_mcp_agent_actor.sql",
+      "at_9519": "373065d93ad0af0cafca7750e633a8a9b4eedd4f2c811f61bd9bd5896af7bb1f",
+      "at_965a87a1": "373065d93ad0af0cafca7750e633a8a9b4eedd4f2c811f61bd9bd5896af7bb1f",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V66_testcase_linear_link.sql",
+      "at_9519": "017122f22c065b894f308ea4881b58bad4c9824d856a00c9e4317bdb9d41689c",
+      "at_965a87a1": "017122f22c065b894f308ea4881b58bad4c9824d856a00c9e4317bdb9d41689c",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V87_zyra_token_usage.sql",
+      "at_9519": "58452fc8eac44e5795bcb4526cca4e1e89ddd81f6199d09b96cdc616512fd174",
+      "at_965a87a1": "58452fc8eac44e5795bcb4526cca4e1e89ddd81f6199d09b96cdc616512fd174",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V89_zyra_chat_review.sql",
+      "at_9519": "31f19e63c46e6fb03f0eecbaae13c2de319149baf29b160fc7b27954b51eb5fb",
+      "at_965a87a1": "31f19e63c46e6fb03f0eecbaae13c2de319149baf29b160fc7b27954b51eb5fb",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V8_ai_generation_history.sql",
+      "at_9519": "0d4468bf96d124673e1b4c81fa1919967f2fd216ab4c85f696c67e2d2df11b3d",
+      "at_965a87a1": "0d4468bf96d124673e1b4c81fa1919967f2fd216ab4c85f696c67e2d2df11b3d",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/package.json",
+      "at_9519": "02775ebb1bd47d325f6f2684b01d8da999f8c6f41466556aca30469355368b1b",
+      "at_965a87a1": "02775ebb1bd47d325f6f2684b01d8da999f8c6f41466556aca30469355368b1b",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/auth/api-token-rest.guard.ts",
+      "at_9519": "47d47da161c3012c9d764ddca070bdd75d4e76aa539490865c474d918ab102f8",
+      "at_965a87a1": "47d47da161c3012c9d764ddca070bdd75d4e76aa539490865c474d918ab102f8",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/auth/api-token.service.ts",
+      "at_9519": "28959f0f009383cbb8f6fb24b9ca6d8164063b7bcfd23a32b36331901dfa7de5",
+      "at_965a87a1": "28959f0f009383cbb8f6fb24b9ca6d8164063b7bcfd23a32b36331901dfa7de5",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/automation/automation.service.ts",
+      "at_9519": "7f65f3217e132a19daf8aa940b9c3fd315c1810e8ec0c67ca070c1f03f8b0ff0",
+      "at_965a87a1": "7f65f3217e132a19daf8aa940b9c3fd315c1810e8ec0c67ca070c1f03f8b0ff0",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/common/human-review-principal.ts",
+      "at_9519": "ddba247c680a53b4d091908061add30b04c8a2505fe6321bc58d93f20fde50c8",
+      "at_965a87a1": "ddba247c680a53b4d091908061add30b04c8a2505fe6321bc58d93f20fde50c8",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/common/testcase-publication.policy.ts",
+      "at_9519": "90f2accd42b37f5c8476833cd362646728c681ac8a91b73c9c6424ce6d8203c0",
+      "at_965a87a1": "90f2accd42b37f5c8476833cd362646728c681ac8a91b73c9c6424ce6d8203c0",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/legacy/legacy.controller.ts",
+      "at_9519": "c5725581c49f0ab2f07ec663f2935acd425aec711d6f0d0050b96bdf47eda455",
+      "at_965a87a1": "c5725581c49f0ab2f07ec663f2935acd425aec711d6f0d0050b96bdf47eda455",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+      "at_9519": "e51f779469455c818bc274cf11be0716445c8a9558e80b0257336881bc8f8104",
+      "at_965a87a1": "e51f779469455c818bc274cf11be0716445c8a9558e80b0257336881bc8f8104",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/legacy/notification-events.ts",
+      "at_9519": "547e338568d32780fab9ef903a5baa76428f319601e24f16710870d1c3bc62bb",
+      "at_965a87a1": "547e338568d32780fab9ef903a5baa76428f319601e24f16710870d1c3bc62bb",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/legacy/zyra-draft-stream.ts",
+      "at_9519": "5e1ff3f3c26082797f7882b66022f5130d18344b8f6a9a66459d838ae09fc143",
+      "at_965a87a1": "5e1ff3f3c26082797f7882b66022f5130d18344b8f6a9a66459d838ae09fc143",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/legacy/zyra-task-activity-ru.ts",
+      "at_9519": "006979b13a72a43db15efad7316bd26b2362f0f62de191dfae999baecf38fb97",
+      "at_965a87a1": "006979b13a72a43db15efad7316bd26b2362f0f62de191dfae999baecf38fb97",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/mcp/mcp.service.ts",
+      "at_9519": "6a171831791944ab3ee1f85b1fe1f60a4210e4baa85791633a0fe4d2602b1533",
+      "at_965a87a1": "6a171831791944ab3ee1f85b1fe1f60a4210e4baa85791633a0fe4d2602b1533",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/mcp/mcp.tools.ts",
+      "at_9519": "810177d5684fe7498e0068f8ef2ea9d23171add241b4e0d07d0807e3b2aeab85",
+      "at_965a87a1": "810177d5684fe7498e0068f8ef2ea9d23171add241b4e0d07d0807e3b2aeab85",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/plan-limits/plan-limits.service.ts",
+      "at_9519": "c4404a3c9e0f690958f045fbeaf611f84be224a037a0a7e4e09feb21e308e547",
+      "at_965a87a1": "c4404a3c9e0f690958f045fbeaf611f84be224a037a0a7e4e09feb21e308e547",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/rag/rag-ingestion.service.ts",
+      "at_9519": "f9610c2c2d772f6c71abe28054debf156e6890bd9e3eb7bcab875d6c1113a3b5",
+      "at_965a87a1": "f9610c2c2d772f6c71abe28054debf156e6890bd9e3eb7bcab875d6c1113a3b5",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/storage/storage.service.ts",
+      "at_9519": "f9b28def7397dbe16f842db02f241ad280a6ba43f46e21031f388afc6440133a",
+      "at_965a87a1": "f9b28def7397dbe16f842db02f241ad280a6ba43f46e21031f388afc6440133a",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/zyra-archive-sweep/zyra-archive-sweep.service.ts",
+      "at_9519": "add0d06dca5a2cb4c63234ad9044964a452d0eca958ea10d370662edf6659b4a",
+      "at_965a87a1": "add0d06dca5a2cb4c63234ad9044964a452d0eca958ea10d370662edf6659b4a",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/AGENTS.md",
+      "at_9519": "63f2c50380ed6303237cce215ce27af1d620d094c215e28d1b1538a3c070e3bb",
+      "at_965a87a1": "63f2c50380ed6303237cce215ce27af1d620d094c215e28d1b1538a3c070e3bb",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/(app)/projects/[id]/agents/page.tsx",
+      "at_9519": "4c32ecf1ae4f3e8bc006d5c4f45f1bb0b83c4429e8122b5e886c21f6ebbcc952",
+      "at_965a87a1": "4c32ecf1ae4f3e8bc006d5c4f45f1bb0b83c4429e8122b5e886c21f6ebbcc952",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/(app)/projects/[id]/agents/tasks/[taskId]/page.tsx",
+      "at_9519": "8bd8b2a9dba9b21457718eafb157a31acb42214dceb0f2c2ed8cc579ef23cc0b",
+      "at_965a87a1": "8bd8b2a9dba9b21457718eafb157a31acb42214dceb0f2c2ed8cc579ef23cc0b",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/(app)/projects/[id]/agents/tasks/page.tsx",
+      "at_9519": "f3a187dc8d641bde474ccf876c912002a023fba123f6a9e26b15e6d27872165d",
+      "at_965a87a1": "f3a187dc8d641bde474ccf876c912002a023fba123f6a9e26b15e6d27872165d",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/(app)/projects/[id]/agents/zyra/page.tsx",
+      "at_9519": "059daa5117a4595c1e9bb1713739b6fef465dd31660e058af2d517548e5c0446",
+      "at_965a87a1": "059daa5117a4595c1e9bb1713739b6fef465dd31660e058af2d517548e5c0446",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/(app)/projects/[id]/agents/zyra/settings/page.tsx",
+      "at_9519": "d8623356b10dd5cd5a287dfbf3ba2fed287a0ed8e2461766fd86699c488e3e1b",
+      "at_965a87a1": "d8623356b10dd5cd5a287dfbf3ba2fed287a0ed8e2461766fd86699c488e3e1b",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/(app)/projects/[id]/requirements/page.tsx",
+      "at_9519": "43064607ce45a3e38b9c0ac0e4a1587fbd2875061147a31646a5033fb9c8cf5d",
+      "at_965a87a1": "43064607ce45a3e38b9c0ac0e4a1587fbd2875061147a31646a5033fb9c8cf5d",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/(app)/projects/[id]/testcases/[tcId]/page.tsx",
+      "at_9519": "90c7cc39d82b4438108c138ca0ba7b9301bc2cc44c073bec7a7285ef7e15962d",
+      "at_965a87a1": "90c7cc39d82b4438108c138ca0ba7b9301bc2cc44c073bec7a7285ef7e15962d",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/globals.css",
+      "at_9519": "a756ae7d8c89af0e22fcece152a5c91cd7958305730e0673f084f739151f727d",
+      "at_965a87a1": "a756ae7d8c89af0e22fcece152a5c91cd7958305730e0673f084f739151f727d",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/components/TopBar.tsx",
+      "at_9519": "524a0e828de3ae47f12fc680a3249523e3346364b8256bbe053f958c0ee13911",
+      "at_965a87a1": "524a0e828de3ae47f12fc680a3249523e3346364b8256bbe053f958c0ee13911",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/components/agents/ReviewBoard.tsx",
+      "at_9519": "43c526a4bfd62df06db8a5a219f9028c7f0d0871394b68c93ea745f7732e0922",
+      "at_965a87a1": "43c526a4bfd62df06db8a5a219f9028c7f0d0871394b68c93ea745f7732e0922",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/components/agents/TaskQuickViewPanel.tsx",
+      "at_9519": "771177b354d1dc630a6562fc8973e924cb0eba3014818788c6fa4a4e325236b3",
+      "at_965a87a1": "771177b354d1dc630a6562fc8973e924cb0eba3014818788c6fa4a4e325236b3",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/components/agents/ZyraChatReviewPanel.tsx",
+      "at_9519": "373854562213bf9127b65634ff2944415cb2e81d226a4d298fd60e50c29b94c0",
+      "at_965a87a1": "373854562213bf9127b65634ff2944415cb2e81d226a4d298fd60e50c29b94c0",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/lib/api.ts",
+      "at_9519": "962dcaf20576c2603f30c4b438bdbef9bf83ffb687024a9d89c65dc0ae468412",
+      "at_965a87a1": "b8f6f6fdf4ce97aca68824b9eae3b08d22cbdb6c0abf56989429f3f74b5a492d",
+      "byte_identical": false
+    },
+    {
+      "path": "Tesbo-Frontend/lib/zyraCacheSync.ts",
+      "at_9519": "7f18aca9ef16019b811e51794d70e2b9fdef1840a8914f25e9da73f62195191c",
+      "at_965a87a1": "7f18aca9ef16019b811e51794d70e2b9fdef1840a8914f25e9da73f62195191c",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/package.json",
+      "at_9519": "75f5759ed7776b065740e6f56d2392900a499ddf1d638adfba4acdacce7ca783",
+      "at_965a87a1": "75f5759ed7776b065740e6f56d2392900a499ddf1d638adfba4acdacce7ca783",
+      "byte_identical": true
+    },
+    {
+      "path": "package.json",
+      "at_9519": "72736314bf5ebe869927d4165090311e77259e31d311311b214655ca8dbb89d7",
+      "at_965a87a1": "72736314bf5ebe869927d4165090311e77259e31d311311b214655ca8dbb89d7",
+      "byte_identical": true
+    }
+  ],
+  "task_api_scope_comparison": {
+    "path": "Tesbo-Frontend/lib/api.ts",
+    "scope": "first 4900 lines, covering task/proposal definitions and functions, before Model Studio change hunk at old line4925",
+    "old_sha256": "410f5855e0e36934276a636e11c01903656022d7d78906c8a55897f395bd9b64",
+    "new_sha256": "410f5855e0e36934276a636e11c01903656022d7d78906c8a55897f395bd9b64",
+    "byte_identical": true
+  },
+  "evidence_level": "manual source/design review plus deterministic inventory/hash accounting; no application tests, database, services, browser or external clients",
+  "limitations": [
+    "No all-repository semantic audit or external consumer telemetry.",
+    "Inventory/hashing is not branch execution.",
+    "Historical reviewer evidence retains original pin.",
+    "Storage-compatible S3 conditional immutability and actual client image consumption not tested.",
+    "No formal two-member Blue quorum in this standalone receipt."
+  ]
+}

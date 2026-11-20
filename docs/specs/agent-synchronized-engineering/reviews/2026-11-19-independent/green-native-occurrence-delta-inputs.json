@@ -1,0 +1,277 @@
+{
+  "reviewer": "/root/green_native_occurrence_delta",
+  "source": "965a87a13d2669354598f8d4b912f36fdb148867",
+  "tree": "b3c497bdb7a43cd43e8d0535f663c542cba88186",
+  "ci_merge": "e49fab4df4043b621b7007e97d8646743f441b6b",
+  "method_commit": "d83549c85a4dcd047fb40dc4fba4ec62737ab0fc",
+  "scope": "bounded occurrence repair and declared native Green profile delta; read hashes do not themselves mean full content/semantics audited",
+  "files": [
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-method-inputs/.kiro/steering/teams/green-team-charter.md",
+      "bytes": 20511,
+      "sha256": "92a18c31b5933b76bbc9334b9b0ffa3bade414ed775a619f4fdb299a591653ec"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-method-inputs/.kiro/steering/teams/review-orchestration.md",
+      "bytes": 45631,
+      "sha256": "023a64168c5160a761b91e7496b8a35b89246baf7eda0ab62bac17a7fa44771e"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-method-inputs/docs/policies/governance/POL-GOVERNANCE-ASSURANCE-PORTABILITY/v001.md",
+      "bytes": 5618,
+      "sha256": "33c69cba82f7d98773e85a30fa1afff15cc0dbcec0d88302a0295ce06e2c8524"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-method-inputs/docs/policies/governance/POL-GOVERNANCE-ASSURANCE-EVIDENCE/v001.md",
+      "bytes": 5821,
+      "sha256": "a6176c0c75342dfa6cbf66cf64e00b9a2940a47655f343e255b96f4fa58c5d52"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-working/green-native-independent.md",
+      "bytes": 44924,
+      "sha256": "32268e7dc9488dbcac8c6bfd4ca7110b8f86c4c56e4965763a0b664d977065a2"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-working/green-native-independent-binding-addendum.md",
+      "bytes": 12740,
+      "sha256": "3b795c9f4622069df5cacaf9739267f1ecdeebcaf2ba6b70cb73429546348d58"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-working/green-native-root-grounding.md",
+      "bytes": 14808,
+      "sha256": "ff84f0aef2b158e7a0f41a7098f2a92d3f497f84c7c183ce4fbaafe74f12c8e8"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-working/green-native-root-binding-delta.md",
+      "bytes": 1607,
+      "sha256": "8723eef9a12c9efd20e480348cfd640aab4d204e7daec96e5646f9942a60dea8"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-working/check_native_review_trace.py",
+      "bytes": 6476,
+      "sha256": "e3116e8b77350d3a3670a9a5bb4e9f36778ffd30714c4d0872ea39b23b9ce9ed"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-working/native-green-profile-9519-v2.json",
+      "bytes": 22767,
+      "sha256": "cfdaa6f32ec9e22ad7210c9baa1c645689953fca8ce2eeb178bd3f451613f39a"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-working/native-green-profile-965a87a1-v3.json",
+      "bytes": 23886,
+      "sha256": "09c507633a46ecd38eaf86d41665d1c8dc0c61d3d9ecb37e22a9a521d85d3875"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-working/green-native-occurrence-binding-result.json",
+      "bytes": 769,
+      "sha256": "7cb1b77ad179f717824405a3917880594224302ee4471b3d85b0d623027f5315"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-working/green-native-occurrence-migrations.log",
+      "bytes": 184,
+      "sha256": "4c5fc30013aa0ab07a01029afa37240ed97d865833a2a187340db1523dc0cbfc"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-working/green-native-occurrence-delta-probe.cjs",
+      "bytes": 13433,
+      "sha256": "e1a8dfc659eb6964ee9412b0dfe6544007c7e3affa4f97e01d8f9ef051619144"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-working/green-native-occurrence-delta-probe.log",
+      "bytes": 2620,
+      "sha256": "c49675ff3ccb3337b205d1546d996830a6e5b04426d86bc33781d8fe6326ce17"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/assurance-working/green-native-occurrence-delta-before.log",
+      "bytes": 24909,
+      "sha256": "5b5ca45256d17672e23dbc4b5c78035fb1cdb1fa56546d8d7acd5ac190ae8dd5"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-canonical-inputs/extracted-v1.4.28/03_TECHNICAL_DESIGN.md",
+      "bytes": 298441,
+      "sha256": "22630a7bbfa3626354f3570e2f4018b42e696cedf2e72c862c1ef4c78550d5f3"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-canonical-inputs/extracted-v1.4.28/07_UI_DESIGN_TASKS.md",
+      "bytes": 110240,
+      "sha256": "72347025fc2530da6a3bd10d0d0b32af2ec4d3efd754f7c4fd31606c613a1980"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-canonical-inputs/extracted-v1.4.28/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 299004,
+      "sha256": "854b03a1b138520269950cad9be31a6379692ad0ac70617e7a422eb543f35aa3"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-canonical-inputs/extracted-v1.4.28/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 120639,
+      "sha256": "e7d01ba202da5572198e303416f4e3ea7a3956dbf99bd62b61acfe94e4639452"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-canonical-inputs/extracted-v1.4.28/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 99719,
+      "sha256": "823c73b774a5462b6a1ca6b4d2467c4a5b6d4901a02c642e89ad6a2edc981770"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-canonical-inputs/extracted-v1.4.28/04_MCP_API_CONTRACTS.md",
+      "bytes": 156290,
+      "sha256": "5893a48fe504a8d5c6b47bb552c493685e950fab62d44334702a92edc7c9474d"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-canonical-inputs/extracted-v1.4.28/00_README.md",
+      "bytes": 138450,
+      "sha256": "43eb372cc28ce482b037301173e7afd783049db0e5fc1974d6afe75ac66cd0d2"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-canonical-inputs/extracted-v1.4.28/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 194683,
+      "sha256": "515c2230b0c3859156a9532dd8d833a28705f53113f8d84cd00e1db96daa8cae"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/AGENTS.md",
+      "bytes": 11901,
+      "sha256": "38f5e4b02ba352d90c1f4268434616c85d22053e5e032598d00c8e994726421d"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/CLAUDE.md",
+      "bytes": 18806,
+      "sha256": "d82f42d90c90a7037b40ec03cc473d05655f820ebc13073a52b2d4696220119f"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/Tesbo-Frontend/AGENTS.md",
+      "bytes": 678,
+      "sha256": "63f2c50380ed6303237cce215ce27af1d620d094c215e28d1b1538a3c070e3bb"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/Tesbo-Frontend/CLAUDE.md",
+      "bytes": 11,
+      "sha256": "336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/Tesbo-Backend-Nest/package.json",
+      "bytes": 2709,
+      "sha256": "02775ebb1bd47d325f6f2684b01d8da999f8c6f41466556aca30469355368b1b"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/Tesbo-Frontend/package.json",
+      "bytes": 1158,
+      "sha256": "75f5759ed7776b065740e6f56d2392900a499ddf1d638adfba4acdacce7ca783"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/e2e/package.json",
+      "bytes": 1199,
+      "sha256": "46e9cc2ab534a49918312f4c088a0464c193f9c85c5e5b9c881cf46425a124a2"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/Tesbo-Backend-Nest/src/behavior-graph/model-studio-repository.ts",
+      "bytes": 61962,
+      "sha256": "6eea2fb02f143f669f78c4cd86fd720219054eb1352dd7902e8ae17af5ab313d"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/Tesbo-Backend-Nest/src/database/database.service.ts",
+      "bytes": 4390,
+      "sha256": "857d5854386388ec786956982d93bb12c84d2a55e04d88e84b5703aeffa1ac24"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+      "bytes": 1548859,
+      "sha256": "e51f779469455c818bc274cf11be0716445c8a9558e80b0257336881bc8f8104"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.spec.ts",
+      "bytes": 21180,
+      "sha256": "e33b55910e0eb27da5189f2cc6af9c68afd25bfec1c4574d6f956f7dd8e41eec"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.db.spec.ts",
+      "bytes": 36262,
+      "sha256": "a60eeddd8f6b0b7f99d51f724a83fada572d9bcdce747957d22c8e640979fea8"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/Tesbo-Backend-Nest/migrations/V154_model_studio_governed_runs.sql",
+      "bytes": 2100,
+      "sha256": "6eefa629d7ca973c8abefd508c0a0bd25f42f5ef250ef41d987bc8d9f430c113"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/Tesbo-Backend-Nest/migrations/V155_testcase_review_semantics.sql",
+      "bytes": 6699,
+      "sha256": "43452d7ad712a5ba9d75320ddc83a73e3e982ec3307ce140084f4028d7d15ee2"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/Tesbo-Frontend/lib/api.ts",
+      "bytes": 187447,
+      "sha256": "b8f6f6fdf4ce97aca68824b9eae3b08d22cbdb6c0abf56989429f3f74b5a492d"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/Tesbo-Frontend/app/(app)/projects/[id]/model-studio/page.tsx",
+      "bytes": 66922,
+      "sha256": "6097f407a914d2b11852d618bb7c1337bb657867b5fc2bca7faa985839dcbe4d"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/Tesbo-Frontend/app/(app)/projects/[id]/cycles/[cycleId]/page.tsx",
+      "bytes": 107723,
+      "sha256": "ed3628e7313841bd3c36904033b1c21dcf0bb23b71472b8fa8c1f15e7e4ed021"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/e2e/api/model-studio.spec.ts",
+      "bytes": 63927,
+      "sha256": "4378bf72118f500789f6cea3b77d61f12fe6b4c777760161444346185e2e8479"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/e2e/ui/model-studio.spec.ts",
+      "bytes": 42428,
+      "sha256": "ed7adcb73f69f4005699d300c0421aabea859ecb2339a2ce9588c76658cd6666"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/docs/specs/agent-synchronized-engineering/design.md",
+      "bytes": 78793,
+      "sha256": "fdac1162f9de4fea4db3ded625419b72d3abb47ed52887b5a7ab4b2976255237"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/docs/specs/agent-synchronized-engineering/implementation-plan.md",
+      "bytes": 71879,
+      "sha256": "60ba8f581af3f033ab709fd5d33e7fbbaa93913d1b6b74e5359835d6f6aa90be"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-review-965a87a1/docs/FEATURE_DOCUMENTATION.md",
+      "bytes": 810614,
+      "sha256": "f807cd1b042ad86faa0706593473c251ed2b263cc3284f49a28a6848a618293d"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-ci-evidence/965a87a1/database.log",
+      "bytes": 76523,
+      "sha256": "755f8d2dc9e42e095ab453b3fa0562a9d57d14297232e974fd90871a91996094"
+    },
+    {
+      "path": "/workspace/scratch/fb086055b433/tesbo-ci-evidence/965a87a1/architecture.log",
+      "bytes": 79442,
+      "sha256": "14535aa6b1695d6b32ed3d44d1913cd9628f5d7f7f1969b8f0ca57764f72b33f"
+    }
+  ],
+  "commands": [
+    {
+      "command": "node --test green-native-occurrence-delta-probe.cjs",
+      "source": "965a87a1",
+      "exit": 0,
+      "tests": 24,
+      "passed": 24,
+      "failed": 0
+    },
+    {
+      "command": "GREEN_OCCURRENCE_SOURCE_ROOT=tesbo-review-9519b56d node --test green-native-occurrence-delta-probe.cjs",
+      "source": "9519b56d",
+      "exit": 1,
+      "note": "Exact counts are retained in the raw before log.",
+      "tests": 24,
+      "passed": 2,
+      "failed": 22
+    },
+    {
+      "command": "python check_native_review_trace.py --repo tesbo-review-965a87a1 --canonical extracted-v1.4.28 --profile native-green-profile-965a87a1-v3.json --negative-controls",
+      "exit": 0
+    },
+    {
+      "command": "node scripts/check-migrations.mjs --base 6897f989b055a955280f810c7daace86f74057fa",
+      "exit": 0
+    }
+  ]
+}
