@@ -717,6 +717,26 @@ test.describe("zyra / agents (UI)", () => {
       const link = page.getByRole("link", { name: "Open existing test case" });
       await expect(link).toHaveAttribute("href", `/projects/${projectId}/testcases/${caseId}`);
       await expect(page.getByText("Review reason: case_changed")).toBeVisible();
+      // The new read-only explanation stays within the existing QA review page,
+      // using the actual persisted native receipt and authenticated project membership.
+      const explanation = page.getByRole("region", { name: "Evidence-bounded impact explanation" });
+      const analysisResponse = page.waitForResponse(response =>
+        response.url().endsWith(`/agents/zyra/changes/${historyId}/analysis`) &&
+        response.request().method() === "GET"
+      );
+      await explanation.getByRole("button", { name: "Explain possible impact (read-only)" }).click();
+      const explained = await analysisResponse;
+      expect(explained.status(), await explained.text()).toBe(200);
+      expect(await explained.json()).toMatchObject({
+        projectId, receiptId: receipt.id, coverageAssertion: "none",
+        executionAssertion: "none", sourceFreshness: "unverified",
+        candidateEffects: [{ caseNodeId: nodeId, consequence: "review_existing_case_expectations" }]
+      });
+      await expect(explanation).toContainText("Possible test-case review effects, not confirmed business consequences");
+      await expect(explanation).toContainText("policy and user-manual consequences");
+      await expect(explanation).toContainText("No case or approval was modified");
+      await explanation.getByRole("button", { name: "Hide impact explanation" }).click();
+
       await expect(page.getByText(/execution and coverage unverified/i)).toBeVisible();
       // Trigger the actual native notification path from a disposable tenant,
       // verify durable rows, then replay. No test execution or case mutation.
