@@ -197,15 +197,14 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
     expect(after.versions).toHaveLength(1); unchangedOutsideCase(before, after);
   });
 
-  describe.each(["service", "MCP registry"])("%s live-write omission", (transport) => {
+  describe("live-write omission", () => {
     it.each(["status", "title", "link", "unlink"])("does not overwrite a real concurrent suite/owner change during a %s edit", async (kind) => {
       const blocker = new Client({ connectionString: url }); await blocker.connect(); await blocker.query("BEGIN");
       await blocker.query("UPDATE testcases SET suite_id = $2, owner_id = $3 WHERE id = $1", [testcaseId, nextRoot, otherOwner]);
       const pid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
       const f = service(), before = await state();
       const body = kind === "status" ? { status: "Archived" } : kind === "title" ? { title: "Concurrent-safe title" } : kind === "link" ? { jiraIssueKey: "REPO-2", jiraUrl: "https://example.invalid/REPO-2" } : { jiraIssueKey: null, jiraUrl: null };
-      const name = kind === "status" ? "archive_testcase" : kind === "link" ? "link_requirement_to_testcase" : kind === "unlink" ? "unlink_requirement_from_testcase" : "update_testcase";
-      const writing = (transport === "service" ? f.svc.updateTestCase(testcaseId, owner, body) : f.tool(name, { testcaseId, ...body, ...(kind === "unlink" ? { provider: "jira" } : {}) })).then(() => null, (error: unknown) => error);
+      const writing = f.svc.updateTestCase(testcaseId, owner, body).then(() => null, (error: unknown) => error);
       try {
         await waitForBlocker(pid);
         expect(await state()).toEqual(before); expect(f.activity).not.toHaveBeenCalled();
@@ -218,6 +217,32 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
       } finally { await blocker.query("ROLLBACK"); await writing; await blocker.end(); }
     }, 15_000);
 
+    it("MCP refuses every retired direct testcase publisher without touching rows", async () => {
+      // Direct publication is retired: the machine path stages a proposal instead of writing. The
+      // live-write lock guarantee above therefore belongs to the human writer, and the registry must
+      // refuse every publisher before any row, history, activity or cache effect.
+      const f = service(), before = await state();
+      const attempts: Array<[string, Record<string, unknown>]> = [
+        ["update_testcase", { testcaseId, title: "Machine edit" }],
+        ["archive_testcase", { testcaseId }],
+        ["restore_testcase", { testcaseId }],
+        ["duplicate_testcase", { testcaseId }],
+        ["bulk_update_testcases", { testcaseIds: [testcaseId], priority: "P0" }],
+        ["bulk_archive_testcases", { testcaseIds: [testcaseId] }],
+        ["link_requirement_to_testcase", { testcaseId, jiraIssueKey: "REPO-3" }],
+        ["unlink_requirement_from_testcase", { testcaseId, provider: "jira" }]
+      ];
+      for (const [name, args] of attempts) {
+        await expect(f.tool(name, args)).rejects.toMatchObject({ data: { code: "HUMAN_PUBLICATION_REQUIRED" } });
+      }
+      expect(await state()).toEqual(before);
+      expect(f.activity).not.toHaveBeenCalled();
+      expect(f.suitesInvalidation).not.toHaveBeenCalled();
+      expect(f.casesInvalidation).not.toHaveBeenCalled();
+    });
+  });
+
+  describe.each(["service", "MCP registry"])("%s suite live-write omission", (transport) => {
     it.each(["name", "description", "position"])("preserves a concurrently committed suite parent during a %s-only edit", async (field) => {
       const blocker = new Client({ connectionString: url }); await blocker.connect(); await blocker.query("BEGIN");
       await blocker.query("UPDATE suites SET parent_id = $2 WHERE id = $1", [child, nextRoot]);
@@ -291,7 +316,7 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
       for (const row of before.cases) {
         const actual = after.cases.find((item) => item.id === row.id);
         if (row.id !== testcaseId) expect(actual).toEqual(row);
-        else expect(actual).toEqual({ ...row, ...(kind === "update" ? { priority: "P0", severity: "High" } : { deleted_at: expect.any(Date), deleted_by: owner }), updated_by: owner, updated_at: expect.any(Date) });
+        else expect(actual).toEqual({ ...row, ...(kind === "update" ? { priority: "P0", severity: "High" } : { deleted_at: expect.any(Date), deleted_by: owner }), review_dependency_revision: String(Number(row.review_dependency_revision) + 1), updated_by: owner, updated_at: expect.any(Date) });
         const oldHistory = before.versions.filter((version) => version.testcase_id === row.id);
         const newHistory = after.versions.filter((version) => version.testcase_id === row.id);
         expect(newHistory.slice(0, oldHistory.length)).toEqual(oldHistory);
@@ -345,7 +370,7 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
     const f = service(), before = await state();
     await f.svc.bulkUpdateTestCases(projectId, owner, { testcaseIds: [testcaseId], suiteId: "none", priority: "", severity: "" });
     const after = await state();
-    expect(after.row).toEqual({ ...before.row, suite_id: null, updated_by: owner, updated_at: expect.any(Date) });
+    expect(after.row).toEqual({ ...before.row, suite_id: null, review_dependency_revision: String(Number(before.row.review_dependency_revision) + 1), updated_by: owner, updated_at: expect.any(Date) });
     expect(after.versions).toHaveLength(before.versions.length + 1);
     unchangedOutsideCase(before, after);
   });
