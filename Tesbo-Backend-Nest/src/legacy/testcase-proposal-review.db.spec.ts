@@ -181,7 +181,9 @@ type Body=Record<string,any>;
       items:(await admin.query("SELECT * FROM cycle_items WHERE cycle_id=$1 ORDER BY id",[run.cycle.id])).rows,
       executions:(await admin.query("SELECT e.* FROM executions e JOIN cycle_items i ON i.id=e.cycle_item_id WHERE i.cycle_id=$1 ORDER BY e.id",[run.cycle.id])).rows
     });
-    const before=await evidence(),renamed=`REN-${randomUUID().replaceAll("-","")}`;
+    // external_id is limited to 32 characters; a full hyphenless UUID would exceed it before the
+    // rename under test ever runs.
+    const before=await evidence(),renamed=`REN-${randomUUID().replaceAll("-","").slice(0,20)}`;
     expect(before.items).toHaveLength(1);
     expect(before.items[0]).toMatchObject({snapshot_external_id:original.externalId,snapshot_approval_revision:original.approvalRevision});
     if(route==="native") await svc.updateTestCaseForUser(user,project,created.id,{externalId:renamed,expectedRevision:original.editRevision});
