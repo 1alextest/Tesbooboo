@@ -4716,6 +4716,38 @@ export async function listZyraGraphChanges(
   if (beforeId) params.set("beforeId", beforeId);
   return api(`/api/projects/${projectId}/agents/zyra/changes?${params.toString()}`, { signal });
 }
+/** An evidence-scoped projection of one committed native graph review receipt. */
+export type GraphQaConsequencePreview = {
+  receiptId: string;
+  projectId: string;
+  source: { contractId: string; scopeFingerprint: string; fromRevision: string; toRevision: string };
+  status: "needs_qa_triage";
+  basis: "cached_source_reference_only" | "source_declaration_unattested" | "verified_source_bytes_unverified_semantics";
+  candidateEffects: Array<{
+    caseNodeId: string;
+    requirementNodeIds: string[];
+    observedReasons: string[];
+    consequence: "review_existing_case_expectations";
+    confidence: "candidate_only";
+    condition: "independent_expectation_and_applicability_review_required";
+  }>;
+  unlinkedCaseNodeIds: string[];
+  changedNodeIds: string[];
+  unlinkedOrUnprovenChange: boolean;
+  unsupportedClaims: string[];
+  coverageAssertion: "none";
+  executionAssertion: "none";
+  sourceFreshness: "unverified";
+  nextAction: "qa_review";
+};
+
+/** Does not submit AI claims, source data, cases, or execution results. */
+export async function getZyraQaConsequencePreview(
+  projectId: string, historyId: string, signal?: AbortSignal
+): Promise<GraphQaConsequencePreview> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/agents/zyra/changes/${encodeURIComponent(historyId)}/analysis`, { signal });
+}
+
 export async function captureZyraGraphChange(projectId: string): Promise<GraphReviewCaptureResult> {
   return api(`/api/projects/${projectId}/agents/zyra/changes/capture`, {
     method: "POST", body: {}
