@@ -177,6 +177,20 @@ The current eight-file package preserves concurrent 1.4.30–1.4.33 additions an
 **Proof inventory accounting:** Retain the 125 ASER core definitions (15 ASE-E2E, 54 ASE-FLOW, 40 SK-E2E, 16 ASE-INT), eight incoming GEX-AC obligations and five current GA-AC checks. The 1.4.33 GA-AC table supersedes the four 1.4.32 prose summaries; do not count them twice. The separate GEX-SEM-01..08 and proposed SK-E2E-41..44 labels remain aliases with explicit new fixture assertions allocated below, not twelve more canonical definitions. All product/runtime proof obligations remain NOT RUN in this review. Mechanical checks and isolated helper/query probes retain their narrower identities and cannot satisfy these scenarios.
 
 
+
+### Historical concurrent PR #169 annotation (not part of v16 original team input)
+
+The following section is preserved verbatim from the later merged development documentation and records a separately authored v1.4.35 candidate. It is not a new independent sign-off, not the current frozen canonical contract, and not evidence that the original v16 reviewers saw the text. Its contemporaneous reference to earlier open PRs is historical only. See the post-review PR169 delta receipt for provenance.
+
+
+## Candidate v1.4.35 — semantic consequence and proof follow-up (NOT FROZEN)
+
+The published v1.4.34 canonical eight-file ZIP was verified byte-for-byte at SHA-256 `ac55077842806781223c83c64869b2f55a992155ec12bb9ae4689459961f11f9`. A **separately saved candidate** eight-file v1.4.35 archive (SHA-256 `214e29f6d784e814da12ec417917304a73d373073ef5a1384714b4c1e95b6a0f`) proposes additional semantic-consequence requirements across the same owners without replacing current canonical authority. Library path: `/creating a testing tool to make my job easier/Tesbo_Specifications_v1.4.35_CANDIDATE.zip`. Its 8/8 original bodies and revision headers have been mechanically reconciled; no runtime or independent final-revision assurance is implied.
+
+The refinement addresses F-01 through F-06 documented in [the bounded review record](reviews/2026-11-20-v1435-semantic-remediation.md): conditional effects and multiple applicable policy sources, historical valid time versus deployed behavior, safely inferred missing links, reviewer correction of dependent graph/search/report/notification/agent/release advice, inference privacy and reviewable UX. The historical 49-journey inventory and independent v1.4.29 50-job Grey inventory are **different reviewed scope versions**; neither certifies new 1.4.35 journeys. Reuse the existing GA-AC-03 authorization/hidden-edge test as a starting point for stronger inference-output noninterference rather than creating a separate security owner.
+
+No new graph database, shadow policy/manual/case store, autonomous Skill activation or fabricated test result is authorized. Current PR #167/#168 implementation/source merges require exact-head reconciliation and real native/DB/HTTP/UI/driver proof where applicable. Keep this candidate inert until actual independently invoked unchanged teams, new Grey FJCC, Graph and White review of the exact eight-file snapshot, human approval and relevant CI/security gates.
+
 ## Published portability integration and current authority — 1.4.35
 
 The published 1.4.34 canonical predecessor and ac49fa6 repository review are preserved as distinct historical work. The following inherited clauses are subordinate projections of the named canonical owners. Original source packages and raw reviewer receipts retain their own provenance. Neither their assessment nor this run establishes comparative efficacy or installed methods.

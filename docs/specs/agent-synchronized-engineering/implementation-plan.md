@@ -597,6 +597,22 @@ Canonical01/03/05 now retain the late concurrent DISC clarification. GEX-DISC la
 **Reviewer challenge:** The existing review surface must let an authorized reviewer inspect the claim, exact premise and citations, submit an attributable challenge/counterexample, and inspect which dependent candidate views are current, stale, blocked or unresolved. Native source amendment and Skill promotion remain separate actions. Validate the actual Reports/change-review navigation, permission, keyboard/focus and recovery path under the existing canonical02/07 and GA-AC owners; this text is not an approved rendered mockup.
 
 
+
+### Historical concurrent PR #169 annotation (not part of v16 original team input)
+
+The following section is preserved verbatim from the later merged development documentation and records a separately authored v1.4.35 candidate. It is not a new independent sign-off, not the current frozen canonical contract, and not evidence that the original v16 reviewers saw the text. Its contemporaneous reference to earlier open PRs is historical only. See the post-review PR169 delta receipt for provenance.
+
+
+### Proposed 1.4.35 semantic assurance admission and journey refresh
+
+The separate eight-file v1.4.35 candidate refines existing FR-117/118/119, Policy/Manual KB, T-422 and native QA/evidence owners. The [exact-source disposition](reviews/2026-11-20-v1435-semantic-remediation.md) supersedes no historical receipts. F-01 exact original v1.4.34 package recovery is verified, and a v1.4.35 candidate ZIP has eight preserved bodies; this is not a full human approval.
+
+**Existing proof reuse:** GA-AC-03 already specifies hidden-edge visibility checks; strengthen its actual AI-inference output/citation/ranking and queued-context negative controls rather than allocating a parallel privacy test framework. GA-AC-05 already tests stale report projection; extend across *all* derived consumers after an explicit human correction. MBT and model/native histories own old-Passed/build/outcome distinction. No duplicate number namespace is granted to `SEM-PROBE-01..08`, which are author-written acceptance proposals in canonical 05, not independent Grey findings.
+
+**Fresh full-journey obligation:** Preserve original 49 GJ and later 50 independently derived G0/G1 jobs under their distinct versions. New unchanged-charter Grey review must independently reconstruct and challenge the current user-job denominator from the *exact* proposed 1.4.35 canonical source, not from these eight probes, earlier inventories or seeded answers. QA then checks real recovery/state cases; Security checks inferred private output/denied proof; Purple checks real current-UI explanation/contest controls; Graph maps genuine evidence and White alone decides freeze. No team's run should be counted unless its actual invocation and first-pass receipt exists.
+
+**Stop gates:** Source latest `development` implementation and merged PR #167/#168, current permissions/transactions and reports must be checked at exact head. No new protected write, UI proof, graph analytics or Skill activation is authorized by this documentation. An independent candidate cannot mark live GEX scenarios or original I3-Q report/retest as passed without genuine target observations.
+
 ## Published portability integration and current authority — 1.4.35
 
 The published 1.4.34 canonical predecessor and ac49fa6 repository review are preserved as distinct historical work. The following inherited clauses are subordinate projections of the named canonical owners. Original source packages and raw reviewer receipts retain their own provenance. Neither their assessment nor this run establishes comparative efficacy or installed methods.
