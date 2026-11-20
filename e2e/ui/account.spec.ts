@@ -86,6 +86,9 @@ test.describe("account screen and password reset (UI)", () => {
    * hash format is the password service's business, and a hand-written row would drift from it.
    */
   async function restoreFixturePassword(): Promise<void> {
+    // Validation-only tests never change the password, and the change endpoint refuses a
+    // same-value change, so a confirmed fixture login is already the restored state.
+    if (await passwordWorks(FIXTURE_PASSWORD)) return;
     for (const candidate of [NEW_PASSWORD, FIXTURE_PASSWORD]) {
       const ctx = await requestContextFor(candidate);
       if (!ctx) continue;
