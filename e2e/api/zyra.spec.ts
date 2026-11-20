@@ -296,9 +296,10 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       const readCatalog = await rpc(read.token, "tools/list");
       expect(readCatalog.result.tools).toHaveLength(24);
       expect(readCatalog.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("preview_behavior_model_draft");
-      // 50 credential-visible write tools plus the governed-run tool from the Model Studio work.
+      // Credential-visible write tools; retired native publishers (including the suite creators)
+      // are hidden and refuse, so the catalog stays at the non-publisher count.
       const listed = await rpc(write.token, "tools/list");
-      expect(listed.result.tools).toHaveLength(51);
+      expect(listed.result.tools).toHaveLength(49);
       expect(listed.result.tools.find((tool: { name: string }) => tool.name === "preview_behavior_model_draft").inputSchema.additionalProperties).toBe(false);
       const params = { name: "preview_behavior_model_draft", arguments: { model: modelPreviewDraft() } };
       expect((await rpc(read.token, "tools/call", params)).error.code).toBe(-32002);
