@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, request as pwRequest, test } from "@playwright/test";
 import { env } from "../utils/env";
+import { approveTestcase } from "../utils/testcase-approval";
+import { literal, scalar } from "../utils/psql";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 const STATE_PATH = path.join(__dirname, "../.auth/state.json");
@@ -17,7 +19,9 @@ async function setUpCycleWithOneCase(title: string) {
   const testcase = await (
     await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title } })
   ).json();
-  await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
+  await approveTestcase(api,ctx.projectId,testcase.id);
+  const attached = await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
+  expect(attached.ok(), await attached.text()).toBe(true);
   await api.patch(`/api/cycles/${cycle.id}`, { data: { status: "In Progress" } });
   await api.dispose();
   return { cycle, testcase };
@@ -1623,7 +1627,7 @@ test.describe("run detail — progress, defects and the bug modal", () => {
     }
   });
 
-  test("EXE-U-31 Bug Key/Bug Title fields appear only when the case is Failed AND a bug is actually linked", { tag: '@tesbo.testId("TES-TC-1335")' }, async ({ page }) => {
+  test("EXE-U-31 authorized Bug Key/Bug Title associations remain visible for every execution result", { tag: '@tesbo.testId("TES-TC-1335")' }, async ({ page }) => {
     const { cycle, testcase } = await setUpCycleWithOneCase(`UI Defect Visibility ${Date.now()}`);
     // Driven from the full-page execute screen rather than the run's side panel: the panel opens
     // from a row interaction this file has no established pattern for, and the same rule governs
@@ -1636,7 +1640,7 @@ test.describe("run detail — progress, defects and the bug modal", () => {
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}/execute/${execution.id}`);
       await expect(page.getByText(testcase.title).first()).toBeVisible();
 
-      // Opens on Untested: a bug reference would be meaningless, so the fields are not offered.
+      // There is no association yet, so no bug detail is invented from the status alone.
       await expect(page.getByText("Bug Key")).toBeHidden();
 
       // Marking Failed changes only the execution's status. It must not, on its own, imply a bug
@@ -1665,11 +1669,17 @@ test.describe("run detail — progress, defects and the bug modal", () => {
       await expect(page.getByText("Bug Key")).toBeVisible();
       await expect(page.getByText("Bug Title")).toBeVisible();
 
-      // A bug linked while the case was Failed must not keep showing once the case moves to any
-      // other status — the fields are Failed-only, not "ever had a bug" only.
-      await page.getByRole("button", { name: "Passed", exact: true }).first().click();
-      await expect(page.getByText("Bug Key")).toBeHidden();
-      await expect(page.getByText("Bug Title")).toBeHidden();
+      const observed = await (await api.get(`/api/cycles/${cycle.id}/executions`)).json();
+      expect(observed.find((row: { id: string }) => row.id === execution.id).status).toBe("Untested");
+      // Only explicit result requests change the outcome. The accepted relationship remains
+      // visible after each persisted result, including Passed and an incidental finding.
+      for (const status of ["Passed", "Blocked", "Skipped", "Failed"]) {
+        const saved = await api.patch(`/api/cycles/${cycle.id}/executions/${execution.id}`, { data: { status } });
+        expect(saved.ok(), await saved.text()).toBe(true);
+        await page.reload();
+        await expect(page.getByLabel("Bug Key", { exact: true })).toHaveValue("PROJ-4471");
+        await expect(page.getByLabel("Bug Title", { exact: true })).toHaveValue(bugTitle);
+      }
     } finally {
       if (bugId) await api.delete(`/api/bugs/${bugId}`, { failOnStatusCode: false });
       await api.dispose();
@@ -1905,26 +1915,23 @@ test.describe("run detail — progress, defects and the bug modal", () => {
   });
 
   /*
-   * Regression: clicking the local "Failed" status button and then the "Log bug" footer button
-   * directly — without an intervening Save — used to reopen the panel showing "Untested" and no
-   * Bug Key/Title. openBugDialogFor(panelExecution) (the footer button's call) snapshots whatever
-   * panelExecution.status currently is, which is still the last-*saved* status, not the locally
-   * toggled one; onLogged then trusted that stale snapshot when reopening the panel. Since a
-    * successful "Log bug"/"Link Bug" changes this manual execution server-side, the panel must
-    * reopen from the saved execution, not the dialog snapshot. Finalized automation is different:
-    * the association succeeds without a verdict change, covered separately below.
+   * A local result choice is not a saved observation. A standalone Log bug action preserves the
+   * actual execution and reloads it after linking, while showing the association at that result.
    */
-  test("EXE-U-31f clicking Log bug without Save first still ends up Failed with the bug visible, not Untested", async ({ page }) => {
+  test("EXE-U-31f Log bug without Save preserves the recorded result and shows the association", async ({ page }) => {
     const { cycle, testcase } = await setUpCycleWithOneCase(`UI Log Bug No Save ${Date.now()}`);
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
     try {
+      const [execution] = await (await api.get(`/api/cycles/${cycle.id}/executions`)).json();
+      const evidence = () => scalar(`SELECT jsonb_build_object('execution',to_jsonb(e),'snapshot',to_jsonb(ci))::text
+        FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id
+        WHERE e.id=${literal(execution.id)} AND ci.cycle_id=${literal(cycle.id)};`);
+      const before = evidence();
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}`);
       await page.getByText(testcase.title).first().click();
       await expect(page.getByRole("heading", { name: testcase.title })).toBeVisible();
 
-      // Toggle the local status button but never click Save, then go straight to Log bug — the
-      // natural thing to do, since the whole point of marking a case Failed is to report the bug
-      // it caused.
+      // Choose a local value without submitting the explicit result writer, then report a finding.
       await page.getByRole("button", { name: "Failed", exact: true }).click();
       await page.getByRole("button", { name: "Log bug" }).click();
 
@@ -1934,13 +1941,15 @@ test.describe("run detail — progress, defects and the bug modal", () => {
       await page.getByRole("button", { name: "Report Bug", exact: true }).click();
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeHidden();
 
-      // The panel must reopen on this same test case, as Failed, with the bug it just filed —
-      // immediately, not reverted to Untested with the fields hidden.
+      // The panel shows the accepted link while the full persisted observation remains intact.
       await expect(page.getByRole("heading", { name: testcase.title })).toBeVisible();
       const bugKeyInput = page.getByLabel("Bug Key");
       const bugTitleInput = page.getByLabel("Bug Title");
       await expect(bugTitleInput).toHaveValue(bugTitle, { timeout: 20_000 });
       await expect(bugKeyInput).toBeVisible();
+      expect(evidence()).toBe(before);
+      const current = await (await api.get(`/api/cycles/${cycle.id}/executions`)).json();
+      expect(current.find((row: { id: string }) => row.id === execution.id).status).toBe("Untested");
     } finally {
       const bugsRes = await api.get(`/api/projects/${ctx.projectId}/bugs`);
       const bugs = await bugsRes.json();

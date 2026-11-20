@@ -36,6 +36,7 @@ export function isProtectedTestcaseRestWrite(method: string, projectSuffix: stri
     /^\/testcases$/,
     /^\/testcases\/(?:bulk-create|bulk-update|bulk-delete|import)$/,
     /^\/testcases\/[^/]+\/(?:duplicate|approve)$/,
+    /^\/model-studio\/models\/[^/]+\/revisions\/[^/]+\/(?:approve|candidates)$/,
     /^\/custom-tags$/,
     /^\/custom-fields\/definitions(?:\/reorder|\/[^/]+\/(?:options|restore))?$/,
     /^\/review-board\/recommendations\/[^/]+\/(?:keep|edit|remove)$/,

@@ -165,11 +165,46 @@ type Body=Record<string,any>;
     audit.mockRestore();await save(review,[0,1],{suiteName:name});
   });
 
+  it.each(["native","proposal"])("preserves accepted run identity when a %s edit renames the current case",async route=>{
+    const svc=service(),created=await svc.createTestCase(project,user,{title:"Accepted run identity",status:"Draft"});
+    const approve=async()=>{
+      const current=await svc.getTestCaseForUser(user,project,created.id);
+      await svc.approveTestCaseForUser(user,project,created.id,{
+        expectedRevision:current.editRevision,expectedApprovalRevision:current.approvalRevision
+      },human);
+      return svc.getTestCaseForUser(user,project,created.id);
+    };
+    const original=await approve();
+    const run=await svc.createCycleWithTestcasesForUser(user,project,{name:"Original selected case",testcaseIds:[created.id]});
+    const evidence=async()=>({
+      run:(await admin.query("SELECT * FROM cycles WHERE id=$1",[run.cycle.id])).rows,
+      items:(await admin.query("SELECT * FROM cycle_items WHERE cycle_id=$1 ORDER BY id",[run.cycle.id])).rows,
+      executions:(await admin.query("SELECT e.* FROM executions e JOIN cycle_items i ON i.id=e.cycle_item_id WHERE i.cycle_id=$1 ORDER BY e.id",[run.cycle.id])).rows
+    });
+    const before=await evidence(),renamed=`REN-${randomUUID().replaceAll("-","")}`;
+    expect(before.items).toHaveLength(1);
+    expect(before.items[0]).toMatchObject({snapshot_external_id:original.externalId,snapshot_approval_revision:original.approvalRevision});
+    if(route==="native") await svc.updateTestCaseForUser(user,project,created.id,{externalId:renamed,expectedRevision:original.editRevision});
+    else await save(await stage([{opType:"update",testcaseId:created.id,expectedRevision:original.editRevision,fields:{externalId:renamed}}]),[0]);
+    const current=await svc.getTestCaseForUser(user,project,created.id);
+    expect(current).toMatchObject({id:created.id,externalId:renamed,status:"In Review"});
+    expect(await evidence()).toEqual(before);
+    const reviewed=await approve();
+    const next=await svc.createCycleWithTestcasesForUser(user,project,{name:"New selected case",testcaseIds:[created.id]});
+    expect((await admin.query("SELECT * FROM cycle_items WHERE cycle_id=$1",[next.cycle.id])).rows).toEqual([
+      expect.objectContaining({testcase_id:created.id,snapshot_external_id:renamed,snapshot_approval_revision:reviewed.approvalRevision})
+    ]);
+    expect(await evidence()).toEqual(before);
+  });
+
   it("waits for a live dependency writer, then rejects the old coherent review without effects",async()=>{
-    const tag=(await admin.query("INSERT INTO custom_tags(project_id,name) VALUES ($1,$2) RETURNING id",[project,`Before ${randomUUID().slice(0, 8)}`])).rows[0].id;
+    // custom_tags.name is varchar(40): a hyphenated UUID plus "Before " fails during setup,
+    // before the transaction race can run. Keep the unique suffix within the native limit.
+    const tagSuffix=randomUUID().replaceAll("-","");
+    const tag=(await admin.query("INSERT INTO custom_tags(project_id,name) VALUES ($1,$2) RETURNING id",[project,`Before ${tagSuffix}`])).rows[0].id;
     const review=await stage([{opType:"create",draft:{title:"Concurrent definition",customTagIds:[tag]}}]),before=(await nativeCases()).rows;
     const blocker=new Client({connectionString:url});await blocker.connect();await blocker.query("BEGIN");
-    await blocker.query("UPDATE custom_tags SET name=$2 WHERE id=$1",[tag,`After ${randomUUID().slice(0, 8)}`]);
+    await blocker.query("UPDATE custom_tags SET name=$2 WHERE id=$1",[tag,`After ${tagSuffix}`]);
     const attempt=save(review,[0]).then(()=>null,(error:unknown)=>error);
     try{
       const deadline=Date.now()+5000;let waiting=false;

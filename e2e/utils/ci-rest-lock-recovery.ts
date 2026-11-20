@@ -9,9 +9,7 @@ export async function verifyRestLockRecovery(page: Page, api: string, web: strin
   const base = `${api}/api/projects/${projectId}`;
   const message = "This project is read-only — CI controlled UI refusal.";
   async function post(url: string, data: Record<string, unknown>) {
-    // Only the project testcase collection needs the review fixture; run-item endpoints such as
-    // /api/cycles/:id/testcases also end in "/testcases" and must be posted as-is.
-    const response = /\/projects\/[^/]+\/testcases$/.test(url)
+    const response = /\/api\/projects\/[^/]+\/testcases$/.test(url)
       ? await createTestcaseFixtureResponse(page.request, url, { data })
       : /\/apikeys$/.test(url)
         ? await issueMcpTestToken(page.request, url, { data })

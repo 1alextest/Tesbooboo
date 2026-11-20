@@ -72,6 +72,14 @@ function isAbortError(e: unknown): boolean {
 const MUTATION_OUTCOME_UNCONFIRMED =
   "Request outcome unconfirmed. This action may already have been applied. Refresh to check before trying again.";
 
+/** A caller must reconcile this write; delivery failure does not prove rollback. */
+export class MutationOutcomeUnknownError extends Error {
+  constructor() {
+    super(MUTATION_OUTCOME_UNCONFIRMED);
+    this.name = "MutationOutcomeUnknownError";
+  }
+}
+
 async function fetchWithNetworkErrorMessage(
   input: string,
   init: RequestInit
@@ -82,13 +90,14 @@ async function fetchWithNetworkErrorMessage(
     return await fetch(input, init);
   } catch (e) {
     if (isAbortError(e)) {
-      throw new Error(canRetry ? "The request took too long. Please check your connection and try again." : MUTATION_OUTCOME_UNCONFIRMED);
+      if (!canRetry) throw new MutationOutcomeUnknownError();
+      throw new Error("The request took too long. Please check your connection and try again.");
     }
     if (!isNetworkFetchError(e)) throw e instanceof Error ? e : new Error(String(e));
     // A lost response is indistinguishable from failed delivery: a mutation may already have
     // committed. Never replay it automatically, including multipart comment/KB writes. Preserve
     // the existing single retry only for reads; no assumption about replayable bodies is needed.
-    if (!canRetry) throw new Error(MUTATION_OUTCOME_UNCONFIRMED);
+    if (!canRetry) throw new MutationOutcomeUnknownError();
     try {
       return await fetch(input, init);
     } catch (e2) {
@@ -5123,10 +5132,23 @@ export async function dispatchModelStudioRun(
   revisionId: string,
   data: { caseIds?: string[]; name?: string; environment?: string; buildVersion?: string }
 ): Promise<ModelStudioModelRun & { requested: number; added: number; skipped: number; note: string }> {
-  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/runs`, {
-    method: "POST",
-    body: data
-  });
+  try {
+    const result = await api<ModelStudioModelRun & { requested: number; added: number; skipped: number; note: string }>(
+      `/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/runs`, { method: "POST", body: data }
+    );
+    // An empty/truncated/unrelated success body cannot establish which native run was created.
+    if (!result?.cycleId || result.run?.id !== result.cycleId || typeof result.run.name !== "string" ||
+        result.projectId !== projectId || result.modelId !== modelId || result.modelRevisionId !== revisionId) {
+      throw new MutationOutcomeUnknownError();
+    }
+    return result;
+  } catch (cause) {
+    // These are the run owner's confirmed validation/access/conflict refusals. A server/proxy
+    // 5xx or an unreadable response may follow commit, so this non-idempotent create stays unknown.
+    if (cause instanceof ApiError && [400, 401, 403, 404, 409, 413, 415, 422, 429].includes(cause.status)) throw cause;
+    if (cause instanceof MutationOutcomeUnknownError) throw cause;
+    throw new MutationOutcomeUnknownError();
+  }
 }
 
 /** A governed run's model basis, read by the native run page; null for an ordinary run. */

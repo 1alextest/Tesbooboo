@@ -20,7 +20,8 @@ const definition: PreviewDefinition = {
 /** Composition checks only; the matching .db.spec proves PostgreSQL rollback and lock behavior. */
 function fixture() {
   const state = { active: true, current: true, approved: true, fail: "", committed: false, inside: false,
-    runs: 0, candidates: 0, stagedRuns: 0, stagedCandidates: 0 };
+    runs: 0, candidates: 0, stagedRuns: 0, stagedCandidates: 0,
+    generated: true, editRevision: hash, links: [] as Array<Record<string, unknown>> };
   const failure = new Error("Required model provenance write failed");
   const effectStates: Array<{ inside: boolean; committed: boolean }> = [];
   const effect = jest.fn(async () => { effectStates.push({ inside: state.inside, committed: state.committed }); });
@@ -40,10 +41,14 @@ function fixture() {
       content_hash: hash, content: definition, revision_number: 1, model_name: "Reviewed model"
     }] };
     if (sql.includes("FROM mbt_model_approvals")) return { rows: state.approved ? [{ id: "approval", content_hash: hash }] : [] };
-    if (sql.includes("FROM mbt_generated_cases g")) return { rows: [{ testcase_id: testcase, path_digest: "path",
-      element_ids: ["start", "finish"], title: "Earlier title", status: "Approved", deleted: false }] };
-    if (sql.includes("FROM testcases")) return { rows: [{ id: testcase, title: "Current reviewed title", status: "Approved", deleted: false }] };
-    if (sql.includes("FROM mbt_model_case_links") || sql.includes("FROM mbt_generated_cases") || sql.includes("pg_advisory_xact_lock")) return { rows: [] };
+    if (sql.includes("FROM mbt_generated_cases g")) return { rows: state.generated ? [{ testcase_id: testcase, path_digest: "path",
+      element_ids: ["start", "finish"], title: "Earlier title", status: "Approved", deleted: false }] : [] };
+    if (sql.includes("FROM testcases")) return { rows: [{ id: testcase, title: "Current reviewed title", status: "Approved", deleted: false,
+      edit_revision: state.editRevision }] };
+    if (sql.includes("FROM mbt_model_case_links")) return { rows: state.links };
+    if (sql.includes("INSERT INTO mbt_model_case_links")) return { rows: state.links.length ? [] : [{ id: "new-link",
+      testcase_id: testcase, testcase_revision: values[4], element_ids: values[5] }] };
+    if (sql.includes("FROM mbt_generated_cases") || sql.includes("pg_advisory_xact_lock")) return { rows: [] };
     throw new Error(`Unexpected query: ${sql}; ${values.length} parameters`);
   };
   const client = { query: jest.fn(async (sql: string, values?: unknown[]) => {
@@ -110,35 +115,72 @@ describe("governed model/native writer composition", () => {
     expect(f.state.committed).toBe(false);
   });
 
+  it("refuses a recorded mapping whose case changed even after the current case was approved again", async () => {
+    const f = fixture(); f.state.generated = false; f.state.editRevision = "b".repeat(64);
+    f.state.links = [{ id: "accepted-link", testcase_id: testcase, testcase_revision: hash,
+      element_ids: ["finish"], title: "Earlier title", status: "Approved", deleted: false }];
+    await expect(f.repository.dispatchRunForUser(user, project, model, revision, { caseIds: [testcase] }))
+      .rejects.toMatchObject({ response: { code: "MAPPING_CHANGED" } });
+    expect(f.legacy.createCycleWithTestcasesForUser).not.toHaveBeenCalled();
+    expect(f.state.runs).toBe(0);
+    expect(f.state.links[0].testcase_revision).toBe(hash);
+  });
+
+  it("retains the exact current explicit mapping basis in a native run manifest", async () => {
+    const f = fixture(); f.state.generated = false;
+    f.state.links = [{ id: "accepted-link", testcase_id: testcase, testcase_revision: hash,
+      element_ids: ["finish"], title: "Current reviewed title", status: "Approved", deleted: false }];
+    const run = await f.repository.dispatchRunForUser(user, project, model, revision, { caseIds: [testcase] });
+    expect(run.manifest.cases).toEqual([expect.objectContaining({ testcaseId: testcase,
+      mappings: [{ id: "accepted-link", testcaseRevision: hash, basis: "CURRENT" }] })]);
+    expect(f.state.runs).toBe(1);
+  });
+
+  it("rejects a stale case revision at link creation without inserting a mapping", async () => {
+    const f = fixture(); f.state.editRevision = "b".repeat(64);
+    await expect(f.repository.linkCaseForUser(user, project, model, revision,
+      { testcaseId: testcase, testcaseRevision: hash, elementIds: ["finish"] }))
+      .rejects.toMatchObject({ response: { code: "MAPPING_CHANGED" } });
+    expect(f.client.query.mock.calls.some(([sql]) => sql.includes("INSERT INTO mbt_model_case_links"))).toBe(false);
+  });
+
+  it("refuses to silently reuse an older mapping when a caller supplies a new case revision", async () => {
+    const f = fixture(); f.state.editRevision = "b".repeat(64);
+    f.state.links = [{ id: "accepted-link", testcase_id: testcase, testcase_revision: hash, element_ids: ["finish"] }];
+    await expect(f.repository.linkCaseForUser(user, project, model, revision,
+      { testcaseId: testcase, testcaseRevision: f.state.editRevision, elementIds: ["finish"] }))
+      .rejects.toMatchObject({ response: { code: "MAPPING_CHANGED" } });
+    expect(f.state.links[0].testcase_revision).toBe(hash);
+  });
+
   it("does not publish candidate effects when its mapping fails, then publishes after a successful commit", async () => {
     const f = fixture(); f.state.fail = "candidate";
     const options = { strategy: "edge_coverage" as const, maxPaths: 20, maxDepth: 12, seed: revision };
     const digest = generateModelPaths({ definition, revisionId: revision, contentHash: hash, options }).paths[0].digest;
     const body = { ...options, digests: [digest] };
-    await expect(f.repository.createCasesFromPathsForUser(user, project, model, revision, body)).rejects.toBe(f.failure);
+    await expect(f.repository.createCasesFromPathsForUser(user, project, model, revision, body, { kind: "human_session" })).rejects.toBe(f.failure);
     expect(f.state.committed).toBe(false);
     expect(f.state.candidates).toBe(0);
     expect(f.effect).not.toHaveBeenCalled();
     f.state.fail = "";
-    expect(await f.repository.createCasesFromPathsForUser(user, project, model, revision, body)).toMatchObject({ created: 1, skipped: 0 });
+    expect(await f.repository.createCasesFromPathsForUser(user, project, model, revision, body, { kind: "human_session" })).toMatchObject({ created: 1, skipped: 0 });
     expect(f.effect).toHaveBeenCalledTimes(1);
     expect(f.state.candidates).toBe(1);
     expect(f.effectStates).toEqual([{ inside: false, committed: true }]);
     expect(f.db.query).not.toHaveBeenCalled();
   });
-});
 
-
-it("keeps model approval unavailable to machine principals before accessing persistence", async () => {
-  const access = jest.fn();
-  const transaction = jest.fn();
-  const repository = new ModelStudioRepository(
-    { transaction } as unknown as DatabaseService,
-    { requireProjectAccess: access } as unknown as LegacyService
-  );
-  await expect(repository.approveRevisionForUser(
-    user, project, model, revision, { expectedHash: hash }, { kind: "api_token" }
-  )).rejects.toMatchObject({ status: 403, response: { code: "HUMAN_REVIEW_REQUIRED" } });
-  expect(access).not.toHaveBeenCalled();
-  expect(transaction).not.toHaveBeenCalled();
+  it.each([undefined, { kind: "api_token" as const }])("refuses untrusted model approval and native materialization before any effect: %j", async principal => {
+    const f = fixture();
+    // Body claims and a real human issuer ID do not supply a trusted session principal.
+    const body = { expectedHash: hash, principal: { kind: "human_session" }, approvedBy: user };
+    for (const attempt of [
+      () => f.repository.approveRevisionForUser(user, project, model, revision, body, principal),
+      () => f.repository.createCasesFromPathsForUser(user, project, model, revision, body, principal)
+    ]) await expect(attempt()).rejects.toMatchObject({ response: { code: "HUMAN_REVIEW_REQUIRED" } });
+    expect(f.legacy.requireProjectAccess).not.toHaveBeenCalled();
+    expect(f.db.query).not.toHaveBeenCalled();
+    expect(f.db.transaction).not.toHaveBeenCalled();
+    expect(f.legacy.createTestCase).not.toHaveBeenCalled();
+  });
 });

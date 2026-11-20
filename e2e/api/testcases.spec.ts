@@ -2224,10 +2224,16 @@ test.describe("editing a test case ID", () => {
     }
   });
 
-  test("a run that already holds the case shows the new ID, including after the case is deleted", async ({ request }) => {
+  test("an existing run keeps its accepted case ID after rename and deletion while a new run uses the reviewed new ID", async ({ request }) => {
+    expect(dbControlAvailable(), "isolated database access is required to compare the complete accepted run evidence").toBe(true);
     const p = `Z${Date.now()}`;
     const tc = await createCase(request, { title: `E2E Run Snapshot ${p}`, status: "Approved" });
     const cycle = await (await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Run Snapshot ${p}` } })).json();
+    let nextCycleId = "";
+    const persisted = () => scalar(`SELECT jsonb_build_object(
+      'run', (SELECT to_jsonb(c) FROM cycles c WHERE c.id=${literal(cycle.id)}),
+      'items', (SELECT jsonb_agg(to_jsonb(i) ORDER BY i.id) FROM cycle_items i WHERE i.cycle_id=${literal(cycle.id)}),
+      'executions', (SELECT jsonb_agg(to_jsonb(e) ORDER BY e.id) FROM executions e JOIN cycle_items i ON i.id=e.cycle_item_id WHERE i.cycle_id=${literal(cycle.id)}))::text;`);
     try {
       const attachment = await request.post(`/api/cycles/${cycle.id}/testcases`, {
         data: { testcaseIds: [tc.id] }, failOnStatusCode: false
@@ -2236,16 +2242,30 @@ test.describe("editing a test case ID", () => {
       const before = await (await request.get(`/api/cycles/${cycle.id}/executions`)).json();
       expect(before).toHaveLength(1);
       expect(before[0].externalId).toBe(tc.externalId);
+      const originalEvidence = persisted();
 
       const put = await request.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-9` } });
       expect(put.ok(), await put.text()).toBeTruthy();
-      expect((await (await request.get(`/api/cycles/${cycle.id}/executions`)).json())[0].externalId).toBe(`${p}-TC-9`);
+      expect((await (await request.get(`/api/cycles/${cycle.id}/executions`)).json())[0].externalId).toBe(tc.externalId);
+      expect(persisted()).toBe(originalEvidence);
+      const reviewed = await approveTestcase(request, ctx.projectId, tc.id);
+      expect(reviewed.externalId).toBe(`${p}-TC-9`);
+      const next = await request.post(`/api/projects/${ctx.projectId}/cycles/from-cases`, {
+        data: { name: `E2E Current Snapshot ${p}`, testcaseIds: [tc.id] }
+      });
+      expect(next.ok(), await next.text()).toBeTruthy();
+      const nextRun = await next.json(); nextCycleId = nextRun.id;
+      expect(nextRun).toMatchObject({ requested: 1, added: 1, skipped: 0 });
+      expect((await (await request.get(`/api/cycles/${nextCycleId}/executions`)).json())[0].externalId).toBe(`${p}-TC-9`);
+      expect(persisted()).toBe(originalEvidence);
 
       await deleteCase(request, tc.id);
-      expect((await (await request.get(`/api/cycles/${cycle.id}/executions`)).json())[0].externalId).toBe(`${p}-TC-9`);
+      expect((await (await request.get(`/api/cycles/${cycle.id}/executions`)).json())[0].externalId).toBe(tc.externalId);
+      expect(persisted()).toBe(originalEvidence);
     } finally {
       await deleteCase(request, tc.id);
       await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
+      if (nextCycleId) await request.delete(`/api/cycles/${nextCycleId}`, { failOnStatusCode: false });
     }
   });
 

@@ -47,7 +47,7 @@ export async function verifyCiZyraOverlappingMoveTrace(page: Page, api: string, 
         }
       });
     }
-    await test.step("capability and access refusals preserve both complete snapshots", async () => {
+    await test.step("capability and access refusals preserve both governing snapshots", async () => {
       const disabled = await page.request.patch(`${base}/agents/zyra/settings`, { data: { capabilities: { suiteOperations: false } } });
       expect(disabled.ok(), await disabled.text()).toBeTruthy();
       const created = await page.request.post(`${base}/agents/zyra/chat/sessions`, { data: { title: "CI overlapping move refusals" } });

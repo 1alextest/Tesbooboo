@@ -52,7 +52,7 @@ export const MCP_SERVER_INSTRUCTIONS = `Tesbo is a test management system. This 
 Typical shapes:
 - Test cases live in suites (list_suites, list_testcases with suiteId).
 - A cycle is a test run: create_cycle_from_testcases seeds it with test cases, each becoming one execution; record results with record_execution_result / bulk_record_execution_results.
-- A bug can link to a test case, a cycle, and/or a specific execution (create_bug/update_bug's links, link_testcase_to_bug/unlink_testcase_from_bug) — linking a failed execution to a bug sets that execution to Failed.
+- A bug can link to a test case, a cycle, and/or a specific execution (create_bug/update_bug's links, link_testcase_to_bug/unlink_testcase_from_bug). Associations preserve the execution result and its evidence; use the authorized result writer to record an observed failure explicitly.
 - The Knowledge Base is a separate document/folder tree, not part of the test-case hierarchy — start with search_knowledge_base or list_knowledge_folders.
 - Versioned QA impact review is shared with the existing Zyra Change Review page: list_qa_graph_changes reads committed revisions and explicit case candidates. Use get_testcase for an existing candidate's full canonical details rather than cloning test cases.
 - capture_qa_graph_change is an optional write-scoped, project-bound observation of an administrator-approved Git source. It accepts no source path, manifest, semantic claim, test outcome or approval from the caller; missing bindings fail closed. A code change or missing explicit reference prompts QA investigation, not a Failed execution or proven coverage.

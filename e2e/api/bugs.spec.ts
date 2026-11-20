@@ -742,24 +742,20 @@ test.describe("bug severity is optional", () => {
 });
 
 /*
- * Linking a bug marks the execution Failed — Basecamp 10226284379 and 10221755377. A bug filed
- * against a case in an open run used to leave it Untested, so the run's numbers said nothing had
- * gone wrong; this is the reverse path (reporting from the Bugs page, or adding a link later).
- *
- * A finalized automated run is sealed: the association is stored for traceability, but linking is
- * not a result correction. Over an already-recorded result the previous value is recorded in the
- * activity payload so the override is visible rather than silent.
+ * A bug association is context, not a new execution observation. Preserve the native execution
+ * result, timestamps, step results and history; actual result writers record a later failure.
+ * This corrects the earlier reverse-link inference without removing the useful association.
  */
-test.describe("linking a bug fails the execution", () => {
+test.describe("linking a bug preserves original execution evidence", () => {
   async function seedRunWithCase(request: any, titleSuffix: string) {
     const cycle = await (
       await request.post(`/api/projects/${ctx.projectId}/cycles`, {
-        data: { name: `E2E Bug AutoFail Run ${titleSuffix}` },
+        data: { name: `E2E Bug Association Run ${titleSuffix}` },
       })
     ).json();
     const testcase = await (
       await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-        data: { title: `E2E Bug AutoFail Case ${titleSuffix}` },
+        data: { title: `E2E Bug Association Case ${titleSuffix}` },
       })
     ).json();
     await approveTestcase(request, ctx.projectId, testcase.id);
@@ -778,22 +774,37 @@ test.describe("linking a bug fails the execution", () => {
     return found?.status;
   }
 
-  test("reporting a bug against an untested case marks it Failed", { tag: '@tesbo.testId("TES-TC-1158")' }, async ({ request }) => {
+  async function executionEvidence(request: APIRequestContext, cycleId: string, executionId: string) {
+    const response=await request.get(`/api/cycles/${cycleId}/executions`);
+    expect(response.ok(),await response.text()).toBe(true);
+    const result=await response.json();
+    const row=(result.list??result).find((item:{id:string})=>item.id===executionId);
+    expect(row).toBeTruthy();
+    const persisted = JSON.parse(scalar(`SELECT jsonb_build_object('execution',to_jsonb(e),'snapshot',to_jsonb(ci),'run',to_jsonb(c))::text
+      FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id JOIN cycles c ON c.id=ci.cycle_id
+      WHERE e.id=${literal(executionId)} AND c.id=${literal(cycleId)} AND c.project_id=${literal(ctx.projectId)};`));
+    return { persisted, exposed: Object.fromEntries(["status","executedAt","executedBy","actualResult","history","stepResults","durationMs","errorMessage","errorStack"].map(key=>[key,row[key]??null])) };
+  }
+
+  test("reporting an observation against an untested case does not invent an execution", { tag: '@tesbo.testId("TES-TC-1158")' }, async ({ request }) => {
     const suffix = `${Date.now()}`;
     const { cycle, testcase, execution } = await seedRunWithCase(request, suffix);
     expect(execution.status, "the fixture has to start untested for this to prove anything").toBe("Untested");
+    const original=await executionEvidence(request,cycle.id,execution.id);
 
     const bug = await (
       await request.post(`/api/projects/${ctx.projectId}/bugs`, {
         data: {
-          title: `E2E AutoFail Bug ${suffix}`,
+          title: `E2E Association Bug ${suffix}`,
           links: [{ testcaseId: testcase.id, cycleId: cycle.id, executionId: execution.id }],
         },
       })
     ).json();
 
     try {
-      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Failed");
+      expect(bug.links).toEqual(expect.arrayContaining([expect.objectContaining({ testcaseId: testcase.id, cycleId: cycle.id, executionId: execution.id })]));
+      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Untested");
+      expect(await executionEvidence(request,cycle.id,execution.id)).toEqual(original);
     } finally {
       await request.delete(`/api/bugs/${bug.id}`, { failOnStatusCode: false });
       await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
@@ -801,27 +812,28 @@ test.describe("linking a bug fails the execution", () => {
     }
   });
 
-  test("a passed result is overridden, and the override is recorded in the activity stream", { tag: '@tesbo.testId("TES-TC-1159")' }, async ({ request }) => {
+  test("a side finding preserves a passed result and does not invent a result-change event", { tag: '@tesbo.testId("TES-TC-1159")' }, async ({ request }) => {
     const suffix = `${Date.now()}`;
     const startedAt = new Date(Date.now() - 60_000).toISOString();
     const { cycle, testcase, execution } = await seedRunWithCase(request, `override ${suffix}`);
     await request.patch(`/api/cycles/${cycle.id}/executions/${execution.id}`, { data: { status: "Passed" } });
     expect(await executionStatus(request, cycle.id, execution.id)).toBe("Passed");
+    const original=await executionEvidence(request,cycle.id,execution.id);
 
     const bug = await (
       await request.post(`/api/projects/${ctx.projectId}/bugs`, {
         data: {
-          title: `E2E AutoFail Override ${suffix}`,
+          title: `E2E Side Finding ${suffix}`,
           links: [{ testcaseId: testcase.id, cycleId: cycle.id, executionId: execution.id }],
         },
       })
     ).json();
 
     try {
-      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Failed");
+      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Passed");
+      expect(await executionEvidence(request,cycle.id,execution.id)).toEqual(original);
 
-      // Overwriting somebody's recorded result silently would be worse than not doing it at all —
-      // the previous value has to be recoverable from the activity stream.
+      // A side finding must not be logged as an actual target result transition.
       //
       // Filtered rather than read off page 1: this project is account A's shared fixture, and during
       // a full run it takes ~70 audit rows a minute, so the default 30-row page had scrolled past
@@ -836,9 +848,7 @@ test.describe("linking a bug fails the execution", () => {
       const entry = rows.find(
         (a: { entityId?: string; diff?: any }) => a.entityId === execution.id && a.diff?.reason === "bug_linked",
       );
-      expect(entry, "the flip should be logged with its reason").toBeTruthy();
-      expect(entry.diff.before.status).toBe("Passed");
-      expect(entry.diff.after.status).toBe("Failed");
+      expect(entry, "a bug association must not be reported as a target execution").toBeUndefined();
     } finally {
       await request.delete(`/api/bugs/${bug.id}`, { failOnStatusCode: false });
       await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
@@ -846,31 +856,64 @@ test.describe("linking a bug fails the execution", () => {
     }
   });
 
-  test("adding a link to an existing bug fails that execution too", { tag: '@tesbo.testId("TES-TC-1160")' }, async ({ request }) => {
+  test("adding and replaying a link preserves the original execution", { tag: '@tesbo.testId("TES-TC-1160")' }, async ({ request }) => {
     const suffix = `${Date.now()}`;
     const { cycle, testcase, execution } = await seedRunWithCase(request, `late link ${suffix}`);
+    const original=await executionEvidence(request,cycle.id,execution.id);
 
     // Reported with no link at all, so nothing can have been failed at create time.
     const bug = await (
       await request.post(`/api/projects/${ctx.projectId}/bugs`, {
-        data: { title: `E2E AutoFail Late Link ${suffix}` },
+        data: { title: `E2E Association Late Link ${suffix}` },
       })
     ).json();
 
     try {
       expect(await executionStatus(request, cycle.id, execution.id)).toBe("Untested");
 
-      await request.post(`/api/bugs/${bug.id}/links`, {
+      const linked = await request.post(`/api/bugs/${bug.id}/links`, {
         data: { testcaseId: testcase.id, cycleId: cycle.id, executionId: execution.id },
       });
-      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Failed");
-      // Replaying the same link is idempotent; the already-Failed execution is not re-transitioned.
-      await request.post(`/api/bugs/${bug.id}/links`, {
+      expect(linked.ok(), await linked.text()).toBe(true);
+      expect((await linked.json()).links).toEqual(expect.arrayContaining([expect.objectContaining({ executionId: execution.id })]));
+      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Untested");
+      expect(await executionEvidence(request,cycle.id,execution.id)).toEqual(original);
+      const repeated = await request.post(`/api/bugs/${bug.id}/links`, {
         data: { testcaseId: testcase.id, cycleId: cycle.id, executionId: execution.id },
       });
-      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Failed");
+      expect(repeated.ok(), await repeated.text()).toBe(true);
+      expect((await repeated.json()).links).toHaveLength(1);
+      expect(await executionStatus(request, cycle.id, execution.id)).toBe("Untested");
+      expect(await executionEvidence(request,cycle.id,execution.id)).toEqual(original);
     } finally {
       await request.delete(`/api/bugs/${bug.id}`, { failOnStatusCode: false });
+      await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
+      await request.delete(`/api/projects/${ctx.projectId}/testcases/${testcase.id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("an explicit observed failure updates the native result and a later association preserves it", async ({ request }) => {
+    const { cycle, testcase, execution } = await seedRunWithCase(request, `explicit result ${Date.now()}`);
+    let bugId = "";
+    try {
+      const observed = "Step 1 expected condition failed; the tester recorded the observation";
+      const saved = await request.patch(`/api/cycles/${cycle.id}/executions/${execution.id}`, {
+        data: { status: "Failed", actualResult: observed }
+      });
+      expect(saved.ok(), await saved.text()).toBe(true);
+      const original = await executionEvidence(request,cycle.id,execution.id);
+      expect(original.persisted.execution).toMatchObject({ status: "Failed", actual_result: observed });
+      expect(original.persisted.execution.executed_at).toBeTruthy();
+      expect(original.persisted.execution.executed_by).toBeTruthy();
+      const created = await request.post(`/api/projects/${ctx.projectId}/bugs`, {
+        data: { title: `Explicit failure association ${Date.now()}`, links: [{ testcaseId: testcase.id, cycleId: cycle.id, executionId: execution.id }] }
+      });
+      expect(created.ok(), await created.text()).toBe(true);
+      const bug = await created.json(); bugId = bug.id;
+      expect(bug.links).toEqual(expect.arrayContaining([expect.objectContaining({ executionId: execution.id })]));
+      expect(await executionEvidence(request,cycle.id,execution.id)).toEqual(original);
+    } finally {
+      if (bugId) await request.delete(`/api/bugs/${bugId}`, { failOnStatusCode: false });
       await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
       await request.delete(`/api/projects/${ctx.projectId}/testcases/${testcase.id}`, { failOnStatusCode: false });
     }
@@ -882,12 +925,12 @@ test.describe("linking a bug fails the execution", () => {
     const suffix = `${Date.now()}`;
     const testcase = await (
       await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-        data: { title: `E2E AutoFail Unlinked Case ${suffix}` },
+        data: { title: `E2E Association Unlinked Case ${suffix}` },
       })
     ).json();
 
     const res = await request.post(`/api/projects/${ctx.projectId}/bugs`, {
-      data: { title: `E2E AutoFail No Execution ${suffix}`, links: [{ testcaseId: testcase.id }] },
+      data: { title: `E2E Association No Execution ${suffix}`, links: [{ testcaseId: testcase.id }] },
       failOnStatusCode: false,
     });
 
@@ -904,7 +947,7 @@ test.describe("linking a bug fails the execution", () => {
   test("a bogus execution id rejects the whole report without persistence", { tag: '@tesbo.testId("TES-TC-1162")' }, async ({ request }) => {
     // Approved strict-link policy: do not silently turn an invalid association into an unlinked bug.
     const suffix = `${Date.now()}`;
-    const title = `E2E AutoFail Bogus Execution ${suffix}`;
+    const title = `E2E Association Bogus Execution ${suffix}`;
     const before = scalar(`SELECT COUNT(*) FROM bugs WHERE project_id = ${literal(ctx.projectId)} AND title = ${literal(title)};`);
     const res = await request.post(`/api/projects/${ctx.projectId}/bugs`, {
       data: {

@@ -1,5 +1,5 @@
 import { createTestcaseFixtureResponse } from "./testcase-approval";
-import { issueMcpTestToken } from "./mcp-access";
+import { approveMcpTestClient } from "./mcp-access";
 import { expect, request as newRequest, type Page, type TestInfo } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -30,7 +30,7 @@ export async function verifyProductionReporter(page: Page, api: string, web: str
       cases.push(await response.json());
     }
     for (const scopes of [["read", "write"], ["read"]]) {
-      const response = await issueMcpTestToken(request, `${base}/apikeys`, { data: { name: `CI reporter ${scopes.join("+")}`, scopes } });
+      const response = await request.post(`${base}/apikeys`, { data: { name: `CI reporter ${scopes.join("+")}`, scopes } });
       expect(response.ok(), await response.text()).toBeTruthy();
       tokens.push(await response.json());
     }
@@ -131,6 +131,12 @@ test.skip('skipped reporter control', { tag: '@tesbo.testId("${cases[2].external
       expect(response.ok(), await response.text()).toBeTruthy();
       return response.json();
     };
+    // A REST reporter credential does not implicitly opt this client into external MCP.
+    const unapprovedClient = await mcp(0, "get_execution", { executionId: failed.id });
+    expect(unapprovedClient.error).toMatchObject({ code: -32001 });
+    expect(await sealed()).toEqual(before);
+    await approveMcpTestClient(request, projectId, { ...tokens[0], scopes: ["read", "write"] }, api);
+    await approveMcpTestClient(request, projectId, { ...tokens[1], scopes: ["read"] }, api);
     const read = await mcp(0, "get_execution", { executionId: failed.id });
     expect(read.error).toBeUndefined();
     expect(JSON.parse(read.result.content[0].text)).toMatchObject({ id: failed.id, status: "Failed" });

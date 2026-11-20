@@ -53,7 +53,7 @@ function latch() {
   async function newModel() {
     const s = services(), model = await s.repository.createModelForUser(user,project,{ name: `Atomic model ${randomUUID()}`, model: MODEL });
     const revision = model.latestRevision!;
-    await s.repository.approveRevisionForUser(user,project,model.id,revision.id,{ expectedHash: revision.contentHash }, { kind: "human_session" });
+    await s.repository.approveRevisionForUser(user,project,model.id,revision.id,{ expectedHash: revision.contentHash },{ kind: "human_session" });
     return { modelId: model.id as string, revisionId: revision.id as string, hash: revision.contentHash as string };
   }
   async function ready() {
@@ -142,14 +142,14 @@ function latch() {
     const proposed = await s.repository.generateForUser(user,project,basis.modelId,basis.revisionId,generation);
     const body = { ...generation, digests: [proposed.paths[0].digest] }, before = await candidateRows();
     const fault = failProvenance(s.db,"mbt_generated_cases");
-    await expect(s.repository.createCasesFromPathsForUser(user,project,basis.modelId,basis.revisionId,body)).rejects.toMatchObject({ code: "22012" });
+    await expect(s.repository.createCasesFromPathsForUser(user,project,basis.modelId,basis.revisionId,body,{ kind: "human_session" })).rejects.toMatchObject({ code: "22012" });
     expect(await candidateRows()).toEqual(before);
     expect(s.embedding).not.toHaveBeenCalled();
     expect(s.suitesCache).not.toHaveBeenCalled();
     expect(s.listCache).not.toHaveBeenCalled();
     fault.mockRestore();
     const repeated = await Promise.all([1,2].map(() =>
-      s.repository.createCasesFromPathsForUser(user,project,basis.modelId,basis.revisionId,body)));
+      s.repository.createCasesFromPathsForUser(user,project,basis.modelId,basis.revisionId,body,{ kind: "human_session" })));
     expect(repeated.reduce((sum,row) => sum+row.created,0)).toBe(1);
     expect(repeated.reduce((sum,row) => sum+row.skipped,0)).toBe(1);
     expect(repeated[0].cases[0].testcaseId).toBe(repeated[1].cases[0].testcaseId);
@@ -229,6 +229,51 @@ function latch() {
       expect(await runRows()).toEqual(before);
     } finally { await blocker.query("ROLLBACK"); await attempt; await blocker.end(); }
   },15000);
+
+  it("blocks a changed explicit mapping after case reapproval and preserves the earlier run until fresh relinking", async () => {
+    const basis = await ready(), s = services();
+    await s.repository.unlinkCaseForUser(user,project,basis.modelId,basis.revisionId,basis.linkId);
+    const originalCase = await s.legacy.getTestCaseForUser(user,project,basis.testcaseId);
+    const mapping = await s.repository.linkCaseForUser(user,project,basis.modelId,basis.revisionId,{
+      testcaseId: basis.testcaseId, testcaseRevision: originalCase.editRevision, elementIds: ["finish"]
+    });
+    const originalRun = await dispatch(s,basis);
+    const history = (await admin.query("SELECT * FROM mbt_model_runs WHERE cycle_id=$1",[originalRun.cycleId])).rows[0];
+    expect(history.manifest.cases).toEqual([expect.objectContaining({
+      mappings: [{ id: mapping.id, testcaseRevision: originalCase.editRevision, basis: "CURRENT" }]
+    })]);
+
+    await s.legacy.updateTestCaseForUser(user,project,basis.testcaseId,{
+      title: "Changed expected behavior", expectedRevision: originalCase.editRevision
+    });
+    const changed = await s.legacy.getTestCaseForUser(user,project,basis.testcaseId);
+    await s.legacy.approveTestCaseForUser(user,project,basis.testcaseId,{
+      expectedRevision: changed.editRevision, expectedApprovalRevision: changed.approvalRevision
+    },{ kind: "human_session" });
+    const reviewed = await s.legacy.getTestCaseForUser(user,project,basis.testcaseId);
+    expect(reviewed.status).toBe("Approved");
+    expect(reviewed.editRevision).not.toBe(originalCase.editRevision);
+    const before = await runRows();
+    const linksBefore = (await admin.query("SELECT * FROM mbt_model_case_links WHERE model_id=$1 ORDER BY id",[basis.modelId])).rows;
+    await expect(dispatch(s,basis)).rejects.toMatchObject({ response: { code: "MAPPING_CHANGED" } });
+    for (const testcaseRevision of [originalCase.editRevision, reviewed.editRevision]) {
+      await expect(s.repository.linkCaseForUser(user,project,basis.modelId,basis.revisionId,{
+        testcaseId: basis.testcaseId, testcaseRevision, elementIds: ["finish"]
+      })).rejects.toMatchObject({ response: { code: "MAPPING_CHANGED" } });
+    }
+    expect(await runRows()).toEqual(before);
+    expect((await admin.query("SELECT * FROM mbt_model_case_links WHERE model_id=$1 ORDER BY id",[basis.modelId])).rows).toEqual(linksBefore);
+
+    await s.repository.unlinkCaseForUser(user,project,basis.modelId,basis.revisionId,mapping.id);
+    const fresh = await s.repository.linkCaseForUser(user,project,basis.modelId,basis.revisionId,{
+      testcaseId: basis.testcaseId, testcaseRevision: reviewed.editRevision, elementIds: ["finish"]
+    });
+    const nextRun = await dispatch(s,basis);
+    expect(nextRun.manifest.cases).toEqual([expect.objectContaining({
+      mappings: [{ id: fresh.id, testcaseRevision: reviewed.editRevision, basis: "CURRENT" }]
+    })]);
+    expect((await admin.query("SELECT * FROM mbt_model_runs WHERE cycle_id=$1",[originalRun.cycleId])).rows[0]).toEqual(history);
+  });
 
   it("pins a relied-on link until dispatch commits and preserves its historical manifest after unlink", async () => {
     const basis = await ready(), s = services(), writer = services(), entered = latch(), release = latch();

@@ -81,7 +81,9 @@ describe("ApiTokenRestGuard", () => {
     "POST /custom-tags", "PATCH /custom-tags/tag", "DELETE /custom-tags/tag",
     "POST /review-board/recommendations/recommendation/keep", "POST /review-board/recommendations/recommendation/edit",
     "POST /review-board/recommendations/recommendation/remove", "POST /ai/generation-history/task/save",
-    "POST /agents/zyra/tasks/task/save", "POST /agents/zyra/tasks/task/close", "POST /TESTCASES/IMPORT/"
+    "POST /agents/zyra/tasks/task/save", "POST /agents/zyra/tasks/task/close", "POST /TESTCASES/IMPORT/",
+    "POST /model-studio/models/model/revisions/revision/approve",
+    "POST /model-studio/models/model/revisions/revision/candidates"
   ])("refuses machine publication before any owner call: %s", async route => {
     const [method, suffix] = route.split(" ");
     const l = legacy();
@@ -94,7 +96,9 @@ describe("ApiTokenRestGuard", () => {
     "POST /agents/zyra/tasks/proposals", "POST /agents/zyra/tasks/task/feedback", "PATCH /agents/zyra/tasks/task/drafts/0",
     "DELETE /agents/zyra/tasks/task/drafts/0", "POST /review-board/analysis", "POST /automation/cases/resolve",
     "POST /automation/runs/run/results", "POST /automation/runs/run/results/case/evidence", "POST /bugs",
-    "GET /testcases/case/custom-field-values", "GET /custom-fields/definitions", "GET /custom-tags"
+    "GET /testcases/case/custom-field-values", "GET /custom-fields/definitions", "GET /custom-tags",
+    "POST /model-studio/models/model/revisions/revision/generate",
+    "POST /model-studio/models/model/revisions/revision/runs"
   ])("preserves scoped candidate, read or evidence neighbor: %s", async route => {
     const [method, suffix] = route.split(" ");
     const l = legacy();

@@ -267,14 +267,14 @@ jobs:
         run: |
           # These cases use the same migrated disposable application, including real human
           # sessions and a separate external token client. No model key or customer records.
-          selection='MCP-P18|REQ-U-coverage|ZYR-P07|ZYU-14 |ZYU-6[4-8] |ZYU-117 |ZYU-12[8-9] |ZYU-13[0-2] |ZYU-141 |linking a bug fails the execution'
+          selection='MCP-P18|REQ-U-coverage|ZYR-P07|ZYU-14 |ZYU-6[4-8] |ZYU-117 |ZYU-12[8-9] |ZYU-13[0-2] |ZYU-141 |linking a bug preserves original execution evidence|EXE-U-31 |EXE-U-31f |marking an execution Failed opens the bug dialog'
           npx playwright test -c playwright.config.ts \
             api/mcp.spec.ts ui/projects.spec.ts ui/requirements.spec.ts \
-            api/zyra.spec.ts ui/zyra.spec.ts api/bugs.spec.ts \
+            api/zyra.spec.ts ui/zyra.spec.ts api/bugs.spec.ts ui/executions.spec.ts \
             --workers=10 --output=test-results-governed-changes -g "$selection" --list
           npx playwright test -c playwright.config.ts \
             api/mcp.spec.ts ui/projects.spec.ts ui/requirements.spec.ts \
-            api/zyra.spec.ts ui/zyra.spec.ts api/bugs.spec.ts \
+            api/zyra.spec.ts ui/zyra.spec.ts api/bugs.spec.ts ui/executions.spec.ts \
             --workers=10 --output=test-results-governed-changes -g "$selection"
       - name: Verify existing native Run, execution, automation and evidence journeys
         working-directory: e2e

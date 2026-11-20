@@ -39,8 +39,7 @@ export async function verifyZyraReviewCloseFeedback(input: {
     await page.getByRole("button", { name: copy.saveOne, exact: true }).click();
     const response = await pending;
     expect(response.ok(), await response.text()).toBeTruthy();
-    // Publication is bound to the reviewed proposal: the save must carry the exact revision the
-    // review screen was showing, which is what makes a stale batch refusable.
+    // Publication is bound to the exact proposal rendered by this review, not a later payload.
     expect(initial.proposalRevision).toMatch(/^[a-f0-9]{64}$/);
     expect(response.request().postDataJSON()).toEqual({ expectedProposalRevision: initial.proposalRevision, selectedDraftIndexes: [0] });
     const result = await response.json();

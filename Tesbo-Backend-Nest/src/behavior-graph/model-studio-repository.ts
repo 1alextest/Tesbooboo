@@ -1,9 +1,9 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException } from "@nestjs/common";
 import type { PoolClient } from "pg";
-import { requireHumanReviewPrincipal, type ReviewPrincipal } from "../common/human-review-principal";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
 import { TESTCASE_EDIT_REVISION_SQL } from "../legacy/testcase-edit-revision";
+import { requireHumanReviewPrincipal, type ReviewPrincipal } from "../common/human-review-principal";
 import { DraftPreviewError, previewDraftModel, type PreviewDefinition } from "./model-studio-preview.core";
 import { generateModelPaths, type GeneratedPath, type GenerationStrategy } from "./model-studio-generator";
 
@@ -264,7 +264,7 @@ export class ModelStudioRepository {
     modelId: string,
     revisionId: string,
     body: Body,
-    principal: ReviewPrincipal
+    principal?: ReviewPrincipal
   ) {
     requireHumanReviewPrincipal(principal);
     await this.access(userId, projectId);
@@ -336,8 +336,10 @@ export class ModelStudioRepository {
     projectId: string,
     modelId: string,
     revisionId: string,
-    body: Body
+    body: Body,
+    principal?: ReviewPrincipal
   ) {
+    requireHumanReviewPrincipal(principal);
     await this.access(userId, projectId);
     for (const value of [modelId, revisionId]) {
       if (!UUID.test(value)) throw new NotFoundException({ error: "Model revision not found" });
@@ -487,11 +489,21 @@ export class ModelStudioRepository {
 
     const testcaseId = String(body?.testcaseId ?? "");
     if (!UUID.test(testcaseId)) throw new BadRequestException({ error: "testcaseId must be a test case id" });
-    const testcase = await client.query("SELECT id FROM testcases WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL", [testcaseId, projectId]);
+    const testcase = await client.query(
+      `SELECT id, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision
+       FROM testcases WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR SHARE`,
+      [testcaseId, projectId]
+    );
     if (!testcase.rows[0]) throw new NotFoundException({ error: "Test case not found" });
     const testcaseRevision = body?.testcaseRevision;
     if (testcaseRevision !== undefined && (typeof testcaseRevision !== "string" || !HASH.test(testcaseRevision))) {
       throw new BadRequestException({ error: "testcaseRevision must be the case editRevision or omitted" });
+    }
+    if (testcaseRevision !== undefined && testcaseRevision !== String(testcase.rows[0].edit_revision)) {
+      throw new ConflictException({
+        code: "MAPPING_CHANGED",
+        error: "This test case changed. Review its current content before linking it."
+      });
     }
 
     const inserted = await client.query(
@@ -505,6 +517,12 @@ export class ModelStudioRepository {
       "SELECT * FROM mbt_model_case_links WHERE model_revision_id = $1 AND testcase_id = $2 AND element_ids = $3::text[]",
       [revisionId, testcaseId, unique]
     )).rows[0];
+    if (String(row.testcase_revision ?? "") !== String(testcaseRevision ?? "")) {
+      throw new ConflictException({
+        code: "MAPPING_CHANGED",
+        error: "This mapping records a different case revision. Review and remove the old mapping before linking the current case."
+      });
+    }
     return this.linkView(row);
   }
 
@@ -597,7 +615,7 @@ export class ModelStudioRepository {
       [revisionId, projectId]
     );
     const linked = await client.query(
-      `SELECT l.testcase_id, l.element_ids, t.title, t.status, t.deleted_at IS NOT NULL AS deleted
+      `SELECT l.id, l.testcase_id, l.testcase_revision, l.element_ids, t.title, t.status, t.deleted_at IS NOT NULL AS deleted
        FROM mbt_model_case_links l
        JOIN testcases t ON t.id = l.testcase_id
        WHERE l.model_revision_id = $1 AND l.project_id = $2
@@ -611,6 +629,7 @@ export class ModelStudioRepository {
       elementIds: Set<string>;
       pathDigest: string | null;
       sources: string[];
+      mappings: Array<{ id: string; testcaseRevision: string | null; basis: "CURRENT" | "UNRECORDED" }>;
     };
     const eligible = new Map<string, EligibleCase>();
     const entryFor = (id: string, row: Body): EligibleCase => {
@@ -620,7 +639,8 @@ export class ModelStudioRepository {
         deleted: row.deleted === true,
         elementIds: new Set<string>(),
         pathDigest: null,
-        sources: []
+        sources: [],
+        mappings: []
       };
       for (const elementId of Array.isArray(row.element_ids) ? row.element_ids : []) existing.elementIds.add(String(elementId));
       eligible.set(id, existing);
@@ -634,6 +654,8 @@ export class ModelStudioRepository {
     for (const row of linked.rows) {
       const entry = entryFor(String(row.testcase_id), row);
       if (!entry.sources.includes("linked")) entry.sources.push("linked");
+      entry.mappings.push({ id: String(row.id), testcaseRevision: row.testcase_revision == null ? null : String(row.testcase_revision),
+        basis: row.testcase_revision == null ? "UNRECORDED" : "CURRENT" });
     }
 
     const rawRequested = body?.caseIds;
@@ -663,7 +685,8 @@ export class ModelStudioRepository {
       [projectId, requested]
     );
     const currentCases = await client.query(
-      "SELECT id, title, status, deleted_at IS NOT NULL AS deleted FROM testcases WHERE project_id = $1 AND id = ANY($2::uuid[])",
+      `SELECT id, title, status, deleted_at IS NOT NULL AS deleted, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision
+       FROM testcases WHERE project_id = $1 AND id = ANY($2::uuid[])`,
       [projectId, requested]
     );
     const currentById = new Map(currentCases.rows.map(row => [String(row.id), row]));
@@ -682,6 +705,16 @@ export class ModelStudioRepository {
         code: "CASE_NOT_APPROVED",
         error: "Only Approved, non-deleted model cases can enter a run",
         caseIds: ineligible
+      });
+    }
+    const changedMappings = requested.filter(id => (eligible.get(id) as EligibleCase).mappings.some(mapping =>
+      mapping.testcaseRevision !== null && mapping.testcaseRevision !== String(currentById.get(id)?.edit_revision)
+    ));
+    if (changedMappings.length) {
+      throw new ConflictException({
+        code: "MAPPING_CHANGED",
+        error: "A selected case changed since it was linked. Review and replace its mapping before starting a new run.",
+        caseIds: changedMappings
       });
     }
     if (!requested.length) {
@@ -718,7 +751,8 @@ export class ModelStudioRepository {
           title: entry.title,
           pathDigest: entry.pathDigest,
           elementIds: [...entry.elementIds],
-          sources: entry.sources
+          sources: entry.sources,
+          mappings: entry.mappings
         };
       })
     };
