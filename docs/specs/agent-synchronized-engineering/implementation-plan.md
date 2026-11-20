@@ -69,6 +69,22 @@ The outcome is *observed change → scoped code-dependency analysis → reasoned
 
 **Research context, not Tesbo test proof:** the [quality survey](https://doi.org/10.1007/s11219-024-09698-w), [behavioral-gap preprint](https://arxiv.org/abs/2606.10417), [ML testing review](https://doi.org/10.1002/stvr.1845) and [industrial automata-learning study](https://doi.org/10.1007/978-3-319-25423-4_5) remain leads whose primary-source scope must be checked before empirical claims. ASE-FLOW-29..44 remains part of the existing planned suite; the later reasoning extension adds ASE-FLOW-45..54. All are NOT RUN and belong in the same P-14 eight-file owner/proof mapping.
 
+### GEX semantic/consequence analysis proof (existing I4/F4, I3/F3, I7; proposed)
+
+Extend the existing FR-118/119 graph, policy/manual owners, native Case/Run/Bug/Evidence and T-422 method resolver; no new canonical graph or autonomous policy author. The initial proof is **read-only**, from current approved policy and audience-scoped manual revisions, a business requirement and authentic evidence. Agents independently interpret the requested user outcome and explain grounded or disputed obligations, upstream/downstream consequences and affected native records without prespecified fault targets. Both code-first and code-free workflows must work.
+
+**Proposed subordinate scenarios for P-14 acceptance mapping (NOT RUN; IDs not canonical):**
+- `GEX-SEM-01`: Approved policy conflicts with a current user manual and observed code. Explain distinct source authority, impacted actor/journey and unresolved requirement; refuse to rewrite policy or manufacture execution proof.
+- `GEX-SEM-02`: Approved policy changes without a code commit. Trace manual audience/version, permissions, states, downstream consumers, case coverage and uncertain links; distinguish stale manual from changed normative requirement.
+- `GEX-SEM-03`: Manual wording changes without any binding workflow change. Preserve a valid unchanged outcome and avoid duplicate requirements/cases.
+- `GEX-SEM-04`: Intermittent failure history mixes different environments and fixtures. Preserve individual attempts and causal alternatives; do not assert flaky test or root cause until evidence permits.
+- `GEX-SEM-05`: Defect-risk model sees sparse/biased labels or a new project. Abstain, explain uncertainty and use legitimate human/rules-only prioritization without dropping mandatory regression.
+- `GEX-SEM-06`: High graph edge/path coverage still misses a policy-required forbidden transition. Show independent normative gap and separated designed/mapped/executed/verified denominators.
+- `GEX-SEM-07`: Finite path budget exhausts mid-search with loops and data-state combinations. Report truncation and omitted candidates; retain critical obligations and don't claim completeness.
+- `GEX-SEM-08`: Agent infers a downstream consequence without an accepted link or source evidence. Keep hypothesis reviewable, explicitly UNKNOWN, and prohibit unauthorized write/Passed results.
+
+**Independent evaluation:** Compare existing deterministic graph projections, governed AI interpretation and no-change/manual baselines on held-out dissimilar systems and withheld critical scenarios. Measure unique actionable gaps, consequence trace accuracy, false claims, missed obligations, root-cause discrimination, risk calibration where data permits, flakiness false attribution, review labor, token/latency cost, privacy and rollback. First-run assurance teams get outcome plus pinned sources, not the scenarios above as suggested findings; these scenarios are for later engineering acceptance. The existing eight canonical documents, approval boundary, original I3-Q execution loop and CI/security gate remain mandatory.
+
 ### GEX governed AI reasoning and authored skill reuse — continuation, no new top-level product
 
 1. **Source/identity reconciliation:** inspect source artifact `manual-test-authoring` (525-line revision with A–H modes, state/role/permission/cross-cutting/test-condition/RTM/PTM and improvement journal), identify any contradictory earlier version, its missing referenced files and whether it is installed/approved anywhere; inspect the canonical D-14/T-422 ownership contract and verify its actual implementation and running MCP capabilities. Review `product-testing`/Primary User Type → Module → Context only from accessible exact source; do not claim local Nesberry edits are merged or live.
