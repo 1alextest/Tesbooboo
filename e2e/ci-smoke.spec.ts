@@ -129,9 +129,9 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
       bugs.push(created.id);
       expect(created).toMatchObject({ reportedBy: ownerId });
       expect(created.links).toEqual(expect.arrayContaining([expect.objectContaining(body.links[0])]));
-      // Reporting a defect is separate from observing a test outcome. Preserve the whole
-      // execution, including its actor, timestamp, actual result and history.
-      expect((await persisted()).execution).toEqual(executionBeforeBugReports);
+      // Reverse path (Basecamp 10226284379 / 10221755377): a bug filed against a live run marks
+      // that execution Failed. Reporting through MCP is idempotent for the already-Failed row.
+      expect((await persisted()).execution[0]).toMatchObject({ status: "Failed", executed_by: ownerId });
     }
     await verifyHistoryImportText(request, nonmember, anonymous, db, api, projectId);
   } finally {

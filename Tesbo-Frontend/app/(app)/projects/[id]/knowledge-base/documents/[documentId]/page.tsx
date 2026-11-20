@@ -460,17 +460,35 @@ export default function KnowledgeDocumentPage() {
     if (visible) setSaveStatus("saving");
     try {
       const updated = await writer.save(revision, async () => {
-        const saved = await updateKnowledgeDocument(projectId, documentId, {
-          title: nextTitle,
-          contentJson: payload?.contentJson,
-          contentHtml: payload?.contentHtml,
-          contentText: payload?.contentText,
-          expectedRevision: persistedDocRef.current?.editRevision,
-        });
-        // Advance inside the queue operation so the next save/review uses the committed base,
-        // even if React has not rendered the response or a review barrier is already waiting.
-        if (writerRef.current === writer) persistedDocRef.current = saved;
-        return saved;
+        try {
+          const saved = await updateKnowledgeDocument(projectId, documentId, {
+            title: nextTitle,
+            contentJson: payload?.contentJson,
+            contentHtml: payload?.contentHtml,
+            contentText: payload?.contentText,
+            expectedRevision: persistedDocRef.current?.editRevision,
+          });
+          // Advance inside the queue operation so the next save/review uses the committed base,
+          // even if React has not rendered the response or a review barrier is already waiting.
+          if (writerRef.current === writer) persistedDocRef.current = saved;
+          return saved;
+        } catch (error) {
+          /*
+           * A lost acknowledgement can leave the write committed while the browser never saw the
+           * new editRevision. Retrying with the stale revision would then fail the CAS check for
+           * ever. Re-read the document: when it already holds exactly what this save sent, adopt it
+           * as the committed result (an idempotent replay of our own write). A genuine concurrent
+           * edit differs, so the original failure still surfaces for it.
+           */
+          const current = await getKnowledgeDocument(projectId, documentId).catch(() => null);
+          const sameTitle = String(current?.title ?? "") === nextTitle;
+          const sameText = String(current?.contentText ?? "") === String(payload?.contentText ?? "");
+          if (current && sameTitle && sameText) {
+            if (writerRef.current === writer) persistedDocRef.current = current;
+            return current;
+          }
+          throw error;
+        }
       }, generation);
       if (!visible || !isMountedRef.current || writerRef.current !== writer || revision !== editRevision.current || restoreInFlightRef.current) return;
       setDoc(updated);

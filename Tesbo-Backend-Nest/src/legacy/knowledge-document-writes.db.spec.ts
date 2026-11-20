@@ -406,7 +406,7 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       const native = f.svc as unknown as {
         ragRetrieval: RagRetrievalService;
         knowledgeSnapshot(project: string, ids?: string[], query?: string): Promise<Array<{ citation: { sourceId: string } }>>;
-        knowledgeFolderSnapshot(project: string, message: string, keys: string[]): Promise<Array<{ citation: { sourceId: string } }>>;
+        knowledgeFolderSnapshot(project: string, message: string, keys: string[]): Promise<Array<{ citation?: { sourceId: string } }>>;
         zyraMemoryText(project: string): Promise<string>;
       };
       native.ragRetrieval = rag;
@@ -442,7 +442,9 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
         ftsSearch(project: string, table: "knowledge_documents", column: string, query: { terms: string[]; tsquery: string; minMatchedTerms: number }): Promise<Array<{ source_id: string }>>;
       }).ftsSearch(projectId, "knowledge_documents", "content_text", { terms: [marker], tsquery: `'${marker}'`, minMatchedTerms: 1 });
       expect(selected.map((row) => row.citation.sourceId).filter((id) => ids.includes(id)).sort()).toEqual(expected);
-      expect(folder.map((row) => row.citation.sourceId).filter((id) => ids.includes(id)).sort()).toEqual(expected);
+      // The folder snapshot carries a synthetic header row (and an id-less marker row when the
+      // folder has no readable content); only cited rows contribute source ids.
+      expect(folder.flatMap((row) => row.citation ? [row.citation.sourceId] : []).filter((id) => ids.includes(id)).sort()).toEqual(expected);
       expect(keyword.map((row) => row.source_id).filter((id) => ids.includes(id)).sort()).toEqual(expected);
       expect(await native.zyraMemoryText(projectId)).toBe("");
       expect(await f.svc.getKnowledgeDocument(projectId, actor, legacyId)).toMatchObject({ contentText: marker, status: "approved", reviewBinding: "legacy_unverified" });

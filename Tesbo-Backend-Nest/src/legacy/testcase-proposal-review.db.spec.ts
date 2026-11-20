@@ -166,10 +166,10 @@ type Body=Record<string,any>;
   });
 
   it("waits for a live dependency writer, then rejects the old coherent review without effects",async()=>{
-    const tag=(await admin.query("INSERT INTO custom_tags(project_id,name) VALUES ($1,$2) RETURNING id",[project,`Before ${randomUUID()}`])).rows[0].id;
+    const tag=(await admin.query("INSERT INTO custom_tags(project_id,name) VALUES ($1,$2) RETURNING id",[project,`Before ${randomUUID().slice(0, 8)}`])).rows[0].id;
     const review=await stage([{opType:"create",draft:{title:"Concurrent definition",customTagIds:[tag]}}]),before=(await nativeCases()).rows;
     const blocker=new Client({connectionString:url});await blocker.connect();await blocker.query("BEGIN");
-    await blocker.query("UPDATE custom_tags SET name=$2 WHERE id=$1",[tag,`After ${randomUUID()}`]);
+    await blocker.query("UPDATE custom_tags SET name=$2 WHERE id=$1",[tag,`After ${randomUUID().slice(0, 8)}`]);
     const attempt=save(review,[0]).then(()=>null,(error:unknown)=>error);
     try{
       const deadline=Date.now()+5000;let waiting=false;
