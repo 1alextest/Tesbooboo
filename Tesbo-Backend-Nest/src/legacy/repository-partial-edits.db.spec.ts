@@ -213,12 +213,14 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
           expect(await writing).toMatchObject({ code: RpcCode.ToolExecutionError, data: { code: "HUMAN_PUBLICATION_REQUIRED" } });
           expect(await state()).toEqual(before);
           for (const effect of [f.fields, f.tags, f.activity, f.embedding, f.notice, f.suitesInvalidation, f.casesInvalidation]) expect(effect).not.toHaveBeenCalled();
+          // Compare the version with the same PostgreSQL JSONB representation used by the trigger.
+          const beforeSnapshot = (await pool.query("SELECT to_jsonb(t) AS snapshot FROM testcases t WHERE id = $1", [testcaseId])).rows[0].snapshot;
           await blocker.query("COMMIT");
           const after = await state();
           expect(after.row).toEqual({ ...before.row, suite_id: nextRoot, owner_id: otherOwner,
             review_dependency_revision: String(BigInt(before.row.review_dependency_revision) + 1n) });
           expect(after.versions).toHaveLength(before.versions.length + 1);
-          expect(after.versions.at(-1)).toMatchObject({ snapshot: before.row });
+          expect(after.versions.at(-1)?.snapshot).toEqual(beforeSnapshot);
           unchangedOutsideCase(before, after);
           return;
         }

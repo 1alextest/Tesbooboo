@@ -46,12 +46,8 @@ const url = process.env.DATABASE_URL ?? "";
     const caseCache = jest.spyOn(internals.testcasesListCache, "invalidate").mockResolvedValue(undefined);
     return { svc, internals, suiteCache, caseCache };
   }
-  // The V155 review triggers bump this counter on every content change. It is a dependency
-  // token, not business state, so it is stripped from this snapshot; the assertions below are
-  // about which rows and relationships changed, not how many times the trigger fired.
-  const withoutReviewCounter = <T>({ review_dependency_revision: _counter, ...row }: T & { review_dependency_revision?: unknown }) => row;
   const state = async () => ({
-    cases: (await db.query("SELECT * FROM testcases WHERE id=ANY($1::uuid[]) ORDER BY id", [[...local, ...foreign, ...untouched]])).rows.map(withoutReviewCounter),
+    cases: (await db.query("SELECT * FROM testcases WHERE id=ANY($1::uuid[]) ORDER BY id", [[...local, ...foreign, ...untouched]])).rows,
     versions: (await db.query("SELECT * FROM testcase_versions WHERE testcase_id=ANY($1::uuid[]) ORDER BY testcase_id,version", [[...local, ...foreign, ...untouched]])).rows,
     suites: (await db.query("SELECT * FROM suites WHERE id=ANY($1::uuid[]) ORDER BY id", [[root, child, foreignChild]])).rows,
     run: (await db.query("SELECT * FROM cycles WHERE id=$1", [run])).rows,
