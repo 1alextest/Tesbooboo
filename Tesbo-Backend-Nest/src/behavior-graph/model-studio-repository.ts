@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException } from "@nestjs/common";
 import type { PoolClient } from "pg";
+import { requireHumanReviewPrincipal, type ReviewPrincipal } from "../common/human-review-principal";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
 import { TESTCASE_EDIT_REVISION_SQL } from "../legacy/testcase-edit-revision";
@@ -262,8 +263,10 @@ export class ModelStudioRepository {
     projectId: string,
     modelId: string,
     revisionId: string,
-    body: Body
+    body: Body,
+    principal: ReviewPrincipal
   ) {
+    requireHumanReviewPrincipal(principal);
     await this.access(userId, projectId);
     for (const value of [modelId, revisionId]) {
       if (!UUID.test(value)) throw new NotFoundException({ error: "Model revision not found" });

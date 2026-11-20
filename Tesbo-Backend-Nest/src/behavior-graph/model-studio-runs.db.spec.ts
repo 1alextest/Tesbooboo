@@ -53,7 +53,7 @@ function latch() {
   async function newModel() {
     const s = services(), model = await s.repository.createModelForUser(user,project,{ name: `Atomic model ${randomUUID()}`, model: MODEL });
     const revision = model.latestRevision!;
-    await s.repository.approveRevisionForUser(user,project,model.id,revision.id,{ expectedHash: revision.contentHash });
+    await s.repository.approveRevisionForUser(user,project,model.id,revision.id,{ expectedHash: revision.contentHash }, { kind: "human_session" });
     return { modelId: model.id as string, revisionId: revision.id as string, hash: revision.contentHash as string };
   }
   async function ready() {

@@ -127,3 +127,18 @@ describe("governed model/native writer composition", () => {
     expect(f.db.query).not.toHaveBeenCalled();
   });
 });
+
+
+it("keeps model approval unavailable to machine principals before accessing persistence", async () => {
+  const access = jest.fn();
+  const transaction = jest.fn();
+  const repository = new ModelStudioRepository(
+    { transaction } as unknown as DatabaseService,
+    { requireProjectAccess: access } as unknown as LegacyService
+  );
+  await expect(repository.approveRevisionForUser(
+    user, project, model, revision, { expectedHash: hash }, { kind: "api_token" }
+  )).rejects.toMatchObject({ status: 403, response: { code: "HUMAN_REVIEW_REQUIRED" } });
+  expect(access).not.toHaveBeenCalled();
+  expect(transaction).not.toHaveBeenCalled();
+});
