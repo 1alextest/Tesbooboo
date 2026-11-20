@@ -18,7 +18,7 @@ const receipt: QaChangeReviewReceipt = {
 };
 
 function context(authorized: boolean, value: QaChangeReviewReceipt | null = receipt) {
-  const query = jest.fn(async () => ({ rows: [{ authorized, receipt: value }] }));
+  const query = jest.fn(async (_sql: string, _params: unknown[]) => ({ rows: [{ authorized, receipt: value }] }));
   const history = new CurrentCacheGraphHistory({ query } as unknown as DatabaseService, {} as never);
   return { query, history };
 }
