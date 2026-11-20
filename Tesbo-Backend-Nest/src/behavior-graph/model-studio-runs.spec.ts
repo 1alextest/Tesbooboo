@@ -11,7 +11,12 @@ const model = "00000000-0000-4000-8000-000000000003";
 const revision = "00000000-0000-4000-8000-000000000004";
 const testcase = "00000000-0000-4000-8000-000000000005";
 const cycle = "00000000-0000-4000-8000-000000000006";
+const cycleItem = "00000000-0000-4000-8000-000000000007";
+const execution = "00000000-0000-4000-8000-000000000008";
+const replacementItem = "00000000-0000-4000-8000-000000000009";
+const replacementExecution = "00000000-0000-4000-8000-000000000010";
 const hash = "a".repeat(64);
+const occurrence = { cycleItemId: cycleItem, executionId: execution, snapshotApprovalRevision: hash };
 const definition: PreviewDefinition = {
   schemaVersion: "tesbo-fsm-draft/1", semantics: "SEQUENTIAL_FSM", initialStateId: "start",
   states: [{ id: "start", label: "Start" }, { id: "done", label: "Done" }],
@@ -22,7 +27,9 @@ const definition: PreviewDefinition = {
 function fixture() {
   const state = { active: true, current: true, approved: true, authorized: true, fail: "", committed: false, inside: false,
     runs: 0, candidates: 0, stagedRuns: 0, stagedCandidates: 0,
-    generated: true, editRevision: hash, links: [] as Array<Record<string, unknown>> };
+    generated: true, editRevision: hash, links: [] as Array<Record<string, unknown>>,
+    occurrences: [{ testcase_id: testcase, cycle_item_id: cycleItem, execution_id: execution,
+      snapshot_approval_revision: hash }] as Array<Record<string, unknown>> };
   const failure = new Error("Required model provenance write failed");
   const effectStates: Array<{ inside: boolean; committed: boolean }> = [];
   const effect = jest.fn(async () => { effectStates.push({ inside: state.inside, committed: state.committed }); });
@@ -38,6 +45,7 @@ function fixture() {
       if (state.fail === "candidate") throw failure;
       return { rows: [] };
     }
+    if (sql.includes("FROM cycle_items ci") && sql.includes("JOIN executions e")) return { rows: state.occurrences };
     if (sql.includes("FROM mbt_models")) return { rows: state.active ? [{ id: model, name: "Reviewed model" }] : [] };
     if (sql.includes("FROM mbt_model_revisions")) return { rows: [{
       id: sql.includes("ORDER BY revision_number") && !state.current ? "new-head" : revision,
@@ -143,12 +151,27 @@ describe("governed model/native writer composition", () => {
     const f = fixture();
     const run = await f.repository.dispatchRunForUser(user, project, model, revision, { caseIds: [testcase] });
     expect(run).toMatchObject({ cycleId: cycle, modelRevisionId: revision, contentHash: hash, added: 1,
-      manifest: { cases: [{ testcaseId: testcase, title: "Current reviewed title" }] } });
+      manifest: { cases: [{ testcaseId: testcase, title: "Current reviewed title", nativeOccurrence: occurrence }] } });
     expect(f.legacy.createCycleWithTestcasesForUser).toHaveBeenCalledWith(user, project,
       expect.objectContaining({ testcaseIds: [testcase] }), f.client);
     expect(f.state.committed).toBe(true);
     expect(f.db.query).not.toHaveBeenCalled();
   });
+
+  it.each(["missing", "ambiguous", "missing snapshot"])(
+    "refuses %s native occurrence identity inside the dispatch transaction", async kind => {
+      const f = fixture();
+      if (kind === "missing") f.state.occurrences = [];
+      else if (kind === "ambiguous") f.state.occurrences.push({ ...f.state.occurrences[0], execution_id: replacementExecution });
+      else f.state.occurrences[0].snapshot_approval_revision = null;
+      await expect(f.repository.dispatchRunForUser(user, project, model, revision, { caseIds: [testcase] }))
+        .rejects.toMatchObject({ status: 409, response: { code: "NATIVE_OCCURRENCE_UNAVAILABLE" } });
+      expect(f.state.committed).toBe(false);
+      expect(f.state.runs).toBe(0);
+      expect(f.client.query.mock.calls.some(([sql]) => sql.includes("INSERT INTO mbt_model_runs"))).toBe(false);
+      expect(f.legacy.deleteCycle).not.toHaveBeenCalled();
+    }
+  );
 
   it.each([
     ["active", 404], ["current", 409], ["approved", 409]
@@ -226,5 +249,93 @@ describe("governed model/native writer composition", () => {
     expect(f.db.query).not.toHaveBeenCalled();
     expect(f.db.transaction).not.toHaveBeenCalled();
     expect(f.legacy.createTestCase).not.toHaveBeenCalled();
+  });
+});
+
+describe("governed model results retain their dispatched native occurrence", () => {
+  const nativeResult = (overrides: Record<string, unknown> = {}) => ({
+    model_run_id: "dispatch", testcase_id: testcase, cycle_item_id: cycleItem, execution_id: execution,
+    snapshot_approval_revision: hash, status: "Passed", ...overrides
+  });
+  function projectionFixture(cases: Array<Record<string, unknown>>, results: Array<Record<string, unknown>>) {
+    const manifest = { contentHash: hash, cases };
+    const run = { id: "dispatch", cycle_id: cycle, cycle_name: "Editable native run", cycle_deleted: null,
+      created_at: "2026-11-20T00:00:00Z", case_count: results.length, manifest };
+    const db = { query: jest.fn(async (sql: string) => {
+      // Supply the actual native rows, including replacement occurrences. Correct attribution
+      // must distinguish their IDs; filtering this fixture by testcaseId would hide the defect.
+      if (sql.includes("JOIN executions e")) {
+        if (sql.includes("COUNT(*)")) return { rows: results.map(row => ({ ...row, count: 1 })) };
+        return { rows: results };
+      }
+      if (sql.includes("FROM mbt_model_runs")) return { rows: [run] };
+      throw new Error(`Unexpected projection query: ${sql}`);
+    }) };
+    const repository = new ModelStudioRepository(db as unknown as DatabaseService, {} as LegacyService);
+    const projections = repository as unknown as {
+      governedRunsFor(revisionId: string, projectId: string): Promise<Array<Record<string, unknown>>>;
+      observedByElementFor(revisionId: string, projectId: string): Promise<Array<Record<string, unknown>>>;
+    };
+    return { projections, manifest };
+  }
+  const manifestCase = (overrides: Record<string, unknown> = {}) => ({
+    testcaseId: testcase, elementIds: ["finish"], nativeOccurrence: occurrence, ...overrides
+  });
+
+  it("continues to attribute the original exact occurrence and excludes later native additions", async () => {
+    const f = projectionFixture([manifestCase()], [nativeResult(), nativeResult({
+      cycle_item_id: replacementItem, execution_id: replacementExecution, status: "Failed"
+    })]);
+    expect(await f.projections.observedByElementFor(revision, project)).toEqual([
+      { elementId: "finish", runs: 1, results: 1, statusCounts: { Passed: 1 } }
+    ]);
+    expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+      caseCount: 1, occurrenceBasis: "PINNED", attributedCaseCount: 1, unavailableCaseCount: 0, unknownCaseCount: 0,
+      statusCounts: { Passed: 1 }
+    })]);
+  });
+
+  it.each([
+    ["re-added case", { cycle_item_id: replacementItem, execution_id: replacementExecution }],
+    ["different execution", { execution_id: replacementExecution }],
+    ["different reviewed snapshot", { snapshot_approval_revision: "b".repeat(64) }],
+    ["unrelated case", { testcase_id: replacementItem }]
+  ])("never attributes a %s to the original manifest", async (_label, replacement) => {
+    const f = projectionFixture([manifestCase()], [nativeResult(replacement as Record<string, unknown>)]);
+    expect(await f.projections.observedByElementFor(revision, project)).toEqual([]);
+    expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+      caseCount: 1, occurrenceBasis: "PINNED", attributedCaseCount: 0, unavailableCaseCount: 1,
+      unknownCaseCount: 0, statusCounts: {}
+    })]);
+  });
+
+  it("keeps the original dispatch count when its occurrence is removed", async () => {
+    const f = projectionFixture([manifestCase()], []);
+    expect(await f.projections.observedByElementFor(revision, project)).toEqual([]);
+    expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+      caseCount: 1, occurrenceBasis: "PINNED", attributedCaseCount: 0, unavailableCaseCount: 1,
+      unknownCaseCount: 0, statusCounts: {}
+    })]);
+  });
+
+  it.each([undefined, {}, { cycleItemId: cycleItem, executionId: execution },
+    { ...occurrence, executionId: "not-an-occurrence" }])(
+    "keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: %j", async nativeOccurrence => {
+      const f = projectionFixture([manifestCase({ nativeOccurrence })], [nativeResult()]);
+      expect(await f.projections.observedByElementFor(revision, project)).toEqual([]);
+      expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+        caseCount: 1, occurrenceBasis: "UNKNOWN", attributedCaseCount: 0, unavailableCaseCount: 0,
+        unknownCaseCount: 1, statusCounts: {}
+      })]);
+    }
+  );
+
+  it("does not count an ambiguously duplicated occurrence twice", async () => {
+    const f = projectionFixture([manifestCase(), manifestCase({ elementIds: ["done"] })], [nativeResult()]);
+    expect(await f.projections.observedByElementFor(revision, project)).toEqual([]);
+    expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+      caseCount: 2, occurrenceBasis: "UNKNOWN", attributedCaseCount: 0, unavailableCaseCount: 0,
+      unknownCaseCount: 2, statusCounts: {}
+    })]);
   });
 });

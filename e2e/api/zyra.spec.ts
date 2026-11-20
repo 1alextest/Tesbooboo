@@ -300,6 +300,8 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       // are hidden and refuse, so the catalog stays at the non-publisher count.
       const listed = await rpc(write.token, "tools/list");
       expect(listed.result.tools).toHaveLength(49);
+      expect(listed.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("create_suite");
+      expect(listed.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("update_suite");
       expect(listed.result.tools.find((tool: { name: string }) => tool.name === "preview_behavior_model_draft").inputSchema.additionalProperties).toBe(false);
       const params = { name: "preview_behavior_model_draft", arguments: { model: modelPreviewDraft() } };
       expect((await rpc(read.token, "tools/call", params)).error.code).toBe(-32002);

@@ -1252,7 +1252,9 @@ export default function TestRunDetailPage() {
               {modelProvenance.revisionNumber}
               {modelProvenance.approvedAt ? ` · approved ${formatDate(modelProvenance.approvedAt)}` : ""}
               {" · "}
-              {modelProvenance.caseCount} case{modelProvenance.caseCount === 1 ? "" : "s"}
+              {modelProvenance.caseCount} originally dispatched case{modelProvenance.caseCount === 1 ? "" : "s"}
+              {modelProvenance.occurrenceBasis === "UNKNOWN" ? " · occurrence basis UNKNOWN" : ""}
+              {" · later additions are outside this model dispatch"}
             </p>
           )}
           <div className="mt-2.5 flex flex-wrap items-center gap-4">

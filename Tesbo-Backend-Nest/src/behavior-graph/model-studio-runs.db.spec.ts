@@ -48,6 +48,7 @@ function latch() {
     const embedding = jest.spyOn(internals, "enqueueTestcaseEmbedding").mockReturnValue(undefined);
     const suitesCache = jest.spyOn(internals.suitesCache, "invalidate").mockResolvedValue(undefined);
     const listCache = jest.spyOn(internals.testcasesListCache, "invalidate").mockResolvedValue(undefined);
+    jest.spyOn(internals, "notifyExecutionChange").mockResolvedValue(undefined);
     return { db, legacy, repository: new ModelStudioRepository(db, legacy), embedding, suitesCache, listCache };
   }
   async function newModel() {
@@ -216,6 +217,119 @@ function latch() {
     const item = after.items.find(row => row.cycle_id === governed.cycleId)!;
     expect(item.snapshot_approval_revision).toMatch(/^[a-f0-9]{64}$/);
     expect(item.snapshot_reviewed_content.case.title).toBe(governed.manifest.cases[0].title);
+  });
+
+  it("keeps model evidence on the original occurrence after native remove, edit, reapproval and re-add", async () => {
+    const basis = await ready(), s = services();
+    const originalCase = await s.legacy.getTestCaseForUser(user,project,basis.testcaseId);
+    await s.repository.unlinkCaseForUser(user,project,basis.modelId,basis.revisionId,basis.linkId);
+    await s.repository.linkCaseForUser(user,project,basis.modelId,basis.revisionId,{
+      testcaseId: basis.testcaseId, testcaseRevision: originalCase.editRevision, elementIds: ["finish"]
+    });
+    const run = await dispatch(s,basis), pin = run.manifest.cases[0].nativeOccurrence!;
+    expect(pin).toEqual({ cycleItemId: expect.any(String), executionId: expect.any(String),
+      snapshotApprovalRevision: originalCase.approvalRevision });
+    const originalManifest = (await admin.query("SELECT * FROM mbt_model_runs WHERE id=$1",[run.id])).rows[0];
+    const snapshot = () => admin.query(
+      "SELECT id, cycle_id, testcase_id, snapshot_title, snapshot_approval_revision, snapshot_reviewed_content FROM cycle_items WHERE id=$1",
+      [pin.cycleItemId]
+    );
+    const originalSnapshot = (await snapshot()).rows[0];
+    expect(originalSnapshot).toMatchObject({ cycle_id: run.cycleId, testcase_id: basis.testcaseId,
+      snapshot_approval_revision: pin.snapshotApprovalRevision, snapshot_reviewed_content: originalCase.approvalSnapshot });
+    expect((await admin.query("SELECT cycle_item_id FROM executions WHERE id=$1",[pin.executionId])).rows[0])
+      .toEqual({ cycle_item_id: pin.cycleItemId });
+
+    await s.legacy.updateExecution(pin.executionId,user,{ status: "Passed" },{ expectedCycleId: run.cycleId });
+    const positive = await s.repository.coverageForUser(user,project,basis.modelId);
+    expect(positive.observedByElement).toEqual([{ elementId: "finish", runs: 1, results: 1, statusCounts: { Passed: 1 } }]);
+    expect(positive.governedRuns).toEqual([expect.objectContaining({ caseCount: 1, attributedCaseCount: 1,
+      unavailableCaseCount: 0, unknownCaseCount: 0, occurrenceBasis: "PINNED", statusCounts: { Passed: 1 } })]);
+
+    await s.legacy.removeCycleTestCase(run.cycleId,user,basis.testcaseId);
+    const removed = await s.repository.coverageForUser(user,project,basis.modelId);
+    expect(removed.observedByElement).toEqual([]);
+    expect(removed.governedRuns).toEqual([expect.objectContaining({ caseCount: 1, attributedCaseCount: 0,
+      unavailableCaseCount: 1, unknownCaseCount: 0, statusCounts: {} })]);
+    await s.legacy.updateTestCaseForUser(user,project,basis.testcaseId,{
+      title: "A different approved definition after dispatch", expectedRevision: originalCase.editRevision
+    });
+    const changed = await s.legacy.getTestCaseForUser(user,project,basis.testcaseId);
+    await s.legacy.approveTestCaseForUser(user,project,basis.testcaseId,{
+      expectedRevision: changed.editRevision, expectedApprovalRevision: changed.approvalRevision
+    },{ kind: "human_session" });
+    const reviewed = await s.legacy.getTestCaseForUser(user,project,basis.testcaseId);
+    expect(reviewed.approvalRevision).not.toBe(pin.snapshotApprovalRevision);
+    const unrelated = await s.legacy.createTestCase(project,user,{ title: "Unrelated later native member", status: "Draft" });
+    const unrelatedReview = await s.legacy.getTestCaseForUser(user,project,unrelated.id);
+    await s.legacy.approveTestCaseForUser(user,project,unrelated.id,{
+      expectedRevision: unrelatedReview.editRevision, expectedApprovalRevision: unrelatedReview.approvalRevision
+    },{ kind: "human_session" });
+    expect(await s.legacy.addCycleTestCases(run.cycleId,user,{ testcaseIds: [basis.testcaseId, unrelated.id] }))
+      .toEqual({ requested: 2, added: 2, skipped: 0 });
+    const current = await s.legacy.executionsForUser(run.cycleId,user);
+    expect(current).toHaveLength(2);
+    const replacement = current.find(row => row.testcaseId === basis.testcaseId)!;
+    expect(replacement.id).not.toBe(pin.executionId);
+    expect(replacement.cycleItemId).not.toBe(pin.cycleItemId);
+    for (const row of current) await s.legacy.updateExecution(row.id,user,{ status: "Passed" },{ expectedCycleId: run.cycleId });
+    const persisted = (await admin.query(
+      `SELECT ci.id, ci.testcase_id, ci.snapshot_approval_revision, e.id AS execution_id, e.status
+       FROM cycle_items ci JOIN executions e ON e.cycle_item_id=ci.id
+       WHERE ci.cycle_id=$1 AND ci.deleted_at IS NULL AND e.deleted_at IS NULL`,[run.cycleId]
+    )).rows;
+    expect(persisted).toHaveLength(2);
+    expect(persisted.every(row => row.status === "Passed")).toBe(true);
+    expect(persisted.find(row => row.testcase_id === basis.testcaseId)).toMatchObject({
+      id: replacement.cycleItemId, execution_id: replacement.id, snapshot_approval_revision: reviewed.approvalRevision
+    });
+
+    const coverage = await s.repository.coverageForUser(user,project,basis.modelId);
+    expect(coverage.observedByElement).toEqual([]);
+    expect(coverage.governedRuns).toEqual([expect.objectContaining({ caseCount: 1, occurrenceBasis: "PINNED",
+      attributedCaseCount: 0, unavailableCaseCount: 1, unknownCaseCount: 0, statusCounts: {} })]);
+    expect(coverage.caseEvidence).toEqual([expect.objectContaining({ testcaseId: basis.testcaseId, statusCounts: { Passed: 2 } })]);
+    expect(coverage.evidenceNote).toMatch(/across native runs, separate from the original occurrences/i);
+    expect(await s.repository.runProvenanceForUser(user,project,run.cycleId)).toMatchObject({
+      caseCount: 1, occurrenceBasis: "PINNED", pinnedCaseCount: 1, unknownCaseCount: 0
+    });
+    expect((await admin.query("SELECT * FROM mbt_model_runs WHERE id=$1",[run.id])).rows[0]).toEqual(originalManifest);
+    expect((await snapshot()).rows[0]).toEqual(originalSnapshot);
+    expect((await admin.query(
+      `SELECT ci.deleted_at IS NOT NULL AS item_removed, e.deleted_at IS NOT NULL AS execution_removed, e.status
+       FROM cycle_items ci JOIN executions e ON e.cycle_item_id=ci.id WHERE ci.id=$1 AND e.id=$2`,
+      [pin.cycleItemId,pin.executionId]
+    )).rows[0]).toEqual({ item_removed: true, execution_removed: true, status: "Passed" });
+  });
+
+  it("keeps a legacy manifest UNKNOWN even when today's native occurrence has a passing result", async () => {
+    const basis = await ready(), s = services(), original = await dispatch(s,basis);
+    const native = await s.legacy.createCycleWithTestcasesForUser(user,project,{
+      name: "Legacy model dispatch fixture", testcaseIds: [basis.testcaseId]
+    });
+    const [result] = await s.legacy.executionsForUser(native.cycle.id,user);
+    await s.legacy.updateExecution(result.id,user,{ status: "Passed" },{ expectedCycleId: native.cycle.id });
+    // Historical JSON fixture, not a product backfill or alteration of the genuine new manifest.
+    const legacyManifest = { ...original.manifest, cases: original.manifest.cases.map((entry: Body) => {
+      const historical = { ...entry }; delete historical.nativeOccurrence; return historical;
+    }) };
+    await admin.query(
+      `INSERT INTO mbt_model_runs(project_id,model_id,model_revision_id,approval_id,content_hash,cycle_id,created_by,manifest)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [project,basis.modelId,basis.revisionId,original.approvalId,basis.hash,native.cycle.id,user,JSON.stringify(legacyManifest)]
+    );
+    const coverage = await s.repository.coverageForUser(user,project,basis.modelId);
+    expect(coverage.governedRuns.find(row => row.cycleId === native.cycle.id)).toMatchObject({
+      caseCount: 1, occurrenceBasis: "UNKNOWN", attributedCaseCount: 0, unavailableCaseCount: 0,
+      unknownCaseCount: 1, statusCounts: {}
+    });
+    for (const row of coverage.observedByElement) expect(row.statusCounts).toEqual({ Untested: 1 });
+    expect(coverage.observedByElement).toHaveLength(3);
+    expect(await s.repository.runProvenanceForUser(user,project,native.cycle.id)).toMatchObject({
+      caseCount: 1, occurrenceBasis: "UNKNOWN", pinnedCaseCount: 0, unknownCaseCount: 1
+    });
+    expect((await admin.query("SELECT manifest FROM mbt_model_runs WHERE id=$1",[original.id])).rows[0].manifest)
+      .toEqual(original.manifest);
   });
 
   it("rolls back a failed candidate mapping, its Draft and audit; concurrent retries create one native Draft", async () => {

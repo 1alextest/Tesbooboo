@@ -691,6 +691,123 @@ test.describe("persisted Model Studio revisions and mappings", () => {
     }
   });
 
+  test("later native occurrences cannot replace the evidence of an original model dispatch", async () => {
+    const tenant = await provisionRbacTenant("model-studio");
+    test.skip(!tenant, "requires direct SQL control for the disposable tenant");
+    const projectId = tenant!.mainProjectId, owner = await loginAs(tenant!.owner);
+    const base = `/api/projects/${projectId}/model-studio/models`, caseBase = `/api/projects/${projectId}/testcases`;
+    let modelId = "", caseId = "", unrelatedId = "", cycleId = "";
+    try {
+      const created = await owner.post(base, { data: { name: `E2E occurrence basis ${Date.now()}`, model: MODEL } });
+      expect(created.status(), await created.text()).toBe(201);
+      const model = await created.json(); modelId = model.id;
+      const revisionUrl = `${base}/${modelId}/revisions/${model.latestRevision.id}`;
+      const approval = await owner.post(`${revisionUrl}/approve`, { data: { expectedHash: model.latestRevision.contentHash } });
+      expect(approval.status(), await approval.text()).toBe(201);
+      const createdCase = await createTestcaseFixtureResponse(owner,caseBase,{
+        data: { title: "Original reviewed occurrence", status: "Approved" }
+      });
+      expect(createdCase.status(), await createdCase.text()).toBe(201); caseId = (await createdCase.json()).id;
+      const originalRead = await owner.get(`${caseBase}/${caseId}`);
+      expect(originalRead.status(), await originalRead.text()).toBe(200); const originalCase = await originalRead.json();
+      const linked = await owner.post(`${revisionUrl}/links`,{
+        data: { testcaseId: caseId, testcaseRevision: originalCase.editRevision, elementIds: ["finish"] }
+      });
+      expect(linked.status(), await linked.text()).toBe(201);
+      const dispatched = await owner.post(`${revisionUrl}/runs`,{ data: { caseIds: [caseId] } });
+      expect(dispatched.status(), await dispatched.text()).toBe(201);
+      const run = await dispatched.json(); cycleId = run.cycleId;
+      const pin = run.manifest.cases[0].nativeOccurrence;
+      expect(pin).toEqual({ cycleItemId: expect.any(String), executionId: expect.any(String),
+        snapshotApprovalRevision: originalCase.approvalRevision });
+      const history = () => scalar(`SELECT to_jsonb(m)::text FROM mbt_model_runs m WHERE m.id=${literal(run.id)};`);
+      const snapshot = () => scalar(`SELECT jsonb_build_object('id',id,'cycleId',cycle_id,'testcaseId',testcase_id,
+        'title',snapshot_title,'approvalRevision',snapshot_approval_revision,'reviewedContent',snapshot_reviewed_content)::text
+        FROM cycle_items WHERE id=${literal(pin.cycleItemId)};`);
+      const originalManifest = history(), originalSnapshot = snapshot();
+      expect(JSON.parse(originalSnapshot)).toMatchObject({ cycleId, testcaseId: caseId,
+        approvalRevision: pin.snapshotApprovalRevision, reviewedContent: originalCase.approvalSnapshot });
+      const originalExecutions = await owner.get(`/api/cycles/${cycleId}/executions`);
+      expect(originalExecutions.status(), await originalExecutions.text()).toBe(200);
+      expect(await originalExecutions.json()).toEqual([expect.objectContaining({
+        id: pin.executionId, cycleItemId: pin.cycleItemId, testcaseId: caseId
+      })]);
+      const recorded = await owner.patch(`/api/cycles/${cycleId}/executions/${pin.executionId}`,{ data: { status: "Passed" } });
+      expect(recorded.ok(), await recorded.text()).toBe(true);
+      const readCoverage = async () => {
+        const response = await owner.get(`${base}/${modelId}/coverage`);
+        expect(response.status(), await response.text()).toBe(200); return response.json();
+      };
+      const positive = await readCoverage();
+      expect(positive.observedByElement).toEqual([{ elementId: "finish", runs: 1, results: 1, statusCounts: { Passed: 1 } }]);
+      expect(positive.governedRuns).toEqual([expect.objectContaining({ caseCount: 1, occurrenceBasis: "PINNED",
+        attributedCaseCount: 1, unavailableCaseCount: 0, unknownCaseCount: 0, statusCounts: { Passed: 1 } })]);
+
+      const removed = await owner.delete(`/api/cycles/${cycleId}/testcases/${caseId}`);
+      expect(removed.ok(), await removed.text()).toBe(true);
+      const afterRemoval = await readCoverage();
+      expect(afterRemoval.observedByElement).toEqual([]);
+      expect(afterRemoval.governedRuns).toEqual([expect.objectContaining({ caseCount: 1, attributedCaseCount: 0,
+        unavailableCaseCount: 1, unknownCaseCount: 0, statusCounts: {} })]);
+      const edited = await owner.put(`${caseBase}/${caseId}`,{
+        data: { title: "Revised approved occurrence after dispatch", expectedRevision: originalCase.editRevision }
+      });
+      expect(edited.ok(), await edited.text()).toBe(true);
+      const reviewed = await approveTestcase(owner,projectId,caseId);
+      expect(reviewed.editRevision).not.toBe(originalCase.editRevision);
+      expect(reviewed.approvalRevision).not.toBe(pin.snapshotApprovalRevision);
+      const unrelated = await createTestcaseFixtureResponse(owner,caseBase,{
+        data: { title: "Unrelated later native addition", status: "Approved" }
+      });
+      expect(unrelated.status(), await unrelated.text()).toBe(201); unrelatedId = (await unrelated.json()).id;
+      const added = await owner.post(`/api/cycles/${cycleId}/testcases`,{ data: { testcaseIds: [caseId,unrelatedId] } });
+      expect(added.ok(), await added.text()).toBe(true);
+      expect(await added.json()).toMatchObject({ requested: 2, added: 2, skipped: 0 });
+      const currentRead = await owner.get(`/api/cycles/${cycleId}/executions`);
+      expect(currentRead.status(), await currentRead.text()).toBe(200);
+      const current = await currentRead.json() as Array<{ id: string; cycleItemId: string; testcaseId: string }>;
+      expect(current).toHaveLength(2);
+      const replacement = current.find(row => row.testcaseId === caseId)!;
+      expect(replacement.id).not.toBe(pin.executionId); expect(replacement.cycleItemId).not.toBe(pin.cycleItemId);
+      for (const entry of current) {
+        const result = await owner.patch(`/api/cycles/${cycleId}/executions/${entry.id}`,{ data: { status: "Passed" } });
+        expect(result.ok(), await result.text()).toBe(true);
+      }
+      const persisted = JSON.parse(scalar(`SELECT jsonb_agg(jsonb_build_object('cycleItemId',ci.id,'testcaseId',ci.testcase_id,
+        'executionId',e.id,'approvalRevision',ci.snapshot_approval_revision,'status',e.status))::text
+        FROM cycle_items ci JOIN executions e ON e.cycle_item_id=ci.id
+        WHERE ci.cycle_id=${literal(cycleId)} AND ci.deleted_at IS NULL AND e.deleted_at IS NULL;`));
+      expect(persisted).toHaveLength(2);
+      expect(persisted).toEqual(expect.arrayContaining(current.map(row => expect.objectContaining({
+        cycleItemId: row.cycleItemId, executionId: row.id, testcaseId: row.testcaseId, status: "Passed"
+      }))));
+      expect(persisted).toContainEqual(expect.objectContaining({ testcaseId: caseId, approvalRevision: reviewed.approvalRevision }));
+
+      const coverage = await readCoverage();
+      expect(coverage.observedByElement).toEqual([]);
+      expect(coverage.governedRuns).toEqual([expect.objectContaining({ cycleId, caseCount: 1, occurrenceBasis: "PINNED",
+        attributedCaseCount: 0, unavailableCaseCount: 1, unknownCaseCount: 0, statusCounts: {} })]);
+      expect(coverage.caseEvidence).toEqual([expect.objectContaining({ testcaseId: caseId, statusCounts: { Passed: 2 } })]);
+      expect(coverage.evidenceNote).toMatch(/across native runs, separate from the original occurrences/i);
+      const provenance = await owner.get(`/api/projects/${projectId}/model-studio/runs/by-cycle/${cycleId}`);
+      expect(provenance.status(), await provenance.text()).toBe(200);
+      expect(await provenance.json()).toMatchObject({ provenance: {
+        caseCount: 1, occurrenceBasis: "PINNED", pinnedCaseCount: 1, unknownCaseCount: 0
+      } });
+      expect(history()).toBe(originalManifest); expect(snapshot()).toBe(originalSnapshot);
+      expect(JSON.parse(scalar(`SELECT jsonb_build_object('itemRemoved',ci.deleted_at IS NOT NULL,
+        'executionRemoved',e.deleted_at IS NOT NULL,'status',e.status)::text
+        FROM cycle_items ci JOIN executions e ON e.cycle_item_id=ci.id
+        WHERE ci.id=${literal(pin.cycleItemId)} AND e.id=${literal(pin.executionId)};`)))
+        .toEqual({ itemRemoved: true, executionRemoved: true, status: "Passed" });
+    } finally {
+      if (cycleId) await owner.delete(`/api/cycles/${cycleId}`,{ failOnStatusCode: false });
+      for (const id of [caseId,unrelatedId]) if (id) await owner.delete(`${caseBase}/${id}`,{ failOnStatusCode: false });
+      if (modelId) exec(`DELETE FROM mbt_models WHERE id=${literal(modelId)} AND project_id=${literal(projectId)};`);
+      await owner.dispose();
+    }
+  });
+
   test("changed explicit case mappings require fresh review before dispatch and preserve previous native runs", async () => {
     const tenant = await provisionRbacTenant("model-studio");
     test.skip(!tenant, "requires direct SQL control for the disposable tenant");

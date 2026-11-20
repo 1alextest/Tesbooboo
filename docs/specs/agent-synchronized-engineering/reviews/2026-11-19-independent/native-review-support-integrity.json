@@ -1,0 +1,1313 @@
+{
+  "scope": "Supplemental independent native review evidence; original scratch bytes retained",
+  "reconstruction": "Restore recorded per-line hex immediately before LF, then append declared terminal LF bytes. No finding or verdict edited.",
+  "files": [
+    {
+      "file": "green-native-independent.md",
+      "original_sha256": "32268e7dc9488dbcac8c6bfd4ca7110b8f86c4c56e4965763a0b664d977065a2",
+      "repository_sha256": "32268e7dc9488dbcac8c6bfd4ca7110b8f86c4c56e4965763a0b664d977065a2",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-independent-binding-addendum.md",
+      "original_sha256": "3b795c9f4622069df5cacaf9739267f1ecdeebcaf2ba6b70cb73429546348d58",
+      "repository_sha256": "3b795c9f4622069df5cacaf9739267f1ecdeebcaf2ba6b70cb73429546348d58",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-root-binding-delta.md",
+      "original_sha256": "8723eef9a12c9efd20e480348cfd640aab4d204e7daec96e5646f9942a60dea8",
+      "repository_sha256": "8723eef9a12c9efd20e480348cfd640aab4d204e7daec96e5646f9942a60dea8",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "native-green-profile-9519-v2.json",
+      "original_sha256": "cfdaa6f32ec9e22ad7210c9baa1c645689953fca8ce2eeb178bd3f451613f39a",
+      "repository_sha256": "cfdaa6f32ec9e22ad7210c9baa1c645689953fca8ce2eeb178bd3f451613f39a",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "native-green-profile-9519-v2-result.json",
+      "original_sha256": "86ebd0be0c50170139a085a61f1439d5be383ae5b2d62e54dc8bcbc74928ed10",
+      "repository_sha256": "86ebd0be0c50170139a085a61f1439d5be383ae5b2d62e54dc8bcbc74928ed10",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-binding-independent-result.json",
+      "original_sha256": "cb0992fd98be0534d19d4c58c1ba683217af995aa204b92e5fac9ca9e7e08c1d",
+      "repository_sha256": "cb0992fd98be0534d19d4c58c1ba683217af995aa204b92e5fac9ca9e7e08c1d",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-binding-independent-v2-result.json",
+      "original_sha256": "86ebd0be0c50170139a085a61f1439d5be383ae5b2d62e54dc8bcbc74928ed10",
+      "repository_sha256": "86ebd0be0c50170139a085a61f1439d5be383ae5b2d62e54dc8bcbc74928ed10",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-binding-independent-migrations.log",
+      "original_sha256": "4c5fc30013aa0ab07a01029afa37240ed97d865833a2a187340db1523dc0cbfc",
+      "repository_sha256": "4c5fc30013aa0ab07a01029afa37240ed97d865833a2a187340db1523dc0cbfc",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-occurrence-probe.log",
+      "original_sha256": "e403c0384a068ca6b3945e5792435401beffd724fecdd4b47eb1a887fa175ba4",
+      "repository_sha256": "98350af271b82fdc9df5cd5b12639e52c5e4d65d2bc399f47e2a2f185d99169f",
+      "restore_trailing_whitespace": [
+        {
+          "line": 18,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 30,
+          "restore_before_lf_hex": "2020"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-recovery-tests-with-dependencies.log",
+      "original_sha256": "d0037bb1d3d17a597bf6f804d8be6fb96d6d04f3a56b36fb604e98b57d034b76",
+      "repository_sha256": "d0037bb1d3d17a597bf6f804d8be6fb96d6d04f3a56b36fb604e98b57d034b76",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "green-native-recovery-tests.log",
+      "original_sha256": "2a5b299a2033b24f4c1658e728eb1f7dacecc16aae625186118dbaea0a616399",
+      "repository_sha256": "2a5b299a2033b24f4c1658e728eb1f7dacecc16aae625186118dbaea0a616399",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "security-final-contract-probes.spec.ts",
+      "original_sha256": "7b6898260dd08759bd43c968e42c3d73280de417427e4dc37a748547e07b1258",
+      "repository_sha256": "7b6898260dd08759bd43c968e42c3d73280de417427e4dc37a748547e07b1258",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "security-final-jest.config.cjs",
+      "original_sha256": "f71ca2b281b5ac8f1fc8e21e427a697d4bb42d045b6ada8f48dfca1355a2c580",
+      "repository_sha256": "f71ca2b281b5ac8f1fc8e21e427a697d4bb42d045b6ada8f48dfca1355a2c580",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "security-final-jest.log",
+      "original_sha256": "0595627045d3de4a5f57161b325fa687c00b10dabb4cc8e5f086238504748cf2",
+      "repository_sha256": "b4401c5b569913c42e987cd0fc58054d2b5013db5f77b3b81e27a006ecc01cae",
+      "restore_trailing_whitespace": [
+        {
+          "line": 1,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 3,
+          "restore_before_lf_hex": "2020"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "security-final-before.log",
+      "original_sha256": "61cad85df60a2ad0ae5e0a0072efcc62253b52e61de80b2c1b8cd40abe888f9e",
+      "repository_sha256": "ce5f119ee4b233da3400c5c976bb1e583b3727d5c804962dc274cff1bbc9e17e",
+      "restore_trailing_whitespace": [
+        {
+          "line": 1,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 3,
+          "restore_before_lf_hex": "2020"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "security-authority-before.config.cjs",
+      "original_sha256": "413e3d6a99db2c0b11550933e46e0cd70523f1c678eb35629970e57ae3e4253f",
+      "repository_sha256": "413e3d6a99db2c0b11550933e46e0cd70523f1c678eb35629970e57ae3e4253f",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "security-authority-before.log",
+      "original_sha256": "c038b4d8e9a1b4d2392106d929edf3aa34775ac51cf5a527ff280c9151a4348a",
+      "repository_sha256": "d46b8fc20a512aca0e24c4604efb1f6a4543c64d1ed110fa0cc5aef487418edf",
+      "restore_trailing_whitespace": [
+        {
+          "line": 1,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 3,
+          "restore_before_lf_hex": "2020"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "qa-native-final-9519-contract-probes.spec.ts",
+      "original_sha256": "106620be6dccc3e9582c3ed408f2aaf26cba5b2bddefba4248ccfb89a44c641b",
+      "repository_sha256": "106620be6dccc3e9582c3ed408f2aaf26cba5b2bddefba4248ccfb89a44c641b",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "qa-native-final-9519-jest.config.json",
+      "original_sha256": "71d41ab18e93296f084cb8c49ab6bc09a28a35a6b2f14b25ee2cd58205a0aa79",
+      "repository_sha256": "71d41ab18e93296f084cb8c49ab6bc09a28a35a6b2f14b25ee2cd58205a0aa79",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "qa-native-final-9519-jest.log",
+      "original_sha256": "561a78968970b2d2301a9fe8e73701f4b9658016268a66d90e5e719436939125",
+      "repository_sha256": "73f155e03cc6336d5dc778b0f9c42423fa26aad9fab24033cbe5dbd3ccfba946",
+      "restore_trailing_whitespace": [
+        {
+          "line": 1,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 3,
+          "restore_before_lf_hex": "2020"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "qa-native-final-temporal-probe.cjs",
+      "original_sha256": "d74654ee91f3ff18f7507ecdebd5a8fb21ebdc865b610209963b9228a8275765",
+      "repository_sha256": "d74654ee91f3ff18f7507ecdebd5a8fb21ebdc865b610209963b9228a8275765",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "qa-native-final-temporal-baseline.log",
+      "original_sha256": "0c8fbbc904034d675432099d4fabb4e88fc951824d334c9a61adcabad72fe84f",
+      "repository_sha256": "f4f5523bfa84ea4492d709e9990a49df9818ba856ceedec180204351f2beeb20",
+      "restore_trailing_whitespace": [
+        {
+          "line": 16,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 18,
+          "restore_before_lf_hex": "2020"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "qa-native-final-9519-temporal-probe.log",
+      "original_sha256": "32070d20b090f530184e3275aa1e37e1f07190791301f7f56e5f9274e0e7471a",
+      "repository_sha256": "32070d20b090f530184e3275aa1e37e1f07190791301f7f56e5f9274e0e7471a",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "qa-native-final-fixture-fidelity.log",
+      "original_sha256": "b82e4ecb85b6a0481582e29588a4bcf32997311985d33e9bfef6b6c1bd7a1a04",
+      "repository_sha256": "b82e4ecb85b6a0481582e29588a4bcf32997311985d33e9bfef6b6c1bd7a1a04",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "ci-9519-database.log",
+      "original_sha256": "3f9f447580eb93bdee6797b1b3a5d4d7527ea98f29987d68845dd927a0293f8c",
+      "repository_sha256": "b1becac02af126312be89dd8735f79cd7963c9447e2d1934a353ae05598b9ed7",
+      "restore_trailing_whitespace": [
+        {
+          "line": 222,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 226,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 229,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 231,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 233,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 235,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 237,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 303,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 305,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 308,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 310,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 313,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 316,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 324,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 327,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 334,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 337,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 502,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 505,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 520,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 523,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 569,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 595,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 599,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 777,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 788,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 789,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 791,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 793,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 801,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 802,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 804,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 814,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 816,
+          "restore_before_lf_hex": "2020"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "ci-9519-architecture.log",
+      "original_sha256": "dfda04c23cf83c9069e11f109556ff8817a451cf7d26a6998f518c45fbc3500d",
+      "repository_sha256": "03824a220769dcf3d0f43e6d220b77f2e4fb2ff80958eaeea36397bf666abff6",
+      "restore_trailing_whitespace": [
+        {
+          "line": 188,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 192,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 195,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 197,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 199,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 201,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 203,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 253,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 255,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 258,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 273,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 276,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 982,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 985,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1000,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1003,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1012,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1015,
+          "restore_before_lf_hex": "20"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "ci-9519-smoke.log",
+      "original_sha256": "c18b7f355f161386c501d935d90ad38bd2423891012af9135b6a9f1fcd5ce251",
+      "repository_sha256": "e5f597c5d3830d539a3aff412e1c9c1fc3ea8febe9400664da368c1db26aaeca",
+      "restore_trailing_whitespace": [
+        {
+          "line": 313,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 317,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 320,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 322,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 324,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 326,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 328,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 431,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 433,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 436,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 438,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 441,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 444,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 446,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 449,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 450,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 453,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 639,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 642,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 842,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 873,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 875,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 878,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 880,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 883,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 886,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 888,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 891,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 898,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 907,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 908,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 909,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 912,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 977,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 978,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 980,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 983,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1014,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1016,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1019,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1021,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1024,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1155,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1229,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1231,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1233,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1235,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1237,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1302,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1304,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1306,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1309,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1341,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1361,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1429,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1431,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1454,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1455,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1456,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1457,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1459,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1463,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1472,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1474,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1476,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1478,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1480,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1484,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1493,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1495,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1497,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1499,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1572,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 1576,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 1578,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 1589,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 1590,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 1592,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 1594,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 1602,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 1808,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 1810,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 1820,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 1822,
+          "restore_before_lf_hex": "2020"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "qa-selected-fixture-delta.md",
+      "original_sha256": "d0cb0e992844223cceda043d5ae7720039d8169456f5532a7feb57bf994da6c3",
+      "repository_sha256": "d0cb0e992844223cceda043d5ae7720039d8169456f5532a7feb57bf994da6c3",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "i3-native-owner-fit.md",
+      "original_sha256": "93a3364f9a56d8936dae1092645978a551e02df94a95c52d25dcea9c3dbd1720",
+      "repository_sha256": "93a3364f9a56d8936dae1092645978a551e02df94a95c52d25dcea9c3dbd1720",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "ci-6d-account-cleanup-analysis.md",
+      "original_sha256": "04202e6464f568e65513aa1ebae68b86d777422336902b5841d6cfcb09ea2ed8",
+      "repository_sha256": "04202e6464f568e65513aa1ebae68b86d777422336902b5841d6cfcb09ea2ed8",
+      "restore_trailing_whitespace": [],
+      "append_terminal_lf_bytes": 0
+    },
+    {
+      "file": "ci-6d-smoke.log",
+      "original_sha256": "430f581c711368699d95c95e6310e3365ca29ae96342f20e86ba6069e5c289f4",
+      "repository_sha256": "93ed537cce284e9c0b0cb5bd5058122bbbd9e95f612ebd8b90c309bcf2e297c1",
+      "restore_trailing_whitespace": [
+        {
+          "line": 310,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 314,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 317,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 319,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 321,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 323,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 325,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 428,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 430,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 433,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 435,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 438,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 441,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 443,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 446,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 447,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 450,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 636,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 639,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 839,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 870,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 872,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 875,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 877,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 880,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 883,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 885,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 888,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 895,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 904,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 905,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 906,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 909,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 974,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 975,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 977,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 980,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1011,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1013,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1016,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1018,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1021,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1129,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1203,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1205,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1207,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1209,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1211,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1276,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1278,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1280,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1283,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1315,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1335,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1403,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1405,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1427,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1606,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1608,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1737,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1754,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1756,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1758,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1854,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1856,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1909,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1955,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1957,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 1961,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2008,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2010,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2014,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2058,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2060,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2062,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2121,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2123,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2142,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2217,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2219,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2249,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2314,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2316,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2336,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2396,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2398,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2410,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2411,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2412,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2413,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2415,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2425,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2429,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2433,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2437,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2439,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2441,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2445,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2447,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2449,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2451,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2453,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2463,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2467,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2469,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2471,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2475,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2477,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2479,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2481,
+          "restore_before_lf_hex": "20"
+        },
+        {
+          "line": 2556,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2560,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2562,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2573,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2574,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2576,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2578,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2586,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2587,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2589,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2599,
+          "restore_before_lf_hex": "2020"
+        },
+        {
+          "line": 2601,
+          "restore_before_lf_hex": "2020"
+        }
+      ],
+      "append_terminal_lf_bytes": 0
+    }
+  ]
+}

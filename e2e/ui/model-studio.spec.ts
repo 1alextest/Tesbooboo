@@ -445,7 +445,7 @@ test("archiving a model in the studio removes it from the list and keeps its his
   }
 });
 
-test("a reviewer approves the revision, creates a draft case and starts a governed run", async ({ page }) => {
+test("a reviewer approves the revision, creates a draft case and starts a governed run", async ({ page }, testInfo) => {
   const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
   const name = `E2E governed studio ${Date.now()}`;
   let modelId = "";
@@ -522,12 +522,50 @@ test("a reviewer approves the revision, creates a draft case and starts a govern
     const observed = runsAfter.getByRole("list", { name: "Observed results by element" });
     await expect(observed).toContainText("Passed 1");
 
+    // The native run remains editable, but a later occurrence cannot take over the original
+    // model result. Exercise the real remove/add owners, then reload the actual coverage view.
+    const manifest = () => scalar(`SELECT manifest::text FROM mbt_model_runs WHERE cycle_id=${literal(cycleId)};`);
+    const originalManifest = manifest();
+    expect(JSON.parse(originalManifest).cases).toEqual([expect.objectContaining({ nativeOccurrence: expect.objectContaining({
+      cycleItemId: execution.cycleItemId, executionId: execution.id
+    }) })]);
+    const removed = await api.delete(`/api/cycles/${cycleId}/testcases/${caseId}`);
+    expect(removed.ok(), await removed.text()).toBeTruthy();
+    const readded = await api.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseIds: [caseId] } });
+    expect(readded.ok(), await readded.text()).toBeTruthy();
+    expect(await readded.json()).toMatchObject({ requested: 1, added: 1, skipped: 0 });
+    const currentRead = await api.get(`/api/cycles/${cycleId}/executions`);
+    expect(currentRead.ok(), await currentRead.text()).toBeTruthy();
+    const current = await currentRead.json(); expect(current).toHaveLength(1);
+    expect(current[0].id).not.toBe(execution.id); expect(current[0].cycleItemId).not.toBe(execution.cycleItemId);
+    const result = await api.patch(`/api/cycles/${cycleId}/executions/${current[0].id}`, { data: { status: "Passed" } });
+    expect(result.ok(), await result.text()).toBeTruthy();
+    expect(scalar(`SELECT status FROM executions WHERE id=${literal(current[0].id)} AND deleted_at IS NULL;`)).toBe("Passed");
+    const coverageRead = await api.get(`/api/projects/${ctx.projectId}/model-studio/models/${modelId}/coverage`);
+    expect(coverageRead.ok(), await coverageRead.text()).toBeTruthy();
+    const coverage = await coverageRead.json();
+    expect(coverage.governedRuns).toEqual([expect.objectContaining({ cycleId, caseCount: 1, occurrenceBasis: "PINNED",
+      attributedCaseCount: 0, unavailableCaseCount: 1, unknownCaseCount: 0, statusCounts: {} })]);
+    expect(coverage.observedByElement).toEqual([]);
+    expect(manifest()).toBe(originalManifest);
+    await page.reload();
+    await page.getByRole("button", { name, exact: false }).click();
+    await expect(runsAfter).toContainText("1 dispatched case");
+    await expect(runsAfter).toContainText("1 original occurrence unavailable");
+    await expect(runsAfter).toContainText("Later native additions are not attributed to this model run");
+    await expect(observed).toHaveCount(0);
+    await testInfo.attach("model-original-occurrence-unavailable-after-native-readd", {
+      body: await page.screenshot({ fullPage: true }), contentType: "image/png"
+    });
+
     // The native run page shows the model basis it came from and links back to the studio model.
     await page.goto(`/projects/${ctx.projectId}/cycles/${cycleId}`);
     const provenance = page.getByTestId("run-model-provenance");
     await expect(provenance).toContainText("Started from model");
     await expect(provenance).toContainText(name);
     await expect(provenance).toContainText("rev 1");
+    await expect(provenance).toContainText("1 originally dispatched case");
+    await expect(provenance).toContainText("later additions are outside this model dispatch");
     await expect(provenance.getByRole("link", { name })).toHaveAttribute("href", /\/model-studio\?model=/);
   } finally {
     /*

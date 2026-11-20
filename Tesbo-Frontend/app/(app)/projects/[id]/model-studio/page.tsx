@@ -965,7 +965,7 @@ export default function ModelStudioPage() {
                     )}
                     {currentCoverage.caseEvidence.length > 0 && (
                       <div className="mt-3">
-                        <h4 className="text-[12px] font-semibold">Observed case results</h4>
+                        <h4 className="text-[12px] font-semibold">Linked case history across native runs</h4>
                         <ul className="mt-1 space-y-1 text-[12px]">
                           {currentCoverage.caseEvidence.map((evidence) => (
                             <li
@@ -1201,8 +1201,11 @@ export default function ModelStudioPage() {
                             {run.name}
                           </Link>
                           <span className="text-[11px] text-[var(--muted)]">
-                            {formatDate(run.createdAt)} · {run.caseCount} case{run.caseCount === 1 ? "" : "s"}
+                            {formatDate(run.createdAt)} · {run.caseCount} dispatched case{run.caseCount === 1 ? "" : "s"}
                             {run.runDeleted ? " · run deleted" : ""}
+                            {run.occurrenceBasis === "UNKNOWN" ? " · occurrence basis UNKNOWN" : ""}
+                            {run.unavailableCaseCount > 0 ? ` · ${run.unavailableCaseCount} original occurrence${run.unavailableCaseCount === 1 ? "" : "s"} unavailable` : ""}
+                            {run.unknownCaseCount > 0 ? ` · ${run.unknownCaseCount} case${run.unknownCaseCount === 1 ? "" : "s"} without recorded occurrence` : ""}
                             {Object.keys(run.statusCounts).length > 0 &&
                               ` · ${Object.entries(run.statusCounts)
                                 .map(([status, count]) => `${status} ${count}`)
@@ -1211,6 +1214,9 @@ export default function ModelStudioPage() {
                         </li>
                       ))}
                     </ul>
+                    <p className="mt-1 text-[11px] text-[var(--muted)]">
+                      Results use the original active occurrences recorded at dispatch. Later native additions are not attributed to this model run.
+                    </p>
                   </div>
                 )}
                 {currentCoverage && currentCoverage.observedByElement.length > 0 && (
@@ -1232,7 +1238,7 @@ export default function ModelStudioPage() {
                       ))}
                     </ul>
                     <p className="mt-1 text-[11px] text-[var(--muted)]">
-                      Case outcomes from governed runs, grouped by model element. Not behavioral coverage or
+                      Case outcomes from original active dispatch occurrences, grouped by model element. Not behavioral coverage or
                       verification.
                     </p>
                   </div>

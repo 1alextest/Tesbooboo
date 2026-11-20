@@ -36,3 +36,20 @@ Original scratch logs remain unchanged. These five repository copies remove only
 | [qa-delta-model-http.log](qa-delta-model-http.log) | `4af5c62be95ec2618b118fb19d754fb247cbd7987cc22e9138c1915506cef9a7` | `7701dd141b6599ed9b4bd412be38d3a994a88567b8061174b4d93c27a4f17665` | line 1: `20`, line 3: `2020` |
 | [qa-independent-contract-probes.log](qa-independent-contract-probes.log) | `dc4ac10169f89ab070eff5dcbbea6e693f16236dd4d7b02427eb01a134dbf95c` | `1880835d2eb9b9e0fc58e97dda34ffb27cef433c4e83489569f5faaf69d5404a` | line 1: `20`, line 3: `2020` |
 | [suite-publication-before.log](suite-publication-before.log) | `8dd6a4c2a0c8cd8cd464e0a91bea51a315276f2cb4da1365d7534a0c12c34e35` | `92908a219464c5d99fc6313cc26a998677199c1db0bfd3a54ca4f8440667d68e` | line 1: `20`, line 3: `2020` |
+
+## Later native review checkpoints
+
+The following are separate pinned receipts, not replacements for earlier verdicts.
+
+| Receipt | Reviewed source | Original SHA-256 | Repository SHA-256 | Reversible transformation |
+| --- | --- | --- | --- | --- |
+| [security-native-final-delta.md](security-native-final-delta.md) | `8db53c1f` / `9519b56d`; identical merge `0d510c59` | `441a3a37ef678da8db43670b24e7ed2af97f9bd304df8841125f390d6bba3640` | `441a3a37ef678da8db43670b24e7ed2af97f9bd304df8841125f390d6bba3640` | Exact bytes retained. |
+| [qa-native-final-delta.md](qa-native-final-delta.md) | `8db53c1f` / `9519b56d`; identical merge `0d510c59` | `57c9ca7324a16afe16fc6953598fa94de4a0bbaaf584bf802993306c0bbed491` | `57c9ca7324a16afe16fc6953598fa94de4a0bbaaf584bf802993306c0bbed491` | Exact bytes retained. |
+| [green-native-root-grounding.md](green-native-root-grounding.md) | `9519b56d`; disclosed implementation-author member | `ff84f0aef2b158e7a0f41a7098f2a92d3f497f84c7c183ce4fbaafe74f12c8e8` | `ff84f0aef2b158e7a0f41a7098f2a92d3f497f84c7c183ce4fbaafe74f12c8e8` | Exact bytes retained. |
+
+## Green binding and later independent probe support
+
+The exact original and repository SHA-256 values for the supplemental receipts, probes and logs are recorded in [native-review-support-integrity.json](native-review-support-integrity.json). It explicitly records any reversible trailing-whitespace or terminal-LF normalization; originals remain unchanged. Both the first native trace profile and the corrected v2 are retained. Independent Green found the first profile's semantic KB trace error despite its mechanical pass; the separate correction/addendum preserves that distinction. The final native Green verdict is still blocked by GREEN-NATIVE-01 at source `9519b56d`.
+
+
+The supplemental index also preserves `qa-selected-fixture-delta.md` and the authored `i3-native-owner-fit.md` memo with their actual provenance. The latter is design authoring, not an independent assurance vote; its physical alternatives remain unselected. Exact source/file pins and runtime limits remain in each artifact.

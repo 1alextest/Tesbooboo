@@ -4925,7 +4925,7 @@ export type ModelStudioCoverage = {
     caseDeleted: boolean;
     createdAt: string;
   }>;
-  /** Observed result history of the linked cases — explicitly not model verification. */
+  /** Linked-case history across native runs, separate from the original model dispatch occurrences. */
   caseEvidence: Array<{
     testcaseId: string;
     testcaseTitle: string;
@@ -4940,9 +4940,14 @@ export type ModelStudioCoverage = {
     cycleId: string;
     name: string;
     createdAt: string;
+    /** Original manifest membership, not today's editable native run membership. */
     caseCount: number;
     runDeleted: boolean;
     statusCounts: Record<string, number>;
+    occurrenceBasis: "PINNED" | "UNKNOWN";
+    attributedCaseCount: number;
+    unavailableCaseCount: number;
+    unknownCaseCount: number;
   }>;
   /**
    * Case outcomes per model element across the governed runs, taken from each run's immutable
@@ -4979,6 +4984,8 @@ export type ModelStudioModelRun = {
       pathDigest: string | null;
       elementIds: string[];
       sources: string[];
+      /** Absent in legacy manifests; readers must not infer it from current membership. */
+      nativeOccurrence?: { cycleItemId: string; executionId: string; snapshotApprovalRevision: string };
     }>;
   };
   coverageAssertion: "none";
@@ -5163,7 +5170,11 @@ export type ModelStudioRunProvenance = {
   approvedAt: string | null;
   approvedBy: string | null;
   dispatchedAt: string;
+  /** Original dispatch count, independent of later native membership changes. */
   caseCount: number;
+  occurrenceBasis: "PINNED" | "UNKNOWN";
+  pinnedCaseCount: number;
+  unknownCaseCount: number;
 };
 
 export async function getModelStudioRunProvenance(

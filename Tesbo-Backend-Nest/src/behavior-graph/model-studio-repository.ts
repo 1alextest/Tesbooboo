@@ -8,6 +8,9 @@ import { DraftPreviewError, previewDraftModel, type PreviewDefinition } from "./
 import { generateModelPaths, type GeneratedPath, type GenerationStrategy } from "./model-studio-generator";
 
 type Body = Record<string, any>;
+type NativeOccurrence = { cycleItemId: string; executionId: string; snapshotApprovalRevision: string };
+type ManifestCase = { entry: Body; occurrence: NativeOccurrence | null };
+type GovernedRunEvidence = { row: Body; cases: Array<ManifestCase & { status: string | null }> };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HASH = /^[a-f0-9]{64}$/;
@@ -745,21 +748,36 @@ export class ModelStudioRepository {
       });
     }
 
+    // The native owner has created and locked this run in the same transaction. Capture its
+    // actual occurrences before commit: testcaseId alone can later name a different membership
+    // and reviewed snapshot after a user removes and re-adds a case to the editable native run.
+    const native = await client.query(
+      `SELECT ci.testcase_id, ci.id AS cycle_item_id, e.id AS execution_id, ci.snapshot_approval_revision
+       FROM cycle_items ci
+       JOIN cycles c ON c.id = ci.cycle_id AND c.project_id = $2
+       JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
+       WHERE ci.cycle_id = $1 AND ci.deleted_at IS NULL`,
+      [created.cycle.id, projectId]
+    );
+    const cases = requested.map((id) => {
+      const matches = native.rows.filter(row => String(row.testcase_id) === id);
+      const nativeOccurrence = this.nativeOccurrenceFor({ testcaseId: id, nativeOccurrence: matches.length === 1 ? {
+        cycleItemId: matches[0].cycle_item_id, executionId: matches[0].execution_id,
+        snapshotApprovalRevision: matches[0].snapshot_approval_revision
+      } : null });
+      if (native.rows.length !== requested.length || !nativeOccurrence) {
+        throw new ConflictException({ code: "NATIVE_OCCURRENCE_UNAVAILABLE",
+          error: "The native run did not expose one reviewed occurrence for every selected case. Nothing was created." });
+      }
+      const entry = eligible.get(id) as EligibleCase;
+      return { testcaseId: id, title: entry.title, pathDigest: entry.pathDigest,
+        elementIds: [...entry.elementIds], sources: entry.sources, mappings: entry.mappings, nativeOccurrence };
+    });
     const manifest = {
       revisionNumber: Number(revisionRow.revision_number),
       contentHash: String(revisionRow.content_hash),
       approvalId: String(approval.rows[0].id),
-      cases: requested.map((id) => {
-        const entry = eligible.get(id) as EligibleCase;
-        return {
-          testcaseId: id,
-          title: entry.title,
-          pathDigest: entry.pathDigest,
-          elementIds: [...entry.elementIds],
-          sources: entry.sources,
-          mappings: entry.mappings
-        };
-      })
+      cases
     };
     const inserted = await client.query(
       `INSERT INTO mbt_model_runs
@@ -804,42 +822,84 @@ export class ModelStudioRepository {
     };
   }
 
-  /** Dispatched runs of one revision, with their native execution status rollups. */
-  private async governedRunsFor(revisionId: string, projectId: string) {
+  private nativeOccurrenceFor(entry: Body): NativeOccurrence | null {
+    const occurrence = entry.nativeOccurrence;
+    return typeof entry.testcaseId === "string" && UUID.test(entry.testcaseId)
+      && occurrence && typeof occurrence.cycleItemId === "string" && UUID.test(occurrence.cycleItemId)
+      && typeof occurrence.executionId === "string" && UUID.test(occurrence.executionId)
+      && typeof occurrence.snapshotApprovalRevision === "string" && HASH.test(occurrence.snapshotApprovalRevision)
+      ? occurrence : null;
+  }
+
+  /** Legacy or ambiguous manifests have no trustworthy occurrence basis; never reconstruct it. */
+  private manifestCases(manifest: Body): ManifestCase[] {
+    const cases: ManifestCase[] = (Array.isArray(manifest?.cases) ? manifest.cases : []).map((value: unknown) => {
+      const entry = value && typeof value === "object" ? value as Body : {};
+      return { entry, occurrence: this.nativeOccurrenceFor(entry) };
+    });
+    const keys = (item: ManifestCase) => item.occurrence ? [
+      `case:${item.entry.testcaseId}`, `item:${item.occurrence.cycleItemId}`, `execution:${item.occurrence.executionId}`
+    ] : [];
+    const counts = new Map<string, number>();
+    for (const item of cases) for (const key of keys(item)) counts.set(key, (counts.get(key) ?? 0) + 1);
+    // Reject every member of a duplicate group, rather than allowing the last mapping to win.
+    return cases.map(item => keys(item).some(key => counts.get(key)! > 1) ? { ...item, occurrence: null } : item);
+  }
+
+  /** One native evidence projection feeds both run rollups and per-element attribution. */
+  private async governedRunEvidenceFor(revisionId: string, projectId: string): Promise<GovernedRunEvidence[]> {
     const runs = await this.db.query(
-      `SELECT mr.id, mr.cycle_id, mr.created_at, c.name AS cycle_name, c.deleted_at AS cycle_deleted,
-              (SELECT COUNT(*)::int FROM cycle_items ci WHERE ci.cycle_id = mr.cycle_id AND ci.deleted_at IS NULL) AS case_count
+      `SELECT mr.id, mr.cycle_id, mr.created_at, mr.manifest, c.name AS cycle_name, c.deleted_at AS cycle_deleted
        FROM mbt_model_runs mr
-       JOIN cycles c ON c.id = mr.cycle_id
+       JOIN cycles c ON c.id = mr.cycle_id AND c.project_id = mr.project_id
        WHERE mr.model_revision_id = $1 AND mr.project_id = $2
        ORDER BY mr.created_at DESC`,
       [revisionId, projectId]
     );
-    const statuses = await this.db.query(
-      `SELECT mr.id AS model_run_id, e.status, COUNT(*)::int AS count
+    if (!runs.rows.length) return [];
+    const executions = await this.db.query(
+      `SELECT mr.id AS model_run_id, ci.testcase_id, ci.id AS cycle_item_id, e.id AS execution_id,
+              ci.snapshot_approval_revision, e.status
        FROM mbt_model_runs mr
+       JOIN cycles c ON c.id = mr.cycle_id AND c.project_id = mr.project_id
        JOIN cycle_items ci ON ci.cycle_id = mr.cycle_id AND ci.deleted_at IS NULL
        JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
-       WHERE mr.model_revision_id = $1 AND mr.project_id = $2
-       GROUP BY mr.id, e.status`,
+       WHERE mr.model_revision_id = $1 AND mr.project_id = $2`,
       [revisionId, projectId]
     );
-    const byRun = new Map<string, Record<string, number>>();
-    for (const row of statuses.rows) {
-      const key = String(row.model_run_id);
-      const counts = byRun.get(key) ?? {};
-      counts[String(row.status)] = Number(row.count);
-      byRun.set(key, counts);
+    const byOccurrence = new Map<string, Body | null>();
+    for (const row of executions.rows) {
+      const key = `${row.model_run_id}:${row.cycle_item_id}:${row.execution_id}`;
+      byOccurrence.set(key, byOccurrence.has(key) ? null : row);
     }
-    return runs.rows.map((row) => ({
-      id: row.id,
-      cycleId: row.cycle_id,
-      name: row.cycle_name,
-      createdAt: row.created_at,
-      caseCount: Number(row.case_count),
-      runDeleted: row.cycle_deleted !== null,
-      statusCounts: byRun.get(String(row.id)) ?? {}
+    return runs.rows.map(row => ({
+      row,
+      cases: this.manifestCases(row.manifest).map(item => {
+        const pin = item.occurrence;
+        const result = pin ? byOccurrence.get(`${row.id}:${pin.cycleItemId}:${pin.executionId}`) : null;
+        const matches = result && result.testcase_id === item.entry.testcaseId
+          && result.snapshot_approval_revision === pin?.snapshotApprovalRevision && typeof result.status === "string";
+        return { ...item, status: matches ? result.status as string : null };
+      })
     }));
+  }
+
+  /** Counts describe the immutable dispatch; statuses use only its original active occurrences. */
+  private async governedRunsFor(revisionId: string, projectId: string, evidence?: GovernedRunEvidence[]) {
+    const runs = evidence ?? await this.governedRunEvidenceFor(revisionId, projectId);
+    return runs.map(({ row, cases }) => {
+      const statusCounts: Record<string, number> = {};
+      for (const item of cases) if (item.status !== null) statusCounts[item.status] = (statusCounts[item.status] ?? 0) + 1;
+      const unknownCaseCount = cases.filter(item => !item.occurrence).length;
+      return {
+        id: row.id, cycleId: row.cycle_id, name: row.cycle_name, createdAt: row.created_at,
+        caseCount: cases.length, runDeleted: row.cycle_deleted !== null, statusCounts,
+        occurrenceBasis: cases.length && !unknownCaseCount ? "PINNED" as const : "UNKNOWN" as const,
+        attributedCaseCount: cases.filter(item => item.status !== null).length,
+        unavailableCaseCount: cases.filter(item => item.occurrence && item.status === null).length,
+        unknownCaseCount
+      };
+    });
   }
 
   /**
@@ -849,39 +909,20 @@ export class ModelStudioRepository {
    * removed after dispatch does not rewrite what that run exercised. Results are native execution
    * statuses — this is not model verification or behavioral coverage.
    */
-  private async observedByElementFor(revisionId: string, projectId: string) {
-    const runs = await this.db.query<{ id: string; manifest: Body }>(
-      "SELECT id, manifest FROM mbt_model_runs WHERE model_revision_id = $1 AND project_id = $2",
-      [revisionId, projectId]
-    );
-    if (!runs.rows.length) return [];
-    const elementsByRunCase = new Map<string, string[]>();
-    for (const run of runs.rows) {
-      const cases = Array.isArray(run.manifest?.cases) ? run.manifest.cases : [];
-      for (const entry of cases) {
-        elementsByRunCase.set(
-          `${run.id}:${String(entry.testcaseId)}`,
-          Array.isArray(entry.elementIds) ? entry.elementIds.map(String) : []
-        );
-      }
-    }
-    const executions = await this.db.query(
-      `SELECT mr.id AS model_run_id, ci.testcase_id, e.status
-       FROM mbt_model_runs mr
-       JOIN cycle_items ci ON ci.cycle_id = mr.cycle_id AND ci.deleted_at IS NULL
-       JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
-       WHERE mr.model_revision_id = $1 AND mr.project_id = $2`,
-      [revisionId, projectId]
-    );
+  private async observedByElementFor(revisionId: string, projectId: string, evidence?: GovernedRunEvidence[]) {
+    const runs = evidence ?? await this.governedRunEvidenceFor(revisionId, projectId);
     const perElement = new Map<string, { runs: Set<string>; results: number; statusCounts: Record<string, number> }>();
-    for (const row of executions.rows) {
-      const elements = elementsByRunCase.get(`${row.model_run_id}:${row.testcase_id}`) ?? [];
-      for (const elementId of elements) {
-        const entry = perElement.get(elementId) ?? { runs: new Set<string>(), results: 0, statusCounts: {} };
-        entry.runs.add(String(row.model_run_id));
-        entry.results += 1;
-        entry.statusCounts[String(row.status)] = (entry.statusCounts[String(row.status)] ?? 0) + 1;
-        perElement.set(elementId, entry);
+    for (const run of runs) {
+      for (const item of run.cases) {
+        if (item.status === null) continue;
+        const elements = new Set<string>(Array.isArray(item.entry.elementIds) ? item.entry.elementIds.map(String) : []);
+        for (const elementId of elements) {
+          const entry = perElement.get(elementId) ?? { runs: new Set<string>(), results: 0, statusCounts: {} };
+          entry.runs.add(String(run.row.id));
+          entry.results += 1;
+          entry.statusCounts[item.status] = (entry.statusCounts[item.status] ?? 0) + 1;
+          perElement.set(elementId, entry);
+        }
       }
     }
     return [...perElement.entries()]
@@ -906,8 +947,7 @@ export class ModelStudioRepository {
     if (!UUID.test(cycleId)) return null;
     const res = await this.db.query(
       `SELECT mr.id, mr.model_id, mr.model_revision_id, mr.content_hash, mr.approval_id, mr.created_at,
-              m.name AS model_name, r.revision_number, a.created_at AS approved_at, a.approved_by,
-              jsonb_array_length(COALESCE(mr.manifest->'cases', '[]'::jsonb)) AS case_count
+              m.name AS model_name, r.revision_number, a.created_at AS approved_at, a.approved_by, mr.manifest
        FROM mbt_model_runs mr
        JOIN mbt_models m ON m.id = mr.model_id AND m.project_id = mr.project_id
        JOIN mbt_model_revisions r ON r.id = mr.model_revision_id AND r.project_id = mr.project_id
@@ -917,6 +957,7 @@ export class ModelStudioRepository {
     );
     const row = res.rows[0];
     if (!row) return null;
+    const cases = this.manifestCases(row.manifest), unknownCaseCount = cases.filter(item => !item.occurrence).length;
     return {
       id: row.id,
       modelId: row.model_id,
@@ -928,7 +969,10 @@ export class ModelStudioRepository {
       approvedAt: row.approved_at,
       approvedBy: row.approved_by ?? null,
       dispatchedAt: row.created_at,
-      caseCount: Number(row.case_count)
+      caseCount: cases.length,
+      occurrenceBasis: cases.length && !unknownCaseCount ? "PINNED" as const : "UNKNOWN" as const,
+      pinnedCaseCount: cases.length - unknownCaseCount,
+      unknownCaseCount
     };
   }
 
@@ -1052,8 +1096,9 @@ export class ModelStudioRepository {
         ...(evidenceByCase.get(String(row.testcase_id)) ?? { statusCounts: {}, latestStatus: null, latestAt: null })
       }));
 
-    const governedRuns = await this.governedRunsFor(String(revision.rows[0].id), projectId);
-    const observedByElement = await this.observedByElementFor(String(revision.rows[0].id), projectId);
+    const runEvidence = await this.governedRunEvidenceFor(String(revision.rows[0].id), projectId);
+    const governedRuns = await this.governedRunsFor(String(revision.rows[0].id), projectId, runEvidence);
+    const observedByElement = await this.observedByElementFor(String(revision.rows[0].id), projectId, runEvidence);
 
     const latestHash = String(revision.rows[0].content_hash);
     let testcasesChangedSinceLink = 0;
@@ -1108,13 +1153,13 @@ export class ModelStudioRepository {
       })),
       caseEvidence,
       evidenceNote:
-        "Case evidence is the observed result history of linked cases. It is not model verification, coverage of the modeled behavior, or proof the expected behavior is correct.",
+        "Case evidence is the observed result history of linked cases across native runs, separate from the original occurrences of a model dispatch. It is not model verification, coverage of the modeled behavior, or proof the expected behavior is correct.",
       governedRuns,
       observedByElement,
       coverageAssertion: "none",
       executionAssertion: governedRuns.length ? "governed-runs" : "none",
       note:
-        "A linked case is an accepted mapping, not execution or verified coverage. Observed results are case outcomes from governed runs of this revision; they do not prove the modeled behavior is correct."
+        "A linked case is an accepted mapping, not execution or verified coverage. Observed results use only the original active occurrences recorded by governed runs of this revision; later additions and unknown occurrence bases are not attributed. They do not prove the modeled behavior is correct."
     };
   }
 

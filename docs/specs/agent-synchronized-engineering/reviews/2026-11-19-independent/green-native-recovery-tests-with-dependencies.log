@@ -1,0 +1,33 @@
+✔ different save revisions serialize without overlapping their writers (2.462427ms)
+✔ same in-flight revision shares one write, but an explicit later save remains a new command (0.301322ms)
+✔ restore drains prior saves, blocks later saves synchronously, then permits new edits (0.82439ms)
+✔ a prior failed write prevents an already-confirmed restore from being dispatched (0.588185ms)
+✔ queued saves are not automatically sent after an earlier failed write (0.527868ms)
+✔ a debounce ticket captured before failure cannot dispatch afterward; a genuinely new edit can (0.367244ms)
+✔ closing drains already-requested edits and rejects new submissions (0.537719ms)
+✔ a failed restore clears its barrier and can be explicitly resubmitted once (0.377151ms)
+✔ two restore submissions cannot overlap or turn into two queued restores (0.347668ms)
+✔ a synchronous writer failure is observable and does not strand later explicit work (0.413877ms)
+✔ independent documents have independent ordering and failure state (0.221624ms)
+✔ a queued edit keeps its document's acknowledged revision after navigation opens another writer (0.329401ms)
+✔ a failed ACK retains the last known base until a later explicit readback succeeds (0.441011ms)
+✔ a persisted unknown intent reloads its exact request only for the same principal, project and model (3.97159ms)
+✔ an old acknowledgement cannot erase a newer distinct intent (0.457102ms)
+✔ unreadable, malformed and wrongly scoped recovery records are errors, never an absent request (1.111521ms)
+✔ network loss preserves unknown Model Studio creation without replaying POST (335.111071ms)
+✔ timeout preserves unknown Model Studio creation without replaying POST (212.899633ms)
+✔ server failure preserves unknown Model Studio creation without replaying POST (195.117517ms)
+✔ HTTP timeout preserves unknown Model Studio creation without replaying POST (258.241891ms)
+✔ truncated success preserves unknown Model Studio creation without replaying POST (108.935236ms)
+✔ empty success preserves unknown Model Studio creation without replaying POST (237.80359ms)
+✔ wrong model response preserves unknown Model Studio creation without replaying POST (196.973102ms)
+✔ confirmed validation/access/conflict refusals retain their status and permit a later deliberate command (521.310255ms)
+✔ bounded GET retries remain unchanged by the typed mutation outcome (131.141956ms)
+ℹ tests 25
+ℹ suites 0
+ℹ pass 25
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3001.232741

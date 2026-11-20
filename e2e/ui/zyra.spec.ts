@@ -1260,7 +1260,7 @@ test.describe("zyra / agents (UI)", () => {
 
   function draftTitles(taskId: string): string[] {
     const raw = scalar(
-      `SELECT COALESCE(jsonb_agg(d->>'title'), '[]'::jsonb)::text FROM ai_generation_requests r, jsonb_array_elements(r.generated_payload) d WHERE r.id = ${literal(taskId)};`,
+      `SELECT COALESCE(jsonb_agg(COALESCE(d.value->'draft'->>'title', d.value->'fields'->>'title', d.value->>'title') ORDER BY d.ordinality), '[]'::jsonb)::text FROM ai_generation_requests r, jsonb_array_elements(r.generated_payload) WITH ORDINALITY AS d(value, ordinality) WHERE r.id = ${literal(taskId)};`,
     );
     return JSON.parse(raw || "[]");
   }

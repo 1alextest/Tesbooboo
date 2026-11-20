@@ -1,0 +1,40 @@
+✔ positive control: the original dispatched occurrence can contribute its native result (2.446633ms)
+✖ new re-added occurrence must not inherit the original dispatch element attribution solely by testcaseId (2.472897ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1032.010539
+
+✖ failing tests:
+
+test at ../assurance-working/green-native-occurrence-probe.cjs:64:1
+✖ new re-added occurrence must not inherit the original dispatch element attribution solely by testcaseId (2.472897ms)
+  AssertionError [ERR_ASSERTION]: A later native occurrence lacks the original dispatch mapping/definition basis and must stay unbound to that model element.
+  + actual - expected
+
+  + [
+  +   {
+  +     elementId: 'expected-element-v1',
+  +     results: 1,
+  +     runs: 1,
+  +     statusCounts: {
+  +       Passed: 1
+  +     }
+  +   }
+  + ]
+  - []
+
+      at TestContext.<anonymous> (/workspace/scratch/fb086055b433/assurance-working/green-native-occurrence-probe.cjs:70:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ { elementId: 'expected-element-v1', runs: 1, results: 1, statusCounts: [Object] } ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
