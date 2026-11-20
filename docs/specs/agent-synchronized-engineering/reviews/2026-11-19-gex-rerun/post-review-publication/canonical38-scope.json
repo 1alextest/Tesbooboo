@@ -1,0 +1,52 @@
+{
+  "reviewed_revision": "1.4.36",
+  "current_observed_revision": "1.4.38",
+  "current_archive_sha256": "38d29265bf04e3707e6d814850316a40d354748f0e6bf639704b5b680b2ec114",
+  "current_library_version": 18,
+  "current_backing_file": "file_00000000903881f58aee5b3961ccfe2a",
+  "final36_sections": [
+    {
+      "file": "00_README.md",
+      "final_36_section_retained_exactly": true,
+      "current_sha256": "046740c0d5a2143593947084aab9bad97aeeb6aca2248fc77b890f8d193b1e57"
+    },
+    {
+      "file": "01_PRODUCT_REQUIREMENTS.md",
+      "final_36_section_retained_exactly": true,
+      "current_sha256": "19e5bbff86646719f707db16615127567d3af02f4d6b6d628da0bee175171607"
+    },
+    {
+      "file": "02_WORKFLOW_AND_UX_SPEC.md",
+      "final_36_section_retained_exactly": true,
+      "current_sha256": "a3248327c291fcfb2d76176cb5723709973bc490bef89f66834a8d84588ba710"
+    },
+    {
+      "file": "03_TECHNICAL_DESIGN.md",
+      "final_36_section_retained_exactly": true,
+      "current_sha256": "6fa31cab5106cc6c72e0ed1bd52a2e503fd474279833784ab2a72fb5bb5609f8"
+    },
+    {
+      "file": "04_MCP_API_CONTRACTS.md",
+      "final_36_section_retained_exactly": true,
+      "current_sha256": "a36b996feb928393d67974c373c503e7798cd049b829551a20a15a2c612cecc9"
+    },
+    {
+      "file": "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "final_36_section_retained_exactly": true,
+      "current_sha256": "26914139df223ee45f03d5e8a027c411b7241c8c4fac23fb43df34a0a18f4165"
+    },
+    {
+      "file": "06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "final_36_section_retained_exactly": true,
+      "current_sha256": "fb759b4768c174bf74b0444d8fcc3e1e7a8057af766a813633d597bba31b871d"
+    },
+    {
+      "file": "07_UI_DESIGN_TASKS.md",
+      "final_36_section_retained_exactly": true,
+      "current_sha256": "4c2b4e8464c810d563b16d18dc754e2b6d8be5a9b5ee4f82580587206caea4bf"
+    }
+  ],
+  "portable_method_section_retained_exactly": true,
+  "whole36_body_preserved": false,
+  "qualification": "Revision38 also edits older normative lines and appends material clauses. No full38 semantic or team approval is implied. Frozen36 remains the review target."
+}
