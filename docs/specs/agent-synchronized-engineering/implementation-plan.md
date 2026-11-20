@@ -85,6 +85,22 @@ Extend the existing FR-118/119 graph, policy/manual owners, native Case/Run/Bug/
 
 **Independent evaluation:** Compare existing deterministic graph projections, governed AI interpretation and no-change/manual baselines on held-out dissimilar systems and withheld critical scenarios. Measure unique actionable gaps, consequence trace accuracy, false claims, missed obligations, root-cause discrimination, risk calibration where data permits, flakiness false attribution, review labor, token/latency cost, privacy and rollback. First-run assurance teams get outcome plus pinned sources, not the scenarios above as suggested findings; these scenarios are for later engineering acceptance. The existing eight canonical documents, approval boundary, original I3-Q execution loop and CI/security gate remain mandatory.
 
+### Outcome-discovery diagnostic triage and targeted acceptance (DISC-01..05; NOT RUN)
+
+The diagnostic at `reviews/2026-11-20-semantic-skill-diagnostic.md` is an informed author application, **not** a blind assurance-team receipt. Against existing R-ASE-07/08/09/19/40 and FR-117/118/119, all five issues are *partly addressed* by present ownership, provenance and graph gap contracts; their missing discriminators are clarified here and in the subordinate requirements/design. None establishes a new database or a confirmed runtime defect.
+
+| Finding | Reused owner | Candidate specification clarification / proposed acceptance |
+| --- | --- | --- |
+| DISC-01 | R-ASE-08/09/40; governed Policy KB | Differentiate same-record CAS collision from conflicting independent effective obligations; preserve applicable versions and explicit authorized human ruling or unresolved result |
+| DISC-02 | FR-118/119; R-ASE-19 | Require conditional consequence mechanism, counterexample, genuinely unaffected connected neighbor and bounded independent falsification |
+| DISC-03 | Policy/Manual/Requirement revisions and source/build evidence | Interpret historical versus current versus future applicability using time-aligned records; unknown deployment cannot certify conformance |
+| DISC-04 | FR-118/119, scoped search, staged proposals | Find missing semantic link and reject lexical decoy without authorizing invented relationship or coverage |
+| DISC-05 | graph review, native history, derived projections, T-422 | Preserve correction, invalidate dependent candidates, constrain cache freshness and keep historical accepted records unchanged |
+
+**Proposed engineering acceptance identifiers (not canonical P-14 IDs):** `GEX-DISC-01..05` map one-to-one to the table. Each requires a positive neighbor and a negative control; record actual authorization, source/revision/actor, before/after graph views, unknown/truncated scope, outcome, cost and evidence. Evaluate separate current and candidate reasoning methods on unseen tasks and multiple domains using the original unchanged reviewer charters, without supplying these specific diagnoses to blind reviewers. An author checking these examples is not proof of independent skill effectiveness or full spec validation.
+
+**Admission boundary:** These clarifications are subordinate proposals until exact eight-file canonical reconciliation; after that, independently validate against current owner contracts and deployed capabilities. Do not assert full causal inference, infer policy hierarchy, change native test statuses or hide existing PR security/CI blockers.
+
 ### GEX governed AI reasoning and authored skill reuse — continuation, no new top-level product
 
 1. **Source/identity reconciliation:** inspect source artifact `manual-test-authoring` (525-line revision with A–H modes, state/role/permission/cross-cutting/test-condition/RTM/PTM and improvement journal), identify any contradictory earlier version, its missing referenced files and whether it is installed/approved anywhere; inspect the canonical D-14/T-422 ownership contract and verify its actual implementation and running MCP capabilities. Review `product-testing`/Primary User Type → Module → Context only from accessible exact source; do not claim local Nesberry edits are merged or live.
