@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, request as pwRequest, test } from "@playwright/test";
 import { env } from "../utils/env";
+import { approveTestcase } from "../utils/testcase-approval";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 const STATE_PATH = path.join(__dirname, "../.auth/state.json");
@@ -72,9 +73,7 @@ test.describe("full test-management scenario", () => {
       // The "Add Test Cases" run picker only allows Approved cases — approve it the way a
       // reviewer would before it's scheduled into a run. Not itself part of the UI journey
       // under test, so done directly via the API.
-      await api.put(`/api/projects/${ctx.projectId}/testcases/${testcaseId}`, {
-        data: { status: "Approved" },
-      });
+      await approveTestcase(api, ctx.projectId, testcaseId!);
 
       // ── 2. Create a test plan from the Test Plans UI ──
       await page.goto(`/projects/${ctx.projectId}/plans`);

@@ -6,7 +6,6 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   listCycleExecutions,
-  getTestRun,
   updateExecution,
   listBugs,
   removeBugLink,
@@ -75,7 +74,6 @@ export default function ExecutionDetailPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [bugRefreshError, setBugRefreshError] = useState<string | null>(null);
-  const [finalizedAutomation, setFinalizedAutomation] = useState(false);
   /* Bug Key / Bug Title shown for a linked execution — read from the real bug(s) filed via "Log
      bug" (bugs/bug_links), not the old free-text defectKey/defectUrl columns on the execution row.
      An execution can have more than one bug linked to it, so this is every bug linked to THIS
@@ -95,13 +93,12 @@ export default function ExecutionDetailPage() {
     onLogged: (exec) => {
       loadLinkedBugs(exec);
       setBugRefreshError(null);
-      Promise.all([getTestRun(cycleId), listCycleExecutions(cycleId)])
-        .then(([run, list]) => {
+      listCycleExecutions(cycleId)
+        .then((list) => {
           const current = list.find((item) => item.id === exec.id);
           if (!current) throw new Error("Execution no longer available");
           setExecution(current);
           setStatus(current.status || "Untested");
-          setFinalizedAutomation(run.source === "automation" && run.closedAt != null);
         })
         .catch(() => setBugRefreshError("Bug saved, but the execution could not be refreshed. Reload to see its current result."));
     },
@@ -158,9 +155,8 @@ export default function ExecutionDetailPage() {
       router.replace("/login");
       return;
     }
-    Promise.all([getTestRun(cycleId), listCycleExecutions(cycleId)])
-      .then(([run, list]) => {
-        setFinalizedAutomation(run.source === "automation" && run.closedAt != null);
+    listCycleExecutions(cycleId)
+      .then((list) => {
         const e = list.find((x) => x.id === executionId);
         if (e) {
           setExecution(e);
@@ -335,8 +331,7 @@ export default function ExecutionDetailPage() {
           </div>
 
           {/*
-            * Bug Key / Bug Title — keep the existing Failed-only presentation on writable runs.
-            * Sealed automation also shows its traceability links without implying failure.
+            * Bug Key / Bug Title — associations remain visible for every recorded result.
             * A status alone never fabricates a bug association. Read-only:
             * these reflect the real bug(s), not a free-text value typed here. One execution can
             * now have several bugs linked (multi-select existing-bug picker) — a single linked
@@ -344,7 +339,7 @@ export default function ExecutionDetailPage() {
             * ("Bug 1 Key", "Bug 2 Key", …) so none is silently dropped. Every row gets its own
             * Unlink action regardless of count.
             */}
-          <div className="space-y-3" hidden={linkedBugs.length === 0 || (status !== "Failed" && !finalizedAutomation)}>
+          <div className="space-y-3" hidden={linkedBugs.length === 0}>
             {linkedBugs.map((bug, i) => {
               const keyLabel = linkedBugs.length > 1 ? `Bug ${i + 1} Key` : "Bug Key";
               const titleLabel = linkedBugs.length > 1 ? `Bug ${i + 1} Title` : "Bug Title";

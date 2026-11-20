@@ -1,0 +1,63 @@
+ts-jest[config] (WARN)
+    The "ts-jest" config option "isolatedModules" is deprecated and will be removed in v30.0.0. Please use "isolatedModules: true" in /workspace/scratch/fb086055b433/tesbo-review-native-final/Tesbo-Backend-Nest/tsconfig.json instead, see https://www.typescriptlang.org/tsconfig/#isolatedModules
+
+FAIL tesbo-review-native-final/Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.spec.ts (5.893 s)
+  governed model/native writer composition
+    ✕ SEC-NATIVE-02 rechecks current authority after a blocked approval owner resumes (59 ms)
+    ✕ SEC-NATIVE-02 rechecks current authority after a blocked candidate owner resumes (5 ms)
+    ○ skipped SEC-NATIVE-02 keeps an authorized exact human approval available
+    ○ skipped propagates manifest failure through the shared transaction without a compensating delete
+    ○ skipped keeps native ownership and records the refreshed reviewed case in a successful manifest
+    ○ skipped refuses a missing active basis before native writes
+    ○ skipped refuses a missing current basis before native writes
+    ○ skipped refuses a missing approved basis before native writes
+    ○ skipped refuses a recorded mapping whose case changed even after the current case was approved again
+    ○ skipped retains the exact current explicit mapping basis in a native run manifest
+    ○ skipped rejects a stale case revision at link creation without inserting a mapping
+    ○ skipped refuses to silently reuse an older mapping when a caller supplies a new case revision
+    ○ skipped does not publish candidate effects when its mapping fails, then publishes after a successful commit
+    ○ skipped refuses untrusted model approval and native materialization before any effect: undefined
+    ○ skipped refuses untrusted model approval and native materialization before any effect: {"kind":"api_token"}
+
+  ● governed model/native writer composition › SEC-NATIVE-02 rechecks current authority after a blocked approval owner resumes
+
+    expect(received).rejects.toMatchObject()
+
+    Received promise resolved instead of rejected
+    Resolved to value: {"alreadyApproved": false, "approval": {"approvedAt": null, "approvedBy": null, "contentHash": null, "status": "NOT_APPROVED"}, "authority": {"approval": "NOT_APPROVED", "executionEvidence": false, "expectedBehavior": true, "observedSource": false, "runtimeEvidence": "NONE"}, "content": {"initialStateId": "start", "schemaVersion": "tesbo-fsm-draft/1", "semantics": "SEQUENTIAL_FSM", "states": [{"id": "start", "label": "Start"}, {"id": "done", "label": "Done"}], "transitions": [{"action": "Submit", "expectedObservation": "Accepted", "from": "start", "id": "finish", "to": "done"}]}, "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "createdAt": undefined, "id": "00000000-0000-4000-8000-000000000004", "modelId": undefined, "parentRevisionId": null, "preview": {"approval": "NOT_APPROVED", "candidateDigest": "cd85957ac5a65d8b4f1ac29f4110898338277743cf8f5cea993f4fd14144dc54", "capabilities": {"activation": false, "pathGeneration": false, "persistence": false, "publication": false, "targetExecution": false}, "definition": {"initialStateId": "start", "schemaVersion": "tesbo-fsm-draft/1", "semantics": "SEQUENTIAL_FSM", "states": [{"id": "done", "label": "Done"}, {"id": "start", "label": "Start"}], "transitions": [{"action": "Submit", "expectedObservation": "Accepted", "from": "start", "id": "finish", "to": "done"}]}, "diagnostics": [{"code": "TERMINAL_STATE", "elementId": "done"}], "limits": {"maxStates": 32, "maxTransitions": 64}, "modelId": undefined, "modelRevisionId": "00000000-0000-4000-8000-000000000004", "runtimeEvidence": "NONE", "schemaVersion": "tesbo-fsm-preview/1", "sourceAuthority": "UNVERIFIED", "states": [{"id": "done", "label": "Done", "reachable": true}, {"id": "start", "label": "Start", "reachable": true}], "status": "DRAFT_PREVIEW", "transitions": [{"action": "Submit", "expectedObservation": "Accepted", "from": "start", "id": "finish", "reachable": true, "to": "done"}], "validation": "STRUCTURALLY_VALID"}, "revisionNumber": 1, "status": undefined}
+
+      114 |       ? f.repository.approveRevisionForUser(user, project, model, revision, { expectedHash: hash }, { kind: "human_session" })
+      115 |       : f.repository.createCasesFromPathsForUser(user, project, model, revision, { ...options, digests: [digest] }, { kind: "human_session" });
+    > 116 |     await expect(attempt).rejects.toMatchObject({ status: 403 });
+          |           ^
+      117 |     expect(f.legacy.requireProjectAccess).toHaveBeenCalled();
+      118 |     expect(f.legacy.requireCurrentProjectAuthority).toHaveBeenCalledTimes(1);
+      119 |     expect(f.client.query.mock.calls.some(([sql]) => /(?:INSERT INTO|UPDATE) mbt_/.test(sql))).toBe(false);
+
+      at expect (Tesbooboo/Tesbo-Backend-Nest/node_modules/expect/build/index.js:113:15)
+      at tesbo-review-native-final/Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.spec.ts:116:11
+
+  ● governed model/native writer composition › SEC-NATIVE-02 rechecks current authority after a blocked candidate owner resumes
+
+    expect(received).rejects.toMatchObject()
+
+    Received promise resolved instead of rejected
+    Resolved to value: {"cases": [{"created": true, "digest": "9ccc23d290cf58c57a3e66f68874c0a19207413af3860f56693a5e2a62b376cf", "testcaseId": "00000000-0000-4000-8000-000000000005", "title": "Model: Start → Done"}], "coverageAssertion": "none", "created": 1, "executionAssertion": "none", "modelId": "00000000-0000-4000-8000-000000000003", "note": "Generated cases are unapproved drafts derived from model proposals. A proposal is not coverage and these cases are not execution evidence.", "revisionId": "00000000-0000-4000-8000-000000000004", "skipped": 0}
+
+      114 |       ? f.repository.approveRevisionForUser(user, project, model, revision, { expectedHash: hash }, { kind: "human_session" })
+      115 |       : f.repository.createCasesFromPathsForUser(user, project, model, revision, { ...options, digests: [digest] }, { kind: "human_session" });
+    > 116 |     await expect(attempt).rejects.toMatchObject({ status: 403 });
+          |           ^
+      117 |     expect(f.legacy.requireProjectAccess).toHaveBeenCalled();
+      118 |     expect(f.legacy.requireCurrentProjectAuthority).toHaveBeenCalledTimes(1);
+      119 |     expect(f.client.query.mock.calls.some(([sql]) => /(?:INSERT INTO|UPDATE) mbt_/.test(sql))).toBe(false);
+
+      at expect (Tesbooboo/Tesbo-Backend-Nest/node_modules/expect/build/index.js:113:15)
+      at tesbo-review-native-final/Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.spec.ts:116:11
+
+Test Suites: 1 failed, 1 total
+Tests:       2 failed, 13 skipped, 15 total
+Snapshots:   0 total
+Time:        6.336 s
+Ran all test suites with tests matching "SEC-NATIVE-02 rechecks".
+Test results written to: assurance-working/security-authority-before-results.json

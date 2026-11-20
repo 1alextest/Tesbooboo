@@ -1,5 +1,6 @@
 import { expect, request as newRequest, test, type Page, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
+import { verifyMoveReviewPreview } from "./zyra-reviewed-moves";
 import { startFakeAiServer } from "./fake-ai-server";
 import { answerRepositorySnapshotSql } from "./zyra-answer-feedback";
 import { seedMoveRepository, settleMoveFixtures, type MoveFixture, type MoveRepositoryState } from "./zyra-move-feedback";
@@ -31,15 +32,9 @@ export async function verifyCiZyraSingleMove(page: Page, api: string, web: strin
       await test.step(label, async () => {
         try {
           await verifyZyraSingleMove({ request: page.request, ai, base, ownerId, language, selector, fixture: fixtures.get(label)!, state,
+            beforeApply: async (preview) => verifyMoveReviewPreview(page, web, projectId, preview, testInfo, `single-${label}`),
             afterReply: async (evidence) => {
               await testInfo.attach(`single-${label}-readback`, { body: JSON.stringify(evidence, null, 2), contentType: "application/json" });
-              const verify = async () => {
-                await expect(page.getByText(evidence.reply, { exact: true })).toBeVisible();
-                expect.soft(await page.getByText(evidence.externalId, { exact: true }).count()).toBe(1);
-                expect.soft(await page.getByText(/⚠️ Nothing was saved\.|⚠️ Ничего не сохранено\./).count()).toBe(0);
-              };
-              await page.goto(`${web}/projects/${projectId}/agents/zyra`); await verify(); await page.reload(); await verify();
-              await testInfo.attach(`single-${label}`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
             },
           });
         } catch (error) {

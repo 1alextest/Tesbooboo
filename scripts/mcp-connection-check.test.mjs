@@ -42,10 +42,8 @@ for (const [code, message] of [[-32001, /access to this project/], [-32002, /Rea
 for (const [label, body] of [
   ["missing JSON-RPC version", { id: 1, result: { tools } }],
   ["wrong request ID", envelope({ tools }, 2)],
-  ["empty tools", envelope({ tools: [] })],
   ["malformed tool", envelope({ tools: ["list_projects"] })],
   ["duplicate tool", envelope({ tools: [tools[0], tools[0]] })],
-  ["missing project-read tool", envelope({ tools: [tools[1]] })],
 ]) {
   test(`${label} is not accepted as a valid catalog`, async () => {
     let calls = 0;
@@ -53,6 +51,16 @@ for (const [label, body] of [
     assert.equal(calls, 1);
   });
 }
+test("a valid restricted catalog reports an unverified read without attempting a tool call", async () => {
+  for (const restricted of [[], [tools[1]]]) {
+    let calls = 0;
+    await assert.rejects(run(async () => {
+      calls++;
+      return response(envelope({ tools: restricted }));
+    }), /Read permission was not verified/);
+    assert.equal(calls, 1);
+  }
+});
 for (const [label, body] of [
   ["wrong-project data", read("project-b")],
   ["a tool-level failure", envelope({ isError: true, content: [{ type: "text", text: secret }] }, 2)],

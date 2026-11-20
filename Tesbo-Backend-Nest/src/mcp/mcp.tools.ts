@@ -4,6 +4,7 @@ import { BUG_SEVERITIES, LegacyService, TESTCASE_REVIEW_VIEWS, TESTCASE_TECHNIQU
 import { expectedTestcaseRevision } from "../legacy/testcase-edit-revision";
 import { CurrentCacheGraphReader } from "../behavior-graph/current-cache-graph.reader";
 import { CurrentCacheGraphHistory } from "../behavior-graph/current-cache-graph.history";
+import { DIRECT_TESTCASE_PUBLISHERS, humanPublicationRequired, proposalReviewPreviewEnabled } from "../common/testcase-publication.policy";
 import { McpError, RpcCode, type McpTool, type McpToolContext } from "./mcp.types";
 
 /** Per-item cap for tools that loop over a single-record legacy call once per array entry — kept
@@ -245,7 +246,7 @@ function rethrowModelError(error: unknown): never {
 }
 
 export function buildMcpTools(): McpTool[] {
-  return [
+  const tools: McpTool[] = [
     {
       name: "preview_behavior_model_draft",
       description: "Validate a bounded sequential FSM candidate through Tesbo's native Model Studio draft preview. Requires write scope, project write entitlement and TESBO_MODEL_PREVIEW_ENABLED=1 (default off). Returns unapproved structure and reachability diagnostics only; creates no model revision, test case, run, path, coverage, runtime evidence or approval. Supply only model; project and user come from the token. Unsupported semantics and invalid fields fail explicitly.",
@@ -667,7 +668,8 @@ export function buildMcpTools(): McpTool[] {
         // updateTestCase() takes no project argument of its own — it derives the project from the
         // row it finds by id — so the tool must check project ownership itself before calling it.
         await requireProjectOwnedRow(ctx, "testcases", testcaseId, "Test case");
-        const { testcaseId: _ignored, ...rest } = args;
+        const rest = { ...args };
+        delete rest.testcaseId;
         // Same step-synonym tolerance as create_testcase — see its handler comment.
         const body = canonicalizeSeverity(
           Array.isArray(rest.steps) ? { ...rest, steps: JSON.stringify(ctx.legacy.safeSteps(rest.steps)) } : rest
@@ -1047,7 +1049,7 @@ export function buildMcpTools(): McpTool[] {
       },
       handler: async (args, ctx) => {
         requireString(args, "name");
-        return ctx.legacy.createSuite(ctx.projectId, args);
+        return ctx.legacy.createSuite(ctx.projectId, args, ctx.userId, { kind: "api_token" });
       }
     },
     {
@@ -1080,7 +1082,7 @@ export function buildMcpTools(): McpTool[] {
           preconditions: args.preconditions,
           parentId: args.parentId,
           position: args.position
-        });
+        }, { kind: "api_token" });
         return (await ctx.legacy.listSuites(ctx.projectId)).find((s) => s.id === suiteId);
       }
     },
@@ -1166,7 +1168,7 @@ export function buildMcpTools(): McpTool[] {
             preconditions: node.preconditions,
             parentId: newParentId,
             position: node.position
-          })) as Record<string, any>;
+          }, ctx.userId, { kind: "api_token" })) as Record<string, any>;
           idMap.set(node.id as string, created.id);
           clonedSuites.push(created);
         }
@@ -1398,7 +1400,8 @@ export function buildMcpTools(): McpTool[] {
       handler: async (args, ctx) => {
         const executionId = requireString(args, "executionId");
         const { cycleId } = await requireExecutionOwner(ctx, executionId);
-        const { executionId: _ignored, ...body } = args;
+        const body = { ...args };
+        delete body.executionId;
         // Same reasoning as record_execution_result: updateExecution requires a real user id.
         await ctx.legacy.updateExecution(executionId, ctx.userId, body);
         return (await ctx.legacy.executions(cycleId)).find((e) => e.id === executionId);
@@ -1447,7 +1450,8 @@ export function buildMcpTools(): McpTool[] {
           try {
             if (!executionId.trim()) throw new Error('"executionId" is required and must be a non-empty string');
             await requireExecutionOwner(ctx, executionId);
-            const { executionId: _ignored, ...body } = item;
+            const body = { ...item };
+            delete body.executionId;
             await ctx.legacy.updateExecution(executionId, ctx.userId, body);
             outcomes.push({ index, executionId, ok: true });
           } catch (err) {
@@ -1582,14 +1586,15 @@ export function buildMcpTools(): McpTool[] {
         // it finds by id (requireBugAccess) — so the tool must check project ownership itself
         // before calling it, same as update_testcase/update_suite.
         await requireProjectOwnedRow(ctx, "bugs", bugId, "Bug");
-        const { bugId: _ignored, ...body } = args;
+        const body = { ...args };
+        delete body.bugId;
         return ctx.legacy.updateBug(ctx.userId, bugId, body);
       }
     },
     {
       name: "link_testcase_to_bug",
       description:
-        "Link a test case to an existing bug in the token's project (a bug_links row), optionally scoped to a specific cycle/execution. Required: bugId, testcaseId. Optional: cycleId, executionId. New/changed targets must be active in this project and form a consistent case/run/execution chain; an invalid target rejects the request. Valid manual/open-run links retain auto-failure behavior; finalized automation accepts the association without changing its sealed verdict. Calling this again with the same bugId+testcaseId (+cycleId) updates the link in place rather than duplicating it. This tool's ownership checks still refuse deleted targets; use update_bug to preserve an exact valid unchanged historical link.",
+        "Link a test case to an existing bug in the token's project (a bug_links row), optionally scoped to a specific cycle/execution. Required: bugId, testcaseId. Optional: cycleId, executionId. New/changed targets must be active in this project and form a consistent case/run/execution chain; an invalid target rejects the request. Associations preserve the execution verdict, performer and time for every run. Record an observed result separately through the authorized result writer. Calling this again with the same bugId+testcaseId (+cycleId) updates the link in place rather than duplicating it. This tool's ownership checks still refuse deleted targets; use update_bug to preserve an exact valid unchanged historical link.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -1892,4 +1897,103 @@ export function buildMcpTools(): McpTool[] {
       }
     }
   ];
+
+  // Reuse the established case vocabulary while the native proposal owner remains responsible
+  // for normalization, revision checks and validation. These are candidate fields, never IDs
+  // or authority supplied by the caller.
+  const proposalFields = {
+    ...(tools.find(tool => tool.name === "create_testcase")!.inputSchema.properties as Record<string, unknown>),
+    ...(tools.find(tool => tool.name === "update_testcase")!.inputSchema.properties as Record<string, unknown>),
+    stepsJson: { type: "string" },
+    customFieldValues: { type: "object" },
+    customTagIds: { type: "array", items: { type: "string" } },
+    ownerId: { type: ["string", "null"] }, suiteId: { type: ["string", "null"] },
+    automationRepo: { type: "string" }, automationPath: { type: "string" },
+    automationTestName: { type: "string" }, automationFramework: { type: "string" },
+    automationTags: { type: "string" },
+    jiraIssueKey: { type: ["string", "null"] }, jiraUrl: { type: ["string", "null"] },
+    linearIssueKey: { type: ["string", "null"] }, linearUrl: { type: ["string", "null"] },
+    notionPageId: { type: ["string", "null"] }, notionUrl: { type: ["string", "null"] }
+  } as Record<string, unknown>;
+  delete proposalFields.testcaseId;
+  delete proposalFields.expectedRevision;
+  const candidateFields = { type: "object", additionalProperties: false, properties: proposalFields };
+  const operations = {
+    type: "array", minItems: 1, maxItems: 100,
+    items: { oneOf: [
+      { type: "object", additionalProperties: false, required: ["opType", "draft"], properties: {
+        opType: { const: "create" }, reason: { type: "string" },
+        draft: { ...candidateFields, required: ["title"], properties: { ...proposalFields, status: { const: "Draft" } } }
+      } },
+      { type: "object", additionalProperties: false, required: ["opType", "testcaseId", "expectedRevision", "fields"], properties: {
+        opType: { enum: ["update", "archive"] }, testcaseId: { type: "string" },
+        expectedRevision: { type: "string", pattern: "^[a-f0-9]{64}$", description: "Exact editRevision returned by get_testcase." },
+        fields: candidateFields, reason: { type: "string" }
+      } }
+    ] }
+  };
+  const proposalTools: McpTool[] = [
+    {
+      name: "stage_testcase_changes", requiredScope: "write",
+      description: "Stage up to 100 unpublished create/update/archive testcase proposals in Tesbo's existing task review workflow. Requires an explicit requestKey; retry that key only with the identical request. Updates and archives require the current get_testcase editRevision. No model key is needed. Returns a task/proposal revision, never a newly published testcase ID. A human must review the exact task and save selected proposals through Tesbo; this tool cannot apply or approve them. Restore uses an update proposal with status Draft; create proposals cannot request Approved.",
+      inputSchema: { type: "object", additionalProperties: false, required: ["requestKey", "operations"], properties: {
+        requestKey: { type: "string", minLength: 1, maxLength: 160 }, title: { type: "string" }, operations
+      } },
+      handler: async (args, ctx) => {
+        const requestKey = requireString(args, "requestKey");
+        if (Object.keys(args).some(key => !["requestKey", "operations", "title"].includes(key))) {
+          throw new McpError(RpcCode.InvalidParams, "Only requestKey, operations and title are accepted; principal and project come from the authenticated credential");
+        }
+        if (!ctx.tokenId) throw new McpError(RpcCode.ProjectScopeDenied, "An authenticated credential is required to stage testcase proposals");
+        if (!ctx.actorId) throw new McpError(RpcCode.ToolExecutionError, "The MCP agent identity is unavailable; no proposal was staged", { code: "AGENT_IDENTITY_UNAVAILABLE" });
+        const submittedOperations = Array.isArray(args.operations) ? args.operations.map(operation => {
+          if (!operation || typeof operation !== "object" || Array.isArray(operation)) return operation;
+          const key = operation.opType === "create" ? "draft" : "fields";
+          const fields = operation[key];
+          if (!fields || typeof fields !== "object" || Array.isArray(fields)) return operation;
+          validateTestcaseTextFields(fields);
+          validateTestcaseSourceRefs(fields);
+          return { ...operation, [key]: canonicalizeSeverity(fields) };
+        }) : args.operations;
+        try {
+          const task = await ctx.legacy.stageTestcaseChanges(ctx.projectId, ctx.userId,
+            { requestKey, operations: submittedOperations, ...(args.title === undefined ? {} : { title: args.title }) },
+            { kind: "api_token", transport: "mcp", tokenId: ctx.tokenId, ...(ctx.actorId ? { actorId: ctx.actorId } : {}) });
+          return { publication: "unpublished", taskId: task.id, task,
+            reviewPath: `/projects/${ctx.projectId}/agents/tasks/${task.id}` };
+        } catch (error) { rethrowModelError(error); }
+      }
+    },
+    {
+      name: "list_testcase_proposals", requiredScope: "read",
+      description: "List staged testcase proposal tasks in this project. These are review candidates, not official cases, approvals or execution evidence. Optional limit and offset paginate the native task owner.",
+      inputSchema: { type: "object", additionalProperties: false, properties: {
+        limit: { type: "integer", minimum: 1, maximum: 100 }, offset: { type: "integer", minimum: 0 }
+      } },
+      handler: async (args, ctx) => ctx.legacy.listTestcaseProposals(ctx.projectId, ctx.userId, args)
+    },
+    {
+      name: "get_testcase_proposal_task", requiredScope: "read",
+      description: "Read one native testcase review task, including its current proposalSnapshot and proposalRevision. Pending drafts are unpublished candidates. Reading or staging a task cannot approve it; only a human can save the exact selected revision.",
+      inputSchema: { type: "object", additionalProperties: false, required: ["taskId"], properties: { taskId: { type: "string" } } },
+      handler: async (args, ctx) => ctx.legacy.zyraTask(ctx.projectId, ctx.userId, requireString(args, "taskId"))
+    }
+  ];
+  return [...tools.map(tool => DIRECT_TESTCASE_PUBLISHERS.has(tool.name) ? {
+    ...tool, hiddenFromDiscovery: true,
+    description: "Direct testcase publication requires human review. Use stage_testcase_changes and inspect the native proposal task; only a human can apply selected proposals.",
+    handler: async (_args: Record<string, unknown>, ctx: McpToolContext) => {
+      const refusal = humanPublicationRequired(ctx.projectId);
+      throw new McpError(RpcCode.ToolExecutionError, refusal.error, refusal);
+    }
+  } : tool), ...proposalTools.map(tool => ({
+    ...tool, proposalPreviewOnly: true,
+    handler: async (args: Record<string, unknown>, ctx: McpToolContext) => {
+      if (!proposalReviewPreviewEnabled()) throw new McpError(RpcCode.ToolExecutionError,
+        "The unpublished proposal review preview is unavailable on this deployment", {
+          code: "PROPOSAL_REVIEW_PREVIEW_DISABLED", stagingAvailable: false
+        });
+      return tool.handler(args, ctx);
+    }
+  }))];
 }

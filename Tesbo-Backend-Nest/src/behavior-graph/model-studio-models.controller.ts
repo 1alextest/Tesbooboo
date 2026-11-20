@@ -90,7 +90,9 @@ export class ModelStudioModelsController {
     @Param("revisionId") revisionId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.models.approveRevisionForUser(request.userId, projectId, modelId, revisionId, body);
+    return this.models.approveRevisionForUser(request.userId, projectId, modelId, revisionId, body, {
+      kind: request.apiToken ? "api_token" : "human_session"
+    });
   }
 
   @Post(":modelId/revisions/:revisionId/runs")
@@ -112,6 +114,8 @@ export class ModelStudioModelsController {
     @Param("revisionId") revisionId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.models.createCasesFromPathsForUser(request.userId, projectId, modelId, revisionId, body);
+    return this.models.createCasesFromPathsForUser(request.userId, projectId, modelId, revisionId, body, {
+      kind: request.apiToken ? "api_token" : "human_session"
+    });
   }
 }

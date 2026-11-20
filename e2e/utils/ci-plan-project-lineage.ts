@@ -1,3 +1,5 @@
+import { createTestcaseFixtureResponse } from "./testcase-approval";
+import { issueMcpTestToken } from "./mcp-access";
 import { expect, request as newRequest, test, type Page, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
 import { verifyRestLockRecovery } from "./ci-rest-lock-recovery";
@@ -9,7 +11,11 @@ export async function verifyPlanProjectLineage(page: Page, api: string, web: str
   const base = `${api}/api/projects/${projectId}`, other = `${api}/api/projects/${otherId}`;
   let tokenId: string | undefined;
   async function post(url: string, data: Record<string, unknown>) {
-    const response = await page.request.post(url, { data });
+    const response = /\/api\/projects\/[^/]+\/testcases$/.test(url)
+      ? await createTestcaseFixtureResponse(page.request, url, { data })
+      : /\/apikeys$/.test(url)
+        ? await issueMcpTestToken(page.request, url, { data })
+        : await page.request.post(url, { data });
     expect(response.ok(), await response.text()).toBeTruthy(); return response.json();
   }
   const state = async () => ({

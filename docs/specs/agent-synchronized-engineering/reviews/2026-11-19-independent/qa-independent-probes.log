@@ -1,0 +1,78 @@
+{
+  "probe": "machine Model Studio approval entrance",
+  "evidence": "EXECUTED isolated production guard/service with mocked DB and membership; not HTTP/DB/runtime proof",
+  "routes": [
+    {
+      "suffix": "/testcases",
+      "allowed": false,
+      "status": 403,
+      "code": "HUMAN_PUBLICATION_REQUIRED"
+    },
+    {
+      "suffix": "/model-studio/models/00000000-0000-4000-8000-000000000003/revisions/00000000-0000-4000-8000-000000000004/approve",
+      "allowed": true
+    },
+    {
+      "suffix": "/model-studio/models/00000000-0000-4000-8000-000000000003/revisions/00000000-0000-4000-8000-000000000004/candidates",
+      "allowed": true
+    }
+  ],
+  "approvalWithoutPrincipal": {
+    "status": "APPROVED",
+    "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "approvedBy": "00000000-0000-4000-8000-000000000001"
+  }
+}
+{
+  "probe": "inherited migration-runner ancestry gap; not authored PR deletion",
+  "evidence": "EXECUTED production source transpiled in VM; all filesystem/dotenv/pg/process effects mocked; no database or network",
+  "baselineImport": {
+    "effects": [],
+    "pools": []
+  },
+  "targetImport": {
+    "effects": [
+      "filesystem",
+      "dotenv",
+      "filesystem",
+      "migration listing",
+      "pool",
+      "connect",
+      "error",
+      "exit"
+    ],
+    "pools": [
+      {
+        "connectionString": "postgresql://localhost:5432/tesbo",
+        "max": 1
+      }
+    ]
+  },
+  "baselineMissingConfigCLI": {
+    "effects": [
+      "filesystem",
+      "dotenv",
+      "error",
+      "exit"
+    ],
+    "pools": []
+  },
+  "targetMissingConfigCLI": {
+    "effects": [
+      "filesystem",
+      "dotenv",
+      "filesystem",
+      "migration listing",
+      "pool",
+      "connect",
+      "error",
+      "exit"
+    ],
+    "pools": [
+      {
+        "connectionString": "postgresql://localhost:5432/tesbo",
+        "max": 1
+      }
+    ]
+  }
+}

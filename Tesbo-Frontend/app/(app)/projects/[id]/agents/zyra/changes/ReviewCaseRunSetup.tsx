@@ -106,7 +106,7 @@ export function ReviewCaseRunSetup({
         const current = await Promise.all(selected.slice(offset, offset + 8).map(async (caseId) => ({
           caseId, record: await getTestCase(projectId, caseId)
         })));
-        const ineligible = current.filter(({ record }) => record.status !== "Approved");
+        const ineligible = current.filter(({ record }) => record.status !== "Approved" || record.approvalCurrent !== true);
         if (ineligible.length) {
           throw new Error("Only Approved test cases can be added to a test run. Review: " +
             ineligible.map(({ caseId }) => caseId).join(", "));

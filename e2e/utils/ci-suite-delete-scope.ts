@@ -42,6 +42,7 @@ export async function verifySuiteDeleteScope(ctx: {
       for (const [client, status, headers] of [[machine, 400, {}], [other, 404, {}], [machine, 403, { Authorization: `Bearer ${tokens.write}` }]] as const) {
         const denied = await client.delete(`${api}/api/suites/${root.id}`, { params: { mode }, headers });
         expect(denied.status(), await denied.text()).toBe(status); expect(await state()).toEqual(before);
+        if ("Authorization" in headers) expect(await denied.json()).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
       }
       await page.goto(`${repositoryUrl}?suiteId=${child.id}`);
       const rootRow = page.getByRole("button", { name: root.name, exact: true }).locator("..");
@@ -113,7 +114,7 @@ export async function verifySuiteDeleteScope(ctx: {
           const readable = await other.get(`${api}/api/projects/${foreignProject}/testcases/${row.id}`); expect(readable.ok()).toBeTruthy();
           expect(await readable.json()).toMatchObject({ suiteId: row.suite_id, title: row.title });
         } else {
-          expect(next).toEqual({ ...row, ...(mode === "moveToDefault" ? { suite_id: null } : { deleted_at: expect.any(Date), deleted_by: ownerId, updated_by: ownerId }), updated_at: expect.any(Date) });
+          expect(next).toEqual({ ...row, ...(mode === "moveToDefault" ? { suite_id: null } : { deleted_at: expect.any(Date), deleted_by: ownerId, updated_by: ownerId }), updated_at: expect.any(Date), review_dependency_revision: String(BigInt(row.review_dependency_revision) + 1n) });
           expect(versions).toHaveLength(1); expect(versions[0].snapshot).toMatchObject({ suite_id: row.suite_id, deleted_at: null });
         }
       }

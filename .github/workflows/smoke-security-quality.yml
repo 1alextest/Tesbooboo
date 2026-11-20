@@ -58,6 +58,9 @@ jobs:
       TESBO_REPORTER_ENABLED: "0"
       # Only the isolated disposable CI stack opts in to ephemeral M1 preview.
       TESBO_MODEL_PREVIEW_ENABLED: "1"
+      # Verify selected human-publication mechanics without exposing the new external
+      # proposal inlet in deployments awaiting the S0 Skills/authority gate.
+      TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED: "1"
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -146,8 +149,10 @@ jobs:
           npx playwright test -c playwright.config.ts api/testcases.spec.ts ui/testcases.spec.ts --workers=10 --output=test-results-testcases --list
           npx playwright test -c playwright.config.ts api/testcases.spec.ts ui/testcases.spec.ts --workers=10 --output=test-results-testcases
           # The linked-issue-key aggregate reads are testcase endpoints; unique ID, testcase lane.
-          npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-tail -g "TAI-A-22" --list
-          npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-tail -g "TAI-A-22"
+          # Keep this report separate: a second invocation otherwise overwrites the full repository
+          # API/UI report above, losing its test inventory and successful visual attachments.
+          PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report-testcase-issue-keys npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-tail -g "TAI-A-22" --list
+          PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report-testcase-issue-keys npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-tail -g "TAI-A-22"
       - name: Verify notification paging and unread counts
         working-directory: e2e
         env:
@@ -193,7 +198,7 @@ jobs:
         run: |
           npx playwright test -c playwright.config.ts api/model-studio.spec.ts ui/model-studio.spec.ts --workers=10 --output=test-results-model-studio --list
           npx playwright test -c playwright.config.ts api/model-studio.spec.ts ui/model-studio.spec.ts --workers=10 --output=test-results-model-studio
-      - name: Verify knowledge base Trash and subtree restore
+      - name: Verify knowledge base restore and exact human review
         working-directory: e2e
         env:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-kb
@@ -202,7 +207,7 @@ jobs:
           # and folder restore now brings back the subtree deleted with it, so the delete/restore
           # contract needs to run. Select the impacted tests only: the UI file also carries
           # intentionally red editor-validation tests (KBU-25/26).
-          selection="KB-A-05|KB-A-07|KB-A-21|KB-A-50|KB-A-51|KB-A-52|KB-A-53|KBU-08|KBU-09|KBU-10|KBU-10b|KBU-24|KBU-25|KBU-26"
+          selection="KB-A-05|KB-A-07|KB-A-21|KB-A-50|KB-A-51|KB-A-52|KB-A-53|KB-A-7[2-7]|KBU-08|KBU-09|KBU-10|KBU-10b|KBU-24|KBU-25|KBU-26|KBU-6[5-9]"
           npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts ui/knowledge-base.spec.ts --workers=10 --output=test-results-kb -g "$selection" --list
           npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts ui/knowledge-base.spec.ts --workers=10 --output=test-results-kb -g "$selection"
       - name: Verify scheduled runs end to end
@@ -246,9 +251,9 @@ jobs:
         env:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-mcp
         run: |
-          # Read-only MCP initialize/tools-list against this exact isolated build.
+          # Fresh granted discovery and the explicit unpublished-stage/human-apply lifecycle.
           # A passing source catalog does not establish the external client's deployment.
-          selection="a current session is served, and tools/list exposes the deployed create_testcase schema|disposable MCP agent create read update archive lifecycle preserves project and run boundaries"
+          selection="MCP-P07|a current session is served|disposable MCP agent create read update archive lifecycle preserves project and run boundaries|MCP list_suites|MCP suite description|MCP clone_test_suite"
           npx playwright test -c playwright.config.ts api/mcp.spec.ts --workers=10 --output=test-results-mcp -g "$selection" --list
           npx playwright test -c playwright.config.ts api/mcp.spec.ts --workers=10 --output=test-results-mcp -g "$selection"
       - name: Verify Approved-only native run attachments
@@ -257,6 +262,22 @@ jobs:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-approval
         run: |
           npx playwright test -c playwright.config.ts api/run-approval.spec.ts --output=test-results-approval --workers=1 -g "Approved-only native run attachments"
+      - name: Verify consent, truthful coverage and selected human publication
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-governed-changes
+        run: |
+          # These cases use the same migrated disposable application, including real human
+          # sessions and a separate external token client. No model key or customer records.
+          selection='MCP-P18|REQ-U-coverage|ZYR-P07|ZYR-A-69|ZYU-14 |ZYU-6[4-8] |ZYU-117 |ZYU-12[8-9] |ZYU-13[0-2] |ZYU-141 |linking a bug preserves original execution evidence|EXE-U-31 |EXE-U-31f |marking an execution Failed opens the bug dialog'
+          npx playwright test -c playwright.config.ts \
+            api/mcp.spec.ts ui/projects.spec.ts ui/requirements.spec.ts \
+            api/zyra.spec.ts ui/zyra.spec.ts api/bugs.spec.ts ui/executions.spec.ts \
+            --workers=10 --output=test-results-governed-changes -g "$selection" --list
+          npx playwright test -c playwright.config.ts \
+            api/mcp.spec.ts ui/projects.spec.ts ui/requirements.spec.ts \
+            api/zyra.spec.ts ui/zyra.spec.ts api/bugs.spec.ts ui/executions.spec.ts \
+            --workers=10 --output=test-results-governed-changes -g "$selection"
       - name: Verify existing native Run, execution, automation and evidence journeys
         working-directory: e2e
         env:

@@ -1,0 +1,131 @@
+ts-jest[config] (WARN)
+    The "ts-jest" config option "isolatedModules" is deprecated and will be removed in v30.0.0. Please use "isolatedModules: true" in /workspace/scratch/fb086055b433/Tesbooboo/Tesbo-Backend-Nest/tsconfig.json instead, see https://www.typescriptlang.org/tsconfig/#isolatedModules
+
+FAIL ../../assurance-working/suite-publication-before.spec.ts (5.446 s)
+  SEC-NATIVE-01 native suite publication authority
+    ✕ refuses missing/machine authority at every exposed native owner: undefined (8 ms)
+    ✕ refuses missing/machine authority at every exposed native owner: {"kind":"api_token"} (1 ms)
+    ✓ preserves an authorized human create and partial text edit (5 ms)
+    ✕ keeps an old Zyra suite-create operation unpublished and reports the expected human boundary (6 ms)
+    ✕ derives the suite principal from the authenticated transport, token=false (1 ms)
+    ✕ derives the suite principal from the authenticated transport, token=true (1 ms)
+
+  ● SEC-NATIVE-01 native suite publication authority › refuses missing/machine authority at every exposed native owner: undefined
+
+    expect(received).rejects.toMatchObject()
+
+    Received promise resolved instead of rejected
+    Resolved to value: {"description": "", "id": "22222222-2222-4222-8222-222222222222", "name": "Unreviewed suite", "parentId": null, "preconditions": "", "recursiveTestCaseCount": 0, "testCaseCount": 0}
+
+      34 |       () => f.native.createSuiteForUser(user, project, body, principal),
+      35 |       () => f.native.updateSuite(user, suite, body, principal)
+    > 36 |     ]) await expect(call()).rejects.toMatchObject({ response: { code: "HUMAN_REVIEW_REQUIRED" } });
+         |              ^
+      37 |     expect(f.query).not.toHaveBeenCalled();
+      38 |     expect(f.projectAccess).not.toHaveBeenCalled();
+      39 |     expect(f.suiteAccess).not.toHaveBeenCalled();
+
+      at expect (../Tesbooboo/Tesbo-Backend-Nest/node_modules/expect/build/index.js:113:15)
+      at suite-publication-before.spec.ts:36:14
+
+  ● SEC-NATIVE-01 native suite publication authority › refuses missing/machine authority at every exposed native owner: {"kind":"api_token"}
+
+    expect(received).rejects.toMatchObject()
+
+    Received promise resolved instead of rejected
+    Resolved to value: {"description": "", "id": "22222222-2222-4222-8222-222222222222", "name": "Unreviewed suite", "parentId": null, "preconditions": "", "recursiveTestCaseCount": 0, "testCaseCount": 0}
+
+      34 |       () => f.native.createSuiteForUser(user, project, body, principal),
+      35 |       () => f.native.updateSuite(user, suite, body, principal)
+    > 36 |     ]) await expect(call()).rejects.toMatchObject({ response: { code: "HUMAN_REVIEW_REQUIRED" } });
+         |              ^
+      37 |     expect(f.query).not.toHaveBeenCalled();
+      38 |     expect(f.projectAccess).not.toHaveBeenCalled();
+      39 |     expect(f.suiteAccess).not.toHaveBeenCalled();
+
+      at expect (../Tesbooboo/Tesbo-Backend-Nest/node_modules/expect/build/index.js:113:15)
+      at suite-publication-before.spec.ts:36:14
+
+  ● SEC-NATIVE-01 native suite publication authority › keeps an old Zyra suite-create operation unpublished and reports the expected human boundary
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 3
+    + Received  + 5
+
+      Array [
+    -   ObjectContaining {
+    -     "detail": StringContaining "No suite was created",
+    -     "title": "Could not create suite",
+    +   Object {
+    +     "actor": "agent",
+    +     "createdAt": "2026-11-20T02:29:45.595Z",
+    +     "detail": "Unreviewed suite",
+    +     "title": "Created suite",
+        },
+      ]
+
+      61 |     const result = await internal.applyZyraChatOperations(project, user, "session", [{ type: "create_suite", suiteName: "Unreviewed suite" }]);
+      62 |     expect(result.testcases).toEqual([]);
+    > 63 |     expect(result.activity).toEqual([expect.objectContaining({ title: "Could not create suite", detail: expect.stringContaining("No suite was created") })]);
+         |                             ^
+      64 |     const reply = internal.reconcileZyraReply({ actionType: "suite", reply: "Created the requested suites.",
+      65 |       operations: [{ type: "create_suite", suiteName: "Unreviewed suite" }] }, result);
+      66 |     expect(reply).toContain("Suite creation requires a human editing action");
+
+      at Object.<anonymous> (suite-publication-before.spec.ts:63:29)
+
+  ● SEC-NATIVE-01 native suite publication authority › derives the suite principal from the authenticated transport, token=false
+
+    expect(jest.fn()).toHaveBeenCalledWith(...expected)
+
+    - Expected
+    + Received
+
+      "33333333-3333-4333-8333-333333333333",
+      "11111111-1111-4111-8111-111111111111",
+      {"name": "Suite", "principal": {"kind": "human_session"}},
+    - {"kind": "human_session"},
+
+    Number of calls: 1
+
+      78 |     await controller.updateSuite(request as never, suite, body);
+      79 |     const principal = { kind: machine ? "api_token" : "human_session" };
+    > 80 |     expect(createSuiteForUser).toHaveBeenCalledWith(user, project, body, principal);
+         |                                ^
+      81 |     expect(updateSuite).toHaveBeenCalledWith(user, suite, body, principal);
+      82 |   });
+      83 | });
+
+      at suite-publication-before.spec.ts:80:32
+
+  ● SEC-NATIVE-01 native suite publication authority › derives the suite principal from the authenticated transport, token=true
+
+    expect(jest.fn()).toHaveBeenCalledWith(...expected)
+
+    - Expected
+    + Received
+
+      "33333333-3333-4333-8333-333333333333",
+      "11111111-1111-4111-8111-111111111111",
+      {"name": "Suite", "principal": {"kind": "human_session"}},
+    - {"kind": "api_token"},
+
+    Number of calls: 1
+
+      78 |     await controller.updateSuite(request as never, suite, body);
+      79 |     const principal = { kind: machine ? "api_token" : "human_session" };
+    > 80 |     expect(createSuiteForUser).toHaveBeenCalledWith(user, project, body, principal);
+         |                                ^
+      81 |     expect(updateSuite).toHaveBeenCalledWith(user, suite, body, principal);
+      82 |   });
+      83 | });
+
+      at suite-publication-before.spec.ts:80:32
+
+Test Suites: 1 failed, 1 total
+Tests:       5 failed, 1 passed, 6 total
+Snapshots:   0 total
+Time:        5.939 s
+Ran all test suites.
+Test results written to: ../../assurance-working/suite-publication-before-results.json

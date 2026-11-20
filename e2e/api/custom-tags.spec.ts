@@ -1,3 +1,4 @@
+import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
 import { exec, literal, scalar } from "../utils/psql";
 import {
@@ -107,7 +108,7 @@ test.describe("custom tags", () => {
   }
 
   async function createTestCase(data: Record<string, unknown> = {}, api: APIRequestContext = asOwner): Promise<any> {
-    const res = await api.post(testcasesUrl(), {
+    const res = await createTestcaseFixtureResponse(api, testcasesUrl(), {
       data: { title: `E2E Custom Tag Case ${Date.now()}${Math.floor(Math.random() * 1000)}`, ...data },
       failOnStatusCode: false,
     });
@@ -295,7 +296,7 @@ test.describe("custom tags", () => {
 
   test("a rename shows wherever the tag is used: the test case, a cached repository page, and Execution Report", async () => {
     const tag = await createTag({ name: tagName("Old") });
-    const testcase = await createTestCase({ customTagIds: [tag.id] });
+    const testcase = await createTestCase({ customTagIds: [tag.id], status: "Approved" });
     const run = await seedRun(asOwner, tenant!.mainProjectId, { name: `E2E Rename Run ${Date.now()}` });
     await addRunCases(asOwner, run.id, [testcase.id]);
     // Warm the cacheable unfiltered first page, so a stale cached name would be caught.
@@ -417,8 +418,8 @@ test.describe("custom tags", () => {
       createTag({ name: tagName("smoke") }),
       createTag({ name: tagName("regression") }),
     ]);
-    const tagged = await createTestCase({ customTagIds: [smoke.id, regression.id] });
-    const untagged = await createTestCase();
+    const tagged = await createTestCase({ customTagIds: [smoke.id, regression.id], status: "Approved" });
+    const untagged = await createTestCase({ status: "Approved" });
 
     const run = await seedRun(asOwner, tenant!.mainProjectId, { name: `E2E Custom Tags Run ${Date.now()}` });
     await addRunCases(asOwner, run.id, [tagged.id, untagged.id]);

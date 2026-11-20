@@ -48,9 +48,12 @@ export async function checkMcpConnection(
   }
   try {
     const { tools } = await rpc(1, "tools/list");
-    if (!Array.isArray(tools) || !tools.length || tools.some((tool) => !object(tool) || typeof tool.name !== "string" || !tool.name || !object(tool.inputSchema)) ||
-      new Set(tools.map((tool) => tool.name)).size !== tools.length || !tools.some((tool) => tool.name === "list_projects")) throw malformed();
-    // Discovery includes every tool regardless of scope. A genuine read verifies Read and project identity.
+    if (!Array.isArray(tools) || tools.some((tool) => !object(tool) || typeof tool.name !== "string" || !tool.name || !object(tool.inputSchema)) ||
+      new Set(tools.map((tool) => tool.name)).size !== tools.length) throw malformed();
+    if (!tools.some((tool) => tool.name === "list_projects")) {
+      throw new CheckError("Read permission was not verified. The approved credential does not expose the project read tool.");
+    }
+    // Discovery is filtered by the credential's grant. A real read verifies project identity.
     const read = await rpc(2, "tools/call", { name: "list_projects", arguments: {} });
     if (read.isError === true) throw new CheckError("The project read failed; Read permission was not verified.");
     if (read.isError !== false || !Array.isArray(read.content) || read.content.length !== 1 || !object(read.content[0]) ||

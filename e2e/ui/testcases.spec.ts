@@ -1,8 +1,12 @@
+import { issueMcpTestToken } from "../utils/mcp-access";
+import { stageAndApplyMcpTestcases, testcaseUpdateProposal } from "../utils/mcp-proposals";
+import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, request as pwRequest, test, type Locator, type Page } from "@playwright/test";
 import { env } from "../utils/env";
 import { testcaseEditState } from "../utils/testcase-edit-state";
+import { createProject, deleteProjects } from "../utils/screens-tenant";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 const STATE_PATH = path.join(__dirname, "../.auth/state.json");
@@ -13,6 +17,52 @@ function fieldControl(page: Page, label: string): Locator {
     `xpath=//label[normalize-space(text())="${label}"]/following-sibling::*[self::input or self::select or self::textarea]`,
   );
 }
+
+test("review approval shows the saved snapshot, refuses stale content, and preserves unsaved edits", async ({ page }) => {
+  const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  const title = `E2E exact UI review ${Date.now()}`;
+  const created = await (await api.post(`/api/projects/${ctx.projectId}/testcases`, {
+    data: { title, attachments: "Original reviewed Notes" },
+  })).json();
+  const endpoint = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
+  try {
+    await page.goto(`/projects/${ctx.projectId}/testcases`);
+    await page.getByRole("button", { name: title, exact: true }).click();
+    const panel = page.locator("aside");
+    const notes = panel.getByPlaceholder("Add notes, links to screenshots, logs, or reference docs");
+    await expect(notes).toHaveValue("Original reviewed Notes");
+    await notes.fill("Saved for exact review");
+    await expect(panel.getByRole("button", { name: "Review for approval" })).toBeDisabled();
+    await panel.getByRole("button", { name: "Save changes", exact: true }).click();
+    await expect(panel.getByText("Test case updated successfully.")).toBeVisible();
+    await panel.getByRole("button", { name: "Review for approval" }).click();
+    const review = page.getByRole("dialog", { name: "Review saved test case" });
+    await expect(review.getByText("Saved for exact review", { exact: true })).toBeVisible();
+    const initial = await (await api.get(endpoint)).json();
+    expect((await api.put(endpoint, { data: { expectedRevision: initial.editRevision, attachments: "Another reviewer changed these Notes" } })).ok()).toBe(true);
+    await review.getByRole("button", { name: "Approve this version" }).click();
+    await expect(review.getByRole("alert")).toBeVisible();
+    await expect(review.getByRole("button", { name: "Approve this version" })).toBeDisabled();
+    expect((await (await api.get(endpoint)).json()).approvalCurrent).toBe(false);
+    expect(await (await api.get(`${endpoint}/approvals`)).json()).toHaveLength(0);
+    await review.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(notes).toHaveValue("Saved for exact review");
+    await panel.getByRole("button", { name: "Review for approval" }).click();
+    await expect(review.getByText("Another reviewer changed these Notes", { exact: true })).toBeVisible();
+    await review.getByRole("button", { name: "Approve this version" }).click();
+    await expect(review).toHaveCount(0);
+    await expect(panel.getByText("The reviewed version was approved.")).toBeVisible();
+    const approved = await (await api.get(endpoint)).json();
+    expect(approved).toMatchObject({ status: "Approved", approvalCurrent: true, attachments: "Another reviewer changed these Notes" });
+    expect(await (await api.get(`${endpoint}/approvals`)).json()).toHaveLength(1);
+    await notes.fill("Unsaved follow-up work");
+    await expect(panel.getByRole("button", { name: "Review for approval" })).toBeDisabled();
+    await expect(notes).toHaveValue("Unsaved follow-up work");
+  } finally {
+    await api.delete(endpoint, { failOnStatusCode: false });
+    await api.dispose();
+  }
+});
 
 test("stale editor save retains unsaved Notes until an explicit reload and review", async ({ page }) => {
   // UI project's default request context points at the web host; this test
@@ -61,44 +111,38 @@ test("stale editor save retains unsaved Notes until an explicit reload and revie
   }
 });
 
-/** Verify the existing editor's Notes textarea after an authorized MCP write,
- * then ensure the MCP omission path does not overwrite a subsequent human edit.
- * Only disposable smoke-tenant records are used.
- */
-test("MCP Notes round-trip through editor, preserve human edit, and explicitly clear", async ({ page, request }) => {
+/** Exercise Notes through reviewed MCP publication and the native editor on disposable records. */
+test("MCP Notes round-trip through editor, preserve human edit, and explicitly clear", async ({ page }) => {
   const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
   const mcp = await pwRequest.newContext({
     baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] },
   });
+  let projectId: string | undefined;
   let tokenId: string | undefined;
   let caseId: string | undefined;
   const title = `E2E MCP to UI Notes ${Date.now()}`;
   const firstNotes = "MCP technical context: café 🧪";
   const humanNotes = "Reviewer confirmed fixture and build.";
-  const call = async (token: string, name: string, args: Record<string, unknown>) => {
-    const response = await mcp.post(`/api/projects/${ctx.projectId}/mcp`, {
-      headers: { Authorization: `Bearer ${token}` },
-      data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } },
-    });
-    expect(response.ok()).toBeTruthy();
-    const body = await response.json();
-    expect(body.error).toBeUndefined();
-    expect(body.result.isError).toBe(false);
-    return JSON.parse(body.result.content[0].text);
-  };
   try {
-    const tokenResponse = await api.post(`/api/projects/${ctx.projectId}/apikeys`, {
+    // This exact-review round trip owns its project dependencies. The parallel testcase API
+    // suite intentionally creates/deletes suites; sharing its project correctly invalidates a
+    // previously reviewed proposal and makes this positive Notes scenario nondeterministic.
+    projectId = (await createProject(api, { name: `E2E Notes review ${Date.now()}` })).id;
+    const tokenResponse = await issueMcpTestToken(api, `/api/projects/${projectId}/apikeys`, {
       data: { name: `E2E Notes editor token ${Date.now()}`, scopes: ["write", "read"] },
     });
     expect(tokenResponse.ok()).toBeTruthy();
     const tokenInfo = await tokenResponse.json();
     tokenId = tokenInfo.id;
     const token = tokenInfo.token as string;
-    const created = await call(token, "create_testcase", { title, attachments: firstNotes });
-    caseId = created.id;
+    const { published } = await stageAndApplyMcpTestcases(api, mcp, token, projectId, [
+      { opType: "create", draft: { title, attachments: firstNotes } }
+    ]);
+    const createdId = published.testcases[0].id as string;
+    caseId = createdId;
     expect(caseId).toBeTruthy();
 
-    await page.goto(`/projects/${ctx.projectId}/testcases`);
+    await page.goto(`/projects/${projectId}/testcases`);
     await expect(page.getByRole("button", { name: title })).toBeVisible();
     await page.getByRole("button", { name: title }).click();
     const panel = page.locator("aside");
@@ -109,15 +153,19 @@ test("MCP Notes round-trip through editor, preserve human edit, and explicitly c
     await expect(panel.getByText("Test case updated successfully.")).toBeVisible();
 
     const persisted = async () => {
-      const response = await api.get(`/api/projects/${ctx.projectId}/testcases/${caseId}`);
+      const response = await api.get(`/api/projects/${projectId}/testcases/${caseId}`);
       expect(response.ok()).toBeTruthy();
       return response.json();
     };
     expect((await persisted()).attachments).toBe(humanNotes);
 
-    await call(token, "update_testcase", { testcaseId: caseId, description: "Readable test intent" });
+    await stageAndApplyMcpTestcases(api, mcp, token, projectId, [
+      await testcaseUpdateProposal(api, projectId, createdId, { description: "Readable test intent" })
+    ]);
     expect((await persisted()).attachments).toBe(humanNotes);
-    await call(token, "update_testcase", { testcaseId: caseId, attachments: "" });
+    await stageAndApplyMcpTestcases(api, mcp, token, projectId, [
+      await testcaseUpdateProposal(api, projectId, createdId, { attachments: "" })
+    ]);
     const cleared = await persisted();
     expect(cleared.attachments).toBe("");
     expect(cleared.description).toBe("Readable test intent");
@@ -126,8 +174,9 @@ test("MCP Notes round-trip through editor, preserve human edit, and explicitly c
     await page.getByRole("button", { name: title }).click();
     await expect(page.locator("aside").getByPlaceholder("Add notes, links to screenshots, logs, or reference docs")).toHaveValue("");
   } finally {
-    if (caseId) await api.delete(`/api/projects/${ctx.projectId}/testcases/${caseId}`, { failOnStatusCode: false });
-    if (tokenId) await api.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    if (caseId) await api.delete(`/api/projects/${projectId}/testcases/${caseId}`, { failOnStatusCode: false });
+    if (tokenId) await api.delete(`/api/projects/${projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    await deleteProjects(api, [projectId]);
     await mcp.dispose();
     await api.dispose();
   }
@@ -426,10 +475,7 @@ test.describe("test case creation", () => {
     }
   });
 
-  // "[MCP] Test case created by MCP is not adding Severity" — the MCP create_testcase tool stored
-  // whatever severity string it was sent ("Major"), which this dropdown can't select, so the detail
-  // panel showed "Select". See the matching api/mcp.spec.ts block for the refusal side.
-  test("a test case created through MCP with a severity shows that severity in Test Case Detail", async ({ page }) => {
+  test("a test case published from an MCP proposal shows canonical severity in Test Case Detail", async ({ page }) => {
     const title = `UI MCP severity test case ${Date.now()}`;
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
     // Cookie-free: AuthMiddleware prefers a session cookie over the bearer token, and a real MCP
@@ -439,23 +485,16 @@ test.describe("test case creation", () => {
     let testcaseId = "";
     try {
       const tokenBody = await (
-        await api.post(`/api/projects/${ctx.projectId}/apikeys`, { data: { name: `E2E UI MCP severity ${Date.now()}`, scopes: ["write"] } })
+        await issueMcpTestToken(api, `/api/projects/${ctx.projectId}/apikeys`, { data: { name: `E2E UI MCP severity ${Date.now()}`, scopes: ["write"] } })
       ).json();
       tokenId = tokenBody.id;
-      const rpc = await mcpApi.post(`/api/projects/${ctx.projectId}/mcp`, {
-        headers: { Authorization: `Bearer ${tokenBody.token}` },
-        data: {
-          jsonrpc: "2.0",
-          id: 1,
-          method: "tools/call",
-          params: { name: "create_testcase", arguments: { title, severity: "high", priority: "P1", component: "Buzz" } },
-        },
-      });
-      const body = await rpc.json();
-      expect(body.error).toBeUndefined();
-      const created = JSON.parse(body.result.content[0].text);
-      testcaseId = created.id;
-      expect(created.severity).toBe("High");
+      const { published } = await stageAndApplyMcpTestcases(api, mcpApi, tokenBody.token, ctx.projectId, [
+        { opType: "create", draft: { title, severity: "high", priority: "P1", component: "Buzz" } }
+      ]);
+      testcaseId = published.testcases[0].id;
+      const response = await api.get(`/api/projects/${ctx.projectId}/testcases/${testcaseId}`);
+      expect(response.ok(), await response.text()).toBeTruthy();
+      expect((await response.json()).severity).toBe("High");
 
       await page.goto(`/projects/${ctx.projectId}/testcases`);
       await page.getByRole("button", { name: title }).click();
@@ -1267,10 +1306,10 @@ test.describe("Not set priority and the added Type / Automation Type values", ()
     let cycleId = "";
     try {
       const notSet = await (
-        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker NotSet ${stamp}`, priority: "Not set", type: "Exploratory", status: "Approved" } })
+        await createTestcaseFixtureResponse(api, `/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker NotSet ${stamp}`, priority: "Not set", type: "Exploratory", status: "Approved" } })
       ).json();
       const p1 = await (
-        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker P1 ${stamp}`, priority: "P1", status: "Approved" } })
+        await createTestcaseFixtureResponse(api, `/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker P1 ${stamp}`, priority: "P1", status: "Approved" } })
       ).json();
       caseIds.push(notSet.id, p1.id);
       const cycle = await (

@@ -6,7 +6,7 @@ import { useParams } from "@/lib/routeParams";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   closeZyraTask,
-  createSuite,
+  ApiError,
   deleteZyraTaskDraft,
   getJiraStatus,
   getLinearStatus,
@@ -223,6 +223,8 @@ export default function ZyraTaskDetailPage() {
   const [targetSuiteId, setTargetSuiteId] = useState("");
   const [newSuiteName, setNewSuiteName] = useState("");
   const [savingDraftIndexes, setSavingDraftIndexes] = useState<number[] | null>(null);
+  const [savingProposal, setSavingProposal] = useState<Pick<ZyraTask, "proposalRevision" | "proposalSnapshot"> | null>(null);
+  const [snapshotOpen, setSnapshotOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -230,6 +232,7 @@ export default function ZyraTaskDetailPage() {
   // A save failure renders inside the Save modal: the page-level `error` banner sits under the
   // modal's backdrop, so a failed save looked like the button had done nothing.
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveNeedsReload, setSaveNeedsReload] = useState(false);
   const pollInFlightRef = useRef(false);
   // The task's own language (set server-side from the script of what the user typed); English
   // until the task has loaded, or when it carries none.
@@ -366,16 +369,26 @@ export default function ZyraTaskDetailPage() {
     saveMode === "none" ||
     (saveMode === "existing" && Boolean(targetSuiteId)) ||
     (saveMode === "new" && !newSuiteNameError);
-  const canSave = !working && (savingDraftIndexes || selectedDrafts).length > 0 && saveTargetValid;
+  const canSave = !working && !saveNeedsReload && Boolean(savingProposal?.proposalRevision) &&
+    (savingDraftIndexes || selectedDrafts).length > 0 && saveTargetValid;
 
   function openSaveModal(indexes?: number[]) {
+    if (!task?.proposalRevision || !task.proposalSnapshot) {
+      setError("The current proposal could not be verified. Reload this task before reviewing it.");
+      return;
+    }
     setSavingDraftIndexes(indexes || selectedDrafts);
+    // Keep the revision paired with the content the reviewer opened. Background task updates
+    // must never silently authorize a newer proposal while this decision is visible.
+    setSavingProposal({ proposalRevision: task.proposalRevision, proposalSnapshot: task.proposalSnapshot });
     // Every save starts from "Select suite": a target left over from a cancelled attempt would
     // otherwise be one click from filing these drafts somewhere nobody chose this time.
     setSaveMode("");
     setTargetSuiteId("");
     setNewSuiteName("");
     setSaveError(null);
+    setSaveNeedsReload(false);
+    setSnapshotOpen(false);
     setSavingOpen(true);
   }
 
@@ -453,7 +466,7 @@ export default function ZyraTaskDetailPage() {
   }
 
   async function handleSave() {
-    if (!task || !canSave) return;
+    if (!task || !canSave || !savingProposal?.proposalRevision) return;
     const indexes = savingDraftIndexes || selectedDrafts;
     setWorking(true);
     setMessage(null);
@@ -462,21 +475,21 @@ export default function ZyraTaskDetailPage() {
     try {
       // Only the chosen path contributes a suite, so a pick abandoned by switching to "No suite"
       // can't ride along.
-      let suiteId = saveMode === "existing" ? targetSuiteId : "";
-      if (saveMode === "new") {
-        const suite = await createSuite(projectId, { name: newSuiteName.trim() });
-        suiteId = suite.id;
-      }
       const result = await saveZyraTask(projectId, task.id, {
+        expectedProposalRevision: savingProposal.proposalRevision,
         selectedDraftIndexes: indexes,
-        suiteId: suiteId || undefined,
+        suiteId: saveMode === "none" ? null : saveMode === "existing" ? targetSuiteId : undefined,
+        // The native Save transaction creates a requested suite only after revision validation.
+        suiteName: saveMode === "new" ? newSuiteName.trim() : undefined,
       });
       setMessage(t("task.saved", { n: result.savedCount }));
       setSavingOpen(false);
       setSavingDraftIndexes(null);
+      setSavingProposal(null);
       await loadData();
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : t("task.err.save"));
+      setSaveNeedsReload(!(err instanceof ApiError) || err.status === 409 || err.status >= 500);
     } finally {
       setWorking(false);
     }
@@ -956,9 +969,14 @@ export default function ZyraTaskDetailPage() {
         <div className="space-y-4">
           <p className="text-sm text-[var(--muted)]">{t("task.saveModal.body", { n: (savingDraftIndexes || selectedDrafts).length })}</p>
           {saveError && <p role="alert" className="rounded-lg border border-[var(--error)]/40 bg-[var(--error-soft)] px-3 py-2 text-sm text-[var(--error-foreground)]">{saveError}</p>}
+          {saveNeedsReload && <p className="text-sm text-[var(--muted)]">Close this dialog and reload the task to check what was saved before reviewing again.</p>}
+          {savingProposal?.proposalSnapshot && <details open={snapshotOpen} onToggle={(event) => setSnapshotOpen(event.currentTarget.open)} className="rounded-lg border border-[var(--border)] p-3 text-sm">
+            <summary>Inspect the saved proposal and target content</summary>
+            {snapshotOpen && <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs">{JSON.stringify(savingProposal.proposalSnapshot, null, 2)}</pre>}
+          </details>}
           <Field>
             <FieldLabel>{t("task.suiteTarget")}</FieldLabel>
-            <Select value={saveMode} onChange={(event) => setSaveMode(event.target.value as SaveMode)}>
+            <Select value={saveMode} disabled={working} onChange={(event) => setSaveMode(event.target.value as SaveMode)}>
               {/* Disabled so it can't be re-picked once a real target is chosen. */}
               <option value="" disabled>{t("task.selectSuite")}</option>
               <option value="none">{t("task.noSuite")}</option>
@@ -969,7 +987,7 @@ export default function ZyraTaskDetailPage() {
           {saveMode === "existing" && (
             <Field>
               <FieldLabel>{t("task.selectExistingSuite")}</FieldLabel>
-              <Select value={targetSuiteId} onChange={(event) => setTargetSuiteId(event.target.value)}>
+              <Select value={targetSuiteId} disabled={working} onChange={(event) => setTargetSuiteId(event.target.value)}>
                 <option value="" disabled>{t("task.selectASuite")}</option>
                 {suites.map((suite) => <option key={suite.id} value={suite.id}>{suite.name}</option>)}
               </Select>
@@ -979,7 +997,7 @@ export default function ZyraTaskDetailPage() {
           {saveMode === "new" && (
             <Field>
               <FieldLabel>{t("task.newSuiteName")}</FieldLabel>
-              <Input value={newSuiteName} onChange={(event) => setNewSuiteName(event.target.value)} placeholder={t("task.newSuitePlaceholder")} maxLength={SUITE_NAME_MAX_LENGTH} />
+              <Input value={newSuiteName} disabled={working} onChange={(event) => setNewSuiteName(event.target.value)} placeholder={t("task.newSuitePlaceholder")} maxLength={SUITE_NAME_MAX_LENGTH} />
               {/* Shown once something is typed, so a freshly opened field isn't already in error. */}
               {newSuiteName && newSuiteNameError && <FieldError>{newSuiteNameError}</FieldError>}
             </Field>

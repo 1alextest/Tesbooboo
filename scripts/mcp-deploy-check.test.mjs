@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { REQUIRED_TOOLS, catalogFingerprint, catalogGaps, schemaGaps, summarize } from "./mcp-deploy-check.mjs";
+import { REQUIRED_TOOLS, PROPOSAL_TOOLS, catalogFingerprint, catalogGaps, schemaGaps, summarize } from "./mcp-deploy-check.mjs";
 
 const text = { type: "string" };
 const citations = { type: "array" };
 const caseFields = { title: text, attachments: text, postconditions: text, estimatedDuration: text, sourceRefs: citations };
-const authoredFields = { ...caseFields, expectedRevision: text };
 
 function tool(name, properties = {}, nested = false) {
   // Clone per tool: tests mutate the returned schema to simulate a regression, and a shared
@@ -19,13 +18,10 @@ function tool(name, properties = {}, nested = false) {
   };
 }
 
-function validTools() {
-  return [
+function validTools(preview = false) {
+  const tools = [
     tool("list_projects"),
     tool("get_testcase", caseFields),
-    tool("create_testcase", caseFields),
-    tool("update_testcase", authoredFields),
-    tool("bulk_create_testcases", caseFields, true),
     tool("list_qa_graph_changes"),
     tool("capture_qa_graph_change"),
     tool("preview_behavior_model_draft"),
@@ -33,8 +29,19 @@ function validTools() {
     tool("save_behavior_model_revision", { modelId: text, baseRevisionId: text, model: { type: "object" } }),
     tool("link_behavior_model_case", { modelId: text, revisionId: text, testcaseId: text, elementIds: { type: "array" } }),
     tool("get_behavior_model_coverage", { modelId: text }),
-    tool("archive_behavior_model", { modelId: text })
+    tool("archive_behavior_model", { modelId: text }),
+    tool("run_behavior_model", { modelId: text, revisionId: text })
   ];
+  if (preview) {
+    const candidate = () => ({ type: "object", properties: structuredClone(caseFields) });
+    tools.push({ name: "stage_testcase_changes", inputSchema: { type: "object", required: ["requestKey", "operations"], properties: {
+      requestKey: text, operations: { type: "array", items: { oneOf: [
+        { type: "object", required: ["opType", "draft"], properties: { opType: { const: "create" }, draft: candidate() } },
+        { type: "object", required: ["opType", "testcaseId", "expectedRevision", "fields"], properties: { opType: { enum: ["update", "archive"] }, testcaseId: text, expectedRevision: text, fields: candidate() } },
+      ] } }
+    } } }, tool("list_testcase_proposals"), tool("get_testcase_proposal_task", { taskId: text }));
+  }
+  return tools;
 }
 
 test("a complete catalog and the required field schemas have no gaps", () => {
@@ -55,32 +62,46 @@ test("catalog gaps identify missing tools, duplicates and unnamed entries", () =
   assert.match(catalogGaps(unnamed).errors.join("\n"), /without a name/);
 });
 
-test("schema gaps catch missing citations, estimates and revision guards", () => {
-  const tools = validTools().map((entry) => {
-    if (entry.name === "create_testcase") delete entry.inputSchema.properties.sourceRefs;
-    if (entry.name === "update_testcase") delete entry.inputSchema.properties.expectedRevision;
-    if (entry.name === "bulk_create_testcases") delete entry.inputSchema.properties.testcases.items.properties.estimatedDuration;
-    return entry;
-  });
+test("proposal schemas catch missing citations, estimates and revision guards", () => {
+  const tools = validTools(true);
+  const branches = tools.find(entry => entry.name === "stage_testcase_changes").inputSchema.properties.operations.items.oneOf;
+  delete branches[0].properties.draft.properties.sourceRefs;
+  delete branches[1].properties.expectedRevision;
+  delete branches[1].properties.fields.properties.estimatedDuration;
   const errors = schemaGaps(tools).errors.join("\n");
-  assert.match(errors, /create_testcase: missing field sourceRefs/);
-  assert.match(errors, /update_testcase: missing field expectedRevision/);
-  assert.match(errors, /bulk_create_testcases: missing field estimatedDuration/);
+  assert.match(errors, /stage_testcase_changes: missing field sourceRefs/);
+  assert.match(errors, /stage_testcase_changes: missing field expectedRevision/);
+  assert.match(errors, /stage_testcase_changes: missing field estimatedDuration/);
 });
 
-test("schema gaps catch missing Notes/Postconditions on single and bulk creates", () => {
-  const tools = validTools().map((entry) => {
-    if (entry.name !== "create_testcase" && entry.name !== "bulk_create_testcases") return entry;
-    const properties = entry.name === "bulk_create_testcases"
-      ? entry.inputSchema.properties.testcases.items.properties
-      : entry.inputSchema.properties;
-    if (entry.name === "create_testcase") delete properties.postconditions;
-    else delete properties.attachments;
-    return entry;
-  });
+test("proposal schemas catch missing Notes/Postconditions in create and update operations", () => {
+  const tools = validTools(true);
+  const branches = tools.find(entry => entry.name === "stage_testcase_changes").inputSchema.properties.operations.items.oneOf;
+  delete branches[0].properties.draft.properties.postconditions;
+  delete branches[1].properties.fields.properties.attachments;
   const errors = schemaGaps(tools).errors.join("\n");
-  assert.match(errors, /create_testcase: missing field postconditions/);
-  assert.match(errors, /bulk_create_testcases: missing field attachments/);
+  assert.match(errors, /stage_testcase_changes: missing field postconditions/);
+  assert.match(errors, /stage_testcase_changes: missing field attachments/);
+});
+
+test("the default-off proposal capability is explicit and cannot be replaced by direct publishers", () => {
+  assert.deepEqual(catalogGaps(validTools()).errors, []);
+  assert.deepEqual(catalogGaps(validTools(), { requireProposalPreview: true }).errors, PROPOSAL_TOOLS.map(name => `missing tool: ${name}`));
+  assert.deepEqual(catalogGaps(validTools(true), { requireProposalPreview: true }).errors, []);
+  assert.deepEqual(schemaGaps(validTools(true)).errors, []);
+  for (const name of ["create_testcase", "create_suite", "update_suite"]) {
+    assert.ok(catalogGaps([...validTools(), tool(name, caseFields)]).errors.includes(`direct publication tool must not be advertised: ${name}`));
+  }
+});
+
+test("proposal deduplication and target revisions are required, not merely documented properties", () => {
+  const tools = validTools(true);
+  const schema = tools.find(entry => entry.name === "stage_testcase_changes").inputSchema;
+  schema.required = ["operations"];
+  schema.properties.operations.items.oneOf[1].required = ["opType", "testcaseId", "fields"];
+  const errors = schemaGaps(tools).errors.join("\n");
+  assert.match(errors, /requestKey and operations must be required/);
+  assert.match(errors, /update expectedRevision must be required/);
 });
 
 test("a catalog matching the server's reported fingerprint passes", () => {

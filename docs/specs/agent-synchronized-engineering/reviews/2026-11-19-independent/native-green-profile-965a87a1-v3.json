@@ -1,0 +1,506 @@
+{
+  "version": "tesbo-native-review-trace/1.0",
+  "application": "1alextest/Tesbooboo",
+  "scope": "Bounded native governance integration; eleven explicitly declared contract rows, not all canonical requirements",
+  "source": "965a87a13d2669354598f8d4b912f36fdb148867",
+  "tree": "b3c497bdb7a43cd43e8d0535f663c542cba88186",
+  "required_contracts": [
+    "N01",
+    "N02",
+    "N03",
+    "N04",
+    "N05",
+    "N06",
+    "N07",
+    "N08",
+    "N09",
+    "N10",
+    "N11"
+  ],
+  "canonical_files": {
+    "00_README.md": "43eb372cc28ce482b037301173e7afd783049db0e5fc1974d6afe75ac66cd0d2",
+    "01_PRODUCT_REQUIREMENTS.md": "515c2230b0c3859156a9532dd8d833a28705f53113f8d84cd00e1db96daa8cae",
+    "02_WORKFLOW_AND_UX_SPEC.md": "e7d01ba202da5572198e303416f4e3ea7a3956dbf99bd62b61acfe94e4639452",
+    "03_TECHNICAL_DESIGN.md": "22630a7bbfa3626354f3570e2f4018b42e696cedf2e72c862c1ef4c78550d5f3",
+    "04_MCP_API_CONTRACTS.md": "5893a48fe504a8d5c6b47bb552c493685e950fab62d44334702a92edc7c9474d",
+    "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md": "854b03a1b138520269950cad9be31a6379692ad0ac70617e7a422eb543f35aa3",
+    "06_IMPLEMENTATION_AGENT_BRIEF.md": "823c73b774a5462b6a1ca6b4d2467c4a5b6d4901a02c642e89ad6a2edc981770",
+    "07_UI_DESIGN_TASKS.md": "72347025fc2530da6a3bd10d0d0b32af2ec4d3efd754f7c4fd31606c613a1980"
+  },
+  "source_files": {
+    "Tesbo-Backend-Nest/src/automation/automation.service.ts": "7f65f3217e132a19daf8aa940b9c3fd315c1810e8ec0c67ca070c1f03f8b0ff0",
+    "Tesbo-Backend-Nest/src/behavior-graph/model-studio-repository.ts": "6eea2fb02f143f669f78c4cd86fd720219054eb1352dd7902e8ae17af5ab313d",
+    "Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.db.spec.ts": "a60eeddd8f6b0b7f99d51f724a83fada572d9bcdce747957d22c8e640979fea8",
+    "Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.spec.ts": "e33b55910e0eb27da5189f2cc6af9c68afd25bfec1c4574d6f956f7dd8e41eec",
+    "Tesbo-Backend-Nest/src/common/testcase-publication.policy.ts": "90f2accd42b37f5c8476833cd362646728c681ac8a91b73c9c6424ce6d8203c0",
+    "Tesbo-Backend-Nest/src/legacy/approved-run-cases.db.spec.ts": "9c9d3b645fbf7e01cb8b41fc98ec4a2cb6909c4de5a33edc8280ddaa8969c94f",
+    "Tesbo-Backend-Nest/src/legacy/bug-link-finalization.spec.ts": "b9f68ff09db209eb6381bf388c8598ae5c9cbff88028b12b02dd3700d286e7cc",
+    "Tesbo-Backend-Nest/src/legacy/bug-link-relationships.spec.ts": "cc063f088f0b3044022ed96c5a7b640eedb3e254c9ffc34c9294678d40f54d82",
+    "Tesbo-Backend-Nest/src/legacy/bug-metadata-writes.db.spec.ts": "26c1874cd3745e53c808f27a922e946669b5df2984686854fe97e3999e0f0c8c",
+    "Tesbo-Backend-Nest/src/legacy/knowledge-document-revision.ts": "03d6e853d0fa6236ef78a3688d9f89ae31c515a8ae177123b55ac865a823159f",
+    "Tesbo-Backend-Nest/src/legacy/knowledge-document-writes.db.spec.ts": "5b360ea1565280e6c02a991cf22e84f1150c21441e8258bc1dc4d8faf9ee1d57",
+    "Tesbo-Backend-Nest/src/legacy/legacy.controller.ts": "c5725581c49f0ab2f07ec663f2935acd425aec711d6f0d0050b96bdf47eda455",
+    "Tesbo-Backend-Nest/src/legacy/legacy.service.ts": "e51f779469455c818bc274cf11be0716445c8a9558e80b0257336881bc8f8104",
+    "Tesbo-Backend-Nest/src/legacy/suite-publication.spec.ts": "f088d5fe7f0abe0547e5ba4da3e2d740ade4a994146eb60c42d9a40c17ad4b1f",
+    "Tesbo-Backend-Nest/src/legacy/testcase-proposal-review.db.spec.ts": "1b2b3cfdfe7093ec9ad3889f44fe6babdde9b9ec9f6dc97153c4676eae6ce853",
+    "Tesbo-Backend-Nest/src/mcp/mcp-publication.spec.ts": "6220dfc4350f534a1b042b5b88a177bb2f22b088c29f3b63878255a3b432d631",
+    "Tesbo-Backend-Nest/src/mcp/mcp.service.spec.ts": "10a0a3b09e463c3c57c349386a6828584d04fd7eb56554010a72806a4679e0fa",
+    "Tesbo-Backend-Nest/src/mcp/mcp.service.ts": "6a171831791944ab3ee1f85b1fe1f60a4210e4baa85791633a0fe4d2602b1533",
+    "Tesbo-Backend-Nest/src/mcp/mcp.tools.ts": "810177d5684fe7498e0068f8ef2ea9d23171add241b4e0d07d0807e3b2aeab85",
+    "Tesbo-Backend-Nest/src/rag/rag-ingestion.service.ts": "f9610c2c2d772f6c71abe28054debf156e6890bd9e3eb7bcab875d6c1113a3b5",
+    "Tesbo-Backend-Nest/src/rag/rag-retrieval.service.ts": "a69c5ad0e9322d4dcdd0c930257af40b4e5ca00be303944e11a8b3610d22bab6",
+    "Tesbo-Frontend/app/(app)/projects/[id]/cycles/[cycleId]/execute/[executionId]/page.tsx": "fe24e34cad15884591f87c67b6dcbf202a47e00e454913921508474cdba3c1ae",
+    "Tesbo-Frontend/app/(app)/projects/[id]/knowledge-base/documents/[documentId]/page.tsx": "dc29f2898a544c4a068d81bdd4a56ac967774c1ab257fadcecff1b3fd2e2a7ae",
+    "Tesbo-Frontend/app/(app)/projects/[id]/model-studio/page.tsx": "6097f407a914d2b11852d618bb7c1337bb657867b5fc2bca7faa985839dcbe4d",
+    "Tesbo-Frontend/app/(app)/projects/[id]/testcases/page.tsx": "ec41bc10387bc916f9dd65bf285f29cf0516dcad0f3d9ea17445a3790e5a3dc4",
+    "Tesbo-Frontend/components/model-studio/model-run-intent.ts": "bec1eb70ccf2b07a6aca16b86073d2512b6faf75bf9de4ab969b719816a786ed",
+    "Tesbo-Frontend/lib/api.ts": "b8f6f6fdf4ce97aca68824b9eae3b08d22cbdb6c0abf56989429f3f74b5a492d",
+    "Tesbo-Frontend/lib/documentWriteQueue.ts": "5d09445e48eddd01e22d15cf8fb63600054523256558fd32fa070048bcf54b78",
+    "docs/specs/agent-synchronized-engineering/design.md": "fdac1162f9de4fea4db3ded625419b72d3abb47ed52887b5a7ab4b2976255237",
+    "docs/specs/agent-synchronized-engineering/implementation-plan.md": "60ba8f581af3f033ab709fd5d33e7fbbaa93913d1b6b74e5359835d6f6aa90be",
+    "e2e/api/mcp.spec.ts": "6380cd15ce0186435069c2ed4bdbccd6920967489d2beb52f8127191a08519f5",
+    "e2e/api/model-studio.spec.ts": "4378bf72118f500789f6cea3b77d61f12fe6b4c777760161444346185e2e8479",
+    "e2e/api/testcases.spec.ts": "73ab7089c9ba34b71c0d931cacfac1a04fadb584e0d59be8c3916439b9fc5c10",
+    "e2e/api/zyra.spec.ts": "f6d2371a86486c8b4f3009267b99c07a2a3a279f865f8737d8c0bc025f582311",
+    "e2e/ui/knowledge-base.spec.ts": "7b8040e8b0de29cc5cd51752b05f1997b3758c64fe761616fa6ea4e3aba1a687",
+    "e2e/ui/model-studio.spec.ts": "ed7adcb73f69f4005699d300c0421aabea859ecb2339a2ce9588c76658cd6666",
+    "e2e/ui/testcases.spec.ts": "8da39b6f2d54ba5548bc42d5e77b22e0ca299af9e18d867d6e8258fc22dc4892",
+    "scripts/document-write-queue.test.mjs": "b89c71d8c9c23f4aa5202f219c0eb4a39c823fb725d88408188f9421307d1ecc",
+    "scripts/mcp-deploy-check.mjs": "119f6e81851c416372674cc1aa44b940edaf7cf66f3e3a19c5721f920383ef5d",
+    "scripts/model-run-recovery.test.mjs": "e56faca1051361c7f7db40df71381ebb14c21e2e96fa17a68403b0414e8e468a",
+    "Tesbo-Frontend/app/(app)/projects/[id]/cycles/[cycleId]/page.tsx": "ed3628e7313841bd3c36904033b1c21dcf0bb23b71472b8fa8c1f15e7e4ed021"
+  },
+  "contracts": [
+    {
+      "id": "N01",
+      "meaning": "Exact case and dependency review, semantic invalidation and current-review run admission",
+      "owner": "LegacyService native testcase/run owners",
+      "canonical": [
+        {
+          "file": "01_PRODUCT_REQUIREMENTS.md",
+          "id": "FR-032"
+        },
+        {
+          "file": "01_PRODUCT_REQUIREMENTS.md",
+          "id": "FR-037"
+        }
+      ],
+      "design": [
+        "docs/specs/agent-synchronized-engineering/design.md"
+      ],
+      "tasks": [
+        "docs/specs/agent-synchronized-engineering/implementation-plan.md"
+      ],
+      "writers": [
+        "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "Tesbo-Backend-Nest/src/legacy/legacy.controller.ts",
+        "Tesbo-Backend-Nest/src/common/testcase-publication.policy.ts"
+      ],
+      "consumers": [
+        "Tesbo-Backend-Nest/src/automation/automation.service.ts",
+        "Tesbo-Backend-Nest/src/behavior-graph/model-studio-repository.ts"
+      ],
+      "proofs": [
+        "Tesbo-Backend-Nest/src/legacy/approved-run-cases.db.spec.ts",
+        "Tesbo-Backend-Nest/src/legacy/testcase-proposal-review.db.spec.ts",
+        "e2e/api/testcases.spec.ts",
+        "e2e/ui/testcases.spec.ts"
+      ],
+      "evidence_status": "runtime_partial",
+      "manual_disposition": "Source and selected runtime evidence; remaining exact-build browser evidence pending.",
+      "limitations": "Does not prove every existing historical import, actor policy or writer outside the declared review scope."
+    },
+    {
+      "id": "N02",
+      "meaning": "Human suite publication at machine, REST and shared native boundaries; exact selected Save remains valid",
+      "owner": "LegacyService suite insertion and shared publication policy",
+      "canonical": [
+        {
+          "file": "00_README.md",
+          "id": "P-07"
+        },
+        {
+          "file": "01_PRODUCT_REQUIREMENTS.md",
+          "id": "FR-027"
+        },
+        {
+          "file": "01_PRODUCT_REQUIREMENTS.md",
+          "id": "FR-037"
+        }
+      ],
+      "design": [
+        "docs/specs/agent-synchronized-engineering/design.md"
+      ],
+      "tasks": [
+        "docs/specs/agent-synchronized-engineering/implementation-plan.md"
+      ],
+      "writers": [
+        "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "Tesbo-Backend-Nest/src/legacy/legacy.controller.ts",
+        "Tesbo-Backend-Nest/src/common/testcase-publication.policy.ts",
+        "Tesbo-Backend-Nest/src/mcp/mcp.service.ts",
+        "Tesbo-Backend-Nest/src/mcp/mcp.tools.ts"
+      ],
+      "consumers": [
+        "Tesbo-Frontend/app/(app)/projects/[id]/testcases/page.tsx"
+      ],
+      "proofs": [
+        "Tesbo-Backend-Nest/src/legacy/suite-publication.spec.ts",
+        "e2e/api/mcp.spec.ts",
+        "e2e/api/zyra.spec.ts"
+      ],
+      "evidence_status": "runtime_partial",
+      "manual_disposition": "Source and selected runtime evidence; remaining exact-build browser evidence pending.",
+      "limitations": "MCP-P07 actual transport result remains pending; no whole-platform publisher census is inferred."
+    },
+    {
+      "id": "N03",
+      "meaning": "Current authority rechecked after model approval/candidate waits",
+      "owner": "LegacyService.requireCurrentProjectAuthority and ModelStudioRepository transaction",
+      "canonical": [
+        {
+          "file": "01_PRODUCT_REQUIREMENTS.md",
+          "id": "MBT-C-06"
+        }
+      ],
+      "design": [
+        "docs/specs/agent-synchronized-engineering/design.md"
+      ],
+      "tasks": [
+        "docs/specs/agent-synchronized-engineering/implementation-plan.md"
+      ],
+      "writers": [
+        "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "Tesbo-Backend-Nest/src/behavior-graph/model-studio-repository.ts",
+        "Tesbo-Backend-Nest/src/legacy/legacy.controller.ts"
+      ],
+      "consumers": [
+        "Tesbo-Backend-Nest/src/mcp/mcp.service.ts",
+        "Tesbo-Backend-Nest/src/mcp/mcp.tools.ts"
+      ],
+      "proofs": [
+        "Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.db.spec.ts",
+        "Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.spec.ts"
+      ],
+      "evidence_status": "runtime_partial",
+      "manual_disposition": "Independent Security inspected exact-tree migrated 609/609 run including eight new authority cases.",
+      "limitations": "SEC02 closes only six wait refusals and two held-authority neighbors; machine provenance and other model writes remain separate."
+    },
+    {
+      "id": "N04",
+      "meaning": "Native Draft/audit/mapping and run/items/executions/manifest commit atomically",
+      "owner": "Existing native case/run owners with shared PoolClient",
+      "canonical": [
+        {
+          "file": "03_TECHNICAL_DESIGN.md",
+          "id": "MBT-C-05"
+        }
+      ],
+      "design": [
+        "docs/specs/agent-synchronized-engineering/design.md"
+      ],
+      "tasks": [
+        "docs/specs/agent-synchronized-engineering/implementation-plan.md"
+      ],
+      "writers": [
+        "Tesbo-Backend-Nest/src/behavior-graph/model-studio-repository.ts",
+        "Tesbo-Backend-Nest/src/legacy/legacy.service.ts"
+      ],
+      "consumers": [
+        "Tesbo-Frontend/app/(app)/projects/[id]/model-studio/page.tsx",
+        "Tesbo-Frontend/lib/api.ts"
+      ],
+      "proofs": [
+        "Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.db.spec.ts",
+        "e2e/api/model-studio.spec.ts"
+      ],
+      "evidence_status": "runtime_partial",
+      "manual_disposition": "Source and selected runtime evidence; remaining exact-build browser evidence pending.",
+      "limitations": "Atomicity does not prove occurrence identity; N11 is a separate open historical consumer finding."
+    },
+    {
+      "id": "N05",
+      "meaning": "Explicit recorded case revision must match at link and dispatch",
+      "owner": "ModelStudioRepository existing mapping owner",
+      "canonical": [
+        {
+          "file": "03_TECHNICAL_DESIGN.md",
+          "id": "MBT-C-05"
+        }
+      ],
+      "design": [
+        "docs/specs/agent-synchronized-engineering/design.md"
+      ],
+      "tasks": [
+        "docs/specs/agent-synchronized-engineering/implementation-plan.md"
+      ],
+      "writers": [
+        "Tesbo-Backend-Nest/src/behavior-graph/model-studio-repository.ts"
+      ],
+      "consumers": [
+        "Tesbo-Frontend/app/(app)/projects/[id]/model-studio/page.tsx",
+        "Tesbo-Frontend/lib/api.ts"
+      ],
+      "proofs": [
+        "Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.db.spec.ts",
+        "e2e/api/model-studio.spec.ts"
+      ],
+      "evidence_status": "runtime_partial",
+      "manual_disposition": "Source and selected runtime evidence; remaining exact-build browser evidence pending.",
+      "limitations": "Physical unlink/history and unrecorded generated/legacy version provenance remain open; no inferred past acceptance."
+    },
+    {
+      "id": "N06",
+      "meaning": "Bug association preserves execution outcome and full result record",
+      "owner": "LegacyService native Bug relationships and explicit result writer",
+      "canonical": [
+        {
+          "file": "01_PRODUCT_REQUIREMENTS.md",
+          "id": "BUG-EFFECT-01"
+        }
+      ],
+      "design": [
+        "docs/specs/agent-synchronized-engineering/design.md"
+      ],
+      "tasks": [
+        "docs/specs/agent-synchronized-engineering/implementation-plan.md"
+      ],
+      "writers": [
+        "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "Tesbo-Backend-Nest/src/mcp/mcp.tools.ts"
+      ],
+      "consumers": [
+        "Tesbo-Frontend/app/(app)/projects/[id]/cycles/[cycleId]/execute/[executionId]/page.tsx"
+      ],
+      "proofs": [
+        "Tesbo-Backend-Nest/src/legacy/bug-link-finalization.spec.ts",
+        "Tesbo-Backend-Nest/src/legacy/bug-link-relationships.spec.ts",
+        "Tesbo-Backend-Nest/src/legacy/bug-metadata-writes.db.spec.ts"
+      ],
+      "evidence_status": "runtime_partial",
+      "manual_disposition": "Source and selected runtime evidence; remaining exact-build browser evidence pending.",
+      "limitations": "Finding classification and separately governed historical correction are not implemented by association-only repair."
+    },
+    {
+      "id": "N07",
+      "meaning": "Exact submitted/reviewed KB snapshots and governed content eligibility",
+      "owner": "Native knowledge document/version owners",
+      "canonical": [
+        {
+          "file": "00_README.md",
+          "id": "P-05"
+        },
+        {
+          "file": "01_PRODUCT_REQUIREMENTS.md",
+          "id": "FR-095"
+        },
+        {
+          "file": "01_PRODUCT_REQUIREMENTS.md",
+          "id": "FR-096"
+        },
+        {
+          "file": "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+          "id": "T-438"
+        }
+      ],
+      "design": [
+        "docs/specs/agent-synchronized-engineering/design.md"
+      ],
+      "tasks": [
+        "docs/specs/agent-synchronized-engineering/implementation-plan.md"
+      ],
+      "writers": [
+        "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "Tesbo-Backend-Nest/src/legacy/legacy.controller.ts",
+        "Tesbo-Backend-Nest/src/legacy/knowledge-document-revision.ts"
+      ],
+      "consumers": [
+        "Tesbo-Backend-Nest/src/rag/rag-retrieval.service.ts",
+        "Tesbo-Backend-Nest/src/rag/rag-ingestion.service.ts"
+      ],
+      "proofs": [
+        "Tesbo-Backend-Nest/src/legacy/knowledge-document-writes.db.spec.ts",
+        "e2e/ui/knowledge-base.spec.ts"
+      ],
+      "evidence_status": "runtime_partial",
+      "manual_disposition": "Native KB semantic revision, exact review and context eligibility foundation is traced to P-05, FR-095/096 and T-438. This does not establish manual audience/classification or Skills semantics.",
+      "limitations": "AI-memory approval is not a Skills assignment/resolver or generic policy authority."
+    },
+    {
+      "id": "N08",
+      "meaning": "Document queued writes retain their own acknowledgment; unknown Save preserves drafts",
+      "owner": "Existing document write queue and native document owner",
+      "canonical": [
+        {
+          "file": "01_PRODUCT_REQUIREMENTS.md",
+          "id": "R-ASE-13"
+        },
+        {
+          "file": "01_PRODUCT_REQUIREMENTS.md",
+          "id": "FR-096"
+        }
+      ],
+      "design": [
+        "docs/specs/agent-synchronized-engineering/design.md"
+      ],
+      "tasks": [
+        "docs/specs/agent-synchronized-engineering/implementation-plan.md"
+      ],
+      "writers": [
+        "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "Tesbo-Frontend/lib/documentWriteQueue.ts"
+      ],
+      "consumers": [
+        "Tesbo-Frontend/app/(app)/projects/[id]/knowledge-base/documents/[documentId]/page.tsx"
+      ],
+      "proofs": [
+        "scripts/document-write-queue.test.mjs",
+        "e2e/ui/knowledge-base.spec.ts"
+      ],
+      "evidence_status": "runtime_partial",
+      "manual_disposition": "Source and selected runtime evidence; remaining exact-build browser evidence pending.",
+      "limitations": "Readback reconciles exact content only; does not guarantee every multi-client or full accessibility journey."
+    },
+    {
+      "id": "N09",
+      "meaning": "Model run uncertainty, temporal revision selection, unavailable coverage and draft recovery",
+      "owner": "Existing Model Studio page and run recovery helper",
+      "canonical": [
+        {
+          "file": "01_PRODUCT_REQUIREMENTS.md",
+          "id": "R-ASE-13"
+        },
+        {
+          "file": "04_MCP_API_CONTRACTS.md",
+          "id": "MBT-C-07"
+        }
+      ],
+      "design": [
+        "docs/specs/agent-synchronized-engineering/design.md"
+      ],
+      "tasks": [
+        "docs/specs/agent-synchronized-engineering/implementation-plan.md"
+      ],
+      "writers": [
+        "Tesbo-Frontend/app/(app)/projects/[id]/model-studio/page.tsx",
+        "Tesbo-Frontend/components/model-studio/model-run-intent.ts"
+      ],
+      "consumers": [
+        "Tesbo-Frontend/lib/api.ts"
+      ],
+      "proofs": [
+        "scripts/model-run-recovery.test.mjs",
+        "e2e/ui/model-studio.spec.ts"
+      ],
+      "evidence_status": "runtime_partial",
+      "manual_disposition": "Source and selected runtime evidence; remaining exact-build browser evidence pending.",
+      "limitations": "Browser-local intent is not server idempotency or cross-device deduplication; actual new screenshots pending."
+    },
+    {
+      "id": "N10",
+      "meaning": "Explicit named project MCP consent and current advertised scope",
+      "owner": "Existing MCP/API-token/project settings owners",
+      "canonical": [
+        {
+          "file": "00_README.md",
+          "id": "P-18"
+        },
+        {
+          "file": "01_PRODUCT_REQUIREMENTS.md",
+          "id": "FR-015"
+        }
+      ],
+      "design": [
+        "docs/specs/agent-synchronized-engineering/design.md"
+      ],
+      "tasks": [
+        "docs/specs/agent-synchronized-engineering/implementation-plan.md"
+      ],
+      "writers": [
+        "Tesbo-Backend-Nest/src/mcp/mcp.service.ts",
+        "Tesbo-Backend-Nest/src/mcp/mcp.tools.ts"
+      ],
+      "consumers": [
+        "scripts/mcp-deploy-check.mjs"
+      ],
+      "proofs": [
+        "Tesbo-Backend-Nest/src/mcp/mcp.service.spec.ts",
+        "Tesbo-Backend-Nest/src/mcp/mcp-publication.spec.ts",
+        "e2e/api/mcp.spec.ts"
+      ],
+      "evidence_status": "runtime_partial",
+      "manual_disposition": "Source and selected runtime evidence; remaining exact-build browser evidence pending.",
+      "limitations": "Issuer active-workspace coupling and broader instance authority remain open; catalog counts do not prove field completeness."
+    },
+    {
+      "id": "N11",
+      "meaning": "Model element outcomes must retain the dispatched native occurrence",
+      "owner": "ModelStudioRepository manifest and native cycle/execution owner",
+      "canonical": [
+        {
+          "file": "03_TECHNICAL_DESIGN.md",
+          "id": "MBT-C-05"
+        },
+        {
+          "file": "01_PRODUCT_REQUIREMENTS.md",
+          "id": "FR-048"
+        }
+      ],
+      "design": [
+        "docs/specs/agent-synchronized-engineering/design.md"
+      ],
+      "tasks": [
+        "docs/specs/agent-synchronized-engineering/implementation-plan.md"
+      ],
+      "writers": [
+        "Tesbo-Backend-Nest/src/behavior-graph/model-studio-repository.ts",
+        "Tesbo-Backend-Nest/src/legacy/legacy.service.ts"
+      ],
+      "consumers": [
+        "Tesbo-Frontend/app/(app)/projects/[id]/model-studio/page.tsx",
+        "Tesbo-Frontend/lib/api.ts",
+        "Tesbo-Frontend/app/(app)/projects/[id]/cycles/[cycleId]/page.tsx"
+      ],
+      "proofs": [
+        "Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.spec.ts",
+        "Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.db.spec.ts",
+        "e2e/api/model-studio.spec.ts",
+        "e2e/ui/model-studio.spec.ts"
+      ],
+      "evidence_status": "source_verified",
+      "manual_disposition": "The shared transaction pins original native item, execution and reviewed snapshot; shared readers require exact pin matches. Root source inspection and author 62-test unit selection support the repair; actual independent delta and current CI remain pending, so Green readiness is not yet granted.",
+      "limitations": "Original9519 independent before probe remains retained. New real migrated/API remove-edit-reapprove-readd plus unrelated addition and legacy UNKNOWN checks, and native UI removal/readd disclosure, are authored but not yet executed at this pin. Full historical import and FR-048 beyond this occurrence boundary remain open."
+    }
+  ],
+  "excluded_claims": [
+    "Semantic validity and completeness are independent two-member review obligations.",
+    "No runtime execution is performed or certified by this adapter.",
+    "A file path or textual ID does not prove correct implementation or a valid trace edge.",
+    "The eleven-row denominator does not certify the whole canonical package, 49 journeys, I3-Q or seven domains.",
+    "Open N11 and all other named gates remain open even if mechanical integrity passes.",
+    "This is not the planned Graph Assurance harness.",
+    "No current-source runtime or formal Green closure is inferred from this trace-integrity profile."
+  ],
+  "existing_verification_components": [
+    {
+      "command": [
+        "node",
+        "scripts/check-migrations.mjs",
+        "--base",
+        "6897f989b055a955280f810c7daace86f74057fa"
+      ],
+      "scope": "Migration inventory and append-only bytes only; executed locally at source9519."
+    },
+    {
+      "command": [
+        "npm",
+        "run",
+        "quality:architecture"
+      ],
+      "scope": "Static import boundaries only. New965a87a1 CI is pending; historical9519 job136047014026 at identical merge0d510c59 passed780 modules with zero forbidden edges, without certifying the new source."
+    }
+  ],
+  "profile_revision": 3,
+  "supersedes_profile_sha256": "cfdaa6f32ec9e22ad7210c9baa1c645689953fca8ce2eeb178bd3f451613f39a",
+  "runtime_evidence_boundary": "This revision rebinds source bytes, not prior CI verdicts. N01-N10 historical runtime references retain their original source/build and scoped limitations. The current965a87a1 isolated CI is pending. No older passing source certifies this full tree."
+}

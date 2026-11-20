@@ -1,0 +1,17 @@
+ts-jest[config] (WARN)
+    The "ts-jest" config option "isolatedModules" is deprecated and will be removed in v30.0.0. Please use "isolatedModules: true" in /workspace/scratch/fb086055b433/tesbo-review-3ebda243/Tesbo-Backend-Nest/tsconfig.json instead, see https://www.typescriptlang.org/tsconfig/#isolatedModules
+
+PASS ../../assurance-working/qa-delta-model-http.spec.ts
+  ✓ actual HTTP approve refuses read/write credentials despite body identity claims (80 ms)
+  ✓ actual HTTP candidates refuses read/write credentials despite body identity claims (14 ms)
+  ✓ actual HTTP approve refuses anonymous and revoked human identities (10 ms)
+  ✓ actual HTTP candidates refuses anonymous and revoked human identities (8 ms)
+  ✓ human HTTP review and candidate publication work while machine generation remains usable (18 ms)
+  ✓ shared domain owners reject missing or machine principal undefined (2 ms)
+  ✓ shared domain owners reject missing or machine principal {"kind":"api_token"} (1 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       7 passed, 7 total
+Snapshots:   0 total
+Time:        2.626 s
+Ran all test suites within paths "/workspace/scratch/fb086055b433/assurance-working/qa-delta-model-http.spec.ts".

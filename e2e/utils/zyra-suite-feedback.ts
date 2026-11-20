@@ -7,6 +7,11 @@ export const SUITE_OPERATION_ERROR = {
   ru: "⚠️ При выполнении операций с наборами возникла ошибка. Ответ ниже не подтверждает, что все операции завершились. Уже применённые изменения сохранены; перед повтором проверьте журнал действий.",
 };
 
+const SUITE_HUMAN_REVIEW = {
+  en: "Suite creation requires a human editing action. No suites were created in this chat turn. Create a suite in the testcase repository, or choose a new suite while saving exact reviewed case proposals.",
+  ru: "Создание набора требует действия человека. В этом сообщении наборы не созданы. Создайте набор в репозитории тест-кейсов или выберите новый набор при сохранении точных проверенных предложений.",
+};
+
 /** Test-only PostgreSQL error, scoped to exactly one fixture project/name, removed even on failure. */
 export async function withSuiteInsertFailure<T>(projectId: string, suiteName: string, execute: (sql: string) => Promise<void>, run: () => Promise<T>): Promise<T> {
   expect(projectId).toMatch(/^[a-f0-9-]{36}$/i);
@@ -30,18 +35,19 @@ export type SuiteFeedbackState = {
   audit: Array<{ entity_id: string; entity_name: string; actor_id: string }>;
 };
 
-/** Script only the provider decision; exercise the real chat router, writer, reconciler and readback. */
+/** Script only the provider decision; check chat refusal, then real native human writes/failures. */
 export async function verifyZyraSuiteTurn(input: {
   request: APIRequestContext; ai: FakeAiServer; base: string; language: "en" | "ru"; ownerId: string;
   mode: "failed" | "partial" | "created" | "reused"; names: string[];
   state: () => Promise<SuiteFeedbackState>;
   afterReply?: (sessionId: string, reply: string, warning: string | null) => Promise<void>;
 }) {
-  const { request, ai, base, language, mode, names, state, afterReply, ownerId } = input;
+  const { request, ai, base, language, mode, names, state, afterReply } = input;
   let sessionId = "";
   const before = await state();
   const calls = ai.requests.length;
   const failed = mode === "failed" || mode === "partial";
+  const refused = mode !== "reused";
   const reply = mode === "reused"
     ? language === "en" ? "The requested suite already exists." : "Запрошенный набор уже существует."
     : language === "en" ? "Created the requested suites." : "Запрошенные наборы созданы.";
@@ -71,21 +77,11 @@ export async function verifyZyraSuiteTurn(input: {
     expect(message.testcases).toEqual([]);
     expect(message.reviewRequestId ?? null).toBeNull();
     const activity = message.activity as Array<{ title: string; detail?: string }>;
-    expect(activity.filter((entry) => entry.title === "An operation failed unexpectedly")).toHaveLength(failed ? 1 : 0);
-    const after = await state();
-    expect(after.cases).toEqual(before.cases);
-    expect(after.reviews).toEqual(before.reviews);
-    const newlyCreated = after.suites.filter((suite) => !before.suites.some((old) => old.id === suite.id));
-    expect(after.suites.filter((suite) => before.suites.some((old) => old.id === suite.id))).toEqual(before.suites);
-    expect(newlyCreated.map((suite) => suite.name)).toEqual(mode === "partial" || mode === "created" ? [names[0]] : []);
-    if (mode === "reused") expect(after.suites).toEqual(before.suites);
-    expect(after.audit.slice(0, before.audit.length)).toEqual(before.audit);
-    const addedAudit = after.audit.slice(before.audit.length);
-    expect(addedAudit.map((entry) => entry.entity_name)).toEqual(newlyCreated.map((suite) => suite.name));
-    expect(addedAudit.map((entry) => entry.entity_id).sort()).toEqual(newlyCreated.map((suite) => suite.id).sort());
-    for (const entry of addedAudit) expect(entry.actor_id).toBe(ownerId);
+    expect(activity.filter((entry) => entry.title === "An operation failed unexpectedly")).toHaveLength(0);
+    expect(activity.filter((entry) => entry.title === "Could not create suite")).toHaveLength(refused ? names.length : 0);
+    expect(await state(), "a model's suite command cannot publish or create a review receipt").toEqual(before);
     expect(String(message.content)).not.toContain("E2E private injected suite failure");
-    const expected = failed ? `${SUITE_OPERATION_ERROR[language]}\n\n${reply}` : reply;
+    const expected = refused ? SUITE_HUMAN_REVIEW[language] : reply;
     // Soft only to finish the independent SQL/browser controls on the red baseline; still fails CI.
     expect.soft(message.content).toBe(expected);
     const users = messages.filter((entry) => entry.role === "user");
@@ -96,9 +92,28 @@ export async function verifyZyraSuiteTurn(input: {
     expect(trace.steps.find((step) => step.stage === "finalizing")?.meta).toMatchObject({ savedCount: 0, proposedCount: 0 });
     expect(JSON.stringify(trace)).not.toContain("E2E private injected suite failure");
     // Keep persistence and browser controls running on the failing-first baseline; these still fail CI.
-    expect.soft(trace.outcome).toBe(failed ? "completed_with_errors" : "completed");
-    expect.soft(trace.steps.find((step) => step.stage === "staging")?.status).toBe(failed ? "failed" : "ok");
-    await afterReply?.(sessionId, reply, failed ? SUITE_OPERATION_ERROR[language] : null);
+    expect.soft(trace.outcome).toBe(refused ? "completed_with_errors" : "completed");
+    expect.soft(trace.steps.find((step) => step.stage === "staging")?.status).toBe(refused ? "failed" : "ok");
+    await afterReply?.(sessionId, expected, refused ? SUITE_HUMAN_REVIEW[language] : null);
+
+    // Preserve the real persistence-failure coverage through the authorized human owner.
+    // Each request is an explicit independent edit; a later failed insert cannot erase the
+    // earlier committed suite. The fault trigger remains installed throughout these requests.
+    if (mode !== "reused") {
+      for (const [index, name] of names.entries()) {
+        const write = await request.post(`${base}/suites`, { data: { name }, failOnStatusCode: false });
+        const fails = failed && index === names.length - 1;
+        expect(write.status(), await write.text()).toBe(fails ? 500 : 201);
+        expect(await write.text()).not.toContain("E2E private injected suite failure");
+      }
+    }
+    const after = await state();
+    expect(after.cases).toEqual(before.cases);
+    expect(after.reviews, "an empty suite creates no testcase proposal or selected-apply receipt").toEqual(before.reviews);
+    const newlyCreated = after.suites.filter((suite) => !before.suites.some((old) => old.id === suite.id));
+    expect(after.suites.filter((suite) => before.suites.some((old) => old.id === suite.id))).toEqual(before.suites);
+    expect(newlyCreated.map((suite) => suite.name)).toEqual(mode === "partial" || mode === "created" ? [names[0]] : []);
+    expect(after.audit, "human native edits are never attributed to a Zyra suite action").toEqual(before.audit);
   } finally {
     if (sessionId) {
       const deleted = await request.delete(`${base}/agents/zyra/chat/sessions/${sessionId}`);

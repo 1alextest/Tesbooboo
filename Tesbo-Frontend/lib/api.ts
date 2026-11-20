@@ -8,6 +8,14 @@ type RequestInitWithBody = Omit<RequestInit, "body"> & { body?: unknown };
 
 type ApiErrorBody = { error?: string; detail?: string; message?: string; errors?: { field?: string; message?: string }[] };
 
+/** Preserve HTTP disposition so callers can distinguish denied reads from unavailable data. */
+export class ApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 /**
  * A response with no `error`/`errors`/`message` body is never something the endpoint chose to say
  * to a user — every hand-written throw in the backend sets one (see legacy.service.ts's
@@ -64,6 +72,14 @@ function isAbortError(e: unknown): boolean {
 const MUTATION_OUTCOME_UNCONFIRMED =
   "Request outcome unconfirmed. This action may already have been applied. Refresh to check before trying again.";
 
+/** A caller must reconcile this write; delivery failure does not prove rollback. */
+export class MutationOutcomeUnknownError extends Error {
+  constructor() {
+    super(MUTATION_OUTCOME_UNCONFIRMED);
+    this.name = "MutationOutcomeUnknownError";
+  }
+}
+
 async function fetchWithNetworkErrorMessage(
   input: string,
   init: RequestInit
@@ -74,13 +90,14 @@ async function fetchWithNetworkErrorMessage(
     return await fetch(input, init);
   } catch (e) {
     if (isAbortError(e)) {
-      throw new Error(canRetry ? "The request took too long. Please check your connection and try again." : MUTATION_OUTCOME_UNCONFIRMED);
+      if (!canRetry) throw new MutationOutcomeUnknownError();
+      throw new Error("The request took too long. Please check your connection and try again.");
     }
     if (!isNetworkFetchError(e)) throw e instanceof Error ? e : new Error(String(e));
     // A lost response is indistinguishable from failed delivery: a mutation may already have
     // committed. Never replay it automatically, including multipart comment/KB writes. Preserve
     // the existing single retry only for reads; no assumption about replayable bodies is needed.
-    if (!canRetry) throw new Error(MUTATION_OUTCOME_UNCONFIRMED);
+    if (!canRetry) throw new MutationOutcomeUnknownError();
     try {
       return await fetch(input, init);
     } catch (e2) {
@@ -142,7 +159,7 @@ async function apiRequest<T = unknown>(path: string, options: RequestInitWithBod
   });
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as ApiErrorBody;
-    throw new Error(formatApiError(res.status, err));
+    throw new ApiError(res.status, formatApiError(res.status, err));
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();
@@ -1015,7 +1032,7 @@ export async function listAiGenerationHistory(
 export async function trackAiGenerationSaved(
   projectId: string,
   requestId: string,
-  data: { suiteId?: string; testcaseIds: string[] }
+  data: { expectedProposalRevision: string; selectedDraftIndexes: number[]; suiteId?: string | null; suiteName?: string }
 ): Promise<void> {
   await api(`/api/projects/${projectId}/ai/generation-history/${requestId}/save`, {
     method: "POST",
@@ -1044,6 +1061,9 @@ export interface ZyraTask {
   /** Full Notion page ids (not the short display keys) queued as Zyra context. */
   notionPageIds?: string[];
   drafts: AiGeneratedDraft[];
+  /** Exact server revision of the reviewable operations and their target context. */
+  proposalRevision?: string;
+  proposalSnapshot?: Record<string, unknown>;
   sources: Array<{ type: string; title: string; detail: string }>;
   activities: Array<{ actor: "user" | "agent" | string; stage: string; title: string; detail: string; createdAt: string; kind?: string }>;
   tokenUsage: { input: number; output: number; total: number };
@@ -1497,13 +1517,15 @@ export async function retryZyraTicketComment(projectId: string, taskId: string, 
 export async function saveZyraTask(
   projectId: string,
   taskId: string,
-  data: { selectedDraftIndexes: number[]; suiteId?: string; suiteName?: string }
+  data: { expectedProposalRevision: string; selectedDraftIndexes: number[]; suiteId?: string | null; suiteName?: string }
 ): Promise<{
   savedCount: number;
   suiteId: string | null;
   testcases: { id: string; externalId: string; title: string; createdAt: string }[];
-  /** Chat-staged batches only: drafts left un-saved by a partial selection, still pending review. */
+  /** Unselected proposals remain pending review for every producer. */
   remaining?: number;
+  replayed?: boolean;
+  saveReceipt?: Record<string, unknown>;
 }> {
   return api(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}/save`, {
     method: "POST",
@@ -1521,6 +1543,21 @@ export async function addProjectMember(projectId: string, data: { userId: string
 
 export async function removeProjectMember(projectId: string, userId: string): Promise<void> {
   await api(`/api/projects/${projectId}/members/${userId}`, { method: "DELETE" });
+}
+
+export type McpClientGrant = {
+  tokenId: string;
+  clientName: string;
+  scopes: Array<"read" | "write">;
+  allowedTools: string[] | null;
+  expiresAt: string | null;
+};
+export type ProjectMcpAccess = { enabled: boolean; revision: number; clients: McpClientGrant[] };
+export async function getProjectMcpAccess(projectId: string): Promise<ProjectMcpAccess> {
+  return api(`/api/projects/${projectId}/mcp-access`);
+}
+export async function updateProjectMcpAccess(projectId: string, access: ProjectMcpAccess): Promise<ProjectMcpAccess> {
+  return api(`/api/projects/${projectId}/mcp-access`, { method: "PUT", body: access });
 }
 
 export interface ApiToken {
@@ -1608,6 +1645,8 @@ export interface TestCaseListItem {
   automationStatus: string;
   automationTags?: string;
   status: string;
+  /** A current exact human receipt; a historical Approved label alone is insufficient. */
+  approvalCurrent?: boolean;
   suiteId: string | null;
   ownerId: string | null;
   updatedAt: string;
@@ -1697,6 +1736,17 @@ export async function listTestCases(
 
 export async function getTestCase(projectId: string, testcaseId: string): Promise<Record<string, unknown>> {
   return api(`/api/projects/${projectId}/testcases/${testcaseId}`);
+}
+
+export async function approveTestCase(
+  projectId: string,
+  testcaseId: string,
+  expectedRevision: string,
+  expectedApprovalRevision: string,
+): Promise<Record<string, unknown>> {
+  return api(`/api/projects/${projectId}/testcases/${testcaseId}/approve`, {
+    method: "POST", body: { expectedRevision, expectedApprovalRevision },
+  });
 }
 
 export async function createTestCase(projectId: string, data: Record<string, unknown>): Promise<{ id: string; externalId: string; title: string; createdAt: string }> {
@@ -3992,6 +4042,10 @@ export interface KnowledgeDocument {
   updatedBy: string | null;
   reviewedBy: string | null;
   reviewedAt: string | null;
+  /** Native exact-row precondition; absent only on an older server. */
+  editRevision?: string;
+  reviewedVersionId?: string | null;
+  reviewBinding?: "none" | "legacy_unverified" | "exact_snapshot";
   isDeleted: boolean;
   createdAt: string;
   updatedAt: string;
@@ -4030,6 +4084,8 @@ export interface KnowledgeDocumentVersion {
   title: string;
   createdBy: string | null;
   createdAt: string;
+  snapshotKind?: "autosave" | "submitted" | "approved" | "rejected";
+  snapshotMetadata?: Record<string, unknown>;
 }
 
 // Folders
@@ -4187,7 +4243,7 @@ export function getKnowledgeDocumentHistory(
 export function updateKnowledgeDocument(
   projectId: string,
   documentId: string,
-  data: Partial<{ title: string; contentJson: unknown; contentHtml: string; contentText: string; documentType: string; status: string }>
+  data: Partial<{ title: string; contentJson: unknown; contentHtml: string; contentText: string; documentType: string; status: string; expectedRevision: string }>
 ): Promise<KnowledgeDocument> {
   return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}`, { method: "PATCH", body: data });
 }
@@ -4230,19 +4286,19 @@ export function listKnowledgeDocumentVersions(
   return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/versions`);
 }
 
-export function restoreKnowledgeDocumentVersion(projectId: string, documentId: string, versionId: string): Promise<KnowledgeDocument> {
+export function restoreKnowledgeDocumentVersion(projectId: string, documentId: string, versionId: string, expectedRevision?: string): Promise<KnowledgeDocument> {
   return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/restore-version`, {
     method: "POST",
-    body: { versionId },
+    body: { versionId, expectedRevision },
   });
 }
 
-export function approveAiMemory(projectId: string, documentId: string): Promise<KnowledgeDocument> {
-  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/approve-ai-memory`, { method: "PATCH" });
+export function approveAiMemory(projectId: string, documentId: string, expectedRevision: string): Promise<KnowledgeDocument> {
+  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/approve-ai-memory`, { method: "PATCH", body: { expectedRevision } });
 }
 
-export function rejectAiMemory(projectId: string, documentId: string): Promise<KnowledgeDocument> {
-  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/reject-ai-memory`, { method: "PATCH" });
+export function rejectAiMemory(projectId: string, documentId: string, expectedRevision: string): Promise<KnowledgeDocument> {
+  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/reject-ai-memory`, { method: "PATCH", body: { expectedRevision } });
 }
 
 // Document comments
@@ -4869,7 +4925,7 @@ export type ModelStudioCoverage = {
     caseDeleted: boolean;
     createdAt: string;
   }>;
-  /** Observed result history of the linked cases — explicitly not model verification. */
+  /** Linked-case history across native runs, separate from the original model dispatch occurrences. */
   caseEvidence: Array<{
     testcaseId: string;
     testcaseTitle: string;
@@ -4884,9 +4940,14 @@ export type ModelStudioCoverage = {
     cycleId: string;
     name: string;
     createdAt: string;
+    /** Original manifest membership, not today's editable native run membership. */
     caseCount: number;
     runDeleted: boolean;
     statusCounts: Record<string, number>;
+    occurrenceBasis: "PINNED" | "UNKNOWN";
+    attributedCaseCount: number;
+    unavailableCaseCount: number;
+    unknownCaseCount: number;
   }>;
   /**
    * Case outcomes per model element across the governed runs, taken from each run's immutable
@@ -4923,6 +4984,8 @@ export type ModelStudioModelRun = {
       pathDigest: string | null;
       elementIds: string[];
       sources: string[];
+      /** Absent in legacy manifests; readers must not infer it from current membership. */
+      nativeOccurrence?: { cycleItemId: string; executionId: string; snapshotApprovalRevision: string };
     }>;
   };
   coverageAssertion: "none";
@@ -5076,10 +5139,23 @@ export async function dispatchModelStudioRun(
   revisionId: string,
   data: { caseIds?: string[]; name?: string; environment?: string; buildVersion?: string }
 ): Promise<ModelStudioModelRun & { requested: number; added: number; skipped: number; note: string }> {
-  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/runs`, {
-    method: "POST",
-    body: data
-  });
+  try {
+    const result = await api<ModelStudioModelRun & { requested: number; added: number; skipped: number; note: string }>(
+      `/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/runs`, { method: "POST", body: data }
+    );
+    // An empty/truncated/unrelated success body cannot establish which native run was created.
+    if (!result?.cycleId || result.run?.id !== result.cycleId || typeof result.run.name !== "string" ||
+        result.projectId !== projectId || result.modelId !== modelId || result.modelRevisionId !== revisionId) {
+      throw new MutationOutcomeUnknownError();
+    }
+    return result;
+  } catch (cause) {
+    // These are the run owner's confirmed validation/access/conflict refusals. A server/proxy
+    // 5xx or an unreadable response may follow commit, so this non-idempotent create stays unknown.
+    if (cause instanceof ApiError && [400, 401, 403, 404, 409, 413, 415, 422, 429].includes(cause.status)) throw cause;
+    if (cause instanceof MutationOutcomeUnknownError) throw cause;
+    throw new MutationOutcomeUnknownError();
+  }
 }
 
 /** A governed run's model basis, read by the native run page; null for an ordinary run. */
@@ -5094,7 +5170,11 @@ export type ModelStudioRunProvenance = {
   approvedAt: string | null;
   approvedBy: string | null;
   dispatchedAt: string;
+  /** Original dispatch count, independent of later native membership changes. */
   caseCount: number;
+  occurrenceBasis: "PINNED" | "UNKNOWN";
+  pinnedCaseCount: number;
+  unknownCaseCount: number;
 };
 
 export async function getModelStudioRunProvenance(

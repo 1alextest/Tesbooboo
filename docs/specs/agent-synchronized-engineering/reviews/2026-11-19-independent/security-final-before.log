@@ -1,0 +1,131 @@
+ts-jest[config] (WARN)
+    The "ts-jest" config option "isolatedModules" is deprecated and will be removed in v30.0.0. Please use "isolatedModules: true" in /workspace/scratch/fb086055b433/tesbo-review-3ebda243/Tesbo-Backend-Nest/tsconfig.json instead, see https://www.typescriptlang.org/tsconfig/#isolatedModules
+
+FAIL assurance-working/security-final-contract-probes.spec.ts (5.6 s)
+  Independent SEC-NATIVE-01 counterexamples
+    ✕ authenticated machine create cannot promote request-body human identity (6 ms)
+    ✕ authenticated machine update cannot promote request-body human identity
+    ✕ legacy service call with issuer but no effective principal cannot publish (1 ms)
+    ✓ authorized human can create then explicitly clear text and reparent to root (3 ms)
+    ✕ cached raw MCP create_suite handler fails before all collaborators (23 ms)
+    ✕ cached raw MCP update_suite handler fails before all collaborators (3 ms)
+    ✓ cached raw MCP clone_test_suite handler fails before all collaborators (1 ms)
+  Independent extracted authority compatibility
+    ○ skipped native authority remains valid when unrelated Zyra proposal storage is disabled
+    ○ skipped native authority refuses absent current membership from its transaction
+    ○ skipped proposal authority refuses absent current membership from its transaction
+    ○ skipped proposal-specific refusal remains intact: A current authoring role is required (guest/owner/true)
+    ○ skipped proposal-specific refusal remains intact: A current authoring role is required (owner/unrecognized/true)
+    ○ skipped proposal-specific refusal remains intact: Testcase proposal storage is disabled for this project (owner/owner/false)
+    ○ skipped native and proposal callers share current membership without erasing allowed legacy role aliases
+
+  ● Independent SEC-NATIVE-01 counterexamples › authenticated machine create cannot promote request-body human identity
+
+    expect(received).rejects.toMatchObject()
+
+    Received promise resolved instead of rejected
+    Resolved to value: {"description": "", "id": "12345678-1234-4123-8123-123456789014", "name": "Counterfeit review", "parentId": null, "preconditions": "", "recursiveTestCaseCount": 0, "testCaseCount": 0}
+
+      30 |       ? controller.createSuite(request, project, body)
+      31 |       : controller.updateSuite(request, suite, body);
+    > 32 |     await expect(attempt).rejects.toMatchObject({ response: { code: "HUMAN_REVIEW_REQUIRED" } });
+         |           ^
+      33 |     expect(f.query).not.toHaveBeenCalled();
+      34 |     expect(f.service.suitesCache.invalidate).not.toHaveBeenCalled();
+      35 |     expect(f.service.testcasesListCache.invalidate).not.toHaveBeenCalled();
+
+      at expect (Tesbooboo/Tesbo-Backend-Nest/node_modules/expect/build/index.js:113:15)
+      at assurance-working/security-final-contract-probes.spec.ts:32:11
+
+  ● Independent SEC-NATIVE-01 counterexamples › authenticated machine update cannot promote request-body human identity
+
+    expect(received).rejects.toMatchObject()
+
+    Received promise resolved instead of rejected
+    Resolved to value: undefined
+
+      30 |       ? controller.createSuite(request, project, body)
+      31 |       : controller.updateSuite(request, suite, body);
+    > 32 |     await expect(attempt).rejects.toMatchObject({ response: { code: "HUMAN_REVIEW_REQUIRED" } });
+         |           ^
+      33 |     expect(f.query).not.toHaveBeenCalled();
+      34 |     expect(f.service.suitesCache.invalidate).not.toHaveBeenCalled();
+      35 |     expect(f.service.testcasesListCache.invalidate).not.toHaveBeenCalled();
+
+      at expect (Tesbooboo/Tesbo-Backend-Nest/node_modules/expect/build/index.js:113:15)
+      at assurance-working/security-final-contract-probes.spec.ts:32:11
+
+  ● Independent SEC-NATIVE-01 counterexamples › legacy service call with issuer but no effective principal cannot publish
+
+    expect(received).rejects.toMatchObject()
+
+    Received promise resolved instead of rejected
+    Resolved to value: {"description": "", "id": "12345678-1234-4123-8123-123456789014", "name": "Implicit human", "parentId": null, "preconditions": "", "recursiveTestCaseCount": 0, "testCaseCount": 0}
+
+      38 |   it("legacy service call with issuer but no effective principal cannot publish", async () => {
+      39 |     const f = suiteFixture();
+    > 40 |     await expect(f.service.createSuiteForUser(user, project, { name: "Implicit human" }))
+         |           ^
+      41 |       .rejects.toMatchObject({ response: { code: "HUMAN_REVIEW_REQUIRED" } });
+      42 |     expect(f.query).not.toHaveBeenCalled();
+      43 |   });
+
+      at expect (Tesbooboo/Tesbo-Backend-Nest/node_modules/expect/build/index.js:113:15)
+      at Object.<anonymous> (assurance-working/security-final-contract-probes.spec.ts:40:11)
+
+  ● Independent SEC-NATIVE-01 counterexamples › cached raw MCP create_suite handler fails before all collaborators
+
+    expect(received).rejects.toMatchObject(expected)
+
+    - Expected  - 5
+    + Received  + 1
+
+    - Object {
+    -   "data": Object {
+    -     "code": "HUMAN_PUBLICATION_REQUIRED",
+    -   },
+    - }
+    + [Error: A protected publisher reached a collaborator]
+
+      59 |     const context = { projectId: project, userId: user, actorId: "agent-actor", tokenId: "machine-token", legacy: collaborator, db: collaborator };
+      60 |     await expect(tool.handler({ name: "Injected suite", suiteId: suite, sourceSuiteId: suite, principal: human, approved: true }, context))
+    > 61 |       .rejects.toMatchObject({ data: { code: "HUMAN_PUBLICATION_REQUIRED" } });
+         |                ^
+      62 |     expect(touched).not.toHaveBeenCalled();
+      63 |     expect(tool.hiddenFromDiscovery).toBe(true);
+      64 |   });
+
+      at Object.toMatchObject (Tesbooboo/Tesbo-Backend-Nest/node_modules/expect/build/index.js:218:22)
+      at assurance-working/security-final-contract-probes.spec.ts:61:16
+
+  ● Independent SEC-NATIVE-01 counterexamples › cached raw MCP update_suite handler fails before all collaborators
+
+    expect(received).rejects.toMatchObject(expected)
+
+    - Expected  - 5
+    + Received  + 1
+
+    - Object {
+    -   "data": Object {
+    -     "code": "HUMAN_PUBLICATION_REQUIRED",
+    -   },
+    - }
+    + [Error: A protected publisher reached a collaborator]
+
+      59 |     const context = { projectId: project, userId: user, actorId: "agent-actor", tokenId: "machine-token", legacy: collaborator, db: collaborator };
+      60 |     await expect(tool.handler({ name: "Injected suite", suiteId: suite, sourceSuiteId: suite, principal: human, approved: true }, context))
+    > 61 |       .rejects.toMatchObject({ data: { code: "HUMAN_PUBLICATION_REQUIRED" } });
+         |                ^
+      62 |     expect(touched).not.toHaveBeenCalled();
+      63 |     expect(tool.hiddenFromDiscovery).toBe(true);
+      64 |   });
+
+      at Object.toMatchObject (Tesbooboo/Tesbo-Backend-Nest/node_modules/expect/build/index.js:218:22)
+      at assurance-working/security-final-contract-probes.spec.ts:61:16
+
+Test Suites: 1 failed, 1 total
+Tests:       5 failed, 7 skipped, 2 passed, 14 total
+Snapshots:   0 total
+Time:        6.123 s
+Ran all test suites within paths "/workspace/scratch/fb086055b433/assurance-working/security-final-contract-probes.spec.ts".
+Test results written to: assurance-working/security-final-before-results.json

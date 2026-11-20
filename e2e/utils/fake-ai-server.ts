@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { env } from "./env";
 
 /*
  * A local stand-in for an OpenAI-compatible /v1/chat/completions endpoint, so a Zyra chat turn can
@@ -38,6 +39,11 @@ export interface FakeAiEmbeddingRequest {
 export interface FakeAiServer {
   /** Pass as `baseUrl` when creating a workspace AI key (provider "openai" or a custom gateway). */
   baseUrl: string;
+  /**
+   * The same endpoint as reached from wherever the backend runs: `baseUrl` for the containerized
+   * local stack, loopback when the backend is a host process (every CI workflow).
+   */
+  backendBaseUrl: string;
   /** Every chat-completion request this server received, in arrival order — for asserting on what the backend sent. */
   requests: FakeAiRequest[];
   /**
@@ -203,6 +209,7 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
 
   return {
     baseUrl: `http://host.docker.internal:${port}/v1`,
+    backendBaseUrl: env.ci ? `http://127.0.0.1:${port}/v1` : `http://host.docker.internal:${port}/v1`,
     requests,
     embeddingRequests,
     queueReply(content) {

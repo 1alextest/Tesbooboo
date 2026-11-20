@@ -18,7 +18,7 @@ describe("ApiTokenRestGuard", () => {
   });
   it.each(["POST", "PUT", "PATCH", "DELETE"])("rejects read token %s", async method => {
     const l = legacy();
-    await expect(new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(request(`/api/projects/${P}/testcases`, method))).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(request(`/api/projects/${P}/bugs`, method))).rejects.toBeInstanceOf(ForbiddenException);
     expect(l.requireProjectAccess).not.toHaveBeenCalled();
   });
   it("permits own-project read while checking membership", async () => {
@@ -29,9 +29,9 @@ describe("ApiTokenRestGuard", () => {
   it("denies write-only tokens reading routes", async () => {
     await expect(new ApiTokenRestGuard(legacy() as unknown as LegacyService).canActivate(request(`/api/projects/${P}/testcases`, "GET", ["write"]))).rejects.toBeInstanceOf(ForbiddenException);
   });
-  it("permits write token mutation after membership validation", async () => {
+  it("permits raw bug intake after membership validation", async () => {
     const l = legacy();
-    expect(await new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(request(`/api/projects/${P}/testcases`, "POST", ["write"]))).toBe(true);
+    expect(await new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(request(`/api/projects/${P}/bugs`, "POST", ["write"]))).toBe(true);
     expect(l.requireProjectAccess).toHaveBeenCalledWith("user-1", P);
   });
   it("denies another project even if user belongs to it", async () => {
@@ -42,14 +42,15 @@ describe("ApiTokenRestGuard", () => {
   it.each(["/api/cycles/other", "/api/bugs/other", "/api/projects", "/api/auth/me"])("denies ambiguous REST alias %s", async path => {
     await expect(new ApiTokenRestGuard(legacy() as unknown as LegacyService).canActivate(request(path, "POST", ["write"]))).rejects.toBeInstanceOf(ForbiddenException);
   });
-  it.each(["/api/mcp", `/api/projects/${P}/mcp`])("delegates %s to MCP's existing checks", async path => {
+  it.each(["/api/mcp", `/api/projects/${P}/mcp`, "/API/MCP", `/api/Projects/${P}/Mcp/`])("delegates %s to MCP's existing checks", async path => {
     const l = legacy();
     expect(await new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(request(path, "POST"))).toBe(true);
     expect(l.requireProjectAccess).not.toHaveBeenCalled();
   });
   it.each([
     "POST /apikeys", "GET /apikeys", "DELETE /apikeys/token-2",
-    "POST /members", "GET /members", "DELETE /members/user-2"
+    "POST /members", "GET /members", "DELETE /members/user-2", "GET /mcp-access", "PUT /mcp-access",
+    "POST /APIKEYS/", "GET /ApiKeys", "DELETE /MEMBERS/user-2", "PUT /MCP-ACCESS/"
   ])("blocks bearer project administration %s", async route => {
     const [method, suffix] = route.split(" ");
     const l = legacy();
@@ -68,5 +69,48 @@ describe("ApiTokenRestGuard", () => {
   it("denies revoked project membership", async () => {
     const l = legacy(); l.requireProjectAccess.mockRejectedValue(new ForbiddenException());
     await expect(new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(request(`/api/projects/${P}/testcases`, "GET"))).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it.each([
+    "POST /suites", "POST /SUITES/",
+    "POST /testcases", "PUT /testcases/case", "DELETE /testcases/case", "POST /testcases/case/duplicate",
+    "POST /testcases/bulk-create", "POST /testcases/bulk-update", "POST /testcases/bulk-delete", "POST /testcases/import",
+    "POST /testcases/case/approve", "PUT /testcases/case/custom-field-values",
+    "POST /custom-fields/definitions", "POST /custom-fields/definitions/reorder", "PATCH /custom-fields/definitions/field",
+    "PATCH /custom-fields/definitions/field/status", "POST /custom-fields/definitions/field/options",
+    "PATCH /custom-fields/definitions/field/options/option", "DELETE /custom-fields/definitions/field", "POST /custom-fields/definitions/field/restore",
+    "POST /custom-tags", "PATCH /custom-tags/tag", "DELETE /custom-tags/tag",
+    "POST /review-board/recommendations/recommendation/keep", "POST /review-board/recommendations/recommendation/edit",
+    "POST /review-board/recommendations/recommendation/remove", "POST /ai/generation-history/task/save",
+    "POST /agents/zyra/tasks/task/save", "POST /agents/zyra/tasks/task/close", "POST /TESTCASES/IMPORT/",
+    "POST /model-studio/models/model/revisions/revision/approve",
+    "POST /model-studio/models/model/revisions/revision/candidates"
+  ])("refuses machine publication before any owner call: %s", async route => {
+    const [method, suffix] = route.split(" ");
+    const l = legacy();
+    const attempt = new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(request(`/api/projects/${P}${suffix}`, method, ["read", "write"]));
+    await expect(attempt).rejects.toMatchObject({ response: expect.objectContaining({ code: "HUMAN_PUBLICATION_REQUIRED" }) });
+    expect(l.requireProjectAccess).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "POST /agents/zyra/tasks/proposals", "POST /agents/zyra/tasks/task/feedback", "PATCH /agents/zyra/tasks/task/drafts/0",
+    "DELETE /agents/zyra/tasks/task/drafts/0", "POST /review-board/analysis", "POST /automation/cases/resolve",
+    "POST /automation/runs/run/results", "POST /automation/runs/run/results/case/evidence", "POST /bugs",
+    "GET /testcases/case/custom-field-values", "GET /custom-fields/definitions", "GET /custom-tags",
+    "POST /model-studio/models/model/revisions/revision/generate",
+    "POST /model-studio/models/model/revisions/revision/runs"
+  ])("preserves scoped candidate, read or evidence neighbor: %s", async route => {
+    const [method, suffix] = route.split(" ");
+    const l = legacy();
+    expect(await new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(request(`/api/projects/${P}${suffix}`, method, ["read", "write"]))).toBe(true);
+    expect(l.requireProjectAccess).toHaveBeenCalledWith("user-1", P);
+  });
+
+  it("keeps suite deletion machine-denied because it moves or deletes contained official cases", async () => {
+    const l = legacy();
+    await expect(new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(request("/api/suites/suite", "DELETE", ["write"])))
+      .rejects.toMatchObject({ response: expect.objectContaining({ code: "HUMAN_PUBLICATION_REQUIRED" }) });
+    expect(l.requireProjectAccess).not.toHaveBeenCalled();
   });
 });

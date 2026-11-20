@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "@/lib/routeParams";
 import {
   approveModelStudioRevision,
@@ -13,17 +13,26 @@ import {
   generateModelStudioPaths,
   getModelStudioCoverage,
   getModelStudioModel,
+  getModelStudioRunProvenance,
+  getTestRun,
   getTestCase,
+  listCycleExecutions,
   linkModelStudioCase,
   listModelStudioModels,
+  listTestRuns,
+  MutationOutcomeUnknownError,
   saveModelStudioRevision,
   unlinkModelStudioCase,
   type ModelStudioCoverage,
   type ModelStudioDetail,
   type ModelStudioGeneratedPath,
   type ModelStudioModel,
-  type ModelStudioRevision
+  type ModelStudioRevision,
+  type TestRunListItem
 } from "@/lib/api";
+import { useAppData } from "@/components/app/AppDataProvider";
+import { clearModelRunIntent, modelRunIntentKey, readModelRunIntent, writeModelRunIntent,
+  type ModelRunIntent } from "@/components/model-studio/model-run-intent";
 import { ModelDraftGraph } from "../agents/zyra/changes/ModelDraftGraph";
 import {
   EMPTY_MODEL,
@@ -76,6 +85,7 @@ function MappingStalenessNote({ staleness }: { staleness: ModelStudioCoverage["m
 }
 
 export default function ModelStudioPage() {
+  const { currentUser } = useAppData();
   const params = useParams();
   const searchParams = useSearchParams();
   const projectId = params.id as string;
@@ -85,13 +95,22 @@ export default function ModelStudioPage() {
   const [models, setModels] = useState<ModelStudioModel[]>([]);
   const [selectedModelId, setSelectedModelId] = useState("");
   const [detail, setDetail] = useState<ModelStudioDetail | null>(null);
+  const [settledDetailKey, setSettledDetailKey] = useState("");
   const [revisionId, setRevisionId] = useState("");
-  const [coverage, setCoverage] = useState<ModelStudioCoverage | null>(null);
+  const [coverageRead, setCoverageRead] = useState<
+    | { key: string; status: "ready"; value: ModelStudioCoverage }
+    | { key: string; status: "error"; message: string }
+    | null
+  >(null);
+  const [coverageRetry, setCoverageRetry] = useState(0);
   const [loading, setLoading] = useState(true);
   const [archiving, setArchiving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Bumped after any write so the model list, detail and coverage re-read together.
   const [reloadToken, setReloadToken] = useState(0);
+  const detailKey = `${projectId}:${selectedModelId}:${reloadToken}`;
+  const detailLoading = settledDetailKey !== detailKey;
+  const coverageKey = `${projectId}:${selectedModelId}:${reloadToken}:${coverageRetry}`;
   const [definitionModal, setDefinitionModal] = useState<"create" | "revision" | null>(null);
   const [authorBusy, setAuthorBusy] = useState(false);
   const [authorError, setAuthorError] = useState<string | null>(null);
@@ -110,8 +129,47 @@ export default function ModelStudioPage() {
   const [runName, setRunName] = useState("");
   const [runEnvironment, setRunEnvironment] = useState("");
   const [runBusy, setRunBusy] = useState(false);
-  const [runError, setRunError] = useState<string | null>(null);
-  const [runNotice, setRunNotice] = useState<{ text: string; href: string; linkText: string } | null>(null);
+  const [runError, setRunErrorState] = useState<{ key: string; message: string } | null>(null);
+  const [runNotice, setRunNotice] = useState<{ key: string; text: string; href: string; linkText: string } | null>(null);
+  // Match ReviewCaseRunSetup's synchronous guard: React state alone cannot stop two click events
+  // before its disabled button renders. The persisted marker also survives reload during POST.
+  const runSubmitting = useRef(false);
+  const principalId = currentUser?.userId ?? "";
+  const runScope = { projectId, modelId: selectedModelId, principalId };
+  const runScopeKey = modelRunIntentKey(runScope);
+  const visibleRunScope = useRef(runScopeKey);
+  const [runRecovery, setRunRecovery] = useState<{ key: string; intent: ModelRunIntent | null; error: string | null }>({ key: "", intent: null, error: null });
+  const pendingRunIntent = runRecovery.key === runScopeKey ? runRecovery.intent : null;
+  const runRecoveryReady = runRecovery.key === runScopeKey && !runRecovery.error && !!principalId;
+  const [runInspection, setRunInspection] = useState<{ intentId: string; runs: TestRunListItem[] } | null>(null);
+  const [inspectingRuns, setInspectingRuns] = useState(false);
+  const [duplicateAcknowledged, setDuplicateAcknowledged] = useState(false);
+  const [reconcilingRunId, setReconcilingRunId] = useState<string | null>(null);
+
+  function setRunError(message: string | null) {
+    setRunErrorState((current) => message ? { key: runScopeKey, message }
+      : current?.key === runScopeKey ? null : current);
+  }
+
+  useEffect(() => {
+    const scope = { projectId, modelId: selectedModelId, principalId };
+    const key = modelRunIntentKey(scope);
+    visibleRunScope.current = key;
+    const read = () => {
+      try {
+        const intent = readModelRunIntent(window.localStorage, scope);
+        setRunRecovery({ key, intent, error: null });
+      } catch {
+        setRunRecovery({ key, intent: null, error: "This browser could not read the saved run request. Inspect native Test Runs and restore site storage before starting another request." });
+      }
+      setRunInspection(null);
+      setDuplicateAcknowledged(false);
+    };
+    read();
+    const changed = (event: StorageEvent) => { if (event.key === key || event.key === null) read(); };
+    window.addEventListener("storage", changed);
+    return () => window.removeEventListener("storage", changed);
+  }, [projectId, selectedModelId, principalId]);
 
   useEffect(() => {
     let active = true;
@@ -144,26 +202,40 @@ export default function ModelStudioPage() {
         if (!active) return;
         setError(null);
         setDetail(model);
-        setRevisionId(model.revisions[0]?.id ?? "");
+        // A background read must preserve a historical revision the person selected while it
+        // was pending. Changing models (or an unavailable selection) still defaults to the head.
+        setRevisionId((current) => model.revisions.some((row) => row.id === current)
+          ? current : model.revisions[0]?.id ?? "");
       })
       .catch((cause) => {
         if (active) setError(cause instanceof Error ? cause.message : "Could not load the model.");
+      })
+      .finally(() => {
+        if (active) setSettledDetailKey(detailKey);
       });
+    return () => { active = false; };
+  }, [projectId, selectedModelId, detailKey]);
+
+  useEffect(() => {
+    if (!selectedModelId) return;
+    let active = true;
     void getModelStudioCoverage(projectId, selectedModelId)
       .then((value) => {
-        if (active) setCoverage(value);
+        if (active) setCoverageRead({ key: coverageKey, status: "ready", value });
       })
-      .catch(() => {
-        if (active) setCoverage(null);
+      .catch((cause) => {
+        if (active) setCoverageRead({ key: coverageKey, status: "error",
+          message: cause instanceof Error ? cause.message : "Could not load model coverage." });
       });
-    return () => {
-      active = false;
-    };
-  }, [projectId, selectedModelId, reloadToken]);
+    return () => { active = false; };
+  }, [projectId, selectedModelId, coverageKey]);
 
   // Keyed to the current selection so a previous model's response cannot render under a new one.
   const currentDetail = detail && detail.id === selectedModelId ? detail : null;
-  const currentCoverage = coverage && coverage.modelId === selectedModelId ? coverage : null;
+  const currentCoverage = coverageRead?.key === coverageKey && coverageRead.status === "ready"
+    && coverageRead.value.modelId === selectedModelId ? coverageRead.value : null;
+  const coverageLoading = coverageRead?.key !== coverageKey;
+  const coverageError = coverageRead?.key === coverageKey && coverageRead.status === "error" ? coverageRead.message : null;
   // Mappings are stored per immutable revision; the coverage read and every authoring action below
   // target the current head, so the latest revision is what "Link case" is relative to.
   const latestRevision = currentDetail?.revisions[0] ?? null;
@@ -237,7 +309,7 @@ export default function ModelStudioPage() {
       setModels(remaining);
       setSelectedModelId(remaining[0]?.id ?? "");
       setDetail(null);
-      setCoverage(null);
+      setCoverageRead(null);
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not archive the model.");
@@ -266,10 +338,12 @@ export default function ModelStudioPage() {
     setAuthorBusy(true);
     setAuthorError(null);
     try {
-      await saveModelStudioRevision(projectId, currentDetail.id, {
+      const created = await saveModelStudioRevision(projectId, currentDetail.id, {
         baseRevisionId: latestRevision.id,
         model: definition
       });
+      // This explicit authoring action opens its new revision; ordinary refreshes preserve choice.
+      setRevisionId(created.id);
       setDefinitionModal(null);
       setReloadToken((token) => token + 1);
     } catch (cause) {
@@ -386,19 +460,57 @@ export default function ModelStudioPage() {
    * the server refuses anything that is not an Approved case of this revision; the created run is an
    * ordinary Test Run, linked back here.
    */
+  function clearResolvedRunIntent(intent: ModelRunIntent) {
+    try {
+      clearModelRunIntent(window.localStorage, intent, intent.id);
+      const remaining = readModelRunIntent(window.localStorage, intent);
+      setRunRecovery((current) => current.key === modelRunIntentKey(intent) ? { ...current, intent: remaining } : current);
+    } catch {
+      // The server response remains confirmed even if browser storage fails afterward. Block new
+      // creates without relabeling that successful response or known refusal as an unknown write.
+      setRunRecovery((current) => current.key === modelRunIntentKey(intent) ? { ...current, intent: null,
+        error: "This request has been resolved, but the browser could not clear its saved request. Restore site storage and inspect native Test Runs before starting another request." } : current);
+    }
+  }
+
   async function dispatchModelRun() {
     if (!currentDetail || !currentCoverage || !latestRevision) return;
-    if (latestRevision.approval.status !== "APPROVED" || !selectedRunCaseIds.length || runBusy) return;
+    if (latestRevision.approval.status !== "APPROVED" || !selectedRunCaseIds.length || runBusy ||
+        runSubmitting.current || !runRecoveryReady || pendingRunIntent) return;
+    runSubmitting.current = true;
+    const intent: ModelRunIntent = {
+      version: 1, id: crypto.randomUUID(), ...runScope, modelName: currentDetail.name,
+      revisionId: latestRevision.id, revisionNumber: latestRevision.revisionNumber,
+      contentHash: latestRevision.contentHash, requestedAt: new Date().toISOString(), outcome: "OUTCOME_UNKNOWN",
+      request: { caseIds: [...selectedRunCaseIds], ...(runName.trim() ? { name: runName.trim() } : {}),
+        ...(runEnvironment.trim() ? { environment: runEnvironment.trim() } : {}) },
+    };
+    // Persist BEFORE calling the non-idempotent owner. Failed storage means no POST is sent.
+    try {
+      const existing = readModelRunIntent(window.localStorage, runScope);
+      if (existing) {
+        setRunRecovery({ key: runScopeKey, intent: existing, error: null });
+        runSubmitting.current = false;
+        return;
+      }
+      writeModelRunIntent(window.localStorage, intent);
+      setRunRecovery({ key: runScopeKey, intent, error: null });
+    } catch {
+      setRunError("This browser could not preserve the run request across reload. Enable site storage before starting it. No run request was sent.");
+      runSubmitting.current = false;
+      return;
+    }
     setRunBusy(true);
     setRunError(null);
     setRunNotice(null);
     try {
-      const result = await dispatchModelStudioRun(projectId, currentDetail.id, latestRevision.id, {
-        caseIds: selectedRunCaseIds,
-        ...(runName.trim() ? { name: runName.trim() } : {}),
-        ...(runEnvironment.trim() ? { environment: runEnvironment.trim() } : {})
-      });
+      const result = await dispatchModelStudioRun(projectId, currentDetail.id, latestRevision.id, intent.request);
+      clearResolvedRunIntent(intent);
+      // Model navigation stays available during a request. Settle the original intent even after
+      // navigation, but never reset the new model's form, errors, selection or inspection state.
+      if (visibleRunScope.current !== runScopeKey) return;
       setRunNotice({
+        key: runScopeKey,
         text: "Created run",
         href: `/projects/${projectId}/cycles/${result.cycleId}`,
         linkText: result.run.name
@@ -407,10 +519,80 @@ export default function ModelStudioPage() {
       setRunEnvironment("");
       setReloadToken((token) => token + 1);
     } catch (cause) {
-      setRunError(cause instanceof Error ? cause.message : "Could not start the run.");
+      if (cause instanceof MutationOutcomeUnknownError) {
+        // Keep the marker and exact original request. Inspection is read-only; neither a reload
+        // nor a similar name proves that this create failed or authorizes another POST.
+        if (visibleRunScope.current === runScopeKey) setRunError(null);
+      } else {
+        // The shared dispatch adapter returns ordinary errors only for confirmed 4xx refusals.
+        // Clear only this request, preserving the form so a stale mapping can be reviewed.
+        clearResolvedRunIntent(intent);
+        if (visibleRunScope.current === runScopeKey) setRunError(cause instanceof Error ? cause.message : "Could not start the run.");
+      }
     } finally {
+      runSubmitting.current = false;
       setRunBusy(false);
     }
+  }
+
+  async function inspectExistingRuns() {
+    if (!pendingRunIntent || inspectingRuns) return;
+    setInspectingRuns(true);
+    setRunInspection(null);
+    setDuplicateAcknowledged(false);
+    setRunError(null);
+    try {
+      const runs = await listTestRuns(projectId);
+      if (visibleRunScope.current === runScopeKey) setRunInspection({ intentId: pendingRunIntent.id, runs });
+    } catch (cause) {
+      if (visibleRunScope.current === runScopeKey) setRunError(cause instanceof Error ? cause.message : "Could not inspect native runs. The outcome is still unknown.");
+    } finally { setInspectingRuns(false); }
+  }
+
+  async function selectInspectedRun(cycleId: string) {
+    if (!pendingRunIntent || runInspection?.intentId !== pendingRunIntent.id || reconcilingRunId) return;
+    setReconcilingRunId(cycleId);
+    setRunError(null);
+    try {
+      // A person identifies the candidate. Independently read the native owner and its immutable
+      // model basis; matching a title alone is never reconciliation or inferred attachment.
+      const [run, provenance, executions] = await Promise.all([
+        getTestRun(cycleId), getModelStudioRunProvenance(projectId, cycleId), listCycleExecutions(cycleId),
+      ]);
+      const actualCases = [...new Set(executions.map((entry) => entry.testcaseId))].sort();
+      if (run.projectId !== projectId || provenance?.modelId !== pendingRunIntent.modelId ||
+          provenance.modelRevisionId !== pendingRunIntent.revisionId || provenance.contentHash !== pendingRunIntent.contentHash ||
+          JSON.stringify(actualCases) !== JSON.stringify([...pendingRunIntent.request.caseIds].sort()) ||
+          (pendingRunIntent.request.name !== undefined && run.name !== pendingRunIntent.request.name) ||
+          (run.environment ?? "") !== (pendingRunIntent.request.environment ?? "")) {
+        throw new Error("This native run does not match the saved model revision, cases and request context. The request outcome remains unknown.");
+      }
+      clearResolvedRunIntent(pendingRunIntent);
+      if (visibleRunScope.current !== runScopeKey) return;
+      setRunNotice({ key: runScopeKey, text: "Using the native run you identified; its model basis and cases were read back.",
+        href: `/projects/${projectId}/cycles/${cycleId}`, linkText: run.name });
+      setRunInspection(null);
+      setDuplicateAcknowledged(false);
+      setReloadToken((token) => token + 1);
+    } catch (cause) {
+      if (visibleRunScope.current === runScopeKey) setRunError(cause instanceof Error ? cause.message : "Could not verify the selected native run. The request outcome remains unknown.");
+    } finally { setReconcilingRunId(null); }
+  }
+
+  function allowSeparateRunRequest() {
+    if (!pendingRunIntent || runInspection?.intentId !== pendingRunIntent.id || !duplicateAcknowledged || runBusy) return;
+    try {
+      clearModelRunIntent(window.localStorage, runScope, pendingRunIntent.id);
+      setRunName(pendingRunIntent.request.name ?? "");
+      setRunEnvironment(pendingRunIntent.request.environment ?? "");
+      setExcludedRunCaseIds(approvedRunCaseIds.filter((id) => !pendingRunIntent.request.caseIds.includes(id)));
+      setRunRecovery((current) => current.key === runScopeKey && current.intent?.id === pendingRunIntent.id ? { ...current, intent: null } : current);
+      setRunInspection(null);
+      setDuplicateAcknowledged(false);
+      setRunNotice({ key: runScopeKey, text: "The previous request remains unconfirmed. Starting now creates a separate request and may duplicate that run.",
+        href: `/projects/${projectId}/cycles`, linkText: "Native Test Runs" });
+      setRunError(null);
+    } catch { setRunError("The saved request could not be released. No new request was sent."); }
   }
 
   const revision: ModelStudioRevision | null =
@@ -472,7 +654,10 @@ export default function ModelStudioPage() {
               <button
                 key={model.id}
                 type="button"
-                onClick={() => setSelectedModelId(model.id)}
+                onClick={() => {
+                  visibleRunScope.current = modelRunIntentKey({ ...runScope, modelId: model.id });
+                  setSelectedModelId(model.id);
+                }}
                 aria-current={model.id === selectedModelId ? "true" : undefined}
                 className={`block w-full rounded px-2 py-1.5 text-left text-[12.5px] ${
                   model.id === selectedModelId
@@ -489,14 +674,15 @@ export default function ModelStudioPage() {
           </nav>
 
           {currentDetail && revision && (
-            <section className="min-w-0 space-y-4">
+            <section aria-label="Selected model" aria-busy={detailLoading} className="min-w-0 space-y-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h2 className="text-lg font-semibold">{currentDetail.name}</h2>
                   <p className="mt-1 text-[12px] text-[var(--muted)]">
                     Expected model · {revision.status} ·{" "}
                     {revision.approval.status === "APPROVED" ? "Approved" : "Not approved"} · Runtime evidence:{" "}
-                    {currentCoverage?.executionAssertion === "governed-runs" ? "governed runs" : "none"}
+                    {currentCoverage ? currentCoverage.executionAssertion === "governed-runs" ? "governed runs" : "none"
+                      : coverageLoading ? "loading" : "unavailable"}
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
@@ -779,7 +965,7 @@ export default function ModelStudioPage() {
                     )}
                     {currentCoverage.caseEvidence.length > 0 && (
                       <div className="mt-3">
-                        <h4 className="text-[12px] font-semibold">Observed case results</h4>
+                        <h4 className="text-[12px] font-semibold">Linked case history across native runs</h4>
                         <ul className="mt-1 space-y-1 text-[12px]">
                           {currentCoverage.caseEvidence.map((evidence) => (
                             <li
@@ -803,11 +989,13 @@ export default function ModelStudioPage() {
                     <MappingStalenessNote staleness={currentCoverage.mappingStaleness} />
                   </>
                 ) : (
-                  <p className="mt-2 text-[12px] text-[var(--muted)]">Coverage is unavailable.</p>
+                  <p role={coverageLoading ? undefined : "alert"} className="mt-2 text-[12px] text-[var(--muted)]">
+                    {coverageLoading ? "Loading model coverage…" : `Coverage is unavailable. ${coverageError ?? "Retry coverage in Model runs."}`}
+                  </p>
                 )}
               </section>
 
-              <section aria-label="Model runs" className="rounded border border-[var(--border)] p-3">
+              <section aria-label="Model runs" aria-busy={coverageLoading} className="rounded border border-[var(--border)] p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="font-medium">Model runs</h3>
                   {currentCoverage && (
@@ -817,12 +1005,85 @@ export default function ModelStudioPage() {
                         : "Runtime evidence: none"}
                     </span>
                   )}
+                  <button type="button" disabled={coverageLoading} onClick={() => setCoverageRetry((value) => value + 1)}
+                    className="rounded border border-[var(--border)] px-2 py-1 text-[12px] hover:bg-[var(--surface-secondary)] disabled:opacity-60">
+                    {coverageLoading ? "Loading coverage…" : currentCoverage ? "Refresh coverage" : "Retry coverage"}
+                  </button>
                 </div>
                 <p className="mt-1 text-[11.5px] text-[var(--muted)]">
                   A run starts only from the model&apos;s current, approved revision, and only with Approved
                   cases that belong to it. Results are case outcomes — not proof that the modeled behavior
                   is correct.
                 </p>
+                {!currentCoverage && (
+                  <p role={coverageLoading ? undefined : "alert"} className="mt-2 text-[12px] text-[var(--muted)]">
+                    {coverageLoading ? "Loading model coverage…" : `Coverage is unavailable. ${coverageError ?? "Try the coverage read again."}`}{" "}
+                    Starting a run is blocked until its case eligibility can be checked.
+                  </p>
+                )}
+                {pendingRunIntent && !runBusy && (
+                  <section aria-label="Run request recovery" data-outcome="OUTCOME_UNKNOWN"
+                    className="mt-3 space-y-2 rounded border border-[var(--warning)] bg-[var(--warning-soft)] p-3 text-[12px]">
+                    <p role="alert">
+                      <strong>Run creation outcome unknown.</strong> The request may already have committed.
+                      Starting another run is blocked until you inspect native Test Runs. A matching name is
+                      only a candidate, not proof that it came from this request.
+                    </p>
+                    <p>
+                      Requested {formatDate(pendingRunIntent.requestedAt)}: {pendingRunIntent.modelName}, revision {pendingRunIntent.revisionNumber};{" "}
+                      {pendingRunIntent.request.caseIds.length} case{pendingRunIntent.request.caseIds.length === 1 ? "" : "s"}.
+                    </p>
+                    <p>Run name: <strong>{pendingRunIntent.request.name ?? "Default from the model and revision"}</strong>.{" "}
+                      Environment: {pendingRunIntent.request.environment || "Not specified"}.</p>
+                    <details>
+                      <summary className="cursor-pointer">Saved request details</summary>
+                      <p className="break-all">Model revision: {pendingRunIntent.revisionId}. Content: {pendingRunIntent.contentHash}.</p>
+                      <p className="break-all">Request reference: {pendingRunIntent.id}. This browser reference is not a server receipt.</p>
+                      <ul aria-label="Requested case identifiers">{pendingRunIntent.request.caseIds.map((id) => <li key={id}>{id}</li>)}</ul>
+                    </details>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <button type="button" onClick={() => void inspectExistingRuns()} disabled={inspectingRuns || !!reconcilingRunId}
+                        className="rounded border border-[var(--border)] px-2 py-1 disabled:opacity-60">
+                        {inspectingRuns ? "Inspecting runs…" : "Inspect existing runs"}
+                      </button>
+                      <Link href={`/projects/${projectId}/cycles`} target="_blank" rel="noopener noreferrer" className="underline">Open native Test Runs</Link>
+                    </div>
+                    {runInspection?.intentId === pendingRunIntent.id && (
+                      <div className="space-y-2">
+                        <p>Native run readback completed. Inspect a candidate and identify it explicitly; this list alone does not settle the request.</p>
+                        {runInspection.runs.length ? (
+                          <ul aria-label="Native runs to inspect" className="space-y-2">
+                            {[...runInspection.runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 20).map((run) => (
+                              <li key={run.id} className="flex flex-wrap items-center gap-2">
+                                <Link href={`/projects/${projectId}/cycles/${run.id}`} target="_blank" rel="noopener noreferrer" className="underline">{run.name}</Link>
+                                <span>{run.externalId} · {formatDate(run.createdAt)} · {run.totalCases} cases · {run.environment || "No environment"}</span>
+                                <button type="button" disabled={!!reconcilingRunId} onClick={() => void selectInspectedRun(run.id)}
+                                  aria-label={`Use inspected run ${run.name}`} className="rounded border border-[var(--border)] px-2 py-1 disabled:opacity-60">
+                                  {reconcilingRunId === run.id ? "Checking run…" : "I identified this run"}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : <p>No native runs were returned. A delayed request may still commit; this is not proof of failure.</p>}
+                        {runInspection.runs.length > 20 && <p>Showing the latest 20 of {runInspection.runs.length} runs. Inspect the full native Test Runs list as well.</p>}
+                        <label className="flex items-start gap-2">
+                          <input type="checkbox" checked={duplicateAcknowledged}
+                            onChange={(event) => setDuplicateAcknowledged(event.target.checked)} disabled={!!reconcilingRunId} />
+                          I inspected native runs and understand a separate new request may create a duplicate.
+                        </label>
+                        <button type="button" disabled={!duplicateAcknowledged || !!reconcilingRunId}
+                          onClick={allowSeparateRunRequest} className="rounded border border-[var(--border)] px-2 py-1 disabled:opacity-60">
+                          Allow a separate new request
+                        </button>
+                      </div>
+                    )}
+                  </section>
+                )}
+                {runRecovery.key === runScopeKey && runRecovery.error && (
+                  <p role="alert" className="mt-2 text-[12px] text-[var(--error-foreground)]">{runRecovery.error}{" "}
+                    <Link href={`/projects/${projectId}/cycles`} className="underline">Open native Test Runs</Link>
+                  </p>
+                )}
                 {!latestRevision ? (
                   <p className="mt-2 text-[12px] text-[var(--muted)]">This model has no revision to run.</p>
                 ) : latestRevision.approval.status !== "APPROVED" ? (
@@ -831,7 +1092,7 @@ export default function ModelStudioPage() {
                   </p>
                 ) : (
                   <>
-                    {eligibleRunCases.length === 0 ? (
+                    {currentCoverage && (eligibleRunCases.length === 0 ? (
                       <p className="mt-2 text-[12px] text-[var(--muted)]">
                         No cases belong to this revision yet. Generate cases from its proposals or link
                         existing cases.
@@ -840,7 +1101,8 @@ export default function ModelStudioPage() {
                       <ul aria-label="Eligible model cases" className="mt-2 space-y-1 text-[12px]">
                         {eligibleRunCases.map((entry) => {
                           const selectable = !entry.deleted && entry.status === "Approved";
-                          const checked = selectable && !excludedRunCaseIds.includes(entry.testcaseId);
+                          const checked = pendingRunIntent ? pendingRunIntent.request.caseIds.includes(entry.testcaseId)
+                            : selectable && !excludedRunCaseIds.includes(entry.testcaseId);
                           return (
                             <li
                               key={entry.testcaseId}
@@ -850,7 +1112,7 @@ export default function ModelStudioPage() {
                                 <input
                                   type="checkbox"
                                   aria-label={`Include ${entry.title}`}
-                                  disabled={!selectable}
+                                  disabled={!selectable || runBusy || !!pendingRunIntent || !runRecoveryReady}
                                   checked={checked}
                                   onChange={(event) =>
                                     setExcludedRunCaseIds((current) =>
@@ -876,12 +1138,13 @@ export default function ModelStudioPage() {
                           );
                         })}
                       </ul>
-                    )}
+                    ))}
                     <div className="mt-2 grid gap-2 sm:grid-cols-2">
                       <label className="text-[12px] text-[var(--muted)]">
                         Run name (optional)
                         <input
-                          value={runName}
+                          value={pendingRunIntent ? pendingRunIntent.request.name ?? "" : runName}
+                          disabled={runBusy || !!pendingRunIntent || !runRecoveryReady}
                           onChange={(event) => setRunName(event.target.value)}
                           placeholder="Defaults to the model and revision"
                           className="mt-1 block w-full rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-[12px] text-[var(--foreground)]"
@@ -890,7 +1153,8 @@ export default function ModelStudioPage() {
                       <label className="text-[12px] text-[var(--muted)]">
                         Environment (optional)
                         <input
-                          value={runEnvironment}
+                          value={pendingRunIntent ? pendingRunIntent.request.environment ?? "" : runEnvironment}
+                          disabled={runBusy || !!pendingRunIntent || !runRecoveryReady}
                           onChange={(event) => setRunEnvironment(event.target.value)}
                           className="mt-1 block w-full rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-[12px] text-[var(--foreground)]"
                         />
@@ -900,12 +1164,12 @@ export default function ModelStudioPage() {
                       <button
                         type="button"
                         onClick={() => void dispatchModelRun()}
-                        disabled={runBusy || !selectedRunCaseIds.length}
+                        disabled={runBusy || !currentCoverage || !selectedRunCaseIds.length || !!pendingRunIntent || !runRecoveryReady}
                         className="rounded border border-[var(--border)] px-2 py-1 text-[12px] hover:bg-[var(--surface-secondary)] disabled:opacity-60"
                       >
                         {runBusy
                           ? "Starting…"
-                          : `Start run with ${selectedRunCaseIds.length} case${selectedRunCaseIds.length === 1 ? "" : "s"}`}
+                          : !currentCoverage ? "Start run" : `Start run with ${selectedRunCaseIds.length} case${selectedRunCaseIds.length === 1 ? "" : "s"}`}
                       </button>
                       {!selectedRunCaseIds.length && eligibleRunCases.length > 0 && (
                         <span className="text-[11.5px] text-[var(--muted)]">
@@ -913,20 +1177,13 @@ export default function ModelStudioPage() {
                         </span>
                       )}
                     </div>
-                    {runError && (
-                      <p role="alert" className="mt-2 text-[12px] text-[var(--error-foreground)]">
-                        {runError}
-                      </p>
-                    )}
-                    {runNotice && (
-                      <p role="status" className="mt-2 rounded border border-[var(--border)] bg-[var(--surface-secondary)] p-2 text-[12px]">
-                        {runNotice.text}{" "}
-                        <Link href={runNotice.href} className="text-[var(--accent-light)] hover:underline">
-                          {runNotice.linkText}
-                        </Link>
-                      </p>
-                    )}
                   </>
+                )}
+                {runError?.key === runScopeKey && <p role="alert" className="mt-2 text-[12px] text-[var(--error-foreground)]">{runError.message}</p>}
+                {runNotice?.key === runScopeKey && (
+                  <p role="status" className="mt-2 rounded border border-[var(--border)] bg-[var(--surface-secondary)] p-2 text-[12px]">
+                    {runNotice.text}{" "}<Link href={runNotice.href} className="text-[var(--accent-light)] hover:underline">{runNotice.linkText}</Link>
+                  </p>
                 )}
                 {currentCoverage && currentCoverage.governedRuns.length > 0 && (
                   <div className="mt-3">
@@ -944,8 +1201,11 @@ export default function ModelStudioPage() {
                             {run.name}
                           </Link>
                           <span className="text-[11px] text-[var(--muted)]">
-                            {formatDate(run.createdAt)} · {run.caseCount} case{run.caseCount === 1 ? "" : "s"}
+                            {formatDate(run.createdAt)} · {run.caseCount} dispatched case{run.caseCount === 1 ? "" : "s"}
                             {run.runDeleted ? " · run deleted" : ""}
+                            {run.occurrenceBasis === "UNKNOWN" ? " · occurrence basis UNKNOWN" : ""}
+                            {run.unavailableCaseCount > 0 ? ` · ${run.unavailableCaseCount} original occurrence${run.unavailableCaseCount === 1 ? "" : "s"} unavailable` : ""}
+                            {run.unknownCaseCount > 0 ? ` · ${run.unknownCaseCount} case${run.unknownCaseCount === 1 ? "" : "s"} without recorded occurrence` : ""}
                             {Object.keys(run.statusCounts).length > 0 &&
                               ` · ${Object.entries(run.statusCounts)
                                 .map(([status, count]) => `${status} ${count}`)
@@ -954,6 +1214,9 @@ export default function ModelStudioPage() {
                         </li>
                       ))}
                     </ul>
+                    <p className="mt-1 text-[11px] text-[var(--muted)]">
+                      Results use the original active occurrences recorded at dispatch. Later native additions are not attributed to this model run.
+                    </p>
                   </div>
                 )}
                 {currentCoverage && currentCoverage.observedByElement.length > 0 && (
@@ -975,7 +1238,7 @@ export default function ModelStudioPage() {
                       ))}
                     </ul>
                     <p className="mt-1 text-[11px] text-[var(--muted)]">
-                      Case outcomes from governed runs, grouped by model element. Not behavioral coverage or
+                      Case outcomes from original active dispatch occurrences, grouped by model element. Not behavioral coverage or
                       verification.
                     </p>
                   </div>

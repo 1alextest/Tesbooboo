@@ -1,5 +1,6 @@
 import { expect, request, test, type APIRequestContext } from "@playwright/test";
 import { env, testAddress } from "../utils/env";
+import { createApprovedTestcase } from "../utils/testcase-approval";
 import { exec, execMany, literal, scalar } from "../utils/psql";
 import {
   clearInvitations,
@@ -400,13 +401,9 @@ test.describe("notifications — Phase 1 matrix", () => {
     const testcaseIds: string[] = [];
     const tcIds: string[] = [];
     for (let i = 0; i < count; i++) {
-      const res = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/testcases`, { data: { title: stamp(`case ${i + 1}`) } });
-      expect(res.status(), await res.text()).toBe(201);
-      const tc = await res.json();
-      testcaseIds.push(tc.id);
-      tcIds.push(tc.externalId);
-      // Native test runs only accept Approved cases (the canonical add boundary enforces it).
-      exec(`UPDATE testcases SET status='Approved' WHERE id=${literal(tc.id)};`);
+      const testcase = await createApprovedTestcase(asOwner, tenant!.mainProjectId, { title: stamp(`case ${i + 1}`) });
+      testcaseIds.push(testcase.id);
+      tcIds.push(testcase.externalId);
     }
     const cycleName = stamp("run");
     // ownerId: the run owner is one of the two recipients of a failed / blocked case.

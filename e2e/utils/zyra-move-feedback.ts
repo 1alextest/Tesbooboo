@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expect, type APIRequestContext } from "@playwright/test";
 import type { FakeAiServer } from "./fake-ai-server";
 import type { AnswerRepositoryState } from "./zyra-answer-feedback";
-import { SUITE_OPERATION_ERROR } from "./zyra-suite-feedback";
+import { assertMoveAudit, assertMovesStillUnpublished, governingMoveRepositoryState, readReviewedMoves, saveReviewedMoves, unchangedMoveContent, type MoveReviewPreview } from "./zyra-reviewed-moves";
 
 export const MOVE_MODES = ["failed", "partial", "moved", "no-match"] as const;
 export type MoveMode = typeof MOVE_MODES[number];
@@ -52,14 +52,17 @@ export async function withMoveUpdateFailure<T>(projectId: string, testcaseId: st
   }
 }
 
-/** Only provider routing is scripted; application, shared writers, finalization and readback are real. */
+/** Only routing is scripted; exact review, transactional rollback and selected apply are real. */
 export async function verifyZyraMoveTurn(input: {
   request: APIRequestContext; ai: FakeAiServer; base: string; ownerId: string; language: "en" | "ru";
   mode: MoveMode; fixture: MoveFixture; state: () => Promise<MoveRepositoryState>;
+  beforeApply?: (preview: MoveReviewPreview) => Promise<void>;
   afterReply?: (evidence: { sessionId: string; language: "en" | "ru"; mode: MoveMode; reply: string; warning: string | null;
-    session: Record<string, unknown>; fixture: MoveFixture; before: MoveRepositoryState; after: MoveRepositoryState }) => Promise<void>;
+    session: Record<string, unknown>; fixture: MoveFixture; before: MoveRepositoryState; staged: MoveRepositoryState;
+    failedApply: { status: number; response: string } | null; after: MoveRepositoryState }) => Promise<void>;
 }) {
-  const { request, ai, base, ownerId, language, mode, fixture, state, afterReply } = input;
+  const { request, ai, base, ownerId, language, mode, fixture, state: rawState, afterReply } = input;
+  const state = async () => governingMoveRepositoryState(await rawState());
   const failed = mode === "failed" || mode === "partial", moved = mode === "partial" || mode === "moved";
   const before = await state(), calls = ai.requests.length;
   const reply = language === "en" ? "Moved the requested test cases." : "Запрошенные тест-кейсы перемещены.";
@@ -67,6 +70,7 @@ export async function verifyZyraMoveTurn(input: {
   if (mode === "partial") operations.push({ type: "create_suite", suiteName: fixture.keptSuiteName });
   if (moved) operations.push({ type: "move_to_suite", suiteId: fixture.destinationId, testcaseIds: [fixture.firstId] });
   if (failed || mode === "no-match") operations.push({ type: "move_to_suite", suiteId: fixture.destinationId, testcaseIds: [failed ? fixture.secondId : randomUUID()] });
+  const proposedIds = [...(moved ? [fixture.firstId] : []), ...(failed ? [fixture.secondId] : [])];
   let sessionId = "";
   try {
     const created = await request.post(`${base}/agents/zyra/chat/sessions`, { data: { title: `E2E move ${language} ${mode} ${randomUUID()}` } });
@@ -88,50 +92,74 @@ export async function verifyZyraMoveTurn(input: {
     const message = assistants[0];
     expect(message.content).toBe(response.message.content);
     expect(message.actionType).toBe("suite");
-    expect(message.reviewRequestId ?? null).toBeNull();
-    expect(message.testcases.map((row: Record<string, unknown>) => row.id)).toEqual(moved ? [fixture.firstId] : []);
-    expect(message.testcases.every((row: Record<string, unknown>) => row.action === "moved")).toBe(true);
-    expect(message.activity.filter((entry: Record<string, unknown>) => entry.title === "An operation failed unexpectedly")).toHaveLength(failed ? 1 : 0);
+    expect(message.testcases.map((row: Record<string, unknown>) => row.id)).toEqual(proposedIds);
+    expect(message.testcases.every((row: Record<string, unknown>) => row.action === "proposed-update")).toBe(true);
+    // The injected writer failure is not reached while staging proposals.
+    expect(message.activity.filter((entry: Record<string, unknown>) => entry.title === "An operation failed unexpectedly")).toHaveLength(0);
+    const staged = await state();
+    assertMovesStillUnpublished(before, staged);
+    expect(staged.reviews.length - before.reviews.length).toBe(proposedIds.length ? 1 : 0);
+    expect(staged.reviews.filter((row) => before.reviews.some((old) => (old as { id: string }).id === (row as { id: string }).id))).toEqual(before.reviews);
+    const reviewed = proposedIds.length ? await readReviewedMoves(request, base, message.reviewRequestId,
+      proposedIds.map((testcaseId) => ({ testcaseId, suiteId: fixture.destinationId }))) : null;
+    if (!reviewed) expect(message.reviewRequestId ?? null).toBeNull();
+    const refusedSuite = mode === "partial";
+    const visibleReply = refusedSuite ? String(message.content).split("\n\n")[0] : reply;
+    expect(message.activity.filter((entry: Record<string, unknown>) => entry.title === "Could not create suite")).toHaveLength(refusedSuite ? 1 : 0);
+    await input.beforeApply?.({ sessionId, language, reply: visibleReply, before, reviewed, proposedCount: proposedIds.length,
+      traceOutcome: refusedSuite ? "completed_with_errors" : "completed", stagingStatus: refusedSuite ? "failed" : "ok" });
+    let failedApply: { status: number; response: string } | null = null;
+    let selected: number[] = [];
+    if (reviewed && failed) {
+      const failedSave = await request.post(`${base}/agents/zyra/tasks/${reviewed.id}/save`, {
+        data: { expectedProposalRevision: reviewed.revision, selectedDraftIndexes: reviewed.snapshot.operations.map((_, index) => index) }, failOnStatusCode: false,
+      });
+      failedApply = { status: failedSave.status(), response: await failedSave.text() };
+      expect(failedApply.status).toBe(500);
+      expect(failedApply.response).not.toContain("E2E private injected move failure");
+      expect(await state(), "failed selected batch rolls back cases, versions, review and audit").toEqual(staged);
+    }
+    if (reviewed && moved) {
+      // The failing trigger stays installed. The human fixture explicitly selects only the valid
+      // operation after the failed whole-batch attempt; this must not retry the rejected operation.
+      selected = reviewed.snapshot.operations.flatMap((operation, index) => operation.testcaseId === fixture.firstId ? [index] : []);
+      expect(selected).toHaveLength(1);
+      await saveReviewedMoves(request, base, reviewed, ownerId, selected);
+    }
     const after = await state();
-    expect(after.reviews).toEqual(before.reviews);
     expect(after.cases).toHaveLength(before.cases.length);
     for (const old of before.cases) {
       const current = after.cases.find((row) => row.id === old.id)!;
       if (moved && old.id === fixture.firstId) {
         expect(current.suite_id).toBe(fixture.destinationId); expect(current.updated_by).toBe(ownerId);
-        const content = (row: Record<string, unknown>) => Object.fromEntries(Object.entries(row).filter(([key]) => !["suite_id", "updated_by", "updated_at"].includes(key)));
-        expect(content(current), "a suite move must not rewrite testcase content or provenance").toEqual(content(old));
+        expect(unchangedMoveContent(current), "a suite move preserves testcase content and provenance").toEqual(unchangedMoveContent(old));
+        expect(Number(current.review_dependency_revision)).toBe(Number(old.review_dependency_revision) + 1);
       } else expect(current).toEqual(old);
     }
     for (const old of before.history) expect(after.history.find((row) => row.testcase_id === old.testcase_id && row.version === old.version)).toEqual(old);
     const addedHistory = after.history.filter((row) => !before.history.some((old) => old.testcase_id === row.testcase_id && old.version === row.version));
     expect(addedHistory).toHaveLength(moved ? 1 : 0);
     if (moved) expect(addedHistory[0]).toMatchObject({ testcase_id: fixture.firstId, changed_by: ownerId, change_type: "update", snapshot: before.cases.find((row) => row.id === fixture.firstId) });
+    expect(after.suites).toEqual(staged.suites);
     expect(after.suites.filter((row) => before.suites.some((old) => (old as Record<string, unknown>).id === (row as Record<string, unknown>).id))).toEqual(before.suites);
     const newSuites = after.suites.filter((row) => !before.suites.some((old) => (old as Record<string, unknown>).id === (row as Record<string, unknown>).id)) as Array<Record<string, unknown>>;
-    expect(newSuites.map((row) => row.name)).toEqual(mode === "partial" ? [fixture.keptSuiteName] : []);
-    const oldAudit = before.audit as Array<Record<string, unknown>>, currentAudit = after.audit as Array<Record<string, unknown>>;
-    expect(currentAudit.filter((row) => oldAudit.some((old) => old.id === row.id))).toEqual(oldAudit);
-    const addedAudit = currentAudit.filter((row) => !oldAudit.some((old) => old.id === row.id));
-    expect(addedAudit.map((row) => row.action).sort()).toEqual(mode === "partial" ? ["zyra_moved_to_suite", "zyra_suite_created"] : moved ? ["zyra_moved_to_suite"] : []);
-    for (const entry of addedAudit) {
-      expect(entry.actor_id).toBe(ownerId);
-      expect(entry.entity_id).toBe(entry.action === "zyra_moved_to_suite" ? fixture.destinationId : newSuites[0].id);
-    }
+    expect(newSuites).toEqual([]);
+    const stageAudit = (staged.audit as Array<Record<string, unknown>>).filter((row) => !(before.audit as Array<Record<string, unknown>>).some((old) => old.id === row.id));
+    expect(stageAudit).toEqual([]);
+    if (reviewed && moved) assertMoveAudit(staged, after, reviewed, ownerId, selected);
+    else expect(after).toEqual(staged);
     const users = session.messages.filter((entry: Record<string, unknown>) => entry.role === "user");
     expect(users).toHaveLength(1);
     const trace = users[0].trace;
     expect(trace.version).toBe(1);
     expect(trace.steps.filter((step: Record<string, unknown>) => step.stage === "staging")).toHaveLength(1);
-    expect(trace.steps.find((step: Record<string, unknown>) => step.stage === "finalizing").meta).toMatchObject({ savedCount: moved ? 1 : 0, proposedCount: 0 });
+    expect(trace.steps.find((step: Record<string, unknown>) => step.stage === "finalizing").meta).toMatchObject({ savedCount: 0, proposedCount: proposedIds.length });
     expect(message.content + JSON.stringify(trace)).not.toContain("E2E private injected move failure");
-    // Soft only on known red assertions, so independent persistence/browser controls still execute.
-    expect.soft(String(message.content).startsWith(SUITE_OPERATION_ERROR[language])).toBe(failed);
-    if (failed) expect.soft(message.content).not.toMatch(/do not exist in this project|в этом проекте нет/);
-    expect.soft(trace.outcome).toBe(failed ? "completed_with_errors" : "completed");
-    expect.soft(trace.steps.find((step: Record<string, unknown>) => step.stage === "staging").status).toBe(failed ? "failed" : "ok");
+    expect(trace.outcome).toBe(refusedSuite ? "completed_with_errors" : "completed");
+    expect(trace.steps.find((step: Record<string, unknown>) => step.stage === "staging").status).toBe(refusedSuite ? "failed" : "ok");
     if (mode === "no-match") expect(message.content).toContain(language === "en" ? "Nothing was saved" : "Ничего не сохранено");
-    await afterReply?.({ sessionId, language, mode, reply, warning: failed ? SUITE_OPERATION_ERROR[language] : null, session, fixture, before, after });
+    else expect(message.content).toMatch(language === "en" ? /staged for your review/ : /Ожидают вашей проверки/);
+    await afterReply?.({ sessionId, language, mode, reply: visibleReply, warning: null, session, fixture, before, staged, failedApply, after });
   } finally {
     if (sessionId) {
       const deleted = await request.delete(`${base}/agents/zyra/chat/sessions/${sessionId}`);

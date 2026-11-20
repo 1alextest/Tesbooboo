@@ -167,7 +167,8 @@ export interface RbacTenant {
   guest: RbacUser;
 }
 
-const PASSWORD = "E2E-Rbac-Pass-9f3!";
+// Positive seed credentials must also satisfy native change/reset policy for API cleanup.
+const PASSWORD = "E2e-Rbac-9!x";
 const MAIN_PROJECT = "RBAC Main Project";
 const SECOND_PROJECT = "RBAC Second Project";
 

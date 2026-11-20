@@ -19,7 +19,9 @@ export async function assertApprovedNewRunCases(
   client: PoolClient, projectId: string, cycleId: string, ids: readonly string[]
 ): Promise<void> {
   if (!ids.length) return;
-  const result = await client.query<{ id: string; status: string }>(
+  // Acquire parent locks before evaluating dependency-backed receipts. A separate statement
+  // avoids using a pre-wait snapshot after a concurrent dependent edit commits.
+  await client.query(
     `SELECT t.id::text AS id, t.status
        FROM testcases t
       WHERE t.project_id=$1::uuid AND t.id=ANY($2::uuid[])
@@ -32,11 +34,25 @@ export async function assertApprovedNewRunCases(
       ORDER BY t.id FOR SHARE OF t`,
     [projectId, [...ids], cycleId]
   );
-  const excluded = result.rows.filter((row) => row.status !== "Approved")
+  const result = await client.query<{ id: string; status: string; approval_current: boolean }>(
+    `SELECT t.id::text AS id, t.status,
+            EXISTS (SELECT 1 FROM testcase_approval_receipts r
+              WHERE r.testcase_id=t.id AND r.project_id=t.project_id
+                AND r.principal_kind='human_session' AND r.reviewed_snapshot IS NOT NULL
+                AND r.semantic_revision=encode(sha256(convert_to(testcase_approval_snapshot(t.id)::text,'UTF8')),'hex'))
+              AS approval_current
+       FROM testcases t
+      WHERE t.project_id=$1::uuid AND t.id=ANY($2::uuid[]) AND t.deleted_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM cycle_items ci WHERE ci.cycle_id=$3::uuid
+          AND ci.testcase_id=t.id AND ci.deleted_at IS NULL)`,
+    [projectId, [...ids], cycleId]
+  );
+  const excluded = result.rows.filter((row) => row.status !== "Approved" || row.approval_current !== true)
     .map((row) => row.id);
   if (excluded.length) {
     throw new ConflictException({
-      error: "Only Approved test cases can be added to a test run",
+      code: "TESTCASE_APPROVAL_REQUIRED",
+      error: "Only Approved test cases with a current exact human-review receipt can be added to a test run",
       testcaseIds: excluded
     });
   }

@@ -2075,6 +2075,112 @@ test.describe("knowledge base (UI)", () => {
     }
   });
 
+  test("KBU-65 approving a dirty AI-memory document saves first and reviews exactly those persisted bytes", async ({ browser }) => {
+    const created = await api.post(kbUrl("/documents"), { data: { title: stamp("Review dirty memory"), folderId: rootFolderId, documentType: "ai_memory", contentText: "Original", contentHtml: "<p>Original</p>" } });
+    expect(created.status()).toBe(201);
+    const doc = await created.json();
+    const page = await openDocument(browser, doc.id);
+    const updatedText = stamp("Visible content being approved");
+    await page.locator(".ProseMirror").first().fill(updatedText);
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(page.getByText("Approved memory", { exact: true })).toBeVisible();
+    const persisted = await (await api.get(kbUrl(`/documents/${doc.id}`))).json();
+    expect(persisted.contentText).toBe(updatedText);
+    expect(persisted.reviewedVersionId).toBeTruthy();
+    const receipt = await (await api.get(kbUrl(`/documents/${doc.id}/versions/${persisted.reviewedVersionId}`))).json();
+    expect(receipt).toMatchObject({ snapshotKind: "approved", contentText: updatedText });
+    expect(receipt.contentJson).toEqual(persisted.contentJson);
+    // History lives in the header's "More actions" menu, like every other View history journey.
+    await page.getByRole("button", { name: "More actions" }).click();
+    await page.getByRole("button", { name: "View history" }).click();
+    await expect(page.getByText(/^Approved exact version /)).toBeVisible();
+  });
+
+  test("KBU-66 a concurrent document edit refuses the stale review and preserves the reviewer's visible content", async ({ browser }) => {
+    const created = await api.post(kbUrl("/documents"), { data: { title: stamp("Stale review"), folderId: rootFolderId, documentType: "ai_memory", contentText: "Content actually reviewed", contentHtml: "<p>Content actually reviewed</p>" } });
+    expect(created.status()).toBe(201);
+    const doc = await created.json();
+    const page = await openDocument(browser, doc.id);
+    await expect(page.locator(".ProseMirror").first()).toContainText("Content actually reviewed");
+    const otherEdit = await api.patch(kbUrl(`/documents/${doc.id}`), { data: { contentText: "Someone else's newer change", contentHtml: "<p>Someone else's newer change</p>" } });
+    expect(otherEdit.status()).toBe(200);
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(page.getByText(/This document changed\. Reload and review the current version/)).toBeVisible();
+    await expect(page.locator(".ProseMirror").first()).toContainText("Content actually reviewed");
+    const persisted = await (await api.get(kbUrl(`/documents/${doc.id}`))).json();
+    expect(persisted).toMatchObject({ status: "draft", reviewedVersionId: null, contentText: "Someone else's newer change" });
+    await page.reload();
+    await expect(page.locator(".ProseMirror").first()).toContainText("Someone else's newer change");
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(page.getByText("Approved memory", { exact: true })).toBeVisible();
+  });
+
+  test("KBU-67 a failed pending save prevents the queued approval from being sent", async ({ browser }) => {
+    const created = await api.post(kbUrl("/documents"), { data: { title: stamp("Failed save review"), folderId: rootFolderId, documentType: "ai_memory", contentText: "Persisted original", contentHtml: "<p>Persisted original</p>" } });
+    expect(created.status()).toBe(201);
+    const doc = await created.json();
+    const page = await openDocument(browser, doc.id);
+    let reviewsSent = 0;
+    page.on("request", (request) => { if (request.url().includes(`${doc.id}/approve-ai-memory`)) reviewsSent++; });
+    await page.route(`**/knowledge-base/documents/${doc.id}`, async (route) => {
+      if (route.request().method() === "PATCH") {
+        await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Document save is temporarily unavailable" }) });
+      } else await route.continue();
+    });
+    await page.locator(".ProseMirror").first().fill("Uncommitted local draft");
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(page.getByText("Document save is temporarily unavailable", { exact: true })).toBeVisible();
+    expect(reviewsSent).toBe(0);
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(page.getByText("Save your changes successfully before reviewing this document.", { exact: true })).toBeVisible();
+    expect(reviewsSent).toBe(0);
+    await expect(page.locator(".ProseMirror").first()).toContainText("Uncommitted local draft");
+    expect((await (await api.get(kbUrl(`/documents/${doc.id}`))).json())).toMatchObject({ status: "draft", contentText: "Persisted original", reviewedVersionId: null });
+  });
+
+  test("KBU-68 review exposes the exact AI-context text alongside the formatted document", async ({ browser }) => {
+    const created = await api.post(kbUrl("/documents"), { data: {
+      title: stamp("Review representations"), folderId: rootFolderId, documentType: "ai_memory",
+      contentText: "Context text supplied by the source", contentHtml: "<p>Formatted source representation</p>",
+    } });
+    expect(created.status()).toBe(201);
+    const doc = await created.json();
+    const page = await openDocument(browser, doc.id);
+    await expect(page.locator(".ProseMirror").first()).toContainText("Formatted source representation");
+    await expect(page.getByLabel("Text supplied as AI context", { exact: true })).toHaveText("Context text supplied by the source");
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(page.getByText("Approved memory", { exact: true })).toBeVisible();
+    const current = await (await api.get(kbUrl(`/documents/${doc.id}`))).json();
+    const exact = await (await api.get(kbUrl(`/documents/${doc.id}/versions/${current.reviewedVersionId}`))).json();
+    expect(exact).toMatchObject({ contentText: "Context text supplied by the source", contentHtml: "<p>Formatted source representation</p>" });
+  });
+
+  test("KBU-69 a legacy approved memory stays unverified until an exact human re-review", async ({ browser }) => {
+    const contentText = "Unchanged legacy memory content";
+    const created = await api.post(kbUrl("/documents"), { data: {
+      title: stamp("Legacy memory review"), folderId: rootFolderId, documentType: "ai_memory",
+      contentText, contentHtml: `<p>${contentText}</p>`,
+    } });
+    expect(created.status()).toBe(201);
+    const doc = await created.json();
+    // Explicit historical fixture: migrations preserve old approved flags but never invent receipts.
+    exec(`UPDATE knowledge_documents SET status = 'approved', reviewed_by = ${literal(tenant!.owner.userId)}, reviewed_at = now(), reviewed_version_id = NULL WHERE id = ${literal(doc.id)} AND project_id = ${literal(tenant!.mainProjectId)}`);
+    const legacy = await (await api.get(kbUrl(`/documents/${doc.id}`))).json();
+    expect(legacy).toMatchObject({ status: "approved", reviewBinding: "legacy_unverified", reviewedVersionId: null });
+    const page = await openDocument(browser, doc.id);
+    await expect(page.getByText("Review required", { exact: true })).toBeVisible();
+    await expect(page.getByText("Approved memory", { exact: true })).toHaveCount(0);
+    await expect(page.getByText(/excluded from AI context until an owner or manager reviews it again/)).toBeVisible();
+    await expect(page.getByLabel("Text supplied as AI context", { exact: true })).toHaveText(contentText);
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(page.getByText("Approved memory", { exact: true })).toBeVisible();
+    const current = await (await api.get(kbUrl(`/documents/${doc.id}`))).json();
+    expect(current).toMatchObject({ status: "approved", reviewBinding: "exact_snapshot", contentText });
+    expect(current.reviewedVersionId).toBeTruthy();
+    const exact = await (await api.get(kbUrl(`/documents/${doc.id}/versions/${current.reviewedVersionId}`))).json();
+    expect(exact).toMatchObject({ snapshotKind: "approved", contentText });
+  });
+
   // ─── Regression: Markdown pasted into a document was stored as raw text ("# Title", "* item",
   //     "**bold**" all literal, one paragraph per line) because the editor only ever parsed a
   //     clipboard's HTML. Markdown is now parsed on paste — but only when there is no rich HTML to

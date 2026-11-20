@@ -1,0 +1,111 @@
+{
+  "receipt_scope": "Independent actual five-image Purple addendum; source review of pending eleven-capture delta; no runtime execution",
+  "inspected_at_utc": "2026-11-20T03:59:09.148714+00:00",
+  "source": "965a87a13d2669354598f8d4b912f36fdb148867",
+  "actual_build": "e49fab4df4043b621b7007e97d8646743f441b6b",
+  "ci_run": 44667829454,
+  "source_tree": "b3c497bdb7a43cd43e8d0535f663c542cba88186",
+  "build_tree": "b3c497bdb7a43cd43e8d0535f663c542cba88186",
+  "build_parents": [
+    "6897f989b055a955280f810c7daace86f74057fa",
+    "965a87a13d2669354598f8d4b912f36fdb148867"
+  ],
+  "observed_main_head": "be0240f413780770c427c4b589a29348d900ec65",
+  "archive": {
+    "path": "/workspace/scratch/fb086055b433/tesbo-ci-evidence/965a87a1/ci-smoke-evidence.zip",
+    "sha256": "606d02869014f699136eec46ef830bd630cc15df8527593d60660539b2b2bfd3",
+    "bytes": 36776144,
+    "entries": 247
+  },
+  "capture_index_sha256": "f539b78ff994463730a16656701428758213e0c56df5b0bff199f429c8fabfdb",
+  "html_sha256": "d42deb0aeb53b4ef7493139fadab035b7c120c8db26d73b2990754c224e4b4aa",
+  "report_json_sha256": "31403f3f04cfaa2bd316a2aa298894c10d59840dde5b85305d4ce82b7ebce0f6",
+  "model_tests": {
+    "total": 19,
+    "expected": 19,
+    "unexpected": 0,
+    "flaky": 0,
+    "skipped": 0,
+    "ok": true
+  },
+  "model_api_tests": 10,
+  "model_ui_tests": 9,
+  "source_inputs": {
+    "Tesbo-Frontend/app/(app)/layout.tsx": {
+      "source965_sha256": "0509e5d7549c7d2eb3bbe85174a2e1502c009619bae8b7b7966a4173abb4e47b",
+      "main_worktree_sha256": "0509e5d7549c7d2eb3bbe85174a2e1502c009619bae8b7b7966a4173abb4e47b",
+      "identical": true
+    },
+    "Tesbo-Frontend/app/(app)/projects/[id]/model-studio/page.tsx": {
+      "source965_sha256": "6097f407a914d2b11852d618bb7c1337bb657867b5fc2bca7faa985839dcbe4d",
+      "main_worktree_sha256": "6097f407a914d2b11852d618bb7c1337bb657867b5fc2bca7faa985839dcbe4d",
+      "identical": true
+    },
+    "Tesbo-Frontend/app/(app)/projects/[id]/cycles/[cycleId]/page.tsx": {
+      "source965_sha256": "ed3628e7313841bd3c36904033b1c21dcf0bb23b71472b8fa8c1f15e7e4ed021",
+      "main_worktree_sha256": "ed3628e7313841bd3c36904033b1c21dcf0bb23b71472b8fa8c1f15e7e4ed021",
+      "identical": true
+    },
+    "Tesbo-Frontend/components/model-studio/model-run-intent.ts": {
+      "source965_sha256": "bec1eb70ccf2b07a6aca16b86073d2512b6faf75bf9de4ab969b719816a786ed",
+      "main_worktree_sha256": "bec1eb70ccf2b07a6aca16b86073d2512b6faf75bf9de4ab969b719816a786ed",
+      "identical": true
+    },
+    "e2e/ui/model-studio.spec.ts": {
+      "source965_sha256": "ed7adcb73f69f4005699d300c0421aabea859ecb2339a2ce9588c76658cd6666",
+      "main_worktree_sha256": "15408bc8af9e54564f51d412560b2a5eec8302bcd8576b292ff0f7aca965006d",
+      "identical": false
+    },
+    "e2e/playwright.config.ts": {
+      "source965_sha256": "7b34962dc4e37bbeff46deb241a9adfef21289e8ae182a2117d31b14e7b17d03",
+      "main_worktree_sha256": "7b34962dc4e37bbeff46deb241a9adfef21289e8ae182a2117d31b14e7b17d03",
+      "identical": true
+    }
+  },
+  "pending_capture_delta": {
+    "file": "e2e/ui/model-studio.spec.ts",
+    "sha256": "15408bc8af9e54564f51d412560b2a5eec8302bcd8576b292ff0f7aca965006d",
+    "patch_file": "purple-model-965-capture-delta.patch",
+    "patch_sha256": "05e4b88de6e3cd8655f132f83f63dca947b033e42b3ade5577b89ae81e2baa7b",
+    "added_lines": 41,
+    "removed_lines": 0,
+    "attachment_names": [
+      "model-run-outcome-unknown-host-context",
+      "model-run-outcome-unknown-after-reload",
+      "model-run-outcome-unknown-retained-disabled-form",
+      "model-run-reconciled-historical-revision-selector",
+      "model-run-reconciled-historical-revision-retained",
+      "model-coverage-unavailable-draft-retained",
+      "model-coverage-recovered-host-context",
+      "model-coverage-recovered-selection-retained",
+      "model-original-occurrence-unavailable-host-context",
+      "model-original-occurrence-unavailable-after-native-readd",
+      "model-native-run-original-dispatch-provenance"
+    ],
+    "viewport_guards_total": 21,
+    "full_ratio_guards": 21,
+    "runtime_result": "NOT RUN by this reviewer; refreshed actual eleven PNGs pending"
+  },
+  "prior_preserved": {
+    "purple-model-recovery-delta.md": "8fa805a79e909e49e022cfd67e432e36b2f9c06f3c2a8bb72d4a7cca96338468",
+    "purple-model-recovery-capture-index.json": "bb5d7a9b6ee31896ebdcd3fb2579c029026b40b5aa05926f6fb25e819994fec6",
+    "purple-model-recovery-inputs.json": "84c2064bba1a5ebf96ee25cbc1e54b7e417ecb8a1323db2e905d34e85f253a3e"
+  },
+  "method": {
+    ".claude/agents/purple-team.md": "9cd28ab82a771de754432b0e40a0e6319da54e6f2ba4c63fd2c2e3580792aeae",
+    ".kiro/steering/teams/review-orchestration.md": "023a64168c5160a761b91e7496b8a35b89246baf7eda0ab62bac17a7fa44771e",
+    "docs/reviews/NESBERRY-PURPLE-TEAM-DESIGN-ASSURANCE.md": "4b5cf3379fe058f0826a360556759ae7a6b7bd9f4051e9d79d519cc383f7bc73",
+    "docs/policies/governance/POL-GOVERNANCE-ASSURANCE-PORTABILITY/v001.md": "33c69cba82f7d98773e85a30fa1afff15cc0dbcec0d88302a0295ce06e2c8524",
+    "docs/policies/governance/POL-GOVERNANCE-MOCKUP-WHOLE-PAGE-JOURNEY/v001.md": "bf778904da7ee598324d60486cedbf49211df4091bd3c04955504e09ad0479d4",
+    "docs/policies/governance/POL-GOVERNANCE-ASSURANCE-EVIDENCE/v001.md": "a6176c0c75342dfa6cbf66cf64e00b9a2940a47655f343e255b96f4fa58c5d52"
+  },
+  "installed_playwright_types": {
+    "path": "e2e/node_modules/playwright/types/test.d.ts",
+    "sha256": "6e8044a9ca35eb66823c9ddddf826ca28bf900cd0cb3d31b3007277d094dc21e",
+    "relevant_lines": "8893-8915"
+  },
+  "smoke_log": {
+    "path": "tesbo-ci-evidence/965a87a1/smoke.log",
+    "sha256": "489e65bb72addee8df4b7f864489f3cea9a76086bcba7c6b4a399fe366995081"
+  }
+}

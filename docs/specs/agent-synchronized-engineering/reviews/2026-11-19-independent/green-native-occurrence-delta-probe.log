@@ -1,0 +1,33 @@
+{"sourcePath":"/workspace/scratch/fb086055b433/tesbo-review-965a87a1/Tesbo-Backend-Nest/src/behavior-graph/model-studio-repository.ts","sourceSha256":"6eea2fb02f143f669f78c4cd86fd720219054eb1352dd7902e8ae17af5ab313d","mode":"production projection/composition with controlled persistence doubles"}
+✔ original occurrence remains a positive native result in both projections (12.405473ms)
+✔ same case re-added with a new item and execution does not inherit original attribution (0.74069ms)
+✔ same item but different execution does not inherit original attribution (8.52546ms)
+✔ same identities but a new reviewed snapshot does not inherit original attribution (0.627621ms)
+✔ same occurrence identities falsely associated with another case does not inherit original attribution (0.625171ms)
+✔ otherwise matching occurrence attributed to another dispatch does not inherit original attribution (0.862173ms)
+✔ later unrelated native additions do not inflate dispatched counts or statuses (3.888798ms)
+✔ removed original remains a known unavailable reference rather than zero dispatched cases (0.52982ms)
+✔ legacy missing pin stays UNKNOWN despite a present passing native case (0.91607ms)
+✔ malformed item identity stays UNKNOWN (0.720937ms)
+✔ missing execution identity stays UNKNOWN (0.506727ms)
+✔ unrecorded review digest stays UNKNOWN (0.269861ms)
+✔ duplicate manifest case pins invalidate both entries, not last-write-wins (2.208783ms)
+✔ one native execution cannot be claimed by two differently named case entries (0.456795ms)
+✔ one native item cannot be claimed by two entries with different executions (2.316063ms)
+✔ duplicate result tuples do not choose an arbitrary passing or failing result (0.467614ms)
+✔ duplicate element labels are counted once per native occurrence (2.277797ms)
+✔ empty historical manifest does not borrow current membership (0.385895ms)
+✔ valid, unavailable and unknown entries remain distinguishable in a partial result (0.479231ms)
+✔ dispatch records real returned native identity before committing its manifest (3.308414ms)
+✔ missing native identity aborts the shared composition before manifest publication (1.483179ms)
+✔ ambiguous native identity aborts the shared composition before manifest publication (0.63093ms)
+✔ invalid native identity aborts the shared composition before manifest publication (0.689764ms)
+✔ manifest insert failure propagates through the same transaction without compensating deletion (0.831269ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 24
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1469.655114

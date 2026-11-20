@@ -381,7 +381,7 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     expect(final.rows[0].closed_at).not.toBeNull();
   });
 
-  describe("bug associations and sealed verdicts", () => {
+  describe("bug associations preserve recorded execution evidence", () => {
     function bugService(db = new DatabaseService(pool), mockAuthorization = true) {
       const legacy = makeLegacy(db);
       if (mockAuthorization) jest.spyOn(legacy, "requireProjectAccess").mockResolvedValue({} as never);
@@ -394,6 +394,11 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
 
     const link = () => ({ testcaseId: caseId, cycleId: runId, executionId });
     const executionRow = async () => (await setup.query("SELECT * FROM executions WHERE id = $1", [executionId])).rows[0];
+    const executionEvidence = async () => ({
+      result: await executionRow(),
+      run: (await setup.query("SELECT * FROM cycles WHERE id = $1", [runId])).rows,
+      items: (await setup.query("SELECT * FROM cycle_items WHERE cycle_id = $1 ORDER BY id", [runId])).rows
+    });
 
     async function resetRun(status = "Passed", source = "automation", runStatus = "In Progress") {
       await setup.query(
@@ -401,8 +406,12 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
         [runId, source, runStatus]
       );
       await setup.query(
-        "UPDATE executions SET status = $2, executed_at = '2026-01-01T00:00:00Z', executed_by = $3, reported_by = 'automation', retry_count = 3 WHERE id = $1",
-        [executionId, status, userId]
+        `UPDATE executions SET status = $2, executed_at = '2026-01-01T00:00:00Z', executed_by = $3,
+           reported_by = 'automation', retry_count = 3, actual_result = 'Original observed result', duration_ms = 17,
+           error_message = 'Original diagnostic', error_stack = 'Original stack',
+           step_results = $4::jsonb, history = $5::jsonb WHERE id = $1`,
+        [executionId, status, userId, JSON.stringify([{ position: 1, status, comment: "Original step" }]),
+          JSON.stringify([{ status, retryCount: 2, errorMessage: "Earlier attempt" }])]
       );
     }
 
@@ -438,6 +447,17 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
       let committed = 0;
       let rolledBack = 0;
       const observed = new Pool({ connectionString: url, max: 1, connectionTimeoutMillis: 2000 });
+      const query = observed.query.bind(observed);
+      observed.query = (async (sql: string, values?: unknown[]) => {
+        const result = await query(sql, values);
+        if (inject && fault === "postcommit SQL failure" && committed > 0 && /FROM bugs b/.test(sql) && /b\.id = \$1/.test(sql)) {
+          inject = false;
+          // The legitimate postcommit bug readback fails. Association never opens a second
+          // execution-writing transaction, and an autocommit read error cannot undo its commit.
+          await query("SELECT 1 / 0");
+        }
+        return result;
+      }) as typeof observed.query;
       observed.on("connect", (client) => {
         const original = client.query.bind(client);
         const execute = original as (sql: string, values?: unknown[]) => Promise<QueryResult<Record<string, unknown>>>;
@@ -452,10 +472,6 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
               inject = false;
               // Model the caller losing an already-successful COMMIT response; not a real network cut.
               throw new Error("Connection terminated unexpectedly");
-            }
-            if (inject && fault === "postcommit SQL failure" && /SELECT c\.id, c\.source, c\.closed_at FROM cycles c/.test(sql)) {
-              inject = false;
-              await execute("SELECT 1 / 0"); // The second transaction fails after bug/link commit.
             }
             return result;
           })();
@@ -478,7 +494,9 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
         else await expect(failed).rejects.toBeInstanceOf(ServiceUnavailableException);
         expect(inject).toBe(false);
         expect(committed).toBe(1);
-        expect(rolledBack).toBe(1); // Cannot undo the preceding successful COMMIT.
+        expect(rolledBack).toBe(fault === "lost COMMIT acknowledgement" ? 1 : 0);
+        // A lost COMMIT acknowledgement prompts rollback; a later autocommit read has no
+        // active transaction to roll back. Neither can undo the preceding successful commit.
         expect((await persisted()).bugs).toHaveLength(1);
         expect((await persisted()).links).toHaveLength(1);
         expect(await sealed()).toEqual(before);
@@ -544,10 +562,13 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
         await setup.query("UPDATE projects SET archived_at = NULL WHERE id = $1", [projectId]);
 
         const f = bugService(undefined, false);
+        const before = await executionEvidence();
         const created = await f.legacy.createBug(projectId, userId, { title: "Authorized member bug", links: [link()] });
         expect(created).toMatchObject({ reportedBy: userId });
         expect(created.links).toEqual(expect.arrayContaining([expect.objectContaining(link())]));
-        expect((await executionRow()).status).toBe("Failed"); // Existing open/manual behavior is retained.
+        expect(await executionEvidence()).toEqual(before);
+        expect(f.activity.mock.calls.filter(call => call[2] === "execution_updated")).toHaveLength(0);
+        expect(f.notification).not.toHaveBeenCalled();
       } finally {
         await setup.query("UPDATE projects SET archived_at = NULL WHERE id = $1", [projectId]);
         await setup.query("UPDATE users SET active_organization_id = NULL WHERE id = ANY($1::uuid[])", [[userId, outsider]]);
@@ -960,14 +981,69 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
       });
     });
 
+    it.each(["create", "add"] as const)("rolls back the actual %s association transaction on a link SQL failure, preserving all execution evidence", async operation => {
+      await resetRun("Passed", "manual");
+      const existing = operation === "add" ? await bugService().legacy.createBug(projectId,userId,{ title: "Existing bug before failed link" }) : null;
+      const db = new DatabaseService(pool), transaction = db.transaction.bind(db), f = bugService(db);
+      const persisted = async () => ({
+        evidence: await executionEvidence(),
+        bugs: (await setup.query("SELECT * FROM bugs WHERE project_id=$1 ORDER BY id",[projectId])).rows,
+        links: (await setup.query("SELECT bl.* FROM bug_links bl JOIN bugs b ON b.id=bl.bug_id WHERE b.project_id=$1 ORDER BY bl.id",[projectId])).rows
+      });
+      const before = await persisted();
+      const fault = jest.spyOn(db,"transaction").mockImplementation(work => transaction(async client => {
+        const runner = new Proxy(client, { get(target,key) {
+          if (key === "query") return async (sql: string, values?: unknown[]) => {
+            const result = await target.query(sql,values);
+            if (/^\s*INSERT INTO bug_links/.test(sql)) await target.query("SELECT 1 / 0");
+            return result;
+          };
+          const value = Reflect.get(target,key);
+          return typeof value === "function" ? value.bind(target) : value;
+        } });
+        return work(runner);
+      }));
+      const write = () => operation === "create"
+        ? f.legacy.createBug(projectId,userId,{ title: "Atomic bug with link", links: [link()] })
+        : f.legacy.addBugLink(userId,String(existing!.id),link());
+      await expect(write()).rejects.toMatchObject({ code: "22012" });
+      expect(await persisted()).toEqual(before);
+      expect(f.activity).not.toHaveBeenCalled();
+      expect(f.notification).not.toHaveBeenCalled();
+      expect(f.bugNotification).not.toHaveBeenCalled();
+      fault.mockRestore();
+      const saved = await write();
+      expect(saved.links).toEqual(expect.arrayContaining([expect.objectContaining(link())]));
+      expect(await executionEvidence()).toEqual(before.evidence);
+    });
+
+    it("records a direct failure through the explicit native result writer and keeps finalized automation protected", async () => {
+      await resetRun("Untested");
+      const f = bugService(), before = await executionEvidence();
+      const bug = await f.legacy.createBug(projectId,userId,{ title: "Observed condition failure", links: [link()] });
+      expect(await executionEvidence()).toEqual(before);
+      await f.legacy.updateExecution(executionId,userId,{ status: "Failed", actualResult: "Step 1 expected condition was violated; evidence recorded by the tester" });
+      const recorded = await executionRow();
+      expect(recorded).toMatchObject({ status: "Failed", executed_by: userId,
+        actual_result: "Step 1 expected condition was violated; evidence recorded by the tester" });
+      expect(recorded.executed_at).not.toEqual(before.result.executed_at);
+      expect(f.activity.mock.calls.filter(call => call[2] === "execution_updated")).toHaveLength(1);
+      expect(f.notification).toHaveBeenCalledTimes(1);
+      await f.legacy.addBugLink(userId,String(bug.id),link());
+      expect(await executionRow()).toEqual(recorded);
+      expect(await svc.closeRun(userId,projectId,runId,{ status: "completed" })).toMatchObject({ summary: { passed: 0, failed: 1, total: 1 } });
+      const sealed = await executionEvidence();
+      await expect(f.legacy.updateExecution(executionId,userId,{ status: "Passed" })).rejects.toBeInstanceOf(ConflictException);
+      expect(await executionEvidence()).toEqual(sealed);
+    });
+
     it.each([
       ["Passed", "completed"], ["Failed", "completed"],
       ["Passed", "incomplete"], ["Failed", "incomplete"]
     ])("keeps create/add associations without changing sealed %s / %s results", async (status, closeStatus) => {
       await resetRun(status);
       const closed = await svc.closeRun(userId, projectId, runId, { status: closeStatus });
-      const before = await executionRow();
-      const runBefore = (await setup.query("SELECT * FROM cycles WHERE id = $1", [runId])).rows[0];
+      const before = await executionEvidence();
       const f = bugService();
       const created = await f.legacy.createBug(projectId, userId, { title: "Sealed create", links: [link()] });
       expect(created.links).toEqual(expect.arrayContaining([expect.objectContaining(link())]));
@@ -975,8 +1051,7 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
       const added = await f.legacy.addBugLink(userId, String(existing.id), link());
       expect(added.links).toEqual(expect.arrayContaining([expect.objectContaining(link())]));
       await f.legacy.addBugLink(userId, String(existing.id), link());
-      expect(await executionRow()).toEqual(before);
-      expect((await setup.query("SELECT * FROM cycles WHERE id = $1", [runId])).rows[0]).toEqual(runBefore);
+      expect(await executionEvidence()).toEqual(before);
       expect(await svc.closeRun(userId, projectId, runId, { status: closeStatus })).toEqual({ ...closed, alreadyClosed: true });
       expect(f.activity.mock.calls.filter((call) => call[2] === "execution_updated")).toHaveLength(0);
       expect(f.notification).not.toHaveBeenCalled();
@@ -984,27 +1059,29 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
 
     it.each([
       ["manual", "Planning"], ["manual", "In Progress"], ["manual", "Completed"], ["automation", "In Progress"]
-    ])("retains failure attribution and duplicate no-churn for %s / %s", async (source, runStatus) => {
+    ])("preserves full execution evidence and duplicate no-churn for %s / %s", async (source, runStatus) => {
       await resetRun("Passed", source, runStatus);
       if (source === "manual" && runStatus === "Completed") {
         await setup.query("UPDATE cycles SET closed_at = now() WHERE id = $1", [runId]);
       }
+      const before = await executionEvidence();
       const f = bugService();
       const created = await f.legacy.createBug(projectId, userId, { title: "Writable link", links: [link()] });
-      const changed = await executionRow();
-      expect(changed).toMatchObject({ status: "Failed", executed_by: userId });
-      expect(changed.executed_at).not.toEqual(new Date("2026-01-01T00:00:00Z"));
+      expect(created.links).toEqual(expect.arrayContaining([expect.objectContaining(link())]));
+      expect(await executionEvidence()).toEqual(before);
       await Promise.all([
         f.legacy.addBugLink(userId, String(created.id), link()),
         f.legacy.addBugLink(userId, String(created.id), link())
       ]);
-      expect(await executionRow()).toEqual(changed);
-      expect(f.activity.mock.calls.filter((call) => call[2] === "execution_updated")).toHaveLength(1);
-      expect(f.notification).toHaveBeenCalledTimes(1);
+      expect(await executionEvidence()).toEqual(before);
+      expect((await f.legacy.getBug(String(created.id))).links).toHaveLength(1);
+      expect(f.activity.mock.calls.filter((call) => call[2] === "execution_updated")).toHaveLength(0);
+      expect(f.notification).not.toHaveBeenCalled();
     });
 
-    it("serializes simultaneous first-time links into one actual result transition", async () => {
+    it("persists simultaneous first-time links without inventing a result transition", async () => {
       await resetRun();
+      const before = await executionEvidence();
       const f = bugService();
       const first = await f.legacy.createBug(projectId, userId, { title: "Concurrent first" });
       const second = await f.legacy.createBug(projectId, userId, { title: "Concurrent second" });
@@ -1012,19 +1089,19 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
         f.legacy.addBugLink(userId, String(first.id), link()),
         f.legacy.addBugLink(userId, String(second.id), link())
       ]);
-      expect((await executionRow()).status).toBe("Failed");
+      expect(await executionEvidence()).toEqual(before);
       expect((await f.legacy.getBug(String(first.id))).links).toHaveLength(1);
       expect((await f.legacy.getBug(String(second.id))).links).toHaveLength(1);
-      expect(f.activity.mock.calls.filter((call) => call[2] === "execution_updated")).toHaveLength(1);
-      expect(f.notification).toHaveBeenCalledTimes(1);
+      expect(f.activity.mock.calls.filter((call) => call[2] === "execution_updated")).toHaveLength(0);
+      expect(f.notification).not.toHaveBeenCalled();
     });
 
     it("waits behind close, then keeps the association without changing the verdict", async () => {
       await resetRun();
-      const before = await executionRow();
+      const before = await executionEvidence();
       const f = bugService();
       const bug = await f.legacy.createBug(projectId, userId, { title: "Close first" });
-      // Existing binding avoids an FK-insert wait masquerading as the helper's parent lock.
+      // Existing binding ensures the wait is the association owner's target lock, not FK insertion.
       await setup.query("INSERT INTO bug_links (bug_id, testcase_id, cycle_id, execution_id) VALUES ($1,$2,$3,$4)",
         [bug.id, caseId, runId, executionId]);
       const closer = await pool.connect();
@@ -1044,7 +1121,9 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
         await closer.query("COMMIT");
         open = false;
         await request;
-        expect(await executionRow()).toEqual(before);
+        const after = await executionEvidence();
+        expect(after.result).toEqual(before.result);
+        expect(after.items).toEqual(before.items);
         expect((await f.legacy.getBug(String(bug.id))).links).toHaveLength(1);
         expect(f.notification).not.toHaveBeenCalled();
       } finally {
@@ -1054,8 +1133,9 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
       }
     });
 
-    it("makes close wait for the actual bug-result write and count its committed failure", async () => {
+    it("makes close wait for the association commit and count the original observed result", async () => {
       await resetRun();
+      const before = await executionEvidence();
       let written!: () => void;
       const didWrite = new Promise<void>((resolve) => { written = resolve; });
       let resume!: () => void;
@@ -1063,7 +1143,8 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
       const mayCommit = new Promise<void>((resolve) => { resume = resolve; });
       const observedPool = new Pool({ connectionString: url, max: 1 });
       const connect = observedPool.connect.bind(observedPool);
-      // Forward real queries, pausing only after the completed production result UPDATE.
+      // Forward real queries, pausing after the production relationship INSERT, while it owns
+      // the same parent target lock as close. No execution update is part of this transaction.
       const observingPool = {
         query: observedPool.query.bind(observedPool),
         connect: async () => {
@@ -1071,7 +1152,7 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
           return {
             query: async (sql: string, params?: unknown[]) => {
               const result = await client.query(sql, params);
-              if (/^\s*UPDATE executions SET status = 'Failed'/.test(sql)) {
+              if (/^\s*INSERT INTO bug_links/.test(sql)) {
                 expect(result.rowCount).toBe(1);
                 writerPid = (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
                 written();
@@ -1089,8 +1170,8 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
       try {
         linked = f.legacy.createBug(projectId, userId, { title: "Link first", links: [link()] });
         // Race against request completion so an early failure cannot hang the latch.
-        await Promise.race([didWrite, linked.then(() => { throw new Error("Expected a completed result write"); })]);
-        expect((await executionRow()).status).toBe("Passed"); // UPDATE is still uncommitted.
+        await Promise.race([didWrite, linked.then(() => { throw new Error("Expected a completed association write"); })]);
+        expect(await executionEvidence()).toEqual(before);
         let settled = false;
         closed = svc.closeRun(userId, projectId, runId, { status: "completed" }).finally(() => { settled = true; });
         await expectBlockedBy(writerPid);
@@ -1098,8 +1179,12 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
         resume();
         await linked;
         const result = await closed;
-        expect(result).toMatchObject({ summary: { passed: 0, failed: 1, total: 1 } });
-        expect((await executionRow()).status).toBe("Failed");
+        expect(result).toMatchObject({ summary: { passed: 1, failed: 0, total: 1 } });
+        const after = await executionEvidence();
+        expect(after.result).toEqual(before.result);
+        expect(after.items).toEqual(before.items);
+        expect(f.activity.mock.calls.filter(call => call[2] === "execution_updated")).toHaveLength(0);
+        expect(f.notification).not.toHaveBeenCalled();
         expect(observedPool.idleCount).toBe(observedPool.totalCount);
       } finally {
         resume();

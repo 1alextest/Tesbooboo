@@ -1,5 +1,6 @@
 import { expect, request as newRequest, test, type Page, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
+import { verifyMoveReviewPreview } from "./zyra-reviewed-moves";
 import { answerRepositorySnapshotSql } from "./zyra-answer-feedback";
 import { startFakeAiServer } from "./fake-ai-server";
 import { seedMoveRepository, settleMoveFixtures, type MoveFixture, type MoveRepositoryState } from "./zyra-move-feedback";
@@ -31,16 +32,13 @@ export async function verifyCiZyraAliasMove(page: Page, api: string, web: string
       await test.step(label, async () => {
         try {
           await verifyZyraAliasMove({ request: page.request, ai, base, ownerId, language, mode, fixture: fixtures.get(label)!, foreignId: foreign.firstId, state,
+            beforeApply: async (preview) => {
+              const missing = mode === "alias-plus-missing" || mode === "alias-plus-foreign";
+              const warning = missing ? language === "en" ? "⚠️ 1 named test case(s) could not be moved." : "⚠️ Не удалось переместить названные тест-кейсы: 1." : undefined;
+              await verifyMoveReviewPreview(page, web, projectId, preview, testInfo, `alias-${label}`, warning);
+            },
             afterReply: async (evidence) => {
               await testInfo.attach(`alias-${label}-readback`, { body: JSON.stringify(evidence, null, 2), contentType: "application/json" });
-              const verify = async () => {
-                await expect(page.getByText(evidence.reply, { exact: true })).toBeVisible();
-                await expect(page.getByText(evidence.externalId, { exact: true })).toBeVisible();
-                if (evidence.expectedMissing) expect.soft(await page.getByText(evidence.expectedHeadline, { exact: false }).count()).toBe(1);
-                else expect.soft(await page.getByText(/named test case\(s\) could not be moved|Не удалось переместить названные тест-кейсы/).count()).toBe(0);
-              };
-              await page.goto(`${web}/projects/${projectId}/agents/zyra`); await verify(); await page.reload(); await verify();
-              await testInfo.attach(`alias-${label}`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
             },
           });
           expect(await foreignState(), "alias accounting must never read targets into another project's write set").toEqual(foreignBefore);

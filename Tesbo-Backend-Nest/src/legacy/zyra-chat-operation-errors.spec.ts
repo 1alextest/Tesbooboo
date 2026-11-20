@@ -26,22 +26,23 @@ process.env.SECRETS_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
 /*
  * F5 (found auditing the same "success reported as failure, or vice versa" class of bug as
  * ZYRA_ALREADY_DISCLOSED's fixes in zyra-chat-intent.spec.ts): applyZyraChatOperations' per-turn
- * loop is not one transaction — each operation issues its own independent DB statement(s) (see the
- * method's own comment on moveTargetIds for why move counts are read back after the loop rather
- * than accumulated live). Before this fix, an exception partway through operation N propagated out
+ * loop is not one transaction — explicit empty-suite creation can commit independently, while case
+ * moves now persist only proposals until exact human selected Save. Before this fix, an exception
+ * partway through operation N propagated out
  * of the whole method uncaught: whatever operations 1..N-1 already committed stayed committed, but
  * the turn produced no reply at all — no assistant message, no activity entry, nothing — so ground
  * truth was partial success while the user saw (at best) a generic transport error. This file drives
  * applyZyraChatOperations directly (same boundary choice as zyra-save-integration-sync.spec.ts:
  * mock what this fix isn't changing — capability resolution, actor resolution, suite creation —
  * and test the one thing it is: does one operation's own hard failure still let the rest of the
- * turn's real result come back).
+ * turn's real result come back). Real selected-apply rollback is covered by the isolated CI/API
+ * helpers; these collaborator tests prove staging, attribution and truthful trace counts.
  */
 
 type Body = Record<string, any>;
 
 function makeLegacy(): LegacyService {
-  const db = { query: jest.fn().mockResolvedValue({ rows: [] }) } as unknown as DatabaseService;
+  const db = { query: jest.fn(async (sql: string) => ({ rows: sql.includes("INSERT INTO ai_generation_requests") ? [{ id: "review-1" }] : [] })) } as unknown as DatabaseService;
   return new LegacyService(
     db,
     {} as unknown as EmailService,
@@ -70,7 +71,31 @@ function mockCapabilitiesAndActor(svc: LegacyService): void {
   jest.spyOn(svc as unknown as { resolveZyraActor: (...a: unknown[]) => Promise<unknown> }, "resolveZyraActor").mockResolvedValue("actor-1");
 }
 
-type AppliedShape = { testcases: Body[]; activity: Array<{ title?: string; detail?: string }>; reviewRequestId: string | null };
+type AppliedShape = { testcases: Body[]; activity: Array<{ title?: string; detail?: string }>; reviewRequestId: string | null; proposedCount?: number };
+
+function reviewableCase(id: string, suiteId = "suite-source") {
+  return { id, externalId: id, title: "Existing case", suiteId, editRevision: "a".repeat(64), approvalRevision: "b".repeat(64),
+    approvalSnapshot: { testcaseId: id, suiteId, title: "Existing case" } };
+}
+
+function expectNativeMoveProposals(svc: LegacyService, applied: AppliedShape, expected: Array<{ id: string; suiteId: string }>) {
+  const calls = (svc as unknown as { db: { query: jest.Mock } }).db.query.mock.calls;
+  const inserted = calls.filter(([sql]) => String(sql).includes("INSERT INTO ai_generation_requests"));
+  expect(inserted).toHaveLength(expected.length ? 1 : 0);
+  expect(applied.reviewRequestId).toBe(expected.length ? "review-1" : null);
+  expect(applied.proposedCount).toBe(expected.length);
+  expect(applied.testcases.every((row) => row.action === "proposed-update")).toBe(true);
+  if (expected.length) {
+    const values = inserted[0][1] as unknown[];
+    expect(values.slice(0, 2)).toEqual(["project-1", "actor-1"]);
+    const proposals = JSON.parse(String(values[4])) as Body[];
+    expect(proposals).toHaveLength(expected.length);
+    expect(proposals.map((proposal) => ({ id: proposal.testcaseId, suiteId: proposal.fields.suiteId }))).toEqual(expected);
+    for (const proposal of proposals) expect(proposal).toMatchObject({ opType: "update", native: true,
+      targetEditRevision: "a".repeat(64), targetApprovalRevision: "b".repeat(64), targetSnapshot: { testcaseId: proposal.testcaseId } });
+  }
+  expect(calls.filter(([sql]) => /(?:UPDATE|INSERT INTO|DELETE FROM)\s+(?:testcases|testcase_versions)\b/i.test(String(sql)))).toEqual([]);
+}
 
 function applyOps(svc: LegacyService, operations: Body[]): Promise<AppliedShape> {
   return (svc as unknown as { applyZyraChatOperations: (...a: unknown[]) => Promise<AppliedShape> }).applyZyraChatOperations(
@@ -168,7 +193,7 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
   });
 
   for (const language of ["en", "ru"] as const) {
-    it.each(["failed", "partial", "moved", "no-match"] as const)(`${language}: move feedback and trace reflect %s without inferring missing rows or rollback`, async (mode) => {
+    it.each(["failed", "partial", "moved", "no-match"] as const)(`${language}: move staging and trace reflect %s without claiming publication or rollback`, async (mode) => {
       const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
       const failed = mode === "failed" || mode === "partial";
       const moved = mode === "partial" || mode === "moved";
@@ -183,14 +208,15 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
       jest.spyOn(svc as unknown as { resolveZyraMoveTargets: (...a: unknown[]) => Promise<unknown> }, "resolveZyraMoveTargets")
         .mockImplementation(async (_project, _session, op) => ({ targets: mode === "no-match" ? [] : [{ id: (op as Body).testcaseIds[0] }], requestedCount: 1 }));
       const transaction = jest.fn();
-      if (moved) transaction.mockResolvedValueOnce(undefined);
-      if (failed) transaction.mockRejectedValueOnce(new Error("private move failure"));
       (svc as unknown as { db: { transaction: jest.Mock } }).db.transaction = transaction;
       (svc as unknown as { suitesCache: { invalidate: jest.Mock } }).suitesCache.invalidate = jest.fn().mockResolvedValue(undefined);
       (svc as unknown as { testcasesListCache: { invalidate: jest.Mock } }).testcasesListCache.invalidate = jest.fn().mockResolvedValue(undefined);
-      jest.spyOn(svc, "getTestCase").mockResolvedValue({ id: "case-1", externalId: "PRO-TC-1", title: "Existing case", suiteId: "suite-1" });
+      jest.spyOn(svc, "getTestCase").mockImplementation(async (id) => {
+        if (failed && id === "case-2") throw new Error("private move failure");
+        return reviewableCase(id);
+      });
       jest.spyOn(svc as unknown as { zyraMoveBreakdown: (...a: unknown[]) => Promise<unknown> }, "zyraMoveBreakdown")
-        .mockResolvedValue(moved || mode === "no-match" ? [{ suiteId: "suite-1", suiteName: "Destination", created: false, count: moved ? 1 : 0 }] : []);
+        .mockResolvedValue([]);
       const reply = language === "en" ? "Moved the requested test cases." : "Запрошенные тест-кейсы перемещены.";
       jest.spyOn(svc as unknown as { buildZyraChatDecision: (...a: unknown[]) => Promise<unknown> }, "buildZyraChatDecision")
         .mockResolvedValue({ reply, actionType: "suite", operations, testcases: [] });
@@ -208,13 +234,15 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
         message: "Move the requested test cases", userMessageId: "turn-1", sessionRow: {}
       }, recorder.onStage));
       const trace = recorder.finish();
-      expect(transaction).toHaveBeenCalledTimes(mode === "partial" ? 2 : mode === "no-match" ? 0 : 1);
+      expect(transaction).not.toHaveBeenCalled();
+      expectNativeMoveProposals(svc, applied!, moved ? [{ id: "case-1", suiteId: "suite-1" }] : []);
       expect(applied!.testcases).toHaveLength(moved ? 1 : 0);
       expect(applied!.activity.filter((entry) => entry.title === "An operation failed unexpectedly")).toHaveLength(failed ? 1 : 0);
       if (mode === "partial") expect(applied!.activity.some((entry) => entry.title === "Created suite")).toBe(true);
-      if (moved) expect(content).toContain(language === "en" ? "1 test case(s) total" : "всего тест-кейсов: 1");
+      if (moved) expect(content).toContain(language === "en" ? "staged for your review" : "Ожидают вашей проверки");
       if (mode === "no-match") expect(content).toContain(language === "en" ? "Nothing was saved" : "Ничего не сохранено");
       expect(content + JSON.stringify(trace)).not.toContain("private move failure");
+      expect(trace.steps.find((step) => step.stage === "finalizing")?.meta).toEqual({ savedCount: 0, proposedCount: moved ? 1 : 0 });
       expect({
         warning: content.startsWith(SUITE_ERROR[language]),
         falselySaysMissing: failed && /do not exist in this project|в этом проекте нет/.test(content),
@@ -236,7 +264,7 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
   }
 
   for (const language of ["en", "ru"] as const) {
-    it.each(["unavailable", "partial", "moved"] as const)(`${language}: reports an unavailable destination even when two prior moved rows mask the operation shortfall (%s)`, async (mode) => {
+    it.each(["unavailable", "partial", "moved"] as const)(`${language}: reports an unavailable destination beside two valid staged moves (%s)`, async (mode) => {
       const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
       const moved = mode !== "unavailable", refused = mode !== "moved";
       const operations: Body[] = [];
@@ -250,9 +278,9 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
       (svc as unknown as { db: { transaction: jest.Mock } }).db.transaction = transaction;
       (svc as unknown as { suitesCache: { invalidate: jest.Mock } }).suitesCache.invalidate = jest.fn().mockResolvedValue(undefined);
       (svc as unknown as { testcasesListCache: { invalidate: jest.Mock } }).testcasesListCache.invalidate = jest.fn().mockResolvedValue(undefined);
-      jest.spyOn(svc, "getTestCase").mockImplementation(async (id) => ({ id, externalId: id, title: "Existing case", suiteId: "suite-own" }));
+      jest.spyOn(svc, "getTestCase").mockImplementation(async (id) => reviewableCase(id));
       jest.spyOn(svc as unknown as { zyraMoveBreakdown: (...a: unknown[]) => Promise<unknown> }, "zyraMoveBreakdown")
-        .mockResolvedValue(moved ? [{ suiteId: "suite-own", suiteName: "Own destination", created: false, count: 2 }] : []);
+        .mockResolvedValue([]);
       const reply = language === "en" ? "Moved the requested test cases." : "Запрошенные тест-кейсы перемещены.";
       jest.spyOn(svc as unknown as { buildZyraChatDecision: (...a: unknown[]) => Promise<unknown> }, "buildZyraChatDecision")
         .mockResolvedValue({ reply, actionType: "suite", operations, testcases: [] });
@@ -270,12 +298,14 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
       }, recorder.onStage));
       const trace = recorder.finish();
       expect(lookup).toHaveBeenCalledTimes(operations.length);
-      expect(transaction).toHaveBeenCalledTimes(moved ? 1 : 0);
+      expect(transaction).not.toHaveBeenCalled();
       expect(targets).toHaveBeenCalledTimes(moved ? 1 : 0);
+      // An unavailable destination must not resolve or stage its source case at all.
+      expect(targets.mock.calls.every(([, , operation]) => (operation as Body).suiteId === "suite-own")).toBe(true);
       expect(applied!.testcases).toHaveLength(moved ? 2 : 0);
-      expect(applied!.reviewRequestId).toBeNull();
-      expect(trace.steps.find((step) => step.stage === "finalizing")?.meta).toEqual({ savedCount: moved ? 2 : 0, proposedCount: 0 });
-      if (moved) expect(content).toContain(language === "en" ? "2 test case(s) total" : "всего тест-кейсов: 2");
+      expectNativeMoveProposals(svc, applied!, moved ? [{ id: "case-1", suiteId: "suite-own" }, { id: "case-2", suiteId: "suite-own" }] : []);
+      expect(trace.steps.find((step) => step.stage === "finalizing")?.meta).toEqual({ savedCount: 0, proposedCount: moved ? 2 : 0 });
+      if (moved) expect(content).toContain(language === "en" ? "staged for your review" : "Ожидают вашей проверки");
       expect(applied!.activity.filter((entry) => entry.title === "An operation failed unexpectedly")).toHaveLength(0);
       expect(applied!.activity.filter((entry) => entry.title === "Could not move testcases")).toHaveLength(refused ? 1 : 0);
       expect(content.startsWith(SUITE_ERROR[language])).toBe(refused);
@@ -286,7 +316,7 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
   }
 
   for (const language of ["en", "ru"] as const) {
-    it.each([0, 1, 25, 26])(`${language}: final trace counts all moved cases without expanding the 25-card preview (targets=%s)`, async (count) => {
+    it.each([0, 1, 25, 26])(`${language}: final trace counts all proposed moves without expanding the 25-card preview (targets=%s)`, async (count) => {
       const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
       const ids = Array.from({ length: count }, (_, index) => `case-${index + 1}`);
       const operations = [{ type: "move_to_suite", suiteId: "suite-own", testcaseIds: count ? ids : ["missing-case"] }];
@@ -298,9 +328,9 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
       (svc as unknown as { db: { transaction: jest.Mock } }).db.transaction = transaction;
       (svc as unknown as { suitesCache: { invalidate: jest.Mock } }).suitesCache.invalidate = jest.fn().mockResolvedValue(undefined);
       (svc as unknown as { testcasesListCache: { invalidate: jest.Mock } }).testcasesListCache.invalidate = jest.fn().mockResolvedValue(undefined);
-      jest.spyOn(svc, "getTestCase").mockImplementation(async (id) => ({ id, externalId: id, title: "Existing case", suiteId: "suite-own" }));
+      jest.spyOn(svc, "getTestCase").mockImplementation(async (id) => reviewableCase(id));
       jest.spyOn(svc as unknown as { zyraMoveBreakdown: (...a: unknown[]) => Promise<unknown> }, "zyraMoveBreakdown")
-        .mockResolvedValue([{ suiteId: "suite-own", suiteName: "Destination", created: false, count }]);
+        .mockResolvedValue([]);
       const reply = language === "en" ? "Moved the requested test cases." : "Запрошенные тест-кейсы перемещены.";
       jest.spyOn(svc as unknown as { buildZyraChatDecision: (...a: unknown[]) => Promise<unknown> }, "buildZyraChatDecision")
         .mockResolvedValue({ reply, actionType: "suite", operations, testcases: [] });
@@ -316,19 +346,19 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
         projectId: "project-1", userId: "user-1", uid: "user-1", sessionId: "session-1",
         message: "Move the requested test cases", userMessageId: "turn-1", sessionRow: {}
       }, recorder.onStage));
-      expect(transaction).toHaveBeenCalledTimes(count ? 1 : 0);
+      expect(transaction).not.toHaveBeenCalled();
       expect(applied!.testcases).toHaveLength(Math.min(count, 25));
-      expect(applied!.reviewRequestId).toBeNull();
-      if (count) expect(content).toContain(language === "en" ? `${count} test case(s) total` : `всего тест-кейсов: ${count}`);
+      expectNativeMoveProposals(svc, applied!, ids.map((id) => ({ id, suiteId: "suite-own" })));
+      if (count) expect(content).toContain(language === "en" ? "staged for your review" : "Ожидают вашей проверки");
       else expect(content).toContain(language === "en" ? "Nothing was saved" : "Ничего не сохранено");
       const trace = recorder.finish();
       expect(trace.outcome).toBe("completed");
-      expect(trace.steps.find((step) => step.stage === "finalizing")?.meta).toEqual({ savedCount: count, proposedCount: 0 });
+      expect(trace.steps.find((step) => step.stage === "finalizing")?.meta).toEqual({ savedCount: 0, proposedCount: count });
     });
   }
 
   for (const language of ["en", "ru"] as const) for (const count of [1, 25, 26]) {
-    it.each(["overlap", "disjoint"] as const)(`${language}: two ${count}-case moves count distinct saved cases, not repeated preview rows (%s)`, async (mode) => {
+    it.each(["overlap", "disjoint"] as const)(`${language}: two ${count}-case moves retain ordered operations and distinct target scope (%s)`, async (mode) => {
       const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
       const first = Array.from({ length: count }, (_, index) => `case-${index + 1}`);
       const last = mode === "overlap" ? first : Array.from({ length: count }, (_, index) => `other-${index + 1}`);
@@ -339,15 +369,13 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
         .mockImplementation(async (_project, id) => ({ id, name: String(id) }));
       jest.spyOn(svc as unknown as { resolveZyraMoveTargets: (...a: unknown[]) => Promise<unknown> }, "resolveZyraMoveTargets")
         .mockImplementation(async (_project, _session, op) => ({ targets: (op as Body).testcaseIds.map((id: string) => ({ id })), requestedCount: count }));
-      let suiteId = "";
-      const transaction = jest.fn().mockImplementation(async () => { suiteId = operations[transaction.mock.calls.length - 1].suiteId; });
+      const transaction = jest.fn();
       (svc as unknown as { db: { transaction: jest.Mock } }).db.transaction = transaction;
       (svc as unknown as { suitesCache: { invalidate: jest.Mock } }).suitesCache.invalidate = jest.fn().mockResolvedValue(undefined);
       (svc as unknown as { testcasesListCache: { invalidate: jest.Mock } }).testcasesListCache.invalidate = jest.fn().mockResolvedValue(undefined);
-      jest.spyOn(svc, "getTestCase").mockImplementation(async (id) => ({ id, externalId: id, title: "Existing case", suiteId }));
+      jest.spyOn(svc, "getTestCase").mockImplementation(async (id) => reviewableCase(id));
       jest.spyOn(svc as unknown as { zyraMoveBreakdown: (...a: unknown[]) => Promise<unknown> }, "zyraMoveBreakdown")
-        .mockResolvedValue([{ suiteId: "suite-first", suiteName: "First", created: false, count: mode === "overlap" ? 0 : count },
-          { suiteId: "suite-last", suiteName: "Last", created: false, count }]);
+        .mockResolvedValue([]);
       const reply = language === "en" ? "Moved the requested test cases." : "Запрошенные тест-кейсы перемещены.";
       jest.spyOn(svc as unknown as { buildZyraChatDecision: (...a: unknown[]) => Promise<unknown> }, "buildZyraChatDecision")
         .mockResolvedValue({ reply, actionType: "suite", operations, testcases: [] });
@@ -363,11 +391,13 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
         projectId: "project-1", userId: "user-1", uid: "user-1", sessionId: "session-1", message: "Move the requested cases",
         userMessageId: "turn-1", sessionRow: {}
       }, recorder.onStage));
-      expect(transaction).toHaveBeenCalledTimes(2);
+      expect(transaction).not.toHaveBeenCalled();
       expect(applied!.testcases).toHaveLength(2 * Math.min(count, 25));
-      expect(applied!.reviewRequestId).toBeNull();
-      expect(content).toContain(language === "en" ? `${expected} test case(s) total` : `всего тест-кейсов: ${expected}`);
-      expect(recorder.finish().steps.find((step) => step.stage === "finalizing")?.meta).toEqual({ savedCount: expected, proposedCount: 0 });
+      const proposed = [...first.map((id) => ({ id, suiteId: "suite-first" })), ...last.map((id) => ({ id, suiteId: "suite-last" }))];
+      expect(new Set(proposed.map((row) => row.id)).size).toBe(expected);
+      expectNativeMoveProposals(svc, applied!, proposed);
+      expect(content).toContain(language === "en" ? "staged for your review" : "Ожидают вашей проверки");
+      expect(recorder.finish().steps.find((step) => step.stage === "finalizing")?.meta).toEqual({ savedCount: 0, proposedCount: 2 * count });
     });
   }
 
