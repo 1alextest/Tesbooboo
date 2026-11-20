@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { expect, request as playwrightRequest, test, type APIRequestContext } from "@playwright/test";
 import { env } from "../utils/env";
 import { dbControlAvailable, exec, literal, scalar } from "../utils/psql";
+import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
 
 /*
  * Readable URLs: GET /api/route-resolve maps the segments of /projects/LOH/bugs/LOH-BUG-1 to the uuids
@@ -161,10 +163,69 @@ test.describe("route-resolve: runs (<KEY>-RUN-<n>)", () => {
     try {
       expect(later.seq, "soft-deleted rows keep their number").toBeGreaterThan(gone.seq);
       expect((await resolve(request, { project: projectKeyA, cycle: `${projectKeyA}-RUN-${gone.seq}` })).status()).toBe(404);
+      expect((await resolve(request, { project: projectKeyA, cycle: gone.id })).status()).toBe(404);
     } finally {
       await request.delete(`/api/cycles/${later.id}`, { failOnStatusCode: false });
     }
   });
+
+  for (const terminalOutcome of ["created","cancelled"] as const) {
+  test(`a deleted source with a retained ${terminalOutcome} request resolves only authorized recovery identity`, async ({ request }) => {
+    const source = await createCycle(request,`E2E retained source ${randomUUID()}`);
+    let testcaseId: string | undefined, destinationId: string | undefined;
+    try {
+      const testcase = await createTestcaseFixtureResponse(request,`/api/projects/${ctxA.projectId}/testcases`,{
+        data:{title:`E2E recovery definition ${randomUUID()}`,status:"Approved"}
+      });
+      expect(testcase.status(),await testcase.text()).toBe(201);
+      testcaseId = (await testcase.json()).id;
+      const added = await request.post(`/api/cycles/${source.id}/testcases`,{data:{testcaseIds:[testcaseId]}});
+      expect(added.ok(),await added.text()).toBeTruthy();
+      const executions = await (await request.get(`/api/cycles/${source.id}/executions`)).json();
+      expect(executions).toHaveLength(1);
+      const preview = await request.get(`/api/cycles/${source.id}/retests/preview`,{params:{executionIds:executions[0].id}});
+      expect(preview.status(),await preview.text()).toBe(200);
+      const body = {requestKey:randomUUID(),executionIds:[executions[0].id],expectedPreviewDigest:(await preview.json()).previewDigest,name:`E2E recovery retest ${randomUUID()}`};
+      const identity = await (await resolve(request,{project:projectKeyA,cycle:source.id})).json();
+      if (terminalOutcome === "created") {
+        const created = await request.post(`/api/cycles/${source.id}/retests`,{data:body});
+        expect(created.status(),await created.text()).toBe(201);
+        destinationId = (await created.json()).cycleId;
+        expect((await request.delete(`/api/cycles/${source.id}`)).ok()).toBeTruthy();
+      } else {
+        expect((await request.delete(`/api/cycles/${source.id}`)).ok()).toBeTruthy();
+        expect((await resolve(request,{project:projectKeyA,cycle:identity.cycleRef})).status()).toBe(404);
+        const cancelled = await request.post(`/api/cycles/${source.id}/retests/requests/${body.requestKey}/cancel`,{data:body});
+        expect(cancelled.status(),await cancelled.text()).toBe(201);
+        expect(await cancelled.json()).toMatchObject({outcome:"cancelled",sourceCycleId:source.id,requestKey:body.requestKey});
+      }
+      for (const cycle of [source.id,identity.cycleRef]) {
+        const resolved = await resolve(request,{project:projectKeyA,cycle});
+        expect(resolved.status(),await resolved.text()).toBe(200);
+        expect(await resolved.json()).toEqual({projectId:ctxA.projectId,projectKey:projectKeyA,cycleId:source.id,cycleRef:identity.cycleRef});
+      }
+      expect((await request.get(`/api/cycles/${source.id}`,{failOnStatusCode:false})).status()).toBe(404);
+      expect((await request.get(`/api/cycles/${source.id}/retests/preview`,{params:{executionIds:executions[0].id},failOnStatusCode:false})).status()).toBe(404);
+      expect((await request.post(`/api/cycles/${source.id}/retests`,{data:{...body,requestKey:randomUUID()},failOnStatusCode:false})).status()).toBe(404);
+      const recovered = await request.get(`/api/cycles/${source.id}/retests/requests/${body.requestKey}`);
+      expect(recovered.status(),await recovered.text()).toBe(200);
+      expect(await recovered.json()).toMatchObject(terminalOutcome === "created"
+        ? {outcome:"created",cycleId:destinationId,sourceCycleId:source.id,replayed:true}
+        : {outcome:"cancelled",sourceCycleId:source.id,requestKey:body.requestKey});
+      for (const cycle of [source.id,identity.cycleRef]) {
+        expect((await resolve(asB,{project:ctxA.projectId,cycle})).status()).toBe(404);
+        const denied = await resolve(anon,{project:ctxA.projectId,cycle});
+        expect(denied.status()).toBe(400);
+        expect(await denied.text()).not.toContain(source.id);
+      }
+      expect((await resolve(asB,{project:ctxB.projectId,cycle:source.id})).status()).toBe(404);
+    } finally {
+      if (destinationId) await request.delete(`/api/cycles/${destinationId}`,{failOnStatusCode:false});
+      await request.delete(`/api/cycles/${source.id}`,{failOnStatusCode:false});
+      if (testcaseId) await request.delete(`/api/projects/${ctxA.projectId}/testcases/${testcaseId}`,{failOnStatusCode:false});
+    }
+  });
+  }
 
   test("runs created at the same instant get distinct numbers", async ({ request }) => {
     const stamp = Date.now();

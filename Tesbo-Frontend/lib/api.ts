@@ -2636,7 +2636,88 @@ export interface TestRunDetail {
   timeSpentMs?: number | null;
   elapsedMs?: number | null;
   tags?: string[];
+  /** Immutable creation lineage; current results still belong to native executions. */
+  retestSourceCycleId?: string | null;
+  retestManifest?: NativeRetestManifest | null;
 }
+
+export interface NativeRetestOccurrence {
+  sourceCycleItemId: string;
+  sourceExecutionId: string;
+  testcaseId: string;
+  sourceTitle: string;
+  sourceExternalId: string;
+  sourceApprovalRevision: string | null;
+  sourceDefinition: Record<string, unknown>;
+  sourceDefinitionBasis: "reviewed_snapshot" | "legacy_snapshot_unknown_approval";
+  sourceResult: Record<string, unknown>;
+  sourceEvidence: Array<{ id: string; fileName: string; contentType: string; fileSize: number; createdAt: string }>;
+  sourceBugLinks: Array<{ id: string; bugId: string; executionId: string }>;
+  currentCase: {
+    id: string; title: string; externalId: string; status: string;
+    approvalRevision: string; approvalCurrent: boolean; reviewedContent: Record<string, unknown>;
+  } | null;
+  eligible: boolean;
+  definitionChanged: boolean;
+}
+
+export interface NativeRetestPreview {
+  projectId: string;
+  sourceCycleId: string;
+  sourceRun: { id: string; name: string; source: string; environment: string; buildVersion: string; status: string };
+  occurrences: NativeRetestOccurrence[];
+  previewDigest: string;
+}
+
+export interface NativeRetestManifest {
+  schemaVersion: 1;
+  projectId: string;
+  sourceCycleId: string;
+  cycleId: string;
+  createdBy: string;
+  principalKind: "human_session";
+  createdAt: string;
+  sourceRun: NativeRetestPreview["sourceRun"];
+  sourcePreviewDigest: string;
+  targetRun: { name: string; environment: string | null; buildVersion: string | null };
+  occurrences: Array<NativeRetestOccurrence & {
+    cycleItemId: string; executionId: string; targetApprovalRevision: string; targetDefinition: Record<string, unknown>;
+  }>;
+}
+
+export interface NativeRetestRequest {
+  requestKey: string;
+  executionIds: string[];
+  expectedPreviewDigest: string;
+  name: string;
+  environment?: string;
+  buildVersion?: string;
+  description?: string;
+}
+
+export interface NativeRetestReceipt {
+  outcome: "created";
+  cycleId: string;
+  sourceCycleId: string;
+  requestKey: string;
+  requestDigest: string;
+  manifestDigest: string;
+  manifest: NativeRetestManifest;
+  available: boolean;
+  replayed: boolean;
+}
+
+export interface NativeRetestCancellation {
+  outcome: "cancelled";
+  projectId: string;
+  sourceCycleId: string;
+  requestKey: string;
+  requestDigest: string;
+  requestedBy: string;
+  cancelledAt: string;
+}
+
+export type NativeRetestDisposition = NativeRetestReceipt | NativeRetestCancellation;
 
 export interface ExecutionItem {
   id: string;
@@ -2784,6 +2865,27 @@ export async function listTestRuns(projectId: string): Promise<TestRunListItem[]
 
 export async function getTestRun(cycleId: string): Promise<TestRunDetail> {
   return api(`/api/cycles/${cycleId}`);
+}
+
+export async function previewNativeRetest(cycleId: string, executionIds: string[]): Promise<NativeRetestPreview> {
+  const query = new URLSearchParams({ executionIds: executionIds.join(",") });
+  return api(`/api/cycles/${cycleId}/retests/preview?${query}`);
+}
+
+export async function createNativeRetest(cycleId: string, request: NativeRetestRequest): Promise<NativeRetestReceipt> {
+  return api(`/api/cycles/${cycleId}/retests`, { method: "POST", body: request });
+}
+
+export async function readNativeRetestRequest(cycleId: string, requestKey: string): Promise<NativeRetestDisposition> {
+  return api(`/api/cycles/${cycleId}/retests/requests/${encodeURIComponent(requestKey)}`);
+}
+
+export async function cancelNativeRetestRequest(cycleId: string, request: NativeRetestRequest): Promise<NativeRetestDisposition> {
+  return api(`/api/cycles/${cycleId}/retests/requests/${encodeURIComponent(request.requestKey)}/cancel`, { method: "POST", body: request });
+}
+
+export async function listNativeRetests(cycleId: string): Promise<Array<{ id: string; name: string; status: string; createdAt: string }>> {
+  return api(`/api/cycles/${cycleId}/retests`);
 }
 
 export async function createTestRun(projectId: string, data: { name: string; description?: string; environment: string; buildVersion?: string }): Promise<{ id: string; name: string; status: string; createdAt: string }> {

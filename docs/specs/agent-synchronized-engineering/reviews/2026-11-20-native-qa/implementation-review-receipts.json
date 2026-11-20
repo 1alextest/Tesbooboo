@@ -1,0 +1,37 @@
+{
+  "status": "Source-review receipts; findings and later fixes remain separately recorded. Runtime proof pending.",
+  "files": [
+    {
+      "path": "native-backend-independent.md",
+      "sha256": "ecd934dd84c675e8da06625b08fa6a539a6d691ec5290b36d633f4703c682452"
+    },
+    {
+      "path": "native-backend-review.md",
+      "sha256": "c19f0e1d26241c63d0591e7976029ee4fac031501712a0224adbdb023c60f065"
+    },
+    {
+      "path": "native-backend-fix-review.md",
+      "sha256": "b084c144d6ba7f150c692b6065132cfd45e94309871c4182164044ec7f9e1b78"
+    },
+    {
+      "path": "native-ui-independent.md",
+      "sha256": "aa923cc13e40952b1ae67f261e4c34e767fbacd82a3c5ab68e956f5ac322f952"
+    },
+    {
+      "path": "native-ui-review.md",
+      "sha256": "911fa8c1f75431ef16ad9e6375d9c0f251536cd71ae9c9b0c6a3293a46f98f09"
+    },
+    {
+      "path": "native-request-disposition-addendum.md",
+      "sha256": "c83f702e5e6b1847e1b682318fb1a5657f6acfc4069fc8663da8a9455e8528ae"
+    },
+    {
+      "path": "white-native-request-disposition.md",
+      "sha256": "c6bd03d794017ce713b0a1ff7c64ccf1aa29533a0a53925b841c5e8ade580f0d"
+    },
+    {
+      "path": "native-backend-terminal-review.md",
+      "sha256": "176333d40caca586ea0ff8875d66897546635017b5a824d7e9faca7c2701f1d0"
+    }
+  ]
+}

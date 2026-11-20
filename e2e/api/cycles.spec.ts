@@ -1,9 +1,11 @@
 import { approveTestcase, createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import fs from "node:fs";
 import path from "node:path";
-import { expect, request as newRequestContext, test } from "@playwright/test";
+import { randomUUID } from "node:crypto";
+import { expect, request as newRequestContext, test, type APIRequestContext } from "@playwright/test";
 import { env } from "../utils/env";
 import { column, exec, literal, scalar } from "../utils/psql";
+import { filesForm, textFile } from "../utils/uploads";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 
@@ -1418,5 +1420,317 @@ test.describe("run history import", () => {
       await asB.dispose();
       await anon.dispose();
     }
+  });
+});
+
+test.describe("native Run retest — distinct reviewed occurrences", () => {
+  async function seed(api: APIRequestContext) {
+    const caseResponse = await createTestcaseFixtureResponse(api, `/api/projects/${ctx.projectId}/testcases`, {
+      data: { title: `Manual retest ${randomUUID()}`, status: "Approved", preconditions: "A signed-in test operator has one draft order",
+        testData: "Disposable order, quantity 1", steps: [{ action: "Submit the draft order once", expected: "Exactly one order is accepted and its identifier is shown" }] }
+    });
+    expect(caseResponse.status(), await caseResponse.text()).toBe(201);
+    const testcase = await caseResponse.json();
+    const response = await api.post(`/api/projects/${ctx.projectId}/cycles/from-cases`, {
+      data: { name: `Original manual observation ${randomUUID()}`, environment: "synthetic", buildVersion: "build-before", testcaseIds: [testcase.id] }
+    });
+    expect(response.status(), await response.text()).toBe(201);
+    const cycle = await response.json();
+    const list = await (await api.get(`/api/cycles/${cycle.id}/executions`)).json();
+    expect(list).toHaveLength(1);
+    const executionId = list[0].id as string;
+    const result = await api.patch(`/api/cycles/${cycle.id}/executions/${executionId}`, {
+      data: { status: "Failed", actualResult: "The synthetic fixture returned two order identifiers" }
+    });
+    expect(result.ok(), await result.text()).toBeTruthy();
+    const created: string[] = [];
+    return { cycleId: cycle.id as string, testcaseId: testcase.id as string, executionId, created,
+      cleanup: async () => {
+        for (const id of created) await api.delete(`/api/cycles/${id}`, { failOnStatusCode: false });
+        await api.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
+        await api.delete(`/api/projects/${ctx.projectId}/testcases/${testcase.id}`, { failOnStatusCode: false });
+      }
+    };
+  }
+  async function preview(api: APIRequestContext, cycleId: string, ids: string[]) {
+    const response = await api.get(`/api/cycles/${cycleId}/retests/preview`, { params: { executionIds: ids.join(",") } });
+    expect(response.status(), await response.text()).toBe(200);
+    return response.json();
+  }
+  const intent = (executionId: string, digest: string) => ({ requestKey: randomUUID(), executionIds: [executionId],
+    expectedPreviewDigest: digest, name: `Independent retest ${randomUUID()}`, environment: "synthetic", buildVersion: "build-after" });
+
+  test("source-free manual observation, evidence and Bug remain original while a new retest records its own result", async ({ request }) => {
+    const f = await seed(request);
+    let bugId: string | undefined;
+    try {
+      const originalBytes = "Original synthetic observation\r\nUnicode: café\r\n";
+      const uploaded = await request.post(`/api/cycles/${f.cycleId}/executions/${f.executionId}/attachments`, {
+        multipart: filesForm([textFile("original.txt", originalBytes)])
+      });
+      expect(uploaded.status(), await uploaded.text()).toBe(201);
+      const evidence = (await uploaded.json()).list[0];
+      const bug = await request.post(`/api/projects/${ctx.projectId}/bugs`, {
+        data: { title: `Synthetic duplicate order ${randomUUID()}`, links: [{ testcaseId: f.testcaseId, cycleId: f.cycleId, executionId: f.executionId }] }
+      });
+      expect(bug.status(), await bug.text()).toBe(201); bugId = (await bug.json()).id;
+      const before = await (await request.get(`/api/cycles/${f.cycleId}/executions`)).json();
+      const reviewed = await preview(request, f.cycleId, [f.executionId]);
+      expect(reviewed.occurrences[0]).toMatchObject({ eligible: true, sourceExecutionId: f.executionId, definitionChanged: false });
+      const body = intent(f.executionId, reviewed.previewDigest);
+      const response = await request.post(`/api/cycles/${f.cycleId}/retests`, { data: body });
+      expect(response.status(), await response.text()).toBe(201);
+      const receipt = await response.json(); f.created.push(receipt.cycleId);
+      expect(receipt.cycleId).not.toBe(f.cycleId);
+      const occurrence = receipt.manifest.occurrences[0];
+      expect(occurrence).toMatchObject({ sourceExecutionId: f.executionId, testcaseId: f.testcaseId,
+        sourceResult: { status: "Failed", actual_result: "The synthetic fixture returned two order identifiers" } });
+      expect(occurrence.sourceEvidence).toEqual(expect.arrayContaining([expect.objectContaining({ id: evidence.id })]));
+      expect(occurrence.sourceBugLinks).toEqual(expect.arrayContaining([expect.objectContaining({ bugId })]));
+      const fresh = await (await request.get(`/api/cycles/${receipt.cycleId}/executions`)).json();
+      expect(fresh).toHaveLength(1);
+      expect(fresh[0]).toMatchObject({ status: "Untested", executedAt: null, evidenceCount: 0 });
+      expect(fresh[0].id).not.toBe(f.executionId);
+      expect(fresh[0].actualResult).toBeFalsy();
+      expect((await request.patch(`/api/cycles/${receipt.cycleId}/executions/${fresh[0].id}`, {
+        data: { status: "Passed", actualResult: "The fixed synthetic fixture returned exactly one order identifier" }
+      })).ok()).toBeTruthy();
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/executions`)).json()).toEqual(before);
+      const downloaded = await request.get(`/api/cycles/${f.cycleId}/executions/${f.executionId}/attachments/${evidence.id}/download`);
+      expect(downloaded.status(), await downloaded.text()).toBe(200);
+      expect(await downloaded.body()).toEqual(Buffer.from(originalBytes));
+      const targetRun = await (await request.get(`/api/cycles/${receipt.cycleId}`)).json();
+      expect(targetRun).toMatchObject({ source: "manual", retestSourceCycleId: f.cycleId, buildVersion: "build-after" });
+      expect(targetRun.retestManifest).toEqual(receipt.manifest);
+      expect((await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).map((row: { id: string }) => row.id)).toContain(receipt.cycleId);
+      const model = await request.get(`/api/projects/${ctx.projectId}/model-studio/runs/by-cycle/${receipt.cycleId}`);
+      expect(model.status(), await model.text()).toBe(200);
+      expect(await model.json()).toEqual({ provenance: null });
+    } finally {
+      if (bugId) await request.delete(`/api/bugs/${bugId}`, { failOnStatusCode: false });
+      await f.cleanup();
+    }
+  });
+
+  test("concurrent exact retries and readback resolve one committed retest; changed reuse conflicts", async ({ request }) => {
+    const f = await seed(request);
+    let secondCaseId: string | undefined;
+    try {
+      secondCaseId = await addCase(request,f.cycleId);
+      const original = await (await request.get(`/api/cycles/${f.cycleId}/executions`)).json();
+      expect(original).toHaveLength(2);
+      const selectedIds = original.map((row: { id: string }) => row.id);
+      const reviewed = await preview(request, f.cycleId, selectedIds);
+      const body = { ...intent(f.executionId,reviewed.previewDigest), executionIds:selectedIds };
+      const responses = await Promise.all([request.post(`/api/cycles/${f.cycleId}/retests`, { data: body }),request.post(`/api/cycles/${f.cycleId}/retests`, { data: { ...body,executionIds:[...selectedIds].reverse() } })]);
+      for (const response of responses) expect(response.status(), await response.text()).toBe(201);
+      const receipts = await Promise.all(responses.map((response) => response.json())); f.created.push(receipts[0].cycleId);
+      expect(receipts[0].cycleId).toBe(receipts[1].cycleId);
+      expect(receipts.map((receipt) => receipt.replayed).sort()).toEqual([false,true]);
+      const fresh = await (await request.get(`/api/cycles/${receipts[0].cycleId}/executions`)).json();
+      expect(fresh).toHaveLength(2);
+      expect(receipts[0].manifest.occurrences).toHaveLength(2);
+      for (const source of original) {
+        const entry = receipts[0].manifest.occurrences.find((row: { sourceExecutionId: string }) => row.sourceExecutionId === source.id);
+        expect(entry).toMatchObject({ testcaseId:source.testcaseId,sourceCycleItemId:source.cycleItemId });
+        expect(selectedIds).not.toContain(entry.executionId);
+        expect(fresh.find((row: { id: string }) => row.id === entry.executionId))
+          .toMatchObject({ testcaseId:source.testcaseId,status:"Untested",evidenceCount:0 });
+        expect(entry.targetApprovalRevision).toBe(reviewed.occurrences.find((row: { sourceExecutionId: string }) => row.sourceExecutionId === source.id).currentCase.approvalRevision);
+      }
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/executions`)).json()).toEqual(original);
+      const readback = await request.get(`/api/cycles/${f.cycleId}/retests/requests/${body.requestKey}`);
+      expect(readback.status()).toBe(200); expect((await readback.json()).manifest).toEqual(receipts[0].manifest);
+      const reconcile = await request.post(`/api/cycles/${f.cycleId}/retests/requests/${body.requestKey}/cancel`,{data:body});
+      expect(reconcile.status(),await reconcile.text()).toBe(201);
+      expect(await reconcile.json()).toEqual({...receipts[0],outcome:"created",replayed:true});
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`, { data: { ...body, buildVersion: "unreviewed replacement" }, failOnStatusCode: false })).status()).toBe(409);
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toHaveLength(1);
+      const current = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${secondCaseId}`)).json();
+      const edited = await request.put(`/api/projects/${ctx.projectId}/testcases/${secondCaseId}`,{data:{title:`Unreviewed selected definition ${randomUUID()}`,expectedRevision:current.editRevision}});
+      expect(edited.ok(),await edited.text()).toBeTruthy();
+      const invalidated = await preview(request,f.cycleId,selectedIds);
+      expect(invalidated.occurrences.map((row: { eligible: boolean }) => row.eligible).sort()).toEqual([false,true]);
+      const rejectedKey = randomUUID();
+      const rejected = await request.post(`/api/cycles/${f.cycleId}/retests`,{data:{...body,requestKey:rejectedKey,expectedPreviewDigest:invalidated.previewDigest},failOnStatusCode:false});
+      expect(rejected.status()).toBe(409);
+      expect(await rejected.json()).toMatchObject({code:"TESTCASE_APPROVAL_REQUIRED"});
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toHaveLength(1);
+      expect((await request.get(`/api/cycles/${f.cycleId}/retests/requests/${rejectedKey}`,{failOnStatusCode:false})).status()).toBe(404);
+    } finally {
+      await f.cleanup();
+      if (secondCaseId) await request.delete(`/api/projects/${ctx.projectId}/testcases/${secondCaseId}`,{failOnStatusCode:false});
+    }
+  });
+
+  test("stale source or definition refuses creation, and a fresh reviewed revision pins the new definition", async ({ request }) => {
+    const f = await seed(request);
+    try {
+      const reviewed = await preview(request, f.cycleId, [f.executionId]);
+      const body = intent(f.executionId, reviewed.previewDigest);
+      await request.patch(`/api/cycles/${f.cycleId}/executions/${f.executionId}`, { data: { actualResult: "Additional source detail" } });
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`, { data: body, failOnStatusCode: false })).status()).toBe(409);
+      const second = await preview(request, f.cycleId, [f.executionId]);
+      const current = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${f.testcaseId}`)).json();
+      const changedTitle = `Revised expected behavior ${randomUUID()}`;
+      const edit = await request.put(`/api/projects/${ctx.projectId}/testcases/${f.testcaseId}`, { data: { title: changedTitle, expectedRevision: current.editRevision } });
+      expect(edit.ok(), await edit.text()).toBeTruthy();
+      const pending = await preview(request, f.cycleId, [f.executionId]); expect(pending.occurrences[0].eligible).toBe(false);
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`, { data: { ...body,expectedPreviewDigest:pending.previewDigest },failOnStatusCode:false })).status()).toBe(409);
+      await approveTestcase(request,ctx.projectId,f.testcaseId);
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`, { data: { ...body,expectedPreviewDigest:second.previewDigest },failOnStatusCode:false })).status()).toBe(409);
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toEqual([]);
+      const finalReview = await preview(request,f.cycleId,[f.executionId]); expect(finalReview.occurrences[0].definitionChanged).toBe(true);
+      const created = await request.post(`/api/cycles/${f.cycleId}/retests`, { data: { ...body,expectedPreviewDigest:finalReview.previewDigest } });
+      expect(created.status(), await created.text()).toBe(201);
+      const receipt = await created.json(); f.created.push(receipt.cycleId);
+      expect(receipt.manifest.occurrences[0].targetDefinition.case.title).toBe(changedTitle);
+      expect(receipt.manifest.occurrences[0].sourceDefinition.case.title).toBe(current.title);
+      expect((await (await request.get(`/api/cycles/${f.cycleId}/executions`)).json())[0].title).toBe(current.title);
+    } finally { await f.cleanup(); }
+  });
+
+  test("a deleted destination remains an unavailable committed receipt and cannot be recreated by an exact retry", async ({ request }) => {
+    const f = await seed(request);
+    try {
+      const reviewed = await preview(request,f.cycleId,[f.executionId]), body = intent(f.executionId,reviewed.previewDigest);
+      const created = await request.post(`/api/cycles/${f.cycleId}/retests`,{data:body});
+      expect(created.status(),await created.text()).toBe(201);
+      const receipt = await created.json(); f.created.push(receipt.cycleId);
+      expect((await request.delete(`/api/cycles/${receipt.cycleId}`)).ok()).toBeTruthy();
+      const readback = await request.get(`/api/cycles/${f.cycleId}/retests/requests/${body.requestKey}`);
+      expect(readback.status()).toBe(200);
+      expect(await readback.json()).toEqual({...receipt,available:false,replayed:true});
+      const retried = await request.post(`/api/cycles/${f.cycleId}/retests`,{data:body});
+      expect(retried.status(),await retried.text()).toBe(201);
+      expect(await retried.json()).toEqual({...receipt,available:false,replayed:true});
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toEqual([]);
+    } finally { await f.cleanup(); }
+  });
+
+  test("readback and exact retry recover a committed retest after its source is deleted, with no fresh creation or foreign disclosure", async ({ request }) => {
+    const f = await seed(request);
+    const asB = await newRequestContext.newContext({baseURL:env.apiBaseUrl,storageState:path.join(__dirname,"../.auth/state-b.json")});
+    const anon = await newRequestContext.newContext({baseURL:env.apiBaseUrl,storageState:{cookies:[],origins:[]}});
+    try {
+      const reviewed = await preview(request,f.cycleId,[f.executionId]), body = intent(f.executionId,reviewed.previewDigest);
+      const committed = await request.post(`/api/cycles/${f.cycleId}/retests`,{data:body});
+      expect(committed.status()).toBe(201);
+      // Recover by the retained request key without consuming the original POST's receipt.
+      expect((await request.delete(`/api/cycles/${f.cycleId}`)).ok()).toBeTruthy();
+      expect((await request.get(`/api/cycles/${f.cycleId}`,{failOnStatusCode:false})).status()).toBe(404);
+      const recovered = await request.get(`/api/cycles/${f.cycleId}/retests/requests/${body.requestKey}`);
+      expect(recovered.status(),await recovered.text()).toBe(200);
+      const receipt = await recovered.json(); f.created.push(receipt.cycleId);
+      expect(receipt).toMatchObject({sourceCycleId:f.cycleId,requestKey:body.requestKey,available:true,replayed:true});
+      expect(receipt.manifest.occurrences[0].sourceResult.status).toBe("Failed");
+      const retry = await request.post(`/api/cycles/${f.cycleId}/retests`,{data:body});
+      expect(retry.status(),await retry.text()).toBe(201); expect(await retry.json()).toEqual(receipt);
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`,{data:{...body,name:"Different request"},failOnStatusCode:false})).status()).toBe(409);
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`,{data:{...body,requestKey:randomUUID()},failOnStatusCode:false})).status()).toBe(404);
+      for (const [denied,status] of [[asB,404],[anon,400]] as const) {
+        for (const response of await Promise.all([
+          denied.get(`/api/cycles/${f.cycleId}/retests/requests/${body.requestKey}`,{failOnStatusCode:false}),
+          denied.post(`/api/cycles/${f.cycleId}/retests`,{data:body,failOnStatusCode:false})
+        ])) {
+          expect(response.status()).toBe(status);
+          expect(await response.text()).not.toContain(receipt.cycleId);
+        }
+      }
+      const runs = await (await request.get(`/api/projects/${ctx.projectId}/cycles`)).json();
+      expect(runs.filter((row: { retestSourceCycleId?: string }) => row.retestSourceCycleId === f.cycleId)).toHaveLength(1);
+    } finally { await asB.dispose(); await anon.dispose(); await f.cleanup(); }
+  });
+
+  test("an unresolved stale request is terminally cancelled before a fresh reviewed request creates one Run", async ({ request }) => {
+    const f = await seed(request);
+    try {
+      const reviewed = await preview(request,f.cycleId,[f.executionId]), saved = intent(f.executionId,reviewed.previewDigest);
+      // Model a lost request before server receipt: the exact saved body remains, while the
+      // source changes. Readback 404 is an unknown outcome, never permission to discard the key.
+      const changed = await request.patch(`/api/cycles/${f.cycleId}/executions/${f.executionId}`,{data:{actualResult:"Additional observation before the delayed request arrived"}});
+      expect(changed.ok(),await changed.text()).toBeTruthy();
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`,{data:saved,failOnStatusCode:false})).status()).toBe(409);
+      expect((await request.get(`/api/cycles/${f.cycleId}/retests/requests/${saved.requestKey}`,{failOnStatusCode:false})).status()).toBe(404);
+      const cancelUrl = `/api/cycles/${f.cycleId}/retests/requests/${saved.requestKey}/cancel`;
+      const cancellation = await request.post(cancelUrl,{data:saved});
+      expect(cancellation.status(),await cancellation.text()).toBe(201);
+      // Ignore the cancellation body and recover the durable noncommit fact by its original key.
+      const recovered = await request.get(`/api/cycles/${f.cycleId}/retests/requests/${saved.requestKey}`);
+      expect(recovered.status(),await recovered.text()).toBe(200);
+      const terminal = await recovered.json();
+      expect(terminal).toMatchObject({outcome:"cancelled",projectId:ctx.projectId,sourceCycleId:f.cycleId,requestKey:saved.requestKey});
+      expect(terminal.requestDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(Number.isNaN(Date.parse(terminal.cancelledAt))).toBe(false);
+      expect(terminal.cycleId).toBeUndefined();
+      expect(await (await request.post(cancelUrl,{data:saved})).json()).toEqual(terminal);
+      const late = await request.post(`/api/cycles/${f.cycleId}/retests`,{data:saved,failOnStatusCode:false});
+      expect(late.status()).toBe(409);
+      expect(await late.json()).toMatchObject({code:"RETEST_REQUEST_CANCELLED",disposition:terminal});
+      expect((await request.post(cancelUrl,{data:{...saved,name:"Changed intent"},failOnStatusCode:false})).status()).toBe(409);
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toEqual([]);
+      const fresh = await preview(request,f.cycleId,[f.executionId]);
+      const created = await request.post(`/api/cycles/${f.cycleId}/retests`,{data:intent(f.executionId,fresh.previewDigest)});
+      expect(created.status(),await created.text()).toBe(201);
+      const receipt = await created.json(); f.created.push(receipt.cycleId);
+      expect(receipt.outcome).toBe("created");
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toHaveLength(1);
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests/requests/${saved.requestKey}`)).json()).toEqual(terminal);
+    } finally { await f.cleanup(); }
+  });
+
+  test("invalid and cross-run selections fail atomically instead of silently dropping requested occurrences", async ({ request }) => {
+    const f = await seed(request), sibling = await seed(request);
+    try {
+      const reviewed = await preview(request,f.cycleId,[f.executionId]), body = intent(f.executionId,reviewed.previewDigest);
+      for (const executionIds of [[],[f.executionId,f.executionId],[f.executionId,"bad-id"]]) {
+        expect((await request.post(`/api/cycles/${f.cycleId}/retests`,{data:{...body,executionIds},failOnStatusCode:false})).status()).toBe(400);
+      }
+      for (const executionIds of [[sibling.executionId],[f.executionId,sibling.executionId],[randomUUID()]]) {
+        expect((await request.post(`/api/cycles/${f.cycleId}/retests`,{data:{...body,executionIds},failOnStatusCode:false})).status()).toBe(404);
+      }
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`,{data:{...body,name:"   "},failOnStatusCode:false})).status()).toBe(400);
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toEqual([]);
+    } finally { await sibling.cleanup(); await f.cleanup(); }
+  });
+
+  test("anonymous and foreign accounts cannot preview, create or recover another project's retest", async ({ request }) => {
+    const f = await seed(request);
+    const asB = await newRequestContext.newContext({baseURL:env.apiBaseUrl,storageState:path.join(__dirname,"../.auth/state-b.json")});
+    const anon = await newRequestContext.newContext({baseURL:env.apiBaseUrl,storageState:{cookies:[],origins:[]}});
+    try {
+      const reviewed = await preview(request,f.cycleId,[f.executionId]), body = intent(f.executionId,reviewed.previewDigest);
+      for (const [denied,status] of [[asB,404],[anon,400]] as const) {
+        const responses = await Promise.all([
+          denied.get(`/api/cycles/${f.cycleId}/retests/preview`,{params:{executionIds:f.executionId},failOnStatusCode:false}),
+          denied.post(`/api/cycles/${f.cycleId}/retests`,{data:body,failOnStatusCode:false}),
+          denied.post(`/api/cycles/${f.cycleId}/retests/requests/${body.requestKey}/cancel`,{data:body,failOnStatusCode:false}),
+          denied.get(`/api/cycles/${f.cycleId}/retests/requests/${body.requestKey}`,{failOnStatusCode:false}),
+          denied.get(`/api/cycles/${f.cycleId}/retests`,{failOnStatusCode:false})
+        ]);
+        for (const response of responses) expect(response.status()).toBe(status);
+      }
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toEqual([]);
+    } finally { await asB.dispose(); await anon.dispose(); await f.cleanup(); }
+  });
+
+  test("sharing the new Run does not publish the source receipt, prior observations or private evidence", async ({ request }) => {
+    const f = await seed(request);
+    const anon = await newRequestContext.newContext({baseURL:env.apiBaseUrl,storageState:{cookies:[],origins:[]}});
+    try {
+      const reviewed=await preview(request,f.cycleId,[f.executionId]);
+      const created=await request.post(`/api/cycles/${f.cycleId}/retests`,{data:intent(f.executionId,reviewed.previewDigest)});
+      expect(created.status(),await created.text()).toBe(201);
+      const receipt=await created.json(); f.created.push(receipt.cycleId);
+      const share=await request.post(`/api/cycles/${receipt.cycleId}/share`,{data:{enabled:true}});
+      expect(share.ok(),await share.text()).toBeTruthy();
+      const {shareToken}=await share.json();
+      const published=await anon.get(`/api/public/shared-runs/${shareToken}`);
+      expect(published.status()).toBe(200);
+      const value=await published.json();
+      expect(value.retestManifest).toBeUndefined(); expect(value.retestSourceCycleId).toBeUndefined();
+      expect(JSON.stringify(value)).not.toContain(f.executionId);
+      expect(JSON.stringify(value)).not.toContain("two order identifiers");
+    } finally { await anon.dispose(); await f.cleanup(); }
   });
 });

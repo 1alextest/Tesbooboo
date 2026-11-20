@@ -3,7 +3,7 @@ import path from "node:path";
 import { expect, request as pwRequest, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { env } from "../utils/env";
 import { literal, scalar } from "../utils/psql";
-import { bulkCreateApprovedTestcases } from "../utils/testcase-approval";
+import { approveTestcase, bulkCreateApprovedTestcases } from "../utils/testcase-approval";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 const STATE_PATH = path.join(__dirname, "../.auth/state.json");
@@ -38,10 +38,10 @@ async function seedRunWithStatuses(api: APIRequestContext, namePrefix: string, s
   return { cycleId: cycle.id as string, testcaseIds };
 }
 
-async function cleanUpRun(api: APIRequestContext, cycleId: string, testcaseIds: string[]) {
+async function cleanUpRun(api: APIRequestContext, cycleId: string, testcaseIds: string[], projectId = ctx.projectId) {
   await api.delete(`/api/cycles/${cycleId}`, { failOnStatusCode: false });
   if (testcaseIds.length > 0) {
-    await api.post(`/api/projects/${ctx.projectId}/testcases/bulk-delete`, {
+    await api.post(`/api/projects/${projectId}/testcases/bulk-delete`, {
       data: { testcaseIds },
       failOnStatusCode: false,
     });
@@ -525,14 +525,18 @@ test.describe("Test Run — bulk status on a multi-selection", () => {
   });
 
   test("a completed run offers no bulk status action", async ({ page }) => {
-    // Completed runs are sealed for results; the selection checkboxes disappear with the bar.
+    // Completed Runs retain result mutation restrictions. Selection now also supports a distinct
+    // new retest, so selecting here must expose only that action, never the old mutation controls.
     const completed = await api.patch(`/api/cycles/${cycleId}`, { data: { status: "Completed" } });
     expect(completed.ok(), await completed.text()).toBeTruthy();
     try {
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycleId}`);
       await expect(page.getByText(titles[0], { exact: true })).toBeVisible();
-      await expect(page.getByRole("checkbox", { name: `Select ${titles[0]}` })).toHaveCount(0);
+      await page.getByRole("checkbox", { name: `Select ${titles[0]}` }).check();
+      await expect(page.getByTestId("run-retest-selected")).toBeVisible();
       await expect(page.getByTestId("run-bulk-status")).toHaveCount(0);
+      await expect(page.getByTestId("run-bulk-remove")).toHaveCount(0);
+      await expect(page.getByTestId("run-bulk-assign")).toHaveCount(0);
     } finally {
       // Reopen so the next test in the file (and cleanup) sees an editable run.
       await api.patch(`/api/cycles/${cycleId}`, { data: { status: "Planning" } });
@@ -1370,5 +1374,818 @@ test.describe("imported run history in the UI", () => {
       await cleanUpRun(api, cycleId, testcaseIds);
       await api.dispose();
     }
+  });
+});
+
+test.describe("native manual retest — reviewed selection and recovery", () => {
+  async function fixture(api: APIRequestContext, withEvidence = false, projectId = ctx.projectId, caseFields: Record<string, unknown> = {}) {
+    const stamp = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const name = `E2E Original manual observation ${stamp}`;
+    const created = await bulkCreateApprovedTestcases(api, projectId, [0, 1].map(index => ({
+      title: `E2E Retest checkout ${stamp}-${index}`,
+      preconditions: "A test customer has one item in the cart.",
+      testData: "One synthetic item, quantity 1",
+      steps: JSON.stringify([{ action: "Confirm the order", expectedResult: "The receipt shows the saved order number." }]),
+      ...caseFields,
+    })));
+    const testcaseIds = created.created.map(item => item.id);
+    const response = await api.post(`/api/projects/${projectId}/cycles`, {
+      data: { name, environment: "Manual QA", buildVersion: "before-fix" },
+    });
+    expect(response.status(), await response.text()).toBe(201);
+    const cycleId = (await response.json()).id as string;
+    const added = await api.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseIds } });
+    expect(added.ok(), await added.text()).toBeTruthy();
+    const rows = await (await api.get(`/api/cycles/${cycleId}/executions`)).json();
+    const execution = rows.find((row: { testcaseId: string }) => row.testcaseId === testcaseIds[0]);
+    const actualResult = `Original observation ${stamp}: the order number is missing.`;
+    const result = await api.patch(`/api/cycles/${cycleId}/executions/${execution.id}`, { data: { status: "Failed", actualResult } });
+    expect(result.ok(), await result.text()).toBeTruthy();
+    let bugId: string | undefined;
+    if (withEvidence) {
+      const upload = await api.post(`/api/cycles/${cycleId}/executions/${execution.id}/attachments`, {
+        multipart: { files: { name: "original-order.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==", "base64") } },
+      });
+      expect(upload.ok(), await upload.text()).toBeTruthy();
+      const bug = await api.post(`/api/projects/${projectId}/bugs`, {
+        data: { title: `E2E Original order defect ${stamp}`, links: [{ testcaseId: testcaseIds[0], cycleId, executionId: execution.id }] },
+      });
+      expect(bug.ok(), await bug.text()).toBeTruthy();
+      bugId = (await bug.json()).id;
+    }
+    return { projectId, cycleId, testcaseIds, executionId: execution.id as string, title: execution.title as string, name, actualResult, bugId };
+  }
+
+  async function children(api: APIRequestContext, cycleId: string): Promise<Array<{ id: string; name: string }>> {
+    const response = await api.get(`/api/cycles/${cycleId}/retests`);
+    expect(response.status(), await response.text()).toBe(200);
+    return response.json();
+  }
+
+  async function cleanup(api: APIRequestContext, source: Awaited<ReturnType<typeof fixture>>) {
+    for (const child of await children(api, source.cycleId)) await api.delete(`/api/cycles/${child.id}`, { failOnStatusCode: false });
+    if (source.bugId) await api.delete(`/api/bugs/${source.bugId}`, { failOnStatusCode: false });
+    await cleanUpRun(api, source.cycleId, source.testcaseIds, source.projectId);
+    await api.dispose();
+  }
+
+  async function openPreview(page: Page, source: Awaited<ReturnType<typeof fixture>>) {
+    await page.goto(`/projects/${source.projectId}/cycles/${source.cycleId}`);
+    await expect(page.getByRole("heading", { name: source.name, exact: true })).toBeVisible();
+    await page.getByRole("checkbox", { name: `Select ${source.title}`, exact: true }).check();
+    await page.getByTestId("run-retest-selected").click();
+    return page.getByRole("dialog", { name: "Create retest", exact: true });
+  }
+
+  async function tabTo(page: Page, control: Locator, options: { backwards?: boolean; within?: Locator } = {}) {
+    for (let count = 0; count < 80; count += 1) {
+      if (await control.evaluate(element => document.activeElement === element)) return;
+      await page.keyboard.press(options.backwards ? "Shift+Tab" : "Tab");
+      if (options.within) expect(await options.within.evaluate(element => element.contains(document.activeElement))).toBe(true);
+    }
+    await expect(control).toBeFocused();
+  }
+
+  async function savedIntent(page: Page, sourceCycleId: string) {
+    return page.evaluate(sourceId => {
+      const stored = Object.entries(localStorage).find(([key]) => key.startsWith("tesbo:retest:") && key.endsWith(`:${sourceId}`));
+      return stored ? { key: stored[0], value: JSON.parse(stored[1]) } : null;
+    }, sourceCycleId);
+  }
+
+  test("creates only the selected Untested occurrence and navigates its preserved source evidence by keyboard", async ({ page }, testInfo) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const source = await fixture(api, true);
+    try {
+      const original = await (await api.get(`/api/cycles/${source.cycleId}/executions`)).json();
+      const dialog = await openPreview(page, source);
+      await expect(dialog.getByText("Source result: Failed", { exact: true })).toBeVisible();
+      await expect(dialog.getByText(source.actualResult, { exact: true })).toBeVisible();
+      await expect(dialog).toContainText("1 evidence file · 1 defect link");
+      const targetName = `Retest after fix ${source.cycleId}`;
+      await dialog.getByLabel("Run name", { exact: true }).fill(targetName);
+      await dialog.getByLabel("Environment", { exact: true }).fill("Manual QA after fix");
+      await dialog.getByLabel("Build to test", { exact: true }).fill("after-fix");
+      await testInfo.attach("native-retest-reviewed-selection", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+      const create = dialog.getByRole("button", { name: "Create retest", exact: true });
+      await expect(create).toBeEnabled();
+      await create.focus();
+      await page.keyboard.press("Enter");
+      await expect(page.getByRole("heading", { name: targetName, exact: true })).toBeVisible();
+      const created = await children(api, source.cycleId);
+      expect(created).toHaveLength(1);
+      const targetId = created[0].id;
+      const newRows = await (await api.get(`/api/cycles/${targetId}/executions`)).json();
+      expect(newRows).toHaveLength(1);
+      expect(newRows[0]).toMatchObject({ testcaseId: source.testcaseIds[0], status: "Untested" });
+      expect(newRows[0].actualResult || "").toBe("");
+      expect(await (await api.get(`/api/cycles/${source.cycleId}/executions`)).json()).toEqual(original);
+      await expect(page.getByTestId("run-retest-origin")).toContainText(source.name);
+      await testInfo.attach("native-retest-new-untested-run", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+      await page.getByRole("button", { name: source.title, exact: true }).click();
+      await expect(page.getByTestId("retest-source-observation")).toContainText(source.actualResult);
+      await expect(page.getByTestId("retest-source-observation")).toContainText("1 prior evidence file · 1 prior defect link");
+      await testInfo.attach("native-retest-source-observation-drawer", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+      await page.keyboard.press("Escape");
+      await page.goto(`/projects/${ctx.projectId}/cycles/${targetId}/execute/${newRows[0].id}`);
+      const observation = page.getByTestId("retest-source-observation");
+      await expect(observation).toContainText("Failed");
+      await testInfo.attach("native-retest-source-observation-full-page", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+      await observation.getByRole("link").focus();
+      await page.keyboard.press("Enter");
+      await expect(page.getByTestId("retest-source-observation")).toHaveCount(0);
+      await expect(page.locator("textarea")).toHaveValue(source.actualResult);
+      await expect(page.getByRole("img", { name: "original-order.png" })).toBeVisible();
+      await page.goto(`/projects/${ctx.projectId}/cycles/${source.cycleId}`);
+      await expect(page.getByTestId("run-retests").getByRole("link", { name: new RegExp(targetName) })).toBeVisible();
+    } finally { await cleanup(api, source); }
+  });
+
+  test("failed lineage and preview reads remain errors and recover with a real fresh preview", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const source = await fixture(api);
+    let failList = true, failPreview = true;
+    try {
+      await page.route(`**/api/cycles/${source.cycleId}/retests`, async route => {
+        if (route.request().method() === "GET" && failList) await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Lineage service unavailable" }) });
+        else await route.continue();
+      });
+      await page.route(`**/api/cycles/${source.cycleId}/retests/preview?*`, async route => {
+        if (failPreview) await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Selected observations unavailable" }) });
+        else await route.continue();
+      });
+      const dialog = await openPreview(page, source);
+      await expect(dialog.getByRole("alert")).toHaveText("Selected observations unavailable");
+      await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeDisabled();
+      await expect(page.getByTestId("run-retests")).toContainText("Retests are unavailable");
+      await expect(page.getByTestId("run-retests")).not.toContainText("No retests recorded");
+      failPreview = false;
+      await dialog.getByRole("button", { name: "Reload preview", exact: true }).click();
+      await expect(dialog.getByText("Source result: Failed", { exact: true })).toBeVisible();
+      await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeEnabled();
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      failList = false;
+      await page.getByRole("button", { name: "Retry retests", exact: true }).click();
+      await expect(page.getByTestId("run-retests")).toContainText("No retests recorded");
+      expect(await children(api, source.cycleId)).toEqual([]);
+    } finally { await cleanup(api, source); }
+  });
+
+  test("a lost creation response survives reload and reads the original receipt without another POST", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const source = await fixture(api);
+    let posts = 0;
+    let allowLookup = false;
+    let savedBeforePost: Record<string, unknown> | null = null;
+    let posted: Record<string, unknown> | null = null;
+    try {
+      await page.route(`**/api/cycles/${source.cycleId}/retests`, async route => {
+        if (route.request().method() !== "POST") { await route.continue(); return; }
+        posts += 1;
+        posted = route.request().postDataJSON();
+        savedBeforePost = await page.evaluate(sourceId => {
+          const stored = Object.entries(localStorage).find(([key]) => key.startsWith("tesbo:retest:") && key.endsWith(`:${sourceId}`));
+          return stored ? JSON.parse(stored[1]).request : null;
+        }, source.cycleId);
+        const committed = await route.fetch();
+        expect(committed.status(), await committed.text()).toBe(201);
+        await route.abort("failed");
+      });
+      await page.route(`**/api/cycles/${source.cycleId}/retests/requests/*`, async route => {
+        if (allowLookup) await route.continue();
+        else await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Receipt lookup temporarily unavailable" }) });
+      });
+      const dialog = await openPreview(page, source);
+      await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeEnabled();
+      await dialog.getByRole("button", { name: "Create retest", exact: true }).click();
+      await expect(dialog.getByRole("button", { name: "Retry saved request", exact: true })).toBeEnabled();
+      await expect(dialog).toContainText("Receipt lookup temporarily unavailable");
+      expect(savedBeforePost).toEqual(posted);
+      expect(posts).toBe(1);
+      allowLookup = true;
+      await page.reload();
+      const banner = page.getByTestId("retest-recovery-banner");
+      await expect(banner).toContainText("Your saved retest request was created.");
+      const created = await children(api, source.cycleId);
+      expect(created).toHaveLength(1);
+      await banner.getByRole("button", { name: "Open retest", exact: true }).click();
+      await expect(page.getByRole("heading", { name: created[0].name, exact: true })).toBeVisible();
+      expect(posts).toBe(1);
+      expect(await children(api, source.cycleId)).toHaveLength(1);
+    } finally { await cleanup(api, source); }
+  });
+
+  test("a lost response recovers after the source is deleted and its readable URL is reloaded", async ({ page }, testInfo) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const source = await fixture(api);
+    const targetName = `Recovered retest after source deletion ${source.cycleId}`;
+    const committedIds = new Set<string>();
+    let targetId = "", requestKey = "";
+    let posts = 0, receiptReads = 0, unavailableReads = 0;
+    let allowLookup = false, sourceDeleted = false;
+    let releaseSourceReads!: () => void;
+    const sourceReadGate = new Promise<void>(resolve => { releaseSourceReads = resolve; });
+    try {
+      await page.route(`**/api/cycles/${source.cycleId}/retests`, async route => {
+        if (route.request().method() !== "POST") { await route.continue(); return; }
+        posts += 1;
+        requestKey = route.request().postDataJSON().requestKey;
+        const committed = await route.fetch();
+        expect(committed.status(), await committed.text()).toBe(201);
+        targetId = (await committed.json()).cycleId;
+        committedIds.add(targetId);
+        await route.abort("failed");
+      });
+      await page.route(`**/api/cycles/${source.cycleId}/retests/requests/*`, async route => {
+        if (!allowLookup) {
+          await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Receipt lookup temporarily unavailable" }) });
+          return;
+        }
+        const response = await route.fetch();
+        expect(response.status(), await response.text()).toBe(200);
+        expect(await response.json()).toMatchObject({ cycleId: targetId, sourceCycleId: source.cycleId, requestKey, available: true });
+        receiptReads += 1;
+        await route.fulfill({ response });
+      });
+      await page.route(new RegExp(`/api/cycles/${source.cycleId}(?:/executions)?(?:\\?.*)?$`), async route => {
+        if (route.request().method() !== "GET" || !sourceDeleted) { await route.continue(); return; }
+        const response = await route.fetch();
+        expect(response.status(), await response.text()).toBe(404);
+        unavailableReads += 1;
+        // Return the real source errors after receipt recovery. Its confirmation must survive
+        // the loading-to-unavailable transition even though its saved intent was already cleared.
+        await sourceReadGate;
+        await route.fulfill({ response });
+      });
+      const dialog = await openPreview(page, source);
+      await expect(page).toHaveURL(/\/cycles\/[^/]+-RUN-\d+$/);
+      const sourceUrl = page.url();
+      await dialog.getByLabel("Run name", { exact: true }).fill(targetName);
+      await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeEnabled();
+      await dialog.getByRole("button", { name: "Create retest", exact: true }).click();
+      await expect(dialog.getByRole("button", { name: "Retry saved request", exact: true })).toBeEnabled();
+      await expect(dialog).toContainText("Receipt lookup temporarily unavailable");
+      expect(posts).toBe(1);
+      expect(committedIds.size).toBe(1);
+      const deleted = await api.delete(`/api/cycles/${source.cycleId}`);
+      expect(deleted.ok(), await deleted.text()).toBeTruthy();
+      expect((await api.get(`/api/cycles/${source.cycleId}`)).status()).toBe(404);
+      sourceDeleted = true;
+      allowLookup = true;
+      await page.reload();
+      await expect(page).toHaveURL(sourceUrl);
+      const banner = page.getByTestId("retest-recovery-banner");
+      await expect(banner).toContainText("Your saved retest request was created.");
+      expect(receiptReads).toBeGreaterThan(0);
+      await expect.poll(() => unavailableReads).toBeGreaterThan(0);
+      releaseSourceReads();
+      await expect(page.getByRole("region", { name: "Run unavailable", exact: true })).toBeVisible();
+      await expect(banner).toContainText("Your saved retest request was created.");
+      await expect(page.getByTestId("run-retest-selected")).toHaveCount(0);
+      await testInfo.attach("native-retest-deleted-source-recovery", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+      await banner.getByRole("button", { name: "Open retest", exact: true }).click();
+      await expect(page.getByRole("heading", { name: targetName, exact: true })).toBeVisible();
+      const target = await api.get(`/api/cycles/${targetId}`);
+      expect(target.status(), await target.text()).toBe(200);
+      expect(await target.json()).toMatchObject({ id: targetId, name: targetName, retestSourceCycleId: source.cycleId });
+      const rows = await (await api.get(`/api/cycles/${targetId}/executions`)).json();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ testcaseId: source.testcaseIds[0], status: "Untested" });
+      expect(posts).toBe(1);
+      expect(committedIds.size).toBe(1);
+    } finally {
+      releaseSourceReads();
+      for (const id of committedIds) await api.delete(`/api/cycles/${id}`, { failOnStatusCode: false });
+      await cleanUpRun(api, source.cycleId, source.testcaseIds);
+      await api.dispose();
+    }
+  });
+
+  test("a 404 recovery read keeps uncertainty and explicit retry uses the identical request", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const source = await fixture(api);
+    const posted: Array<Record<string, unknown>> = [];
+    try {
+      await page.route(`**/api/cycles/${source.cycleId}/retests`, async route => {
+        if (route.request().method() !== "POST") { await route.continue(); return; }
+        posted.push(route.request().postDataJSON());
+        if (posted.length === 1) await route.abort("failed");
+        else await route.continue();
+      });
+      const dialog = await openPreview(page, source);
+      await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeEnabled();
+      await dialog.getByRole("button", { name: "Create retest", exact: true }).click();
+      await expect(dialog).toContainText("The earlier request may still be running");
+      await expect(dialog.getByRole("button", { name: "Retry saved request", exact: true })).toBeEnabled();
+      expect(await children(api, source.cycleId)).toEqual([]);
+      await dialog.getByRole("button", { name: "Retry saved request", exact: true }).click();
+      const createdName = String(posted[0].name);
+      await expect(page.getByRole("heading", { name: createdName, exact: true })).toBeVisible();
+      expect(posted).toHaveLength(2);
+      expect(posted[1]).toEqual(posted[0]);
+      expect(await children(api, source.cycleId)).toHaveLength(1);
+    } finally { await cleanup(api, source); }
+  });
+
+  test("a stale uncertain request can be stopped before a fresh reviewed request uses a new key", async ({ page }, testInfo) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const source = await fixture(api);
+    const posted: Array<Record<string, unknown>> = [];
+    const stopBodies: Array<Record<string, unknown>> = [];
+    try {
+      await page.route(`**/api/cycles/${source.cycleId}/retests`, async route => {
+        if (route.request().method() !== "POST") { await route.continue(); return; }
+        posted.push(route.request().postDataJSON());
+        if (posted.length === 1) await route.abort("failed");
+        else await route.continue();
+      });
+      await page.route(`**/api/cycles/${source.cycleId}/retests/requests/*/cancel`, async route => {
+        stopBodies.push(route.request().postDataJSON());
+        const response = await route.fetch();
+        expect(response.ok(), await response.text()).toBeTruthy();
+        expect((await response.json()).outcome).toBe("cancelled");
+        await route.fulfill({ response });
+      });
+      const dialog = await openPreview(page, source);
+      await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeEnabled();
+      await dialog.getByRole("button", { name: "Create retest", exact: true }).click();
+      await expect(dialog).toContainText("The earlier request may still be running");
+      expect(await children(api, source.cycleId)).toEqual([]);
+      const endpoint = `/api/projects/${source.projectId}/testcases/${source.testcaseIds[0]}`;
+      const current = await (await api.get(endpoint)).json();
+      const changedTitle = `${source.title} reviewed after uncertainty`;
+      const changed = await api.patch(endpoint, { data: { title: changedTitle, expectedRevision: current.editRevision } });
+      expect(changed.ok(), await changed.text()).toBeTruthy();
+      const approved = await approveTestcase(api, source.projectId, source.testcaseIds[0]);
+      const retryResponse = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === `/api/cycles/${source.cycleId}/retests`);
+      await dialog.getByRole("button", { name: "Retry saved request", exact: true }).click();
+      expect((await retryResponse).status()).toBe(409);
+      await expect(dialog.getByRole("button", { name: "Stop request and review again", exact: true })).toBeEnabled();
+      expect(posted[1]).toEqual(posted[0]);
+      expect((await savedIntent(page, source.cycleId))?.value.request).toEqual(posted[0]);
+      await dialog.getByRole("button", { name: "Stop request and review again", exact: true }).click();
+      await expect(dialog).toContainText("This saved request was stopped. It cannot create a Run");
+      expect(stopBodies).toEqual([posted[0]]);
+      expect(await savedIntent(page, source.cycleId)).toBeNull();
+      const stopped = await api.get(`/api/cycles/${source.cycleId}/retests/requests/${posted[0].requestKey}`);
+      expect(stopped.status(), await stopped.text()).toBe(200);
+      expect(await stopped.json()).toMatchObject({ outcome: "cancelled", projectId: source.projectId, sourceCycleId: source.cycleId, requestKey: posted[0].requestKey });
+      const late = await api.post(`/api/cycles/${source.cycleId}/retests`, { data: posted[0], failOnStatusCode: false });
+      expect(late.status(), await late.text()).toBe(409);
+      expect((await late.json()).code).toBe("RETEST_REQUEST_CANCELLED");
+      expect(await children(api, source.cycleId)).toEqual([]);
+      await dialog.getByRole("button", { name: "Review again", exact: true }).click();
+      await expect(dialog.getByRole("region", { name: "Current approved definition", exact: true })).toContainText(changedTitle);
+      await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeDisabled();
+      const targetName = `Fresh reviewed retest ${source.cycleId}`;
+      await dialog.getByLabel("Run name", { exact: true }).fill(targetName);
+      await dialog.getByRole("checkbox", { name: "I reviewed the definition differences and want to retest the current approved definitions.", exact: true }).check();
+      await testInfo.attach("native-retest-fresh-review-after-stop", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+      await dialog.getByRole("button", { name: "Create retest", exact: true }).click();
+      await expect(page.getByRole("heading", { name: targetName, exact: true })).toBeVisible();
+      expect(posted).toHaveLength(3);
+      expect(posted[2].requestKey).not.toBe(posted[0].requestKey);
+      const created = await children(api, source.cycleId);
+      expect(created).toHaveLength(1);
+      const target = await (await api.get(`/api/cycles/${created[0].id}`)).json();
+      expect(target.retestManifest.occurrences[0]).toMatchObject({ sourceExecutionId: source.executionId, targetApprovalRevision: approved.approvalRevision });
+    } finally { await cleanup(api, source); }
+  });
+
+  test("a lost stop response retains the intent until reload reads its exact cancellation", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const source = await fixture(api);
+    let posts = 0, stops = 0;
+    let allowLookup = false;
+    let original: Record<string, unknown> = {};
+    try {
+      await page.route(`**/api/cycles/${source.cycleId}/retests`, async route => {
+        if (route.request().method() !== "POST") { await route.continue(); return; }
+        posts += 1;
+        original = route.request().postDataJSON();
+        await route.abort("failed");
+      });
+      await page.route(`**/api/cycles/${source.cycleId}/retests/requests/*`, async route => {
+        if (allowLookup) await route.continue();
+        else await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Outcome lookup temporarily unavailable" }) });
+      });
+      await page.route(`**/api/cycles/${source.cycleId}/retests/requests/*/cancel`, async route => {
+        stops += 1;
+        expect(route.request().postDataJSON()).toEqual(original);
+        const response = await route.fetch();
+        expect(response.ok(), await response.text()).toBeTruthy();
+        expect((await response.json()).outcome).toBe("cancelled");
+        await route.abort("failed");
+      });
+      const dialog = await openPreview(page, source);
+      await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeEnabled();
+      await dialog.getByRole("button", { name: "Create retest", exact: true }).click();
+      await expect(dialog.getByRole("button", { name: "Stop request and review again", exact: true })).toBeEnabled();
+      await dialog.getByRole("button", { name: "Stop request and review again", exact: true }).click();
+      await expect(dialog).toContainText("Outcome lookup temporarily unavailable");
+      await expect(dialog.getByRole("button", { name: "Check outcome", exact: true })).toBeEnabled();
+      expect((await savedIntent(page, source.cycleId))?.value.request).toEqual(original);
+      expect(await children(api, source.cycleId)).toEqual([]);
+      allowLookup = true;
+      await page.reload();
+      await expect(page.getByTestId("retest-recovery-banner")).toContainText("Your saved retest request was stopped.");
+      expect(await savedIntent(page, source.cycleId)).toBeNull();
+      expect(posts).toBe(1);
+      expect(stops).toBe(1);
+      const late = await api.post(`/api/cycles/${source.cycleId}/retests`, { data: original, failOnStatusCode: false });
+      expect(late.status(), await late.text()).toBe(409);
+      expect((await late.json()).code).toBe("RETEST_REQUEST_CANCELLED");
+      expect(await children(api, source.cycleId)).toEqual([]);
+    } finally { await cleanup(api, source); }
+  });
+
+  test("stopping a request that already created a retest recovers that destination", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const source = await fixture(api);
+    let posts = 0, stops = 0;
+    let targetId = "";
+    try {
+      await page.route(`**/api/cycles/${source.cycleId}/retests`, async route => {
+        if (route.request().method() !== "POST") { await route.continue(); return; }
+        posts += 1;
+        const response = await route.fetch();
+        expect(response.status(), await response.text()).toBe(201);
+        targetId = (await response.json()).cycleId;
+        await route.abort("failed");
+      });
+      await page.route(`**/api/cycles/${source.cycleId}/retests/requests/*`, route => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Outcome lookup temporarily unavailable" }) }));
+      await page.route(`**/api/cycles/${source.cycleId}/retests/requests/*/cancel`, async route => {
+        stops += 1;
+        const response = await route.fetch();
+        expect(response.ok(), await response.text()).toBeTruthy();
+        expect(await response.json()).toMatchObject({ outcome: "created", cycleId: targetId });
+        await route.fulfill({ response });
+      });
+      const dialog = await openPreview(page, source);
+      await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeEnabled();
+      await dialog.getByRole("button", { name: "Create retest", exact: true }).click();
+      await expect(dialog.getByRole("button", { name: "Stop request and review again", exact: true })).toBeEnabled();
+      await dialog.getByRole("button", { name: "Stop request and review again", exact: true }).click();
+      await expect(dialog.getByRole("button", { name: "Open retest", exact: true })).toBeVisible();
+      await expect(dialog.getByRole("button", { name: "Review again", exact: true })).toHaveCount(0);
+      expect(await savedIntent(page, source.cycleId)).toBeNull();
+      await dialog.getByRole("button", { name: "Open retest", exact: true }).click();
+      await expect(page.getByTestId("run-retest-origin")).toContainText(source.name);
+      const created = await children(api, source.cycleId);
+      expect(created).toHaveLength(1);
+      expect(created[0].id).toBe(targetId);
+      expect(posts).toBe(1);
+      expect(stops).toBe(1);
+    } finally { await cleanup(api, source); }
+  });
+
+  test("a deleted source with no server outcome reloads only through its current user's pending intent", async ({ page, browser }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const source = await fixture(api);
+    let posts = 0;
+    let original: Record<string, unknown> = {};
+    let holdResolution = true;
+    let releaseResolution!: () => void;
+    const resolutionGate = new Promise<void>(resolve => { releaseResolution = resolve; });
+    const withoutIntent = await browser.newContext({ baseURL: env.webBaseUrl, storageState: STATE_PATH });
+    try {
+      await page.route("**/api/route-resolve?*", async route => {
+        if (!holdResolution || new URL(route.request().url()).searchParams.get("cycle") !== source.cycleId) { await route.continue(); return; }
+        const response = await route.fetch();
+        expect(response.status(), await response.text()).toBe(200);
+        await resolutionGate;
+        await route.fulfill({ response });
+      });
+      await page.route(`**/api/cycles/${source.cycleId}/retests`, async route => {
+        if (route.request().method() !== "POST") { await route.continue(); return; }
+        posts += 1;
+        original = route.request().postDataJSON();
+        await route.abort("failed");
+      });
+      const dialog = await openPreview(page, source);
+      await expect(page).toHaveURL(new RegExp(`/cycles/${source.cycleId}$`));
+      await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeEnabled();
+      await dialog.getByRole("button", { name: "Create retest", exact: true }).click();
+      await expect(dialog).toContainText("The earlier request may still be running");
+      expect((await savedIntent(page, source.cycleId))?.value.routeHint).toEqual({ projectRef: source.projectId, cycleRef: source.cycleId });
+      // Canonicalization can finish after the uncertain POST. Enrich only its route hint; the
+      // original request must remain byte-for-byte available for cancellation and exact replay.
+      holdResolution = false;
+      releaseResolution();
+      await expect(page).toHaveURL(/\/cycles\/[^/]+-RUN-\d+$/);
+      const sourceUrl = page.url();
+      const saved = await savedIntent(page, source.cycleId);
+      expect(saved?.value.request).toEqual(original);
+      expect(saved?.value.routeHint).toEqual({
+        projectRef: decodeURIComponent(new URL(sourceUrl).pathname.split("/")[2]),
+        cycleRef: decodeURIComponent(new URL(sourceUrl).pathname.split("/")[4]),
+      });
+      expect(await children(api, source.cycleId)).toEqual([]);
+      const deleted = await api.delete(`/api/cycles/${source.cycleId}`);
+      expect(deleted.ok(), await deleted.text()).toBeTruthy();
+      const resolveQuery = new URLSearchParams({ project: saved!.value.routeHint.projectRef, cycle: saved!.value.routeHint.cycleRef });
+      expect((await api.get(`/api/route-resolve?${resolveQuery}`)).status()).toBe(404);
+
+      // The same authenticated user in a browser with no pending intent keeps the normal 404 UI.
+      const otherPage = await withoutIntent.newPage();
+      await otherPage.goto(sourceUrl);
+      await expect(otherPage.getByRole("heading", { name: "Page not found", exact: true })).toBeVisible();
+      const foreignUser = "00000000-0000-4000-8000-000000000099";
+      await otherPage.evaluate(({ savedValue, foreignId }) => {
+        localStorage.setItem(`tesbo:retest:${foreignId}:${savedValue.projectId}:${savedValue.sourceCycleId}`, JSON.stringify({ ...savedValue, userId: foreignId }));
+      }, { savedValue: saved!.value, foreignId: foreignUser });
+      await otherPage.reload();
+      await expect(otherPage.getByRole("heading", { name: "Page not found", exact: true })).toBeVisible();
+      await expect(otherPage.getByTestId("retest-recovery-banner")).toHaveCount(0);
+
+      await page.reload();
+      await expect(page).toHaveURL(sourceUrl);
+      await expect(page.getByRole("region", { name: "Run unavailable", exact: true })).toBeVisible();
+      const banner = page.getByTestId("retest-recovery-banner");
+      await expect(banner).toContainText("A retest request is awaiting confirmation.");
+      await banner.getByRole("button", { name: "Review retest request", exact: true }).click();
+      await expect(dialog.getByRole("button", { name: "Stop request and review again", exact: true })).toBeEnabled();
+      await dialog.getByRole("button", { name: "Stop request and review again", exact: true }).click();
+      await expect(dialog).toContainText("This saved request was stopped. It cannot create a Run");
+      await expect(dialog.getByRole("button", { name: "Review again", exact: true })).toHaveCount(0);
+      expect(await savedIntent(page, source.cycleId)).toBeNull();
+      const outcome = await api.get(`/api/cycles/${source.cycleId}/retests/requests/${original.requestKey}`);
+      expect(outcome.status(), await outcome.text()).toBe(200);
+      expect(await outcome.json()).toMatchObject({ outcome: "cancelled", sourceCycleId: source.cycleId, requestKey: original.requestKey });
+      const late = await api.post(`/api/cycles/${source.cycleId}/retests`, { data: original, failOnStatusCode: false });
+      expect(late.status(), await late.text()).toBe(409);
+      expect((await late.json()).code).toBe("RETEST_REQUEST_CANCELLED");
+      expect(posts).toBe(1);
+    } finally {
+      releaseResolution();
+      await withoutIntent.close();
+      await cleanUpRun(api, source.cycleId, source.testcaseIds);
+      await api.dispose();
+    }
+  });
+
+  test("keyboard focus stays in the dialog through preview reload, uncertain submit, and recovery reload", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const source = await fixture(api);
+    let failPreview = true;
+    let releasePreview!: () => void, releaseLookup!: () => void;
+    const previewGate = new Promise<void>(resolve => { releasePreview = resolve; });
+    const lookupGate = new Promise<void>(resolve => { releaseLookup = resolve; });
+    try {
+      await page.route(`**/api/cycles/${source.cycleId}/retests/preview?*`, async route => {
+        if (failPreview) {
+          await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Preview temporarily unavailable" }) });
+          return;
+        }
+        const response = await route.fetch();
+        await previewGate;
+        await route.fulfill({ response });
+      });
+      await page.route(`**/api/cycles/${source.cycleId}/retests`, async route => {
+        if (route.request().method() === "POST") await route.abort("failed");
+        else await route.continue();
+      });
+      await page.route(`**/api/cycles/${source.cycleId}/retests/requests/*`, async route => {
+        await lookupGate;
+        await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Outcome lookup temporarily unavailable" }) });
+      });
+      await page.goto(`/projects/${source.projectId}/cycles/${source.cycleId}`);
+      await expect(page.getByRole("heading", { name: source.name, exact: true })).toBeVisible();
+      await page.getByRole("checkbox", { name: `Select ${source.title}`, exact: true }).check();
+      const trigger = page.getByTestId("run-retest-selected");
+      await tabTo(page, trigger, { backwards: true });
+      await page.keyboard.press("Enter");
+      const dialog = page.getByRole("dialog", { name: "Create retest", exact: true });
+      await expect(dialog).toBeFocused();
+      await expect(dialog.getByRole("alert")).toHaveText("Preview temporarily unavailable");
+      await page.keyboard.press("Tab");
+      await expect(dialog.getByLabel("Run name", { exact: true })).toBeFocused();
+      await page.keyboard.press("Shift+Tab");
+      await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+      await tabTo(page, dialog.getByRole("button", { name: "Reload preview", exact: true }), { within: dialog });
+      failPreview = false;
+      await page.keyboard.press("Enter");
+      await expect(dialog).toContainText("Loading the selected observations");
+      await expect(dialog).toBeFocused();
+      await page.keyboard.press("Shift+Tab");
+      await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(dialog.getByLabel("Run name", { exact: true })).toBeFocused();
+      releasePreview();
+      const create = dialog.getByRole("button", { name: "Create retest", exact: true });
+      await expect(create).toBeEnabled();
+      await tabTo(page, create, { within: dialog });
+      await page.keyboard.press("Enter");
+      await expect(dialog.getByRole("button", { name: "Check outcome", exact: true })).toBeDisabled();
+      await expect(dialog).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(dialog).toBeFocused();
+      await page.keyboard.press("Shift+Tab");
+      await expect(dialog).toBeFocused();
+      releaseLookup();
+      await expect(dialog.getByRole("button", { name: "Check outcome", exact: true })).toBeEnabled();
+      await page.keyboard.press("Tab");
+      await expect(dialog.getByRole("button", { name: "Close and keep request", exact: true })).toBeFocused();
+      await page.keyboard.press("Shift+Tab");
+      await expect(dialog.getByRole("button", { name: "Stop request and review again", exact: true })).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(dialog.getByRole("button", { name: "Close and keep request", exact: true })).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(dialog).toBeHidden();
+      await expect(trigger).toBeFocused();
+      await page.reload();
+      const review = page.getByTestId("retest-recovery-banner").getByRole("button", { name: "Review retest request", exact: true });
+      await expect(review).toBeVisible();
+      await tabTo(page, review);
+      await page.keyboard.press("Enter");
+      await expect(dialog.getByRole("button", { name: "Check outcome", exact: true })).toBeEnabled();
+      await expect(dialog).toBeFocused();
+      await page.keyboard.press("Shift+Tab");
+      await expect(dialog.getByRole("button", { name: "Stop request and review again", exact: true })).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(dialog.getByRole("button", { name: "Close and keep request", exact: true })).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(dialog).toBeHidden();
+      await expect(review).toBeFocused();
+      expect(await children(api, source.cycleId)).toEqual([]);
+    } finally {
+      releasePreview();
+      releaseLookup();
+      await cleanup(api, source);
+    }
+  });
+
+  test("a completed source can start a distinct retest while its status and results stay sealed", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const source = await fixture(api);
+    try {
+      const completed = await api.patch(`/api/cycles/${source.cycleId}`, { data: { status: "Completed" } });
+      expect(completed.ok(), await completed.text()).toBeTruthy();
+      const original = await (await api.get(`/api/cycles/${source.cycleId}/executions`)).json();
+      const dialog = await openPreview(page, source);
+      await expect(page.getByTestId("run-bulk-status")).toHaveCount(0);
+      await expect(page.getByTestId("run-bulk-remove")).toHaveCount(0);
+      await expect(page.getByTestId("run-bulk-assign")).toHaveCount(0);
+      await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeEnabled();
+      await dialog.getByRole("button", { name: "Create retest", exact: true }).click();
+      await expect(page.getByTestId("run-retest-origin")).toContainText(source.name);
+      const created = await children(api, source.cycleId);
+      expect(created).toHaveLength(1);
+      expect(await (await api.get(`/api/cycles/${source.cycleId}`)).json()).toMatchObject({ status: "Completed" });
+      expect(await (await api.get(`/api/cycles/${source.cycleId}/executions`)).json()).toEqual(original);
+      expect(await (await api.get(`/api/cycles/${created[0].id}`)).json()).toMatchObject({ status: "Planning" });
+    } finally { await cleanup(api, source); }
+  });
+
+  test("changed definitions are compared and require an explicit acknowledgment before retesting", async ({ page }, testInfo) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const source = await fixture(api);
+    try {
+      const endpoint = `/api/projects/${ctx.projectId}/testcases/${source.testcaseIds[0]}`;
+      const current = await (await api.get(endpoint)).json();
+      const newTitle = `${source.title} corrected expectation`;
+      const edited = await api.patch(endpoint, { data: {
+        title: newTitle, expectedRevision: current.editRevision,
+        steps: JSON.stringify([{ action: "Confirm the order and open its receipt", expectedResult: "The order number and saved timestamp are visible." }]),
+      } });
+      expect(edited.ok(), await edited.text()).toBeTruthy();
+      await approveTestcase(api, ctx.projectId, source.testcaseIds[0]);
+      const dialog = await openPreview(page, source);
+      await expect(dialog).toContainText("The case definition changed since this source observation.");
+      await expect(dialog.getByRole("region", { name: "Source definition", exact: true })).toContainText("The receipt shows the saved order number.");
+      await expect(dialog.getByRole("region", { name: "Current approved definition", exact: true })).toContainText("The order number and saved timestamp are visible.");
+      const create = dialog.getByRole("button", { name: "Create retest", exact: true });
+      await expect(create).toBeDisabled();
+      await testInfo.attach("native-retest-changed-definition-comparison", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+      await dialog.getByRole("checkbox", { name: "I reviewed the definition differences and want to retest the current approved definitions.", exact: true }).check();
+      await expect(create).toBeEnabled();
+      await create.click();
+      await expect(page.getByTestId("run-retest-origin")).toContainText(source.name);
+      const created = await children(api, source.cycleId);
+      const newRows = await (await api.get(`/api/cycles/${created[0].id}/executions`)).json();
+      expect(newRows).toHaveLength(1);
+      expect(newRows[0]).toMatchObject({ title: newTitle, status: "Untested" });
+      const original = await (await api.get(`/api/cycles/${source.cycleId}/executions`)).json();
+      expect(original.find((row: { id: string }) => row.id === source.executionId)).toMatchObject({ title: source.title, status: "Failed", actualResult: source.actualResult });
+    } finally { await cleanup(api, source); }
+  });
+
+  test("custom-field configuration changes remain inspectable when the field name and value stay the same", async ({ page }, testInfo) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    let projectId = "";
+    let source: Awaited<ReturnType<typeof fixture>> | undefined;
+    try {
+      // A definition edit invalidates every case approval in its project. An isolated project
+      // keeps this real dependency change from altering other files' concurrent smoke fixtures.
+      const suffix = `${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
+      const project = await api.post("/api/projects", { data: { name: `E2E Retest fields ${suffix}`.slice(0, 30), key: `RF${suffix}` } });
+      expect(project.status(), await project.text()).toBe(201);
+      projectId = (await project.json()).id;
+      const definitions = `/api/projects/${projectId}/custom-fields/definitions`;
+      const fieldName = `Review field ${suffix}`;
+      const definition = await api.post(definitions, { data: { name: fieldName, fieldType: "text", required: false, config: { maxLength: 20 } } });
+      expect(definition.status(), await definition.text()).toBe(201);
+      const field = await definition.json();
+      source = await fixture(api, false, projectId, { customFieldValues: { [field.id]: "same saved value" } });
+      const changed = await api.patch(`${definitions}/${field.id}`, { data: { required: true, config: { maxLength: 80 } } });
+      expect(changed.status(), await changed.text()).toBe(200);
+      const approved = await approveTestcase(api, projectId, source.testcaseIds[0]);
+      const dialog = await openPreview(page, source);
+      await expect(dialog).toContainText("The case definition changed since this source observation.");
+      const before = dialog.getByRole("region", { name: "Source definition", exact: true });
+      const after = dialog.getByRole("region", { name: "Current approved definition", exact: true });
+      await expect(before.getByText("same saved value", { exact: true })).toBeVisible();
+      await expect(after.getByText("same saved value", { exact: true })).toBeVisible();
+      const oldSummary = before.getByText(`Field definition: ${fieldName}`, { exact: true });
+      const newSummary = after.getByText(`Field definition: ${fieldName}`, { exact: true });
+      await oldSummary.click();
+      await newSummary.click();
+      const oldField = oldSummary.locator("..");
+      const newField = newSummary.locator("..");
+      await expect(oldField.getByText("Type", { exact: true })).toBeVisible();
+      await expect(oldField.getByText("text", { exact: true })).toBeVisible();
+      await expect(oldField.getByText("Maximum length", { exact: true })).toBeVisible();
+      await expect(oldField.getByText("20", { exact: true })).toBeVisible();
+      await expect(newField.getByText("80", { exact: true })).toBeVisible();
+      await expect(oldField.getByText("Required", { exact: true }).locator("..")).toHaveText(/Required\s*false/);
+      await expect(newField.getByText("Required", { exact: true }).locator("..")).toHaveText(/Required\s*true/);
+      const create = dialog.getByRole("button", { name: "Create retest", exact: true });
+      await expect(create).toBeDisabled();
+      await testInfo.attach("native-retest-custom-field-definition-comparison", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+      await dialog.getByRole("checkbox", { name: "I reviewed the definition differences and want to retest the current approved definitions.", exact: true }).check();
+      await create.click();
+      await expect(page.getByTestId("run-retest-origin")).toContainText(source.name);
+      const created = await children(api, source.cycleId);
+      expect(created).toHaveLength(1);
+      const target = await (await api.get(`/api/cycles/${created[0].id}`)).json();
+      const occurrence = target.retestManifest.occurrences[0];
+      expect(occurrence.targetApprovalRevision).toBe(approved.approvalRevision);
+      expect(occurrence.sourceDefinition.customFields.find((item: { definition: { id: string } }) => item.definition.id === field.id)).toMatchObject({ definition: { name: fieldName, required: false, config: { maxLength: 20 } }, value: "same saved value" });
+      expect(occurrence.targetDefinition.customFields.find((item: { definition: { id: string } }) => item.definition.id === field.id)).toMatchObject({ definition: { name: fieldName, required: true, config: { maxLength: 80 } }, value: "same saved value" });
+    } finally {
+      if (source) {
+        for (const child of await children(api, source.cycleId)) await api.delete(`/api/cycles/${child.id}`, { failOnStatusCode: false });
+        await cleanUpRun(api, source.cycleId, source.testcaseIds, projectId);
+      }
+      if (projectId) await api.delete(`/api/projects/${projectId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
+  test("an in-place Run refresh clears a replaced occurrence until the replacement is explicitly selected", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const source = await fixture(api);
+    let previews = 0;
+    try {
+      page.on("request", request => { if (new URL(request.url()).pathname === `/api/cycles/${source.cycleId}/retests/preview`) previews += 1; });
+      const original = await (await api.get(`/api/cycles/${source.cycleId}/executions`)).json();
+      const unaffected = original.find((row: { testcaseId: string }) => row.testcaseId === source.testcaseIds[1]);
+      await page.goto(`/projects/${source.projectId}/cycles/${source.cycleId}`);
+      await expect(page.getByRole("heading", { name: source.name, exact: true })).toBeVisible();
+      const checkbox = page.getByRole("checkbox", { name: `Select ${source.title}`, exact: true });
+      await checkbox.check();
+      await expect(page.getByTestId("run-retest-selected")).toBeVisible();
+      const removed = await api.delete(`/api/cycles/${source.cycleId}/testcases/${source.testcaseIds[0]}`);
+      expect(removed.ok(), await removed.text()).toBeTruthy();
+      const added = await api.post(`/api/cycles/${source.cycleId}/testcases`, { data: { testcaseIds: [source.testcaseIds[0]] } });
+      expect(added.ok(), await added.text()).toBeTruthy();
+      const replacement = (await (await api.get(`/api/cycles/${source.cycleId}/executions`)).json()).find((row: { testcaseId: string }) => row.testcaseId === source.testcaseIds[0]);
+      expect(replacement.id).not.toBe(source.executionId);
+      expect(replacement.status).toBe("Untested");
+
+      // Log Bug's onLogged callback calls load() on this same mounted Run. A full navigation
+      // would clear selection even in the broken version and would not test the replacement bug.
+      await page.getByRole("button", { name: unaffected.title, exact: true }).click();
+      await page.getByTestId("panel-log-bug").click();
+      const bugTitle = `E2E Refresh retained selection ${source.cycleId}`;
+      await page.getByPlaceholder("Brief summary of the bug…").fill(bugTitle);
+      const bugResponse = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === `/api/projects/${source.projectId}/bugs`);
+      await page.getByRole("button", { name: "Report Bug", exact: true }).click();
+      const logged = await bugResponse;
+      expect(logged.ok(), await logged.text()).toBeTruthy();
+      source.bugId = (await logged.json()).id;
+      await expect(page.getByRole("heading", { name: "Report a Bug", exact: true })).toBeHidden();
+      await expect(page.getByTestId("run-selection-changed")).toContainText("Their selection was cleared");
+      await page.keyboard.press("Escape");
+      await expect(checkbox).not.toBeChecked();
+      await expect(page.getByTestId("run-retest-selected")).toHaveCount(0);
+      expect(previews).toBe(0);
+      await checkbox.check();
+      await expect(page.getByTestId("run-bulk-remove")).toBeVisible();
+      await expect(page.getByTestId("run-bulk-assign")).toBeVisible();
+      await expect(page.getByTestId("run-bulk-status")).toBeVisible();
+      await page.getByTestId("run-retest-selected").click();
+      const dialog = page.getByRole("dialog", { name: "Create retest", exact: true });
+      await expect(dialog.getByText("Source result: Untested", { exact: true })).toBeVisible();
+      await expect(dialog).not.toContainText(source.actualResult);
+      await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeEnabled();
+      await dialog.getByRole("button", { name: "Create retest", exact: true }).click();
+      await expect(page.getByTestId("run-retest-origin")).toContainText(source.name);
+      const created = await children(api, source.cycleId);
+      expect(created).toHaveLength(1);
+      const target = await (await api.get(`/api/cycles/${created[0].id}`)).json();
+      expect(target.retestManifest.occurrences).toHaveLength(1);
+      expect(target.retestManifest.occurrences[0]).toMatchObject({ sourceExecutionId: replacement.id, sourceResult: { status: "Untested" } });
+    } finally { await cleanup(api, source); }
   });
 });

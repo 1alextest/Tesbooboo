@@ -49,9 +49,10 @@ const url = process.env.DATABASE_URL ?? "";
   let setup: Client, pool: Pool, project: string, other: string, plan: string, cycle: string;
   let localSuite: string, localCase: string, foreignSuite: string, foreignCase: string, foreignPlan: string;
   const owner = randomUUID(), stamp = randomUUID();
+  const poolApplicationName = `plan-lineage-${stamp}`;
   beforeAll(async () => {
     setup = new Client({ connectionString: url }); await setup.connect();
-    pool = new Pool({ connectionString: url, max: 4, connectionTimeoutMillis: 3000 });
+    pool = new Pool({ connectionString: url, max: 4, connectionTimeoutMillis: 3000, application_name: poolApplicationName });
     await setup.query("INSERT INTO users (id,email,name) VALUES ($1,$2,'Lineage owner')", [owner, `lineage-${stamp}@tesbo.invalid`]);
     const org = (await setup.query("INSERT INTO organizations (name,slug) VALUES ('Lineage CI',$1) RETURNING id", [`lineage-${stamp}`])).rows[0].id;
     project = (await setup.query("INSERT INTO projects (organization_id,key,name) VALUES ($1,'LNA','Lineage A') RETURNING id", [org])).rows[0].id;
@@ -224,7 +225,7 @@ const url = process.env.DATABASE_URL ?? "";
       notifications = jest.spyOn(legacy, "notifyUsers");
       restHandlers = (["updatePlan", "deletePlan", "addPlanItem", "deletePlanItem", "updateCycle", "deleteCycle", "addCycleTestCases",
         "removeCycleTestCase", "removeCycleTestCases", "updateExecution", "uploadExecutionAttachments", "bulkAssignExecutions",
-        "bulkUpdateExecutionStatus", "importRunHistory", "shareCycle"] as const).map((method) => jest.spyOn(legacy, method));
+        "bulkUpdateExecutionStatus", "importRunHistory", "shareCycle", "createNativeRetest", "cancelNativeRetestRequest"] as const).map((method) => jest.spyOn(legacy, method));
       // This boundary test does not boot unrelated resumable Zyra plans from other retained fixtures.
       jest.spyOn(legacy, "onModuleInit").mockResolvedValue(undefined);
       tokens = new ApiTokenService(db);
@@ -496,6 +497,7 @@ const url = process.env.DATABASE_URL ?? "";
       state.runItems = (await setup.query("SELECT i.* FROM cycle_items i JOIN cycles c ON c.id=i.cycle_id WHERE c.project_id=ANY($1::uuid[]) ORDER BY i.id", [ids])).rows;
       state.results = (await setup.query("SELECT e.* FROM executions e JOIN cycle_items i ON i.id=e.cycle_item_id JOIN cycles c ON c.id=i.cycle_id WHERE c.project_id=ANY($1::uuid[]) ORDER BY e.id", [ids])).rows;
       state.links = (await setup.query("SELECT l.* FROM bug_links l JOIN bugs b ON b.id=l.bug_id WHERE b.project_id=ANY($1::uuid[]) ORDER BY l.id", [ids])).rows;
+      state.retestRequests = (await setup.query("SELECT * FROM cycle_retest_requests WHERE project_id=ANY($1::uuid[]) ORDER BY project_id,request_key",[ids])).rows;
       state.documentVersions = (await setup.query("SELECT v.* FROM knowledge_document_versions v JOIN knowledge_documents d ON d.id=v.document_id WHERE d.project_id=ANY($1::uuid[]) ORDER BY v.id", [ids])).rows;
       return state;
     }
@@ -733,13 +735,14 @@ const url = process.env.DATABASE_URL ?? "";
     });
 
     describe("authenticated REST Plan/Run aliases", () => {
-      let restPlan: string, restItem: string, restRun: string, restCase: string, spareCase: string, restExecution: string, restAttachment: string;
+      let restPlan: string, restItem: string, restRun: string, restCase: string, spareCase: string, restExecution: string, restAttachment: string, restRetestDigest: string, restCancelKey: string;
       const retainedTrace = Buffer.from("PK disposable retained trace bytes");
       beforeEach(async () => {
         // Every red-case target is independent: an actually persisted deletion or edit must not
         // make the next reproduction fail on a missing parent instead of its intended lock oracle.
         restPlan = (await setup.query("INSERT INTO plans (project_id,name) VALUES ($1,'REST lock Plan') RETURNING id", [locked])).rows[0].id;
-        restCase = (await setup.query("INSERT INTO testcases (project_id,external_id,title) VALUES ($1,$2,'REST lock Case') RETURNING id", [locked, `REST-${randomUUID().slice(0, 24)}`])).rows[0].id;
+        restCase = (await setup.query("INSERT INTO testcases (project_id,external_id,title,status) VALUES ($1,$2,'REST lock Case','Approved') RETURNING id", [locked, `REST-${randomUUID().slice(0, 24)}`])).rows[0].id;
+        await recordReviewedCaseFixture(setup, restCase, owner);
         spareCase = (await setup.query("INSERT INTO testcases (project_id,external_id,title,status) VALUES ($1,$2,'REST spare Case','Approved') RETURNING id", [locked, `REST-${randomUUID().slice(0, 24)}`])).rows[0].id;
         await recordReviewedCaseFixture(setup, spareCase, owner);
         restItem = (await setup.query("INSERT INTO plan_items (plan_id,testcase_id) VALUES ($1,$2) RETURNING id", [restPlan, restCase])).rows[0].id;
@@ -749,6 +752,8 @@ const url = process.env.DATABASE_URL ?? "";
         const key = `ci/rest-lock/${restExecution}/retained.zip`;
         await storage.put(key, retainedTrace, "application/zip");
         restAttachment = (await setup.query("INSERT INTO attachments (project_id,entity_type,entity_id,file_name,content_type,file_size,storage_path,uploaded_by) VALUES ($1,'execution',$2,'retained.zip','application/zip',$3,$4,$5) RETURNING id", [locked, restExecution, retainedTrace.length, key, owner])).rows[0].id;
+        restRetestDigest = (await legacy.previewNativeRetest(restRun, owner, [restExecution])).previewDigest;
+        restCancelKey = randomUUID();
         put.mockClear(); // Seeded content exists on disk; only request-time puts count as side effects.
       });
       const restWrites = {
@@ -766,8 +771,16 @@ const url = process.env.DATABASE_URL ?? "";
         "Execution bulk assign": () => ({ method: "POST", path: `/api/cycles/${restRun}/executions/bulk-assign`, body: { executionIds: [restExecution], assigneeId: owner } }),
         "Execution bulk status": () => ({ method: "POST", path: `/api/cycles/${restRun}/executions/bulk-status`, body: { executionIds: [restExecution], status: "Failed" } }),
         "History import": () => ({ method: "POST", path: `/api/cycles/${restRun}/history-import`, body: { run: { status: "Completed" }, results: [{ testcaseId: restCase, status: "Failed", history: [{ status: "Passed" }] }] } }),
-        "Sharing enable": () => ({ method: "POST", path: `/api/cycles/${restRun}/share`, body: { enabled: true } })
+        "Sharing enable": () => ({ method: "POST", path: `/api/cycles/${restRun}/share`, body: { enabled: true } }),
+        "Retest creation": () => ({ method: "POST", path: `/api/cycles/${restRun}/retests`, body: {
+          requestKey: randomUUID(), executionIds: [restExecution], expectedPreviewDigest: restRetestDigest,
+          name: "Reviewed retest of retained result", buildVersion: "fixed-disposable-build"
+        } })
       } satisfies Record<string, () => { method: string; path: string; body?: unknown; upload?: boolean }>;
+      const restRecoveries = {
+        "Retest cancellation": () => ({method:"POST",path:`/api/cycles/${restRun}/retests/requests/${restCancelKey}/cancel`,
+          body:{...restWrites["Retest creation"]().body,requestKey:restCancelKey}})
+      };
       type RestInput = { method: string; path: string; body?: unknown; upload?: boolean };
       async function rest(input: RestInput, headers: Record<string, string> = { Cookie: `${settings.sessionCookieName}=${session}` }) {
         const form = new FormData();
@@ -801,10 +814,10 @@ const url = process.env.DATABASE_URL ?? "";
           return path && /^\/api\/(plans|cycles)\//.test(path) ? [{ path, method }] : [];
         });
         const mutations = aliases.filter(({ method }) => method !== RequestMethod.GET);
-        const normalize = (input: RestInput) => `${input.method} ${input.path.replace(restPlan, ":planId").replace(restItem, ":itemId").replace(restRun, ":cycleId").replace(restExecution, ":executionId").replace(restCase, ":testcaseId")}`;
-        expect(mutations.map(({ path, method }) => `${RequestMethod[method]} ${path}`).sort()).toEqual(Object.values(restWrites).map((input) => normalize(input())).sort());
-        expect(aliases).toHaveLength(26);
-        expect(aliases.filter(({ method }) => method === RequestMethod.GET)).toHaveLength(11);
+        const normalize = (input: RestInput) => `${input.method} ${input.path.replace(restPlan, ":planId").replace(restItem, ":itemId").replace(restRun, ":cycleId").replace(restExecution, ":executionId").replace(restCase, ":testcaseId").replace(restCancelKey, ":requestKey")}`;
+        expect(mutations.map(({ path, method }) => `${RequestMethod[method]} ${path}`).sort()).toEqual([...Object.values(restWrites),...Object.values(restRecoveries)].map((input) => normalize(input())).sort());
+        expect(aliases).toHaveLength(31);
+        expect(aliases.filter(({ method }) => method === RequestMethod.GET)).toHaveLength(14);
         // Run schedules moved to SchedulesController when they stopped being stubs; their auth and
         // contract are covered by e2e/api/execution-ops.spec.ts instead of this alias inventory.
         expect(aliases.filter(({ path }) => path.startsWith("/api/cycles/schedules/"))).toHaveLength(0);
@@ -838,6 +851,17 @@ const url = process.env.DATABASE_URL ?? "";
         if (name === "Execution bulk status") expect(savedExecution).toMatchObject({ status: "Failed", executed_by: owner, history: [{ status: "Blocked" }] });
         if (name === "History import") { expect(savedRun.status).toBe("Completed"); expect(savedExecution).toMatchObject({ status: "Failed", executed_by: owner, history: [{ status: "Passed" }] }); }
         if (name === "Sharing enable") expect(savedRun).toMatchObject({ share_enabled: true, share_token: expect.any(String) });
+        if (name === "Retest creation") {
+          const receipt = response.body as { cycleId: string; manifest: { occurrences: Array<{ executionId: string; sourceExecutionId: string; sourceEvidence: Array<{ id: string }> }> } };
+          expect(receipt.cycleId).not.toBe(restRun);
+          expect(savedRun).toEqual((before.cycles as Array<Record<string, unknown>>).find((row) => row.id === restRun));
+          expect(savedExecution).toEqual((before.results as Array<Record<string, unknown>>).find((row) => row.id === restExecution));
+          const occurrence = receipt.manifest.occurrences[0];
+          expect(occurrence.sourceExecutionId).toBe(restExecution);
+          expect(occurrence.sourceEvidence).toEqual(expect.arrayContaining([expect.objectContaining({ id: restAttachment })]));
+          expect((after.results as Array<Record<string, unknown>>).find((row) => row.id === occurrence.executionId))
+            .toMatchObject({ status: "Untested", actual_result: null, executed_by: null });
+        }
         if (name === "Evidence upload") {
           expect(put).toHaveBeenCalledTimes(1);
           const saved = (await setup.query("SELECT storage_path FROM attachments WHERE entity_id=$1 AND id<>$2", [restExecution, restAttachment])).rows;
@@ -856,7 +880,9 @@ const url = process.env.DATABASE_URL ?? "";
         "Evidence download": () => ({ path: `/api/cycles/${restRun}/executions/${restExecution}/attachments/${restAttachment}/download`, expected: retainedTrace.toString() }),
         "Trace link": () => ({ path: `/api/cycles/${restRun}/executions/${restExecution}/attachments/${restAttachment}/trace-link`, expected: expect.objectContaining({ token: expect.any(String), expiresAt: expect.any(String) }) }),
         "CSV export": () => ({ path: `/api/cycles/${restRun}/export/csv`, expected: expect.stringContaining("Retained REST result") }),
-        "Run summary": () => ({ path: `/api/cycles/${restRun}/report/summary`, expected: { total: 1, passed: 1, failed: 0, blocked: 0, skipped: 0, untested: 0 } })
+        "Run summary": () => ({ path: `/api/cycles/${restRun}/report/summary`, expected: { total: 1, passed: 1, failed: 0, blocked: 0, skipped: 0, untested: 0 } }),
+        "Retest preview": () => ({ path: `/api/cycles/${restRun}/retests/preview?executionIds=${restExecution}`, expected: expect.objectContaining({ sourceCycleId: restRun, previewDigest: restRetestDigest }) }),
+        "Retest list": () => ({ path: `/api/cycles/${restRun}/retests`, expected: [] })
       };
       it.each(Object.keys(restReads) as Array<keyof typeof restReads>)("retains the locked %s read and all stored history", async (name) => {
         const before = await businessState(), input = restReads[name](), response = await rest({ method: "GET", path: input.path });
@@ -878,6 +904,86 @@ const url = process.env.DATABASE_URL ?? "";
         expect(quota).not.toHaveBeenCalled(); expect(put).not.toHaveBeenCalled(); expect(productActivity).not.toHaveBeenCalled();
         expect(await businessState()).toEqual(before);
       });
+      it("recovers the exact committed retest after the project becomes read-only without creating another Run", async () => {
+        await setup.query("UPDATE organizations SET plan='pro' WHERE id=$1", [organization]);
+        await limits.invalidateEntitlementCache(organization);
+        const input = restWrites["Retest creation"](), created = await rest(input);
+        expect(created.status).toBe(201);
+        const receipt = created.body as { cycleId: string; requestKey: string; manifest: unknown };
+        await setup.query("UPDATE organizations SET plan='launch' WHERE id=$1", [organization]);
+        await limits.invalidateEntitlementCache(organization);
+        quota.mockClear();
+        const before = await businessState();
+        expect(await rest({ method: "GET", path: `/api/cycles/${restRun}/retests/requests/${receipt.requestKey}` }))
+          .toEqual({ status: 200, body: { ...(created.body as object), replayed: true } });
+        expect(quota).not.toHaveBeenCalled();
+        expect(await rest(input)).toEqual({status:201,body:{...(created.body as object),replayed:true}});
+        expect(await rest({...input,body:{...input.body,requestKey:randomUUID()}}))
+          .toEqual({status:403,body:{error:expect.stringContaining("This project is read-only")}});
+        expect(await businessState()).toEqual(before);
+      });
+      it("records and recovers terminal cancellation while billing is read-only, without a Run or evidence write", async () => {
+        const input = restRecoveries["Retest cancellation"](), before = await businessState();
+        const cancelled = await rest(input);
+        expect(cancelled).toMatchObject({status:201,body:{outcome:"cancelled",projectId:locked,sourceCycleId:restRun,requestKey:restCancelKey,requestedBy:owner}});
+        expect(quota).not.toHaveBeenCalled();
+        const after = await businessState();
+        expect({...after,audit_logs:before.audit_logs,retestRequests:before.retestRequests}).toEqual(before);
+        expect((after.retestRequests as Array<Record<string,unknown>>).filter(row => row.request_key === restCancelKey)).toHaveLength(1);
+        expect(await rest({method:"GET",path:`/api/cycles/${restRun}/retests/requests/${restCancelKey}`})).toEqual({status:200,body:cancelled.body});
+        expect(await rest(input)).toEqual(cancelled);
+        const refused = await rest({...restWrites["Retest creation"](),body:input.body});
+        expect(refused).toMatchObject({status:409,body:{code:"RETEST_REQUEST_CANCELLED",disposition:cancelled.body}});
+        expect(await businessState()).toEqual(after);
+        expect(put).not.toHaveBeenCalled();
+        expect(quota).not.toHaveBeenCalled();
+      });
+      it("denies machine-token cancellation before recording any terminal disposition", async () => {
+        const before = await businessState();
+        expect(await rest(restRecoveries["Retest cancellation"](),{Authorization:`Bearer ${token}`}))
+          .toEqual({status:403,body:{error:"API token is not authorized for this REST project route"}});
+        expect(await businessState()).toEqual(before);
+        expect(quota).not.toHaveBeenCalled();
+      });
+      it("refuses a retest when billing changes after its real HTTP guard cached Pro and before the source lock releases", async () => {
+        // The actual middleware above runs RequestCacheService.run(next), with both its switch
+        // and Redis enabled. Invalidating outside this request cannot clear its cached Pro result.
+        expect(settings.enableRequestScopedCache).toBe(true);
+        await setup.query("UPDATE organizations SET plan='pro' WHERE id=$1", [organization]);
+        await limits.invalidateEntitlementCache(organization);
+        const input = restWrites["Retest creation"]();
+        const blocker = new Client({ connectionString: url }); await blocker.connect();
+        let pending: ReturnType<typeof rest> | undefined;
+        try {
+          await blocker.query("BEGIN");
+          await blocker.query("SELECT id FROM cycles WHERE id=$1 FOR UPDATE", [restRun]);
+          pending = rest(input);
+          const deadline = Date.now() + 5000;
+          let waiting = false;
+          while (Date.now() < deadline) {
+            const state = await setup.query(`SELECT count(*)::int AS n FROM pg_stat_activity
+              WHERE application_name=$1 AND wait_event_type='Lock' AND query ILIKE '%FROM cycles%FOR UPDATE%'`, [poolApplicationName]);
+            if (state.rows[0].n > 0) { waiting = true; break; }
+            await new Promise<void>((resolve) => setTimeout(resolve,20));
+          }
+          expect(waiting).toBe(true);
+          expect(quota).toHaveBeenCalledTimes(1);
+          expect(JSON.parse(cache.get(`entitlement:${organization}`)!)).toMatchObject({ effectivePlan: "pro" });
+          const before = await businessState();
+          // A different database connection and async context model the committed billing event.
+          await setup.query("UPDATE organizations SET plan='launch',plan_grace_ends_at=now()-interval '1 day' WHERE id=$1", [organization]);
+          await limits.invalidateEntitlementCache(organization);
+          await blocker.query("COMMIT");
+          expect(await pending).toEqual({ status: 403, body: { error: expect.stringContaining("This project is read-only") } });
+          expect(await businessState()).toEqual(before);
+          expect((await setup.query("SELECT id FROM cycles WHERE retest_request_key=$1", [input.body.requestKey])).rows).toEqual([]);
+          expect(put).not.toHaveBeenCalled();
+        } finally {
+          await blocker.query("ROLLBACK");
+          await pending;
+          await blocker.end();
+        }
+      }, 15_000);
       it("preserves missing/invalid credentials and membership/URL ownership before entitlement or input validation", async () => {
         const before = await businessState(), input = { ...restWrites["Plan edit"](), body: { name: "x".repeat(10_000) } };
         expect(await rest(input, {})).toEqual({ status: 400, body: { error: "Authentication required" } });

@@ -293,6 +293,24 @@ jobs:
             api/executions.spec.ts api/attachments.spec.ts \
             --workers=1 --retries=0 --output=test-results-compatibility \
             -g "supports the create -> read -> update -> list -> delete lifecycle|supports adding and removing test cases|the same id repeated inside one request is added once|AUT-01 a full session|adding a test case to a cycle auto-creates an Untested execution|an execution attachment uploads and appears in its list|from-cases seeds the run with its cases|from-cases refuses a Draft case"
+      - name: Verify native manual retest and Run execution impact set
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-native-retest
+        run: |
+          # Full impacted files, including existing create/clone/manual-result behavior.
+          # This stack is built from the candidate SHA and uses only disposable CI tenants.
+          # Native retest preserves old observations and creates separate Untested occurrences;
+          # it is not the future external task/report lifecycle or a correction journal.
+          npx playwright test -c playwright.config.ts --list | tail -n 1
+          npx playwright test -c playwright.config.ts \
+            api/cycles.spec.ts api/executions.spec.ts api/route-resolve.spec.ts \
+            api/plans.spec.ts api/billing.spec.ts ui/billing.spec.ts ui/cycles.spec.ts ui/executions.spec.ts ui/readable-urls.spec.ts \
+            --workers=10 --retries=0 --output=test-results-native-retest --list
+          npx playwright test -c playwright.config.ts \
+            api/cycles.spec.ts api/executions.spec.ts api/route-resolve.spec.ts \
+            api/plans.spec.ts api/billing.spec.ts ui/billing.spec.ts ui/cycles.spec.ts ui/executions.spec.ts ui/readable-urls.spec.ts \
+            --workers=10 --retries=0 --output=test-results-native-retest
       - name: Capture smoke evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

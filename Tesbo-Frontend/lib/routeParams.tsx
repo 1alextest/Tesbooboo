@@ -2,9 +2,11 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useParams as useNextParams } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { routeResolveKey, takePrefetched } from "@/lib/projectPrefetch";
+import { findRetestRouteIntent, retestRouteHint, updateRetestRouteHint } from "@/lib/nativeRetestIntent";
 import { PageLoader } from "@/components/ui";
+import { useAppData } from "@/components/app/AppDataProvider";
 
 /*
  * Readable URLs: /projects/LOH/bugs/LOH-BUG-1 instead of /projects/<uuid>/bugs/<uuid>.
@@ -82,6 +84,8 @@ function decode(v: string): string {
 
 export function RouteParamsProvider({ children }: { children: React.ReactNode }) {
   const raw = useNextParams() as Params;
+  const { currentUser } = useAppData();
+  const userId = currentUser?.userId;
 
   const refs = useMemo(() => {
     const out: Record<string, string> = {};
@@ -94,12 +98,12 @@ export function RouteParamsProvider({ children }: { children: React.ReactNode })
   const key = cacheKeyFor(refs);
 
   const [, setTick] = useState(0);
-  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
+  const [failure, setFailure] = useState<{ key: string; userId?: string; message: string; recovery?: Resolved } | null>(null);
 
   const cached = resolvedCache.get(key);
   // A uuid-only URL needs no lookup to render, so it never waits on the network; the lookup still
   // runs below to learn the readable form.
-  const effective = cached ?? identityFor(refs);
+  const effective = cached ?? identityFor(refs) ?? (failure?.key === key && failure.userId === userId ? failure.recovery : undefined);
 
   useEffect(() => {
     if (cached || !refs.project) return;
@@ -122,12 +126,23 @@ export function RouteParamsProvider({ children }: { children: React.ReactNode })
         if (!cancelled) setTick((n) => n + 1);
       })
       .catch((err) => {
-        if (!cancelled) setFailure({ key, message: err instanceof Error ? err.message : "Not found" });
+        if (cancelled) return;
+        let recovery: Resolved | undefined;
+        // A pending request may predate source deletion and have no server receipt yet. Like a
+        // UUID URL, its scoped hint only mounts the page; every data/recovery request still goes
+        // through the server's current access checks. Never put this hint in the resolved cache.
+        if (err instanceof ApiError && err.status === 404 && userId && refs.cycle && retestRouteHint(window.location.pathname)) {
+          try {
+            const intent = findRetestRouteIntent(window.localStorage, userId, refs.project, refs.cycle);
+            if (intent) recovery = { projectId: intent.projectId, cycleId: intent.sourceCycleId };
+          } catch { /* Unavailable browser storage keeps the ordinary resolver error. */ }
+        }
+        setFailure({ key, userId, message: err instanceof Error ? err.message : "Not found", recovery });
       });
     return () => {
       cancelled = true;
     };
-  }, [cached, key, refs]);
+  }, [cached, key, refs, userId]);
 
   // Rewrite the address bar to the readable form. replaceState rather than router.replace: nothing
   // should re-render or re-fetch, only the visible URL changes.
@@ -152,9 +167,16 @@ export function RouteParamsProvider({ children }: { children: React.ReactNode })
       return seg;
     });
     if (changed) {
+      if (userId && cached.cycleId && retestRouteHint(window.location.pathname)) {
+        try {
+          updateRetestRouteHint(window.localStorage, { userId, projectId: cached.projectId, sourceCycleId: cached.cycleId }, {
+            projectRef: cached.projectKey ?? cached.projectId, cycleRef: cached.cycleRef ?? cached.cycleId,
+          });
+        } catch { /* Navigation identity never becomes a server access or outcome decision. */ }
+      }
       window.history.replaceState(window.history.state, "", `${next.join("/")}${window.location.search}${window.location.hash}`);
     }
-  }, [cached, refs]);
+  }, [cached, refs, userId]);
 
   const value = useMemo<Params | null>(() => {
     if (!effective) return null;
@@ -169,7 +191,7 @@ export function RouteParamsProvider({ children }: { children: React.ReactNode })
   }, [JSON.stringify(effective), raw]);
 
   if (!value) {
-    if (failure?.key === key) {
+    if (failure?.key === key && failure.userId === userId) {
       return (
         <div className="p-8 text-center" role="alert">
           <h1 className="text-lg font-semibold">Page not found</h1>
