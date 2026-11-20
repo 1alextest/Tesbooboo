@@ -163,10 +163,10 @@ test.describe("billing settings", () => {
   test("hitting the Launch project limit points at the upgrade", { tag: '@tesbo.testId("TES-TC-639")' }, async () => {
     setProPlan(orgId);
     const created = await api.post("/api/projects", {
-      data: { name: `E2E Billing UI Limit ${Date.now()}`, key: `BILU${`${Date.now()}`.slice(-8)}` },
+      data: { name: `E2E Bill Limit ${Date.now()}`, key: `BILU${`${Date.now()}`.slice(-8)}` },
       failOnStatusCode: false,
     });
-    expect(created.ok()).toBeTruthy();
+    expect(created.ok(), await created.text()).toBeTruthy();
     const projectId = (await created.json()).id;
 
     try {
@@ -376,12 +376,17 @@ test.describe("billing settings", () => {
       try {
         const locked = activeProjectIdsOldestFirst(orgId)[2];
         setGraceWindow(orgId, -1);
+        const projectResponse = await api.get(`/api/projects/${locked}`);
+        expect(projectResponse.ok(), await projectResponse.text()).toBeTruthy();
+        const project = await projectResponse.json();
+        expect(project.id).toBe(locked);
+        expect(project.key).toBeTruthy();
 
         // The lock restricts writes only. If a downgrade could hide a project, "your data is safe"
         // would be untrue — a customer has to be able to open and export everything.
         await page.goto(`/projects/${locked}/testcases`);
         await expect(page.getByText(/Failed to load|not found/i)).toHaveCount(0);
-        await expect(page).toHaveURL(new RegExp(`/projects/${locked}/testcases`));
+        await expect.poll(() => new URL(page.url()).pathname).toBe(`/projects/${project.key}/testcases`);
       } finally {
         setProPlan(orgId);
         for (const id of created) await api.delete(`/api/projects/${id}`, { failOnStatusCode: false });

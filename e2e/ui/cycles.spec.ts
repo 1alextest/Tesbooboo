@@ -13,25 +13,30 @@ const STATE_PATH = path.join(__dirname, "../.auth/state.json");
  * the requested status (an "Untested" entry is left alone since that is already the default on
  * creation). Cycles are created in "Planning" by default (migrations/V9_cycle_status.sql).
  */
-async function seedRunWithStatuses(api: APIRequestContext, namePrefix: string, statuses: string[]) {
+async function seedRunWithStatuses(api: APIRequestContext, namePrefix: string, statuses: string[], projectId = ctx.projectId) {
   const stamp = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
-  const cycle = await (
-    await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `${namePrefix} ${stamp}` } })
-  ).json();
+  const cycleResponse = await api.post(`/api/projects/${projectId}/cycles`, { data: { name: `${namePrefix} ${stamp}` } });
+  expect(cycleResponse.ok(), await cycleResponse.text()).toBeTruthy();
+  const cycle = await cycleResponse.json();
 
   let testcaseIds: string[] = [];
   if (statuses.length > 0) {
     const created = await bulkCreateApprovedTestcases(
-      api, ctx.projectId,
+      api, projectId,
       statuses.map((_, i) => ({ title: `${namePrefix} Case ${stamp}-${i}` })),
     );
     testcaseIds = created.created.map((c: { id: string }) => c.id);
-    await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds } });
+    const attached = await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds } });
+    expect(attached.ok(), await attached.text()).toBeTruthy();
 
-    const executions = await (await api.get(`/api/cycles/${cycle.id}/executions`)).json();
+    const executionResponse = await api.get(`/api/cycles/${cycle.id}/executions`);
+    expect(executionResponse.ok(), await executionResponse.text()).toBeTruthy();
+    const executions = await executionResponse.json();
+    expect(executions).toHaveLength(statuses.length);
     for (let i = 0; i < statuses.length; i++) {
       if (statuses[i] === "Untested") continue;
-      await api.patch(`/api/cycles/${cycle.id}/executions/${executions[i].id}`, { data: { status: statuses[i] } });
+      const updated = await api.patch(`/api/cycles/${cycle.id}/executions/${executions[i].id}`, { data: { status: statuses[i] } });
+      expect(updated.ok(), await updated.text()).toBeTruthy();
     }
   }
 
@@ -177,25 +182,36 @@ test.describe("Test Runs — Pass Rate and Skipped consistency", () => {
     page,
   }) => {
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
-    // Freshly created cycles default to "Planning" — filtering to that status isolates this
-    // fixture from any run another spec has already moved to In Progress or Completed.
-    const statuses = [...Array(1).fill("Passed"), ...Array(3).fill("Untested")];
-    const { cycleId, testcaseIds } = await seedRunWithStatuses(api, "E2E PassRate Scope", statuses);
+    // The page and comparison request must observe the same owned set. Other specs create and
+    // delete Planning runs concurrently in the shared project, so a status filter cannot isolate it.
+    const projectResponse = await api.post("/api/projects", { data: { name: `E2E Rate ${Date.now().toString(36)}` } });
+    expect(projectResponse.ok(), await projectResponse.text()).toBeTruthy();
+    const project = await projectResponse.json();
+    const fixtures: Array<{ cycleId: string; testcaseIds: string[] }> = [];
 
     try {
-      await page.goto(`/projects/${ctx.projectId}/cycles`);
-      await page.getByRole("button", { name: "Planning" }).click();
-      await expect(runCard(page, cycleId)).toBeVisible();
+      const first = await seedRunWithStatuses(api, "E2E Rate Passed", ["Passed", "Untested", "Untested", "Untested"], project.id);
+      fixtures.push(first);
+      const second = await seedRunWithStatuses(api, "E2E Rate Settled", ["Failed", "Blocked", "Skipped"], project.id);
+      fixtures.push(second);
+      const excluded = await seedRunWithStatuses(api, "E2E Rate Excluded", ["Passed", "Passed"], project.id);
+      fixtures.push(excluded);
+      const started = await api.patch(`/api/cycles/${excluded.cycleId}`, { data: { status: "In Progress" } });
+      expect(started.ok(), await started.text()).toBeTruthy();
 
-      // Computed from a live snapshot of exactly the runs the "Planning" filter shows, taken
-      // right after the page's own data has settled, so the expected value tracks whatever else
-      // is concurrently Planning in this shared project rather than assuming this fixture is the
-      // only one — the point being tested is the formula (Passed / (Passed+Failed+Blocked), the
-      // same one the Test Plan page uses), not a fixed number.
-      const runs: Array<{ status: string; passed: number; failed: number; blocked: number }> = await (
-        await api.get(`/api/projects/${ctx.projectId}/cycles`)
-      ).json();
+      await page.goto(`/projects/${project.id}/cycles`);
+      await page.getByRole("button", { name: "Planning" }).click();
+      await expect(runCard(page, first.cycleId)).toBeVisible();
+      await expect(runCard(page, second.cycleId)).toBeVisible();
+      await expect(runCard(page, excluded.cycleId)).toHaveCount(0);
+
+      // Keep the API-backed formula comparison, with pending/skipped cases excluded from its
+      // denominator and an In Progress run excluded by the active filter.
+      const runsResponse = await api.get(`/api/projects/${project.id}/cycles`);
+      expect(runsResponse.ok(), await runsResponse.text()).toBeTruthy();
+      const runs: Array<{ status: string; passed: number; failed: number; blocked: number }> = await runsResponse.json();
       const planningRuns = runs.filter((r) => r.status === "Planning");
+      expect(planningRuns).toHaveLength(2);
       const totalPassed = planningRuns.reduce((sum, r) => sum + r.passed, 0);
       const totalFailed = planningRuns.reduce((sum, r) => sum + r.failed, 0);
       const totalBlocked = planningRuns.reduce((sum, r) => sum + r.blocked, 0);
@@ -207,7 +223,8 @@ test.describe("Test Runs — Pass Rate and Skipped consistency", () => {
         expectedPassRate !== null ? `${expectedPassRate}%` : "—",
       );
     } finally {
-      await cleanUpRun(api, cycleId, testcaseIds);
+      for (const fixture of fixtures) await cleanUpRun(api, fixture.cycleId, fixture.testcaseIds, project.id);
+      await api.delete(`/api/projects/${project.id}`, { failOnStatusCode: false });
       await api.dispose();
     }
   });
@@ -234,7 +251,7 @@ test.describe("Test Run — Priority/Type/Assignee filters", () => {
   let memberId: string;
   const stamp = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
   const LEGACY_TYPE = `LegacyImportedType${stamp}`;
-  const LEGACY_PRIORITY = `P9Legacy${stamp}`;
+  const LEGACY_PRIORITY = "P9Legacy";
   const titles = Array.from({ length: 6 }, (_, i) => `E2E RunFilters ${stamp}-${i}`);
 
   test.beforeAll(async () => {
@@ -1089,7 +1106,8 @@ test.describe("deleting a run from the UI (hard-delete remediation Phase 1)", ()
       await page.getByRole("button", { name: "Delete", exact: true }).click();
 
       // Gone from the list — the same observable behavior as before this fix.
-      await expect(page.getByText(name, { exact: true })).not.toBeVisible();
+      await expect(page.getByRole("heading", { name: "Delete Test Run", exact: true })).toBeHidden();
+      await expect(runCard(page, cycleId)).toHaveCount(0);
 
       // Database-visible: the row survived, soft-deleted, rather than vanishing outright.
       expect(
@@ -1132,11 +1150,13 @@ test.describe("Test Environment dropdown: runs list and test plan", () => {
   /** A fresh project whose settings are PATCHed as `settings` (object => stored as a jsonb object, string => jsonb string). */
   async function seedProject(settings: unknown): Promise<string> {
     const stamp = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
-    const created = await (await api.post("/api/projects", { data: { name: `E2E EnvDropdown ${stamp}` } })).json();
+    const response = await api.post("/api/projects", { data: { name: `E2E Env ${stamp}` } });
+    expect(response.ok(), await response.text()).toBeTruthy();
+    const created = await response.json();
     projectIds.push(created.id);
     if (settings !== undefined) {
       const res = await api.patch(`/api/projects/${created.id}`, { data: { settings } });
-      expect(res.ok()).toBeTruthy();
+      expect(res.ok(), await res.text()).toBeTruthy();
     }
     return created.id;
   }
@@ -1177,7 +1197,7 @@ test.describe("Test Environment dropdown: runs list and test plan", () => {
     await expect.poll(() => optionNames(page)).toEqual(["Select environment"]);
     await page.locator('form input[type="text"]').first().fill("E2E EnvRun none");
     await expect(page.getByRole("button", { name: "Create Test Run", exact: true })).toBeDisabled();
-    await expect(page.getByRole("link", { name: "Project settings" })).toHaveAttribute("href", /settings\?tab=testRuns/);
+    await expect(page.locator("form").getByRole("link", { name: "Project settings", exact: true })).toHaveAttribute("href", /settings\?tab=testRuns/);
   });
 
   test("entries without a name or URL, and repeated names, are not offered", async ({ page }) => {
@@ -1262,8 +1282,15 @@ test.describe("run card is one click target", () => {
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
     const { cycleId, testcaseIds } = await seedRunWithStatuses(api, "E2E Card Click", ["Passed", "Failed", "Untested"]);
     try {
-      const runUrl = new RegExp(`/projects/${ctx.projectId}/cycles/${cycleId}$`);
-      const listUrl = `/projects/${ctx.projectId}/cycles`;
+      const resolvedResponse = await api.get("/api/route-resolve", { params: { project: ctx.projectId, cycle: cycleId } });
+      expect(resolvedResponse.ok(), await resolvedResponse.text()).toBeTruthy();
+      const resolved = await resolvedResponse.json();
+      expect(resolved.projectId).toBe(ctx.projectId);
+      expect(resolved.cycleId).toBe(cycleId);
+      expect(resolved.projectKey).toBeTruthy();
+      expect(resolved.cycleRef).toBeTruthy();
+      const listUrl = `/projects/${resolved.projectKey}/cycles`;
+      const runPath = `${listUrl}/${resolved.cycleRef}`;
       await page.goto(listUrl);
       const card = runCard(page, cycleId);
       await expect(card).toContainText("1 passed");
@@ -1271,17 +1298,17 @@ test.describe("run card is one click target", () => {
 
       // Bottom-left of the card is the progress / counts strip: nothing there was a link before.
       await card.click({ position: { x: 40, y: box.height - 12 } });
-      await expect(page).toHaveURL(runUrl);
+      await expect.poll(() => new URL(page.url()).pathname).toBe(runPath);
 
       // Right of the header row, clear of the action icons and the name.
       await page.goto(listUrl);
       await runCard(page, cycleId).click({ position: { x: (box.width * 2) / 3, y: 20 } });
-      await expect(page).toHaveURL(runUrl);
+      await expect.poll(() => new URL(page.url()).pathname).toBe(runPath);
 
       // The pencil is above the stretched link: it opens the edit form and does not navigate.
       await page.goto(listUrl);
       await runCard(page, cycleId).getByTitle("Edit run").click();
-      await expect(page).toHaveURL(new RegExp(`${listUrl}$`));
+      await expect.poll(() => new URL(page.url()).pathname).toBe(listUrl);
       await expect(page.getByRole("button", { name: /Save/i }).first()).toBeVisible();
     } finally {
       await cleanUpRun(api, cycleId, testcaseIds);
@@ -1714,7 +1741,7 @@ test.describe("native manual retest — reviewed selection and recovery", () => 
       const endpoint = `/api/projects/${source.projectId}/testcases/${source.testcaseIds[0]}`;
       const current = await (await api.get(endpoint)).json();
       const changedTitle = `${source.title} reviewed after uncertainty`;
-      const changed = await api.patch(endpoint, { data: { title: changedTitle, expectedRevision: current.editRevision } });
+      const changed = await api.put(endpoint, { data: { title: changedTitle, expectedRevision: current.editRevision } });
       expect(changed.ok(), await changed.text()).toBeTruthy();
       const approved = await approveTestcase(api, source.projectId, source.testcaseIds[0]);
       const retryResponse = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === `/api/cycles/${source.cycleId}/retests`);
@@ -2103,7 +2130,7 @@ test.describe("native manual retest — reviewed selection and recovery", () => 
       const endpoint = `/api/projects/${ctx.projectId}/testcases/${source.testcaseIds[0]}`;
       const current = await (await api.get(endpoint)).json();
       const newTitle = `${source.title} corrected expectation`;
-      const edited = await api.patch(endpoint, { data: {
+      const edited = await api.put(endpoint, { data: {
         title: newTitle, expectedRevision: current.editRevision,
         steps: JSON.stringify([{ action: "Confirm the order and open its receipt", expectedResult: "The order number and saved timestamp are visible." }]),
       } });
@@ -2247,4 +2274,95 @@ test.describe("native manual retest — reviewed selection and recovery", () => 
       expect(target.retestManifest.occurrences[0]).toMatchObject({ sourceExecutionId: replacement.id, sourceResult: { status: "Untested" } });
     } finally { await cleanup(api, source); }
   });
+
+  for (const outcome of ["created", "cancelled"] as const) {
+    for (const sourceDeleted of [false, true]) {
+      test(`closing ${outcome} recovery without a selection returns keyboard focus to the ${sourceDeleted ? "unavailable source's Back to Test Runs link" : "source Run heading"}`, async ({ page }) => {
+        const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+        const source = await fixture(api);
+        const targetName = `Terminal focus ${outcome} ${source.cycleId}`;
+        let posts = 0;
+        let allowLookup = false;
+        let targetId = "";
+        let posted: Record<string, unknown> | null = null;
+        try {
+          await page.route(`**/api/cycles/${source.cycleId}/retests`, async route => {
+            if (route.request().method() !== "POST") { await route.continue(); return; }
+            posts += 1;
+            posted = route.request().postDataJSON();
+            await route.abort("failed");
+          });
+          await page.route(`**/api/cycles/${source.cycleId}/retests/requests/*`, async route => {
+            if (allowLookup) await route.continue();
+            else await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Outcome lookup temporarily unavailable" }) });
+          });
+          const dialog = await openPreview(page, source);
+          await dialog.getByLabel("Run name", { exact: true }).fill(targetName);
+          await expect(dialog.getByRole("button", { name: "Create retest", exact: true })).toBeEnabled();
+          await dialog.getByRole("button", { name: "Create retest", exact: true }).click();
+          await expect(dialog.getByRole("button", { name: "Retry saved request", exact: true })).toBeEnabled();
+          const saved = await savedIntent(page, source.cycleId);
+          expect(saved).not.toBeNull();
+          const original = saved!.value.request;
+          expect(original).toEqual(posted);
+          expect(posts).toBe(1);
+
+          // Complete the exact saved command through the real server while its browser outcome
+          // is unknown. Reload must recover that terminal fact, with no checkbox selection left.
+          const disposition = outcome === "created"
+            ? await api.post(`/api/cycles/${source.cycleId}/retests`, { data: original })
+            : await api.post(`/api/cycles/${source.cycleId}/retests/requests/${original.requestKey}/cancel`, { data: original });
+          expect(disposition.status(), await disposition.text()).toBe(outcome === "created" ? 201 : 200);
+          const terminal = await disposition.json();
+          expect(terminal).toMatchObject({ outcome, sourceCycleId: source.cycleId, requestKey: original.requestKey });
+          if (outcome === "created") targetId = terminal.cycleId;
+          if (sourceDeleted) {
+            const removed = await api.delete(`/api/cycles/${source.cycleId}`);
+            expect(removed.ok(), await removed.text()).toBeTruthy();
+            expect((await api.get(`/api/cycles/${source.cycleId}`)).status()).toBe(404);
+          }
+          allowLookup = true;
+          await page.reload();
+          const banner = page.getByTestId("retest-recovery-banner");
+          await expect(banner).toContainText(outcome === "created" ? "Your saved retest request was created." : "Your saved retest request was stopped.");
+          if (sourceDeleted) await expect(page.getByRole("region", { name: "Run unavailable", exact: true })).toBeVisible();
+          else await expect(page.getByRole("heading", { name: source.name, exact: true })).toBeVisible();
+          await expect(page.getByTestId("run-retest-selected")).toHaveCount(0);
+          expect(await savedIntent(page, source.cycleId)).toBeNull();
+          await tabTo(page, banner.getByRole("button", { name: "Review retest request", exact: true }));
+          await page.keyboard.press("Enter");
+          await expect(dialog).toContainText(outcome === "created" ? targetName : "This saved request was stopped.");
+          await tabTo(page, dialog.getByRole("button", { name: "Close", exact: true }), { within: dialog });
+          await page.keyboard.press(sourceDeleted ? "Escape" : "Enter");
+          await expect(dialog).toBeHidden();
+          await expect(banner).toHaveCount(0);
+          const destination = sourceDeleted
+            ? page.getByRole("link", { name: "Back to Test Runs", exact: true })
+            : page.getByRole("heading", { name: source.name, exact: true });
+          await expect(destination).toBeFocused();
+
+          const runs = await api.get(`/api/projects/${source.projectId}/cycles`);
+          expect(runs.status(), await runs.text()).toBe(200);
+          const matching = (await runs.json()).filter((run: { name: string }) => run.name === targetName);
+          if (outcome === "created") {
+            expect(matching).toHaveLength(1);
+            expect(matching[0].id).toBe(targetId);
+            const rows = await (await api.get(`/api/cycles/${targetId}/executions`)).json();
+            expect(rows).toHaveLength(1);
+            expect(rows[0]).toMatchObject({ testcaseId: source.testcaseIds[0], status: "Untested" });
+          } else {
+            expect(matching).toEqual([]);
+            const late = await api.post(`/api/cycles/${source.cycleId}/retests`, { data: original, failOnStatusCode: false });
+            expect(late.status(), await late.text()).toBe(409);
+            expect((await late.json()).code).toBe("RETEST_REQUEST_CANCELLED");
+          }
+          expect(posts).toBe(1);
+        } finally {
+          if (targetId) await api.delete(`/api/cycles/${targetId}`, { failOnStatusCode: false });
+          await cleanUpRun(api, source.cycleId, source.testcaseIds, source.projectId);
+          await api.dispose();
+        }
+      });
+    }
+  }
 });

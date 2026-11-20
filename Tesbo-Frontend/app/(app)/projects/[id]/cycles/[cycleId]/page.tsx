@@ -425,10 +425,25 @@ export default function TestRunDetailPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retestOpen, setRetestOpen] = useState(false);
   const [retestExecutionIds, setRetestExecutionIds] = useState<string[]>([]);
+  const retestTrigger = useRef<HTMLButtonElement>(null);
+  const runHeading = useRef<HTMLHeadingElement>(null);
+  const backToRunsLink = useRef<HTMLAnchorElement>(null);
   const viewScope = `${currentUserId || ""}:${projectId}:${cycleId}`;
   const currentViewScope = useRef(viewScope);
   currentViewScope.current = viewScope;
   const loadSequence = useRef(0);
+  const restoreRetestFocus = useCallback(() => {
+    const closingScope = currentViewScope.current;
+    // The dialog is rendered before these sibling controls. Wait for this commit's refs,
+    // including a source read that settles in the same render as the recovery dismissal.
+    queueMicrotask(() => {
+      if (currentViewScope.current !== closingScope) return;
+      const selectedAction = retestTrigger.current;
+      const target = selectedAction?.isConnected && !selectedAction.disabled
+        ? selectedAction : runHeading.current ?? backToRunsLink.current;
+      if (target?.isConnected) target.focus();
+    });
+  }, []);
   useEffect(() => {
     if (loadedViewScope !== viewScope || selectedRunExecutions.size === 0) return;
     const current = new Map(executions.map(item => [item.testcaseId, item.id]));
@@ -1164,12 +1179,14 @@ export default function TestRunDetailPage() {
 
   const sourceAvailable = Boolean(run && loadedViewScope === viewScope && run.id === cycleId && run.projectId === projectId);
   const retestDialog = currentUser && <RetestRunDialog key={viewScope} open={retestOpen} onOpen={() => setRetestOpen(true)} onClose={() => setRetestOpen(false)}
+    onRestoreFocus={restoreRetestFocus}
     sourceRun={sourceAvailable && run ? run : { id: cycleId, name: "Unavailable source Run", environment: "" }}
     allowCreate={sourceAvailable && !loadError} projectId={projectId} userId={currentUser.userId} executionIds={retestExecutionIds}
     onCreated={id => { setRetestOpen(false); router.push(`/projects/${projectId}/cycles/${id}`); }} />;
+  const backToTestRuns = <Link ref={backToRunsLink} href={`/projects/${projectId}/cycles`} className="ml-4 text-sm text-[var(--accent-light)] hover:underline">Back to Test Runs</Link>;
 
   if (loading) {
-    return <>{retestDialog}<PageLoader variant="screen" /></>;
+    return <>{retestDialog}<div className="px-6 pt-4">{backToTestRuns}</div><PageLoader variant="screen" /></>;
   }
   if (!run || !sourceAvailable) {
     return <>
@@ -1177,7 +1194,7 @@ export default function TestRunDetailPage() {
       <section className="p-6" aria-label="Run unavailable">
         <p role="alert" className="mb-3 text-sm text-[var(--error-foreground)]">{loadError || "This Run is unavailable."}</p>
         <Button variant="secondary" onClick={() => void load()}>Retry Run</Button>
-        <Link href={`/projects/${projectId}/cycles`} className="ml-4 text-sm text-[var(--accent-light)] hover:underline">Back to Test Runs</Link>
+        {backToTestRuns}
       </section>
     </>;
   }
@@ -1276,7 +1293,7 @@ export default function TestRunDetailPage() {
         <div className="mb-3 shrink-0">
           <div className="flex flex-wrap items-center gap-2.5">
             <RunAvatar name={run.name} size={28} />
-            <h1 className="text-[20px] font-semibold leading-tight tracking-[-0.02em] text-[var(--foreground)]">{run.name}</h1>
+            <h1 ref={runHeading} tabIndex={-1} className="text-[20px] font-semibold leading-tight tracking-[-0.02em] text-[var(--foreground)]">{run.name}</h1>
             <StatusChip tone={runStatusToTone(run.status)}>{run.status}</StatusChip>
             {ownerName && <MemberAvatar name={ownerName} seed={run.ownerId} size={24} />}
           </div>
@@ -1488,7 +1505,7 @@ export default function TestRunDetailPage() {
             <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2.5 border-b border-[var(--border)] bg-[var(--brand-soft)] px-4 py-2 text-[12px]">
               <span className="font-medium text-[var(--brand-primary)]">{selectedRunCaseIds.size} selected</span>
               <div className="h-4 w-px bg-[var(--border-strong)]" />
-              <button type="button" data-testid="run-retest-selected" disabled={Boolean(loadError)} onClick={() => {
+              <button ref={retestTrigger} type="button" data-testid="run-retest-selected" disabled={Boolean(loadError)} onClick={() => {
                 setRetestExecutionIds(Array.from(selectedRunExecutions.values()));
                 setRetestOpen(true);
               }} className="flex items-center gap-1 font-medium text-[var(--brand-primary)] hover:underline disabled:opacity-50">

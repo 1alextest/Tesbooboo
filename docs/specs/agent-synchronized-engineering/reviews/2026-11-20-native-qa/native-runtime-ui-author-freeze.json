@@ -1,0 +1,58 @@
+{
+  "status": "Frozen terminal recovery focus addendum; runtime after correction not run",
+  "publishedParent": "644ab9616905af6ac832a098ab44656aa7faa1eb",
+  "frozenAt": "2026-11-20T08:26:30Z",
+  "priorFreeze": "/workspace/scratch/8e9074abd0d0/native-ui-first-ci-correction-freeze.json",
+  "change": "RetestRunDialog uses a stable page-owned fallback when terminal dismissal removes the recovery banner. The page targets a connected enabled Retest selected control, otherwise the Run heading, otherwise Back to Test Runs. The existing Back navigation is also available during source loading.",
+  "preservation": {
+    "sharedModal": "Unchanged",
+    "terminalStateClearing": "Preserved",
+    "ordinaryConnectedTrigger": "Preserved",
+    "legacyCyclesPrefixSha256": "9b0842a74cfa35e543728ce1cdd40abeb69477536ccb73a5201218533ac43054",
+    "legacyCyclesPrefixUnchanged": true,
+    "initial16NativeBlockSha256": "7d4eaceaa7a67775840740d344db437b6b2ae6e30bad9b6997356c9474f1de84",
+    "initial16NativeAssertionsUnchanged": true,
+    "successfulScreenshotAttachments": 8,
+    "scopeAndRequestIdentity": "Unchanged"
+  },
+  "regressions": {
+    "newCases": 4,
+    "scenarios": [
+      "created terminal recovery / no selection / available source / Close -> Run heading",
+      "cancelled terminal recovery / no selection / available source / Close -> Run heading",
+      "created terminal recovery / no selection / deleted source / Escape -> Back to Test Runs",
+      "cancelled terminal recovery / no selection / deleted source / Escape -> Back to Test Runs"
+    ],
+    "evidenceBoundary": "Real saved create body, real create/cancel server disposition, actual reload/readback, keyboard traversal, cleared terminal banner, exact focus destination, one created Untested occurrence or no Run with late cancelled create refused. Not executed locally.",
+    "nativeCount": 20
+  },
+  "checks": {
+    "frontendTypeScript": "PASS: tsc --noEmit --incremental false",
+    "e2eTypeScript": "PASS: tsc --noEmit",
+    "scopedEslint": "PASS: both changed frontend files",
+    "architecture": "PASS: 739 modules; 0 forbidden edges",
+    "diffCheck": "PASS",
+    "selectedCollection": "PASS: 260 tests in 9 files, including 20 native UI scenarios, requested workers 10 and retries 0",
+    "suiteCollection": "PASS: 3009 tests in 91 files",
+    "localDatabaseAndBrowserRuntime": "NOT RUN"
+  },
+  "collectionFiles": {
+    "selected": "/workspace/scratch/8e9074abd0d0/native-ui-terminal-focus-selected-list.txt",
+    "suite": "/workspace/scratch/8e9074abd0d0/native-ui-terminal-focus-suite-list.txt"
+  },
+  "changedFiles": [
+    {
+      "path": "Tesbo-Frontend/components/testruns/RetestRunDialog.tsx",
+      "sha256": "f34c1b9b077e3e38352f04e2a8569465c1d53138ae0890388425bd834eabc400"
+    },
+    {
+      "path": "Tesbo-Frontend/app/(app)/projects/[id]/cycles/[cycleId]/page.tsx",
+      "sha256": "e1ea5293eb13d0ee7b91a5decfd17dd358ad834af384e8a4db6c51a36d5c525a"
+    },
+    {
+      "path": "e2e/ui/cycles.spec.ts",
+      "sha256": "ccd23508bacf31b463bff63046188a2ce1bdf8b044953980357e5876ddf54c00"
+    }
+  ],
+  "runtimeLimit": "The three original native failures reproduced on both completed CI runs before these corrections. The terminal-close finding is source-confirmed; the four new regressions and the current correction have not yet run. No runtime or visual acceptance is claimed."
+}

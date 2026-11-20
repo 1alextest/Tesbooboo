@@ -1009,14 +1009,36 @@ test.describe("cycles read-path gap sweep (hard-delete remediation Phase 2)", ()
     const cycle = await (
       await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Export Gate Auth ${Date.now()}` } })
     ).json();
+    const asB = await newRequestContext.newContext({
+      baseURL: env.apiBaseUrl,
+      storageState: path.join(__dirname, "../.auth/state-b.json"),
+    });
+    const anon = await newRequestContext.newContext({
+      baseURL: env.apiBaseUrl,
+      storageState: { cookies: [], origins: [] },
+    });
+    const exportUrl = `/api/cycles/${cycle.id}/export/csv`;
     try {
-      const anon = await request.get(`/api/cycles/${cycle.id}/export/csv`, {
-        headers: { Cookie: "" },
-        failOnStatusCode: false,
-      });
-      expect([401, 403]).toContain(anon.status());
+      const authorized = await request.get(exportUrl);
+      expect(authorized.status(), await authorized.text()).toBe(200);
+      expect(authorized.headers()["content-type"]).toContain("text/csv");
+
+      for (const deleted of [false, true]) {
+        if (deleted) {
+          const removed = await request.delete(`/api/cycles/${cycle.id}`);
+          expect(removed.status(), await removed.text()).toBe(200);
+          expect((await request.get(exportUrl, { failOnStatusCode: false })).status()).toBe(404);
+        }
+        const anonymous = await anon.get(exportUrl, { failOnStatusCode: false });
+        expect(anonymous.status(), `anonymous export, deleted=${deleted}`).toBe(400);
+        expect(await anonymous.json()).toMatchObject({ error: "Authentication required" });
+        const foreign = await asB.get(exportUrl, { failOnStatusCode: false });
+        expect(foreign.status(), `foreign export, deleted=${deleted}`).toBe(404);
+      }
     } finally {
       await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
+      await asB.dispose();
+      await anon.dispose();
     }
   });
 

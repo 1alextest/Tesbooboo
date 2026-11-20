@@ -50,9 +50,9 @@ async function createBug(request: APIRequestContext, title: string) {
   return res.json();
 }
 
-async function createCycle(request: APIRequestContext, name: string) {
-  const res = await request.post(`/api/projects/${ctxA.projectId}/cycles`, { data: { name } });
-  expect(res.ok(), await res.text()).toBeTruthy();
+async function createCycle(request: APIRequestContext, name: string, projectId = ctxA.projectId) {
+  const res = await request.post(`/api/projects/${projectId}/cycles`, { data: { name } });
+  expect(res.status(), await res.text()).toBe(201);
   return res.json();
 }
 
@@ -133,26 +133,62 @@ test.describe("route-resolve: bugs and test cases (stored per-project ids)", () 
 
 test.describe("route-resolve: runs (<KEY>-RUN-<n>)", () => {
   test("a run gets a per-project number, resolves by ref and uuid, and the numbers are sequential", async ({ request }) => {
-    const first = await createCycle(request, `E2E readable run A ${Date.now()}`);
-    const second = await createCycle(request, `E2E readable run B ${Date.now()}`);
+    // Adjacency is project-wide: other files create Runs concurrently in account A's shared project.
+    // Own only this scenario's numbering namespace so an intervening writer cannot consume its number.
+    const suffix = randomUUID().replace(/-/g, "").slice(0, 12);
+    const projectName = `Run numbering ${suffix}`;
+    const projectKey = `SEQ${suffix.toUpperCase()}`;
+    let projectId: string | undefined;
+    const cycleIds: string[] = [];
     try {
+      const createdProject = await request.post("/api/projects", { data: { name: projectName, key: projectKey } });
+      expect(createdProject.status(), await createdProject.text()).toBe(201);
+      const project = await createdProject.json();
+      projectId = project.id;
+      expect(projectId).toBeTruthy();
+      expect(project).toMatchObject({ name: projectName, key: projectKey });
+      const before = await request.get(`/api/projects/${project.id}/cycles`);
+      expect(before.status(), await before.text()).toBe(200);
+      expect(await before.json()).toEqual([]);
+
+      const first = await createCycle(request, `E2E readable run A ${suffix}`, project.id);
+      cycleIds.push(first.id);
+      const second = await createCycle(request, `E2E readable run B ${suffix}`, project.id);
+      cycleIds.push(second.id);
+      expect(first.projectId).toBe(project.id);
+      expect(second.projectId).toBe(project.id);
       expect(first.seq).toBeGreaterThan(0);
       expect(second.seq).toBe(first.seq + 1);
 
-      const byUuid = await (await resolve(request, { project: projectKeyA, cycle: first.id })).json();
+      const after = await request.get(`/api/projects/${project.id}/cycles`);
+      expect(after.status(), await after.text()).toBe(200);
+      const runs = await after.json();
+      expect(runs).toHaveLength(2);
+      expect(runs.map((run: { id: string }) => run.id).sort()).toEqual([...cycleIds].sort());
+
+      const byUuidResponse = await resolve(request, { project: project.key, cycle: first.id });
+      expect(byUuidResponse.status(), await byUuidResponse.text()).toBe(200);
+      const byUuid = await byUuidResponse.json();
       expect(byUuid.cycleId).toBe(first.id);
       expect(byUuid.cycleRef).toMatch(new RegExp(`-RUN-${first.seq}$`));
 
-      const byRef = await (await resolve(request, { project: projectKeyA, cycle: byUuid.cycleRef })).json();
+      const byRefResponse = await resolve(request, { project: project.key, cycle: byUuid.cycleRef });
+      expect(byRefResponse.status(), await byRefResponse.text()).toBe(200);
+      const byRef = await byRefResponse.json();
       expect(byRef.cycleId).toBe(first.id);
 
       // The prefix is cosmetic: a link minted before the project's id prefix was renamed still lands.
-      const staleRef = await (await resolve(request, { project: projectKeyA, cycle: `OLD-RUN-${second.seq}` })).json();
+      const staleRefResponse = await resolve(request, { project: project.key, cycle: `OLD-RUN-${second.seq}` });
+      expect(staleRefResponse.status(), await staleRefResponse.text()).toBe(200);
+      const staleRef = await staleRefResponse.json();
       expect(staleRef.cycleId).toBe(second.id);
       expect(staleRef.cycleRef).toMatch(new RegExp(`-RUN-${second.seq}$`));
     } finally {
-      await request.delete(`/api/cycles/${first.id}`, { failOnStatusCode: false });
-      await request.delete(`/api/cycles/${second.id}`, { failOnStatusCode: false });
+      try {
+        for (const cycleId of cycleIds) await request.delete(`/api/cycles/${cycleId}`, { failOnStatusCode: false });
+      } finally {
+        if (projectId) await request.delete(`/api/projects/${projectId}`, { failOnStatusCode: false });
+      }
     }
   });
 

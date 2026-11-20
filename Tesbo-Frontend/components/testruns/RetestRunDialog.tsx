@@ -98,6 +98,7 @@ type Props = {
   open: boolean;
   onOpen: () => void;
   onClose: () => void;
+  onRestoreFocus: () => void;
   onCreated: (cycleId: string) => void;
   projectId: string;
   userId: string;
@@ -106,7 +107,7 @@ type Props = {
   allowCreate?: boolean;
 };
 
-export default function RetestRunDialog({ open, onOpen, onClose, onCreated, projectId, userId, sourceRun, executionIds, allowCreate = true }: Props) {
+export default function RetestRunDialog({ open, onOpen, onClose, onRestoreFocus, onCreated, projectId, userId, sourceRun, executionIds, allowCreate = true }: Props) {
   const scope = useMemo(() => ({ userId, projectId, sourceCycleId: sourceRun.id }), [userId, projectId, sourceRun.id]);
   const scopeKey = `${userId}:${projectId}:${sourceRun.id}`;
   const currentScope = useRef(scopeKey);
@@ -118,6 +119,8 @@ export default function RetestRunDialog({ open, onOpen, onClose, onCreated, proj
   const onCreatedRef = useRef(onCreated);
   onCreatedRef.current = onCreated;
   const dialog = useRef<HTMLDivElement>(null);
+  const recoveryBanner = useRef<HTMLElement>(null);
+  const restoreRecoveryFocus = useRef(false);
   const [storageReady, setStorageReady] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
   const [pending, setPending] = useState<RetestIntent | null>(null);
@@ -280,7 +283,17 @@ export default function RetestRunDialog({ open, onOpen, onClose, onCreated, proj
   }, [open, allowCreate, storageReady, pending, receipt, cancellation, storageError, previewReload, selectionKey, scope.sourceCycleId, scopeKey, projectId]);
 
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!open) {
+      // Opening recovery removes its banner before this effect can capture the trigger.
+      // Restore to the newly mounted button after the closed render has attached its refs.
+      if (restoreRecoveryFocus.current) {
+        const trigger = recoveryBanner.current?.querySelector<HTMLButtonElement>("button");
+        if (trigger) trigger.focus();
+        else onRestoreFocus();
+        restoreRecoveryFocus.current = false;
+      }
+      return;
+    }
     const before = document.activeElement;
     const root = dialog.current;
     if (!root) return;
@@ -303,9 +316,9 @@ export default function RetestRunDialog({ open, onOpen, onClose, onCreated, proj
     return () => {
       document.removeEventListener("focusin", containFocus, true);
       document.removeEventListener("keydown", trapTab, true);
-      if (before instanceof HTMLElement && before.isConnected) before.focus();
+      if (!restoreRecoveryFocus.current && before instanceof HTMLElement && before.isConnected) before.focus();
     };
-  }, [open]);
+  }, [open, onRestoreFocus]);
 
   // Replacing a form or error removes its focused control without firing focusin. Keep focus on
   // the surviving dialog root during every phase transition, including phases with no controls.
@@ -394,12 +407,12 @@ export default function RetestRunDialog({ open, onOpen, onClose, onCreated, proj
   function freshPreview() { setPreviewReload(value => value + 1); }
 
   return <>
-    {(pending || receipt || cancellation || storageError) && !open && <section data-testid="retest-recovery-banner" aria-label="Retest request recovery"
+    {(pending || receipt || cancellation || storageError) && !open && <section ref={recoveryBanner} data-testid="retest-recovery-banner" aria-label="Retest request recovery"
       className="mb-3 shrink-0 rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 text-[13px]">
       <p role="status">{receipt ? (receipt.available ? "Your saved retest request was created." : "Your saved retest was created, but that Run is no longer available.")
         : cancellation ? "Your saved retest request was stopped. You can review a new selection." : storageError || "A retest request is awaiting confirmation. Check its outcome before starting another."}</p>
       {recoveryMessage && <p className="mt-1 text-[var(--muted)]">{recoveryMessage}</p>}
-      <Button variant="secondary" className="mt-2" onClick={onOpen}>Review retest request</Button>
+      <Button variant="secondary" className="mt-2" onClick={() => { restoreRecoveryFocus.current = true; onOpen(); }}>Review retest request</Button>
       {receipt?.available && <Button className="ml-2 mt-2" onClick={() => onCreatedRef.current(receipt.cycleId)}>Open retest</Button>}
     </section>}
     <Modal open={open} onClose={close} className="max-w-[920px]">
