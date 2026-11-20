@@ -27,4 +27,17 @@ The original Grey inventory contains **50 G0/G1 jobs**, not 50 runtime tests. Fi
 
 ## Later canonical publication
 
-The current canonical item subsequently advanced to 1.4.37. [The preservation record](post-review-publication/README.md) verifies that it retained this run's 1.4.36 content and separates its added clauses from the completed v16 reviews. This directory and six submitted views remain the exact reviewed 1.4.36 evidence, not an unqualified 1.4.37 sign-off.
+The current canonical item subsequently advanced to 1.4.37. [The preservation record](post-review-publication/README.md) verifies that it retained this run's 1.4.36 content and separates its added clauses from the completed v16 reviews. This directory preserves the exact reviewed 1.4.36 evidence, not an unqualified later-revision sign-off. The further-publication section below identifies the two view additions and exact reconstruction procedure.
+
+### Further publication boundary: canonical 1.4.38 and PR169
+
+A final publication check observed canonical **1.4.38** (archive SHA-256 `38d29265bf04e3707e6d814850316a40d354748f0e6bf639704b5b680b2ec114`). All eight final 1.4.36 reconciliation sections and the portable principle-distillation section remain exact. Unlike the 1.4.37 append-only comparison, 1.4.38 also edits older normative lines; whole-document preservation is not claimed. Its added/changed clauses are outside this run's frozen review and receive no inherited approval.
+
+External PR169 then merged as `ed71aa544108760f711ed4cb1bb7b7ba008ef417`, adding eight README lines, ten implementation-plan lines and two separate review records. The incoming material concerns a **different 1.4.35 candidate**, archive `214e29f6d784e814da12ec417917304a73d373073ef5a1384714b4c1e95b6a0f`, not this run's published35 predecessor. Its 20/20 mechanical preflight and 0/14 authentic role stages remain separate from this run's 58 checks and actual reviewers. Both new records and both exact additions are preserved with an explicit post-review boundary. They propose material semantic, privacy, correction and journey work; this merge reconciliation grants no substantive clearance.
+
+The two current repository views therefore include separately attributed post-review additions. The frozen fourteen-file input is unchanged: reverse `post-review-publication/pr169-view-reconciliation.patch` on copies of the current six views to recover the exact v16 views before applying older input transitions. An actual isolated reverse application recovered all six hashes. The original main review body, earlier verdicts and current implementation remain preserved; this is publication/conflict reconciliation, not another team run.
+
+### Concurrent CI maintenance boundary
+
+While the documentation conflict was being reconciled, the shared PR branch advanced independently to commit `1ef9c9e262a2aad6a4af1b646d47746463eff8a8`. That commit changes `.gitleaks.toml` and `scripts/check-gitleaks-evidence-exceptions.py` to propose an exact rule/path/value exception and scanner controls for the two verified Git provenance false positives. This delivery preserves those incoming objects separately from the documentation author's work; it does not classify their tests as passed or add them to the frozen team review. The original failed scan at `5b1e834…` remains historical. The PR now contains concurrent CI-maintenance changes as well as the documentation rerun; final-head checks must establish their own outcome. Native application code and all frozen review inputs/receipts remain unchanged by this publication reconciliation.
+
