@@ -1917,7 +1917,7 @@ test.describe("run detail — progress, defects and the bug modal", () => {
       const picker = page.getByTestId("existing-bug-picker");
       await picker.getByText(existingBugTitle, { exact: true }).click();
       await picker.getByRole("button", { name: "Add Selected (1)", exact: true }).click();
-      await page.getByRole("button", { name: "Link Bug" }).click();
+      await page.getByRole("button", { name: "Link Bug", exact: true }).click();
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeHidden();
 
       // The panel must reopen automatically, for this same test case, with the real linked bug's

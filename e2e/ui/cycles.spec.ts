@@ -1308,7 +1308,7 @@ test.describe("Test Environment dropdown: runs list and test plan", () => {
     // The plan form pre-selects the first environment; the user can still switch.
     await envSelect(page).selectOption("Production");
     const runName = `E2E EnvPlanRun ${Date.now()}`;
-    await page.locator('form input[type="text"]').first().fill(runName);
+    await page.locator("form").getByRole("textbox").fill(runName);
     await page.locator("form").getByRole("button", { name: "Create Test Run", exact: true }).click();
     await expect(page.getByText(runName, { exact: true })).toBeVisible();
     const runs: { name: string; environment: string }[] = await (await api.get(`/api/projects/${projectId}/cycles`)).json();

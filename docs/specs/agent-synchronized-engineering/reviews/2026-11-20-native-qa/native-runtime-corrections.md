@@ -33,6 +33,27 @@ The artifact is `ci-smoke-evidence`, ID `14615375446`, 77,394,100 bytes, SHA256 
 
 On the same actual merge, behavioral quality passed 158 migrations and 640 real-database tests with zero database skips. API/MCP had 326 passes and eight existing gated skips; transactional coverage had 72 passes and 90 existing gated skips. Those separately gated Review Board suites also ran in the smoke prerequisites. Architecture passed 114 policy tests, 785 modules with no forbidden edges, no baseline expansion and no new clone. The default secret detectors and the exact-exception positive/negative controls also passed. These are cab1/d5f results, not certification of the next correction.
 
+## Fourth runtime: all native scenarios passed
+
+[Smoke job 136195888722](https://github.com/1alextest/Tesbooboo/actions/runs/44709080965/job/136195888722) tested feature `228a06a30156c8e3fee09938d0d0262cdd552e61` in actual merge `d53ed043a7203475605b8e4a93ccfc29baae35a3`, with development parent `d74ddce2d04241695164b5a8b4d9b341932cfdcc`. The merge tree is `eff016e4ee52210527acad03c72099949b73703e`; the feature tree is `19ca18524e7236ec0893aaebb0134feedfc6429c`. Their four-file difference is the previously reviewed upstream Model Studio and PR #172 test work, not a change to the frozen native product or selected files.
+
+**All 32 native scenarios passed: 21 UI, nine API and two retained-source resolver cases.** Both cancelled-terminal focus variants reached and passed their real reload/focus/fencing assertions. The new null-environment retest-to-Edit journey passed, including disabled Save before choosing an environment, persisted target metadata, unchanged source observations and unchanged creation manifest. All ten filter cases ran and passed; none remained blocked by setup.
+
+The full selection was **261 = 220 actual passes + one expected failure + 38 unexpected failures + two explicit skips + zero not run**. The report's 221 expected outcomes include the expected-failure billing-copy test. There were zero flaky or unclassified report outcomes. All nonbilling API files passed, and readable-URL tests passed 12/12. The unmodified timing-sensitive prefetch implementation's pass in this run is not a repair of the duplicate-read defect demonstrated in the earlier run.
+
+The unexpected failures comprise 35 billing failures due to the missing enabled fixture, the recorded remote-ticket title defect, and two newly reached selector errors:
+
+| Selected case | Actual evidence | Bounded test correction |
+|---|---|---|
+| Plan Create Run environment persistence | The environment assertions pass, but the name fill waits for `form input[type="text"]`. The existing Plan form contains one textbox whose Input does not emit an explicit type attribute. | Identify that owning form's single textbox by role, retaining environment selection, created Run visibility and API persistence. |
+| Failed+Save then Link Existing Bug reopens the drawer | Picker title and selection now pass. The final nonexact `Link Bug` button query matches both the background testcase button and the actual footer action. The failure log identifies the exact action. | Require exact `Link Bug`, retaining the link, automatic drawer reopen, exact key and title assertions. |
+
+No product change follows from those two selector errors. The [head-bound runtime classification and exact correction receipt](native-ui-228a-selector-correction.md) records the actual assertion steps, trace DOM and frozen two-line patch. The [independent selector review](native-ui-228a-selector-independent-review.md) found no source blocker, verified unchanged product/native bytes and independently recollected the same selection. The full 261-case selection and its existing timeouts/retry policy remain unchanged. The next exact-head run must reach the later assertions; their existence is not a pass.
+
+All 26 prerequisite smoke stages passed, and 24/25 check runs passed; only the impact step made smoke red. The fresh behavioral logs independently confirm this actual merge, 158 migrations, 640 database passes/zero database skips, 326 API/MCP passes/eight existing gated skips, and 72 transactional passes/90 existing gated skips. Architecture and full-tree scanner controls also passed at this merge.
+
+Artifact `14616593698` is 81,175,198 bytes, SHA256 `51f38ee801f60362a9ee772dbf3307e89c0077667025dbd89c8b0f1287a839ce`; its downloaded bytes were independently verified. The completed job log SHA256 is `f321bc15b56aa9c1e6b04a6c39ccd5f9888e3b61b6e0d660a6bf73845bc23add`. All eight expected native PNGs were produced by passing cases and their extracted hashes verified. Final visual acceptance is deferred to the next selector-only head; no screenshot pass is inferred from extraction.
+
 ## Confirmed native corrections
 
 | Finding | Concrete cause | Correction and preserved claim |
@@ -110,5 +131,7 @@ If a suitable test account is unavailable, a separate local provider-fixture inc
 ## Admission after corrections
 
 The final corrected collection resolves 261 selected tests out of 3,010 total tests, including 21 native UI scenarios. The prior twenty native scenarios, including the exact-201 correction, and the independently reviewed final legacy prefix are preserved byte-for-byte; one added nullable Run-edit journey accounts for the latest count increase. The [nullable-edit author freeze](native-ui-nullable-edit-freeze.json) binds the three-line product change, full test file and actual static/collection results. It retains the same eight screenshot attachments. The [independent nullable-edit review](native-ui-nullable-edit-review.md) found no source blocker and explicitly limits its runtime claim: environment/build nulls are forced by the new scenario, while historical null description remains source-inspected.
+
+That collection and preservation statement describes the nullable-edit publication at 228a. Its subsequent selector-only follow-up retains all 21 native cases and every product byte unchanged, replacing only the two legacy selectors described above. The current source binding is the [selector correction freeze](native-ui-228a-selector-correction-freeze.json); collection remains 261/3,010 with the same eight native screenshot attachments. The 228a native runtime pass is historical evidence, not an assertion that the next full gate is green.
 
 The next exact-head CI run must execute the same complete nine-file selection at `--workers=10 --retries=0`. The PR must report selected, executed, expected failures, unexpected failures, explicit skips and not-run counts separately, with its actual synthetic merge commit and environment. Type checks, collection and this record do not promote the implementation to verified or merge-ready. Merge remains contingent on the authorized complete green gate; production deployment and the external own-driver QA loop remain outside this increment.
