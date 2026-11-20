@@ -95,13 +95,22 @@ export default function ModelStudioPage() {
   const [models, setModels] = useState<ModelStudioModel[]>([]);
   const [selectedModelId, setSelectedModelId] = useState("");
   const [detail, setDetail] = useState<ModelStudioDetail | null>(null);
+  const [settledDetailKey, setSettledDetailKey] = useState("");
   const [revisionId, setRevisionId] = useState("");
-  const [coverage, setCoverage] = useState<ModelStudioCoverage | null>(null);
+  const [coverageRead, setCoverageRead] = useState<
+    | { key: string; status: "ready"; value: ModelStudioCoverage }
+    | { key: string; status: "error"; message: string }
+    | null
+  >(null);
+  const [coverageRetry, setCoverageRetry] = useState(0);
   const [loading, setLoading] = useState(true);
   const [archiving, setArchiving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Bumped after any write so the model list, detail and coverage re-read together.
   const [reloadToken, setReloadToken] = useState(0);
+  const detailKey = `${projectId}:${selectedModelId}:${reloadToken}`;
+  const detailLoading = settledDetailKey !== detailKey;
+  const coverageKey = `${projectId}:${selectedModelId}:${reloadToken}:${coverageRetry}`;
   const [definitionModal, setDefinitionModal] = useState<"create" | "revision" | null>(null);
   const [authorBusy, setAuthorBusy] = useState(false);
   const [authorError, setAuthorError] = useState<string | null>(null);
@@ -193,26 +202,40 @@ export default function ModelStudioPage() {
         if (!active) return;
         setError(null);
         setDetail(model);
-        setRevisionId(model.revisions[0]?.id ?? "");
+        // A background read must preserve a historical revision the person selected while it
+        // was pending. Changing models (or an unavailable selection) still defaults to the head.
+        setRevisionId((current) => model.revisions.some((row) => row.id === current)
+          ? current : model.revisions[0]?.id ?? "");
       })
       .catch((cause) => {
         if (active) setError(cause instanceof Error ? cause.message : "Could not load the model.");
+      })
+      .finally(() => {
+        if (active) setSettledDetailKey(detailKey);
       });
+    return () => { active = false; };
+  }, [projectId, selectedModelId, detailKey]);
+
+  useEffect(() => {
+    if (!selectedModelId) return;
+    let active = true;
     void getModelStudioCoverage(projectId, selectedModelId)
       .then((value) => {
-        if (active) setCoverage(value);
+        if (active) setCoverageRead({ key: coverageKey, status: "ready", value });
       })
-      .catch(() => {
-        if (active) setCoverage(null);
+      .catch((cause) => {
+        if (active) setCoverageRead({ key: coverageKey, status: "error",
+          message: cause instanceof Error ? cause.message : "Could not load model coverage." });
       });
-    return () => {
-      active = false;
-    };
-  }, [projectId, selectedModelId, reloadToken]);
+    return () => { active = false; };
+  }, [projectId, selectedModelId, coverageKey]);
 
   // Keyed to the current selection so a previous model's response cannot render under a new one.
   const currentDetail = detail && detail.id === selectedModelId ? detail : null;
-  const currentCoverage = coverage && coverage.modelId === selectedModelId ? coverage : null;
+  const currentCoverage = coverageRead?.key === coverageKey && coverageRead.status === "ready"
+    && coverageRead.value.modelId === selectedModelId ? coverageRead.value : null;
+  const coverageLoading = coverageRead?.key !== coverageKey;
+  const coverageError = coverageRead?.key === coverageKey && coverageRead.status === "error" ? coverageRead.message : null;
   // Mappings are stored per immutable revision; the coverage read and every authoring action below
   // target the current head, so the latest revision is what "Link case" is relative to.
   const latestRevision = currentDetail?.revisions[0] ?? null;
@@ -286,7 +309,7 @@ export default function ModelStudioPage() {
       setModels(remaining);
       setSelectedModelId(remaining[0]?.id ?? "");
       setDetail(null);
-      setCoverage(null);
+      setCoverageRead(null);
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not archive the model.");
@@ -315,10 +338,12 @@ export default function ModelStudioPage() {
     setAuthorBusy(true);
     setAuthorError(null);
     try {
-      await saveModelStudioRevision(projectId, currentDetail.id, {
+      const created = await saveModelStudioRevision(projectId, currentDetail.id, {
         baseRevisionId: latestRevision.id,
         model: definition
       });
+      // This explicit authoring action opens its new revision; ordinary refreshes preserve choice.
+      setRevisionId(created.id);
       setDefinitionModal(null);
       setReloadToken((token) => token + 1);
     } catch (cause) {
@@ -649,14 +674,15 @@ export default function ModelStudioPage() {
           </nav>
 
           {currentDetail && revision && (
-            <section className="min-w-0 space-y-4">
+            <section aria-label="Selected model" aria-busy={detailLoading} className="min-w-0 space-y-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h2 className="text-lg font-semibold">{currentDetail.name}</h2>
                   <p className="mt-1 text-[12px] text-[var(--muted)]">
                     Expected model · {revision.status} ·{" "}
                     {revision.approval.status === "APPROVED" ? "Approved" : "Not approved"} · Runtime evidence:{" "}
-                    {currentCoverage?.executionAssertion === "governed-runs" ? "governed runs" : "none"}
+                    {currentCoverage ? currentCoverage.executionAssertion === "governed-runs" ? "governed runs" : "none"
+                      : coverageLoading ? "loading" : "unavailable"}
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
@@ -963,11 +989,13 @@ export default function ModelStudioPage() {
                     <MappingStalenessNote staleness={currentCoverage.mappingStaleness} />
                   </>
                 ) : (
-                  <p className="mt-2 text-[12px] text-[var(--muted)]">Coverage is unavailable.</p>
+                  <p role={coverageLoading ? undefined : "alert"} className="mt-2 text-[12px] text-[var(--muted)]">
+                    {coverageLoading ? "Loading model coverage…" : `Coverage is unavailable. ${coverageError ?? "Retry coverage in Model runs."}`}
+                  </p>
                 )}
               </section>
 
-              <section aria-label="Model runs" className="rounded border border-[var(--border)] p-3">
+              <section aria-label="Model runs" aria-busy={coverageLoading} className="rounded border border-[var(--border)] p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="font-medium">Model runs</h3>
                   {currentCoverage && (
@@ -977,12 +1005,22 @@ export default function ModelStudioPage() {
                         : "Runtime evidence: none"}
                     </span>
                   )}
+                  <button type="button" disabled={coverageLoading} onClick={() => setCoverageRetry((value) => value + 1)}
+                    className="rounded border border-[var(--border)] px-2 py-1 text-[12px] hover:bg-[var(--surface-secondary)] disabled:opacity-60">
+                    {coverageLoading ? "Loading coverage…" : currentCoverage ? "Refresh coverage" : "Retry coverage"}
+                  </button>
                 </div>
                 <p className="mt-1 text-[11.5px] text-[var(--muted)]">
                   A run starts only from the model&apos;s current, approved revision, and only with Approved
                   cases that belong to it. Results are case outcomes — not proof that the modeled behavior
                   is correct.
                 </p>
+                {!currentCoverage && (
+                  <p role={coverageLoading ? undefined : "alert"} className="mt-2 text-[12px] text-[var(--muted)]">
+                    {coverageLoading ? "Loading model coverage…" : `Coverage is unavailable. ${coverageError ?? "Try the coverage read again."}`}{" "}
+                    Starting a run is blocked until its case eligibility can be checked.
+                  </p>
+                )}
                 {pendingRunIntent && !runBusy && (
                   <section aria-label="Run request recovery" data-outcome="OUTCOME_UNKNOWN"
                     className="mt-3 space-y-2 rounded border border-[var(--warning)] bg-[var(--warning-soft)] p-3 text-[12px]">
@@ -1054,7 +1092,7 @@ export default function ModelStudioPage() {
                   </p>
                 ) : (
                   <>
-                    {eligibleRunCases.length === 0 ? (
+                    {currentCoverage && (eligibleRunCases.length === 0 ? (
                       <p className="mt-2 text-[12px] text-[var(--muted)]">
                         No cases belong to this revision yet. Generate cases from its proposals or link
                         existing cases.
@@ -1100,7 +1138,7 @@ export default function ModelStudioPage() {
                           );
                         })}
                       </ul>
-                    )}
+                    ))}
                     <div className="mt-2 grid gap-2 sm:grid-cols-2">
                       <label className="text-[12px] text-[var(--muted)]">
                         Run name (optional)
@@ -1126,12 +1164,12 @@ export default function ModelStudioPage() {
                       <button
                         type="button"
                         onClick={() => void dispatchModelRun()}
-                        disabled={runBusy || !selectedRunCaseIds.length || !!pendingRunIntent || !runRecoveryReady}
+                        disabled={runBusy || !currentCoverage || !selectedRunCaseIds.length || !!pendingRunIntent || !runRecoveryReady}
                         className="rounded border border-[var(--border)] px-2 py-1 text-[12px] hover:bg-[var(--surface-secondary)] disabled:opacity-60"
                       >
                         {runBusy
                           ? "Starting…"
-                          : `Start run with ${selectedRunCaseIds.length} case${selectedRunCaseIds.length === 1 ? "" : "s"}`}
+                          : !currentCoverage ? "Start run" : `Start run with ${selectedRunCaseIds.length} case${selectedRunCaseIds.length === 1 ? "" : "s"}`}
                       </button>
                       {!selectedRunCaseIds.length && eligibleRunCases.length > 0 && (
                         <span className="text-[11.5px] text-[var(--muted)]">

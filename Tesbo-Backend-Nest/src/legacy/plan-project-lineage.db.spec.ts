@@ -334,7 +334,7 @@ const url = process.env.DATABASE_URL ?? "";
       else process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = previousProposalPreview;
     });
     const routes = ["dynamic", "project-prefixed"] as const;
-    const business = async () => (await setup.query("SELECT * FROM suites WHERE project_id=$1 ORDER BY id", [locked])).rows;
+    const business = async () => (await setup.query("SELECT * FROM bugs WHERE project_id=$1 ORDER BY id", [locked])).rows;
     type Options = { token?: string | null; project?: string; session?: string; notification?: boolean };
     const endpoint = (route: typeof routes[number], id = locked) => `${base}${route === "dynamic" ? "/api/mcp" : `/api/projects/${id}/mcp`}`;
     async function send(route: typeof routes[number], method: string, params?: Record<string, unknown>, options: Options = {}) {
@@ -354,10 +354,10 @@ const url = process.env.DATABASE_URL ?? "";
       expect(await business()).toEqual(before);
       expect(response.status).toBe(201);
       expect(response.body.error).toBeUndefined();
-      expect(response.body.result.tools.map((tool: { name: string }) => tool.name)).toContain("create_suite");
+      expect(response.body.result.tools.map((tool: { name: string }) => tool.name)).toContain("create_bug");
     });
     it.each(routes)("refuses a valid write through %s before any persisted business change", async (route) => {
-      const before = await business(), response = await rpc(route, "tools/call", { name: "create_suite", arguments: { name: "Must never be created while locked" } });
+      const before = await business(), response = await rpc(route, "tools/call", { name: "create_bug", arguments: { title: "Must never be created while locked" } });
       // One comparison exposes both the wire contract and any actually persisted write in red CI.
       expect({ ...response, business: await business() }).toEqual({
         status: 201, body: { jsonrpc: "2.0", id: 7, error: { code: -32003,
@@ -483,12 +483,10 @@ const url = process.env.DATABASE_URL ?? "";
     };
     async function businessState() {
       const ids = [project, other, locked], state: Record<string, unknown> = {};
-      // The proposal-review triggers bump projects.testcase_proposal_dependency_revision on every
-      // dependent suite/testcase write. That monotonic counter is deliberately excluded here: this
-      // snapshot asserts BUSINESS state, and a legitimate single write must not read as a second one.
+      // Retain the full project row, including review/consent counters: denied operations must
+      // preserve governing state too. The permitted Bug control changes only its row and audit.
       state.projects = (await setup.query(
-        `SELECT id, organization_id, key, name, description, created_at, updated_at, archived_at
-         FROM projects WHERE id=ANY($1::uuid[]) ORDER BY id`, [ids]
+        "SELECT * FROM projects WHERE id=ANY($1::uuid[]) ORDER BY id", [ids]
       )).rows;
       for (const table of ["suites", "testcases", "plans", "cycles", "bugs", "knowledge_folders", "knowledge_documents", "knowledge_files", "attachments", "audit_logs"]) {
         state[table] = (await setup.query(`SELECT * FROM ${table} WHERE project_id=ANY($1::uuid[]) ORDER BY id`, [ids])).rows;
@@ -509,9 +507,9 @@ const url = process.env.DATABASE_URL ?? "";
       for (const [scope, cases] of [["write", writes], ["read", reads]] as const) {
         expect(Object.keys(cases).sort()).toEqual(mcp.listTools().filter((tool) => tool.requiredScope === scope && !tool.proposalPreviewOnly).map((tool) => tool.name).sort());
       }
-      // 25 pre-existing active writers + the governed-run tool; 11 retired direct publishers.
-      expect(Object.keys(writes).filter(name => !DIRECT_TESTCASE_PUBLISHERS.has(name))).toHaveLength(26);
-      expect(Object.keys(writes).filter(name => DIRECT_TESTCASE_PUBLISHERS.has(name))).toHaveLength(11);
+      // 24 active writers, including governed runs; 13 retired testcase/dependency publishers.
+      expect(Object.keys(writes).filter(name => !DIRECT_TESTCASE_PUBLISHERS.has(name))).toHaveLength(24);
+      expect(Object.keys(writes).filter(name => DIRECT_TESTCASE_PUBLISHERS.has(name))).toHaveLength(13);
       expect(Object.keys(reads)).toHaveLength(22);
     });
     describe.each(routes)("%s full registry", (route) => {
@@ -554,7 +552,7 @@ const url = process.env.DATABASE_URL ?? "";
         expect((await rpc(route, "tools/list", {}, { token: writeToken })).body.result.tools.map((tool: { name: string }) => tool.name))
           .toEqual(mcp.listTools().filter(tool => tool.requiredScope === "write" && !tool.hiddenFromDiscovery && !tool.proposalPreviewOnly).map(tool => tool.name));
         for (const [method, params, credential, code] of [
-          ["tools/call", { name: "create_suite", arguments: { name: "No permission" } }, readToken, -32002],
+          ["tools/call", { name: "create_bug", arguments: { title: "No permission" } }, readToken, -32002],
           ["tools/call", { name: "list_testcases", arguments: {} }, writeToken, -32002],
           ["tools/call", { name: "not_a_tool" }, token, -32601],
           ["not_a_method", {}, token, -32601]
@@ -564,7 +562,7 @@ const url = process.env.DATABASE_URL ?? "";
         }
         await setup.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [locked, owner]);
         try {
-          const response = await rpc(route, "tools/call", { name: "create_suite", arguments: { name: "Revoked issuer" } });
+          const response = await rpc(route, "tools/call", { name: "create_bug", arguments: { title: "Revoked issuer" } });
           expect(response.status).toBe(201); expect(response.body.error.code).toBe(-32001);
         } finally { await setup.query("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'owner')", [locked, owner]); }
         expect(quota).not.toHaveBeenCalled(); noHandler(); expect(await businessState()).toEqual(before);
@@ -591,9 +589,8 @@ const url = process.env.DATABASE_URL ?? "";
         expect(current).toMatch(/^[a-f0-9]{16}\.[a-f0-9-]{36}$/);
         expect(await rpc(route, "ping", {}, { token: readToken, session: current })).toEqual({ status: 201, body: { jsonrpc: "2.0", id: 7, result: {} } });
         expect((await rpc(route, "tools/list", {}, { token: readToken, session: current })).body.result.tools).toHaveLength(22);
-        // The default fixture token carries read+write; 47 credential-visible tools plus the
-        // governed-run tool.
-        expect((await rpc(route, "tools/list")).body.result.tools).toHaveLength(48);
+        // The default fixture token carries read+write: 22 read and 24 active write tools.
+        expect((await rpc(route, "tools/list")).body.result.tools).toHaveLength(46);
         const trailing = await fetch(`${endpoint(route)}/?native=1`, { method: "POST", headers: {
           Authorization: `Bearer ${readToken}`, "content-type": "application/json"
         }, body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/list" }) });
@@ -601,7 +598,7 @@ const url = process.env.DATABASE_URL ?? "";
         expect((await trailing.json()).result.tools.map((tool: { name: string }) => tool.name))
           .toEqual(mcp.listTools().filter(tool => tool.requiredScope === "read" && !tool.proposalPreviewOnly).map(tool => tool.name));
         const stale = "0000000000000000.11111111-2222-4333-8444-555555555555";
-        const refused = await rpc(route, "tools/call", { name: "create_suite", arguments: { name: "Stale call" } }, { session: stale });
+        const refused = await rpc(route, "tools/call", { name: "create_bug", arguments: { title: "Stale call" } }, { session: stale });
         expect(refused.status).toBe(404); expect(refused.body.error.code).toBe(-32004);
         const recovered = await send(route, "initialize", {}, { session: stale });
         expect(recovered.status).toBe(201); expect(recovered.headers.get("mcp-session-id")).not.toBe(stale);
@@ -620,29 +617,33 @@ const url = process.env.DATABASE_URL ?? "";
         await limits.invalidateEntitlementCache(organization);
         const target = mode === "within allowance" ? project : locked;
         const before = await businessState(), name = `Allowed ${route} ${mode}`;
-        const response = await rpc(route, "tools/call", { name: "create_suite", arguments: { name } }, {
+        const response = await rpc(route, "tools/call", { name: "create_bug", arguments: { title: name } }, {
           token: mode === "within allowance" ? writableToken : token, project: target
         });
         expect(response.status).toBe(201); expect(response.body.error).toBeUndefined();
         const result = JSON.parse(response.body.result.content[0].text);
-        expect((await setup.query("SELECT name,project_id FROM suites WHERE id=$1", [result.id])).rows).toEqual([{ name, project_id: target }]);
+        expect((await setup.query("SELECT title,project_id FROM bugs WHERE id=$1", [result.id])).rows).toEqual([{ title: name, project_id: target }]);
         const after = await businessState();
-        expect((after.suites as unknown[]).length).toBe((before.suites as unknown[]).length + 1);
-        expect({ ...after, suites: before.suites }).toEqual(before);
+        expect((after.bugs as unknown[]).length).toBe((before.bugs as unknown[]).length + 1);
+        const previousAudit = new Set((before.audit_logs as Array<{ id: string }>).map(row => row.id));
+        const newAudit = (after.audit_logs as Array<Record<string, unknown>>).filter(row => !previousAudit.has(String(row.id)));
+        expect(newAudit).toEqual([expect.objectContaining({ entity_type: "bug", entity_id: result.id,
+          action: "bug_created", actor_id: owner, project_id: target })]);
+        expect({ ...after, bugs: before.bugs, audit_logs: before.audit_logs }).toEqual(before);
         expect(quota).toHaveBeenCalledWith(organization, target);
       });
       it("uses the authenticated project, not project/organization values inside tool arguments", async () => {
         const before = await businessState();
-        denied(await rpc(route, "tools/call", { name: "create_suite", arguments: { name: "Spoofed", projectId: project, organizationId: randomUUID() } }));
+        denied(await rpc(route, "tools/call", { name: "create_bug", arguments: { title: "Spoofed", projectId: project, organizationId: randomUUID() } }));
         expect(quota).toHaveBeenCalledWith(organization, locked); noHandler(); expect(await businessState()).toEqual(before);
       });
       it("falls back to PostgreSQL if Redis fails and does not mislabel an actual PostgreSQL failure as a plan denial", async () => {
         const before = await businessState();
         (redis.get as jest.Mock).mockRejectedValueOnce(new Error("Controlled Redis read failure"));
         (redis.set as jest.Mock).mockRejectedValueOnce(new Error("Controlled Redis write failure"));
-        denied(await rpc(route, "tools/call", { name: "create_suite", arguments: { name: "Cache failure" } }));
+        denied(await rpc(route, "tools/call", { name: "create_bug", arguments: { title: "Cache failure" } }));
         quota.mockImplementationOnce(async () => { await db.query("SELECT 1 / 0"); });
-        const failed = await rpc(route, "tools/call", { name: "create_suite", arguments: { name: "Database failure" } });
+        const failed = await rpc(route, "tools/call", { name: "create_bug", arguments: { title: "Database failure" } });
         expect(failed).toEqual({ status: 201, body: { jsonrpc: "2.0", id: 7, error: { code: -32603, message: "Internal error" } } });
         noHandler(); expect(await businessState()).toEqual(before);
       });
@@ -655,22 +656,22 @@ const url = process.env.DATABASE_URL ?? "";
     });
     it("keeps ordinary project-prefixed REST writes under the existing HTTP 403 lock", async () => {
       const before = await businessState();
-      const response = await fetch(`${base}/api/projects/${locked}/suites`, { method: "POST", headers: {
+      const response = await fetch(`${base}/api/projects/${locked}/bugs`, { method: "POST", headers: {
         Authorization: `Bearer ${writeToken}`, "content-type": "application/json"
-      }, body: JSON.stringify({ name: "REST remains locked" }) });
+      }, body: JSON.stringify({ title: "REST remains locked" }) });
       expect(response.status).toBe(403); expect((await response.json()).error).toContain("This project is read-only");
       expect(quota).toHaveBeenCalledWith(organization, locked); noHandler(); expect(await businessState()).toEqual(before);
     });
     it("keeps the existing entitlement cache and explicit invalidation semantics, without waiting out or changing its TTL", async () => {
       await setup.query("UPDATE organizations SET plan='pro' WHERE id=$1", [organization]);
       await limits.invalidateEntitlementCache(organization);
-      const input = { name: "create_suite", arguments: { name: "Warm Pro cache" } };
+      const input = { name: "create_bug", arguments: { title: "Warm Pro cache" } };
       expect((await rpc("dynamic", "tools/call", input)).body.error).toBeUndefined();
       expect(redis.set).toHaveBeenCalledWith(`entitlement:${organization}`, expect.any(String), "EX", 45);
       await setup.query("UPDATE organizations SET plan='launch' WHERE id=$1", [organization]);
       // Direct SQL intentionally does not invalidate Redis; this pins the existing cached snapshot,
       // not acceptance of a new consistency policy or a real Redis-expiry experiment.
-      expect((await rpc("project-prefixed", "tools/call", { ...input, arguments: { name: "Existing cached snapshot" } })).body.error).toBeUndefined();
+      expect((await rpc("project-prefixed", "tools/call", { ...input, arguments: { title: "Existing cached snapshot" } })).body.error).toBeUndefined();
       await limits.invalidateEntitlementCache(organization);
       denied(await rpc("dynamic", "tools/call", input));
     });
@@ -680,7 +681,7 @@ const url = process.env.DATABASE_URL ?? "";
       await setup.query("UPDATE organizations SET plan='pro',plan_source='admin',plan_override_expires_at=now()-interval '1 day',plan_grace_ends_at=NULL,grace_locked_notified_at=NULL WHERE id=$1", [organization]);
       await limits.invalidateEntitlementCache(organization);
       const before = await businessState();
-      denied(await rpc("dynamic", "tools/call", { name: "create_suite", arguments: { name: "Expired grant" } }));
+      denied(await rpc("dynamic", "tools/call", { name: "create_bug", arguments: { title: "Expired grant" } }));
       expect((await setup.query("SELECT plan,plan_source,plan_grace_ends_at,plan_override_expires_at FROM organizations WHERE id=$1", [organization])).rows[0])
         .toEqual({ plan: "launch", plan_source: "stripe", plan_grace_ends_at: null, plan_override_expires_at: null });
       expect((await setup.query("SELECT count(*)::int AS count FROM audit_logs WHERE organization_id=$1 AND action='billing_downgraded'", [organization])).rows[0].count).toBe(1);
@@ -688,7 +689,7 @@ const url = process.env.DATABASE_URL ?? "";
       await setup.query("UPDATE organizations SET plan_grace_ends_at=now()-interval '1 day' WHERE id=$1", [organization]);
       await limits.invalidateEntitlementCache(organization);
       const notices = (await setup.query("SELECT count(*)::int AS count FROM audit_logs WHERE organization_id=$1 AND action='billing_limits_enforced'", [organization])).rows[0].count;
-      for (const route of routes) denied(await rpc(route, "tools/call", { name: "create_suite", arguments: { name: "One notice" } }));
+      for (const route of routes) denied(await rpc(route, "tools/call", { name: "create_bug", arguments: { title: "One notice" } }));
       expect(email.sendGraceEnded).toHaveBeenCalledTimes(1);
       expect((await setup.query("SELECT count(*)::int AS count FROM audit_logs WHERE organization_id=$1 AND action='billing_limits_enforced'", [organization])).rows[0].count).toBe(notices + 1);
       noHandler(); expect(await businessState()).toEqual(before);
@@ -699,7 +700,7 @@ const url = process.env.DATABASE_URL ?? "";
         await setup.query("UPDATE users SET active_organization_id=NULL,last_active_at='2000-01-01' WHERE id=$1", [owner]);
         for (const key of cache.keys()) if (key.startsWith("activity:")) cache.delete(key);
         const before = await businessState();
-        denied(await rpc("dynamic", "tools/call", { name: "create_suite", arguments: { name: "Metadata only" } }));
+        denied(await rpc("dynamic", "tools/call", { name: "create_bug", arguments: { title: "Metadata only" } }));
         await Promise.all(tracking.mock.results.filter((result) => result.type === "return").map((result) => result.value));
         await Promise.all(observed.mock.results.filter((result) => result.type === "return").map((result) => result.value));
         expect(tracking).toHaveBeenCalledWith(owner);
@@ -716,10 +717,10 @@ const url = process.env.DATABASE_URL ?? "";
       try {
         expect(archived.status).toBe(200);
         expect((await setup.query("SELECT archived_at FROM projects WHERE id=$1", [other])).rows[0].archived_at).not.toBeNull();
-        const response = await rpc("dynamic", "tools/call", { name: "create_suite", arguments: { name: "Unlocked by archive" } });
+        const response = await rpc("dynamic", "tools/call", { name: "create_bug", arguments: { title: "Unlocked by archive" } });
         expect(response.body.error).toBeUndefined();
         const created = JSON.parse(response.body.result.content[0].text);
-        expect((await setup.query("SELECT project_id FROM suites WHERE id=$1", [created.id])).rows[0].project_id).toBe(locked);
+        expect((await setup.query("SELECT project_id FROM bugs WHERE id=$1", [created.id])).rows[0].project_id).toBe(locked);
       } finally { await setup.query("UPDATE projects SET archived_at=NULL WHERE id=$1", [other]); }
     });
     it("allows a human to archive the locked project itself but refuses its now-inaccessible token calls", async () => {

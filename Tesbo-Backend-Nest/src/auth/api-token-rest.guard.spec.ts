@@ -72,6 +72,7 @@ describe("ApiTokenRestGuard", () => {
   });
 
   it.each([
+    "POST /suites", "POST /SUITES/",
     "POST /testcases", "PUT /testcases/case", "DELETE /testcases/case", "POST /testcases/case/duplicate",
     "POST /testcases/bulk-create", "POST /testcases/bulk-update", "POST /testcases/bulk-delete", "POST /testcases/import",
     "POST /testcases/case/approve", "PUT /testcases/case/custom-field-values",

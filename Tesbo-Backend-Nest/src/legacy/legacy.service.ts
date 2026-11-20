@@ -4032,6 +4032,20 @@ export class LegacyService implements OnModuleInit {
     return row;
   }
 
+  /** Current native human authority, held through the caller's transaction commit.
+   * Call after any domain serialization wait; this deliberately bypasses request-cache access.
+   * Feature-specific capabilities remain with their owner rather than entering this shared check.
+   */
+  async requireCurrentProjectAuthority(client: PoolClient, projectId: string, userId: string | null | undefined) {
+    const uid = this.requireUser(userId);
+    const access = await client.query(`SELECT p.*,pm.role AS caller_role,om.role AS workspace_role FROM projects p JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=$2
+      JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id=$2
+      JOIN users u ON u.id=$2 AND u.active_organization_id=p.organization_id
+      WHERE p.id=$1 AND p.archived_at IS NULL FOR SHARE OF p,pm,om,u`, [projectId,uid]);
+    if (!access.rows[0]) throw new ForbiddenException({ error: "Current project and workspace membership are required" });
+    return access.rows[0];
+  }
+
   /** Drops every memoized requireProjectAccess result for this project within the current request. */
   private invalidateProjectAccessCache(projectId: string): void {
     this.requestCache.invalidatePrefix(`access:${projectId}:`);
@@ -4412,17 +4426,13 @@ export class LegacyService implements OnModuleInit {
     return res.rows.map(toCamel);
   }
 
-  async createSuiteForUser(userId: string | null | undefined, projectId: string, body: Body) {
-    await this.requireProjectAccess(this.requireUser(userId), projectId);
-    return this.createSuite(projectId, body);
+  async createSuiteForUser(userId: string | null | undefined, projectId: string, body: Body, principal?: ReviewPrincipal) {
+    return this.createSuite(projectId, body, userId, principal);
   }
 
   /**
-   * The insert itself, without a caller check.
-   *
-   * Kept unguarded for the three callers that have already decided access: the MCP tool (whose API
-   * token is bound to one project, see McpService), the Zyra chat flow, and CSV import — all of which
-   * authorized before they got here. Route traffic goes through createSuiteForUser.
+   * Suite parents must resolve to a live same-project row. Public suite publication below
+   * requires a trusted human session; machine draft staging cannot supply that authority.
    */
   // Once suites were soft-deleted (V110) this stopped being enforced by the database: a parentId
   // pointing at a soft-deleted (or another project's) suite used to raise a loud FK violation on
@@ -4454,7 +4464,14 @@ export class LegacyService implements OnModuleInit {
     return text;
   }
 
-  async createSuite(projectId: string, body: Body, transactionClient?: PoolClient) {
+  async createSuite(projectId: string, body: Body, userId?: string | null, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    return this.insertSuite(projectId, body);
+  }
+
+  /** Only native human publication and the exact-reviewed atomic Save call this insertion seam. */
+  private async insertSuite(projectId: string, body: Body, transactionClient?: PoolClient) {
     const name = String(body.name || "").trim();
     if (!name) throw new BadRequestException({ error: "name is required" });
     validateBoundedField(name, "Suite name", SUITE_NAME_MAX_LENGTH);
@@ -4475,7 +4492,8 @@ export class LegacyService implements OnModuleInit {
     return { ...toCamel(res.rows[0]), testCaseCount: 0, recursiveTestCaseCount: 0 };
   }
 
-  async updateSuite(userId: string | null | undefined, suiteId: string, body: Body) {
+  async updateSuite(userId: string | null | undefined, suiteId: string, body: Body, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
     const projectId = await this.requireSuiteAccess(userId, suiteId);
     validateBoundedField(body.name, "Suite name", SUITE_NAME_MAX_LENGTH);
     const description = this.normalizeSuiteText(body.description, "Suite description");
@@ -5244,7 +5262,7 @@ export class LegacyService implements OnModuleInit {
    * Do not replace this with a Suite row lock acquired after a testcase row: deletion
    * updates cases before suites, which would invert the lock order.
    */
-  private async lockTestcaseSuiteWrites(client: PoolClient, projectId: string): Promise<void> {
+  async lockTestcaseSuiteWrites(client: PoolClient, projectId: string): Promise<void> {
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`suite-tree:${projectId}`]);
   }
 
@@ -15634,16 +15652,12 @@ export class LegacyService implements OnModuleInit {
   }
 
   private async requireProposalAuthority(client: PoolClient, projectId: string, uid: string) {
-    const access = await client.query(`SELECT p.*,pm.role AS caller_role,om.role AS workspace_role FROM projects p JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=$2
-      JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id=$2
-      JOIN users u ON u.id=$2 AND u.active_organization_id=p.organization_id
-      WHERE p.id=$1 AND p.archived_at IS NULL FOR SHARE OF p,pm,om,u`, [projectId,uid]);
-    if (!access.rows[0]) throw new ForbiddenException({ error: "Current project and workspace membership are required" });
-    if (!this.parseRole(access.rows[0].caller_role) || !this.parseRole(access.rows[0].workspace_role)) throw new ForbiddenException({error:"A current authoring role is required"});
-    if (!this.normalizeZyraCapabilities(this.parseProjectSettings(access.rows[0].settings).zyraAgent?.capabilities).testcaseStorage) {
+    const access = await this.requireCurrentProjectAuthority(client, projectId, uid);
+    if (!this.parseRole(access.caller_role) || !this.parseRole(access.workspace_role)) throw new ForbiddenException({error:"A current authoring role is required"});
+    if (!this.normalizeZyraCapabilities(this.parseProjectSettings(access.settings).zyraAgent?.capabilities).testcaseStorage) {
       throw new ForbiddenException({ error: "Testcase proposal storage is disabled for this project" });
     }
-    return access.rows[0];
+    return access;
   }
 
   private normalizeProposalCaseFields(input: Body): Body {
@@ -16372,7 +16386,7 @@ export class LegacyService implements OnModuleInit {
       // the existing step so the recorder does not label the turn completed without errors. This
       // neither infers rollback/suite counts nor changes how any operation is applied.
       if (decision.operations.length && decision.operations.every((op) => op.type === "create_suite" || op.type === "move_to_suite") &&
-          applied.activity.some((entry) => entry.title === "An operation failed unexpectedly" || entry.title === "Could not move testcases")) {
+          applied.activity.some((entry) => entry.title === "An operation failed unexpectedly" || entry.title === "Could not move testcases" || entry.title === "Could not create suite")) {
         onStage?.("staging", { status: "failed" }, "update");
       }
       const activity = [
@@ -17994,6 +18008,12 @@ export class LegacyService implements OnModuleInit {
         }
       }
       } catch (err) {
+        if (err instanceof ForbiddenException && (err.getResponse() as Body)?.code === "HUMAN_REVIEW_REQUIRED") {
+          activity.push({ actor: "agent", title: "Could not create suite",
+            detail: "Suite creation requires a human editing action. Create it in the testcase repository, or choose a new suite while saving exact reviewed case proposals. No suite was created.",
+            createdAt: new Date().toISOString() });
+          continue;
+        }
         this.logger.error(`Zyra chat operation (${op.type}) failed for project ${projectId}: ${err instanceof Error ? err.message : err}`);
         activity.push({
           actor: "agent",
@@ -18105,7 +18125,7 @@ export class LegacyService implements OnModuleInit {
     const existing = await this.db.query(
       "SELECT id, name FROM suites WHERE project_id = $1 AND lower(name) = lower($2) AND deleted_at IS NULL ORDER BY position, created_at LIMIT 1",
       [projectId, trimmed]
-    ).catch(() => ({ rows: [] as Body[] }));
+    );
     if (existing.rows[0]) return { id: String(existing.rows[0].id), name: String(existing.rows[0].name), created: false };
     const created = await this.createSuite(projectId, { name: trimmed }) as Body;
     return { id: String(created.id), name: String(created.name), created: true };
@@ -20919,7 +20939,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         validateBoundedField(name, "Suite name", SUITE_NAME_MAX_LENGTH);
         const found = await client.query("SELECT id FROM suites WHERE project_id=$1 AND lower(name)=lower($2) AND deleted_at IS NULL ORDER BY id LIMIT 1", [projectId,name]);
         if (found.rows[0]) return String(found.rows[0].id);
-        const suite = await this.createSuite(projectId, { name }, client) as Body;
+        const suite = await this.insertSuite(projectId, { name }, client) as Body;
         await this.logProjectActivity(projectId,uid,"suite_created","suite",suite.id,name,{source:"testcase_proposal_review",taskId},client);
         return String(suite.id);
       };
@@ -25244,6 +25264,12 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       : proposedCount > 0
       ? `\n\n📝 ${proposedCount} of them ${proposedCount === 1 ? "is" : "are"} staged for your review — open the review panel to select, edit, or discard, then Save to add ${proposedCount === 1 ? "it" : "them"} to the repository. Nothing has been written to the repository yet.`
       : "";
+    if (applied.activity.some((entry) => entry.title === "Could not create suite")) {
+      const refusal = ru
+        ? "Создание набора требует действия человека. В этом сообщении наборы не созданы. Создайте набор в репозитории тест-кейсов или выберите новый набор при сохранении точных проверенных предложений."
+        : "Suite creation requires a human editing action. No suites were created in this chat turn. Create a suite in the testcase repository, or choose a new suite while saving exact reviewed case proposals.";
+      return refusal + reviewHint + moveSuffix;
+    }
     // Suite assignment also writes independently; a caught error is neither a missing target nor
     // proof of rollback. Keep completed moves and any still-pending review guidance alongside it.
     if (decision.operations.length && decision.operations.every((op) => op.type === "create_suite" || op.type === "move_to_suite") &&

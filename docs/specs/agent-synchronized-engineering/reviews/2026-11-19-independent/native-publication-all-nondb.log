@@ -1,0 +1,257 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> tesbo-backend-nest@0.1.0 test
+> jest --runInBand --testPathIgnorePatterns=\.db\.spec\.ts$ --silent
+
+PASS src/database/migrate.spec.ts
+[Nest] 18  - 11/19/2026, 9:35:45 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project 11111111-1111-4111-8111-111111111111: Private database failure
+PASS src/legacy/suite-publication.spec.ts
+PASS src/mcp/mcp.service.spec.ts
+PASS src/legacy/bug-link-finalization.spec.ts
+[Nest] 18  - 11/19/2026, 9:35:51 PM    WARN [IntegrationSyncClient] Jira token refresh failed (401) for connection conn-1 after retry
+[Nest] 18  - 11/19/2026, 9:35:52 PM    WARN [IntegrationSyncClient] Jira token refresh failed (401) for connection conn-1 after retry
+[Nest] 18  - 11/19/2026, 9:35:54 PM    WARN [IntegrationSyncClient] Linear token refresh failed (401) for connection conn-1 after retry
+PASS src/integration-sync/integration-sync.client.spec.ts (6.12 s)
+[Nest] 18  - 11/19/2026, 9:35:55 PM    WARN [IntegrationSyncClient] Linear token refresh failed (401) for connection conn-1 after retry
+[Nest] 18  - 11/19/2026, 9:35:55 PM    WARN [IntegrationSyncProcessor] Nightly jira sync failed to start for project proj-3: connection revoked
+[Nest] 18  - 11/19/2026, 9:35:55 PM    WARN [IntegrationSyncProcessor] Sync run run-1 could not use its jira connection: Jira needs to be reconnected to this workspace.
+[Nest] 18  - 11/19/2026, 9:35:55 PM    WARN [IntegrationSyncProcessor] Skipping jira ticket BAD-1 in run run-1 — could not upsert: value too long for type character varying(1024)
+[Nest] 18  - 11/19/2026, 9:35:55 PM    WARN [IntegrationSyncProcessor] Skipping linear ticket BAD-1 in run run-1 — could not upsert: value too long for type character varying(1024)
+[Nest] 18  - 11/19/2026, 9:35:55 PM    WARN [IntegrationSyncProcessor] Sync run run-1 cannot read its Notion database: The Notion database could not be found. Share it with the Tesbo integration.
+[Nest] 18  - 11/19/2026, 9:35:55 PM     LOG [IntegrationSyncProcessor] Nightly notion sync starting for 0 targets.
+[Nest] 18  - 11/19/2026, 9:35:55 PM     LOG [IntegrationSyncProcessor] Nightly notion sync complete: 0 started, 0 already ran this cycle, 0 failed to start.
+[Nest] 18  - 11/19/2026, 9:35:55 PM     LOG [IntegrationSyncProcessor] Nightly notion sync starting for 3 targets.
+[Nest] 18  - 11/19/2026, 9:35:55 PM     LOG [IntegrationSyncProcessor] Nightly notion sync complete: 3 started, 0 already ran this cycle, 0 failed to start.
+[Nest] 18  - 11/19/2026, 9:35:55 PM     LOG [IntegrationSyncProcessor] Nightly notion sync starting for 2 targets.
+[Nest] 18  - 11/19/2026, 9:35:55 PM     LOG [IntegrationSyncProcessor] Nightly notion sync complete: 2 started, 0 already ran this cycle, 0 failed to start.
+[Nest] 18  - 11/19/2026, 9:35:55 PM    WARN [IntegrationSyncProcessor] Nightly notion sync failed to start for project proj-1: db blip
+[Nest] 18  - 11/19/2026, 9:35:55 PM     LOG [IntegrationSyncProcessor] Nightly notion sync starting for 2 targets.
+[Nest] 18  - 11/19/2026, 9:35:55 PM    WARN [IntegrationSyncProcessor] Nightly notion sync failed to start for project proj-1: boom
+[Nest] 18  - 11/19/2026, 9:35:55 PM     LOG [IntegrationSyncProcessor] Nightly notion sync complete: 1 started, 0 already ran this cycle, 1 failed to start.
+[Nest] 18  - 11/19/2026, 9:35:55 PM     LOG [IntegrationSyncProcessor] Nightly notion sync starting for 0 targets.
+[Nest] 18  - 11/19/2026, 9:35:55 PM     LOG [IntegrationSyncProcessor] Nightly notion sync complete: 0 started, 0 already ran this cycle, 0 failed to start.
+[Nest] 18  - 11/19/2026, 9:35:55 PM    WARN [IntegrationSyncProcessor] Body fetch failed for Notion page page-1, reusing cached: boom
+PASS src/integration-sync/integration-sync.processor.spec.ts
+PASS src/legacy/bug-link-relationships.spec.ts
+PASS src/auth/api-token-rest.integration.spec.ts
+PASS src/legacy/run-status-validation.spec.ts
+PASS src/behavior-graph/graph-change-review.recovery.spec.ts
+[Nest] 18  - 11/19/2026, 9:36:03 PM     LOG [GraphChangeReviewRecovery] QA graph notification recovery: {"eligible":2,"delivered":1,"pending":1,"noRecipients":0,"failed":0}
+[Nest] 18  - 11/19/2026, 9:36:03 PM     LOG [GraphChangeReviewRecovery] QA graph notification recovery: {"eligible":1,"delivered":1,"pending":0,"noRecipients":0,"failed":0}
+[Nest] 18  - 11/19/2026, 9:36:03 PM    WARN [GraphChangeReviewRecovery] QA graph notification retry failed for receipt 4: temporary database fault
+[Nest] 18  - 11/19/2026, 9:36:03 PM     LOG [GraphChangeReviewRecovery] QA graph notification recovery: {"eligible":3,"delivered":1,"pending":0,"noRecipients":1,"failed":1}
+[Nest] 18  - 11/19/2026, 9:36:03 PM     LOG [GraphChangeReviewRecovery] QA graph notification recovery: {"eligible":0,"delivered":0,"pending":0,"noRecipients":0,"failed":0}
+[Nest] 18  - 11/19/2026, 9:36:03 PM    WARN [GraphReviewRecoveryProcessor] Unknown graph notification recovery job: unexpected
+PASS src/legacy/integration-connection-lifecycle.spec.ts
+PASS src/behavior-graph/graph-change-review.controller.spec.ts
+PASS src/legacy/zyra-draft-generation.spec.ts
+[Nest] 18  - 11/19/2026, 9:36:08 PM    WARN [LegacyService] Zyra draft used an unrecognized technique tag "invented_one" — dropped, not surfaced
+[Nest] 18  - 11/19/2026, 9:36:08 PM    WARN [LegacyService] Zyra draft used an unrecognized technique tag "invented_two" — dropped, not surfaced
+[Nest] 18  - 11/19/2026, 9:36:08 PM    WARN [LegacyService] Zyra draft used an unrecognized technique tag "not_a_real_technique" — dropped, not surfaced
+[Nest] 18  - 11/19/2026, 9:36:09 PM    WARN [LegacyService] Linear projects list failed for project 5f9c1f2e-6f3a-4a7e-8b21-000000000002: Bad Request Exception
+[Nest] 18  - 11/19/2026, 9:36:09 PM    WARN [LegacyService] Linear teams list failed for project 5f9c1f2e-6f3a-4a7e-8b21-000000000002: Bad Request Exception
+PASS src/legacy/linear-integration.spec.ts
+PASS src/behavior-graph/local-pinned-git-source.spec.ts
+PASS src/legacy/zyra-citations.spec.ts
+PASS src/billing/billing-lifecycle.spec.ts
+PASS src/legacy/zyra-chat-intent.spec.ts
+[Nest] 18  - 11/19/2026, 9:36:15 PM   ERROR [ZyraArchiveSweepService] Archive sweep: Jira lookup crashed for project proj-a — unexpected crash
+[Nest] 18  - 11/19/2026, 9:36:15 PM   ERROR [ZyraArchiveSweepService] Archive sweep: Linear lookup crashed for testcase tc-1 — timeout
+[Nest] 18  - 11/19/2026, 9:36:15 PM   ERROR [ZyraArchiveSweepService] Archive sweep: Jira lookup crashed for project proj-a — total outage
+[Nest] 18  - 11/19/2026, 9:36:15 PM   ERROR [ZyraArchiveSweepService] Archive sweep: notification failed for project proj-a — db exploded
+PASS src/zyra-archive-sweep/zyra-archive-sweep.service.spec.ts
+[Nest] 18  - 11/19/2026, 9:36:16 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: connection reset
+[Nest] 18  - 11/19/2026, 9:36:16 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: db unavailable
+[Nest] 18  - 11/19/2026, 9:36:16 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: connection reset
+[Nest] 18  - 11/19/2026, 9:36:16 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private suite failure
+[Nest] 18  - 11/19/2026, 9:36:16 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private suite failure
+[Nest] 18  - 11/19/2026, 9:36:16 PM   ERROR [LegacyService] Zyra chat operation (move_to_suite) failed for project project-1: private move failure
+[Nest] 18  - 11/19/2026, 9:36:16 PM   ERROR [LegacyService] Zyra chat operation (move_to_suite) failed for project project-1: private move failure
+[Nest] 18  - 11/19/2026, 9:36:16 PM   ERROR [LegacyService] Zyra chat operation (move_to_suite) failed for project project-1: private move failure
+[Nest] 18  - 11/19/2026, 9:36:16 PM   ERROR [LegacyService] Zyra chat operation (move_to_suite) failed for project project-1: private move failure
+[Nest] 18  - 11/19/2026, 9:36:16 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private database detail
+[Nest] 18  - 11/19/2026, 9:36:16 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private database detail
+[Nest] 18  - 11/19/2026, 9:36:16 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private audit detail
+[Nest] 18  - 11/19/2026, 9:36:16 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private database detail
+[Nest] 18  - 11/19/2026, 9:36:16 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private database detail
+[Nest] 18  - 11/19/2026, 9:36:16 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private audit detail
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 0 candidates, 0 already staged, 0 not connected, 0 checked, 0 staged, 0 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 0 projects notified (0 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 3 candidates, 0 already staged, 0 not connected, 3 checked, 0 staged, 3 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 0 projects notified (0 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 2 candidates, 0 already staged, 0 not connected, 2 checked, 1 staged, 1 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 1 projects notified (1 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 1ms: 1 candidates, 0 already staged, 0 not connected, 1 checked, 1 staged, 0 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 1 projects notified (1 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 1ms: 2 candidates, 0 already staged, 0 not connected, 2 checked, 1 staged, 1 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 1 projects notified (1 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 1 candidates, 0 already staged, 0 not connected, 1 checked, 0 staged, 0 not done, 0 unmapped category, 0 archived meanwhile, 1 failed, 0 projects notified (0 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM    WARN [ZyraArchiveSweepService] Archive sweep failures: [{"testcaseId":"tc-1","provider":"notion","issueKey":"page-1","reason":"not_found"}]
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 0 candidates, 0 already staged, 0 not connected, 0 checked, 0 staged, 0 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 0 projects notified (0 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 40ms: 10 candidates, 0 already staged, 0 not connected, 10 checked, 0 staged, 10 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 0 projects notified (0 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 2 candidates, 1 already staged, 0 not connected, 1 checked, 0 staged, 1 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 0 projects notified (0 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 2 candidates, 0 already staged, 0 not connected, 1 checked, 1 staged, 0 not done, 0 unmapped category, 0 archived meanwhile, 1 failed, 1 projects notified (1 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM    WARN [ZyraArchiveSweepService] Archive sweep failures: [{"testcaseId":"tc-1","provider":"jira","issueKey":"A-1","reason":"error","detail":"unexpected crash"}]
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 2 candidates, 0 already staged, 0 not connected, 1 checked, 1 staged, 0 not done, 0 unmapped category, 0 archived meanwhile, 1 failed, 1 projects notified (1 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM    WARN [ZyraArchiveSweepService] Archive sweep failures: [{"testcaseId":"tc-1","provider":"linear","issueKey":"ENG-1","reason":"error","detail":"timeout"}]
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 3 candidates, 0 already staged, 1 not connected, 2 checked, 0 staged, 0 not done, 1 unmapped category, 0 archived meanwhile, 1 failed, 0 projects notified (0 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM    WARN [ZyraArchiveSweepService] Archive sweep failures: [{"testcaseId":"tc-1","provider":"jira","issueKey":"A-1","reason":"not_found"}]
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 1 candidates, 1 already staged, 0 not connected, 2 checked, 1 staged, 0 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 1 projects notified (1 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 1 candidates, 0 already staged, 0 not connected, 1 checked, 0 staged, 0 not done, 0 unmapped category, 1 archived meanwhile, 0 failed, 0 projects notified (0 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 1 candidates, 0 already staged, 0 not connected, 0 checked, 0 staged, 0 not done, 0 unmapped category, 0 archived meanwhile, 1 failed, 0 projects notified (0 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM    WARN [ZyraArchiveSweepService] Archive sweep failures: [{"testcaseId":"tc-1","provider":"jira","issueKey":"A-1","reason":"error","detail":"total outage"}]
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 1 candidates, 0 already staged, 0 not connected, 1 checked, 0 staged, 1 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 0 projects notified (0 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 3 candidates, 0 already staged, 0 not connected, 3 checked, 3 staged, 0 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 1 projects notified (1 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 2 candidates, 0 already staged, 0 not connected, 2 checked, 2 staged, 0 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 2 projects notified (2 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 1 candidates, 0 already staged, 0 not connected, 1 checked, 1 staged, 0 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 1 projects notified (1 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 1 candidates, 1 already staged, 0 not connected, 0 checked, 0 staged, 0 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 0 projects notified (0 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 2 candidates, 0 already staged, 0 not connected, 2 checked, 2 staged, 0 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 1 projects notified (2 rows), 1 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 1ms: 1 candidates, 0 already staged, 0 not connected, 1 checked, 1 staged, 0 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 0 projects notified (0 rows), 0 notify failures
+[Nest] 18  - 11/19/2026, 9:36:15 PM     LOG [ZyraArchiveSweepService] Archive sweep finished in 0ms: 1 candidates, 0 already staged, 0 not connected, 1 checked, 1 staged, 0 not done, 0 unmapped category, 0 archived meanwhile, 0 failed, 1 projects notified (1 rows), 0 notify failures
+PASS src/legacy/zyra-chat-operation-errors.spec.ts
+PASS src/legacy/zyra-ticket-scope.spec.ts
+PASS src/auth/api-token-rest.guard.spec.ts
+PASS src/legacy/multi-workspace.spec.ts
+[Nest] 18  - 11/19/2026, 9:36:20 PM    WARN [LegacyService] Notification "workspace_removed" wrote no rows for 1 recipient(s)
+[Nest] 18  - 11/19/2026, 9:36:20 PM    WARN [LegacyService] Notification "workspace_removed" wrote no rows for 1 recipient(s)
+[Nest] 18  - 11/19/2026, 9:36:20 PM    WARN [LegacyService] Notification "workspace_role_changed" wrote no rows for 1 recipient(s) (membership scope applied)
+PASS src/legacy/zyra-archive-sweep-lookup.spec.ts
+PASS src/legacy/notion-integration.spec.ts
+[Nest] 18  - 11/19/2026, 9:36:23 PM    WARN [LegacyService] Failed to post Zyra ticket comment to Notion aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee: The Tesbo integration has no access to this Notion page. In Notion, open it, choose Connections and add the Tesbo integration.
+[Nest] 18  - 11/19/2026, 9:36:23 PM    WARN [LegacyService] Failed to post Zyra ticket comment to Notion aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee: Notion refused the request (403): the Tesbo integration is missing a required capability (Insufficient permissions for this endpoint.). Enable read content, read comments and insert comments for the integration in Notion, then reconnect.
+[Nest] 18  - 11/19/2026, 9:36:23 PM    WARN [LegacyService] Failed to post Zyra ticket comment to Notion aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee: The Notion page could not be found. It may have been deleted, or it is no longer shared with the Tesbo integration. In Notion, open the page, choose Connections and add the Tesbo integration, or select a different database in this project's Notion integration settings.
+PASS src/legacy/signup-invite.spec.ts
+PASS src/legacy/zyra-live-drafts.spec.ts
+[Nest] 18  - 11/19/2026, 9:36:26 PM    WARN [LegacyService] A live draft could not be staged for project p1: connection reset
+PASS src/behavior-graph/model-studio-runs.spec.ts
+PASS src/legacy/ticket-comment-links.spec.ts
+PASS src/behavior-graph/model-studio-preview.spec.ts
+PASS src/automation/automation-retry-ordering.spec.ts
+PASS src/legacy/knowledge-document-governance.spec.ts
+PASS src/legacy/zyra-plan-concurrency.spec.ts
+[Nest] 18  - 11/19/2026, 9:36:34 PM    WARN [LegacyService] Scenario top-up failed for project project-1, keeping the 40-scenario plan: provider timeout
+PASS src/automation/automation-finalization.spec.ts
+PASS src/legacy/zyra-live-ticket-category.spec.ts
+PASS src/mcp/mcp-publication.spec.ts
+PASS src/legacy/plan-project-lineage.spec.ts
+PASS src/auth/auth.middleware.spec.ts
+PASS src/legacy/zyra-generation-speed.spec.ts
+PASS src/legacy/zyra-jira-keys.spec.ts
+PASS src/legacy/zyra-plan-batching.spec.ts
+PASS src/legacy/zyra-project-snapshot.spec.ts
+PASS src/automation/automation-closure.spec.ts
+PASS src/legacy/zyra-integration-sync.spec.ts
+PASS src/legacy/zyra-response-parsing.spec.ts
+PASS src/schedules/schedules.service.spec.ts
+PASS src/legacy/suite-delete-project-scope.spec.ts
+PASS src/legacy/zyra-system-actor.spec.ts
+[Nest] 18  - 11/19/2026, 9:36:55 PM   ERROR [LegacyService] Notification "bug_assigned" failed — connection lost
+PASS src/legacy/notification-events.spec.ts
+PASS src/legacy/team-invite.spec.ts
+PASS src/legacy/testcase-bulk-project-scope.spec.ts
+PASS src/legacy/repository-partial-edits.spec.ts
+PASS src/legacy/testcase-proposal-review.spec.ts
+PASS src/legacy/history-import-finalization.spec.ts
+[Nest] 18  - 11/19/2026, 9:37:01 PM   ERROR [WelcomeEmailService] Failed to schedule welcome email for user user-1: ECONNREFUSED
+PASS src/welcome-email/welcome-email.service.spec.ts
+[Nest] 18  - 11/19/2026, 9:37:01 PM    WARN [WelcomeEmailService] Welcome email not scheduled: user ghost not found
+[Nest] 18  - 11/19/2026, 9:37:01 PM     LOG [WelcomeEmailService] Welcome email skipped: user gone no longer exists
+PASS src/legacy/zyra-save-integration-sync.spec.ts
+[Nest] 18  - 11/19/2026, 9:37:02 PM    WARN [LegacyService] Failed to post Zyra ticket comment to Jira EAD-11215: Jira request failed (403).
+[Nest] 18  - 11/19/2026, 9:37:02 PM    WARN [LegacyService] Failed to queue Zyra ticket comments for task 00000000-0000-4000-8000-000000000002: db down
+[Nest] 18  - 11/19/2026, 9:37:02 PM    WARN [LegacyService] Failed to post Zyra ticket comment to Jira EAD-11215: Jira refused the comment (403) — the connected Jira account doesn't have permission to comment on this issue. Give that account comment permission in the Jira project, or reconnect with an account that has it, then retry.
+[Nest] 18  - 11/19/2026, 9:37:02 PM    WARN [LegacyService] Failed to post Zyra ticket comment to Jira EAD-11215: Jira rejected the connection's credentials (401) — the authorization has expired or been revoked. Reconnect Jira in workspace settings, then retry.
+PASS src/automation/automation-closed-reuse.spec.ts
+PASS src/behavior-graph/project-source-binding.management.spec.ts
+PASS src/legacy/zyra-task-draft-normalization.spec.ts
+PASS src/legacy/testcase-approval.spec.ts
+PASS src/legacy/zyra-router-salvage-retry.spec.ts
+PASS src/legacy/knowledge-document-comments.spec.ts
+[Nest] 18  - 11/19/2026, 9:37:09 PM   ERROR [AutomationService] Could not remove uncommitted evidence object executions/96b4c52b-66cb-4c41-bf57-86c1e5550888/0c4de6af-61f3-453c-8a4b-6173eb7658cd/879292fd-94d1-45b0-a44a-61be28049bd2.png: storage cleanup unavailable
+PASS src/automation/automation-evidence-closure.spec.ts
+PASS src/legacy/platform-admins.spec.ts
+PASS src/behavior-graph/graph-review-run-links.spec.ts
+PASS src/analytics-report/analytics-report.spec.ts
+[Nest] 18  - 11/19/2026, 9:37:13 PM    WARN [AnalyticsReportService] Analytics report skipped: missing BASECAMP_REFRESH_TOKEN.
+[Nest] 18  - 11/19/2026, 9:37:13 PM     LOG [AnalyticsReportService] Analytics report for 2026-10-07 posted to Basecamp (answer 4242).
+[Nest] 18  - 11/19/2026, 9:37:13 PM     LOG [AnalyticsReportService] Analytics report for 2026-10-07 already posted or in progress; skipping.
+PASS src/legacy/manual-evidence-finalization.spec.ts
+PASS src/legacy/zyra-reply-guards.spec.ts
+PASS src/legacy/zyra-turn-context.spec.ts
+PASS src/behavior-graph/graph-change-review.delivery.spec.ts
+PASS src/behavior-graph/graph-comparison-gate.spec.ts
+PASS src/legacy/zyra-similarity-feedback.spec.ts
+[Nest] 18  - 11/19/2026, 9:37:19 PM    WARN [LegacyService] zyraSimilarityFeedbackForDrafts failed for project p1: embeddings provider unreachable
+[Nest] 18  - 11/19/2026, 9:37:19 PM    WARN [LegacyService] zyraSimilarityFeedbackForDrafts failed for project p1: db unavailable
+PASS src/legacy/zyra-ticket-snapshot-status.spec.ts
+PASS src/legacy/zyra-notifications.spec.ts
+PASS src/integration-sync/notion-client.spec.ts
+PASS src/auth/otp-welcome.spec.ts
+PASS src/behavior-graph/current-cache-graph-projection.spec.ts
+PASS src/observability/embedding-trace.spec.ts
+[Nest] 18  - 11/19/2026, 9:37:22 PM    WARN [EmbeddingTrace] Failed to open embedding span: hash blew up
+[Nest] 18  - 11/19/2026, 9:37:22 PM    WARN [EmbeddingTrace] Failed to open embedding span: SDK internal error
+[Nest] 18  - 11/19/2026, 9:37:22 PM    WARN [EmbeddingTrace] Failed to close embedding span (success): update blew up
+[Nest] 18  - 11/19/2026, 9:37:22 PM    WARN [EmbeddingTrace] Failed to close embedding span (error): update blew up
+PASS src/integration-sync/integration-sync.requirements.spec.ts
+PASS src/storage/storage.service.spec.ts
+PASS src/behavior-graph/implementation-source-verifier.spec.ts
+PASS src/rag/rag-embedding.processor.spec.ts
+[Nest] 18  - 11/19/2026, 9:37:23 PM    WARN [RagEmbeddingProcessor] Cannot embed document:doc-1 — No embeddings-capable key.
+[Nest] 18  - 11/19/2026, 9:37:23 PM    WARN [RagEmbeddingProcessor] Discarding chunk 0 of document:doc-1 — openai/text-embedding-3-small returned 10 dimensions, expected 1024.
+[Nest] 18  - 11/19/2026, 9:37:23 PM    WARN [RagEmbeddingProcessor] Cannot embed testcase:tc-1 — No embeddings-capable key.
+[Nest] 18  - 11/19/2026, 9:37:23 PM    WARN [RagEmbeddingProcessor] Discarding embedding for testcase:tc-1 — openai/text-embedding-3-small returned 10 dimensions, expected 1024.
+[Nest] 18  - 11/19/2026, 9:37:23 PM    WARN [RagEmbeddingProcessor] Embedding job permanently failed for document:doc-1
+[Nest] 18  - 11/19/2026, 9:37:23 PM    WARN [RagEmbeddingProcessor] Embedding job permanently failed for testcase:tc-1
+[Nest] 18  - 11/19/2026, 9:37:23 PM     LOG [IntegrationSyncModule] Nightly Jira sync scheduler registered (0 0 * * * Asia/Kolkata).
+[Nest] 18  - 11/19/2026, 9:37:23 PM     LOG [IntegrationSyncModule] Nightly Linear sync scheduler registered (0 0 * * * Asia/Kolkata).
+[Nest] 18  - 11/19/2026, 9:37:23 PM     LOG [IntegrationSyncModule] Nightly Notion sync scheduler registered (0 0 * * * Asia/Kolkata).
+[Nest] 18  - 11/19/2026, 9:37:23 PM     LOG [IntegrationSyncModule] Stuck-run watchdog registered (every 5m).
+[Nest] 18  - 11/19/2026, 9:37:23 PM    WARN [IntegrationSyncModule] Failed to register nightly Jira sync scheduler: redis down
+[Nest] 18  - 11/19/2026, 9:37:23 PM     LOG [IntegrationSyncModule] Nightly Linear sync scheduler registered (0 0 * * * Asia/Kolkata).
+[Nest] 18  - 11/19/2026, 9:37:23 PM     LOG [IntegrationSyncModule] Nightly Notion sync scheduler registered (0 0 * * * Asia/Kolkata).
+[Nest] 18  - 11/19/2026, 9:37:23 PM     LOG [IntegrationSyncModule] Stuck-run watchdog registered (every 5m).
+PASS src/integration-sync/integration-sync.module.spec.ts
+PASS src/config/email-delivery.policy.spec.ts
+PASS src/legacy/execution-attribution.spec.ts
+[Nest] 18  - 11/19/2026, 9:37:24 PM    WARN [IntegrationSyncService] Nightly jira sync for project proj-1 already ran this cycle (run run-1) — duplicate trigger suppressed.
+[Nest] 18  - 11/19/2026, 9:37:24 PM    WARN [IntegrationSyncService] Nightly jira sync for project proj-1 already ran this cycle (run run-seed) — duplicate trigger suppressed.
+[Nest] 18  - 11/19/2026, 9:37:24 PM    WARN [IntegrationSyncService] Failed 2 sync run(s) left over from before this restart.
+[Nest] 18  - 11/19/2026, 9:37:24 PM    WARN [IntegrationSyncService] Failed 1 sync run(s) left over from before this restart.
+[Nest] 18  - 11/19/2026, 9:37:24 PM    WARN [IntegrationSyncService] Failed to clean up interrupted sync runs on startup: connection reset
+[Nest] 18  - 11/19/2026, 9:37:24 PM    WARN [IntegrationSyncService] Watchdog failed 1 stale sync run(s).
+PASS src/integration-sync/integration-sync.service.spec.ts
+PASS src/behavior-graph/model-studio-generator.spec.ts
+PASS src/auth/api-token.service.spec.ts
+PASS src/legacy/approved-run-cases.policy.spec.ts
+PASS src/rag/rag-ingestion.spec.ts
+PASS src/legacy/zyra-turn-trace.spec.ts
+PASS src/behavior-graph/graph-change-impact.spec.ts
+PASS src/integration-sync/ensure-provider-folder.spec.ts
+PASS src/rag/rag-retrieval.service.spec.ts
+[Nest] 18  - 11/19/2026, 9:37:25 PM    WARN [RagRetrievalService] retrieveKnowledgeContext failed for project project-1: embeddings provider unreachable
+PASS src/integration-sync/integration-sync.notifications.spec.ts
+PASS src/observability/ai-trace.spec.ts
+PASS src/billing/country-detection.spec.ts
+[Nest] 18  - 11/19/2026, 9:37:25 PM    WARN [AiTrace] recordGeneration failed: SDK exploded
+[Nest] 18  - 11/19/2026, 9:37:25 PM    WARN [AiTrace] recordReconciliation failed: SDK exploded
+PASS src/behavior-graph/qa-verification-gaps.spec.ts
+PASS src/auth/email-invite.spec.ts
+PASS src/legacy/zyra-progress.service.spec.ts
+PASS src/common/text-diff.util.spec.ts
+PASS src/behavior-graph/project-source-binding.spec.ts
+PASS src/behavior-graph/qa-change-review-receipt.spec.ts
+PASS src/behavior-graph/implementation-observation-graph.spec.ts
+PASS src/database/database.module.spec.ts
+PASS src/common/integration-text.util.spec.ts
+PASS src/review-board/review-board.analysis.spec.ts
+PASS src/legacy/zyra-replies-ru.spec.ts
+PASS src/auth/user-activity.service.spec.ts
+PASS src/auth/email-welcome.spec.ts
+[Nest] 18  - 11/19/2026, 9:37:26 PM    WARN [UserActivityService] activity tracking failed (non-fatal): db down
+PASS src/rag/rag-ai-allocation.spec.ts
+PASS src/build-provenance.spec.ts
+PASS src/integration-sync/integration-sync-document.builder.spec.ts
+PASS src/common/external-url.util.spec.ts
+PASS src/common/script-language.spec.ts
+PASS src/behavior-graph/qa-review-candidates.spec.ts
+
+Test Suites: 2 skipped, 116 passed, 116 of 118 total
+Tests:       98 skipped, 2344 passed, 2442 total
+Snapshots:   0 total
+Time:        123.823 s, estimated 191 s

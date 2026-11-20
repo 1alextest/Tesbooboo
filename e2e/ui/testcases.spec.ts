@@ -6,6 +6,7 @@ import path from "node:path";
 import { expect, request as pwRequest, test, type Locator, type Page } from "@playwright/test";
 import { env } from "../utils/env";
 import { testcaseEditState } from "../utils/testcase-edit-state";
+import { createProject, deleteProjects } from "../utils/screens-tenant";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 const STATE_PATH = path.join(__dirname, "../.auth/state.json");
@@ -116,27 +117,32 @@ test("MCP Notes round-trip through editor, preserve human edit, and explicitly c
   const mcp = await pwRequest.newContext({
     baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] },
   });
+  let projectId: string | undefined;
   let tokenId: string | undefined;
   let caseId: string | undefined;
   const title = `E2E MCP to UI Notes ${Date.now()}`;
   const firstNotes = "MCP technical context: café 🧪";
   const humanNotes = "Reviewer confirmed fixture and build.";
   try {
-    const tokenResponse = await issueMcpTestToken(api, `/api/projects/${ctx.projectId}/apikeys`, {
+    // This exact-review round trip owns its project dependencies. The parallel testcase API
+    // suite intentionally creates/deletes suites; sharing its project correctly invalidates a
+    // previously reviewed proposal and makes this positive Notes scenario nondeterministic.
+    projectId = (await createProject(api, { name: `E2E Notes review ${Date.now()}` })).id;
+    const tokenResponse = await issueMcpTestToken(api, `/api/projects/${projectId}/apikeys`, {
       data: { name: `E2E Notes editor token ${Date.now()}`, scopes: ["write", "read"] },
     });
     expect(tokenResponse.ok()).toBeTruthy();
     const tokenInfo = await tokenResponse.json();
     tokenId = tokenInfo.id;
     const token = tokenInfo.token as string;
-    const { published } = await stageAndApplyMcpTestcases(api, mcp, token, ctx.projectId, [
+    const { published } = await stageAndApplyMcpTestcases(api, mcp, token, projectId, [
       { opType: "create", draft: { title, attachments: firstNotes } }
     ]);
     const createdId = published.testcases[0].id as string;
     caseId = createdId;
     expect(caseId).toBeTruthy();
 
-    await page.goto(`/projects/${ctx.projectId}/testcases`);
+    await page.goto(`/projects/${projectId}/testcases`);
     await expect(page.getByRole("button", { name: title })).toBeVisible();
     await page.getByRole("button", { name: title }).click();
     const panel = page.locator("aside");
@@ -147,18 +153,18 @@ test("MCP Notes round-trip through editor, preserve human edit, and explicitly c
     await expect(panel.getByText("Test case updated successfully.")).toBeVisible();
 
     const persisted = async () => {
-      const response = await api.get(`/api/projects/${ctx.projectId}/testcases/${caseId}`);
+      const response = await api.get(`/api/projects/${projectId}/testcases/${caseId}`);
       expect(response.ok()).toBeTruthy();
       return response.json();
     };
     expect((await persisted()).attachments).toBe(humanNotes);
 
-    await stageAndApplyMcpTestcases(api, mcp, token, ctx.projectId, [
-      await testcaseUpdateProposal(api, ctx.projectId, createdId, { description: "Readable test intent" })
+    await stageAndApplyMcpTestcases(api, mcp, token, projectId, [
+      await testcaseUpdateProposal(api, projectId, createdId, { description: "Readable test intent" })
     ]);
     expect((await persisted()).attachments).toBe(humanNotes);
-    await stageAndApplyMcpTestcases(api, mcp, token, ctx.projectId, [
-      await testcaseUpdateProposal(api, ctx.projectId, createdId, { attachments: "" })
+    await stageAndApplyMcpTestcases(api, mcp, token, projectId, [
+      await testcaseUpdateProposal(api, projectId, createdId, { attachments: "" })
     ]);
     const cleared = await persisted();
     expect(cleared.attachments).toBe("");
@@ -168,8 +174,9 @@ test("MCP Notes round-trip through editor, preserve human edit, and explicitly c
     await page.getByRole("button", { name: title }).click();
     await expect(page.locator("aside").getByPlaceholder("Add notes, links to screenshots, logs, or reference docs")).toHaveValue("");
   } finally {
-    if (caseId) await api.delete(`/api/projects/${ctx.projectId}/testcases/${caseId}`, { failOnStatusCode: false });
-    if (tokenId) await api.delete(`/api/projects/${ctx.projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    if (caseId) await api.delete(`/api/projects/${projectId}/testcases/${caseId}`, { failOnStatusCode: false });
+    if (tokenId) await api.delete(`/api/projects/${projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    await deleteProjects(api, [projectId]);
     await mcp.dispose();
     await api.dispose();
   }

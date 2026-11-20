@@ -96,6 +96,7 @@ test.describe("account screen and password reset (UI)", () => {
       await ctx.dispose();
       if (res.ok() || res.status() === 204) return;
     }
+    throw new Error("Could not restore the account fixture password through the native password-change endpoint");
   }
 
   /** A logged-in API context for the owner at a given password, or null if that password is wrong. */

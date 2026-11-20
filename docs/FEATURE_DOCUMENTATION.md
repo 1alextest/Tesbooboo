@@ -3565,13 +3565,13 @@ duplicate bug filing.
 - **Protocol methods** (`tools/list`, `tools/call`, `initialize`, `ping`)
   - `initialize` → supports `2025-06-18` and `2024-11-05` (the latter is the fallback), server name `tesbo-mcp`, version `0.1.0+<deploy>.<tool-fingerprint>`, and capabilities (`tools.listChanged: false`). Returns `mcp-session-id`; stale schema sessions get HTTP 404 and must reinitialize. Initialized notifications get 202; GET/DELETE get 405 (no SSE/session termination).
   - `ping` → empty result, for client keep-alive/liveness checks.
-  - `tools/list` → returns the current named grant's permitted tool names, descriptions and JSON Schemas. The publication/consent implementation has **48 default tools** (22 read, 26 write), or **51** (24 read, 27 write) only when the default-off proposal-review preview is explicitly enabled; both counts include the approval-gated `run_behavior_model` tool. Eleven retired direct testcase publishers remain in the source registry but are hidden from discovery. Scope and tool allowlists can narrow either catalog. The session fingerprint hashes the exact permitted catalog; a grant/catalog change requires reinitialization. Earlier 50/53/58 inventories below are historical snapshots, not the current contract. `scripts/mcp-deploy-check.mjs` validates discovery and its fingerprint; `REQUIRE_PROPOSAL_PREVIEW=1` additionally requires the preview schema.
+  - `tools/list` → returns the current named grant's permitted tool names, descriptions and JSON Schemas. The publication/consent implementation has **46 default tools** (22 read, 24 write), or **49** (24 read, 25 write) only when the default-off proposal-review preview is explicitly enabled; both counts include the approval-gated `run_behavior_model` tool. Thirteen retired direct testcase/suite publishers remain in the source registry but are hidden from discovery, including `create_suite` and `update_suite`. Scope and tool allowlists can narrow either catalog. The session fingerprint hashes the exact permitted catalog; a grant/catalog change requires reinitialization. Earlier 50/53/58 inventories below are historical snapshots, not the current contract. `scripts/mcp-deploy-check.mjs` validates discovery and its fingerprint; `REQUIRE_PROPOSAL_PREVIEW=1` additionally requires the preview schema.
   - `tools/call` → dispatches to the named tool with `arguments`; unknown tool name → `MethodNotFound` (-32601); on success wraps the JSON-stringified result as an MCP `content: [{type:"text", text}]` part with `isError:false`; on a handler exception, maps the underlying error (e.g. a `BadRequestException`'s message) onto a `ToolExecutionError` (-32003) rather than leaking a raw 500.
   - Malformed request (missing/wrong `jsonrpc` version, non-string `method`) → `InvalidRequest` (-32600); the request `id` is always echoed back on error responses (including `null` if none was sent), per JSON-RPC spec.
 - **Exposed registry** (thin adapters over the existing services, not independent product workflows):
   - Project: `list_projects`.
   - Test cases: `list_testcases`, `get_testcase`, `get_testcase_bugs`, `get_testcase_executions`. The eleven former direct testcase publishers (including bulk, requirement-link and suite-clone publication) are absent from discovery; cached calls receive `HUMAN_PUBLICATION_REQUIRED` without mutation. The optional `stage_testcase_changes`, `list_testcase_proposals`, and `get_testcase_proposal_task` preview uses the existing unpublished task owner. It cannot approve or publish cases.
-  - Suites: `list_suites`, `get_suite`, `create_suite`, `update_suite`. Human selected proposal application uses native suite/case writers within its transaction.
+  - Suites: `list_suites` and `get_suite`. Suite creation/editing requires a trusted human session at the native owner; cached machine `create_suite`/`update_suite` calls and bearer REST creation refuse without mutation. Human selected proposal application uses the private native insertion seam within its transaction after exact review. A standalone Zyra suite-create command remains unpublished and explains the human editing action.
   - Runs/results: `list_test_cycles`, `get_test_cycle`, `create_cycle_from_plan`, `create_cycle_from_testcases`, `record_execution_result`, `list_executions`, `get_execution`, `update_execution_result`, `bulk_record_execution_results`, `get_test_execution_summary`.
   - Bugs/traceability: `list_bugs`, `get_bug`, `create_bug`, `update_bug`, `link_testcase_to_bug`, `unlink_testcase_from_bug`, `get_requirement_matrix`.
   - Knowledge Base: `search_knowledge_base`, `list_knowledge_documents`, `get_knowledge_document`, `create_knowledge_document`, `update_knowledge_document`, `move_knowledge_document`, `archive_knowledge_document`, `restore_knowledge_document`, `list_knowledge_folders`, `get_knowledge_folder`, `create_knowledge_folder`, `update_knowledge_folder`, `move_knowledge_folder`.
@@ -3815,7 +3815,7 @@ the new PostgreSQL result without relabeling #25's unexecuted checks as passes.
 
 | Finding / evidence | Impact and severity | Root cause / proposed remediation | Relationship and disposition |
 |---|---|---|---|
-| At the integrated baseline, `LegacyService.failLinkedExecutions`, called by `createBug` / `addBugLink`, directly updates verdict, time and performer without the parent finalization guard. | High: a bug association can rewrite a finalized automated result and its live summary. Source-confirmed; baseline runtime reproduction pending. | User selected association-only success for finalized automation: retain valid links without changing sealed results. Serialize result side effects with closure and make UI refresh authoritative state. Atomic rejection is NOT the selected policy. | Focused follow-up after #26; see implementation/verification boundary below. Full direct/side finding semantics remain separately proposed. |
+| At the historical integrated baseline, `LegacyService.failLinkedExecutions`, called by `createBug` / `addBugLink`, updated verdict, time and performer. | High: association alone can rewrite independent execution evidence. | The earlier assertion here of a superseding user-selected bounded policy has no attributable approval artifact and is withdrawn. Canonical v1.4.28 README lines 301/303/329/339 require association/result separation for all executions. | PR #167 removes the automatic result side effect and retains explicit observed-result writing; exact-head runtime acceptance is recorded in the integration closure record. Full direct/side classification and reviewed historical correction remain separate gates. |
 | At the integration baseline, no history-import test fails after a completed database write. `e2e/api/cycles.spec.ts` invalid-row case fails during validation. | High assurance gap at that baseline. | Extend `automation-closure.db.spec.ts` with a real late PostgreSQL failure, prove earlier writes occurred, and compare persisted run/results/snapshots plus successful follow-up. | PR #26 implements and passes this bounded scenario on disposable migrated PostgreSQL; integration/review and later-stage coverage remain outstanding. |
 | `deleteCycle`, testcase external-ID renaming, project-member removal and sharing can change closed-run records/metadata. REST/MCP bulk updates commit per item. | Policy-dependent integrity/atomicity risks; not all are defects. | Inventory deletion vs result immutability, snapshot identity, assignment cleanup, publication, and partial-batch semantics; preserve existing behavior until policy is approved. | Mutation-path assurance; deferred classification and coverage. |
 | At the baseline, nested execution PATCH does not pass URL `cycleId` into `updateExecution`; reporter `onEnd` logs closure after a caught close error. | Medium: misleading parent context / false success reporting. | Validate parent-child relationship and report close failures truthfully; add transport/reporter regressions. | Execution context reproduced and repaired in PR #31 below, pending integration/review; reporter close-failure handling remains separate. |
@@ -3826,7 +3826,17 @@ the new PostgreSQL result without relabeling #25's unexecuted checks as passes.
 | At the pre-fix baseline, `createBug` and its REST controller omit user/project membership checks; identity middleware and the no-token branch of `ApiTokenRestGuard` do not require authentication. | High authorization risk. A real Nest controller/service harness returned 201 for anonymous and nonmember principals before the fix; identities/DB were simulated, not a production or PostgreSQL exploit. | The focused follow-up invokes existing user/project authorization before bug validation, target resolution or writes. The nullable-user MCP rationale is stale relative to current member-bound MCP. | PR #28 owner-merged with fresh database/session/token/MCP evidence below; not claimed resolved by verdict-preservation tests or a full authorization audit. |
 | `addBugLink` does not sanitize targets; create/update sanitize component IDs independently, not the complete testcase/run/execution chain. | High cross-project/relationship-integrity risk, source-confirmed. Independent foreign keys prove existence, not ownership. | Validate the complete authoritative chain, active parents/membership and historical-link edit semantics across create/add/replace, with rejection before unintended writes. | Separate relationship repair/release blocker. Checking the effective persisted execution binding in the verdict helper is NOT a full repair. |
 
-#### Integrated rollback evidence and approved bug-link follow-up
+#### Integrated rollback evidence and historical bug-link follow-up
+
+**20 November authority reconciliation:** this section preserves the historical implementation and
+test evidence below. Its earlier claim of a newer user approval for automatic manual/open-run
+failure was not substantiated. The governing canonical association-versus-outcome rule was already
+explicit; implementation history is not authority to supersede it. At PR #167 head `3ebda243`,
+`createBug` and `addBugLink` preserve the entire execution record, and the native explicit result
+writer remains the observed-result owner. The full execution page shows retained links at every
+status. See [the current integration record](specs/agent-synchronized-engineering/reviews/2026-11-19-integration-closure.md)
+for the source, test and unresolved-correction boundaries. The paragraph below describes the old
+bounded implementation, not a current policy or release claim.
 
 PR [#26](https://github.com/1alextest/Tesbooboo/pull/26) passed **22/22 checks** at
 `9a3c869`; the owner merged it into `development` as `236ace7` on 2026-11-11.
@@ -3837,13 +3847,12 @@ failure. Backend quality separately passed 1,631 tests with 113 external/DB test
 skipped; those skips are not database proof. Post-refresh local verification
 timeouts remain timeouts, despite successful isolated CI. No deployment is claimed.
 
-For the next bounded fix the user explicitly selected **keep valid bug associations,
-preserve finalized verdicts**. The implementation branch adds parent-first ordered
-locking and active result/binding re-read; sealed runs produce no result mutation
-or fabricated result event. Manual/open automation auto-failure and already-Failed
-no-churn behavior remain. The run drawer/full execution page refresh the saved
-verdict; sealed automation can display retained associations on Passed results.
-Existing writable-run visibility and UI components remain unchanged.
+The historical bounded fix retained valid associations and finalized verdicts through parent-first
+ordered locking and active result/binding re-read. Sealed runs produced no result mutation or
+fabricated result event. Manual/open automation auto-failure and already-Failed no-churn behavior
+remained in that implementation. The run drawer/full execution page refreshed the saved verdict;
+sealed automation could display retained associations on Passed results. The automatic side effect
+was subsequently removed in the PR #167 correction identified above.
 
 Verification plan: extend the existing migrated PostgreSQL closure suite for both
 callers, Passed/Failed and completed/incomplete closes, manual/open controls,

@@ -55,7 +55,7 @@ describe("MCP-P07 protected testcase publication and unpublished proposal previe
     else process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = value;
     const f = fixture();
     const tools = (await f.list()).result.tools;
-    expect(tools).toHaveLength(48);
+    expect(tools).toHaveLength(46);
     for (const name of [...previewTools, ...DIRECT_TESTCASE_PUBLISHERS]) expect(tools.map((tool: any) => tool.name)).not.toContain(name);
     for (const name of previewTools) {
       const denied = await f.call(name, { taskId, requestKey: "forged-preview", operations: [], enabled: true,
@@ -79,17 +79,17 @@ describe("MCP-P07 protected testcase publication and unpublished proposal previe
         stageTool: enabled ? "stage_testcase_changes" : null });
       expect(denied.result).toBeUndefined();
       for (const method of [f.legacy.stageTestcaseChanges, f.legacy.createTestCase, f.legacy.updateTestCase,
-        f.legacy.duplicateTestCase, f.legacy.bulkUpdateTestCases, f.legacy.createSuite]) expect(method).not.toHaveBeenCalled();
+        f.legacy.duplicateTestCase, f.legacy.bulkUpdateTestCases, f.legacy.createSuite, f.legacy.updateSuite]) expect(method).not.toHaveBeenCalled();
       expect(f.query.mock.calls.every(([sql]) => sql.includes("SELECT p.settings, t.scopes"))).toBe(true);
     }
   );
 
-  it("advertises exactly 51 callable tools with preview on, with 24 read and 27 write tools", async () => {
+  it("advertises exactly 49 callable tools with preview on, with 24 read and 25 write tools", async () => {
     const f = fixture();
     const all = (await f.list()).result.tools;
-    expect(all).toHaveLength(51);
+    expect(all).toHaveLength(49);
     expect((await f.list(["read"])).result.tools).toHaveLength(24);
-    expect((await f.list(["write"])).result.tools).toHaveLength(27);
+    expect((await f.list(["write"])).result.tools).toHaveLength(25);
     expect(all.map((tool: any) => tool.name)).toEqual(expect.arrayContaining(previewTools));
     for (const name of DIRECT_TESTCASE_PUBLISHERS) expect(all.map((tool: any) => tool.name)).not.toContain(name);
     expect(all.map((tool: any) => tool.name).some((name: string) => /approve|apply/.test(name))).toBe(false);
@@ -106,7 +106,7 @@ describe("MCP-P07 protected testcase publication and unpublished proposal previe
   it.each([false, true])("binds initialize/session fingerprints to the exact granted catalog with preview=%p", async enabled => {
     process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = enabled ? "1" : "0";
     for (const scopes of [["read"], ["read", "write"]]) {
-      for (const allowedTools of [null, ["list_projects", "create_suite"]]) {
+      for (const allowedTools of [null, ["list_projects", "create_bug"]]) {
         const f = fixture({ allowedTools });
         const who = principal(scopes);
         const init: any = await f.service.handleRequest({ jsonrpc: "2.0", id: 1, method: "initialize" }, who, projectId);

@@ -536,12 +536,12 @@ export class LegacyController {
 
   @Post("/api/projects/:projectId/suites")
   createSuite(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
-    return this.legacy.createSuiteForUser(req.userId, projectId, body);
+    return this.legacy.createSuiteForUser(req.userId, projectId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/suites/:suiteId")
   updateSuite(@Req() req: AuthenticatedRequest, @Param("suiteId") suiteId: string, @Body() body: Record<string, any>) {
-    return this.legacy.updateSuite(req.userId, suiteId, body);
+    return this.legacy.updateSuite(req.userId, suiteId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Delete("/api/suites/:suiteId")

@@ -103,7 +103,11 @@ export async function verifyZyraMoveTurn(input: {
     const reviewed = proposedIds.length ? await readReviewedMoves(request, base, message.reviewRequestId,
       proposedIds.map((testcaseId) => ({ testcaseId, suiteId: fixture.destinationId }))) : null;
     if (!reviewed) expect(message.reviewRequestId ?? null).toBeNull();
-    await input.beforeApply?.({ sessionId, language, reply, before, reviewed, proposedCount: proposedIds.length, traceOutcome: "completed", stagingStatus: "ok" });
+    const refusedSuite = mode === "partial";
+    const visibleReply = refusedSuite ? String(message.content).split("\n\n")[0] : reply;
+    expect(message.activity.filter((entry: Record<string, unknown>) => entry.title === "Could not create suite")).toHaveLength(refusedSuite ? 1 : 0);
+    await input.beforeApply?.({ sessionId, language, reply: visibleReply, before, reviewed, proposedCount: proposedIds.length,
+      traceOutcome: refusedSuite ? "completed_with_errors" : "completed", stagingStatus: refusedSuite ? "failed" : "ok" });
     let failedApply: { status: number; response: string } | null = null;
     let selected: number[] = [];
     if (reviewed && failed) {
@@ -139,10 +143,9 @@ export async function verifyZyraMoveTurn(input: {
     expect(after.suites).toEqual(staged.suites);
     expect(after.suites.filter((row) => before.suites.some((old) => (old as Record<string, unknown>).id === (row as Record<string, unknown>).id))).toEqual(before.suites);
     const newSuites = after.suites.filter((row) => !before.suites.some((old) => (old as Record<string, unknown>).id === (row as Record<string, unknown>).id)) as Array<Record<string, unknown>>;
-    expect(newSuites.map((row) => row.name)).toEqual(mode === "partial" ? [fixture.keptSuiteName] : []);
+    expect(newSuites).toEqual([]);
     const stageAudit = (staged.audit as Array<Record<string, unknown>>).filter((row) => !(before.audit as Array<Record<string, unknown>>).some((old) => old.id === row.id));
-    expect(stageAudit.map((row) => row.action)).toEqual(mode === "partial" ? ["zyra_suite_created"] : []);
-    if (mode === "partial") expect(stageAudit[0]).toMatchObject({ actor_id: ownerId, entity_id: newSuites[0].id });
+    expect(stageAudit).toEqual([]);
     if (reviewed && moved) assertMoveAudit(staged, after, reviewed, ownerId, selected);
     else expect(after).toEqual(staged);
     const users = session.messages.filter((entry: Record<string, unknown>) => entry.role === "user");
@@ -152,11 +155,11 @@ export async function verifyZyraMoveTurn(input: {
     expect(trace.steps.filter((step: Record<string, unknown>) => step.stage === "staging")).toHaveLength(1);
     expect(trace.steps.find((step: Record<string, unknown>) => step.stage === "finalizing").meta).toMatchObject({ savedCount: 0, proposedCount: proposedIds.length });
     expect(message.content + JSON.stringify(trace)).not.toContain("E2E private injected move failure");
-    expect(trace.outcome).toBe("completed");
-    expect(trace.steps.find((step: Record<string, unknown>) => step.stage === "staging").status).toBe("ok");
+    expect(trace.outcome).toBe(refusedSuite ? "completed_with_errors" : "completed");
+    expect(trace.steps.find((step: Record<string, unknown>) => step.stage === "staging").status).toBe(refusedSuite ? "failed" : "ok");
     if (mode === "no-match") expect(message.content).toContain(language === "en" ? "Nothing was saved" : "Ничего не сохранено");
     else expect(message.content).toMatch(language === "en" ? /staged for your review/ : /Ожидают вашей проверки/);
-    await afterReply?.({ sessionId, language, mode, reply, warning: null, session, fixture, before, staged, failedApply, after });
+    await afterReply?.({ sessionId, language, mode, reply: visibleReply, warning: null, session, fixture, before, staged, failedApply, after });
   } finally {
     if (sessionId) {
       const deleted = await request.delete(`${base}/agents/zyra/chat/sessions/${sessionId}`);

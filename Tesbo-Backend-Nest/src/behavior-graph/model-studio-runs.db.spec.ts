@@ -114,6 +114,87 @@ function latch() {
     throw new Error(`Expected the competing owner to wait on ${fragment}`);
   }
 
+  const authorityWaits = ["approval", "candidate-digest", "candidate-suite"] as const;
+  it.each(authorityWaits.flatMap(operation => ["membership", "archive"].map(change => [operation, change] as const)))(
+    "SEC-NATIVE-02 refuses %s after %s changes during a real PostgreSQL wait", async (operation, change) => {
+      const s = services();
+      const model = await s.repository.createModelForUser(user,project,{ name: `Authority barrier ${randomUUID()}`, model: MODEL });
+      const revision = model.latestRevision!, generation = { strategy: "edge_coverage", maxPaths: 10, maxDepth: 8 };
+      if (operation !== "approval") await s.repository.approveRevisionForUser(user,project,model.id,revision.id,
+        { expectedHash: revision.contentHash },{ kind: "human_session" });
+      const proposed = await s.repository.generateForUser(user,project,model.id,revision.id,generation);
+      const body = { ...generation, digests: [proposed.paths[0].digest] };
+      const nativeState = async () => ({
+        ...await candidateRows(),
+        approvals: (await admin.query("SELECT * FROM mbt_model_approvals WHERE model_id=$1 ORDER BY id",[model.id])).rows,
+        revisions: (await admin.query("SELECT * FROM mbt_model_revisions WHERE model_id=$1 ORDER BY id",[model.id])).rows
+      });
+      const before = await nativeState(), blocker = new Client({ connectionString: url });
+      await blocker.connect();
+      let attempt: Promise<unknown> | undefined;
+      try {
+        await blocker.query("BEGIN");
+        if (operation === "approval") await blocker.query("SELECT id FROM mbt_model_revisions WHERE id=$1 FOR UPDATE",[revision.id]);
+        else await blocker.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)",[
+          operation === "candidate-digest" ? `model-candidates:${project}:${revision.id}` : `suite-tree:${project}`
+        ]);
+        attempt = (operation === "approval"
+          ? s.repository.approveRevisionForUser(user,project,model.id,revision.id,{ expectedHash: revision.contentHash },{ kind: "human_session" })
+          : s.repository.createCasesFromPathsForUser(user,project,model.id,revision.id,body,{ kind: "human_session" })
+        ).then(() => null,error => error);
+        // Admission has succeeded and the actual domain statement is blocked; no timing sleep
+        // or mocked access check stands in for the permission change racing the native owner.
+        await waitForLock(operation === "approval" ? "FOR UPDATE OF r" : "pg_advisory_xact_lock");
+        if (change === "membership") await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,user]);
+        else await admin.query("UPDATE projects SET archived_at=now() WHERE id=$1",[project]);
+        await blocker.query("COMMIT");
+        expect(await attempt).toMatchObject({ status: 403, response: { error: "Current project and workspace membership are required" } });
+        expect(await nativeState()).toEqual(before);
+        expect(s.embedding).not.toHaveBeenCalled();
+      } finally {
+        await blocker.query("ROLLBACK"); await attempt; await blocker.end();
+        if (change === "membership") await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING",[project,user]);
+        else await admin.query("UPDATE projects SET archived_at=NULL WHERE id=$1",[project]);
+      }
+    },15000
+  );
+
+  it.each(["approval", "candidate"] as const)("SEC-NATIVE-02 holds current authority until an authorized %s commits", async operation => {
+    const s = services(), model = await s.repository.createModelForUser(user,project,{ name: `Authority held ${randomUUID()}`, model: MODEL });
+    const settings = (await admin.query("SELECT settings FROM projects WHERE id=$1",[project])).rows[0].settings;
+    // Model publication has its own current native authority; Zyra's proposal-storage feature
+    // flag must not silently become an additional Model Studio permission.
+    if (operation === "candidate") await admin.query("UPDATE projects SET settings=settings || $2::jsonb WHERE id=$1",[
+      project, JSON.stringify({ zyraAgent: { capabilities: { testcaseStorage: false } } })
+    ]);
+    const revision = model.latestRevision!, generation = { strategy: "edge_coverage", maxPaths: 10, maxDepth: 8 };
+    if (operation === "candidate") await s.repository.approveRevisionForUser(user,project,model.id,revision.id,
+      { expectedHash: revision.contentHash },{ kind: "human_session" });
+    const proposed = await s.repository.generateForUser(user,project,model.id,revision.id,generation);
+    const entered = latch(), release = latch(), transaction = s.db.transaction.bind(s.db);
+    jest.spyOn(s.db,"transaction").mockImplementation(fn => transaction(async client => {
+      const result = await fn(client); entered.release(); await release.promise; return result;
+    }));
+    const attempt = operation === "approval"
+      ? s.repository.approveRevisionForUser(user,project,model.id,revision.id,{ expectedHash: revision.contentHash },{ kind: "human_session" })
+      : s.repository.createCasesFromPathsForUser(user,project,model.id,revision.id,
+        { ...generation, digests: [proposed.paths[0].digest] },{ kind: "human_session" });
+    let revoke: Promise<unknown> | undefined;
+    try {
+      await Promise.race([entered.promise,attempt.then(() => { throw new Error("Publication escaped its commit barrier"); })]);
+      revoke = pool.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,user]);
+      await waitForLock("DELETE FROM project_members");
+      release.release();
+      const result = await attempt; await revoke;
+      expect(result).toMatchObject(operation === "approval" ? { alreadyApproved: false } : { created: 1, skipped: 0 });
+      expect((await admin.query("SELECT count(*)::int AS n FROM mbt_model_approvals WHERE model_revision_id=$1",[revision.id])).rows[0].n).toBe(1);
+    } finally {
+      release.release(); await Promise.allSettled([attempt,revoke]);
+      await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING",[project,user]);
+      if (operation === "candidate") await admin.query("UPDATE projects SET settings=$2::jsonb WHERE id=$1",[project,JSON.stringify(settings)]);
+    }
+  },15000);
+
   it("rolls back run, items and executions on manifest failure, then permits governed and ordinary native runs", async () => {
     const basis = await ready(), s = services(), before = await runRows();
     const compensation = jest.spyOn(s.legacy,"deleteCycle").mockRejectedValue(new Error("Deletion unavailable"));

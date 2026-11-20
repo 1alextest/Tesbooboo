@@ -2,7 +2,7 @@
 export const DIRECT_TESTCASE_PUBLISHERS = new Set([
   "create_testcase", "update_testcase", "archive_testcase", "restore_testcase", "duplicate_testcase",
   "bulk_create_testcases", "bulk_update_testcases", "bulk_archive_testcases",
-  "link_requirement_to_testcase", "unlink_requirement_from_testcase", "clone_test_suite"
+  "link_requirement_to_testcase", "unlink_requirement_from_testcase", "clone_test_suite", "create_suite", "update_suite"
 ]);
 
 export function isDirectTestcasePublisher(name: string): boolean {
@@ -33,6 +33,7 @@ export function isProtectedTestcaseRestWrite(method: string, projectSuffix: stri
   const verb = method.toUpperCase();
   const suffix = projectSuffix.replace(/\/$/, "").toLowerCase();
   if (verb === "POST") return [
+    /^\/suites$/,
     /^\/testcases$/,
     /^\/testcases\/(?:bulk-create|bulk-update|bulk-delete|import)$/,
     /^\/testcases\/[^/]+\/(?:duplicate|approve)$/,

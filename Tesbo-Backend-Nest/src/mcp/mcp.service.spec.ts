@@ -248,8 +248,6 @@ describe("McpService", () => {
           "get_testcase_executions",
           "list_suites",
           "get_suite",
-          "create_suite",
-          "update_suite",
           "list_test_cycles",
           "get_test_cycle",
           "create_cycle_from_plan",
@@ -359,12 +357,12 @@ describe("McpService", () => {
       const legacy = makeLegacy();
       const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "create_suite", arguments: { name: "S" } }),
+        rpc("tools/call", { name: "create_bug", arguments: { title: "S" } }),
         principal({ scopes: ["read"] }),
         "proj-1"
       );
       expect(res.error.code).toBe(RpcCode.ScopeDenied);
-      expect((legacy as any).createSuite).not.toHaveBeenCalled();
+      expect((legacy as any).createBug).not.toHaveBeenCalled();
     });
 
     it("allows a read tool for a read-only token", async () => {
@@ -889,8 +887,8 @@ describe("McpService", () => {
     it("caches the MCP actor lookup across calls", async () => {
       const { db, query } = makeDb({ mcpActorId: "mcp-actor-1" });
       const svc = new McpService(makeLegacy(), db, writableLimits);
-      await svc.handleRequest(rpc("tools/call", { name: "create_suite", arguments: { name: "A" } }), principal(), "proj-1");
-      await svc.handleRequest(rpc("tools/call", { name: "create_suite", arguments: { name: "B" } }), principal(), "proj-1");
+      await svc.handleRequest(rpc("tools/call", { name: "create_bug", arguments: { title: "A" } }), principal(), "proj-1");
+      await svc.handleRequest(rpc("tools/call", { name: "create_bug", arguments: { title: "B" } }), principal(), "proj-1");
       const actorLookups = query.mock.calls.filter((c) => String(c[0]).includes("FROM actors a JOIN agents g"));
       expect(actorLookups).toHaveLength(1);
     });
@@ -1207,7 +1205,7 @@ describe("McpService", () => {
     });
   });
 
-  describe("list_suites / get_suite / update_suite project scoping", () => {
+  describe("suite reads and retired suite publication", () => {
     it("lists suites scoped to the token's project", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
@@ -1231,7 +1229,7 @@ describe("McpService", () => {
       expect(JSON.parse(res.result.content[0].text).id).toBe("suite-1");
     });
 
-    it("denies get_suite/update_suite for a suite belonging to another project", async () => {
+    it("denies a foreign suite read and refuses retired publication without exposing ownership", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", suiteProject: "proj-OTHER" });
       const legacy = makeLegacy();
       const svc = new McpService(legacy, db, writableLimits);
@@ -1248,11 +1246,11 @@ describe("McpService", () => {
         principal(),
         "proj-1"
       );
-      expect(updateRes.error.code).toBe(RpcCode.ProjectScopeDenied);
+      expect(updateRes.error).toMatchObject({ code: RpcCode.ToolExecutionError, data: { code: "HUMAN_PUBLICATION_REQUIRED" } });
       expect((legacy as any).updateSuite).not.toHaveBeenCalled();
     });
 
-    it("returns a tool error for get_suite/update_suite when the suite does not exist", async () => {
+    it("returns a tool error for get_suite when the suite does not exist", async () => {
       const { db } = makeDb({ suiteProject: undefined });
       const svc = new McpService(makeLegacy(), db, writableLimits);
       const getRes: any = await svc.handleRequest(
@@ -1264,19 +1262,17 @@ describe("McpService", () => {
       expect(getRes.error.message).toMatch(/not found/i);
     });
 
-    it("rejects get_suite and update_suite without suiteId", async () => {
+    it("validates the suite read ID and refuses a retired update even without an ID", async () => {
       const { db } = makeDb();
       const svc = new McpService(makeLegacy(), db, writableLimits);
       expect(
         (await svc.handleRequest(rpc("tools/call", { name: "get_suite", arguments: {} }), principal(), "proj-1") as any).error.message
       ).toMatch(/"suiteId"/i);
-      expect(
-        (await svc.handleRequest(rpc("tools/call", { name: "update_suite", arguments: {} }), principal(), "proj-1") as any).error
-          .message
-      ).toMatch(/"suiteId"/i);
+      const update: any = await svc.handleRequest(rpc("tools/call", { name: "update_suite", arguments: {} }), principal(), "proj-1");
+      expect(update.error).toMatchObject({ code: RpcCode.ToolExecutionError, data: { code: "HUMAN_PUBLICATION_REQUIRED" } });
     });
 
-    it("renames a suite without reading and re-sending its parent, attributed to the token's user", async () => {
+    it("refuses a cached suite rename even when the issuer owns the project", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", suiteProject: "proj-1" });
       const legacy = makeLegacy();
       const svc = new McpService(legacy, db, writableLimits);
@@ -1285,30 +1281,22 @@ describe("McpService", () => {
         principal({ userId: "user-7" }),
         "proj-1"
       );
-      expect(res.result.isError).toBe(false);
-      // Attributed to ctx.userId because updateSuite performs the existing access check.
-      expect((legacy as any).updateSuite).toHaveBeenCalledWith("user-7", "suite-1", {
-        name: "Renamed",
-        parentId: undefined,
-        position: undefined
-      });
-      expect((legacy as any).listSuites).toHaveBeenCalledTimes(1); // Return value only, after the write.
+      expect(res.error).toMatchObject({ code: RpcCode.ToolExecutionError, data: { code: "HUMAN_PUBLICATION_REQUIRED" } });
+      expect((legacy as any).updateSuite).not.toHaveBeenCalled();
+      expect((legacy as any).listSuites).not.toHaveBeenCalled();
     });
 
-    it("reparents a suite to the root when parentId is explicitly null", async () => {
+    it("refuses a cached suite reparent without invoking the native owner", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1", suiteProject: "proj-1" });
       const legacy = makeLegacy();
       const svc = new McpService(legacy, db, writableLimits);
-      await svc.handleRequest(
+      const result: any = await svc.handleRequest(
         rpc("tools/call", { name: "update_suite", arguments: { suiteId: "suite-1", parentId: null } }),
         principal({ userId: "user-7" }),
         "proj-1"
       );
-      expect((legacy as any).updateSuite).toHaveBeenCalledWith("user-7", "suite-1", {
-        name: undefined,
-        parentId: null,
-        position: undefined
-      });
+      expect(result.error).toMatchObject({ code: RpcCode.ToolExecutionError, data: { code: "HUMAN_PUBLICATION_REQUIRED" } });
+      expect((legacy as any).updateSuite).not.toHaveBeenCalled();
     });
   });
 
@@ -2065,18 +2053,18 @@ describe("McpService", () => {
     it("maps an underlying service exception onto a ToolExecutionError", async () => {
       const { db } = makeDb({ mcpActorId: "mcp-actor-1" });
       const legacy = makeLegacy({
-        createSuite: jest.fn().mockRejectedValue({
-          getResponse: () => ({ error: "name is required" })
+        createBug: jest.fn().mockRejectedValue({
+          getResponse: () => ({ error: "title is required" })
         })
       });
       const svc = new McpService(legacy, db, writableLimits);
       const res: any = await svc.handleRequest(
-        rpc("tools/call", { name: "create_suite", arguments: { name: "x" } }),
+        rpc("tools/call", { name: "create_bug", arguments: { title: "x" } }),
         principal(),
         "proj-1"
       );
       expect(res.error.code).toBe(RpcCode.ToolExecutionError);
-      expect(res.error.message).toBe("name is required");
+      expect(res.error.message).toBe("title is required");
     });
   });
 });
@@ -2105,8 +2093,8 @@ describe("MCP native model draft preview", () => {
   it("advertises a bounded exact schema and returns the shared native result without writes", async () => {
     const { svc, query } = setup();
     const list: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
-    expect(list.result.tools).toHaveLength(proposalReviewPreviewEnabled() ? 51 : 48);
-    expect(new Set(list.result.tools.map((tool: any) => tool.name)).size).toBe(proposalReviewPreviewEnabled() ? 51 : 48);
+    expect(list.result.tools).toHaveLength(proposalReviewPreviewEnabled() ? 49 : 46);
+    expect(new Set(list.result.tools.map((tool: any) => tool.name)).size).toBe(proposalReviewPreviewEnabled() ? 49 : 46);
     const tool = list.result.tools.find((t: any) => t.name === "preview_behavior_model_draft");
     expect(tool.inputSchema).toMatchObject({ additionalProperties: false, required: ["model"],
       properties: { model: { additionalProperties: false, properties: { states: { maxItems: 32 }, transitions: { maxItems: 64 } } } } });

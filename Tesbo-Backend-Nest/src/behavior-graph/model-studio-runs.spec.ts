@@ -1,3 +1,4 @@
+import { ForbiddenException } from "@nestjs/common";
 import { ModelStudioRepository } from "./model-studio-repository";
 import type { DatabaseService } from "../database/database.service";
 import type { LegacyService } from "../legacy/legacy.service";
@@ -19,13 +20,15 @@ const definition: PreviewDefinition = {
 
 /** Composition checks only; the matching .db.spec proves PostgreSQL rollback and lock behavior. */
 function fixture() {
-  const state = { active: true, current: true, approved: true, fail: "", committed: false, inside: false,
+  const state = { active: true, current: true, approved: true, authorized: true, fail: "", committed: false, inside: false,
     runs: 0, candidates: 0, stagedRuns: 0, stagedCandidates: 0,
     generated: true, editRevision: hash, links: [] as Array<Record<string, unknown>> };
   const failure = new Error("Required model provenance write failed");
   const effectStates: Array<{ inside: boolean; committed: boolean }> = [];
   const effect = jest.fn(async () => { effectStates.push({ inside: state.inside, committed: state.committed }); });
   const execute = async (sql: string, values: unknown[] = []) => {
+    if (sql.includes("INSERT INTO mbt_model_approvals")) return { rows: [{ id: "approval", content_hash: hash, approved_by: user }] };
+    if (sql.includes("UPDATE mbt_model_revisions")) return { rows: [] };
     if (sql.includes("INSERT INTO mbt_model_runs")) {
       if (state.fail === "run") throw failure;
       return { rows: [{ id: "manifest", project_id: project, model_id: model, model_revision_id: revision,
@@ -69,6 +72,15 @@ function fixture() {
   };
   const legacy = {
     requireProjectAccess: jest.fn(async () => ({ id: project })),
+    requireCurrentProjectAuthority: jest.fn(async (runner, p, u) => {
+      expect(runner).toBe(client); expect(p).toBe(project); expect(u).toBe(user);
+      expect(state.inside).toBe(true);
+      if (!state.authorized) throw new ForbiddenException({ error: "Current project and workspace membership are required" });
+      return { id: project };
+    }),
+    lockTestcaseSuiteWrites: jest.fn(async (runner, p) => {
+      await runner.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`suite-tree:${p}`]);
+    }),
     createCycleWithTestcasesForUser: jest.fn(async (_user, _project, _body, runner) => {
       if (runner === client) state.stagedRuns++; else state.runs++;
       return { cycle: { id: cycle, name: "Native run" }, requested: 1, added: 1, skipped: 0 };
@@ -86,6 +98,38 @@ function fixture() {
 }
 
 describe("governed model/native writer composition", () => {
+  it.each(["approval", "candidate"] as const)("SEC-NATIVE-02 rechecks current authority after a blocked %s owner resumes", async operation => {
+    const f = fixture(), original = f.client.query.getMockImplementation()!;
+    f.client.query.mockImplementation(async (sql, values) => {
+      // Deterministic unit analogue of the DB barrier: preflight succeeded, then membership
+      // changed while the real model/candidate lock was awaited. Only a final owner check catches it.
+      if (operation === "approval" ? sql.includes("FOR UPDATE OF r") : String(values?.[0]).startsWith("model-candidates:")) {
+        f.state.authorized = false;
+      }
+      return original(sql, values);
+    });
+    const options = { strategy: "edge_coverage" as const, maxPaths: 20, maxDepth: 12, seed: revision };
+    const digest = generateModelPaths({ definition, revisionId: revision, contentHash: hash, options }).paths[0].digest;
+    const attempt = operation === "approval"
+      ? f.repository.approveRevisionForUser(user, project, model, revision, { expectedHash: hash }, { kind: "human_session" })
+      : f.repository.createCasesFromPathsForUser(user, project, model, revision, { ...options, digests: [digest] }, { kind: "human_session" });
+    await expect(attempt).rejects.toMatchObject({ status: 403 });
+    expect(f.legacy.requireProjectAccess).toHaveBeenCalled();
+    expect(f.legacy.requireCurrentProjectAuthority).toHaveBeenCalledTimes(1);
+    expect(f.client.query.mock.calls.some(([sql]) => /(?:INSERT INTO|UPDATE) mbt_/.test(sql))).toBe(false);
+    expect(f.legacy.createTestCase).not.toHaveBeenCalled();
+    expect(f.effect).not.toHaveBeenCalled();
+    expect(f.state.committed).toBe(false);
+  });
+
+  it("SEC-NATIVE-02 keeps an authorized exact human approval available", async () => {
+    const f = fixture();
+    await expect(f.repository.approveRevisionForUser(user, project, model, revision,
+      { expectedHash: hash }, { kind: "human_session" })).resolves.toMatchObject({ alreadyApproved: false });
+    expect(f.legacy.requireCurrentProjectAuthority).toHaveBeenCalledWith(f.client, project, user);
+    expect(f.state.committed).toBe(true);
+  });
+
   it("propagates manifest failure through the shared transaction without a compensating delete", async () => {
     const f = fixture(); f.state.fail = "run";
     await expect(f.repository.dispatchRunForUser(user, project, model, revision, { caseIds: [testcase] })).rejects.toBe(f.failure);

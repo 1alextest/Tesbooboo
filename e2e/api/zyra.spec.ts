@@ -3495,7 +3495,7 @@ test.describe("zyra chat — citations (fake provider)", () => {
   // create_suite / move_to_suite resolver: before this fix it matched by name with no `deleted_at`
   // filter, so asking Zyra to (re-)create a suite whose name matches one that was just soft-deleted
   // would silently reattach to the dead row instead of creating a fresh, listable one.
-  test("ZYR-A-69 create_suite creates a fresh suite when the same name was used by a suite that is now soft-deleted", async () => {
+  test("ZYR-A-69 suite creation needs a human action and does not reuse a same-name soft-deleted suite", async () => {
     await allocateFakeAiKey();
     const suiteName = `E2E Suite Reuse By Name ${Date.now()}`;
 
@@ -3509,11 +3509,15 @@ test.describe("zyra chat — citations (fake provider)", () => {
       failOnStatusCode: false,
     });
     expect(turn1.status(), `first create_suite turn — ${await turn1.text()}`).toBeLessThan(300);
+    expect((await turn1.json()).message.content).toContain("Suite creation requires a human editing action");
+    expect(scalar(`SELECT id FROM suites WHERE project_id=${literal(tenant!.mainProjectId)} AND name=${literal(suiteName)} AND deleted_at IS NULL;`)).toBe("");
+    const firstCreated = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/suites`, { data: { name: suiteName } });
+    expect(firstCreated.status(), await firstCreated.text()).toBe(201);
 
     const firstSuiteId = scalar(
       `SELECT id FROM suites WHERE project_id = ${literal(tenant!.mainProjectId)} AND name = ${literal(suiteName)} AND deleted_at IS NULL;`,
     );
-    expect(firstSuiteId, "the first turn must have created the suite").toBeTruthy();
+    expect(firstSuiteId, "the explicit human native action creates the suite").toBeTruthy();
 
     const del = await asOwner.delete(`/api/suites/${firstSuiteId}`, { params: { mode: "moveToDefault" }, failOnStatusCode: false });
     expect(del.ok(), `deleting the first suite — ${await del.text()}`).toBeTruthy();
@@ -3530,6 +3534,10 @@ test.describe("zyra chat — citations (fake provider)", () => {
       failOnStatusCode: false,
     });
     expect(turn2.status(), `second create_suite turn — ${await turn2.text()}`).toBeLessThan(300);
+    expect((await turn2.json()).message.content).toContain("Suite creation requires a human editing action");
+    expect(scalar(`SELECT id FROM suites WHERE project_id=${literal(tenant!.mainProjectId)} AND name=${literal(suiteName)} AND deleted_at IS NULL;`)).toBe("");
+    const secondCreated = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/suites`, { data: { name: suiteName } });
+    expect(secondCreated.status(), await secondCreated.text()).toBe(201);
 
     const activeMatches = column(
       `SELECT id FROM suites WHERE project_id = ${literal(tenant!.mainProjectId)} AND name = ${literal(suiteName)} AND deleted_at IS NULL;`,

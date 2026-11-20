@@ -64,7 +64,7 @@ Rules worth knowing before calling a write tool:
 - When the preview is available, supply an explicit requestKey; updates and archives bind the current get_testcase editRevision. Read the resulting task with get_testcase_proposal_task or list_testcase_proposals.
 - A task ID identifies a proposal workflow, never a newly published test case. A human must inspect the exact proposal revision and save selected changes in Tesbo. There is no MCP apply or approval tool.
 - Stage restore as an update with status Draft. A new case is published as Draft; human publication and subsequent test-case approval are separate decisions.
-- update_suite only changes the fields you pass; every other field keeps its current value.
+- Suite creation and editing require the native human action. Machine clients can read suites; cached create_suite/update_suite calls are refused without changing the suite.
 - Every id-addressed tool is already scoped to this token's project; passing an id from another project fails with a clear "not found" / "belongs to a different project" error rather than acting on it.
 
 Example workflow: "file a bug for the test case that just failed" → get_testcase_executions or list_executions to find the failing execution, then create_bug with links: [{testcaseId, cycleId, executionId}].`;

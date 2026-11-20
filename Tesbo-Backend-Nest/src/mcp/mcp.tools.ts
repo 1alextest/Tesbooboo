@@ -1049,7 +1049,7 @@ export function buildMcpTools(): McpTool[] {
       },
       handler: async (args, ctx) => {
         requireString(args, "name");
-        return ctx.legacy.createSuite(ctx.projectId, args);
+        return ctx.legacy.createSuite(ctx.projectId, args, ctx.userId, { kind: "api_token" });
       }
     },
     {
@@ -1082,7 +1082,7 @@ export function buildMcpTools(): McpTool[] {
           preconditions: args.preconditions,
           parentId: args.parentId,
           position: args.position
-        });
+        }, { kind: "api_token" });
         return (await ctx.legacy.listSuites(ctx.projectId)).find((s) => s.id === suiteId);
       }
     },
@@ -1168,7 +1168,7 @@ export function buildMcpTools(): McpTool[] {
             preconditions: node.preconditions,
             parentId: newParentId,
             position: node.position
-          })) as Record<string, any>;
+          }, ctx.userId, { kind: "api_token" })) as Record<string, any>;
           idMap.set(node.id as string, created.id);
           clonedSuites.push(created);
         }
@@ -1594,7 +1594,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "link_testcase_to_bug",
       description:
-        "Link a test case to an existing bug in the token's project (a bug_links row), optionally scoped to a specific cycle/execution. Required: bugId, testcaseId. Optional: cycleId, executionId. New/changed targets must be active in this project and form a consistent case/run/execution chain; an invalid target rejects the request. Valid manual/open-run links retain auto-failure behavior; finalized automation accepts the association without changing its sealed verdict. Calling this again with the same bugId+testcaseId (+cycleId) updates the link in place rather than duplicating it. This tool's ownership checks still refuse deleted targets; use update_bug to preserve an exact valid unchanged historical link.",
+        "Link a test case to an existing bug in the token's project (a bug_links row), optionally scoped to a specific cycle/execution. Required: bugId, testcaseId. Optional: cycleId, executionId. New/changed targets must be active in this project and form a consistent case/run/execution chain; an invalid target rejects the request. Associations preserve the execution verdict, performer and time for every run. Record an observed result separately through the authorized result writer. Calling this again with the same bugId+testcaseId (+cycleId) updates the link in place rather than duplicating it. This tool's ownership checks still refuse deleted targets; use update_bug to preserve an exact valid unchanged historical link.",
       requiredScope: "write",
       inputSchema: {
         type: "object",

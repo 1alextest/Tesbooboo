@@ -44,7 +44,7 @@ export const REQUIRED_TOOLS = [
 
 export const PROPOSAL_TOOLS = ["stage_testcase_changes", "list_testcase_proposals", "get_testcase_proposal_task"];
 const RETIRED_PUBLISHERS = ["create_testcase", "update_testcase", "archive_testcase", "restore_testcase", "duplicate_testcase",
-  "bulk_create_testcases", "bulk_update_testcases", "bulk_archive_testcases", "link_requirement_to_testcase", "unlink_requirement_from_testcase", "clone_test_suite"];
+  "bulk_create_testcases", "bulk_update_testcases", "bulk_archive_testcases", "link_requirement_to_testcase", "unlink_requirement_from_testcase", "clone_test_suite", "create_suite", "update_suite"];
 
 /** If proposal preview is exposed, its actual candidate fields must be discoverable. Default-off
  * deployments are valid without these tools; a retired direct publisher is never a substitute. */

@@ -157,6 +157,23 @@ async function callMcpToolExpectError(
   return body.error as { code: number; message: string; data?: { code?: string; stagingAvailable?: boolean; httpStatus?: number } };
 }
 
+/** Suites are published by the real signed-in human editor; cached machine writers refuse first. */
+async function publishHumanSuiteChange(
+  human: APIRequestContext, machine: APIRequestContext, token: string, tool: "create_suite" | "update_suite", args: Record<string, unknown>
+) {
+  const before = await callMcpTool(machine, token, "list_suites");
+  const denied = await callMcpToolExpectError(machine, token, tool, args);
+  expect(denied.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+  expect(await callMcpTool(machine, token, "list_suites")).toEqual(before);
+  const { suiteId, ...body } = args;
+  const written = tool === "create_suite"
+    ? await human.post(`/api/projects/${ctx.projectId}/suites`, { data: body })
+    : await human.patch(`/api/suites/${suiteId}`, { data: body });
+  expect(written.ok(), await written.text()).toBeTruthy();
+  const id = tool === "create_suite" ? (await written.json()).id : suiteId;
+  return callMcpTool(machine, token, "get_suite", { suiteId: id });
+}
+
 /** Successful case-field regressions now exercise unpublished staging and an explicit human Save. */
 async function publishReviewedCaseChange(
   human: APIRequestContext, machine: APIRequestContext, token: string, legacyTool: string, args: Record<string, unknown>,
@@ -264,8 +281,8 @@ test("MCP-P07 disposable proposal review lifecycle preserves project and run bou
     const catalog = (await rpc("tools/list")).result.tools as Array<{ name: string }>;
     // Credential-visible catalog: the retired direct testcase publishers are hidden, so this is
     // fewer than the full registry even though the token has write scope.
-    expect(catalog).toHaveLength(51);
-    expect(new Set(catalog.map(item => item.name)).size).toBe(51);
+    expect(catalog).toHaveLength(49);
+    expect(new Set(catalog.map(item => item.name)).size).toBe(49);
     expect(catalog.map(item => item.name)).toContain("list_qa_graph_changes");
     expect(catalog.map(item => item.name)).toEqual(
       expect.arrayContaining([
@@ -288,7 +305,7 @@ test("MCP-P07 disposable proposal review lifecycle preserves project and run bou
     };
     for (const name of ["create_testcase", "update_testcase", "archive_testcase", "restore_testcase", "duplicate_testcase",
       "bulk_create_testcases", "bulk_update_testcases", "bulk_archive_testcases", "link_requirement_to_testcase",
-      "unlink_requirement_from_testcase", "clone_test_suite"]) {
+      "unlink_requirement_from_testcase", "clone_test_suite", "create_suite", "update_suite"]) {
       expect(catalog.map(item => item.name)).not.toContain(name);
       const denied = await rejected(name, createFields);
       expect(denied.data).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED", stagingAvailable: true });
@@ -724,8 +741,8 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
       // This test runs only in the explicitly enabled isolated preview profile. Counts are the
       // credential-visible catalog: retired direct publishers are hidden, and the governed-run
       // tool from the Model Studio work is visible to a write token.
-      expect(names, "freshly initialized deployed preview catalog").toHaveLength(51);
-      expect(new Set(names).size, "MCP names must be unique").toBe(51);
+      expect(names, "freshly initialized deployed preview catalog").toHaveLength(49);
+      expect(new Set(names).size, "MCP names must be unique").toBe(49);
       expect(names).toEqual(expect.arrayContaining([
         "list_qa_graph_changes", "capture_qa_graph_change", "preview_behavior_model_draft", "create_behavior_model",
         "save_behavior_model_revision", "link_behavior_model_case", "get_behavior_model_coverage", "archive_behavior_model",
@@ -734,7 +751,7 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
       ]));
       for (const name of ["create_testcase", "update_testcase", "archive_testcase", "restore_testcase", "duplicate_testcase",
         "bulk_create_testcases", "bulk_update_testcases", "bulk_archive_testcases", "link_requirement_to_testcase",
-        "unlink_requirement_from_testcase", "clone_test_suite"]) expect(names).not.toContain(name);
+        "unlink_requirement_from_testcase", "clone_test_suite", "create_suite", "update_suite"]) expect(names).not.toContain(name);
       const operations = tools.find(t => t.name === "stage_testcase_changes")?.inputSchema.properties?.operations.items?.oneOf;
       const create = operations?.[0].properties?.draft.properties;
       const update = operations?.[1].properties?.fields.properties;
@@ -2348,9 +2365,9 @@ test.describe("MCP list_suites, get_suite, and update_suite", () => {
       expect(fetched.id).toBe(suiteId);
       expect(fetched.parentId).toBe(parentId);
 
-      // The gotcha this tool works around: updateSuite() writes parent_id verbatim, no COALESCE.
-      // A rename-only call (no parentId) must NOT un-parent the suite.
-      const renamed = await callMcpTool(mcpApi, token, "update_suite", {
+      // The human native owner preserves fields omitted at the actual write.
+      // Machine publication remains refused for the same rename.
+      const renamed = await publishHumanSuiteChange(request, mcpApi, token, "update_suite", {
         suiteId,
         name: `E2E MCP Get Suite Renamed ${stamp}`,
       });
@@ -2358,7 +2375,7 @@ test.describe("MCP list_suites, get_suite, and update_suite", () => {
       expect(renamed.parentId).toBe(parentId);
 
       // An explicit null does move it to the root.
-      const rootedResult = await callMcpTool(mcpApi, token, "update_suite", { suiteId, parentId: null });
+      const rootedResult = await publishHumanSuiteChange(request, mcpApi, token, "update_suite", { suiteId, parentId: null });
       expect(rootedResult.parentId).toBeNull();
     } finally {
       if (tokenId) {
@@ -2403,7 +2420,7 @@ test.describe("MCP list_suites, get_suite, and update_suite", () => {
         suiteId: bSuiteId,
         name: "Renamed by project A's token",
       });
-      expect(updateError.code).toBe(-32001);
+      expect(updateError.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
 
       const stillThere = await (await asB.get(`/api/projects/${ctxB.projectId}/suites`)).json();
       expect(stillThere.some((s: { id: string; name: string }) => s.id === bSuiteId && s.name.startsWith("E2E MCP Suite Cross-Project"))).toBe(
@@ -2441,13 +2458,13 @@ test.describe("MCP list_suites, get_suite, and update_suite", () => {
       const writeToken = writeTokenBody.token as string;
 
       expect((await callMcpToolExpectError(mcpApi, writeToken, "get_suite", {})).message).toMatch(/"suiteId"/i);
-      expect((await callMcpToolExpectError(mcpApi, writeToken, "update_suite", { name: "x" })).message).toMatch(/"suiteId"/i);
+      expect((await callMcpToolExpectError(mcpApi, writeToken, "update_suite", { name: "x" })).data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
       expect((await callMcpToolExpectError(mcpApi, writeToken, "get_suite", { suiteId: ghostId })).message).toMatch(
         /not found/i,
       );
       expect(
-        (await callMcpToolExpectError(mcpApi, writeToken, "update_suite", { suiteId: ghostId, name: "x" })).message,
-      ).toMatch(/not found/i);
+        (await callMcpToolExpectError(mcpApi, writeToken, "update_suite", { suiteId: ghostId, name: "x" })).data?.code,
+      ).toBe("HUMAN_PUBLICATION_REQUIRED");
 
       const readTokenRes = await issueMcpTestToken(request, `/api/projects/${ctx.projectId}/apikeys`, {
         data: { name: `E2E MCP suite read-only token ${Date.now()}`, scopes: ["read"] },
@@ -4803,10 +4820,10 @@ test.describe("MCP clone_test_suite", () => {
       const refused = await callMcpToolExpectError(mcpApi, token, "clone_test_suite", { suiteId: sourceParent.id });
       expect(refused.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
       expect(await callMcpTool(mcpApi, token, "list_suites", {})).toEqual(beforeSuites);
-      // Suite-only creation is still available. Official copied cases appear only after human Save.
-      const parent = await callMcpTool(mcpApi, token, "create_suite", { name: `${sourceParent.name} (copy)` });
+      // The human native editor creates the copied hierarchy. Cases appear only after exact human Save.
+      const parent = await publishHumanSuiteChange(request, mcpApi, token, "create_suite", { name: `${sourceParent.name} (copy)` });
       clonedParentId = parent.id;
-      const child = await callMcpTool(mcpApi, token, "create_suite", { name: sourceChild.name, parentId: clonedParentId });
+      const child = await publishHumanSuiteChange(request, mcpApi, token, "create_suite", { name: sourceChild.name, parentId: clonedParentId });
       clonedChildId = child.id;
       const saved = await stageAndApplyMcpTestcases(request, mcpApi, token, ctx.projectId, [
         { opType: "create", draft: { title: `${caseInParent.title} (copy)`, suiteId: clonedParentId } },
@@ -5163,30 +5180,30 @@ test.describe("MCP suite description and preconditions", () => {
       tokenId = tokenBody.id;
       const token = tokenBody.token as string;
 
-      const created = await callMcpTool(mcpApi, token, "create_suite", {
+      const created = await publishHumanSuiteChange(request, mcpApi, token, "create_suite", {
         name: `E2E MCP Suite Text ${stamp}`,
-        description: "Created by an agent",
+        description: "Created by a human",
         preconditions: "Seed data loaded",
       });
       suiteIds.push(created.id);
-      expect(created.description).toBe("Created by an agent");
+      expect(created.description).toBe("Created by a human");
       expect(created.preconditions).toBe("Seed data loaded");
 
       const got = await callMcpTool(mcpApi, token, "get_suite", { suiteId: created.id });
-      expect([got.description, got.preconditions]).toEqual(["Created by an agent", "Seed data loaded"]);
+      expect([got.description, got.preconditions]).toEqual(["Created by a human", "Seed data loaded"]);
       const listed = (await callMcpTool(mcpApi, token, "list_suites", {})).suites.find((s: { id: string }) => s.id === created.id);
-      expect(listed.description).toBe("Created by an agent");
+      expect(listed.description).toBe("Created by a human");
 
       // A rename that omits the text keeps it; an empty string clears just that field.
-      const renamed = await callMcpTool(mcpApi, token, "update_suite", { suiteId: created.id, name: `E2E MCP Suite Text ${stamp} renamed` });
-      expect([renamed.description, renamed.preconditions]).toEqual(["Created by an agent", "Seed data loaded"]);
-      const cleared = await callMcpTool(mcpApi, token, "update_suite", { suiteId: created.id, preconditions: "" });
-      expect([cleared.description, cleared.preconditions]).toEqual(["Created by an agent", ""]);
-      const edited = await callMcpTool(mcpApi, token, "update_suite", { suiteId: created.id, description: "Edited", preconditions: "Back again" });
+      const renamed = await publishHumanSuiteChange(request, mcpApi, token, "update_suite", { suiteId: created.id, name: `E2E MCP Suite Text ${stamp} renamed` });
+      expect([renamed.description, renamed.preconditions]).toEqual(["Created by a human", "Seed data loaded"]);
+      const cleared = await publishHumanSuiteChange(request, mcpApi, token, "update_suite", { suiteId: created.id, preconditions: "" });
+      expect([cleared.description, cleared.preconditions]).toEqual(["Created by a human", ""]);
+      const edited = await publishHumanSuiteChange(request, mcpApi, token, "update_suite", { suiteId: created.id, description: "Edited", preconditions: "Back again" });
       expect([edited.description, edited.preconditions]).toEqual(["Edited", "Back again"]);
 
       // A child suite retains its own text; cached deep cloning cannot publish cases.
-      const child = await callMcpTool(mcpApi, token, "create_suite", {
+      const child = await publishHumanSuiteChange(request, mcpApi, token, "create_suite", {
         name: `E2E MCP Suite Child ${stamp}`,
         parentId: created.id,
         description: "Child text",
@@ -5196,11 +5213,11 @@ test.describe("MCP suite description and preconditions", () => {
       const denied = await callMcpToolExpectError(mcpApi, token, "clone_test_suite", { suiteId: created.id, name: `E2E MCP Suite Clone ${stamp}` });
       expect(denied.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
       expect(await callMcpTool(mcpApi, token, "list_suites", {})).toEqual(beforeClone);
-      const copiedParent = await callMcpTool(mcpApi, token, "create_suite", {
+      const copiedParent = await publishHumanSuiteChange(request, mcpApi, token, "create_suite", {
         name: `E2E MCP Suite Clone ${stamp}`, description: edited.description, preconditions: edited.preconditions
       });
       suiteIds.push(copiedParent.id);
-      const copiedChild = await callMcpTool(mcpApi, token, "create_suite", {
+      const copiedChild = await publishHumanSuiteChange(request, mcpApi, token, "create_suite", {
         name: child.name, parentId: copiedParent.id, description: child.description, preconditions: child.preconditions
       });
       suiteIds.push(copiedChild.id);
@@ -5208,8 +5225,11 @@ test.describe("MCP suite description and preconditions", () => {
       expect(copiedChild).toMatchObject({ description: "Child text", preconditions: "", parentId: copiedParent.id });
 
       // Over the limit is refused as a tool error, and nothing is written.
-      const tooLong = await callMcpToolExpectError(mcpApi, token, "update_suite", { suiteId: created.id, description: "x".repeat(20001) });
-      expect(tooLong.message).toMatch(/too long|limit/i);
+      const deniedLong = await callMcpToolExpectError(mcpApi, token, "update_suite", { suiteId: created.id, description: "x".repeat(20001) });
+      expect(deniedLong.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+      const tooLong = await request.patch(`/api/suites/${created.id}`, { data: { description: "x".repeat(20001) } });
+      expect(tooLong.status()).toBe(400);
+      expect(await tooLong.text()).toMatch(/too long|limit/i);
       expect((await callMcpTool(mcpApi, token, "get_suite", { suiteId: created.id })).description).toBe("Edited");
     } finally {
       for (const id of suiteIds.reverse()) await request.delete(`/api/suites/${id}`, { failOnStatusCode: false });
@@ -5279,6 +5299,98 @@ test.describe("MCP test case ID", () => {
 });
 
 
+test("MCP-P07 SEC-NATIVE-01 suite publication refuses both machine aliases and REST while native human review remains usable", async () => {
+  const tenant = await provisionRbacTenant("mcp-lifecycle");
+  expect(tenant, "SEC-NATIVE-01 requires the authorized disposable database fixture").not.toBeNull();
+  const owner = await loginAs(tenant!.owner);
+  const machine = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
+  const suiteIds: string[] = [], caseIds: string[] = [];
+  let tokenId: string | undefined, projectId = "", base = "";
+  try {
+    const stamp = Date.now().toString().slice(-7);
+    const project = await owner.post("/api/projects", { data: { name: `E2E suite publication ${stamp}`, key: `SEC${stamp}` } });
+    expect(project.ok(), await project.text()).toBeTruthy();
+    projectId = String((await project.json()).id); base = `/api/projects/${projectId}`;
+    const create = async (body: Record<string, unknown>) => {
+      const response = await owner.post(`${base}/suites`, { data: body });
+      expect(response.ok(), await response.text()).toBeTruthy();
+      const suite = await response.json(); suiteIds.push(suite.id); return suite;
+    };
+    const parent = await create({ name: "Native human parent" });
+    const child = await create({ name: "Native human child", parentId: parent.id, description: "Keep context", preconditions: "Keep prerequisites" });
+    const issued = await issueMcpTestToken(owner, `${base}/apikeys`, { data: { name: "Explicit suite-boundary test client", scopes: ["read", "write"] } });
+    expect(issued.ok(), await issued.text()).toBeTruthy();
+    const token = await issued.json(); tokenId = token.id;
+    const headers = { Authorization: `Bearer ${token.token}` };
+    const state = () => scalar(`SELECT jsonb_build_object(
+      'suites',(SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM suites s WHERE s.project_id=${literal(projectId)}),
+      'cases',(SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM testcases t WHERE t.project_id=${literal(projectId)}),
+      'audit',(SELECT jsonb_agg(to_jsonb(a) ORDER BY a.id) FROM audit_logs a WHERE a.project_id=${literal(projectId)})
+    )::text;`);
+    const before = state();
+    for (const route of ["/api/mcp", `${base}/mcp`]) {
+      for (const [name, args] of [
+        ["create_suite", { name: "Forbidden machine suite", parentId: parent.id }],
+        ["update_suite", { suiteId: child.id, name: "Forbidden rename", parentId: null, description: "Forbidden context", preconditions: "Forbidden setup" }]
+      ] as const) {
+        const response = await machine.post(route, { headers, data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: {
+          name, arguments: { ...args, principal: { kind: "human_session" }, approved: true }
+        } } });
+        expect(response.ok(), await response.text()).toBeTruthy();
+        const denied = await response.json();
+        expect(denied.error.data.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+        expect(denied.result).toBeUndefined();
+        expect(state()).toBe(before);
+      }
+    }
+    const deniedRest = await machine.post(`${base}/suites`, { headers, data: { name: "Forbidden REST suite", principal: { kind: "human_session" } } });
+    expect(deniedRest.status()).toBe(403);
+    expect((await deniedRest.json()).code).toBe("HUMAN_PUBLICATION_REQUIRED");
+    expect(state()).toBe(before);
+
+    const changed = await owner.patch(`/api/suites/${child.id}`, { data: { name: "Reviewed human rename", preconditions: "" } });
+    expect(changed.ok(), await changed.text()).toBeTruthy();
+    const suites = await owner.get(`${base}/suites`);
+    expect((await suites.json()).find((suite: { id: string }) => suite.id === child.id)).toMatchObject({
+      name: "Reviewed human rename", parentId: parent.id, description: "Keep context", preconditions: ""
+    });
+
+    // The selected human Save may create a suite inside its native transaction, after exact
+    // proposal validation. It does not impersonate a human at the machine adapter.
+    const stagedResponse = await machine.post(`${base}/mcp`, { headers, data: { jsonrpc: "2.0", id: 2, method: "tools/call", params: {
+      name: "stage_testcase_changes", arguments: { requestKey: `suite-review-${Date.now()}`, operations: [{ opType: "create", draft: { title: "Selected reviewed suite case" } }] }
+    } } });
+    expect(stagedResponse.ok(), await stagedResponse.text()).toBeTruthy();
+    const stagedRpc = await stagedResponse.json(); expect(stagedRpc.error).toBeUndefined();
+    const staged = JSON.parse(stagedRpc.result.content[0].text);
+    const reviewResponse = await owner.get(`${base}/agents/zyra/tasks/${staged.taskId}`);
+    expect(reviewResponse.ok(), await reviewResponse.text()).toBeTruthy();
+    const reviewed = await reviewResponse.json(), suiteName = "Suite chosen by exact human Save";
+    expect((await (await owner.get(`${base}/suites`)).json()).some((suite: { name: string }) => suite.name === suiteName)).toBe(false);
+    const savedResponse = await owner.post(`${base}/agents/zyra/tasks/${staged.taskId}/save`, { data: {
+      expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [0], suiteName
+    } });
+    expect(savedResponse.ok(), await savedResponse.text()).toBeTruthy();
+    const saved = await savedResponse.json();
+    expect(saved.savedCount).toBe(1);
+    expect(saved.saveReceipt).toMatchObject({ principalKind: "human_session", reviewerId: tenant!.owner.userId,
+      applyParameters: { suiteNameProvided: true, suiteName } });
+    caseIds.push(saved.testcases[0].id);
+    const afterSuites = await (await owner.get(`${base}/suites`)).json();
+    const selectedSuite = afterSuites.find((suite: { name: string }) => suite.name === suiteName);
+    expect(selectedSuite).toBeTruthy(); suiteIds.push(selectedSuite.id);
+    const native = await owner.get(`${base}/testcases/${caseIds[0]}`);
+    expect(native.ok(), await native.text()).toBeTruthy();
+    expect(await native.json()).toMatchObject({ title: "Selected reviewed suite case", status: "Draft", suiteId: selectedSuite.id });
+  } finally {
+    for (const id of caseIds) await owner.delete(`${base}/testcases/${id}`, { failOnStatusCode: false });
+    for (const id of suiteIds.reverse()) await owner.delete(`/api/suites/${id}`, { failOnStatusCode: false });
+    if (tokenId) await owner.delete(`${base}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    if (projectId) await owner.delete(base, { failOnStatusCode: false });
+    await Promise.all([owner.dispose(),machine.dispose()]);
+  }
+});
+
 test("MCP-P18 project consent, named credentials and revocation cover both aliases and cached sessions", async () => {
   const tenant = await provisionRbacTenant("mcp-lifecycle");
   expect(tenant, "MCP-P18 requires the authorized disposable database fixture").not.toBeNull();
@@ -5328,7 +5440,7 @@ test("MCP-P18 project consent, named credentials and revocation cover both alias
     const machineGrant = await machine.put(endpoint, { headers: { Authorization: `Bearer ${token.token}` }, data: { ...initial, enabled: true } });
     expect(machineGrant.status()).toBe(403);
     expect(await read()).toEqual(initial);
-    const grant = { tokenId: token.id, clientName: "QA executor", scopes: ["read", "write"], allowedTools: ["list_projects", "create_suite"], expiresAt: null };
+    const grant = { tokenId: token.id, clientName: "QA executor", scopes: ["read", "write"], allowedTools: ["list_projects", "create_knowledge_folder"], expiresAt: null };
     for (const bad of [
       { ...initial, enabled: "true" },
       { ...initial, revision: -1 },
@@ -5362,25 +5474,26 @@ test("MCP-P18 project consent, named credentials and revocation cover both alias
     expect(session).toBeTruthy();
     for (const route of aliases) {
       const list = await rpc(route, "tools/list", token.token, session);
-      expect(list.body.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["create_suite", "list_projects"]);
+      expect(list.body.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["create_knowledge_folder", "list_projects"]);
       const denied = await rpc(route, "tools/list", unapproved.token, undefined, { clientInfo: { name: "QA executor" } });
       expect(denied.body.error.code).toBe(-32001); // claimed app name is never authorization
       const hiddenTool = await rpc(route, "tools/call", token.token, session, { name: "list_testcases", arguments: {} });
       expect(hiddenTool.body.error.code).toBe(-32002);
     }
-    const made = await rpc(aliases[0], "tools/call", token.token, session, { name: "create_suite", arguments: { name: "MCP consent permitted suite" } });
+    const made = await rpc(aliases[0], "tools/call", token.token, session, { name: "create_knowledge_folder", arguments: { name: "MCP consent permitted folder" } });
     expect(made.body.error).toBeUndefined();
-    const suite = JSON.parse(made.body.result.content[0].text);
-    expect((await owner.delete(`/api/suites/${suite.id}`)).ok()).toBeTruthy();
+    const folder = JSON.parse(made.body.result.content[0].text);
+    expect((await owner.get(`/api/projects/${projectId}/knowledge-base/folders/${folder.id}`)).ok()).toBeTruthy();
+    expect((await owner.delete(`/api/projects/${projectId}/knowledge-base/folders/${folder.id}`)).ok()).toBeTruthy();
     const disabled = await owner.put(endpoint, { data: { ...current, enabled: false } });
     expect(disabled.ok(), await disabled.text()).toBeTruthy(); current = await disabled.json();
     for (const route of aliases) {
       for (const method of ["tools/list", "tools/call", "notifications/initialized"]) {
-        const denied = await rpc(route, method, token.token, session, { name: "create_suite", arguments: { name: "MCP must never write" } });
+        const denied = await rpc(route, method, token.token, session, { name: "create_knowledge_folder", arguments: { name: "MCP must never write" } });
         expect(denied.body.error.code).toBe(-32001);
       }
     }
-    expect(Number(scalar(`SELECT COUNT(*) FROM suites WHERE project_id=${literal(projectId!)} AND name='MCP must never write';`))).toBe(0);
+    expect(Number(scalar(`SELECT COUNT(*) FROM knowledge_folders WHERE project_id=${literal(projectId!)} AND name='MCP must never write';`))).toBe(0);
     const expired = await owner.put(endpoint, { data: { ...current, enabled: true, clients: [{ ...grant, expiresAt: "2000-01-01T00:00:00.000Z" }] } });
     expect(expired.ok(), await expired.text()).toBeTruthy(); current = await expired.json();
     expect((await rpc(aliases[0], "tools/list", token.token, session)).body.error.code).toBe(-32001);

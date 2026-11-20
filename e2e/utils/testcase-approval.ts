@@ -56,6 +56,7 @@ export async function bulkCreateApprovedTestcases(
   });
   expect(response.ok(), await response.text()).toBeTruthy();
   const created = await response.json();
+  expect(created.created).toHaveLength(testcases.length);
   for (const row of created.created) await approveTestcase(human, projectId, row.id, apiOrigin);
   return created;
 }

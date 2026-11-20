@@ -26,7 +26,7 @@ const MODEL = {
   ]
 };
 
-async function createRunRecoveryFixture(api: APIRequestContext, label: string) {
+async function createRunRecoveryFixture(api: APIRequestContext, label: string, options: { withHistory?: boolean } = {}) {
   const name = `E2E run recovery ${label} ${Date.now()}`;
   let modelId = "", caseId = "";
   const cleanup = async () => {
@@ -45,15 +45,25 @@ async function createRunRecoveryFixture(api: APIRequestContext, label: string) {
     const created = await api.post(`/api/projects/${ctx.projectId}/model-studio/models`, { data: { name, model: MODEL } });
     expect(created.status(), await created.text()).toBe(201);
     const model = await created.json(); modelId = model.id;
-    const revisionUrl = `/api/projects/${ctx.projectId}/model-studio/models/${modelId}/revisions/${model.latestRevision.id}`;
-    const approved = await api.post(`${revisionUrl}/approve`, { data: { expectedHash: model.latestRevision.contentHash } });
+    const historicalRevision = model.latestRevision;
+    let revision = historicalRevision;
+    if (options.withHistory) {
+      const revised = await api.post(`/api/projects/${ctx.projectId}/model-studio/models/${modelId}/revisions`, { data: {
+        baseRevisionId: historicalRevision.id,
+        model: { ...MODEL, transitions: [{ ...MODEL.transitions[0], action: "Submit current revision" }] },
+      } });
+      expect(revised.status(), await revised.text()).toBe(201);
+      revision = await revised.json(); expect(revision.revisionNumber).toBe(2);
+    }
+    const revisionUrl = `/api/projects/${ctx.projectId}/model-studio/models/${modelId}/revisions/${revision.id}`;
+    const approved = await api.post(`${revisionUrl}/approve`, { data: { expectedHash: revision.contentHash } });
     expect(approved.status(), await approved.text()).toBe(201);
     const testcase = await createApprovedTestcase(api, ctx.projectId, { title: `${name} case` }); caseId = testcase.id;
     const linked = await api.post(`${revisionUrl}/links`, { data: {
       testcaseId: caseId, testcaseRevision: testcase.editRevision, elementIds: ["finish"],
     } });
     expect(linked.status(), await linked.text()).toBe(201);
-    return { modelId, caseId, name, revision: model.latestRevision, cleanup,
+    return { modelId, caseId, name, revision, historicalRevision, cleanup,
       runUrl: `${env.apiBaseUrl}${revisionUrl}/runs`, pageUrl: `/projects/${ctx.projectId}/model-studio?model=${modelId}`,
       nativeCount: (runName: string) => scalar(`SELECT count(*) FROM cycles WHERE project_id=${literal(ctx.projectId)} AND name=${literal(runName)};`),
       manifestCount: () => scalar(`SELECT count(*) FROM mbt_model_runs WHERE model_id=${literal(modelId)};`),
@@ -61,10 +71,12 @@ async function createRunRecoveryFixture(api: APIRequestContext, label: string) {
   } catch (error) { await cleanup(); throw error; }
 }
 
-test("a committed model run with a lost response stays blocked across reload until the reviewer identifies its native run", async ({ page }) => {
+test("a committed model run with a lost response stays blocked across reload until the reviewer identifies its native run", async ({ page }, testInfo) => {
   const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
-  const fixture = await createRunRecoveryFixture(api, "lost ACK");
+  const fixture = await createRunRecoveryFixture(api, "lost ACK", { withHistory: true });
   const runName = `${fixture.name} native run`;
+  const detailUrl = `${env.apiBaseUrl}/api/projects/${ctx.projectId}/model-studio/models/${fixture.modelId}`;
+  let releaseDetail = () => {};
   let postCount = 0, cycleId = "";
   let release!: () => void, committed!: () => void, rejectCommit!: (cause: unknown) => void, finished!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
@@ -93,6 +105,7 @@ test("a committed model run with a lost response stays blocked across reload unt
     await saved;
     expect(postCount).toBe(1);
     expect(fixture.nativeCount(runName)).toBe("1"); expect(fixture.manifestCount()).toBe("1");
+    expect(scalar(`SELECT model_revision_id FROM mbt_model_runs WHERE model_id=${literal(fixture.modelId)};`)).toBe(fixture.revision.id);
     // The marker exists before an ACK, so a page reload during this window cannot permit a replay.
     const pending = await page.evaluate((modelId) => Object.keys(localStorage)
       .filter((key) => key.startsWith("tesbo:model-run-intent:v1:"))
@@ -111,14 +124,41 @@ test("a committed model run with a lost response stays blocked across reload unt
     await expect(runs.getByLabel("Run name (optional)")).toHaveValue(runName);
     await expect(runs.getByLabel("Environment (optional)")).toHaveValue("QA recovery");
     expect(postCount).toBe(1); expect(fixture.nativeCount(runName)).toBe("1");
+    await testInfo.attach("model-run-outcome-unknown-after-reload", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
     await recovery.getByRole("button", { name: "Inspect existing runs", exact: true }).click();
     await expect(recovery).toContainText("Native run readback completed");
     await expect(recovery.getByRole("link", { name: runName, exact: true })).toHaveAttribute("href", `/projects/${ctx.projectId}/cycles/${cycleId}`);
     await expect(start).toBeDisabled(); // A title match and readback alone never release uncertainty.
     await expect(recovery.getByRole("button", { name: "Allow a separate new request" })).toBeDisabled();
+    // Hold the real detail refresh caused by successful native reconciliation. Waiting for the
+    // selected-model busy state to finish below proves React consumed this response before the
+    // selection assertion; checking R1 immediately after the click would pass the old head reset.
+    let detailArrived!: () => void, rejectDetail!: (error: unknown) => void;
+    const detailReady = new Promise<void>((resolve, reject) => { detailArrived = resolve; rejectDetail = reject; });
+    const heldDetail = new Promise<void>((resolve) => { releaseDetail = resolve; });
+    void detailReady.catch(() => undefined);
+    await page.route(detailUrl, async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      try {
+        const response = await route.fetch({ maxRetries: 0 });
+        expect(response.status(), await response.text()).toBe(200);
+        detailArrived(); await heldDetail; await route.fulfill({ response });
+      } catch (error) { rejectDetail(error); throw error; }
+    });
     await recovery.getByRole("button", { name: `Use inspected run ${runName}`, exact: true }).click();
+    await detailReady;
+    const selectedModel = page.getByRole("region", { name: "Selected model", exact: true });
+    const revisionSelect = page.getByRole("combobox", { name: "Revision", exact: true });
+    await expect(selectedModel).toHaveAttribute("aria-busy", "true");
+    await revisionSelect.selectOption(fixture.historicalRevision.id);
+    await expect(revisionSelect).toHaveValue(fixture.historicalRevision.id);
+    releaseDetail();
+    await expect(selectedModel).toHaveAttribute("aria-busy", "false");
+    await expect(revisionSelect).toHaveValue(fixture.historicalRevision.id);
     await expect(recovery).toHaveCount(0);
     await expect(runs.getByRole("status")).toContainText("Using the native run you identified");
+    await expect(runs).toHaveAttribute("aria-busy", "false");
+    await testInfo.attach("model-run-reconciled-historical-revision-retained", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
     const persisted = await api.get(`/api/cycles/${cycleId}/executions`);
     expect(persisted.ok(), await persisted.text()).toBeTruthy();
     expect((await persisted.json()).map((entry: { testcaseId: string }) => entry.testcaseId)).toEqual([fixture.caseId]);
@@ -126,7 +166,8 @@ test("a committed model run with a lost response stays blocked across reload unt
     await expect(runs).toBeVisible(); await expect(recovery).toHaveCount(0);
     expect(postCount).toBe(1); expect(fixture.nativeCount(runName)).toBe("1"); expect(fixture.manifestCount()).toBe("1");
   } finally {
-    release(); await page.unroute(fixture.runUrl); await fixture.cleanup(); await api.dispose();
+    release(); releaseDetail(); await page.unroute(fixture.runUrl); await page.unroute(detailUrl);
+    await fixture.cleanup(); await api.dispose();
   }
 });
 
@@ -202,6 +243,117 @@ test("a confirmed mapping conflict keeps the model run form editable and creates
     await expect(runs.getByRole("region", { name: "Run request recovery" })).toHaveCount(0);
     expect(fixture.nativeCount(runName)).toBe("0"); expect(fixture.manifestCount()).toBe("0");
   } finally { await fixture.cleanup(); await api.dispose(); }
+});
+
+test("coverage loading and denial preserve the run draft and selected cases until a successful retry, while real empty coverage stays empty", async ({ page }, testInfo) => {
+  const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  const fixture = await createRunRecoveryFixture(api, "coverage recovery");
+  const coverageUrl = `${env.apiBaseUrl}/api/projects/${ctx.projectId}/model-studio/models/${fixture.modelId}/coverage`;
+  const runName = `${fixture.name} native run`;
+  let otherCaseId = "", emptyModelId = "", postCount = 0;
+  let coverageMode: "held" | "allowed" | "denied" = "held";
+  let coverageArrived!: () => void, rejectCoverage!: (error: unknown) => void, releaseCoverage!: () => void;
+  const coverageReady = new Promise<void>((resolve, reject) => { coverageArrived = resolve; rejectCoverage = reject; });
+  const heldCoverage = new Promise<void>((resolve) => { releaseCoverage = resolve; });
+  void coverageReady.catch(() => undefined);
+  page.on("request", (request) => { if (request.url() === fixture.runUrl && request.method() === "POST") postCount++; });
+  await page.route(coverageUrl, async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    if (coverageMode === "denied") return route.fulfill({ status: 403, contentType: "application/json",
+      body: JSON.stringify({ error: "Synthetic coverage read denied" }) });
+    if (coverageMode === "allowed") return route.continue();
+    try {
+      const response = await route.fetch({ maxRetries: 0 });
+      expect(response.status(), await response.text()).toBe(200);
+      coverageArrived(); await heldCoverage; await route.fulfill({ response });
+    } catch (error) { rejectCoverage(error); throw error; }
+  });
+  try {
+    const otherCase = await createApprovedTestcase(api, ctx.projectId, { title: `${fixture.name} excluded case` });
+    otherCaseId = otherCase.id;
+    const linked = await api.post(`/api/projects/${ctx.projectId}/model-studio/models/${fixture.modelId}/revisions/${fixture.revision.id}/links`, {
+      data: { testcaseId: otherCaseId, testcaseRevision: otherCase.editRevision, elementIds: ["finish"] },
+    });
+    expect(linked.status(), await linked.text()).toBe(201);
+    await page.goto(fixture.pageUrl);
+    await coverageReady;
+    const runs = page.getByRole("region", { name: "Model runs", exact: true });
+    const mappings = page.getByRole("region", { name: "Case mappings", exact: true });
+    const start = runs.getByRole("button", { name: /^Start run/ });
+    await expect(runs).toHaveAttribute("aria-busy", "true");
+    await expect(runs).toContainText("Loading model coverage");
+    await expect(mappings).toContainText("Loading model coverage");
+    await expect(runs).not.toContainText("No cases belong to this revision yet");
+    await expect(start).toBeDisabled();
+    await runs.getByLabel("Run name (optional)").fill(runName);
+    await runs.getByLabel("Environment (optional)").fill("QA coverage recovery");
+    coverageMode = "allowed"; releaseCoverage();
+    await expect(runs).toHaveAttribute("aria-busy", "false");
+    await expect(runs.getByRole("checkbox", { name: /^Include / })).toHaveCount(2);
+    const excluded = runs.getByRole("checkbox", { name: `Include ${otherCase.title}`, exact: true });
+    await excluded.uncheck();
+    await expect(start).toHaveText("Start run with 1 case"); await expect(start).toBeEnabled();
+
+    coverageMode = "denied";
+    await runs.getByRole("button", { name: "Refresh coverage", exact: true }).click();
+    await expect(runs.getByRole("alert")).toContainText("Coverage is unavailable. Synthetic coverage read denied");
+    await expect(mappings.getByRole("alert")).toContainText("Coverage is unavailable. Synthetic coverage read denied");
+    await expect(runs).not.toContainText("No cases belong to this revision yet");
+    await expect(runs.getByLabel("Run name (optional)")).toHaveValue(runName);
+    await expect(runs.getByLabel("Environment (optional)")).toHaveValue("QA coverage recovery");
+    await expect(start).toBeDisabled();
+    await start.evaluate((element) => (element as HTMLButtonElement).click());
+    expect(postCount).toBe(0); expect(fixture.nativeCount(runName)).toBe("0"); expect(fixture.manifestCount()).toBe("0");
+    await testInfo.attach("model-coverage-unavailable-draft-retained", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+
+    coverageMode = "allowed";
+    const retried = page.waitForResponse((response) => response.url() === coverageUrl && response.request().method() === "GET");
+    await runs.getByRole("button", { name: "Retry coverage", exact: true }).click();
+    const response = await retried; expect(response.status(), await response.text()).toBe(200);
+    await expect(runs).toHaveAttribute("aria-busy", "false");
+    await expect(runs.getByRole("alert")).toHaveCount(0);
+    await expect(mappings.getByRole("alert")).toHaveCount(0);
+    await expect(runs.getByRole("checkbox", { name: /^Include / })).toHaveCount(2);
+    await expect(excluded).not.toBeChecked();
+    await expect(runs.getByRole("checkbox", { name: `Include ${fixture.name} case`, exact: true })).toBeChecked();
+    await expect(runs.getByLabel("Run name (optional)")).toHaveValue(runName);
+    await expect(runs.getByLabel("Environment (optional)")).toHaveValue("QA coverage recovery");
+    await expect(start).toHaveText("Start run with 1 case"); await expect(start).toBeEnabled();
+    expect(postCount).toBe(0);
+    await testInfo.attach("model-coverage-recovered-selection-retained", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+    const dispatched = page.waitForResponse((entry) => entry.url() === fixture.runUrl && entry.request().method() === "POST");
+    await start.click();
+    const createdRun = await dispatched; expect(createdRun.status(), await createdRun.text()).toBe(201);
+    expect(createdRun.request().postDataJSON().caseIds).toEqual([fixture.caseId]);
+    const cycleId = (await createdRun.json()).cycleId;
+    await expect(runs.getByRole("status").filter({ hasText: "Created run" })).toBeVisible();
+    const executions = await api.get(`/api/cycles/${cycleId}/executions`);
+    expect(executions.ok(), await executions.text()).toBeTruthy();
+    expect((await executions.json()).map((entry: { testcaseId: string }) => entry.testcaseId)).toEqual([fixture.caseId]);
+    expect(postCount).toBe(1); expect(fixture.nativeCount(runName)).toBe("1"); expect(fixture.manifestCount()).toBe("1");
+
+    // This separate successful native response really has no cases; only it gets empty guidance.
+    const empty = await api.post(`/api/projects/${ctx.projectId}/model-studio/models`, { data: { name: `${fixture.name} empty control`, model: MODEL } });
+    expect(empty.status(), await empty.text()).toBe(201);
+    const emptyModel = await empty.json(); emptyModelId = emptyModel.id;
+    const approved = await api.post(`/api/projects/${ctx.projectId}/model-studio/models/${emptyModelId}/revisions/${emptyModel.latestRevision.id}/approve`, {
+      data: { expectedHash: emptyModel.latestRevision.contentHash },
+    });
+    expect(approved.status(), await approved.text()).toBe(201);
+    await page.goto(`/projects/${ctx.projectId}/model-studio?model=${emptyModelId}`);
+    await expect(runs).toHaveAttribute("aria-busy", "false");
+    await expect(runs).toContainText("No cases belong to this revision yet");
+    await expect(mappings).toContainText("0 linked");
+    await expect(runs).not.toContainText("Coverage is unavailable");
+    await expect(runs.getByRole("button", { name: "Start run with 0 cases", exact: true })).toBeDisabled();
+    expect(scalar(`SELECT count(*) FROM mbt_model_runs WHERE model_id=${literal(emptyModelId)};`)).toBe("0");
+    expect(fixture.nativeCount(runName)).toBe("1");
+  } finally {
+    releaseCoverage(); await page.unroute(coverageUrl); await fixture.cleanup();
+    if (otherCaseId) await api.delete(`/api/projects/${ctx.projectId}/testcases/${otherCaseId}`, { failOnStatusCode: false });
+    if (emptyModelId) exec(`DELETE FROM mbt_models WHERE id=${literal(emptyModelId)} AND project_id=${literal(ctx.projectId)};`);
+    await api.dispose();
+  }
 });
 
 test("a mapping whose case changed since acceptance is reported for review, not rewritten", async ({ page }) => {
@@ -424,8 +576,14 @@ test("a model is created and revised in the studio, and a case is linked and unl
     // Saving revision 2 starts from the head and appends, rather than rewriting revision 1.
     await page.getByRole("button", { name: "New revision" }).click();
     await page.getByLabel("Transition 1 action").fill("Submit");
+    const savedRevision = page.waitForResponse((response) => response.request().method() === "POST"
+      && /\/model-studio\/models\/[^/]+\/revisions$/.test(new URL(response.url()).pathname));
     await page.getByRole("button", { name: "Save revision" }).click();
+    const revisionResponse = await savedRevision;
+    expect(revisionResponse.status(), await revisionResponse.text()).toBe(201);
+    const authoredRevision = await revisionResponse.json();
     await expect(revisionSelect).toContainText("rev 2");
+    await expect(revisionSelect).toHaveValue(authoredRevision.id);
 
     // Link the case to the start state, then remove the mapping from the studio.
     await page.getByRole("button", { name: "Link case", exact: true }).click();

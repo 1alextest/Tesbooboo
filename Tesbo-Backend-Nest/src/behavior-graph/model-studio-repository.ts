@@ -303,6 +303,7 @@ export class ModelStudioRepository {
           error: "The revision changed since it was reviewed; reload before approving"
         });
       }
+      await this.legacy.requireCurrentProjectAuthority(client, projectId, userId);
       const inserted = await client.query(
         `INSERT INTO mbt_model_approvals (project_id, model_id, model_revision_id, content_hash, approved_by)
          VALUES ($1,$2,$3,$4,$5)
@@ -387,6 +388,10 @@ export class ModelStudioRepository {
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [
         `model-candidates:${projectId}:${revisionId}`
       ]);
+      // Native case insertion also takes this mutex. Acquire it before authority rows, matching
+      // reviewed proposal publication, so revocation/archive can win any earlier wait safely.
+      await this.legacy.lockTestcaseSuiteWrites(client, projectId);
+      await this.legacy.requireCurrentProjectAuthority(client, projectId, userId);
       const createdCases: Array<{ digest: string; testcaseId: string; created: boolean; title?: string }> = [];
       for (const digest of digests) {
         const path = byDigest.get(digest) as GeneratedPath;

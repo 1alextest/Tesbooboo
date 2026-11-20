@@ -89,7 +89,9 @@ test("the default-off proposal capability is explicit and cannot be replaced by 
   assert.deepEqual(catalogGaps(validTools(), { requireProposalPreview: true }).errors, PROPOSAL_TOOLS.map(name => `missing tool: ${name}`));
   assert.deepEqual(catalogGaps(validTools(true), { requireProposalPreview: true }).errors, []);
   assert.deepEqual(schemaGaps(validTools(true)).errors, []);
-  assert.match(catalogGaps([...validTools(), tool("create_testcase", caseFields)]).errors.join("\n"), /direct publication tool must not be advertised: create_testcase/);
+  for (const name of ["create_testcase", "create_suite", "update_suite"]) {
+    assert.ok(catalogGaps([...validTools(), tool(name, caseFields)]).errors.includes(`direct publication tool must not be advertised: ${name}`));
+  }
 });
 
 test("proposal deduplication and target revisions are required, not merely documented properties", () => {

@@ -7,7 +7,7 @@ This is an implementation evidence record under the existing ASER review owner, 
 ## Run context and immutable inputs
 
 - Target: `1alextest/Tesbooboo`, PR #167 into `development`; #158 is closed and unmerged. PR #164's governed model runs remain part of the integration.
-- Baseline under independent archaeology: `288c89b36dd5e748621752a175f1f4bdaac7ec87`. Concurrent upstream work through `ae3bdbd4725f2547af9a387afcdbfd6ab95c2cd2` is reconciled, including exact PostgreSQL JSONB history assertions, truthful credential-restricted MCP diagnostics, the reviewed-case graph-handoff fixture, human-reviewed MCP Notes/severity proposals and explicit reporter MCP consent. The integration preserves stronger competing-transaction checks, full semantic revision counters and complete document readback before retry. PR #166's migration URL validation is retained through development merge parent `6897f989b055a955280f810c7daace86f74057fa`.
+- Baseline under independent archaeology: `288c89b36dd5e748621752a175f1f4bdaac7ec87`. Concurrent upstream work through `6862748b986264a6ae7866a33316ee796a9e8e46` is reconciled, including exact PostgreSQL JSONB history assertions, truthful credential-restricted MCP diagnostics, the reviewed-case graph-handoff fixture, human-reviewed MCP Notes/severity proposals, explicit reporter MCP consent, valid rename IDs, native-reviewed notification fixtures, the actual PUT case-edit route and the KB actions-menu navigation. The integration preserves stronger competing-transaction checks, full semantic revision counters and complete document readback before retry. PR #166's migration URL validation is retained through development merge parent `6897f989b055a955280f810c7daace86f74057fa`.
 - Canonical requirements: the original eight numbered files in `Tesbo_Specifications_v1.4.28.zip`, SHA-256 `6094687758ebf1e5dfa3c6ed8e2209b8967a190523815ba1e1197d11867374ef`, and the existing application baseline. The repository roadmap remains subordinate to those originals.
 - Unchanged review method: `NesberryEnterprise/Nesberry@d83549c85a4dcd047fb40dc4fba4ec62737ab0fc`, canonical team charters, review orchestration, Purple mandate/runbook and Graph requirements/design/tasks. The portability policy binds the method to Tesbo's actual actors, policies, code, UI and authorized environments; Nesberry-specific product rules are not imported.
 - Actors and outcomes: human project owners/managers/reviewers, project-bound machine credentials, internal jobs, external executor instances and separate analysts. Publication, execution observation, model expectations and human approval remain different facts.
@@ -61,14 +61,156 @@ Later corrective checks, before the final CI pin:
 
 The required new runtime run must include all existing selected stages in `smoke-security-quality.yml`, including the full Model Studio API/UI files, exact human review, consent, KB, testcase, native Run/execution/automation/evidence compatibility and the smoke journeys. `behavioral-quality.yml` includes 11 model transaction/race/mapping cases alongside all existing migrated suites and the new historical rename/association assertions. The existing frontend quality job also selects the recovery helper/transport regressions. A skipped downstream step, mocked pass or earlier green commit does not close these exits.
 
+### Published integration evidence and remaining corrections
+
+The first published corrective source is `3ebda24300d55a6d3e2141b9d64aecde23e7d4c4`, tree
+`085693afe6a6e9673a74a730ce32bcee7bc8911f`. Its actual CI checkout was PR merge
+`c181e36ccdbf43237efbb1a9e9ae8dff98478c34`, combining that head with development `6897f989`.
+Behavioral run `44654648269`, database job `136017777581`, passed 599 tests and failed two new
+rename fixtures before the history assertions: `REN-` plus a 32-character UUID exceeded the native
+32-character external-ID limit. No assertion or production validation was weakened. The upstream
+correction is retained, and run `44655359869`, database job `136020112536`, passed **all 601 tests
+across all 17 suites**, including the two old/new run-history witnesses, model atomicity and Bug
+association preservation. That run used source `3cc4e045473df6fcef8a204079ab37125d678329` and
+merge build `fb29500535953cfff320c4acafcddcf86f0d76f0`.
+
+For source `3ebda243`, smoke run `44654648304` passed the initial **19/19** smoke cases and the
+selected graph/Zyra handoff **21/21**. The later notification lane failed six fixtures because they
+assigned an Approved label without the required exact native review. The upstream notification
+fixture repair uses the actual native review helper and is retained. Remaining downstream runtime
+results must be read from their actual later head; this failed workflow is not acceptance.
+
+Authentic artifact `14593362064`, `ci-smoke-evidence`, has SHA-256
+`be90a1ac8a59be71757350072068de787a222293384d142d042bd63890460e59`. The downloaded bytes were
+hash-verified and the embedded reports decoded. The artifact contains 218 PNGs, including actual
+document uncertainty/navigation and full-page/drawer execution states. This is a count of artifact
+images, not a visual-coverage verdict. A second testcase-lane invocation overwrote its earlier HTML
+report with the one-test issue-key aggregate report; the pending workflow correction gives that
+invocation its own existing artifact output directory. The original logs retain the earlier step
+result, but the overwritten HTML inventory is not reconstructed as if it survived.
+
+The independent [QA delta](2026-11-19-independent/qa-native-delta.md) at `3ebda243` passed 153
+targeted assertions, three original unchanged contract probes and seven new real Nest/HTTP/domain
+checks using injected authentication/persistence. It confirms the inspected backend corrections;
+the HTTP harness is not actual cookie/token parsing or PostgreSQL evidence. It retains NOT READY
+while actual browser journeys are pending and identifies late detail refresh resetting a newer
+historical-revision selection. A coverage-read failure also needs truthful unavailable-state copy.
+The owning UI tests and current source are being corrected; no future result is counted here.
+
+The independent [Security receipt](2026-11-19-independent/security-native.md) at source `8707d56a`
+identified two current-boundary gaps being repaired: suite create/update bypasses the stated human
+publication boundary, and model approval/candidate authority is not rechecked and retained across
+its transaction wait. Its machine-origin provenance finding remains a distinct tracked identity
+gate, not permission to invent an installation schema. The receipt's 354 unit checks and 12 recovery
+checks are mocked/source evidence; its required real denial/positive and concurrency tests remain
+open until executed at the corrective head.
+
+### Later runtime and current bounded follow-up
+
+Source `cce4516c679a671b5c2ce30bc43afe99292079f1` ran as merge build
+`207f7cbba15928e33a5997a0c10bd819056a7932`. Smoke run `44656690980`, job `136024548988`,
+passed **17/17 Model Studio tests (9 API, 8 UI)**. Its testcase lane finished with **127 passed
+and one passed on retry**, not a clean first-attempt 128/128. The retained trace shows proposal
+schema dependency revision 22 at creation and 24 before the Notes update, while the parallel
+API suite created/deleted suites in the same project. The exact-review Save returned 409 during those changes; the trace does not retain a save-time
+snapshot to prove the sole cause of the conflict. The positive Notes fixture now owns a disposable project via the existing
+project helper; all persistence/assertion checks remain and no automatic Save retry was added.
+
+The same run passed **28/29** selected KB tests. KBU-65 passed the exact saved-content and reviewed
+version assertions, then waited for a hidden menu item without first opening More actions.
+The screenshot, accessibility snapshot and source agree on that navigation mistake. Upstream
+`6862748b` adds the missing menu click; that exact correction is retained. No assertion, timeout
+or production rule was relaxed. Later scheduled-run/MCP/native-execution stages were skipped by
+this failed job and are not counted as executed.
+
+Artifact `14594393268`, SHA-256
+`a3c5b4960ab254406fef697b330c1944402c77f88cc59f43987de000e68c965c`, was downloaded and
+hash-verified. Its 235 PNGs and traces remain authentic evidence of those captured scenes;
+Model Studio's passing report has no screenshot attachments, so its visual recovery is not
+inferred from the pass count.
+
+The next coherent source batch prepares the following scoped repairs, still requiring exact-head CI:
+
+- Preserve a still-valid historical model revision during delayed detail refresh; select a newly
+  authored revision explicitly. Key coverage loading/error/ready state, retain the run draft and
+  selection through denied-read retry, and block dispatch while eligibility is unavailable.
+  Discovery selects 18 Model Studio tests (9 API, 9 UI), including the delayed-read ordering and
+  real loading/error/retry/empty controls. Four After screenshots are attached after assertions;
+  they are not produced or verified by discovery.
+- Refuse machine suite create/update at MCP/REST and the shared native owner, while keeping
+  trusted human creation/editing and exact-reviewed same-transaction suite insertion. Recheck
+  current project/workspace/member authority after model transaction waits and retain it until
+  commit. Eight new PostgreSQL authority/lock scenarios remain CI obligations.
+- Keep the exact active MCP catalog at 46 default tools (22 read, 24 write), or 49 with the
+  isolated proposal preview (24 read, 25 write); 13 direct testcase/dependency publishers are
+  retired. Generic scope/billing controls use the existing permitted Bug writer and still check
+  real persisted rows, exact audit and forbidden effects. The full project snapshot includes
+  governing revision/consent state. Targeted MCP compatibility tests pass 201/201 locally.
+- Preserve the full testcase HTML report by giving the later issue-key invocation a separate
+  output directory. The runtime selection remains unchanged.
+
+The independent [Purple receipt](2026-11-19-independent/purple-native.md) records 37 actual PNG
+inspections, source-derived capture semantics and image hashes. It credits the narrow mobile and
+keyboard preview evidence, identifies two advisory presentation issues, and keeps persisted-model
+visual recovery and the completed KB history journey unverified. A passed browser assertion is
+not substituted for an unseen screenshot or an untested assistive-technology path.
+
+Final local backend regression at the coherent follow-up source passed **116 suites / 2,344
+assertions**. Two environment-gated suites / 98 tests remained skipped and must not be counted as
+runtime proof. The native publication selection passed **383/383 across nine suites**, and the
+standalone deployment diagnostic passed 14/14. The immutable `3ebda243` suite-publication probe
+failed five of six tests; the corrected native suite now passes seven, including a later-added
+failed-lookup distinction. Backend/E2E types and the existing lint baseline passed with zero new
+lint errors. Raw local logs and the adapted before-probe are retained beside these receipts.
+
+Source `6862748b986264a6ae7866a33316ee796a9e8e46`, merge build
+`e14e1f3c6ac2f69aca8b7fe8ff9a90ea917b23ad`, subsequently passed **29/29 KB** and **19/19
+scheduled-run** tests in smoke run `44660092957`. Its selected testcase and email stages each had
+one retry-pass and are not clean first-attempt results. The bulk execution stage selected 11:
+eight passed, one failed in setup, and two did not run. The setup sent generic Approved cases to
+bulk-create and then assumed a successful `created` array. The existing run-browser fixtures now
+use the real bulk Draft writer followed by the exact human review helper; the six sibling setup
+sites retain all original run/filter/sort/status assertions. These fixture corrections still require
+a new real run; later MCP/compatibility stages remain unexecuted at this cutoff.
+
+These local and source statements do not promote the earlier browser/database results to the new
+batch. The independent security, QA and visual reviewers must reconcile the final pinned delta.
+
 ## Independent assurance and retained next milestone
 
 Two actual independent Blue reviewers completed archaeology at the pinned baseline. Their unchanged individual receipts and bounded two-member reconciliation are retained in [the independent review directory](2026-11-19-independent/blue-reconciliation.md). The agreed direction is to extend and compose the native owners; it is not a full specification freeze, approval of a concrete new persistence primitive or release readiness.
 
 The independent QA receipt at source `3299691e` is [retained](2026-11-19-independent/qa-integration.md) with only its terminal blank line normalized for repository whitespace validation (original SHA-256 `585d28eb35a4c98e73e2dcd4e317918263b5f55a784007c5ef98d90e3134c1c4`); its findings are unchanged. Its NOT READY verdict identified four concrete defects: machine model publication, Bug result rewriting, stale recorded mappings and uncertain run retry. The later fixes and runtime evidence require a new delta review; the earlier verdict is not silently replaced. Its 49-journey denominator and unexecuted broader obligations remain explicit.
 
-Independent Red and Elephant Gold reviews are in progress. Grey journey reconstruction, White prearchitecture, implementation specialist review, manual Graph closeout and White final reconciliation retain their original sequence and evidence obligations. No full-team verdict is recorded yet.
+The actual independent [Red receipt](2026-11-19-independent/red-independent.md) and root grounding
+member's [formal two-member Gate B reconciliation](2026-11-19-independent/red-grounding-and-reconciliation.md)
+are complete. They admit only the native extension/extraction/composition direction to Grey/White;
+no concrete new persistent primitive or unresolved human policy is approved. The independent
+[Elephant Gold receipt](2026-11-19-independent/eg-independent.md) independently retains NOT FROZEN
+and records the canonical/source authority and actual merge-build distinctions.
+
+The independent [Grey receipt](2026-11-19-independent/grey-independent.md) retains 49 journeys:
+43 high and six medium, with 24 G0 simulations, 20 G1 source traces and five blocked original-loop
+journeys. It records zero runtime observations and MATERIAL JOURNEY GAPS. Its independent
+pre-crosswalk reconstruction checkpoint is preserved alongside it. The separate actual [W-I challenge](2026-11-19-independent/grey-independent-challenge.md)
+verified the accounting and sustained the bounded findings, while narrowing the positional-save,
+source-history and conditional-deletion claims. It also independently corroborated the same-pin
+suite publication gap. The actual [White prearchitecture receipt](2026-11-19-independent/white-prearchitecture.md)
+records **PASS WITH EXPLICIT GATES — bounded native design work only**, after reading the actual
+W-I receipt. It admits native journey, owner-fit, consumer and oracle design; it does not approve
+a new persistent owner, unresolved protected policy, original-loop completion or final readiness.
+Its known suite omission is pinned to `3ebda243` and requires a new disposition on the later fix.
+Remaining implementation specialists, manual Graph closeout and White final reconciliation retain
+their original sequence and evidence obligations. No full-team verdict is recorded yet.
 
 At the pinned methodology revision, Graph tasks state that its mechanical harness is not implemented. Any closeout in this iteration must be labelled a manual evidence reconciliation, not an executed Graph verifier. Missing runtime or visual evidence remains an explicit gap.
 
 The retained I3-Q outcome remains ChatGPT task → explicitly assigned external executor using its own driver → original report bytes/attachments → analysis → linked new retest → exact selected human native publication. The current default-off proposal preview and model dispatch do not implement that outcome. The next design must reuse the native task, principal, storage, proposal, case, Run and Bug owners, with separate task/prompt/assignment/attempt/report/analysis identities and truthful failure/retry semantics. Operational S0 decisions and real original-loop runtime evidence remain outstanding.
+
+## Concurrent fixture reconciliation before publication
+
+Upstream `77573c4a35e7a04c510d225788211c5584df8d4e` supplied the same six run-browser fixture repairs through the shared `bulkCreateApprovedTestcases` helper. This batch preserves that upstream implementation and adds the created-row count assertion from the independently prepared local helper. Both paths use actual Draft creation and exact human review; no status/filter/sort assertions are removed. The local-only duplicate helper is removed. Runtime verification still belongs to the next published tree.
+
+## First-attempt email fixture diagnosis
+
+Artifact `14596256551` from source `6862748b`, merge `e14e1f3c`, run `44660092957` confirms ACU-10 failed after earlier account reset work because the shared positive fixture password had 18 characters while native password setting permits at most 16. Cleanup authenticated with the previous reset password, received HTTP 400 when restoring the oversized seed, and silently exhausted its attempts. The API email tests and the three negative form assertions passed. This is a demonstrated fixture-policy mismatch, not evidence of broken email delivery. The existing shared positive seed now satisfies the policy and the existing cleanup throws if it cannot restore the native state; negative assertions and product policy remain unchanged. The same selected ACU-07/08/10 sequence must now pass on its first attempts. See the hash-bound [artifact analysis](2026-11-19-independent/ci-686-failure-analysis.md).

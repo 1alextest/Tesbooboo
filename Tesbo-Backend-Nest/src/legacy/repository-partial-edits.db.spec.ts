@@ -240,8 +240,18 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
       await blocker.query("UPDATE suites SET parent_id = $2 WHERE id = $1", [child, nextRoot]);
       const pid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
       const f = service(), before = await state(), body = { [field]: field === "position" ? 8 : "Edited text" };
-      const writing = (transport === "service" ? f.svc.updateSuite(owner, child, body) : f.tool("update_suite", { suiteId: child, ...body })).then(() => null, (error: unknown) => error);
+      const writing = (transport === "service" ? f.svc.updateSuite(owner, child, body, { kind: "human_session" }) : f.tool("update_suite", { suiteId: child, ...body })).then(() => null, (error: unknown) => error);
       try {
+        if (transport === "MCP registry") {
+          expect(await writing).toMatchObject({ code: RpcCode.ToolExecutionError, data: { code: "HUMAN_PUBLICATION_REQUIRED" } });
+          expect(await state()).toEqual(before);
+          expect(f.suitesInvalidation).not.toHaveBeenCalled(); expect(f.casesInvalidation).not.toHaveBeenCalled();
+          await blocker.query("COMMIT");
+          const after = await state();
+          expect(after.child).toEqual({ ...before.child, parent_id: nextRoot });
+          expect(after.row).toEqual(before.row); expect(after.versions).toEqual(before.versions); expect(after.control).toEqual(before.control);
+          return;
+        }
         await waitForBlocker(pid); expect(await state()).toEqual(before);
         await blocker.query("COMMIT"); expect(await writing).toBeNull();
         const after = await state();
@@ -263,7 +273,8 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
       ["bulk_update_testcases", { testcaseIds: [testcaseId], priority: "P0" }],
       ["bulk_archive_testcases", { testcaseIds: [testcaseId] }],
       ["link_requirement_to_testcase", { testcaseId, jiraIssueKey: "REPO-3" }],
-      ["unlink_requirement_from_testcase", { testcaseId, provider: "jira" }]
+      ["unlink_requirement_from_testcase", { testcaseId, provider: "jira" }],
+      ["create_suite", { name: "Machine suite" }], ["update_suite", { suiteId: child, name: "Machine rename", parentId: null }]
     ];
     for (const [name, args] of attempts) {
       await expect(f.tool(name, args)).rejects.toMatchObject({ data: { code: "HUMAN_PUBLICATION_REQUIRED" } });
@@ -274,9 +285,11 @@ type Hook = (sql: string, result: QueryResult<Record<string, unknown>>, raw: Raw
 
   it("retains explicit reparent/root and text-clearing behavior", async () => {
     const f = service();
-    await f.svc.updateSuite(owner, child, { parentId: nextRoot, description: "", preconditions: null });
+    await f.svc.updateSuite(owner, child, { parentId: nextRoot, description: "", preconditions: null }, { kind: "human_session" });
     expect((await state()).child).toMatchObject({ parent_id: nextRoot, description: "", preconditions: "" });
-    await f.tool("update_suite", { suiteId: child, parentId: null });
+    await expect(f.tool("update_suite", { suiteId: child, parentId: null })).rejects.toMatchObject({ data: { code: "HUMAN_PUBLICATION_REQUIRED" } });
+    expect((await state()).child).toMatchObject({ parent_id: nextRoot, description: "", preconditions: "" });
+    await f.svc.updateSuite(owner, child, { parentId: null }, { kind: "human_session" });
     expect((await state()).child).toMatchObject({ parent_id: null, description: "", preconditions: "" });
   });
 
