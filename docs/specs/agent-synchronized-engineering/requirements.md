@@ -1,6 +1,6 @@
 # ASER — Requirements v0.4 (canonical integration view)
 
-**Canonical home:** Tesbo specification package revision **1.4.29 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
+**Canonical home:** Tesbo specification package revision **1.4.34 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
 
 **State:** Proposed requirements, mapped individually to canonical owners, tasks and falsifiers in `05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md` revision 1.4.29. The 48 R-ASE identifiers are preserved as a scoped namespace in the same canonical package; existing FR/AC/T/QA identifiers are not renumbered.
 
@@ -438,3 +438,38 @@ See [skills-governance.md](skills-governance.md) `SK-E2E-01..28` (v1.4.28 baseli
 
 **ASER context-extension note:** The seventh domain is Skills Governance. The earlier six-domain `ASE-E2E` scenarios remain required but are not sufficient for governed authoring; `SK-E2E` extends them, and every published artifact must pin applicable skill provenance. Canonical revision 1.4.28 incorporates this scope in the original eight files; design reconciliation does not ratify undecided policy or authorize implementation, publication or deployment.
 
+### Source-fit application of the retained requirements
+
+The same R-ASE and MBT contracts govern reuse. Existing model/source/native case/run code requires the concrete convergence in the design and implementation plan before CURRENT selection, true-human approval, unpublished AI candidate handling, atomic provenance, mapping history, source entitlement or immutable learning can be claimed. Existing matching/lookup and Bug/result side effects must not become false learning labels. This clarifies implementation admission for retained requirements; it creates no new requirement, graph or approval owner.
+
+### Method portability preserves the target contract
+
+Reuse an imported method only within an explicit supported authoring/output profile. Separate reusable test-design reasoning from target actors, interfaces, artifact formats, classification vocabulary and lifecycle operations. A target without accounts, a browser, a repository, a formal model or an automated driver must not acquire fabricated prerequisites. Technique applicability follows the actual obligation and supported capability; a narrow specialist method may legitimately be not applicable.
+
+The method must preserve an accepted current restriction, release window or user-visible notice when it is part of the applicable requirement. Incidental planning labels may be omitted; wording alone cannot supersede an accepted obligation. A reusable case's intended actor/data/channel scope is distinct from the subset actually observed. Representative execution supports only its evidenced scope or an explicitly justified equivalence claim, never an implicit all-context pass.
+
+Native definition status, execution outcome, approval, active applicability and presentation layout remain independent. Imported workbook conventions cannot renumber canonical case identities, reset prior attempts, promote a Draft, overwrite relied-on revisions or bypass native selected review/apply. These are refinements of existing T-422, native case/history and accepted-oracle requirements, not new record owners.
+
+### Reconciliation with published canonical revisions 1.4.30 and 1.4.31
+
+## Revision 1.4.31 — graph contracts and assurance findings
+
+Extend FR-115–119 and FR-124 through exact-revision typed relationships to governing policy obligations and user-manual sections. For each applicable obligation, show the approving authority, scope and effective interval. A manual explains intended operation and is linked as guidance. Conflicting requirements, policy, observed behavior and manuals remain visible and require an accountable disposition. A reviewed change may create linked review candidates for affected policies, guides or tests. Publication remains with the respective native owner.
+
+Graph analysis may rank root-cause hypotheses, surface inconsistent execution cohorts and prioritize defect investigation. Root-cause confirmation requires independent distinguishing evidence and an authorized disposition. Risk scores and inconsistency flags are informational. They cannot change test verdicts, defect status or release approval.
+
+**Current reconciliation boundary:** canonical revision 1.4.32 preserves the published 1.4.30/31 obligations and the source-convergence and imported-method refinements above. Earlier subordinate draft wording does not supersede that current canonical contract. All architecture/authority, implementation, runtime, visual and method-efficacy gates retain their recorded scope.
+
+
+### Retained published Graph Analytics proposal
+
+Extend FR-115–119 and FR-124 with a ranked, permission-scoped Graph Analytics view. Explain the meaning of a relationship, its applicable obligation or guidance, the plausible consequence of a change, evidence strength, alternatives where material, and the next verification step. Initial views are Change impact and Coverage gaps. Later failure investigation and stability use the same reporting surface and existing analytics owners.
+
+**Historical integration boundary:** the prepared 1.4.33 v7 candidate preserved the published 1.4.32 Graph Analytics proposal and reviewed portability corrections. Its exact receipts remain historical; the current canonical authority and later incoming amendments are stated below.
+
+
+### Retained published Graph Analytics assurance amendments (1.4.33)
+
+FR-115–119 and FR-121–124 apply. Each finding explains the affected outcome, exact obligation or evidence basis, relationship direction, plausible consequence, uncertainty and next check. An effective approved policy or requirement can establish an obligation without a model. Manual guidance, observed behavior and inferred dependencies retain their separate meaning. Where applicable, a finding links to the existing FR-119 impact and its current status. Viewing or drafting leaves acknowledgment and closure to that workflow.
+
+**Current canonical authority:** revision 1.4.34 preserves the complete published 1.4.33 and the assessed portability correction. The historical 125 ASER and eight GEX-AC definition rows remain unchanged; five GA-AC acceptance rows supersede the four earlier summaries. GEX-SEM and GEX-DISC remain noncanonical subordinate proposals. Incoming Graph Analytics refinements and later DISC content do not inherit earlier cold, UI, runtime or empirical review. All remain subject to their declared gates; the package is NOT FROZEN.

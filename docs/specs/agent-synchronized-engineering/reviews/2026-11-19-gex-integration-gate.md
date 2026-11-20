@@ -45,3 +45,21 @@ This section records findings against PR #168 head `264380c28a6844e9a349968d9317
 | GEX-GATE-12 — overlapping branches remain distinct | PR #167 and #168 are both open; their plans/approval contracts overlap. | Reconcile exact heads and every changed owner/link, rerun current-tree CI and narrow secrets analysis, then execute *unchanged* assurance team charters against pinned canonical content. |
 
 **Independent team status: NOT RUN by this addendum.** These are author-desk challenges, not Blue/Red/Green/White/QA/Security/Grey/Purple/Graph/Elephant-Gold verdicts. Freeze each genuine reviewer's first-pass findings before feedback, and preserve non-results rather than synthesizing a PASS. No deployment, canonical freeze or merge is authorized by this review.
+
+
+## Current portability reconciliation checkpoint — prepared 1.4.34
+
+This is a later evidence-bound update. All earlier observations and limits above remain historical records. The current detailed disposition is [Skills portability and specification reconciliation](2026-11-19-skills-portability.md), supported by actual separately invoked and frozen reviewer receipts.
+
+| Earlier gate | Current evidence and bounded disposition |
+| --- | --- |
+| GEX-GATE-01 / 07 | Original canonical bytes are recovered. The proposed 1.4.34 archive preserves every published 1.4.33 body except the current revision header, then appends reviewed reconciliation to the same eight files. Exact target, predecessor and ZIP hashes are in the detailed receipt. Missing-byte availability is resolved; full architecture/canonical freeze is not granted. |
+| GEX-GATE-02 | [Commit 2190fecc](https://github.com/1alextest/Tesbooboo/commit/2190fecc120e4de0817abc61d434542c54df27f1) passed all eight returned workflow groups, including current-tree secret scanning. A verified Git-source citation was linked without changing any scanner rule or exception. A later publication requires its own current-head CI result. |
+| GEX-GATE-04 | Earlier subordinate SK-E2E-41..44 proposals are mapped to existing canonical proof owners. The 125 ASER definitions and eight GEX-AC definitions remain distinct from five GA-AC acceptance rows that supersede four earlier prose summaries. GEX-SEM and later GEX-DISC labels remain subordinate proposals, not canonical ID allocations or executed tests. |
+| GEX-GATE-05 | Actual independent Blue, Red, Elephant Gold and QA first passes, disclosed maintainer work, informed Green/QA/Graph and actual White dispositions now exist. The broader original assurance run is reconciled with its own exact pins. This replaces the absence-of-receipts state for the stated scope, not missing code-author/deployer grounding or complete implementation/UI/operational assurance. |
+| GEX-GATE-03 / 06 / 12 | PR167 is active separate implementation. Its changing head, implementation proof and overlap must be reconciled before merge. No earlier CI checkpoint or this documentation review certifies its current head. |
+| GEX-GATE-08 / 09 / 10 / 11 | Native profile/schema/grammar, complete candidate package, independent oracle, protected authority and empirical effectiveness gates remain. The recovered raw Skill bodies are unchanged and inert. Written adoption safeguards do not install or qualify them. |
+
+The reviewed integration manifest is SHA-256 `62f9190c1d48b1b93f139fe8474accbcd19cf8ac156247931701be9363b2ec6f`; canonical ZIP SHA-256 is `ac55077842806781223c83c64869b2f55a992155ec12bb9ae4689459961f11f9`. Maintainer and independent Green each ran the declared 96-check structural verifier successfully. Manual Graph checks support owner/identifier/proof consistency. These are document/source/integrity results, not native runtime tests or a computed Graph-harness result.
+
+Later incoming DISC clarification blocks and their original author diagnostic are preserved during publication with a separate exact merge receipt and independent Green preservation check. They do not inherit the v7 substantive verdict. The package and PR remain **PROPOSED / NOT FROZEN**; no source implementation, Skill activation, merge or deployment follows from this checkpoint.
