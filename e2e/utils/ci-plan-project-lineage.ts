@@ -26,9 +26,13 @@ export async function verifyPlanProjectLineage(page: Page, api: string, web: str
   });
   try {
     const plan = await post(`${base}/plans`, { name: "CI Local Lineage Plan" });
-    await test.step("a genuinely empty Plan retains the existing no-associated-runs guidance", async () => {
+    await test.step("a genuinely empty Plan retains the existing no-associated-runs guidance and explains the next step", async () => {
       await page.goto(`${web}/projects/${projectId}/plans/${plan.id}`);
       await expect(page.getByText("No test runs associated with this plan yet. Create a new run or link an existing one to start tracking progress.", { exact: true })).toBeVisible();
+      // Creating or linking a run is linking-only: the plan's cases are not seeded automatically,
+      // so the empty state names the manual next step instead of implying one.
+      await expect(page.getByTestId("plan-empty-run-next-step")).toContainText("New runs start empty");
+      await expect(page.getByTestId("plan-empty-run-next-step")).toContainText("Cases are never added automatically");
     });
     const foreign = await post(`${other}/plans`, { name: "CI PRIVATE foreign Plan" });
     const suite = await post(`${base}/suites`, { name: "CI Local Lineage Suite" });
