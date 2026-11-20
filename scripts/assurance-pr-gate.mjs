@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const REVIEW_ROOT = 'docs/specs/agent-synchronized-engineering/reviews/';
 const SHA = /^[a-f0-9]{40}$/i;
 const RECEIPT_PATH = /^docs\/specs\/agent-synchronized-engineering\/reviews\/[A-Za-z0-9/_-]+\.md$/;
 
