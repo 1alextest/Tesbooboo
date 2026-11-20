@@ -215,7 +215,7 @@ test.describe("test cycle / run CRUD", () => {
       });
       expect(res.status()).toBe(409);
       const body = await res.json();
-      expect(body.error).toContain("Only Approved test cases can be added to a test run");
+      expect(body.error).toContain("Only Approved test cases with a current exact human-review receipt can be added to a test run");
 
       const runs = await (await request.get(`/api/projects/${ctx.projectId}/cycles`)).json();
       expect(runs.some((run: { name: string }) => run.name.includes("Draft Cycle"))).toBe(false);
