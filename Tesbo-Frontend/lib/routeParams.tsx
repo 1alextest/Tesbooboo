@@ -6,7 +6,6 @@ import { api, ApiError } from "@/lib/api";
 import { routeResolveKey, takePrefetched } from "@/lib/projectPrefetch";
 import { findRetestRouteIntent, retestRouteHint, updateRetestRouteHint } from "@/lib/nativeRetestIntent";
 import { PageLoader } from "@/components/ui";
-import { useAppData } from "@/components/app/AppDataProvider";
 
 /*
  * Readable URLs: /projects/LOH/bugs/LOH-BUG-1 instead of /projects/<uuid>/bugs/<uuid>.
@@ -82,10 +81,8 @@ function decode(v: string): string {
   }
 }
 
-export function RouteParamsProvider({ children }: { children: React.ReactNode }) {
+export function RouteParamsProvider({ children, userId }: { children: React.ReactNode; userId: string | undefined }) {
   const raw = useNextParams() as Params;
-  const { currentUser } = useAppData();
-  const userId = currentUser?.userId;
 
   const refs = useMemo(() => {
     const out: Record<string, string> = {};

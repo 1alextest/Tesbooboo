@@ -49,6 +49,14 @@
       "path": "native-v38-reconciliation.md.json",
       "sha256": "46b4a2bb7ab1876baa78f34c2c1c65dff2d935c13130f615f166a447e8e75163",
       "originalReportSha256": "78b33b5c354fb53bdcbf2cd638ed303bd2785946c58dea2c049f73e123a693fa"
+    },
+    {
+      "path": "native-ui-identity-composition-review.md",
+      "sha256": "9a17c1abde34dbf76ee9fc83c85cf2301b02c243873abfebbe23561d9785f62e"
+    },
+    {
+      "path": "native-secret-exception-review.md",
+      "sha256": "34ed52805f3db1b3a55597898060d06460e4f75b890279802dd7da9fb31969fd"
     }
   ]
 }
