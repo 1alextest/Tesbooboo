@@ -1,0 +1,166 @@
+{
+  "record_kind": "Deterministic artifact assembly and exact-byte verification; not an assurance signatory or runtime acceptance",
+  "revision": "1.4.38",
+  "input": {
+    "directory": "input-v38-candidate2",
+    "manifest": {
+      "path": "input-v38-candidate2/manifest.json",
+      "bytes": 3398,
+      "sha256": "a5da721acc5c8ce39948c42ec8cc2345ea3778278642b63dc58430fa6575531a"
+    },
+    "file_count": 15,
+    "payload_bytes": 2365656,
+    "files": [
+      {
+        "path": "RUN-CONTEXT.md",
+        "bytes": 9284,
+        "sha256": "c783a18bc793b45a930ad3648074f2f5249dfb85f700e1fff58d2c91e14b0288"
+      },
+      {
+        "path": "canonical/00_README.md",
+        "bytes": 165131,
+        "sha256": "046740c0d5a2143593947084aab9bad97aeeb6aca2248fc77b890f8d193b1e57"
+      },
+      {
+        "path": "canonical/01_PRODUCT_REQUIREMENTS.md",
+        "bytes": 227675,
+        "sha256": "19e5bbff86646719f707db16615127567d3af02f4d6b6d628da0bee175171607"
+      },
+      {
+        "path": "canonical/02_WORKFLOW_AND_UX_SPEC.md",
+        "bytes": 142900,
+        "sha256": "a3248327c291fcfb2d76176cb5723709973bc490bef89f66834a8d84588ba710"
+      },
+      {
+        "path": "canonical/03_TECHNICAL_DESIGN.md",
+        "bytes": 407849,
+        "sha256": "6fa31cab5106cc6c72e0ed1bd52a2e503fd474279833784ab2a72fb5bb5609f8"
+      },
+      {
+        "path": "canonical/04_MCP_API_CONTRACTS.md",
+        "bytes": 186695,
+        "sha256": "a36b996feb928393d67974c373c503e7798cd049b829551a20a15a2c612cecc9"
+      },
+      {
+        "path": "canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+        "bytes": 392397,
+        "sha256": "26914139df223ee45f03d5e8a027c411b7241c8c4fac23fb43df34a0a18f4165"
+      },
+      {
+        "path": "canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+        "bytes": 131932,
+        "sha256": "fb759b4768c174bf74b0444d8fcc3e1e7a8057af766a813633d597bba31b871d"
+      },
+      {
+        "path": "canonical/07_UI_DESIGN_TASKS.md",
+        "bytes": 134250,
+        "sha256": "4c2b4e8464c810d563b16d18dc754e2b6d8be5a9b5ee4f82580587206caea4bf"
+      },
+      {
+        "path": "views/AGENT_RULE_TEMPLATE.md",
+        "bytes": 43020,
+        "sha256": "4d7a9e45ed6b627602f0670a6ff8f78148fe740280969e93df642ac5037af111"
+      },
+      {
+        "path": "views/README.md",
+        "bytes": 46799,
+        "sha256": "1df7503adc67d95d108d6b0f8b967c3263f3c2ee135b47c551bb8dff24e30cf6"
+      },
+      {
+        "path": "views/design.md",
+        "bytes": 162618,
+        "sha256": "42b044548c028c2ad0fd865e737a0524770a1d3b61fbf5e5ec732cf4b8c0f487"
+      },
+      {
+        "path": "views/implementation-plan.md",
+        "bytes": 143684,
+        "sha256": "e721edc05f48a81a606def4aae9ab75f0e50ceefe2497e2a5f59b68b3ec14d60"
+      },
+      {
+        "path": "views/requirements.md",
+        "bytes": 95674,
+        "sha256": "17715eaca32392557d111a1512985931b73f77f5c930a0cb5e412d7743a06b64"
+      },
+      {
+        "path": "views/skills-governance.md",
+        "bytes": 75748,
+        "sha256": "4cec61661eff9afe398cc146e7766a75c59e28e40d286f16ed3e16ccae5dd475"
+      }
+    ]
+  },
+  "normative_file_count": 8,
+  "normative_file_bytes": 1788829,
+  "canonical_files": [
+    {
+      "path": "00_README.md",
+      "input_path": "input-v38-candidate2/canonical/00_README.md",
+      "bytes": 165131,
+      "sha256": "046740c0d5a2143593947084aab9bad97aeeb6aca2248fc77b890f8d193b1e57"
+    },
+    {
+      "path": "01_PRODUCT_REQUIREMENTS.md",
+      "input_path": "input-v38-candidate2/canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 227675,
+      "sha256": "19e5bbff86646719f707db16615127567d3af02f4d6b6d628da0bee175171607"
+    },
+    {
+      "path": "02_WORKFLOW_AND_UX_SPEC.md",
+      "input_path": "input-v38-candidate2/canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 142900,
+      "sha256": "a3248327c291fcfb2d76176cb5723709973bc490bef89f66834a8d84588ba710"
+    },
+    {
+      "path": "03_TECHNICAL_DESIGN.md",
+      "input_path": "input-v38-candidate2/canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 407849,
+      "sha256": "6fa31cab5106cc6c72e0ed1bd52a2e503fd474279833784ab2a72fb5bb5609f8"
+    },
+    {
+      "path": "04_MCP_API_CONTRACTS.md",
+      "input_path": "input-v38-candidate2/canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 186695,
+      "sha256": "a36b996feb928393d67974c373c503e7798cd049b829551a20a15a2c612cecc9"
+    },
+    {
+      "path": "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "input_path": "input-v38-candidate2/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 392397,
+      "sha256": "26914139df223ee45f03d5e8a027c411b7241c8c4fac23fb43df34a0a18f4165"
+    },
+    {
+      "path": "06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "input_path": "input-v38-candidate2/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 131932,
+      "sha256": "fb759b4768c174bf74b0444d8fcc3e1e7a8057af766a813633d597bba31b871d"
+    },
+    {
+      "path": "07_UI_DESIGN_TASKS.md",
+      "input_path": "input-v38-candidate2/canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 134250,
+      "sha256": "4c2b4e8464c810d563b16d18dc754e2b6d8be5a9b5ee4f82580587206caea4bf"
+    }
+  ],
+  "archive": {
+    "path": "deliverables/Tesbo_Specifications_v1.4.38.zip",
+    "bytes": 615130,
+    "sha256": "38d29265bf04e3707e6d814850316a40d354748f0e6bf639704b5b680b2ec114",
+    "member_count": 8,
+    "uncompressed_member_bytes": 1788829
+  },
+  "recipe": {
+    "script": "verification/build_specifications_archive.py",
+    "member_order": "CANONICAL_NAMES in numeric filename order",
+    "member_paths": "Exactly eight Markdown files at ZIP root; no directories or extra files",
+    "timestamp": "2026-11-19T00:00:00; fixed ZIP metadata, not a claim about source creation time",
+    "mode": "regular file 0644; Unix creator; empty comments and extra fields",
+    "compression": "Python standard-library ZIP_DEFLATED, compression level 9"
+  },
+  "checks": {
+    "final_manifest_matches_required_sha256": true,
+    "every_manifest_record_matches_exact_input_bytes": true,
+    "snapshot_has_no_unlisted_files": true,
+    "exactly_eight_canonical_markdown_files": true,
+    "zip_members_match_input_bytes": true,
+    "zip_crc_valid": true
+  }
+}
