@@ -148,9 +148,11 @@ def main():
         )
         baseline_blue = scan(args.image, default_config, root,
                              {str(blue_receipt): original_lines}, "blue-commits-default")
-        expected_blue = {(str(blue_receipt), "sourcegraph-access-token"): 3}
+        # Gitleaks deduplicates the repeated source commit within one file;
+        # the two distinct verified Git objects are the actual findings.
+        expected_blue = {(str(blue_receipt), "sourcegraph-access-token"): 2}
         require_findings(baseline_blue, expected_blue, "blue-commits-default")
-        if len(baseline_blue) != 3:
+        if len(baseline_blue) != 2:
             raise AssertionError("Blue commit baseline has unexpected extra findings")
         if scan(args.image, config, root, {str(blue_receipt): original_lines},
                 "blue-commits-corrected"):
@@ -158,9 +160,9 @@ def main():
 
         other_git = hashlib.sha1(b"tesbo independently different sourcegraph control").hexdigest()
         neighbor_cases = [
-            ("blue-outside-path", "src/blue-a-v1.md", original_lines, 3, "sourcegraph-access-token"),
-            ("blue-nested-path", "src/" + str(blue_receipt), original_lines, 3, "sourcegraph-access-token"),
-            ("blue-suffix", str(blue_receipt) + ".extra", original_lines, 3, "sourcegraph-access-token"),
+            ("blue-outside-path", "src/blue-a-v1.md", original_lines, 2, "sourcegraph-access-token"),
+            ("blue-nested-path", "src/" + str(blue_receipt), original_lines, 2, "sourcegraph-access-token"),
+            ("blue-suffix", str(blue_receipt) + ".extra", original_lines, 2, "sourcegraph-access-token"),
             ("blue-new-sha", str(blue_receipt), "sourcegraph\nOriginal source " + other_git + "\n", 1, "sourcegraph-access-token"),
             ("blue-original-plus-new-sha", str(blue_receipt), "sourcegraph\nOriginal source " + source_git + " and new " + other_git + "\n", 1, "sourcegraph-access-token"),
             ("blue-provider-token", str(blue_receipt), "Provider sample " + provider + "\n", 1, "github-pat"),
