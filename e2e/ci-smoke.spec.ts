@@ -471,8 +471,8 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
       }
     }
 
-    // Positive controls: real MCP create/add/edit preserve the observed result and link identity,
-    // then metadata edits preserving deleted history and strict refusal after explicit removal.
+    // A direct report fails this manual execution once. Further associations and metadata edits
+    // preserve the recorded result and link history, including after the run is deleted.
     const passed = await request.patch(`${api}/api/cycles/${first.cycleId}/executions/${first.executionId}`, { data: { status: "Passed" } });
     expect(passed.ok(), await passed.text()).toBeTruthy();
     const executionBeforeLinks = (await db.query("SELECT * FROM executions WHERE id = $1", [first.executionId])).rows;
@@ -487,13 +487,19 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
     const reported = await mcp("create_bug", { title: "CI valid relationship report", links: [first] });
     bugs.push(reported.id);
     expect(reported.links).toEqual([expect.objectContaining(first)]);
-    expect((await db.query("SELECT * FROM executions WHERE id = $1", [first.executionId])).rows).toEqual(executionBeforeLinks);
+    const executionAfterReport = (await db.query("SELECT * FROM executions WHERE id = $1", [first.executionId])).rows;
+    expect(executionAfterReport).toEqual([{
+      ...executionBeforeLinks[0], status: "Failed", executed_by: ownerId,
+      executed_at: expect.any(Date), updated_at: expect.any(Date)
+    }]);
+    expect(executionAfterReport[0].executed_at.getTime()).toBeGreaterThanOrEqual(executionBeforeLinks[0].executed_at.getTime());
+    expect(executionAfterReport[0].updated_at.getTime()).toBeGreaterThanOrEqual(executionBeforeLinks[0].updated_at.getTime());
     const linked = await mcp("link_testcase_to_bug", { bugId: bug.id, ...first });
     const original = (await db.query("SELECT * FROM bug_links WHERE bug_id = $1 ORDER BY id", [bug.id])).rows;
     const edited = await mcp("update_bug", { bugId: bug.id, title: "CI valid metadata edit", links: linked.links });
     expect(edited.links).toEqual(linked.links);
     expect((await db.query("SELECT * FROM bug_links WHERE bug_id = $1 ORDER BY id", [bug.id])).rows).toEqual(original);
-    expect((await db.query("SELECT * FROM executions WHERE id = $1", [first.executionId])).rows).toEqual(executionBeforeLinks);
+    expect((await db.query("SELECT * FROM executions WHERE id = $1", [first.executionId])).rows).toEqual(executionAfterReport);
     expect((await request.delete(`${api}/api/cycles/${first.cycleId}`)).ok()).toBeTruthy();
     const historical = await mcp("update_bug", { bugId: bug.id, title: "CI historical metadata edit", links: edited.links });
     expect(historical.links).toEqual(expect.arrayContaining([expect.objectContaining({ ...first, cycleName: expect.stringContaining("(deleted)") })]));
