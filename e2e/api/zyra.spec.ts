@@ -2966,7 +2966,7 @@ test.describe("zyra chat — citations (fake provider)", () => {
    */
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await asOwner.post("/api/workspace/ai-keys", {
-      data: { name: `E2E citations fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl, defaultModel: "gpt-4o-mini" },
+      data: { name: `E2E citations fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl, defaultModel: "gpt-4o-mini" },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);
@@ -4481,7 +4481,7 @@ test.describe("zyra chat — progress streaming (fake provider)", () => {
 
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await asOwner.post("/api/workspace/ai-keys", {
-      data: { name: `E2E progress fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl },
+      data: { name: `E2E progress fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);
@@ -4724,7 +4724,7 @@ test.describe("zyra task-board generation — knowledge relevance (fake provider
         name: `E2E relevance fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`,
         provider: "e2e-fake-gateway",
         apiKey: "sk-e2e-fake",
-        baseUrl: ai.baseUrl,
+        baseUrl: ai.backendBaseUrl,
         defaultModel: "gpt-4o-mini",
       },
       failOnStatusCode: false,
@@ -5113,7 +5113,7 @@ test.describe("zyra task-board — ticket auto-comment (fake provider)", () => {
         name: `E2E autocomment fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`,
         provider: "e2e-fake-gateway",
         apiKey: "sk-e2e-fake",
-        baseUrl: ai.baseUrl,
+        baseUrl: ai.backendBaseUrl,
         defaultModel: "gpt-4o-mini",
       },
       failOnStatusCode: false,
@@ -6315,7 +6315,7 @@ test.describe("zyra chat — knowledge-base gate and background send (fake provi
   // observable these tests assert on. fake-ai-server keeps those calls off the chat reply queue.
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await asOwner.post("/api/workspace/ai-keys", {
-      data: { name: `E2E kb-gate fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl, defaultModel: "gpt-4o-mini" },
+      data: { name: `E2E kb-gate fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl, defaultModel: "gpt-4o-mini" },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);
@@ -6733,7 +6733,7 @@ test.describe("zyra — exact KB requirement grounding (fake provider)", () => {
 
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await asOwner.post("/api/workspace/ai-keys", {
-      data: { name: `E2E exact-values fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl, defaultModel: "gpt-4o-mini" },
+      data: { name: `E2E exact-values fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl, defaultModel: "gpt-4o-mini" },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);
@@ -7050,7 +7050,7 @@ test.describe("zyra chat — request trace and turn lifecycle (fake provider)", 
 
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await asOwner.post("/api/workspace/ai-keys", {
-      data: { name: `E2E trace fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl, defaultModel: "gpt-4o-mini" },
+      data: { name: `E2E trace fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl, defaultModel: "gpt-4o-mini" },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);
@@ -7648,7 +7648,7 @@ test.describe("zyra — writes in the language the user writes in (fake provider
   // job ever eats a queued reply — see the "zyra chat — citations" block's identical helper.
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await asOwner.post("/api/workspace/ai-keys", {
-      data: { name: `E2E language fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl, defaultModel: "gpt-4o-mini" },
+      data: { name: `E2E language fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl, defaultModel: "gpt-4o-mini" },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);

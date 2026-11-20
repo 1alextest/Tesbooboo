@@ -524,7 +524,7 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
   /** Points this tenant's project at the fake provider — same routes api/zyra.spec.ts uses. */
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await asOwner.post("/api/workspace/ai-keys", {
-      data: { name: `E2E ZCC fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl },
+      data: { name: `E2E ZCC fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);

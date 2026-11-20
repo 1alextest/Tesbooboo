@@ -3432,7 +3432,7 @@ test.describe("zyra / agents (UI)", () => {
    *  ZYR-A-91's allocateFakeAiKey comment). */
   async function allocateFakeProviderKey(ai: FakeAiServer): Promise<void> {
     const keyRes = await api.post("/api/workspace/ai-keys", {
-      data: { name: `E2E ui feedback fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl, defaultModel: "gpt-4o-mini" },
+      data: { name: `E2E ui feedback fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl, defaultModel: "gpt-4o-mini" },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);
@@ -5259,7 +5259,7 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
 
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await api.post("/api/workspace/ai-keys", {
-      data: { name: `E2E ui chat fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl, defaultModel: "gpt-4o-mini" },
+      data: { name: `E2E ui chat fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl, defaultModel: "gpt-4o-mini" },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);

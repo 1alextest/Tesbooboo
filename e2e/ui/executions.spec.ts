@@ -1937,7 +1937,7 @@ test.describe("run detail — progress, defects and the bug modal", () => {
       await expect(page.getByRole("heading", { name: testcase.title })).toBeVisible();
 
       // Choose a local value without submitting the explicit result writer, then report a finding.
-      await page.getByRole("button", { name: "Failed", exact: true }).click();
+      await page.getByRole("group", { name: "Execution status" }).getByRole("button", { name: "Failed", exact: true }).click();
       await page.getByRole("button", { name: "Log bug" }).click();
 
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeVisible();

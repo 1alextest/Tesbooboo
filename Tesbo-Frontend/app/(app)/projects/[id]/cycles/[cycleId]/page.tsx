@@ -2176,7 +2176,7 @@ export default function TestRunDetailPage() {
               {/* Status picker */}
               <div>
                 <label className="mb-2 block text-[12.5px] font-medium text-[var(--muted)]">Status</label>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2" role="group" aria-label="Execution status">
                   {EXEC_STATUSES.map((s) => {
                     const active = panelStatus === s;
                     const colors = PANEL_STATUS_COLORS[s] || PANEL_STATUS_COLORS.Untested;

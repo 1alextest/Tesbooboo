@@ -292,11 +292,12 @@ export function seedJiraRequirements(
     .map(
       (key) =>
         `(${literal(projectId)}, ${literal(connectionId)}, ${literal(key)}, ${literal(key)}, ` +
-        `${literal(`Requirement ${key}`)}, 'Story', 'Open', ${literal(descriptions[key] ?? null)})`,
+        `${literal(`Requirement ${key}`)}, 'Story', 'Open', ${literal(descriptions[key] ?? null)}, 'e2e-screens')`,
     )
     .join(", ");
+  // The listing only returns tickets from the mapping's current remote project.
   exec(
-    `INSERT INTO jira_tickets (project_id, jira_connection_id, jira_issue_id, jira_issue_key, summary, issue_type, status, description) ` +
+    `INSERT INTO jira_tickets (project_id, jira_connection_id, jira_issue_id, jira_issue_key, summary, issue_type, status, description, mapped_remote_id) ` +
       `VALUES ${values} ON CONFLICT DO NOTHING;`,
   );
 }
@@ -327,11 +328,11 @@ export function seedLinearRequirements(
     .map(
       (key) =>
         `(${literal(projectId)}, ${literal(connectionId)}, ${literal(key)}, ${literal(key)}, ` +
-        `${literal(`Requirement ${key}`)}, 'Story', 'Todo', ${literal(descriptions[key] ?? null)})`,
+        `${literal(`Requirement ${key}`)}, 'Story', 'Todo', ${literal(descriptions[key] ?? null)}, 'e2e-screens')`,
     )
     .join(", ");
   exec(
-    `INSERT INTO linear_tickets (project_id, integration_connection_id, linear_issue_id, linear_issue_key, summary, issue_type, status, description) ` +
+    `INSERT INTO linear_tickets (project_id, integration_connection_id, linear_issue_id, linear_issue_key, summary, issue_type, status, description, mapped_remote_id) ` +
       `VALUES ${values} ON CONFLICT DO NOTHING;`,
   );
 }
