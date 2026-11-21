@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { requiresAssurance, parseReviewBody, evaluateAssuranceReviews } from './assurance-pr-gate.mjs';
+import { requiresAssurance, parseReviewBody, parseReviewerRoster, evaluateAssuranceReviews } from './assurance-pr-gate.mjs';
 
 const head = 'a'.repeat(40);
 const specialist = 'docs/specs/agent-synchronized-engineering/reviews/independent-blue.md';
 const white = 'docs/specs/agent-synchronized-engineering/reviews/white-final.md';
 const changedFiles = ['docs/specs/agent-synchronized-engineering/requirements.md'];
+const trustedRoster = { INDEPENDENT: ['blue'], WHITE: ['white'] };
 function review(login, role, receipt, options = {}) {
   const decision = options.decision ?? (role === 'WHITE' ? 'FROZEN' : 'REVIEWED');
   return { id: options.id ?? 10, state: options.state ?? 'APPROVED', commit_id: options.commit ?? head,
@@ -13,7 +14,7 @@ function review(login, role, receipt, options = {}) {
     body: `TESBO-ASSURANCE: ${role}\nTESBO-HEAD: ${options.namedHead ?? head}\nTESBO-EVIDENCE: ${receipt}\nTESBO-DECISION: ${decision}` +
       (options.reason ? `\nTESBO-WAIVER-REASON: ${options.reason}` : '') };
 }
-function check(reviews, extra = {}) { return evaluateAssuranceReviews({ changedFiles, head, author: 'author', reviews, ...extra }); }
+function check(reviews, extra = {}) { return evaluateAssuranceReviews({ changedFiles, head, author: 'author', reviews, authorizedReviewers: trustedRoster, ...extra }); }
 const valid = [review('blue', 'INDEPENDENT', specialist), review('white', 'WHITE', white, { id: 11 })];
 
 test('only protected spec/assurance material triggers the gate', () => {
@@ -21,6 +22,22 @@ test('only protected spec/assurance material triggers the gate', () => {
   assert.equal(requiresAssurance('scripts/assurance-pr-gate.mjs'), true);
   assert.equal(requiresAssurance('Tesbo-Backend-Nest/src/app.module.ts'), false);
   assert.equal(check([], { changedFiles: ['README.md'] }).status, 'not_applicable');
+});
+test('trusted role rosters reject malformed, duplicated and missing identities', () => {
+  assert.deepEqual(parseReviewerRoster(' Blue,white-qa '), ['blue', 'white-qa']);
+  for (const value of [undefined, '', ' ', 'blue,,white', '../unsafe', 'blue,BLUE', 'blue\\nwhite']) {
+    assert.equal(parseReviewerRoster(value), null);
+  }
+});
+test('fails closed without admin-authorized reviewers, even for otherwise plausible human approvals', () => {
+  assert.equal(check(valid, { authorizedReviewers: null }).status, 'blocked');
+  assert.match(check(valid, { authorizedReviewers: null }).errors.join(' '), /reviewer roster/);
+  assert.equal(check(valid, { authorizedReviewers: { INDEPENDENT: [], WHITE: ['white'] } }).status, 'blocked');
+});
+test('rejects an outsider declaring INDEPENDENT or WHITE and reviewers claiming the wrong role', () => {
+  assert.equal(check([review('outsider', 'INDEPENDENT', specialist), valid[1]]).status, 'blocked');
+  assert.equal(check([valid[0], review('outsider', 'WHITE', white, { id: 11 })]).status, 'blocked');
+  assert.equal(check([review('white', 'INDEPENDENT', specialist), review('blue', 'WHITE', white, { id: 11 })]).status, 'blocked');
 });
 test('accepts two different approved humans and complete exact-head evidence references', () => {
   assert.equal(check(valid).status, 'review_provisionally_verified');
@@ -77,7 +94,7 @@ test('the live GitHub gate checks evidence on the exact PR head, not a previous 
     return { ok: true, json: async () => data };
   };
   try {
-    const outcome = await run({ repository: 'example/tesbo', prNumber: 7, token: 'not-a-real-token' });
+    const outcome = await run({ repository: 'example/tesbo', prNumber: 7, token: 'not-a-real-token', authorizedReviewers: trustedRoster });
     assert.equal(outcome.status, 'review_provisionally_verified');
     assert.equal(urls.filter(u => u.includes('/contents/')).length, 2);
     assert.equal(urls.every(u => !u.includes('ref=development')), true);
