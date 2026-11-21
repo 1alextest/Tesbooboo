@@ -1,3 +1,5 @@
+> **Current follow-up:** [GEX-ASER-2026-11-19](#gex-aser-2026-11-19) records the intelligent graph direction, agnostic principles and actual team rerun. Its full review binds revision 1.4.36; the subsequent 1.4.37 publication is explicitly outside that sign-off. The prior record below is preserved unchanged.
+
 # Tesbo ASER — Independent assurance rerun and existing-spec reconciliation
 
 **User-facing date:** 18 November 2026. **Run:** ASER-RERUN-2026-11-18. **Scope:** the existing R-ASE-01–48 integration, its governed-skills and human-facing delivery contracts, the original QA task/report/retest loop, and the same eight canonical files. This updates existing specifications and review records; it implements no product capability.
@@ -6195,3 +6197,106 @@ The request is to run the full assurance teams independently. This session expos
 
 
 </details>
+
+
+---
+
+## GEX-ASER-2026-11-19
+
+### User outcome and current documentation
+
+The user accepted an intelligent graph direction, asked to update the existing specifications, explain what earlier teams missed, distill application-neutral principles, and rerun the established teams. This record reports actual analytical invocations and bounded verification. It does not report a deployed intelligent graph, installed Skill, new human policy, product test execution or architecture freeze.
+
+The reviewed canonical revision **1.4.36** contains the same eight files. It preserves the complete published 1.4.35 bodies with current-revision header replacement and trailing separator-whitespace normalization, then appends this run's corrections and explicit precedence. The six ASER files are subordinate projections. Final input is **1.4.36-candidate-v16**, manifest SHA-256 `9dba403c3bb129ce5a5fcab4064a6afccdc669e588ba983e124680bbcf4e7062`. The exact eight-file archive hashes to `406d5da0eb7f4d4a6fc062407f2d3affa7ec540d2e8572678e457f8847a7de33` (582,993 bytes). The original application inspection remains pinned to [Tesbo source](https://github.com/1alextest/Tesbooboo/tree/6897f989b055a955280f810c7daace86f74057fa); deployment was not verified.
+
+The separately published [portability assessment](2026-11-19-skills-portability.md), earlier integration gate and author desk diagnostics retain their original targets and provenance. Their agents, judgments and conceptual probes are not pooled with this run or its method-transfer experiment. Incoming branch work through ac49fa6 and both external merges into development 1fe1005 are retained. The source findings remain historical at 6897; the newly merged implementation has its own evidence and is not recertified by this document review. Textual overlaps are reconciled by canonical owner rather than discarded. The [author ledger](2026-11-19-gex-rerun/author-correction-ledger.md) explains every review snapshot without changing earlier receipts.
+
+### What the earlier review missed
+
+The [retrospective](2026-11-19-gex-rerun/prior-evidence-retrospective.md) supports a **missed connection between existing capabilities**, not an absence of all the required ideas. Earlier specifications already covered states, upstream/downstream consumers, governed Skills, feedback, version comparisons and learning journeys. The recorded review emphasized integrity, ownership and implementation admission, with limited Model Studio sampling. It did not record the decision about which graph interpretation and test-design judgments should vary through a governed method while stable guarantees remain enforced by native code.
+
+A search of the old review archive found no consultation recorded under the names `manual-test-authoring` or `product-testing`. That is not proof a reviewer had access and ignored a method. Later recovery produced two distinct manual-authoring bodies with unverified lineage and incomplete companion-package evidence. They are useful source material but contain conflicting oracle/default conventions that require a scoped successor or supported profile. Their discovery now cannot explain an earlier reviewer's private reasoning. Prompt framing, time and model behavior remain unproven causal hypotheses.
+
+The earlier Model Studio review-input artifact explicitly did not claim teams had run. The later real ASER review concluded NOT FROZEN and only bounded manual Graph consistency. Neither promised discovery of every useful feature. The new cold passes reviewed the now-explicit proposal; they do not show that reviewers would have independently invented it before the user's suggestion.
+
+### Product direction and invariant boundaries
+
+The proposed graph combines typed structural relationships with evidence-grounded interpretation of requirements, policies, manuals, cases and observations. The method should identify relevant conditions, actors, states, transitions, constraints, upstream causes, downstream consequences and independent expected outcomes when those concepts apply. It must distinguish observed facts, accepted obligations, inferred relations, contradictions and missing evidence. A graph path alone does not establish causation or test coverage.
+
+Governed reasoning and test-authoring methods reuse T-422 assignment/version/evaluation owners. Schema validity, permission, identity, exact historical evidence, transactions and protected publication remain native responsibilities. A changed method cannot invent an absent parser/tool, grant authority, silently reset results or update historical cases. Approval and activation are separate, as are Model CURRENT selection and effective Skill assignment. Authorized Draft inspection, explicit historical work and ordinary human manual QA remain valid.
+
+Graph Analytics is a proposed projection inside Reports, initially **Change impact** and **Coverage gaps**, with deterministic ordering available independently of AI explanations. The preserved published 1.4.35 closure also counts applicable obligations across model, policy and requirement sources, keeps evidence sufficiency distinct from observed PASS/FAIL, and preserves each native impact identity. A valid no-impact conclusion requires a bounded, assessed dependency frontier. The next action follows evidence: reuse/propose a case, deliberately prepare a native Run, recover missing evidence, request clarification, or take no action. Viewing or staging cannot implicitly create or dispatch a Run. A separately authorized prepared Run is legitimate before dispatch. Source snapshots, permission-filtered aggregates and exact handoff bases must remain consistent; the initial new views do not add export types or disturb the six existing exports.
+
+The original case-free ChatGPT → Tesbo task → assigned external executor using its own driver → original report/evidence → analysis → linked retest → exact human-selected native apply loop remains required. This amendment does not turn Tesbo into a second automation driver or require a source repository for valid manual work.
+
+### Agnostic principles and the method experiment
+
+Canonical06 operationalizes the retained distillation chain: **observation → consequence → failure class → invariant → principle → reusable question → contextual example**. Each applicable rule supplies **when, evidence, decision, output/check, and limits**. Classify missing, ambiguous, not reached, not applied, unchecked or unresolved guidance before adding a rule. Repair the existing method owner rather than creating overlapping checklists.
+
+The proposed application questions are: what outcome and consequential decision need support; where useful capability/knowledge already exists; what genuinely varies; which code/configuration/rule/method/model/human mechanism is sufficient; what independently grounds expectation and authority; what kind of correction feedback actually warrants; what transfer evidence could refute improvement; and what shows the method was applied. A routine completeness review can trigger this inquiry without a named defect or requested AI mechanism. Contextual lenses are optional, and no change, deterministic work, a narrow specialist profile, N/A and UNKNOWN remain legitimate results.
+
+The [method-transfer record](2026-11-19-gex-rerun/method-transfer/RESULT.md) preserves fixed incumbent/candidate text, two independently chosen synthetic briefs, separate no-history planners and a label-masked independent adjudicator. Both responses met both briefs: exact rehearsal-cover preservation and interpretation of a fictional scene against approved canon. The result shows bounded application, **no decisive correctness gap and no demonstrated superiority**. There was no originating-case replay, real product outcome, human study or cross-model replication. Later canonical changes to the discovery/adoption method were not part of that trial and remain unqualified. No method was installed, approved or activated.
+
+### What the actual rerun found
+
+The following source findings are historical at 6897. Some narrower repairs were subsequently merged; their implementation evidence is separately attributed in the plan and native integration closure. This rerun neither carries the old failures automatically to 1fe nor closes them by merge inference.
+
+Original cold outputs and later informed corrections remain separate under [receipts](2026-11-19-gex-rerun/receipts). Original Blue/Red/Green members are actual independent agent invocations, not labels in an author-written panel. Their charter versions and exact inputs are retained in the manifests and [dispatch register](2026-11-19-gex-rerun/dispatch-register.json). Same model family, shared primary material, later exposure and actual code-author/deployer absence remain disclosed. Root is the documentation amendment maintainer, not that missing implementation participant. Read-only specialist preparation overlapped pending pre-gates; no retroactive chronological gate completion is asserted.
+
+| Finding family | Documentation treatment | Remaining evidence boundary |
+| --- | --- | --- |
+| Latest saved model versus accepted CURRENT selection | Native family pointer/CAS, approval separate from activation, exact historical mode | Mismatch recorded at source 6897; current implementation requires separately bound migration/race evidence |
+| Native case and Run effects versus required mapping/provenance | Shared unpublished staging and actual transaction-aware native commit; truthful partial stages and uncertain readback | Separate transactions/compensation inspected; no real DB fault test |
+| Machine issuer identity versus exact human assent | Trusted principal kind and action-bound assent at the final native owner | Original HIGH classification retained at source 6897; current authority/all-writer proof requires separately bound evidence |
+| Mapping removal and mutable evidence history | Exact revision/occurrence history and guarded removal; immutable feedback independent of regeneration | Current implementation and history-migration assessment remain outside this pinned-source review |
+| One execution multiplied by several model mappings | Count native occurrence grain independently of link cardinality | Isolated source-equivalent join probe, not PostgreSQL/runtime evidence |
+| Failed Requirements or case discovery becomes empty | Distinct unavailable/stale/partial versus successful zero | Source mechanisms inspected; authentic recovery/UI untested |
+| Model A response can display under Model B | Bind response and errors to original context/request generation | Server path-digest protection credited; cross-model persistence not established |
+| Bug association changes execution truth in some paths | Association separate from authorized result correction | Does not explain live TES-TC-4's recorded Failed state |
+| Source entitlement differs from destination ownership | Enforce source scope or an accountable intentional shared-source policy | Deployment configuration unknown; no live private-source disclosure established |
+| Overbroad integration wording | QA6-D1 corrected active-only gating; PU-V8-01 corrected dispatch-only Run creation; GB10-L1 corrected copied owner label | Original findings retained; only documentation closure established |
+
+Grey independently inventoried **50 material jobs: 19 Critical, 30 High and one Medium; 37 G0 and 13 G1; 36 HOLDS, five FAILS, nine INCONCLUSIVE**. These are original bounded contract/source traces. QA independently challenged the five Major mechanisms and Critical-job oracles. Later setup/report continuations remain informed work, not extra cold discoveries or runtime journeys. The actual outbound example is the daily user-metrics Basecamp job, not a general project-report scheduler.
+
+QA ran **five pure-helper controls**. Green B actually ran the final **58-check verifier**, exit 0, and both Green member dispositions are separately attributable. The verifier checks exact members/hashes, published-body preservation, identifiers and declared proof sets. V16 contains no relative Markdown-link rows for its local-link check; external contents and anchors are outside that check. The earlier v13 failure and v14 pinned-URL correction remain recorded. It does not establish semantic completeness, authentic UI, native DB/API behavior or method efficacy. The distinct planned inventories remain **125 ASER definitions, eight GEX-AC obligations and five current GA-AC checks**. SEM/SK/DISC aliases allocate additional fixtures to existing owners; they are not additional canonical definitions or executed tests.
+
+### Final target dispositions and publication boundary
+
+| Actual role | Final-target receipts | Bounded contribution |
+| --- | --- | --- |
+| Blue | [A](2026-11-19-gex-rerun/receipts/blue-a-informed-v16.md), [B](2026-11-19-gex-rerun/receipts/blue-b-informed-v16.md) | Native ownership, reuse and composition; original severity differences and implementation-grounding limits retained |
+| Red | [A](2026-11-19-gex-rerun/receipts/red-a-informed-v16.md), [B](2026-11-19-gex-rerun/receipts/red-b-informed-v16.md) | Premises, valid alternatives and boundary counterexamples; old source Majors remain historically attributable |
+| Green | [A](2026-11-19-gex-rerun/receipts/green-a-informed-v16.md), [B](2026-11-19-gex-rerun/receipts/green-b-informed-v16.md) | Exact target preservation, ownership/proof allocation and B's actual 58-check execution |
+| Grey | [Final delta](2026-11-19-gex-rerun/receipts/grey-informed-v16.md) | Original 50-job inventory plus bounded informed consumer/journey consistency; no new runtime counts |
+| QA | [Final delta](2026-11-19-gex-rerun/receipts/qa-informed-v16.md) | Independent oracles and discriminating fixtures, including verified FAIL versus missing evidence and mixed obligations |
+| Purple | [Final delta](2026-11-19-gex-rerun/receipts/purple-informed-v16.md) | Native workflow and meaning; SOURCE-INSPECTED / VISUAL-BASELINE BLOCKED |
+| Security | [Final delta](2026-11-19-gex-rerun/receipts/security-informed-v16.md) | Authority, source visibility, private/absent equivalence, delayed-AI revocation and replay identity; no current-code security verdict |
+| Elephant-Gold | [Final delta](2026-11-19-gex-rerun/receipts/elephant-gold-informed-v16.md) | All six lenses; no further material document contradiction within inspected scope |
+
+The manual [Graph closeout](2026-11-19-gex-rerun/receipts/graph-final-v16.md) supports the inspected documentation integration and found no additional material ownership conflict or contract correction. It does not issue a calculated Graph status or establish full assurance. Graph first identified that the latest Blue/Red signatures stopped at v12; all four members then supplied actual v16 deltas, which Graph read before freezing. The review-sequence gap is addressed; missing implementation-author/deployer participation and proof remain separate.
+
+The final [White gate](2026-11-19-gex-rerun/receipts/white-final-v16.md) is **NOT FROZEN for architecture and full assurance; bounded documentation delivery is supported**. White read all eleven final specialist receipts and the actual manual Graph closeout and established no additional material documentation blocker. Its frozen receipt has SHA-256 `d6a050be4d04c13e21d0711ce1d8b1829733ce3ab3b54efd14ad67c50e1518b4`. Original White remains BLOCKED — MORE ARCHAEOLOGY at its original input.
+
+Remaining gates require actual implementation-author/deployer grounding, evidence bound to the implemented head and complete affected consumers/migrations, accountable authority decisions, native runtime and the original external QA round trip, authentic UI/accessibility evidence, and qualification of the exact successor method. Final-tree and follow-up CI evidence are subsequent delivery checks, not retroactive product acceptance. The later canonical 1.4.37 is explicitly outside this verdict. No gate is waived by publishing these documents.
+
+Current-target CI is recorded separately from the source and document tests. Eight workflows passed on incoming ac49fa6; that does not pre-certify this later delivery. An earlier historical secret-scan checkpoint reported one finding without an available location/classification; subsequent incoming scans passed. Original facts remain preserved rather than rewriting the failed checkpoint. PR167 and PR168 were merged externally as 1fe1005 and f4301347 while this review ran; their source and raw implementation evidence are preserved. The final follow-up is a separate draft documentation PR on the merged parent. It does not merge, deploy or recertify that implementation. Current-source status must use those newer records instead of treating the old pinned findings as current defects.
+
+The final package, living fieldwork J31 entry, raw receipts, reversible input deltas and exact identities preserve what changed and what is still unknown. Last authenticated Run fieldwork remains 20 October 2026; no live record, native Guide, Skill, approved mockup or result was changed here.
+
+
+### Later canonical publication boundary
+
+After this run's exact 1.4.36 target and manual Graph receipt were frozen, the canonical item advanced externally to 1.4.37 (archive SHA-256 `1ed8afd0a978ab9b257c10d61549f6085c7f1f593713a26b0ae56a4540562848`). A read-only comparison verified that all eight reviewed 1.4.36 bodies survive the exact current-header substitution. The added Graph Analytics closure clauses are material and remain outside this run's specialist/Graph/White sign-off. The same canonical item was preserved without overwriting the later work. This run's final review and six repository projections remain explicitly tied to1.4.36; the newer canonical governs its additional contracts. This is a version boundary, not an assertion that the later work had no separate review.
+
+### Further publication boundary: canonical 1.4.38 and PR169
+
+A final publication check observed canonical **1.4.38** (archive SHA-256 `38d29265bf04e3707e6d814850316a40d354748f0e6bf639704b5b680b2ec114`). All eight final 1.4.36 reconciliation sections and the portable principle-distillation section remain exact. Unlike the 1.4.37 append-only comparison, 1.4.38 also edits older normative lines; whole-document preservation is not claimed. Its added/changed clauses are outside this run's frozen review and receive no inherited approval.
+
+External PR169 then merged as `ed71aa544108760f711ed4cb1bb7b7ba008ef417`, adding eight README lines, ten implementation-plan lines and two separate review records. The incoming material concerns a **different 1.4.35 candidate**, archive `214e29f6d784e814da12ec417917304a73d373073ef5a1384714b4c1e95b6a0f`, not this run's published35 predecessor. Its 20/20 mechanical preflight and 0/14 authentic role stages remain separate from this run's 58 checks and actual reviewers. Both new records and both exact additions are preserved with an explicit post-review boundary. They propose material semantic, privacy, correction and journey work; this merge reconciliation grants no substantive clearance.
+
+The two current repository views therefore include separately attributed post-review additions. The frozen fourteen-file input is unchanged: reverse `post-review-publication/pr169-view-reconciliation.patch` on copies of the current six views to recover the exact v16 views before applying older input transitions. An actual isolated reverse application recovered all six hashes. The original main review body, earlier verdicts and current implementation remain preserved; this is publication/conflict reconciliation, not another team run.
+
+### Concurrent CI maintenance boundary
+
+While the documentation conflict was being reconciled, the shared PR branch advanced independently to commit `1ef9c9e262a2aad6a4af1b646d47746463eff8a8`. That commit changes `.gitleaks.toml` and `scripts/check-gitleaks-evidence-exceptions.py` to propose an exact rule/path/value exception and scanner controls for the two verified Git provenance false positives. This delivery preserves those incoming objects separately from the documentation author's work; it does not classify their tests as passed or add them to the frozen team review. The original failed scan at `5b1e834…` remains historical. The PR now contains concurrent CI-maintenance changes as well as the documentation rerun; final-head checks must establish their own outcome. Native application code and all frozen review inputs/receipts remain unchanged by this publication reconciliation.
+

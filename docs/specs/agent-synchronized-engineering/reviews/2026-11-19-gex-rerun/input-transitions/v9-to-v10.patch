@@ -1,0 +1,216 @@
+--- a/canonical/01_PRODUCT_REQUIREMENTS.md
++++ b/canonical/01_PRODUCT_REQUIREMENTS.md
+@@ -1070,3 +1070,22 @@
+ Across existing native histories and authorized graph views, support (a) **root-cause investigation** that separates temporal co-occurrence, dependency, plausible mechanism, tested falsification and verified cause; (b) **defect-risk prioritization** grounded in labeled historical outcomes with model/version, held-out precision/recall/calibration, prevalence/drift and uncertainty, with a valid rules-only/no-prediction baseline; (c) reproducible **node/edge/branch/transition/selected-path coverage** with a model-revision and actor/data/build/environment-scoped denominator, exclusions, feasibility, status tiers and explicit unknown; (d) **flakiness investigation** using comparable attempts, build/environment/fixture/time differences, independently observed outcomes and alternate setup/product defects, without equating any intermittent failure with flaky test code; and (e) **bounded path exploration** with explicit budget, loop/state/data equivalence, safety-critical and policy-mandated obligations protected, reasons for selection/omission and a truthful incomplete result.
+ 
+ **Acceptance:** High structural coverage with a missing approved business obligation remains a gap; a graph-selected path never becomes an executed or Passed result without genuine evidence; a single failed test does not establish a root cause or flakiness; a risk model with unverified labels/low sample size must abstain; a bounded traversal cannot silently discard a required forbidden-transition check. AI may generate evidence-linked hypotheses and experiment proposals but never authority, official defects or test verdicts by inference alone.
++
++
++### Late concurrent semantic diagnostic reconciliation
++
++The author-applied DISC-01..05 material at branch a800d18 is preserved and reconciled through existing canonical owners. Its diagnostic and all-lens desk record are historical author observations, not independent cold-team receipts, demonstrated method improvement or evidence that source bytes/agents were unavailable in this separate run. The current exact source/review records determine those claims. The following clarifications remain proposed and retain the current scope, authority and proof limits.
++
++### GEX semantic discovery refinement (R-ASE-07/08/09/19/40; proposed canonical clarification)
++
++**Competing applicable obligations (DISC-01):** When several separately approved rules appear applicable to one actor/action, reconcile documented authority, scope, jurisdiction, exceptions and effective periods independently. A genuine overlap with incompatible effects remains `unresolved_conflict` with both exact sources and an accountable authorized decision owner until a valid precedence or exception decision is supplied. Do not infer that the newest, externally sourced, most specific-looking, or AI-preferred text automatically wins. Do not mistake two concurrent revisions of one identity for two independent valid policy authorities.
++
++**Condition-qualified consequences (DISC-02):** An impact proposal must distinguish a link/path from the mechanism that would make an actual behavior change. State the necessary preconditions, affected actor/state, consequence, applicable evidence, plausible alternative/no-effect interpretation and discriminating observation. A correct edge with an unsatisfied guard is not a confirmed effect; an explanatory hypothesis does not establish runtime causality.
++
++**Time-aligned meaning (DISC-03):** Compare Policy, Manual, Requirement, Model, source and tested deployment against a declared *as-of* time, actor and target build; separate effective date from document publication, recorded observation and actual deployment. Historical accuracy, currently applicable, future pending, stale, conflicting and unknown-deployment meanings cannot be silently collapsed. Missing temporal identity must result in incomplete/unknown, not retrospective relabeling.
++
++**Unlinked discovery (DISC-04):** Authorized, scoped reasoning may propose a potentially material semantic relationship between previously unlinked sources using content spans, actor/context/conditions and independent negative comparisons. Similar wording alone is insufficient. The hypothesis remains an unapproved edge candidate; it cannot establish accepted requirement, confirmed impact, coverage or authority until native owner review. Record false positives and deliberately unrelated lookalikes.
++
++**Correction propagation (DISC-05):** When a reviewer contests a derived meaning or impact, preserve the exact original claim, source/Skill versions, correction, reason and reviewer attribution. Recompute or invalidate all known dependent *derived candidates* and explain unresolved consumers; protect accepted authoritative records, historical runs and unrelated graph facts. Neither rejecting a hypothesis nor replacing a Skill version silently edits prior decisions.
++
++**Acceptance:** An independent reviewer can distinguish two valid authorities with conflicting scope, a linked but causally unaffected consumer, historically accurate but not currently effective instructions, a meaningful unlinked obligation versus a lexical decoy, and a rejected inference whose downstream candidates must become stale. Each outcome shows evidence/unknowns and the authorized next owner. A deterministic/no-change outcome is valid. These are proposed additions to existing owners, not a new graph service or a claim of implemented functionality.
+--- a/canonical/03_TECHNICAL_DESIGN.md
++++ b/canonical/03_TECHNICAL_DESIGN.md
+@@ -1719,3 +1719,26 @@
+ The existing `run_behavior_model` operation may create a native Run as its own explicitly requested protected operation. That operation's required native effect, model manifest, provenance and audit still share the actual native transaction. Separately authorized preparation stages are not one fictitious cross-operation transaction. Dispatch remains distinct from target execution, evidence and FR-119 acknowledgment/closure.
+ 
+ Acceptance must discriminate viewing/staging with no Run side effect, authorized native creation yielding a prepared Run before dispatch, reuse/choose of an existing eligible Run, later-stage failure with accurate PARTIAL receipts, and the atomic Run-plus-manifest failure path of `run_behavior_model`. Preserve project, permission, case/oracle revision, snapshot, cohort and genuine-prior-receipt checks at the applicable native boundary. These variants extend the retained GA-AC-01 / MBT-AC-37 / ASE-INT transaction proofs; they are NOT RUN and add no new scenario ID.
++
++
++### Late concurrent semantic diagnostic reconciliation
++
++The author-applied DISC-01..05 material at branch a800d18 is preserved and reconciled through existing canonical owners. Its diagnostic and all-lens desk record are historical author observations, not independent cold-team receipts, demonstrated method improvement or evidence that source bytes/agents were unavailable in this separate run. The current exact source/review records determine those claims. The following clarifications remain proposed and retain the current scope, authority and proof limits.
++
++### Semantic discovery diagnostic closure — DISC-01..05, no new owner (proposed)
++
++The existing Policy/Manual KB owners determine authoritative content and approved decisions; FR-118 retains typed graph links, FR-119 impact projections, FR-117 accepted expectations, T-422 reasoning methods and native history/approval remains authoritative. The semantic agent **never** resolves authority by intuition or creates a parallel policy evaluator. Read-only analysis can produce candidates and an attributable owner handoff.
++
++**DISC-01 authority collision:** Resolve source identity and applicability before comparing rules. Partition contradictions into (a) same-record stale or concurrent revision conflict, controlled by native versioning, (b) separately authoritative rules with overlapping contexts and incompatible effects, awaiting an explicit scope/precedence/exception decision, and (c) apparent language ambiguity needing clarification. If precedence is not already defined by approved policy/governance, return unresolved and block only dependent governed claims rather than invent universal hierarchy. Show independent unaffected actions as positive controls.
++
++**DISC-02 genuine consequence test:** For any explanation, include `source claim -> relationship -> necessary guard/condition -> affected user/state/record -> expected consequence -> counterexample or missing evidence`. Mark edges and conditional inference separately; compare against a similar linked but unaffected consumer. A change-impact review can flag *possible* effects without claiming causation; an observed failure only supports a verified root cause after suitable discriminatory evidence.
++
++**DISC-03 temporal join:** Define an as-of interpretation over each source's valid/effective interval and recorded revision, publication time, observation time and deployment/build provenance. Treat incomplete clocks/binding versions as unknown. A manual describing an earlier valid process is not inherently erroneous when queried historically; a current request must select the currently effective normative revision. Preserve immutable past receipts and prohibit forward-looking observations as evidence of earlier execution.
++
++**DISC-04 missing-edge discovery:** Reuse permission-filtered source search, graph gap review and shared staging for a proposed candidate link with cited spans, semantic matching condition and counterexamples. Require review before FR-118 accepted mapping. Compare with a lexically similar but semantically unrelated source; score precision and critical-miss recall and preserve permission-safe unknowns. A missing edge does not justify `no affected tests`.
++
++**DISC-05 reviewer contest and dependent views:** Correction is an append-only native review event against exact derived claim and its pinned input manifest; mark known affected candidate views stale and re-derive only within authorized scope. Show rejection reason, what changed, what remains pending, cache/consumer freshness and the current owner of authoritative corrections. Do not erase old outputs, automatically retrain/promote guidance, retroactively change runs or silently retain rejected hypotheses as current release support.
++
++**Semantics evaluation contract:** An independent adjudicator considers supported implication, unsupported asserted effect, missed obligation, appropriate abstention/no-effect, source and time correctness, human decision clarity and cost on dissimilar withheld cases. An LLM explanation agreeing with its own generated edge is not an oracle. No new schema or metric database is presumed; additional fields require existing-owner inventory and a demonstrated unsupported contract.
++
++**Dependent-consumer and notification boundary:** Rejection or source/access change invalidates known derived candidates under their existing owner. Graph detail, change summary, authorized search, release/readiness projection, notification history and caches must expose corrected/current state, explicit stale/partial state or blocked current reliance within the approved operational budget. Retain the original claim, correction and historical receipts. Already delivered external notification bytes cannot be recalled by an internal cache update; retain their historical delivery and, where authorized, link a correction/current-status readback instead of claiming silent erasure. An unknown or unavailable consumer is an explicit unresolved impact, not an invented global invalidation success.
+--- a/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md
++++ b/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md
+@@ -1892,3 +1892,25 @@
+ The existing `run_behavior_model` operation may create a native Run as its own explicitly requested protected operation. That operation's required native effect, model manifest, provenance and audit still share the actual native transaction. Separately authorized preparation stages are not one fictitious cross-operation transaction. Dispatch remains distinct from target execution, evidence and FR-119 acknowledgment/closure.
+ 
+ Acceptance must discriminate viewing/staging with no Run side effect, authorized native creation yielding a prepared Run before dispatch, reuse/choose of an existing eligible Run, later-stage failure with accurate PARTIAL receipts, and the atomic Run-plus-manifest failure path of `run_behavior_model`. Preserve project, permission, case/oracle revision, snapshot, cohort and genuine-prior-receipt checks at the applicable native boundary. These variants extend the retained GA-AC-01 / MBT-AC-37 / ASE-INT transaction proofs; they are NOT RUN and add no new scenario ID.
++
++
++### Late concurrent semantic diagnostic reconciliation
++
++The author-applied DISC-01..05 material at branch a800d18 is preserved and reconciled through existing canonical owners. Its diagnostic and all-lens desk record are historical author observations, not independent cold-team receipts, demonstrated method improvement or evidence that source bytes/agents were unavailable in this separate run. The current exact source/review records determine those claims. The following clarifications remain proposed and retain the current scope, authority and proof limits.
++
++
++### DISC fixture aliases and cross-consumer reconciliation
++
++`GEX-DISC-01..05` remain supplementary fixture aliases; they do not add canonical scenario definitions or independent discoveries. The eight GEX-AC obligations, five current GA-AC checks and 125 ASER core definitions retain their separate accounting. All fixtures below are NOT RUN.
++
++| Diagnostic alias | Existing proof owners | Discriminating fixture and legitimate neighboring outcome |
++| --- | --- | --- |
++| `GEX-DISC-01` | GEX-AC-01; ASE-INT-10; SK-E2E-26; GEX-SEM-01 alias | Compare two independently applicable contradictory obligations with two concurrent versions of one identity. Apply only an approved scope/precedence/exception ruling; otherwise retain unresolved conflict and allow unaffected authorized actions. |
++| `GEX-DISC-02` | GEX-AC-07; ASE-FLOW-21/45/47/52 | Same typed relationship, satisfied versus unsatisfied guard and a genuinely unaffected connected neighbor. Explain necessary condition and discriminating observation; supported no-effect or UNKNOWN is valid, graph path alone never proves cause. |
++| `GEX-DISC-03` | GEX-AC-01/07; MBT-AC-34; ASE-FLOW-26; GA-AC-01/02 | Use historically correct manual, later effective policy, future publication and old/unknown deployed build. Current and historical queries retain distinct as-of/effective/recorded/observed/deployed meaning and cannot borrow future execution evidence. |
++| `GEX-DISC-04` | GEX-AC-01; ASE-FLOW-24/32/47/52; SK-E2E-29 | Authorized unlinked content shares a material condition; a lexical decoy does not. Propose only a grounded inert candidate relation, record matching uncertainty and denied-source limits, preserve a valid existing-case/no-new-link outcome. |
++| `GEX-DISC-05` | GEX-AC-03/04; ASE-FLOW-34/48/54; SK-E2E-31/38/39; GA-AC-03/05 | Reject an exact inferred claim, then read graph detail, change summary, search, release projection, notification history and caches. Each known consumer shows corrected state or explicit stale/blocked reliance; original attempts and decisions remain. Include delayed regeneration, revoked source, unaffected neighbor and already delivered external notification; no fictitious recall or automatic training/promotion. |
++
++**Restricted-information control:** Extend GA-AC-03 and ASER-C06 with two identical authorized visible inputs differing only in inaccessible policy/manual/edges. Explanations, selection/order, counts, citations, alerts and permitted derived status must not reveal restricted existence/content. Assess practical timing leakage within declared budgets without claiming universal constant-time proof. The authorized owner still receives useful allowed detail; insufficient authorized basis yields truthful uncertainty without exposing hidden identifiers.
++
++**Reviewer challenge:** The existing review surface must let an authorized reviewer inspect the claim, exact premise and citations, submit an attributable challenge/counterexample, and inspect which dependent candidate views are current, stale, blocked or unresolved. Native source amendment and Skill promotion remain separate actions. Validate the actual Reports/change-review navigation, permission, keyboard/focus and recovery path under the existing canonical02/07 and GA-AC owners; this text is not an approved rendered mockup.
+--- a/views/design.md
++++ b/views/design.md
+@@ -303,6 +303,22 @@
+ 
+ **Reviewable output:** Return the question/outcome, input-manifest digest, active method/model version, selected source/graph snapshot and trust tier, cited normative expectations, relevant paths and conditional consequences, proposed investigation/test/manual/policy updates, unsupported gaps, per-claim confidence basis, safe next evidence to collect and human owner. Read analysis and native record mutation remain distinct operations. A proposed result cannot silently change Policy, Manual, Case, Skill, Model or execution state. Reuse existing permissions and shared staging/apply.
+ 
++### Semantic discovery diagnostic closure — DISC-01..05, no new owner (proposed)
++
++The existing Policy/Manual KB owners determine authoritative content and approved decisions; FR-118 retains typed graph links, FR-119 impact projections, FR-117 accepted expectations, T-422 reasoning methods and native history/approval remains authoritative. The semantic agent **never** resolves authority by intuition or creates a parallel policy evaluator. Read-only analysis can produce candidates and an attributable owner handoff.
++
++**DISC-01 authority collision:** Resolve source identity and applicability before comparing rules. Partition contradictions into (a) same-record stale or concurrent revision conflict, controlled by native versioning, (b) separately authoritative rules with overlapping contexts and incompatible effects, awaiting an explicit scope/precedence/exception decision, and (c) apparent language ambiguity needing clarification. If precedence is not already defined by approved policy/governance, return unresolved and block only dependent governed claims rather than invent universal hierarchy. Show independent unaffected actions as positive controls.
++
++**DISC-02 genuine consequence test:** For any explanation, include `source claim -> relationship -> necessary guard/condition -> affected user/state/record -> expected consequence -> counterexample or missing evidence`. Mark edges and conditional inference separately; compare against a similar linked but unaffected consumer. A change-impact review can flag *possible* effects without claiming causation; an observed failure only supports a verified root cause after suitable discriminatory evidence.
++
++**DISC-03 temporal join:** Define an as-of interpretation over each source's valid/effective interval and recorded revision, publication time, observation time and deployment/build provenance. Treat incomplete clocks/binding versions as unknown. A manual describing an earlier valid process is not inherently erroneous when queried historically; a current request must select the currently effective normative revision. Preserve immutable past receipts and prohibit forward-looking observations as evidence of earlier execution.
++
++**DISC-04 missing-edge discovery:** Reuse permission-filtered source search, graph gap review and shared staging for a proposed candidate link with cited spans, semantic matching condition and counterexamples. Require review before FR-118 accepted mapping. Compare with a lexically similar but semantically unrelated source; score precision and critical-miss recall and preserve permission-safe unknowns. A missing edge does not justify `no affected tests`.
++
++**DISC-05 reviewer contest and dependent views:** Correction is an append-only native review event against exact derived claim and its pinned input manifest; mark known affected candidate views stale and re-derive only within authorized scope. Show rejection reason, what changed, what remains pending, cache/consumer freshness and the current owner of authoritative corrections. Do not erase old outputs, automatically retrain/promote guidance, retroactively change runs or silently retain rejected hypotheses as current release support.
++
++**Semantics evaluation contract:** An independent adjudicator considers supported implication, unsupported asserted effect, missed obligation, appropriate abstention/no-effect, source and time correctness, human decision clarity and cost on dissimilar withheld cases. An LLM explanation agreeing with its own generated edge is not an oracle. No new schema or metric database is presumed; additional fields require existing-owner inventory and a demonstrated unsupported contract.
++
+ ### GEX quality and learning — manual-first execution and versioned feedback (cross-cutting proposal)
+ 
+ **Source-free QA first:** Tesbo must author **native manual Test Cases** when inputs are approved requirements, policies, user journeys, UI/UX descriptions, domain rules, QA interviews or genuine observed defects. Source-code dependencies, a CI selector or a manually prepared behavior model are optional. The graph derives **candidate obligations**, explores distinct positive/negative/forbidden/data/role/state/recovery scenarios and links to existing Cases/Suites, rather than creating a separate "graph test" entity. Existing FR-027–037 staging, Case Cascade, step Action/Expected Result, Markdown/Fields and human review/apply own publication. Human-executable tests require explicit setup/data, actions and observable Expected Results; this detailed output **does not** authorize scripting the independent assurance teams' discovery procedures.
+@@ -688,3 +704,8 @@
+ The existing `run_behavior_model` operation may create a native Run as its own explicitly requested protected operation. That operation's required native effect, model manifest, provenance and audit still share the actual native transaction. Separately authorized preparation stages are not one fictitious cross-operation transaction. Dispatch remains distinct from target execution, evidence and FR-119 acknowledgment/closure.
+ 
+ Acceptance must discriminate viewing/staging with no Run side effect, authorized native creation yielding a prepared Run before dispatch, reuse/choose of an existing eligible Run, later-stage failure with accurate PARTIAL receipts, and the atomic Run-plus-manifest failure path of `run_behavior_model`. Preserve project, permission, case/oracle revision, snapshot, cohort and genuine-prior-receipt checks at the applicable native boundary. These variants extend the retained GA-AC-01 / MBT-AC-37 / ASE-INT transaction proofs; they are NOT RUN and add no new scenario ID.
++
++
++### Current DISC reconciliation status
++
++Canonical01/03/05 now retain the late concurrent DISC clarification. GEX-DISC labels map to existing proof owners and remain NOT RUN; author desk records are not this run’s independent receipts. No new graph/authority store, scenario count or method-benefit credit follows.
+--- a/views/implementation-plan.md
++++ b/views/implementation-plan.md
+@@ -84,6 +84,22 @@
+ - `GEX-SEM-08`: Agent infers a downstream consequence without an accepted link or source evidence. Keep hypothesis reviewable, explicitly UNKNOWN, and prohibit unauthorized write/Passed results.
+ 
+ **Independent evaluation:** Compare existing deterministic graph projections, governed AI interpretation and no-change/manual baselines on held-out dissimilar systems and withheld critical scenarios. Measure unique actionable gaps, consequence trace accuracy, false claims, missed obligations, root-cause discrimination, risk calibration where data permits, flakiness false attribution, review labor, token/latency cost, privacy and rollback. First-run assurance teams get outcome plus pinned sources, not the scenarios above as suggested findings; these scenarios are for later engineering acceptance. The existing eight canonical documents, approval boundary, original I3-Q execution loop and CI/security gate remain mandatory.
++
++### Outcome-discovery diagnostic triage and targeted acceptance (DISC-01..05; NOT RUN)
++
++The diagnostic at `reviews/2026-11-20-semantic-skill-diagnostic.md` is an informed author application, **not** a blind assurance-team receipt. Against existing R-ASE-07/08/09/19/40 and FR-117/118/119, all five issues are *partly addressed* by present ownership, provenance and graph gap contracts; their missing discriminators are clarified here and in the subordinate requirements/design. None establishes a new database or a confirmed runtime defect.
++
++| Finding | Reused owner | Candidate specification clarification / proposed acceptance |
++| --- | --- | --- |
++| DISC-01 | R-ASE-08/09/40; governed Policy KB | Differentiate same-record CAS collision from conflicting independent effective obligations; preserve applicable versions and explicit authorized human ruling or unresolved result |
++| DISC-02 | FR-118/119; R-ASE-19 | Require conditional consequence mechanism, counterexample, genuinely unaffected connected neighbor and bounded independent falsification |
++| DISC-03 | Policy/Manual/Requirement revisions and source/build evidence | Interpret historical versus current versus future applicability using time-aligned records; unknown deployment cannot certify conformance |
++| DISC-04 | FR-118/119, scoped search, staged proposals | Find missing semantic link and reject lexical decoy without authorizing invented relationship or coverage |
++| DISC-05 | graph review, native history, derived projections, T-422 | Preserve correction, invalidate dependent candidates, constrain cache freshness and keep historical accepted records unchanged |
++
++**Proposed engineering acceptance identifiers (not canonical P-14 IDs):** `GEX-DISC-01..05` map one-to-one to the table. Each requires a positive neighbor and a negative control; record actual authorization, source/revision/actor, before/after graph views, unknown/truncated scope, outcome, cost and evidence. Evaluate separate current and candidate reasoning methods on unseen tasks and multiple domains using the original unchanged reviewer charters, without supplying these specific diagnoses to blind reviewers. An author checking these examples is not proof of independent skill effectiveness or full spec validation.
++
++**Admission boundary:** Canonical01/03/05 now own these proposed clarifications and their fixture mapping; independently validate them against current owner contracts and deployed capabilities. Do not assert full causal inference, infer policy hierarchy, change native test statuses or hide existing PR security/CI blockers.
+ 
+ ### GEX governed AI reasoning and authored skill reuse — continuation, no new top-level product
+ 
+@@ -517,3 +533,25 @@
+ The existing `run_behavior_model` operation may create a native Run as its own explicitly requested protected operation. That operation's required native effect, model manifest, provenance and audit still share the actual native transaction. Separately authorized preparation stages are not one fictitious cross-operation transaction. Dispatch remains distinct from target execution, evidence and FR-119 acknowledgment/closure.
+ 
+ Acceptance must discriminate viewing/staging with no Run side effect, authorized native creation yielding a prepared Run before dispatch, reuse/choose of an existing eligible Run, later-stage failure with accurate PARTIAL receipts, and the atomic Run-plus-manifest failure path of `run_behavior_model`. Preserve project, permission, case/oracle revision, snapshot, cohort and genuine-prior-receipt checks at the applicable native boundary. These variants extend the retained GA-AC-01 / MBT-AC-37 / ASE-INT transaction proofs; they are NOT RUN and add no new scenario ID.
++
++
++### Current DISC reconciliation status
++
++Canonical01/03/05 now retain the late concurrent DISC clarification. GEX-DISC labels map to existing proof owners and remain NOT RUN; author desk records are not this run’s independent receipts. No new graph/authority store, scenario count or method-benefit credit follows.
++
++
++### DISC fixture aliases and cross-consumer reconciliation
++
++`GEX-DISC-01..05` remain supplementary fixture aliases; they do not add canonical scenario definitions or independent discoveries. The eight GEX-AC obligations, five current GA-AC checks and 125 ASER core definitions retain their separate accounting. All fixtures below are NOT RUN.
++
++| Diagnostic alias | Existing proof owners | Discriminating fixture and legitimate neighboring outcome |
++| --- | --- | --- |
++| `GEX-DISC-01` | GEX-AC-01; ASE-INT-10; SK-E2E-26; GEX-SEM-01 alias | Compare two independently applicable contradictory obligations with two concurrent versions of one identity. Apply only an approved scope/precedence/exception ruling; otherwise retain unresolved conflict and allow unaffected authorized actions. |
++| `GEX-DISC-02` | GEX-AC-07; ASE-FLOW-21/45/47/52 | Same typed relationship, satisfied versus unsatisfied guard and a genuinely unaffected connected neighbor. Explain necessary condition and discriminating observation; supported no-effect or UNKNOWN is valid, graph path alone never proves cause. |
++| `GEX-DISC-03` | GEX-AC-01/07; MBT-AC-34; ASE-FLOW-26; GA-AC-01/02 | Use historically correct manual, later effective policy, future publication and old/unknown deployed build. Current and historical queries retain distinct as-of/effective/recorded/observed/deployed meaning and cannot borrow future execution evidence. |
++| `GEX-DISC-04` | GEX-AC-01; ASE-FLOW-24/32/47/52; SK-E2E-29 | Authorized unlinked content shares a material condition; a lexical decoy does not. Propose only a grounded inert candidate relation, record matching uncertainty and denied-source limits, preserve a valid existing-case/no-new-link outcome. |
++| `GEX-DISC-05` | GEX-AC-03/04; ASE-FLOW-34/48/54; SK-E2E-31/38/39; GA-AC-03/05 | Reject an exact inferred claim, then read graph detail, change summary, search, release projection, notification history and caches. Each known consumer shows corrected state or explicit stale/blocked reliance; original attempts and decisions remain. Include delayed regeneration, revoked source, unaffected neighbor and already delivered external notification; no fictitious recall or automatic training/promotion. |
++
++**Restricted-information control:** Extend GA-AC-03 and ASER-C06 with two identical authorized visible inputs differing only in inaccessible policy/manual/edges. Explanations, selection/order, counts, citations, alerts and permitted derived status must not reveal restricted existence/content. Assess practical timing leakage within declared budgets without claiming universal constant-time proof. The authorized owner still receives useful allowed detail; insufficient authorized basis yields truthful uncertainty without exposing hidden identifiers.
++
++**Reviewer challenge:** The existing review surface must let an authorized reviewer inspect the claim, exact premise and citations, submit an attributable challenge/counterexample, and inspect which dependent candidate views are current, stale, blocked or unresolved. Native source amendment and Skill promotion remain separate actions. Validate the actual Reports/change-review navigation, permission, keyboard/focus and recovery path under the existing canonical02/07 and GA-AC owners; this text is not an approved rendered mockup.
+--- a/views/requirements.md
++++ b/views/requirements.md
+@@ -153,6 +153,20 @@
+ Across existing native histories and authorized graph views, support (a) **root-cause investigation** that separates temporal co-occurrence, dependency, plausible mechanism, tested falsification and verified cause; (b) **defect-risk prioritization** grounded in labeled historical outcomes with model/version, held-out precision/recall/calibration, prevalence/drift and uncertainty, with a valid rules-only/no-prediction baseline; (c) reproducible **node/edge/branch/transition/selected-path coverage** with a model-revision and actor/data/build/environment-scoped denominator, exclusions, feasibility, status tiers and explicit unknown; (d) **flakiness investigation** using comparable attempts, build/environment/fixture/time differences, independently observed outcomes and alternate setup/product defects, without equating any intermittent failure with flaky test code; and (e) **bounded path exploration** with explicit budget, loop/state/data equivalence, safety-critical and policy-mandated obligations protected, reasons for selection/omission and a truthful incomplete result.
+ 
+ **Acceptance:** High structural coverage with a missing approved business obligation remains a gap; a graph-selected path never becomes an executed or Passed result without genuine evidence; a single failed test does not establish a root cause or flakiness; a risk model with unverified labels/low sample size must abstain; a bounded traversal cannot silently discard a required forbidden-transition check. AI may generate evidence-linked hypotheses and experiment proposals but never authority, official defects or test verdicts by inference alone.
++
++### GEX semantic discovery refinement (R-ASE-07/08/09/19/40; proposed canonical clarification)
++
++**Competing applicable obligations (DISC-01):** When several separately approved rules appear applicable to one actor/action, reconcile documented authority, scope, jurisdiction, exceptions and effective periods independently. A genuine overlap with incompatible effects remains `unresolved_conflict` with both exact sources and an accountable authorized decision owner until a valid precedence or exception decision is supplied. Do not infer that the newest, externally sourced, most specific-looking, or AI-preferred text automatically wins. Do not mistake two concurrent revisions of one identity for two independent valid policy authorities.
++
++**Condition-qualified consequences (DISC-02):** An impact proposal must distinguish a link/path from the mechanism that would make an actual behavior change. State the necessary preconditions, affected actor/state, consequence, applicable evidence, plausible alternative/no-effect interpretation and discriminating observation. A correct edge with an unsatisfied guard is not a confirmed effect; an explanatory hypothesis does not establish runtime causality.
++
++**Time-aligned meaning (DISC-03):** Compare Policy, Manual, Requirement, Model, source and tested deployment against a declared *as-of* time, actor and target build; separate effective date from document publication, recorded observation and actual deployment. Historical accuracy, currently applicable, future pending, stale, conflicting and unknown-deployment meanings cannot be silently collapsed. Missing temporal identity must result in incomplete/unknown, not retrospective relabeling.
++
++**Unlinked discovery (DISC-04):** Authorized, scoped reasoning may propose a potentially material semantic relationship between previously unlinked sources using content spans, actor/context/conditions and independent negative comparisons. Similar wording alone is insufficient. The hypothesis remains an unapproved edge candidate; it cannot establish accepted requirement, confirmed impact, coverage or authority until native owner review. Record false positives and deliberately unrelated lookalikes.
++
++**Correction propagation (DISC-05):** When a reviewer contests a derived meaning or impact, preserve the exact original claim, source/Skill versions, correction, reason and reviewer attribution. Recompute or invalidate all known dependent *derived candidates* and explain unresolved consumers; protect accepted authoritative records, historical runs and unrelated graph facts. Neither rejecting a hypothesis nor replacing a Skill version silently edits prior decisions.
++
++**Acceptance:** An independent reviewer can distinguish two valid authorities with conflicting scope, a linked but causally unaffected consumer, historically accurate but not currently effective instructions, a meaningful unlinked obligation versus a lexical decoy, and a rejected inference whose downstream candidates must become stale. Each outcome shows evidence/unknowns and the authorized next owner. A deterministic/no-change outcome is valid. These are proposed additions to existing owners, not a new graph service or a claim of implemented functionality.
+ 
+ ## R-ASE-20 — Observable work completion
+ 
+@@ -458,3 +472,8 @@
+ **Method and evaluation version boundary:** Canonical 06's incoming portable trigger/adoption wording is preserved as an unvalidated candidate. It changes the method text compared with the earlier frozen trial candidate. The completed incumbent/candidate exercise used the original fixed v1–v7 wording on two independently selected synthetic briefs; both arms met their contracts, with no demonstrated superiority. It does not discharge the stricter 1.4.30/31 discovery qualification or validate this successor, the extra contextual wording, a runtime Skill, prediction, or real-user benefit. The original team charters and original outputs remain unchanged. No candidate Skill is installed, approved or activated by this document.
+ 
+ **Proof inventory accounting:** Retain the 125 ASER core definitions (15 ASE-E2E, 54 ASE-FLOW, 40 SK-E2E, 16 ASE-INT), eight incoming GEX-AC obligations and five current GA-AC checks. The 1.4.33 GA-AC table supersedes the four 1.4.32 prose summaries; do not count them twice. The separate GEX-SEM-01..08 and proposed SK-E2E-41..44 labels remain aliases with explicit new fixture assertions allocated below, not twelve more canonical definitions. All product/runtime proof obligations remain NOT RUN in this review. Mechanical checks and isolated helper/query probes retain their narrower identities and cannot satisfy these scenarios.
++
++
++### Current DISC reconciliation status
++
++Canonical01/03/05 now retain the late concurrent DISC clarification. GEX-DISC labels map to existing proof owners and remain NOT RUN; author desk records are not this run’s independent receipts. No new graph/authority store, scenario count or method-benefit credit follows.
+--- a/views/skills-governance.md
++++ b/views/skills-governance.md
+@@ -283,10 +283,10 @@
+ 
+ ### Native feedback integration prerequisite
+ 
+-Reuse existing semantic matching, technique prompts, citation filtering and native task/review feedback. Record an authorized correction or rejected/no-change outcome independently of optional inference/regeneration. Retain the original and successor immutable candidate outputs with their source, accepted-oracle, method, model and actual effect receipts; do not overwrite the basis of a comparison. A native AI allocation or eligible generation-task state must not be assumed necessary for every legitimate raw feedback observation. Failed/partial lookup remains unknown. Current endpoint behavior is narrower than this target and requires the source-convergence work in the design/plan; the unchanged candidate principle text above remains unvalidated for improved discovery.
+-
+-
+-**Method-version boundary:** The semantic and outcome-first discussion above is contextual application of the fixed candidate principles in canonical 06, not an amendment to an original assurance charter or a newly installed method. The bounded independent transfer trial used its own frozen candidate bytes; it supplies no efficacy evidence for additional wording or broader semantic/predictive scope. See the current review record for the actual trial and final-target receipts.
++Reuse existing semantic matching, technique prompts, citation filtering and native task/review feedback. Record an authorized correction or rejected/no-change outcome independently of optional inference/regeneration. Retain the original and successor immutable candidate outputs with their source, accepted-oracle, method, model and actual effect receipts; do not overwrite the basis of a comparison. A native AI allocation or eligible generation-task state must not be assumed necessary for every legitimate raw feedback observation. Failed/partial lookup remains unknown. Current endpoint behavior is narrower than this target and requires the source-convergence work in the design/plan; the current candidate principle text above remains unvalidated for improved discovery.
++
++
++**Method-version boundary:** The semantic and outcome-first discussion above is contextual application of the candidate principles in canonical 06, not an amendment to an original assurance charter or a newly installed method. The bounded independent transfer trial used its own frozen candidate bytes; it supplies no efficacy evidence for additional wording or broader semantic/predictive scope. See the current review record for the actual trial and final-target receipts.
+ 
+ 
+ ### Current canonical portability and qualification

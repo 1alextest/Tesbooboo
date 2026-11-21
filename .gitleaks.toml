@@ -27,3 +27,16 @@ condition = "AND"
 paths = ['''^(?:/repo/)?docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/native-green-profile-965a87a1-v3\.json$''']
 regexTarget = "match"
 regexes = ['''^(?:api\.ts": "b8f6f6fdf4ce97aca68824b9eae3b08d22cbdb6c0abf56989429f3f74b5a492d|04_MCP_API_CONTRACTS\.md": "5893a48fe504a8d5c6b47bb552c493685e950fab62d44334702a92edc7c9474d)"$''']
+
+# These two 40-character values are separately verified Git commit objects,
+# not Sourcegraph access tokens. Preserve the immutable original Blue receipt.
+# A rule-local secret allowlist avoids suppressing unrelated Sourcegraph-pattern matches.
+# Segmented SHA patterns keep the allowlist itself free of a new bare 40-hex token.
+[[rules]]
+id = "sourcegraph-access-token"
+[[rules.allowlists]]
+description = "Only the two original Git commit identities in the frozen Blue receipt"
+condition = "AND"
+paths = ['''^(?:/repo/)?docs/specs/agent-synchronized-engineering/reviews/2026-11-19-gex-rerun/receipts/blue-a-v1\.md$''']
+regexTarget = "secret"
+regexes = ['''^(?:6897f989b055a955280f(?:810c7daace86f74057fa)|d83549c85a4dcd047fb40(?:dc4fba4ec62737ab0fc))$''']

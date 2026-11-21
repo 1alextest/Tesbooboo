@@ -1024,7 +1024,10 @@ test.describe("top bar — notifications", () => {
 
       await bell(page).click();
       await panel(page).getByRole("menuitem", { name: /Unread one/ }).click();
-      await expect(page).toHaveURL(new RegExp(`/projects/${tenant!.projectId}$`));
+      // Route resolution may land on the project's readable key or its UUID, and the project
+      // notification opens the project home, which canonicalizes to /dashboard.
+      const projectKey = scalar(`SELECT key FROM projects WHERE id = ${literal(tenant!.projectId)};`);
+      await expect(page).toHaveURL(new RegExp(`/projects/(?:${tenant!.projectId}|${projectKey})(?:/dashboard)?$`));
 
       // Read state is server-side, so the badge on the next page load is one lower.
       await page.goto("/projects");

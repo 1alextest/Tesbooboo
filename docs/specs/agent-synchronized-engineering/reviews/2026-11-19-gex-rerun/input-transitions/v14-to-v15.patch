@@ -1,0 +1,515 @@
+--- a/canonical/00_README.md
++++ b/canonical/00_README.md
+@@ -1,6 +1,6 @@
+ # Tesbo: Shared Human-and-Agent Engineering Platform — Specification Package
+ 
+-**Revision:** 1.4.35 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN 
++**Revision:** 1.4.36 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN 
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Status:** source-informed proposals plus scoped native preview increments; NOT FROZEN; no package-wide completion or deployment certification.
+ **Historical v1.4.27 working proposed baseline:** 124 FR, 12 NFR, 93 AC, 91 implementation tasks and 490 planned QA checks (QA-448–490 NOT RUN; owner approval pending). **Previous v1.4.19 proposed baseline:** 114 FR, 12 NFR, 81 AC, 83 tasks and 447 planned QA checks. **Previous v1.4.18 baseline:** 105 FR, 12 NFR, 72 AC, 77 tasks and 423 planned QA checks. The new QA-404–423 are NOT RUN; historical execution/coverage claims retain their original dates and limitations. This document amendment does not certify application behavior.
+@@ -733,9 +733,14 @@
+ Application-neutral responsibility boundaries are supported by source/document review and independently chosen conceptual counterexamples. That evidence does not demonstrate better discovery, complete cross-application efficacy, live enforcement or an installed Skill. Preserve the original frozen reviewer receipts and label later reconciliation as informed. A scoped UI/workbook profile is a legitimate outcome; no universal testing method or mandatory AI mechanism is implied.
+ 
+ 
+-## Revision 1.4.35 — concurrent-source reconciliation and independent assurance
+-
+-This amendment preserves the complete incoming published 1.4.34 canonical bodies, including its portability corrections, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
++## Revision 1.4.35 — Graph Analytics review closure contracts
++
++This amendment governs Graph Analytics where earlier chapters differ. It resolves specification findings, with runtime proof pending. The first implementation slice is the DMIS approval-to-posting workflow using native Reports, change review, Cases, Runs and Evidence. The package remains NOT FROZEN.
++
++
++## Revision 1.4.36 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the complete incoming published 1.4.35 canonical bodies, including portability and Graph Analytics closure contracts, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
+ 
+ ### Current source-fit boundary for the intelligent graph proposal
+ 
+@@ -751,7 +756,7 @@
+ **Proof inventory accounting:** Retain the 125 ASER core definitions (15 ASE-E2E, 54 ASE-FLOW, 40 SK-E2E, 16 ASE-INT), eight incoming GEX-AC obligations and five current GA-AC checks. The 1.4.33 GA-AC table supersedes the four 1.4.32 prose summaries; do not count them twice. The separate GEX-SEM-01..08 and proposed SK-E2E-41..44 labels remain aliases with explicit new fixture assertions allocated below, not twelve more canonical definitions. All product/runtime proof obligations remain NOT RUN in this review. Mechanical checks and isolated helper/query probes retain their narrower identities and cannot satisfy these scenarios.
+ 
+ 
+-**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this revision their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
++**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this reconciliation their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
+ 
+ 
+ ### Publication checkpoint — external implementation and documentation merges
+@@ -759,3 +764,6 @@
+ After the v12 specification review froze, GitHub reported PR168 merged as f43013473b3a8b725bb547187e21b4459d0e8838 and PR167 merged as 1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea (implementation head b07def32b725cfa3b71f34d001bbbdc94ed38226). Development now includes both, and the old documentation branch was removed externally. This supersedes earlier statements that those PRs remain open/unmerged. The present work prepares a documentation follow-up on that merged parent and preserves its product changes; it did not perform either merge or verify deployment.
+ 
+ The original source findings and team receipts remain bound to 6897f989b055a955280f810c7daace86f74057fa. Their original OPEN or RELEASE-BLOCK dispositions are not automatically current defects or release judgments about the merged implementation. The separately authored native integration closure and its exact evidence own implementation claims. Newly merged documents report narrower repairs in human approval, native transactions, result-preserving Bug association, requirement lookup states and reviewed document history. Those claims require their own exact-source/runtime evidence; this documentation rerun does not silently re-certify them or rewrite its earlier observations. The broader graph reasoning, effective Skill assignment/resolution, source-event reconciliation, original external QA loop and empirical method benefit retain their explicit unimplemented/unqualified or admission status in that implementation record. Retained proposed contracts continue to govern future work.
++
++
++**Current36 integration boundary:** The published35 Graph Analytics closure contracts are preserved and govern mixed model/policy/requirement obligation scope, distinct evidence sufficiency and observed PASS/FAIL, per-impact actions, total ranking, authorized-visible snapshot identity and current-authority rollover. Their new fixtures extend the same five GA-AC checks and remain NOT RUN. The DMIS approval-to-posting workflow is the named pilot context, not a universal actor/schema/method or a claimed live test. The incoming short source-checkout claim belongs to its separate review; this run's inspected source remains6897 and its delivery parent is1fe. Earlier38/35-style current statements are historical when this latest explicit qualification differs. This chapter preserves the independently reviewed CURRENT/HISTORICAL, separate Skill assignment, prepared-Run and source-status qualifications above. No empirical benefit, deployment, activation or implementation acceptance is inherited.
+--- a/canonical/01_PRODUCT_REQUIREMENTS.md
++++ b/canonical/01_PRODUCT_REQUIREMENTS.md
+@@ -1,7 +1,7 @@
+ # Product Requirements — Shared Human-and-Agent Engineering Workflow
+ 
+ **Document ID:** TESBO-PRD-001  
+-**Revision:** 1.4.35 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN 
++**Revision:** 1.4.36 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN 
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Priority terms:** **MUST** = acceptance requirement; **SHOULD** = planned but can be staged; **MAY** = optional/future.  
+ **Application context:** project-agnostic, multi-project QA management and agent-orchestrated execution. DMIS/ODPEM is an initial web pilot only, never a product-specific requirement or default tenant.
+@@ -1060,9 +1060,14 @@
+ Native definition status, execution outcome, approval, active applicability and presentation layout remain independent. Imported workbook conventions cannot renumber canonical case identities, reset prior attempts, promote a Draft, overwrite relied-on revisions or bypass native selected review/apply. These are refinements of existing T-422, native case/history and accepted-oracle requirements, not new record owners.
+ 
+ 
+-## Revision 1.4.35 — concurrent-source reconciliation and independent assurance
+-
+-This amendment preserves the complete incoming published 1.4.34 canonical bodies, including its portability corrections, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
++## Revision 1.4.35 — Graph Analytics review closure contracts
++
++FR-115–119 and FR-121–124 require approved applicable policy and requirement obligations in the selected scope, including those outside an active model. Keep distinct native impact records and dispositions. Evidence sufficiency and observed outcome are independent. Verified failure leaves the discrepancy visible for native QA triage. A supported no-impact conclusion only applies within a documented, assessed dependency frontier and comparable authorized baselines.
++
++
++## Revision 1.4.36 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the complete incoming published 1.4.35 canonical bodies, including portability and Graph Analytics closure contracts, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
+ 
+ ### Reuse requires preserving the retained user contract
+ 
+@@ -1105,4 +1110,7 @@
+ **Acceptance:** An independent reviewer can distinguish two valid authorities with conflicting scope, a linked but causally unaffected consumer, historically accurate but not currently effective instructions, a meaningful unlinked obligation versus a lexical decoy, and a rejected inference whose downstream candidates must become stale. Each outcome shows evidence/unknowns and the authorized next owner. A deterministic/no-change outcome is valid. These are proposed additions to existing owners, not a new graph service or a claim of implemented functionality.
+ 
+ 
+-**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this revision their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
++**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this reconciliation their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
++
++
++**Current36 integration boundary:** The published35 Graph Analytics closure contracts are preserved and govern mixed model/policy/requirement obligation scope, distinct evidence sufficiency and observed PASS/FAIL, per-impact actions, total ranking, authorized-visible snapshot identity and current-authority rollover. Their new fixtures extend the same five GA-AC checks and remain NOT RUN. The DMIS approval-to-posting workflow is the named pilot context, not a universal actor/schema/method or a claimed live test. The incoming short source-checkout claim belongs to its separate review; this run's inspected source remains6897 and its delivery parent is1fe. Earlier38/35-style current statements are historical when this latest explicit qualification differs. This chapter preserves the independently reviewed CURRENT/HISTORICAL, separate Skill assignment, prepared-Run and source-status qualifications above. No empirical benefit, deployment, activation or implementation acceptance is inherited.
+--- a/canonical/02_WORKFLOW_AND_UX_SPEC.md
++++ b/canonical/02_WORKFLOW_AND_UX_SPEC.md
+@@ -1,6 +1,6 @@
+ # Functional Workflow and UX Specification
+ 
+-**Document ID:** TESBO-FS-002 | **Revision:** 1.4.35 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** proposed workflow plus scoped native preview; NOT FROZEN.
++**Document ID:** TESBO-FS-002 | **Revision:** 1.4.36 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** proposed workflow plus scoped native preview; NOT FROZEN.
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ 
+ **Interaction/ownership doctrine (P-01–P-20):** One Copilot presents Tesbo-owned sessions and linked QA artifacts; never embed another product's standalone project/chat hierarchy. Imported UI primitives must retain Tesbo's real project/session routes, current auth, violet tokens, accessible focus/keyboard conventions, and source-linked task/review views. Users can switch project/session/provider without moving or cloning KB files, reports or approved cases. Third-party demo flows are references only.
+@@ -782,9 +782,14 @@
+ Explain unsupported or ambiguous method composition in the existing authoring/review surface, with the affected action and a useful authorized next step. A manual API security case can involve several simultaneous method facets; do not silently pick one display category or imply that an optional graph/automation adapter is required. Keep accepted limited-release behavior and actual tested actor/fixture scope visible where they change the expected result or interpretation. No new top-level UI or mandatory wizard is required by this clarification.
+ 
+ 
+-## Revision 1.4.35 — concurrent-source reconciliation and independent assurance
+-
+-This amendment preserves the complete incoming published 1.4.34 canonical bodies, including its portability corrections, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
++## Revision 1.4.35 — Graph Analytics review closure contracts
++
++For the DMIS approval-rule change, current-build approval PASS plus prior-build posting PASS leaves current posting unverified. Current matching posting FAIL with admissible evidence removes the missing-evidence label and shows an open discrepancy with native QA triage. Current matching posting PASS meets the selected posting obligation, without automatically acknowledging or closing a native impact. A missing or inadmissible receipt never establishes a verified result. A finding spanning two native impacts shows both statuses and requires selecting the intended impact before any follow-up action.
++
++
++## Revision 1.4.36 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the complete incoming published 1.4.35 canonical bodies, including portability and Graph Analytics closure contracts, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
+ 
+ ### Current-versus-draft and honest recovery on existing surfaces
+ 
+@@ -802,4 +807,7 @@
+ Acceptance must discriminate viewing/staging with no Run side effect, authorized native creation yielding a prepared Run before dispatch, reuse/choose of an existing eligible Run, later-stage failure with accurate PARTIAL receipts, and the atomic Run-plus-manifest failure path of `run_behavior_model`. Preserve project, permission, case/oracle revision, snapshot, cohort and genuine-prior-receipt checks at the applicable native boundary. These variants extend the retained GA-AC-01 / MBT-AC-37 / ASE-INT transaction proofs; they are NOT RUN and add no new scenario ID.
+ 
+ 
+-**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this revision their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
++**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this reconciliation their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
++
++
++**Current36 integration boundary:** The published35 Graph Analytics closure contracts are preserved and govern mixed model/policy/requirement obligation scope, distinct evidence sufficiency and observed PASS/FAIL, per-impact actions, total ranking, authorized-visible snapshot identity and current-authority rollover. Their new fixtures extend the same five GA-AC checks and remain NOT RUN. The DMIS approval-to-posting workflow is the named pilot context, not a universal actor/schema/method or a claimed live test. The incoming short source-checkout claim belongs to its separate review; this run's inspected source remains6897 and its delivery parent is1fe. Earlier38/35-style current statements are historical when this latest explicit qualification differs. This chapter preserves the independently reviewed CURRENT/HISTORICAL, separate Skill assignment, prepared-Run and source-status qualifications above. No empirical benefit, deployment, activation or implementation acceptance is inherited.
+--- a/canonical/03_TECHNICAL_DESIGN.md
++++ b/canonical/03_TECHNICAL_DESIGN.md
+@@ -1,6 +1,6 @@
+ # Technical Architecture and Data Design
+ 
+-**Document ID:** TESBO-TD-003 | **Revision:** 1.4.35 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** source-informed design plus scoped native increments; NOT FROZEN.
++**Document ID:** TESBO-TD-003 | **Revision:** 1.4.36 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** source-informed design plus scoped native increments; NOT FROZEN.
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Stack:** existing Next.js, NestJS, PostgreSQL/pgvector, Redis/BullMQ and Railway fork.  
+ **Audited fork:** T-454 source verification `1alextest/Tesbooboo@5989e5e2c646666ed087a7885389b2ffce4bad42` (development); prior historical audit `124f1280afd7ee0e400755796ac46ba9f956b05f`. Production SHA/migrations were not verified.  
+@@ -1697,9 +1697,18 @@
+ **Current navigation/authority clarification:** the complete canonical Skills contract is in this file at [Governed Skills contract within T-422](#governed-skills-contract-within-t-422). Older copied-view labels and self-link wording are historical navigation text, not a change of authority. The six repository views remain subordinate to these eight canonical files.
+ 
+ 
+-## Revision 1.4.35 — concurrent-source reconciliation and independent assurance
+-
+-This amendment preserves the complete incoming published 1.4.34 canonical bodies, including its portability corrections, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
++## Revision 1.4.35 — Graph Analytics review closure contracts
++
++Compute the obligation basis as the union of applicable approved model, policy and requirement obligations within declared scope. Collapse only exact reviewed semantic equivalents for the same applicability context and pinned revisions. Keep unmapped policy obligations and unresolved conflicts visible; a deliberate model-only filter labels its narrower denominator. A zero denominator means N/A only for a complete scope. Compare counts only across equivalent evidence stages and cohorts.
++
++Use one ordered list: confirmed critical, unknown criticality, confirmed noncritical. Within each bucket order confirmed applicability, inferred applicability, unresolved applicability, then direct before downstream before unknown direction, then stable finding identity. Explicit criticality filters keep unknown reachable. Deduplicate repeated paths without merging native impact IDs. If actionable statuses differ, preserve separate native actions.
++
++Split internal index identity from authorized visible snapshot identity. Recovery checks the authoritative source binding generation, cursor/watermark, extraction profile and active index identity plus the report snapshot derived from it. Hidden-only changes do not perturb authorized visible freshness or pagination. Verify no-progress detection, escalation and bounded retry/rebuild or stale fallback. An explanation-only outage leaves deterministic results available.
++
++
++## Revision 1.4.36 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the complete incoming published 1.4.35 canonical bodies, including portability and Graph Analytics closure contracts, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
+ 
+ ### Source-to-target convergence before governed graph reliance
+ 
+@@ -1792,7 +1801,7 @@
+ **Dependent-consumer and notification boundary:** Rejection or source/access change invalidates known derived candidates under their existing owner. Graph detail, change summary, authorized search, release/readiness projection, notification history and caches must expose corrected/current state, explicit stale/partial state or blocked current reliance within the approved operational budget. Retain the original claim, correction and historical receipts. Already delivered external notification bytes cannot be recalled by an internal cache update; retain their historical delivery and, where authorized, link a correction/current-status readback instead of claiming silent erasure. An unknown or unavailable consumer is an explicit unresolved impact, not an invented global invalidation success.
+ 
+ 
+-**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this revision their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
++**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this reconciliation their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
+ 
+ 
+ ### Publication checkpoint — external implementation and documentation merges
+@@ -1800,3 +1809,6 @@
+ After the v12 specification review froze, GitHub reported PR168 merged as f43013473b3a8b725bb547187e21b4459d0e8838 and PR167 merged as 1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea (implementation head b07def32b725cfa3b71f34d001bbbdc94ed38226). Development now includes both, and the old documentation branch was removed externally. This supersedes earlier statements that those PRs remain open/unmerged. The present work prepares a documentation follow-up on that merged parent and preserves its product changes; it did not perform either merge or verify deployment.
+ 
+ The original source findings and team receipts remain bound to 6897f989b055a955280f810c7daace86f74057fa. Their original OPEN or RELEASE-BLOCK dispositions are not automatically current defects or release judgments about the merged implementation. The separately authored native integration closure and its exact evidence own implementation claims. Newly merged documents report narrower repairs in human approval, native transactions, result-preserving Bug association, requirement lookup states and reviewed document history. Those claims require their own exact-source/runtime evidence; this documentation rerun does not silently re-certify them or rewrite its earlier observations. The broader graph reasoning, effective Skill assignment/resolution, source-event reconciliation, original external QA loop and empirical method benefit retain their explicit unimplemented/unqualified or admission status in that implementation record. Retained proposed contracts continue to govern future work.
++
++
++**Current36 integration boundary:** The published35 Graph Analytics closure contracts are preserved and govern mixed model/policy/requirement obligation scope, distinct evidence sufficiency and observed PASS/FAIL, per-impact actions, total ranking, authorized-visible snapshot identity and current-authority rollover. Their new fixtures extend the same five GA-AC checks and remain NOT RUN. The DMIS approval-to-posting workflow is the named pilot context, not a universal actor/schema/method or a claimed live test. The incoming short source-checkout claim belongs to its separate review; this run's inspected source remains6897 and its delivery parent is1fe. Earlier38/35-style current statements are historical when this latest explicit qualification differs. This chapter preserves the independently reviewed CURRENT/HISTORICAL, separate Skill assignment, prepared-Run and source-status qualifications above. No empirical benefit, deployment, activation or implementation acceptance is inherited.
+--- a/canonical/04_MCP_API_CONTRACTS.md
++++ b/canonical/04_MCP_API_CONTRACTS.md
+@@ -1,6 +1,6 @@
+ # Proposed MCP / REST Contracts and Integration Security
+ 
+-**Document ID:** TESBO-API-004 | **Revision:** 1.4.35 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** mixed proposed and scoped native contracts; NOT FROZEN. PROPOSED labels remain proposals.
++**Document ID:** TESBO-API-004 | **Revision:** 1.4.36 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** mixed proposed and scoped native contracts; NOT FROZEN. PROPOSED labels remain proposals.
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Important:** Names, JSON payloads and paths labeled `PROPOSED` below are **not existing routes**. Discover/confirm their implementation after engineering work. Source audit found current Tesbo MCP at `/api/projects/:projectId/mcp` and `/api/mcp` through JSON-RPC 2.0 and a `tsbo_` bearer token.
+ 
+@@ -1079,9 +1079,16 @@
+ The output adapter must validate the native artifact kind and lifecycle before staging or applying a proposal. Explicitly separate definition status from execution outcome and preserve step-local expected results, original identities, accepted revisions and actual attempts. Unsupported classifications require a declared mapping or an honest unresolved result, never a guessed enum conversion. The exact wire schema/profile and mapping remain implementation-admission deliverables; these behavior obligations are not a claim of a deployed API.
+ 
+ 
+-## Revision 1.4.35 — concurrent-source reconciliation and independent assurance
+-
+-This amendment preserves the complete incoming published 1.4.34 canonical bodies, including its portability corrections, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
++## Revision 1.4.35 — Graph Analytics review closure contracts
++
++Pin each comparison side's effective instant and governing authority revisions independently of source generation. For historical replay use its declared as-of scope; for current reliance, applicable authority expiry or supersession invalidates affected results and handoffs even without recapture. A no-impact status requires available, comparable and fresh authorized inputs, resolved governing applicability and a justified assessed frontier with no detected impact. Otherwise report incomplete, stale, incomparable or unresolved as appropriate.
++
++Keep absent and private proof indistinguishable within a projection. Report incomplete only from an independently authorized limitation. Hidden-only rebuilds must leave authorized cursor behavior, freshness, rank, facets, counts, snippets and deep links equivalent. Enforce actual permission loss on subsequent reads, late AI delivery, reuse and handoff; discard obsolete visible content. Pin exact selected native impact ID, eligible case/oracle/model where applicable, source, build, environment and genuine prior receipt where required. Identical operation-key replay returns the same committed receipt; a changed payload under the same key conflicts. No implicit run, acknowledgment or closure.
++
++
++## Revision 1.4.36 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the complete incoming published 1.4.35 canonical bodies, including portability and Graph Analytics closure contracts, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
+ 
+ ### Source-convergence boundary for existing operations
+ 
+@@ -1100,4 +1107,7 @@
+ Acceptance must discriminate viewing/staging with no Run side effect, authorized native creation yielding a prepared Run before dispatch, reuse/choose of an existing eligible Run, later-stage failure with accurate PARTIAL receipts, and the atomic Run-plus-manifest failure path of `run_behavior_model`. Preserve project, permission, case/oracle revision, snapshot, cohort and genuine-prior-receipt checks at the applicable native boundary. These variants extend the retained GA-AC-01 / MBT-AC-37 / ASE-INT transaction proofs; they are NOT RUN and add no new scenario ID.
+ 
+ 
+-**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this revision their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
++**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this reconciliation their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
++
++
++**Current36 integration boundary:** The published35 Graph Analytics closure contracts are preserved and govern mixed model/policy/requirement obligation scope, distinct evidence sufficiency and observed PASS/FAIL, per-impact actions, total ranking, authorized-visible snapshot identity and current-authority rollover. Their new fixtures extend the same five GA-AC checks and remain NOT RUN. The DMIS approval-to-posting workflow is the named pilot context, not a universal actor/schema/method or a claimed live test. The incoming short source-checkout claim belongs to its separate review; this run's inspected source remains6897 and its delivery parent is1fe. Earlier38/35-style current statements are historical when this latest explicit qualification differs. This chapter preserves the independently reviewed CURRENT/HISTORICAL, separate Skill assignment, prepared-Run and source-status qualifications above. No empirical benefit, deployment, activation or implementation acceptance is inherited.
+--- a/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md
++++ b/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md
+@@ -1,6 +1,6 @@
+ # Implementation Backlog, Engineering Tasks and QA Acceptance Plan
+ 
+-**Document ID:** TESBO-PLAN-005 | **Revision:** 1.4.35 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** plan plus scoped implementation receipts; unverified backlog/QA entries remain NOT RUN; NOT FROZEN.
++**Document ID:** TESBO-PLAN-005 | **Revision:** 1.4.36 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** plan plus scoped implementation receipts; unverified backlog/QA entries remain NOT RUN; NOT FROZEN.
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Repository:** `1alextest/Tesbooboo`, feature branch first, never direct Railway production promotion.  
+ **Execution tool:** engineer/coding agent may be OpenCode; this plan does **not** replace the separate OpenCode+Chrome MCP QA execution workflow.
+@@ -1867,9 +1867,22 @@
+ The five GA-AC-01..05 Graph Analytics acceptance rows in the retained published 1.4.33 chapter supersede the four earlier 1.4.32 prose summaries. They are a separate planned set and remain NOT RUN. The incoming subordinate GEX-SEM-01..08 and GEX-DISC-01..05 labels remain noncanonical proposals pending their stated P-14 mapping/review; preserving them does not allocate additional canonical IDs.
+ 
+ 
+-## Revision 1.4.35 — concurrent-source reconciliation and independent assurance
+-
+-This amendment preserves the complete incoming published 1.4.34 canonical bodies, including its portability corrections, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
++## Revision 1.4.35 — Graph Analytics review closure contracts
++
++Extend the existing five acceptance checks. All remain NOT RUN.
++
++| Check | Added discriminating proof |
++| --- | --- |
++| GA-AC-01 | Test approval-only, older posting, verified current posting FAIL and PASS as distinct controls. Assert evidence status, observed outcome, action and unchanged impact disposition. Include two owned impacts and two paths to one impact. Verify exact pins, authority rollover without recapture, identical retry, changed-payload conflict and native no-write readback. |
++| GA-AC-02 | Hand-count one mixed model/policy project with reviewed equivalent pair, unmapped critical policy and conflict. Precompute counts at each stage; contrast complete empty, partial, unavailable and unknown. Assert critical → unknown → noncritical across ties/pages with AI off, and each state-specific action. |
++| GA-AC-03 | Compare absent vs private proof and hidden-only index publication mid-page across observable cursor behavior, ranks, counts, paths, facets, snippets, freshness, placeholders and deep links. Revoke while AI is queued; verify late result and reuse are rejected. |
++| GA-AC-04 | Add conforming, no-impact, omitted-dependency, unknown, missing-requirement and downstream-failure cases. Omitted/unexamined dependency cannot produce a complete negative conclusion. Apply FR-124 replay reliability/safety and itemized lifecycle cost including coding-agent upkeep, repair, infrastructure and reconciliation. Predeclare critical-miss and safety regression no-go thresholds. |
++| GA-AC-05 | Exercise missed event, overlapping rebuild, cursor/extractor change in same generation and no progress. Verify owner/escalation, bounded recovery, exact active snapshot convergence and safe logs. AI-only degradation preserves deterministic outputs. |
++
++
++## Revision 1.4.36 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the complete incoming published 1.4.35 canonical bodies, including portability and Graph Analytics closure contracts, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
+ 
+ ### Source-convergence proof allocation — definitions, not executed closure
+ 
+@@ -1959,7 +1972,7 @@
+ **Reviewer challenge:** The existing review surface must let an authorized reviewer inspect the claim, exact premise and citations, submit an attributable challenge/counterexample, and inspect which dependent candidate views are current, stale, blocked or unresolved. Native source amendment and Skill promotion remain separate actions. Validate the actual Reports/change-review navigation, permission, keyboard/focus and recovery path under the existing canonical02/07 and GA-AC owners; this text is not an approved rendered mockup.
+ 
+ 
+-**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this revision their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
++**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this reconciliation their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
+ 
+ 
+ ### Publication checkpoint — external implementation and documentation merges
+@@ -2012,3 +2025,6 @@
+ | Missing/conflicting mandatory guidance | Block governed authoring, preserve independently authorized raw evidence intake, and require a named accountable human decision for any scoped exception. |
+ 
+ These choices, assignment storage/resolution, revocation/invalidation across consumers, semantic conflict handling and real client/UI proof remain S0 admission gates. The retained original external QA loop has its own task/assignment/report/selected-apply contracts; this KB change cannot close I3-Q.
++
++
++**Current36 integration boundary:** The published35 Graph Analytics closure contracts are preserved and govern mixed model/policy/requirement obligation scope, distinct evidence sufficiency and observed PASS/FAIL, per-impact actions, total ranking, authorized-visible snapshot identity and current-authority rollover. Their new fixtures extend the same five GA-AC checks and remain NOT RUN. The DMIS approval-to-posting workflow is the named pilot context, not a universal actor/schema/method or a claimed live test. The incoming short source-checkout claim belongs to its separate review; this run's inspected source remains6897 and its delivery parent is1fe. Earlier38/35-style current statements are historical when this latest explicit qualification differs. This chapter preserves the independently reviewed CURRENT/HISTORICAL, separate Skill assignment, prepared-Run and source-status qualifications above. No empirical benefit, deployment, activation or implementation acceptance is inherited.
+--- a/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md
++++ b/canonical/06_IMPLEMENTATION_AGENT_BRIEF.md
+@@ -1,6 +1,6 @@
+ # Implementation Agent Brief — OpenCode / Claude Code / Codex
+ 
+-**Revision:** 1.4.35 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN 
++**Revision:** 1.4.36 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN 
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Target:** `1alextest/Tesbooboo`; never substitute upstream for the owner's fork.  
+ **Status:** engineering instructions plus scoped implementation receipts; no package-wide completion or production deployment claim; NOT FROZEN.
+@@ -622,12 +622,20 @@
+ These qualifications apply the existing outcome/authority/context/history/evaluation principles; they do not alter assurance charters or impose a new universal workflow. Adaptation examples stay in scoped evidence, and a missing original package or origin context remains explicit rather than invented.
+ 
+ 
+-## Revision 1.4.35 — concurrent-source reconciliation and independent assurance
+-
+-This amendment preserves the complete incoming published 1.4.34 canonical bodies, including its portability corrections, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
++## Revision 1.4.35 — Graph Analytics review closure contracts
++
++Reconcile source at the implementation head before coding. The reviewed checkout 6dd8e073 shows native human-session review, transaction-aware case/run writes, scoped run readback and Requirements request fencing. Treat these as inspected source, not deployment evidence or operation-keyed replay. Active-approved revision selection, model picker unavailable-vs-empty handling and exact commitment remain open. Use native fixtures and scope the DMIS proof to the approved obligation, known build/environment and independently verified outcome.
++
++
++## Revision 1.4.36 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the complete incoming published 1.4.35 canonical bodies, including portability and Graph Analytics closure contracts, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
+ 
+ 
+ **Method and evaluation version boundary:** Canonical 06's incoming portable trigger/adoption wording is preserved as an unvalidated candidate. It changes the method text compared with the earlier frozen trial candidate. The completed incumbent/candidate exercise used the original fixed v1–v7 wording on two independently selected synthetic briefs; both arms met their contracts, with no demonstrated superiority. It does not discharge the stricter 1.4.30/31 discovery qualification or validate this successor, the extra contextual wording, a runtime Skill, prediction, or real-user benefit. The original team charters and original outputs remain unchanged. No candidate Skill is installed, approved or activated by this document.
+ 
+ 
+-**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this revision their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
++**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this reconciliation their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
++
++
++**Current36 integration boundary:** The published35 Graph Analytics closure contracts are preserved and govern mixed model/policy/requirement obligation scope, distinct evidence sufficiency and observed PASS/FAIL, per-impact actions, total ranking, authorized-visible snapshot identity and current-authority rollover. Their new fixtures extend the same five GA-AC checks and remain NOT RUN. The DMIS approval-to-posting workflow is the named pilot context, not a universal actor/schema/method or a claimed live test. The incoming short source-checkout claim belongs to its separate review; this run's inspected source remains6897 and its delivery parent is1fe. Earlier38/35-style current statements are historical when this latest explicit qualification differs. This chapter preserves the independently reviewed CURRENT/HISTORICAL, separate Skill assignment, prepared-Run and source-status qualifications above. No empirical benefit, deployment, activation or implementation acceptance is inherited.
+--- a/canonical/07_UI_DESIGN_TASKS.md
++++ b/canonical/07_UI_DESIGN_TASKS.md
+@@ -1,6 +1,6 @@
+ # UI/UX Design Tasks and Screen Specifications
+ 
+-**Document ID:** TESBO-UX-007 | **Revision:** 1.4.35 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** proposed extensions plus limited native inspector; full graphical UI/AT and independent sign-off remain open; NOT FROZEN.
++**Document ID:** TESBO-UX-007 | **Revision:** 1.4.36 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** proposed extensions plus limited native inspector; full graphical UI/AT and independent sign-off remain open; NOT FROZEN.
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ 
+ **Platform UI rule:** Project settings determine target kind/adapter, allowed test actions, test-case templates/fields and suite hierarchy, imported-source mapping, issue tracker and evidence classification. DMIS labels and web browser affordances are pilot fixtures, not universal UI controls. A project with no case import or issue tracker sees no required workbook/GitLab fields. Unsupported target adapters show `NOT_SUPPORTED` with no mock execution.
+@@ -736,9 +736,14 @@
+ Verify these refinements against authentic current surfaces at an exact build, role, fixture and viewport, including keyboard/accessibility and interrupted recovery. Source review and workbook sketches do not close the existing visual/runtime gate. Use the current D-14/T-422 and native Case/Run owners; no new top-level navigation is proposed.
+ 
+ 
+-## Revision 1.4.35 — concurrent-source reconciliation and independent assurance
+-
+-This amendment preserves the complete incoming published 1.4.34 canonical bodies, including its portability corrections, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
++## Revision 1.4.35 — Graph Analytics review closure contracts
++
++Show evidence stage and outcome independently. On verified FAIL, route to native QA triage; on verified PASS, show posting evidence and preserve impact workflow. Give unknown criticality an explicit label and filter. Display each authorized native impact's status and make action target selection explicit. Show only permission-safe freshness and recovery detail, with a scope explanation for model-only coverage. Rendered and accessibility proof remain pending.
++
++
++## Revision 1.4.36 — concurrent-source reconciliation and independent assurance
++
++This amendment preserves the complete incoming published 1.4.35 canonical bodies, including portability and Graph Analytics closure contracts, and reconciles the separately reviewed GEX corrections through v11. Earlier receipts bind their exact inputs; final integration requires its own target-bound receipt. The same eight files remain canonical; repository views remain subordinate. The newest explicit qualifications below govern overlapping older shorthand. Source inspection remains pinned to `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; other open PRs and this proposal do not establish current deployment. Exact current-target review receipts, actual method versions and remaining gates belong to GEX-ASER-2026-11-19. The package remains NOT FROZEN.
+ 
+ ### Source-grounded interaction migration
+ 
+@@ -749,4 +754,7 @@
+ The Reports Graph Analytics projection and Model Studio source-convergence corrections apply to their respective existing surfaces. Neither is an approved rendered mockup. Preserve both export-entry exclusions for new Graph Analytics views and the six existing native export types; original navigation, authentic UI and accessibility proof remain required.
+ 
+ 
+-**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this revision their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
++**Final authority and evidence reconciliation:** Revision 1.4.35 retains both the published portability assessment and this separate GEX-ASER run without pooling their members, trials or verdicts. The 1.4.34 chapter's characterization of GEX-SEM/GEX-DISC as noncanonical proposals describes that predecessor. In this reconciliation their substantive assertions are allocated to existing canonical proof owners by the explicit tables above/in canonical05; their labels remain supplementary aliases, not new canonical definitions or executed tests. Eight GEX-AC obligations, five current GA-AC checks and 125 ASER definitions retain separate accounting. The current/historical/Skill-assignment and prepared-Run qualifications in this reconciliation control older conflicting shorthand. Imported method conventions are scoped through the existing resolver and native lifecycle. No original method body is installed or activated, and the earlier two-brief experiment does not qualify the changed discovery method or imported-method profile.
++
++
++**Current36 integration boundary:** The published35 Graph Analytics closure contracts are preserved and govern mixed model/policy/requirement obligation scope, distinct evidence sufficiency and observed PASS/FAIL, per-impact actions, total ranking, authorized-visible snapshot identity and current-authority rollover. Their new fixtures extend the same five GA-AC checks and remain NOT RUN. The DMIS approval-to-posting workflow is the named pilot context, not a universal actor/schema/method or a claimed live test. The incoming short source-checkout claim belongs to its separate review; this run's inspected source remains6897 and its delivery parent is1fe. Earlier38/35-style current statements are historical when this latest explicit qualification differs. This chapter preserves the independently reviewed CURRENT/HISTORICAL, separate Skill assignment, prepared-Run and source-status qualifications above. No empirical benefit, deployment, activation or implementation acceptance is inherited.
+--- a/views/AGENT_RULE_TEMPLATE.md
++++ b/views/AGENT_RULE_TEMPLATE.md
+@@ -1,6 +1,6 @@
+ # Portable Tesbo synchronization rule — AGENTS.md / CLAUDE.md template
+ 
+-**Canonical home:** Tesbo specification package revision **1.4.35 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
++**Canonical home:** Tesbo specification package revision **1.4.36 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
+ 
+ **Status:** Proposed agent instruction. Copy/adapt into the **target application's** agent instruction file only after the project is deliberately bound to Tesbo. This document in Tesbo's repo is not automatically loaded by agents developing other repositories.
+ 
+@@ -153,3 +153,15 @@
+ 
+ 
+ **Current controlling reconciliation:** Canonical revision1.4.35 owns this proposal. Retain the v11 corrections for separate Model CURRENT and effective Skill assignment, explicit Draft/HISTORICAL work, quantitative abstention, intentional prepared Runs, corrected evidence propagation and externally delivered notifications. The GEX-SEM and GEX-DISC assertions now have existing canonical proof owners while their labels remain aliases; older “awaiting canonical reconciliation” statements are historical. Keep 125 ASER definitions, eight GEX-AC obligations and five GA-AC checks distinct. No runtime, visual, human-governance, efficacy or method-activation claim follows. The six views remain subordinate to the same eight canonical files.
++
++
++## Current canonical36 reconciliation of published35 Graph Analytics closure
++
++The published35 material below is retained through its canonical owners and remains proposed/NOT FROZEN. Evidence-stage and outcome are separate; model-only filtering is explicitly narrower than the full authorized obligation basis. The named DMIS workflow is a scoped pilot, not a portable method prerequisite. Source checkout observations and merged implementation evidence remain attributed to their actual separate reviews. The current run does not inherit their runtime or approval claims.
++
++### Inherited Graph Analytics closure — canonical06
++
++Reconcile source at the implementation head before coding. The reviewed checkout 6dd8e073 shows native human-session review, transaction-aware case/run writes, scoped run readback and Requirements request fencing. Treat these as inspected source, not deployment evidence or operation-keyed replay. Active-approved revision selection, model picker unavailable-vs-empty handling and exact commitment remain open. Use native fixtures and scope the DMIS proof to the approved obligation, known build/environment and independently verified outcome.
++
++
++Current canonical authority is revision1.4.36. Preserve all earlier v14 qualifications for method/mode selection, native partial preparation, source-pin versus merged-parent status and existing proof aliases. Original cold signatures remain bound to their exact snapshots; the final informed review binds current bytes. The five GA-AC definitions are extended, not duplicated or executed.
+--- a/views/README.md
++++ b/views/README.md
+@@ -1,6 +1,6 @@
+ # Agent-Synchronized Engineering Records (ASER) — Integrated specification view
+ 
+-**Canonical home:** Tesbo specification package revision **1.4.35 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
++**Canonical home:** Tesbo specification package revision **1.4.36 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
+ 
+ **Status:** Proposed integration design for canonical revision 1.4.29; NOT FROZEN. Existing native capabilities, specified extensions and unverified source artifacts retain separate maturity labels. The new assurance rerun must identify its actual input snapshot and scope; no earlier review or scenario count certifies this amendment.
+ **Target repository/branch:** `1alextest/Tesbooboo` / `development`.
+@@ -202,3 +202,25 @@
+ After the v12 specification review froze, GitHub reported PR168 merged as f43013473b3a8b725bb547187e21b4459d0e8838 and PR167 merged as 1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea (implementation head b07def32b725cfa3b71f34d001bbbdc94ed38226). Development now includes both, and the old documentation branch was removed externally. This supersedes earlier statements that those PRs remain open/unmerged. The present work prepares a documentation follow-up on that merged parent and preserves its product changes; it did not perform either merge or verify deployment.
+ 
+ The original source findings and team receipts remain bound to 6897f989b055a955280f810c7daace86f74057fa. Their original OPEN or RELEASE-BLOCK dispositions are not automatically current defects or release judgments about the merged implementation. The separately authored native integration closure and its exact evidence own implementation claims. Newly merged documents report narrower repairs in human approval, native transactions, result-preserving Bug association, requirement lookup states and reviewed document history. Those claims require their own exact-source/runtime evidence; this documentation rerun does not silently re-certify them or rewrite its earlier observations. The broader graph reasoning, effective Skill assignment/resolution, source-event reconciliation, original external QA loop and empirical method benefit retain their explicit unimplemented/unqualified or admission status in that implementation record. Retained proposed contracts continue to govern future work.
++
++
++## Current canonical36 reconciliation of published35 Graph Analytics closure
++
++The published35 material below is retained through its canonical owners and remains proposed/NOT FROZEN. Evidence-stage and outcome are separate; model-only filtering is explicitly narrower than the full authorized obligation basis. The named DMIS workflow is a scoped pilot, not a portable method prerequisite. Source checkout observations and merged implementation evidence remain attributed to their actual separate reviews. The current run does not inherit their runtime or approval claims.
++
++### Inherited Graph Analytics closure — canonical00
++
++This amendment governs Graph Analytics where earlier chapters differ. It resolves specification findings, with runtime proof pending. The first implementation slice is the DMIS approval-to-posting workflow using native Reports, change review, Cases, Runs and Evidence. The package remains NOT FROZEN.
++
++
++### Inherited Graph Analytics closure — canonical02
++
++For the DMIS approval-rule change, current-build approval PASS plus prior-build posting PASS leaves current posting unverified. Current matching posting FAIL with admissible evidence removes the missing-evidence label and shows an open discrepancy with native QA triage. Current matching posting PASS meets the selected posting obligation, without automatically acknowledging or closing a native impact. A missing or inadmissible receipt never establishes a verified result. A finding spanning two native impacts shows both statuses and requires selecting the intended impact before any follow-up action.
++
++
++### Inherited Graph Analytics closure — canonical07
++
++Show evidence stage and outcome independently. On verified FAIL, route to native QA triage; on verified PASS, show posting evidence and preserve impact workflow. Give unknown criticality an explicit label and filter. Display each authorized native impact's status and make action target selection explicit. Show only permission-safe freshness and recovery detail, with a scope explanation for model-only coverage. Rendered and accessibility proof remain pending.
++
++
++Current canonical authority is revision1.4.36. Preserve all earlier v14 qualifications for method/mode selection, native partial preparation, source-pin versus merged-parent status and existing proof aliases. Original cold signatures remain bound to their exact snapshots; the final informed review binds current bytes. The five GA-AC definitions are extended, not duplicated or executed.
+--- a/views/design.md
++++ b/views/design.md
+@@ -1,6 +1,6 @@
+ # ASER — Reuse-first technical design v0.4 (canonical integration view)
+ 
+-**Canonical home:** Tesbo specification package revision **1.4.35 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
++**Canonical home:** Tesbo specification package revision **1.4.36 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
+ 
+ **Status:** Architecture proposal only. Existing source owners must be re-verified at implementation head. No migration approved by this document.
+ 
+@@ -789,3 +789,26 @@
+ After the v12 specification review froze, GitHub reported PR168 merged as f43013473b3a8b725bb547187e21b4459d0e8838 and PR167 merged as 1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea (implementation head b07def32b725cfa3b71f34d001bbbdc94ed38226). Development now includes both, and the old documentation branch was removed externally. This supersedes earlier statements that those PRs remain open/unmerged. The present work prepares a documentation follow-up on that merged parent and preserves its product changes; it did not perform either merge or verify deployment.
+ 
+ The original source findings and team receipts remain bound to 6897f989b055a955280f810c7daace86f74057fa. Their original OPEN or RELEASE-BLOCK dispositions are not automatically current defects or release judgments about the merged implementation. The separately authored native integration closure and its exact evidence own implementation claims. Newly merged documents report narrower repairs in human approval, native transactions, result-preserving Bug association, requirement lookup states and reviewed document history. Those claims require their own exact-source/runtime evidence; this documentation rerun does not silently re-certify them or rewrite its earlier observations. The broader graph reasoning, effective Skill assignment/resolution, source-event reconciliation, original external QA loop and empirical method benefit retain their explicit unimplemented/unqualified or admission status in that implementation record. Retained proposed contracts continue to govern future work.
++
++
++## Current canonical36 reconciliation of published35 Graph Analytics closure
++
++The published35 material below is retained through its canonical owners and remains proposed/NOT FROZEN. Evidence-stage and outcome are separate; model-only filtering is explicitly narrower than the full authorized obligation basis. The named DMIS workflow is a scoped pilot, not a portable method prerequisite. Source checkout observations and merged implementation evidence remain attributed to their actual separate reviews. The current run does not inherit their runtime or approval claims.
++
++### Inherited Graph Analytics closure — canonical03
++
++Compute the obligation basis as the union of applicable approved model, policy and requirement obligations within declared scope. Collapse only exact reviewed semantic equivalents for the same applicability context and pinned revisions. Keep unmapped policy obligations and unresolved conflicts visible; a deliberate model-only filter labels its narrower denominator. A zero denominator means N/A only for a complete scope. Compare counts only across equivalent evidence stages and cohorts.
++
++Use one ordered list: confirmed critical, unknown criticality, confirmed noncritical. Within each bucket order confirmed applicability, inferred applicability, unresolved applicability, then direct before downstream before unknown direction, then stable finding identity. Explicit criticality filters keep unknown reachable. Deduplicate repeated paths without merging native impact IDs. If actionable statuses differ, preserve separate native actions.
++
++Split internal index identity from authorized visible snapshot identity. Recovery checks the authoritative source binding generation, cursor/watermark, extraction profile and active index identity plus the report snapshot derived from it. Hidden-only changes do not perturb authorized visible freshness or pagination. Verify no-progress detection, escalation and bounded retry/rebuild or stale fallback. An explanation-only outage leaves deterministic results available.
++
++
++### Inherited Graph Analytics closure — canonical04
++
++Pin each comparison side's effective instant and governing authority revisions independently of source generation. For historical replay use its declared as-of scope; for current reliance, applicable authority expiry or supersession invalidates affected results and handoffs even without recapture. A no-impact status requires available, comparable and fresh authorized inputs, resolved governing applicability and a justified assessed frontier with no detected impact. Otherwise report incomplete, stale, incomparable or unresolved as appropriate.
++
++Keep absent and private proof indistinguishable within a projection. Report incomplete only from an independently authorized limitation. Hidden-only rebuilds must leave authorized cursor behavior, freshness, rank, facets, counts, snippets and deep links equivalent. Enforce actual permission loss on subsequent reads, late AI delivery, reuse and handoff; discard obsolete visible content. Pin exact selected native impact ID, eligible case/oracle/model where applicable, source, build, environment and genuine prior receipt where required. Identical operation-key replay returns the same committed receipt; a changed payload under the same key conflicts. No implicit run, acknowledgment or closure.
++
++
++Current canonical authority is revision1.4.36. Preserve all earlier v14 qualifications for method/mode selection, native partial preparation, source-pin versus merged-parent status and existing proof aliases. Original cold signatures remain bound to their exact snapshots; the final informed review binds current bytes. The five GA-AC definitions are extended, not duplicated or executed.
+--- a/views/implementation-plan.md
++++ b/views/implementation-plan.md
+@@ -1,6 +1,6 @@
+ # ASER — Implementation roadmap and assurance plan
+ 
+-**Canonical home:** Tesbo specification package revision **1.4.35 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
++**Canonical home:** Tesbo specification package revision **1.4.36 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
+ 
+ **State:** The roadmap is proposed; the dated implementation follow-up identifies the bounded source work separately. Do not merge unimplemented acceptance statements into deployment claims. Use Tesbo `development` → reviewed PR → green checks; never write directly to `main`.
+ 
+@@ -653,3 +653,23 @@
+ After the v12 specification review froze, GitHub reported PR168 merged as f43013473b3a8b725bb547187e21b4459d0e8838 and PR167 merged as 1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea (implementation head b07def32b725cfa3b71f34d001bbbdc94ed38226). Development now includes both, and the old documentation branch was removed externally. This supersedes earlier statements that those PRs remain open/unmerged. The present work prepares a documentation follow-up on that merged parent and preserves its product changes; it did not perform either merge or verify deployment.
+ 
+ The original source findings and team receipts remain bound to 6897f989b055a955280f810c7daace86f74057fa. Their original OPEN or RELEASE-BLOCK dispositions are not automatically current defects or release judgments about the merged implementation. The separately authored native integration closure and its exact evidence own implementation claims. Newly merged documents report narrower repairs in human approval, native transactions, result-preserving Bug association, requirement lookup states and reviewed document history. Those claims require their own exact-source/runtime evidence; this documentation rerun does not silently re-certify them or rewrite its earlier observations. The broader graph reasoning, effective Skill assignment/resolution, source-event reconciliation, original external QA loop and empirical method benefit retain their explicit unimplemented/unqualified or admission status in that implementation record. Retained proposed contracts continue to govern future work.
++
++
++## Current canonical36 reconciliation of published35 Graph Analytics closure
++
++The published35 material below is retained through its canonical owners and remains proposed/NOT FROZEN. Evidence-stage and outcome are separate; model-only filtering is explicitly narrower than the full authorized obligation basis. The named DMIS workflow is a scoped pilot, not a portable method prerequisite. Source checkout observations and merged implementation evidence remain attributed to their actual separate reviews. The current run does not inherit their runtime or approval claims.
++
++### Inherited Graph Analytics closure — canonical05
++
++Extend the existing five acceptance checks. All remain NOT RUN.
++
++| Check | Added discriminating proof |
++| --- | --- |
++| GA-AC-01 | Test approval-only, older posting, verified current posting FAIL and PASS as distinct controls. Assert evidence status, observed outcome, action and unchanged impact disposition. Include two owned impacts and two paths to one impact. Verify exact pins, authority rollover without recapture, identical retry, changed-payload conflict and native no-write readback. |
++| GA-AC-02 | Hand-count one mixed model/policy project with reviewed equivalent pair, unmapped critical policy and conflict. Precompute counts at each stage; contrast complete empty, partial, unavailable and unknown. Assert critical → unknown → noncritical across ties/pages with AI off, and each state-specific action. |
++| GA-AC-03 | Compare absent vs private proof and hidden-only index publication mid-page across observable cursor behavior, ranks, counts, paths, facets, snippets, freshness, placeholders and deep links. Revoke while AI is queued; verify late result and reuse are rejected. |
++| GA-AC-04 | Add conforming, no-impact, omitted-dependency, unknown, missing-requirement and downstream-failure cases. Omitted/unexamined dependency cannot produce a complete negative conclusion. Apply FR-124 replay reliability/safety and itemized lifecycle cost including coding-agent upkeep, repair, infrastructure and reconciliation. Predeclare critical-miss and safety regression no-go thresholds. |
++| GA-AC-05 | Exercise missed event, overlapping rebuild, cursor/extractor change in same generation and no progress. Verify owner/escalation, bounded recovery, exact active snapshot convergence and safe logs. AI-only degradation preserves deterministic outputs. |
++
++
++Current canonical authority is revision1.4.36. Preserve all earlier v14 qualifications for method/mode selection, native partial preparation, source-pin versus merged-parent status and existing proof aliases. Original cold signatures remain bound to their exact snapshots; the final informed review binds current bytes. The five GA-AC definitions are extended, not duplicated or executed.
+--- a/views/requirements.md
++++ b/views/requirements.md
+@@ -1,6 +1,6 @@
+ # ASER — Requirements v0.4 (canonical integration view)
+ 
+-**Canonical home:** Tesbo specification package revision **1.4.35 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
++**Canonical home:** Tesbo specification package revision **1.4.36 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
+ 
+ **State:** Proposed requirements, mapped individually to canonical owners, tasks and falsifiers in `05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md` revision 1.4.29. The 48 R-ASE identifiers are preserved as a scoped namespace in the same canonical package; existing FR/AC/T/QA identifiers are not renumbered.
+ 
+@@ -499,3 +499,15 @@
+ 
+ 
+ **Current controlling reconciliation:** Canonical revision1.4.35 owns this proposal. Retain the v11 corrections for separate Model CURRENT and effective Skill assignment, explicit Draft/HISTORICAL work, quantitative abstention, intentional prepared Runs, corrected evidence propagation and externally delivered notifications. The GEX-SEM and GEX-DISC assertions now have existing canonical proof owners while their labels remain aliases; older “awaiting canonical reconciliation” statements are historical. Keep 125 ASER definitions, eight GEX-AC obligations and five GA-AC checks distinct. No runtime, visual, human-governance, efficacy or method-activation claim follows. The six views remain subordinate to the same eight canonical files.
++
++
++## Current canonical36 reconciliation of published35 Graph Analytics closure
++
++The published35 material below is retained through its canonical owners and remains proposed/NOT FROZEN. Evidence-stage and outcome are separate; model-only filtering is explicitly narrower than the full authorized obligation basis. The named DMIS workflow is a scoped pilot, not a portable method prerequisite. Source checkout observations and merged implementation evidence remain attributed to their actual separate reviews. The current run does not inherit their runtime or approval claims.
++
++### Inherited Graph Analytics closure — canonical01
++
++FR-115–119 and FR-121–124 require approved applicable policy and requirement obligations in the selected scope, including those outside an active model. Keep distinct native impact records and dispositions. Evidence sufficiency and observed outcome are independent. Verified failure leaves the discrepancy visible for native QA triage. A supported no-impact conclusion only applies within a documented, assessed dependency frontier and comparable authorized baselines.
++
++
++Current canonical authority is revision1.4.36. Preserve all earlier v14 qualifications for method/mode selection, native partial preparation, source-pin versus merged-parent status and existing proof aliases. Original cold signatures remain bound to their exact snapshots; the final informed review binds current bytes. The five GA-AC definitions are extended, not duplicated or executed.
+--- a/views/skills-governance.md
++++ b/views/skills-governance.md
+@@ -1,6 +1,6 @@
+ # ASER — Governed Skills Library and Effective Skill Assignments
+ 
+-**Canonical home:** Tesbo specification package revision **1.4.35 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
++**Canonical home:** Tesbo specification package revision **1.4.36 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the 1.4.29 rerun requires its own receipts.
+ 
+ **State:** Proposed contract for specification review, not implemented. **Scope:** Tesbo project/workspace authoring governance; no change to authoritative product behavior until explicit approval and implementation.
+ **Relationship to existing work:** Extend the logical contracts already reconciled in the same eight canonical files at 1.4.28 through the proposed 1.4.29 amendment, retaining `docs/reviews/governed-asset-evolution-reconciliation.md` (noncanonical v0.5) and earlier evidence at their original scope. Reuse Knowledge Base identity/versioning, case approval, Zyra and MCP where actual source fit is verified. This creates no ninth canonical spec, second AI agent or independent skill database.
+@@ -338,3 +338,15 @@
+ 
+ 
+ **Current controlling reconciliation:** Canonical revision1.4.35 owns this proposal. Retain the v11 corrections for separate Model CURRENT and effective Skill assignment, explicit Draft/HISTORICAL work, quantitative abstention, intentional prepared Runs, corrected evidence propagation and externally delivered notifications. The GEX-SEM and GEX-DISC assertions now have existing canonical proof owners while their labels remain aliases; older “awaiting canonical reconciliation” statements are historical. Keep 125 ASER definitions, eight GEX-AC obligations and five GA-AC checks distinct. No runtime, visual, human-governance, efficacy or method-activation claim follows. The six views remain subordinate to the same eight canonical files.
++
++
++## Current canonical36 reconciliation of published35 Graph Analytics closure
++
++The published35 material below is retained through its canonical owners and remains proposed/NOT FROZEN. Evidence-stage and outcome are separate; model-only filtering is explicitly narrower than the full authorized obligation basis. The named DMIS workflow is a scoped pilot, not a portable method prerequisite. Source checkout observations and merged implementation evidence remain attributed to their actual separate reviews. The current run does not inherit their runtime or approval claims.
++
++### Inherited Graph Analytics closure — canonical06
++
++Reconcile source at the implementation head before coding. The reviewed checkout 6dd8e073 shows native human-session review, transaction-aware case/run writes, scoped run readback and Requirements request fencing. Treat these as inspected source, not deployment evidence or operation-keyed replay. Active-approved revision selection, model picker unavailable-vs-empty handling and exact commitment remain open. Use native fixtures and scope the DMIS proof to the approved obligation, known build/environment and independently verified outcome.
++
++
++Current canonical authority is revision1.4.36. Preserve all earlier v14 qualifications for method/mode selection, native partial preparation, source-pin versus merged-parent status and existing proof aliases. Original cold signatures remain bound to their exact snapshots; the final informed review binds current bytes. The five GA-AC definitions are extended, not duplicated or executed.

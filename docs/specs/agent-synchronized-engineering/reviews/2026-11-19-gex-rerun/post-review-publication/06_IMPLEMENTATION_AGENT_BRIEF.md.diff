@@ -1,0 +1,19 @@
+--- reviewed36
++++ concurrent37
+@@ -1,6 +1,6 @@
+ # Implementation Agent Brief — OpenCode / Claude Code / Codex
+ 
+-**Revision:** 1.4.36 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN 
++**Revision:** 1.4.37 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN 
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Target:** `1alextest/Tesbooboo`; never substitute upstream for the owner's fork.  
+ **Status:** engineering instructions plus scoped implementation receipts; no package-wide completion or production deployment claim; NOT FROZEN.
+@@ -639,3 +639,8 @@
+ 
+ 
+ **Current36 integration boundary:** The published35 Graph Analytics closure contracts are preserved and govern mixed model/policy/requirement obligation scope, distinct evidence sufficiency and observed PASS/FAIL, per-impact actions, total ranking, authorized-visible snapshot identity and current-authority rollover. Their new fixtures extend the same five GA-AC checks and remain NOT RUN. The DMIS approval-to-posting workflow is the named pilot context, not a universal actor/schema/method or a claimed live test. The incoming short source-checkout claim belongs to its separate review; this run's inspected source remains6897 and its delivery parent is1fe. Earlier current-state statements are historical when this latest explicit qualification differs. This chapter preserves the independently reviewed CURRENT/HISTORICAL, separate Skill assignment, prepared-Run and source-status qualifications above. No empirical benefit, deployment, activation or implementation acceptance is inherited.
++
++
++## Revision 1.4.37 — Graph Analytics review resolution
++
++Implement within Tesbo using native Reports, graph/change review, Cases/Runs/Evidence and decision history. Use DMIS only as synthetic acceptance context and also exercise a neutral second project via FR-124. At implementation head verify owner/service fit for frontier attestation, equivalence adjudication, operation receipts and commit/publish fences. Existing raw capture pagination and attachment readiness are narrower than the selected report and evidence contracts. Do not transfer runtime or source claims between artifact pins.

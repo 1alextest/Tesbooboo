@@ -1,0 +1,23 @@
+# Tesbo specification review context
+
+Run GEX-ASER-2026-11-19 assesses candidate v1 of canonical revision 1.4.29 and the matching six subordinate views. The manifest pins the complete input bytes, application source and unchanged methodology.
+
+## Requested outcome and scope
+
+Assess whether the proposed graph and governed-method capability can meet its stated user outcomes coherently in Tesbo, including all material affected consumers and preserved original QA workflows. The user wants the existing product documentation updated and independently challenged. This is design adequacy and source-fit review of an existing proposed amendment; it is not a claim that the capability is implemented or a release is ready. Derive scope, applicable risks, alternatives, journeys, ownership and findings from primary sources and your charter. A justified no-finding, valid alternative, N/A or UNKNOWN outcome is legitimate. No preferred finding or verdict is supplied.
+
+Primary documents are the eight files in `canonical/`; `views/` are subordinate integration views. Read the current 1.4.29 amendment and relevant earlier governing contracts, native owner definitions and accepted decisions. Historical bodies and decisions remain primary source context, but earlier review judgments, historical team findings and old journey inventories do not substitute for your independent work. Do not read other reviewers' outputs, author retrospective files or prior review records during a cold pass. This is a cold review of the now-explicit proposal, not a blind experiment on whether you would independently invent it.
+
+## Method and source bindings
+
+Read the unchanged original charter for your role and applicable orchestration at the method root in `manifest.json`. Resolve requirements using Tesbo's own sources and scope; Nesberry business policies, scripts, actors and fixtures are not transferred to Tesbo. The pinned original methods have their own active/advisory/draft limits, sequencing and actual membership requirements. Do not rewrite or relax those requirements to obtain a verdict. The additional method guidance in canonical 06 is a candidate under review, not a replacement charter or an active installed Skill.
+
+Application source is a Git object database at `/workspace/scratch/307cd95373fe/tesbo`, pinned to `6897f989b055a955280f810c7daace86f74057fa`. Read with `git show`, `git grep` or `git ls-tree` using that exact revision. Do not treat its mutable working tree as the reviewed source. Read the source AGENTS.md and relevant operational instructions; no product code, schema or live data may be changed for this review. A newer PR or old CI record is a lead, not evidence about this pinned target.
+
+## Evidence and authorization
+
+Source inspection, document inspection and bounded G0/G1 design simulation are available. No running target, authentic current UI capture, real-user observation, production authority decision, cross-model independence or G2/G3 execution evidence is supplied. Do not fabricate those. Read-only source inspection and isolated scratch verification are authorized. Do not mutate external application data, send messages/comments, merge/deploy, activate a Skill or run shared-infrastructure tests. The actual user is the decision owner; review agents are analytical reviewers, not human operational approvers.
+
+Report exact input/charter identity, actual scope read, invoked checks and evidence mode, findings with source and consequence, legitimate alternatives, uncertainty and unresolved admissions. Separate mandatory checks from advisory or draft method elements. Keep source facts, simulations and hypotheses distinct. Freeze your original signed role/member receipt before any reconciliation. Use the role's vocabulary and retain actual quorum limits. Later shared findings or correction passes must be explicitly labeled informed deltas.
+
+Your output location is assigned in the dispatch message, outside this immutable input directory. Do not change input files. Produce a self-contained Markdown receipt and concise completion message. If you need another role's artifact to complete an original gate, state that dependency rather than inventing it.

@@ -1,0 +1,11 @@
+--- a/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md
++++ b/canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md
+@@ -1989,7 +1989,7 @@
+ 
+ **Verification target:** use the repository's existing isolated GitHub Actions PostgreSQL/Redis/backend/frontend/browser stack and disposable projects. The preview flag is set only in the isolated protocol test job. No shared/live database, production deployment, customer fixture or operational Skill grant is part of this verification. The required checks include migration inventory/idempotence, backend contracts, migrated transaction/race suites, genuine MCP sessions and browser review/error flows. Local unit/type checks do not replace those exits.
+ 
+-The [19 November integration closure record](reviews/2026-11-19-integration-closure.md) records the current fixes, exact evidence boundaries and independent review inputs. Historical assurance remains in its original record; an old passing revision does not certify this integration.
++The [19 November integration closure record](https://github.com/1alextest/Tesbooboo/blob/1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-integration-closure.md) records the current fixes, exact evidence boundaries and independent review inputs. Historical assurance remains in its original record; an old passing revision does not certify this integration.
+ 
+ **Next implementation sequence, using existing owners:** first complete I3-Q's explicit executor assignment/attempt fencing and immutable prompt, case-free report byte intake/readback with provenance, independent retest lineage and mixed selected-apply outcomes. In parallel with read-only visibility, extend the existing source binding/capture owner with provider event receipts, replay/order handling and missed-hook reconciliation. Resolve the S0 operational choices below before exposing governed authoring; then bind native proposals to approved active Skill versions. These are real outstanding capabilities, not features certified by this publication preview. All seven engineering-record domains still require capability/impact assessment in the connected change workflow.
+ 

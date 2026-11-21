@@ -1,0 +1,82 @@
+{
+  "observed_at_utc": "2026-11-20 05:05:12 UTC",
+  "development_sha": "6897f989b055a955280f810c7daace86f74057fa",
+  "document_head": "7a80a3fb832902b135cc5fbc965e142bf6db9fa3",
+  "workflows": [
+    {
+      "id": 44674183417,
+      "name": "Repository secret guard",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "7a80a3fb832902b135cc5fbc965e142bf6db9fa3",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44674183417"
+    },
+    {
+      "id": 44674183161,
+      "name": "Behavioral quality",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "7a80a3fb832902b135cc5fbc965e142bf6db9fa3",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44674183161"
+    },
+    {
+      "id": 44674183178,
+      "name": "Security analysis",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "7a80a3fb832902b135cc5fbc965e142bf6db9fa3",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44674183178"
+    },
+    {
+      "id": 44674183222,
+      "name": "Core code quality",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "7a80a3fb832902b135cc5fbc965e142bf6db9fa3",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44674183222"
+    },
+    {
+      "id": 44674183175,
+      "name": "Free repository security",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "7a80a3fb832902b135cc5fbc965e142bf6db9fa3",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44674183175"
+    },
+    {
+      "id": 44674183270,
+      "name": "CI hygiene",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "7a80a3fb832902b135cc5fbc965e142bf6db9fa3",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44674183270"
+    },
+    {
+      "id": 44674183163,
+      "name": "Mutation effectiveness",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "7a80a3fb832902b135cc5fbc965e142bf6db9fa3",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44674183163"
+    },
+    {
+      "id": 44674183245,
+      "name": "Smoke and supply-chain security",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "7a80a3fb832902b135cc5fbc965e142bf6db9fa3",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44674183245"
+    }
+  ],
+  "security_failure": {
+    "workflow_run_id": 44674183175,
+    "job_id": 136081954963,
+    "scanner": "gitleaks",
+    "reported_findings": 1,
+    "exit_code": 1,
+    "artifact_list": [],
+    "finding_location": "not present in retrieved log",
+    "classification": "unresolved; neither real-secret diagnosis nor false-positive diagnosis established"
+  },
+  "limits": "CI statuses apply only to this document head. They do not prove product runtime, deployment or proposed contracts."
+}

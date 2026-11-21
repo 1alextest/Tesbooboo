@@ -528,6 +528,11 @@ export default function PlanDetailPage() {
                       ? "No test runs associated with this plan yet. Create a new run or link an existing one to start tracking progress."
                       : "No execution data is available for the associated runs yet. Add test cases to a run to start tracking progress."}
                   </p>
+                  {runs.length === 0 && (
+                    <p data-testid="plan-empty-run-next-step" className="mx-auto mt-2 max-w-[520px] text-[12px] text-[var(--muted-soft)]">
+                      New runs start empty: after creating or linking a run, add this plan&apos;s approved cases from the run page. Cases are never added automatically.
+                    </p>
+                  )}
                 </section>
               )}
 
