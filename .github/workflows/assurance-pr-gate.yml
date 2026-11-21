@@ -25,7 +25,8 @@ jobs:
       - name: Verify protected specification approval and exact-head review evidence
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          # Repository variables are maintained by repository admins, not the PR author.
+          # Roster transport is provisional: collaborators may edit repository variables.
+          # Do not treat as a trusted approval source before configuring owner-controlled policy.
           TESBO_ASSURANCE_INDEPENDENT_REVIEWERS: ${{ vars.TESBO_ASSURANCE_INDEPENDENT_REVIEWERS }}
           TESBO_ASSURANCE_WHITE_REVIEWERS: ${{ vars.TESBO_ASSURANCE_WHITE_REVIEWERS }}
         run: node scripts/assurance-pr-gate.mjs
