@@ -948,7 +948,16 @@ test.describe("auto bug-filing on Failed", () => {
       // And it survives a real reload, not just the in-memory refresh after each link.
       await page.reload();
       await page.getByRole("button", { name: title }).click();
-      await expect(page.locator('input[aria-label^="Bug "][aria-label$=" Key"]')).toHaveCount(3);
+      const reloadedKeyInputs = page.locator('input[aria-label^="Bug "][aria-label$=" Key"]');
+      const reloadedTitleInputs = page.locator('input[aria-label^="Bug "][aria-label$=" Title"]');
+      await expect(reloadedKeyInputs).toHaveCount(3);
+      await expect(reloadedTitleInputs).toHaveCount(3);
+      expect((await reloadedKeyInputs.evaluateAll((els) =>
+        els.map((el) => (el as HTMLInputElement).value))).sort())
+        .toEqual([existingBug.externalId, `PROJ-${stamp}MIX`, `ENG-${stamp}MIX`].sort());
+      expect((await reloadedTitleInputs.evaluateAll((els) =>
+        els.map((el) => (el as HTMLInputElement).value))).sort())
+        .toEqual([existingBug.title, "Mixed Jira ticket", "Mixed Linear ticket"].sort());
     } finally {
       const cleanupApi = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
       await cleanupApi.delete(`/api/bugs/${existingBug.id}`, { failOnStatusCode: false });
