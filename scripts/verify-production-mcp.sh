@@ -30,6 +30,19 @@ if [[ ! -s "$token_file" ]]; then
   exit 2
 fi
 
+# Bind the private credential to a separately approved origin before the first
+# authenticated request. The origin file lives next to the token and is never
+# inferred from the caller-provided MCP URL.
+MCP_TOKEN_FILE="$token_file" node --input-type=module -e '
+  import { requireApprovedMcpEndpoint } from "./scripts/mcp-approved-origin.mjs";
+  try {
+    requireApprovedMcpEndpoint(process.env.TESBO_MCP_URL, process.env.MCP_TOKEN_FILE);
+  } catch (error) {
+    console.error("verify-production-mcp: " + (error instanceof Error ? error.message : "unapproved MCP origin"));
+    process.exit(2);
+  }
+'
+
 if [[ -z "${EXPECTED_GIT_SHA:-}" ]]; then
   branch="${VERIFY_BRANCH:-development}"
   git fetch origin "$branch" --quiet
