@@ -1,0 +1,849 @@
+{
+  "reviewer": "/root/white_i3_owner_admission",
+  "mode": "manual source/document admission; literal reference inventory is a discovery aid, not runtime or semantic completeness proof",
+  "method_commit": "d83549c85a4dcd047fb40dc4fba4ec62737ab0fc",
+  "source_commit": "9519b56d3441dfec3a107db95ca602665454f407",
+  "source_tree": "31b5e09247237c29ef3d215ab60147c7e4f13ba7",
+  "source_clean": true,
+  "inputs": [
+    {
+      "path": "assurance-working/i3-native-owner-fit.md",
+      "sha256": "93a3364f9a56d8936dae1092645978a551e02df94a95c52d25dcea9c3dbd1720",
+      "bytes": 75121
+    },
+    {
+      "path": "assurance-working/white-prearchitecture.md",
+      "sha256": "3ef21ed86b51a88d857b1310c85a5583185c9d10eb7d0084e2f5f4c90af5a33a",
+      "bytes": 43789
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/white-prearchitecture.md",
+      "sha256": "484b068eae9015a2eb08451a28c3697ac812986d128c0820a4b9057010e877e4",
+      "bytes": 43785
+    },
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/00_README.md",
+      "sha256": "43eb372cc28ce482b037301173e7afd783049db0e5fc1974d6afe75ac66cd0d2",
+      "bytes": 138450
+    },
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/01_PRODUCT_REQUIREMENTS.md",
+      "sha256": "515c2230b0c3859156a9532dd8d833a28705f53113f8d84cd00e1db96daa8cae",
+      "bytes": 194683
+    },
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/02_WORKFLOW_AND_UX_SPEC.md",
+      "sha256": "e7d01ba202da5572198e303416f4e3ea7a3956dbf99bd62b61acfe94e4639452",
+      "bytes": 120639
+    },
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/03_TECHNICAL_DESIGN.md",
+      "sha256": "22630a7bbfa3626354f3570e2f4018b42e696cedf2e72c862c1ef4c78550d5f3",
+      "bytes": 298441
+    },
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/04_MCP_API_CONTRACTS.md",
+      "sha256": "5893a48fe504a8d5c6b47bb552c493685e950fab62d44334702a92edc7c9474d",
+      "bytes": 156290
+    },
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "sha256": "854b03a1b138520269950cad9be31a6379692ad0ac70617e7a422eb543f35aa3",
+      "bytes": 299004
+    },
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "sha256": "823c73b774a5462b6a1ca6b4d2467c4a5b6d4901a02c642e89ad6a2edc981770",
+      "bytes": 99719
+    },
+    {
+      "path": "tesbo-canonical-inputs/extracted-v1.4.28/07_UI_DESIGN_TASKS.md",
+      "sha256": "72347025fc2530da6a3bd10d0d0b32af2ec4d3efd754f7c4fd31606c613a1980",
+      "bytes": 110240
+    },
+    {
+      "path": "assurance-method-inputs/.kiro/steering/teams/white-team-charter.md",
+      "sha256": "5dd6af6c69e220f68b165419cc250473ad1415451f4e82bd9149074aac894e26",
+      "bytes": 14328
+    },
+    {
+      "path": "assurance-method-inputs/.kiro/steering/teams/review-orchestration.md",
+      "sha256": "023a64168c5160a761b91e7496b8a35b89246baf7eda0ab62bac17a7fa44771e",
+      "bytes": 45631
+    },
+    {
+      "path": "assurance-method-inputs/.kiro/steering/teams/blue-team-charter.md",
+      "sha256": "bc2a6911bfafb99ef27431b50de23fdb6da1e8edee038f0f014cc97f208367b1",
+      "bytes": 21978
+    },
+    {
+      "path": "assurance-method-inputs/.kiro/steering/teams/red-team-charter.md",
+      "sha256": "3f633248025cb73c8b6f392f989599eb6d7554db714a66ac323b080e2d749c9e",
+      "bytes": 21277
+    },
+    {
+      "path": "assurance-method-inputs/docs/policies/governance/POL-GOVERNANCE-ASSURANCE-PORTABILITY/v001.md",
+      "sha256": "33c69cba82f7d98773e85a30fa1afff15cc0dbcec0d88302a0295ce06e2c8524",
+      "bytes": 5618
+    },
+    {
+      "path": "assurance-method-inputs/docs/policies/governance/POL-GOVERNANCE-ASSURANCE-EVIDENCE/v001.md",
+      "sha256": "a6176c0c75342dfa6cbf66cf64e00b9a2940a47655f343e255b96f4fa58c5d52",
+      "bytes": 5821
+    },
+    {
+      "path": "assurance-method-inputs/.kiro/specs/graph-assurance/requirements.md",
+      "sha256": "7b713378952749586d63f6af7f2c8c7d435b439799c23f3172695b7b660d9607",
+      "bytes": 85128
+    },
+    {
+      "path": "assurance-method-inputs/.kiro/specs/graph-assurance/design.md",
+      "sha256": "19518ab48e00f1f293b8e34fbe64167ecfa23e0b03ef8240ce20af14bca83de9",
+      "bytes": 82591
+    },
+    {
+      "path": "assurance-method-inputs/.kiro/specs/graph-assurance/tasks.md",
+      "sha256": "96277b467ce56fc6f3d8df5c36f1326469664c3cf733c20037ff580927798169",
+      "bytes": 28125
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/blue-a.md",
+      "sha256": "de0c7a52c993dbb0d1562604447b515310f816ecfe7ca425d8a54d2fde6a42c8",
+      "bytes": 83334
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/blue-b.md",
+      "sha256": "bb941ff9c5eb8eb7ab99c46cbb3314001292772835d8f4f3d04953a9a300a502",
+      "bytes": 67743
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/blue-reconciliation.md",
+      "sha256": "f9e51a1ee2df7c750771dbc35c00b38e80d967a3963bdec30c12aee3465d02f5",
+      "bytes": 6967
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/red-independent.md",
+      "sha256": "a0110725a8bd99dc7af2afefabef6c5caa4f861c864e06285dea9a2a134d095e",
+      "bytes": 89467
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/red-grounding-and-reconciliation.md",
+      "sha256": "b34bad8f645201a02bdad34fa50eb301ed49241d04f4b2e5f3cb0e3dc6dc2ed9",
+      "bytes": 19190
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/grey-independent.md",
+      "sha256": "8293b29111bb2aa2904dc3197dc0f68870c80237e4f0b397cc7d482ef221b711",
+      "bytes": 90396
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/grey-independent-challenge.md",
+      "sha256": "2ae410aa072cf470da0ccc76501084be6d1fe26c3e199a836fa30a1d2c9506ff",
+      "bytes": 37356
+    },
+    {
+      "path": "tesbo-review-9519b56d/docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/receipt-provenance.md",
+      "sha256": "bf3102fb74699b915f0f84f532354a09c78e2104bf9f8653055c21b63a2d2158",
+      "bytes": 6015
+    },
+    {
+      "path": "tesbo-review-9519b56d/AGENTS.md",
+      "sha256": "38f5e4b02ba352d90c1f4268434616c85d22053e5e032598d00c8e994726421d",
+      "bytes": 11901
+    },
+    {
+      "path": "tesbo-review-9519b56d/CLAUDE.md",
+      "sha256": "d82f42d90c90a7037b40ec03cc473d05655f820ebc13073a52b2d4696220119f",
+      "bytes": 18806
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+      "sha256": "e51f779469455c818bc274cf11be0716445c8a9558e80b0257336881bc8f8104",
+      "bytes": 1548859
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/legacy/legacy.controller.ts",
+      "sha256": "c5725581c49f0ab2f07ec663f2935acd425aec711d6f0d0050b96bdf47eda455",
+      "bytes": 111360
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/mcp/mcp.tools.ts",
+      "sha256": "810177d5684fe7498e0068f8ef2ea9d23171add241b4e0d07d0807e3b2aeab85",
+      "bytes": 109070
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/storage/storage.service.ts",
+      "sha256": "f9b28def7397dbe16f842db02f241ad280a6ba43f46e21031f388afc6440133a",
+      "bytes": 7526
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/src/automation/automation.service.ts",
+      "sha256": "7f65f3217e132a19daf8aa940b9c3fd315c1810e8ec0c67ca070c1f03f8b0ff0",
+      "bytes": 51842
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V8_ai_generation_history.sql",
+      "sha256": "0d4468bf96d124673e1b4c81fa1919967f2fd216ab4c85f696c67e2d2df11b3d",
+      "bytes": 1547
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V35_zyra_agent_tasks.sql",
+      "sha256": "9d54ed6bda3617b23761950229a9edfaa85d8485bf9f0177eb7455095e4abbd1",
+      "bytes": 733
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V58_actors_identity.sql",
+      "sha256": "2295da8c84e7f7b9014a1ff1ec11f0952c3fbeae06ea9708598e218ed577cf9d",
+      "bytes": 2857
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V65_mcp_agent_actor.sql",
+      "sha256": "373065d93ad0af0cafca7750e633a8a9b4eedd4f2c811f61bd9bd5896af7bb1f",
+      "bytes": 685
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V107_ai_generation_requests_system_actor.sql",
+      "sha256": "ca295d2fa92006a07e2f6c54cfe4029d29cc1c12f6eb7905eaecca4a05ca9f9f",
+      "bytes": 2697
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V116_zyra_chat_sessions_soft_delete.sql",
+      "sha256": "b55bbeb1e52af9997dcc4dd0fd744d3c058d7a6916f3d87b0f72c7b8e841fcb3",
+      "bytes": 1657
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V123_integration_ticket_comments.sql",
+      "sha256": "3ada01c7d5b45e96daaefecd4b9efa187b3af0f7846190836b9c0871b9c2ba40",
+      "bytes": 2895
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V135_project_scoped_run_task_seq.sql",
+      "sha256": "8059a162d691a63faf4178431ae129264533d273022c89571c4f70353b91ca31",
+      "bytes": 2464
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Backend-Nest/migrations/V157_native_testcase_proposal_review.sql",
+      "sha256": "cfd6a0091351f7f39807dd0a9832c706f31d712e0c64d2a61efae7f2f96e7c51",
+      "bytes": 7818
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/app/(app)/projects/[id]/agents/tasks/page.tsx",
+      "sha256": "f3a187dc8d641bde474ccf876c912002a023fba123f6a9e26b15e6d27872165d",
+      "bytes": 25709
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/app/(app)/projects/[id]/agents/tasks/[taskId]/page.tsx",
+      "sha256": "8bd8b2a9dba9b21457718eafb157a31acb42214dceb0f2c2ed8cc579ef23cc0b",
+      "bytes": 49454
+    },
+    {
+      "path": "tesbo-review-9519b56d/Tesbo-Frontend/lib/api.ts",
+      "sha256": "962dcaf20576c2603f30c4b438bdbef9bf83ffb687024a9d89c65dc0ae468412",
+      "bytes": 186835
+    }
+  ],
+  "literal_reference_search": {
+    "needle": "ai_generation_requests",
+    "scope": "tracked Nest src and migrations plus frontend; .spec.ts and __tests__ excluded",
+    "files": [
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V107_ai_generation_requests_system_actor.sql",
+        "sha256": "ca295d2fa92006a07e2f6c54cfe4029d29cc1c12f6eb7905eaecca4a05ca9f9f",
+        "matches": [
+          {
+            "line": 4,
+            "text": "-- ai_generation_requests table Zyra's chat/task-board flows already use, by writing requested_by ="
+          },
+          {
+            "line": 35,
+            "text": "ALTER TABLE ai_generation_requests ALTER COLUMN requested_by DROP NOT NULL;"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V108_ai_generation_requests_sweep_dedup.sql",
+        "sha256": "079e98ec68c42db98a9344152c0ba9a9f07938beb15c940527431d0f243d2d8b",
+        "matches": [
+          {
+            "line": 20,
+            "text": "ALTER TABLE ai_generation_requests"
+          },
+          {
+            "line": 37,
+            "text": "CREATE UNIQUE INDEX idx_ai_generation_requests_sweep_archive_dedup"
+          },
+          {
+            "line": 38,
+            "text": "ON ai_generation_requests (sweep_testcase_id)"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V109_notifications_dedupe_key.sql",
+        "sha256": "e4491ac9344b43405492e3fb2ed10c4c5083e5ef47bdbeca02856490daeb86db",
+        "matches": [
+          {
+            "line": 8,
+            "text": "-- `ai_generation_requests.provider` (not a new column) was reused for the sweep's actor identity"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V116_zyra_chat_sessions_soft_delete.sql",
+        "sha256": "b55bbeb1e52af9997dcc4dd0fd744d3c058d7a6916f3d87b0f72c7b8e841fcb3",
+        "matches": [
+          {
+            "line": 2,
+            "text": "-- today, and zyra_chat_messages.session_id / ai_generation_requests.chat_session_id are both"
+          },
+          {
+            "line": 22,
+            "text": "ALTER TABLE ai_generation_requests DROP CONSTRAINT ai_generation_requests_chat_session_id_fkey;"
+          },
+          {
+            "line": 23,
+            "text": "ALTER TABLE ai_generation_requests"
+          },
+          {
+            "line": 24,
+            "text": "ADD CONSTRAINT ai_generation_requests_chat_session_id_fkey FOREIGN KEY (chat_session_id) REFERENCES zyra_chat_sessions(id) ON DELETE RESTRICT;"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V123_integration_ticket_comments.sql",
+        "sha256": "3ada01c7d5b45e96daaefecd4b9efa187b3af0f7846190836b9c0871b9c2ba40",
+        "matches": [
+          {
+            "line": 9,
+            "text": "--      zyraSaveAttempt also writes into ai_generation_requests.save_events). Processing the same"
+          },
+          {
+            "line": 24,
+            "text": "generation_request_id  UUID NOT NULL REFERENCES ai_generation_requests(id) ON DELETE CASCADE,"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V132_zyra_generation_language.sql",
+        "sha256": "852ce936d50c360c17d6e572078672a99d978053a62f5f45f6d21bac364d075c",
+        "matches": [
+          {
+            "line": 21,
+            "text": "ALTER TABLE ai_generation_requests ADD COLUMN IF NOT EXISTS language VARCHAR(8) NOT NULL DEFAULT 'en';"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V133_notion_integration.sql",
+        "sha256": "d464b2e39fc27073e09ec3c44b422fbd50094e5e244a7acd08b012101e5f71a5",
+        "matches": [
+          {
+            "line": 76,
+            "text": "ALTER TABLE ai_generation_requests ADD COLUMN IF NOT EXISTS notion_page_ids JSONB DEFAULT '[]'::jsonb;"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V135_project_scoped_run_task_seq.sql",
+        "sha256": "8059a162d691a63faf4178431ae129264533d273022c89571c4f70353b91ca31",
+        "matches": [
+          {
+            "line": 3,
+            "text": "-- (cycles) and Zyra tasks (ai_generation_requests) only had a uuid. `seq` is the per-project number"
+          },
+          {
+            "line": 12,
+            "text": "ALTER TABLE ai_generation_requests ADD COLUMN IF NOT EXISTS seq INT;"
+          },
+          {
+            "line": 22,
+            "text": "FROM ai_generation_requests WHERE seq IS NULL"
+          },
+          {
+            "line": 24,
+            "text": "UPDATE ai_generation_requests SET seq = numbered.n FROM numbered WHERE ai_generation_requests.id = numbered.id;"
+          },
+          {
+            "line": 43,
+            "text": "DROP TRIGGER IF EXISTS ai_generation_requests_assign_seq ON ai_generation_requests;"
+          },
+          {
+            "line": 44,
+            "text": "CREATE TRIGGER ai_generation_requests_assign_seq BEFORE INSERT ON ai_generation_requests"
+          },
+          {
+            "line": 48,
+            "text": "CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_generation_requests_project_seq ON ai_generation_requests (project_id, seq);"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V157_native_testcase_proposal_review.sql",
+        "sha256": "cfd6a0091351f7f39807dd0a9832c706f31d712e0c64d2a61efae7f2f96e7c51",
+        "matches": [
+          {
+            "line": 2,
+            "text": "ALTER TABLE ai_generation_requests ADD COLUMN proposal_revision BIGINT NOT NULL DEFAULT 0;"
+          },
+          {
+            "line": 3,
+            "text": "ALTER TABLE ai_generation_requests ADD COLUMN proposal_request_key TEXT;"
+          },
+          {
+            "line": 4,
+            "text": "ALTER TABLE ai_generation_requests ADD COLUMN proposal_request_digest CHAR(64);"
+          },
+          {
+            "line": 5,
+            "text": "ALTER TABLE ai_generation_requests ADD COLUMN proposal_provenance JSONB;"
+          },
+          {
+            "line": 6,
+            "text": "CREATE UNIQUE INDEX idx_native_proposal_request ON ai_generation_requests"
+          },
+          {
+            "line": 18,
+            "text": "CREATE TRIGGER native_proposal_revision BEFORE UPDATE ON ai_generation_requests"
+          },
+          {
+            "line": 47,
+            "text": "CREATE TRIGGER native_proposal_history BEFORE UPDATE ON ai_generation_requests"
+          },
+          {
+            "line": 110,
+            "text": ") FROM ai_generation_requests r JOIN projects p ON p.id=r.project_id WHERE r.id=request_id;"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V35_zyra_agent_tasks.sql",
+        "sha256": "9d54ed6bda3617b23761950229a9edfaa85d8485bf9f0177eb7455095e4abbd1",
+        "matches": [
+          {
+            "line": 1,
+            "text": "ALTER TABLE ai_generation_requests"
+          },
+          {
+            "line": 11,
+            "text": "CREATE INDEX IF NOT EXISTS idx_ai_generation_requests_agent_status"
+          },
+          {
+            "line": 12,
+            "text": "ON ai_generation_requests(project_id, agent_name, task_status, created_at DESC);"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V36_zyra_activity_sources.sql",
+        "sha256": "14072201a7fd2bec63970bbc6f45fcd3e87d4aaf50ad00371225abf6c2d5e171",
+        "matches": [
+          {
+            "line": 1,
+            "text": "ALTER TABLE ai_generation_requests"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V40_rename_zyra_agent.sql",
+        "sha256": "fa2ed86b58cda5e98c75b6dff15aee445bb685cae78c1a2ed5c9b16a3fa44feb",
+        "matches": [
+          {
+            "line": 1,
+            "text": "ALTER TABLE ai_generation_requests"
+          },
+          {
+            "line": 4,
+            "text": "UPDATE ai_generation_requests"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V66_testcase_linear_link.sql",
+        "sha256": "017122f22c065b894f308ea4881b58bad4c9824d856a00c9e4317bdb9d41689c",
+        "matches": [
+          {
+            "line": 6,
+            "text": "ALTER TABLE ai_generation_requests ADD COLUMN IF NOT EXISTS linear_issue_keys JSONB DEFAULT '[]'::jsonb;"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V87_zyra_token_usage.sql",
+        "sha256": "58452fc8eac44e5795bcb4526cca4e1e89ddd81f6199d09b96cdc616512fd174",
+        "matches": [
+          {
+            "line": 1,
+            "text": "-- Zyra Settings \"Token usage\" tile reads SUM(token_total) from ai_generation_requests, a table"
+          },
+          {
+            "line": 31,
+            "text": "-- (currently empty) table instead of ai_generation_requests. Chat-driven usage from before this"
+          },
+          {
+            "line": 43,
+            "text": "FROM ai_generation_requests"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V89_zyra_chat_review.sql",
+        "sha256": "31f19e63c46e6fb03f0eecbaae13c2de319149baf29b160fc7b27954b51eb5fb",
+        "matches": [
+          {
+            "line": 4,
+            "text": "-- in `ai_generation_requests.generated_payload` and only commits them on an explicit Save; this links"
+          },
+          {
+            "line": 7,
+            "text": "ALTER TABLE ai_generation_requests"
+          },
+          {
+            "line": 14,
+            "text": "ADD COLUMN IF NOT EXISTS review_request_id UUID REFERENCES ai_generation_requests(id) ON DELETE SET NULL;"
+          },
+          {
+            "line": 16,
+            "text": "CREATE INDEX IF NOT EXISTS idx_ai_generation_requests_chat_session"
+          },
+          {
+            "line": 17,
+            "text": "ON ai_generation_requests(chat_session_id, created_at DESC);"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/migrations/V8_ai_generation_history.sql",
+        "sha256": "0d4468bf96d124673e1b4c81fa1919967f2fd216ab4c85f696c67e2d2df11b3d",
+        "matches": [
+          {
+            "line": 1,
+            "text": "CREATE TABLE ai_generation_requests ("
+          },
+          {
+            "line": 25,
+            "text": "CREATE INDEX idx_ai_generation_requests_project ON ai_generation_requests(project_id, created_at DESC);"
+          },
+          {
+            "line": 26,
+            "text": "CREATE INDEX idx_ai_generation_requests_requested_by ON ai_generation_requests(requested_by, created_at DESC);"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+        "sha256": "e51f779469455c818bc274cf11be0716445c8a9558e80b0257336881bc8f8104",
+        "matches": [
+          {
+            "line": 248,
+            "text": "// ai_generation_requests.provider value for a row staged by the archive sweep (sub-task C) rather"
+          },
+          {
+            "line": 250,
+            "text": "// V107_ai_generation_requests_system_actor.sql's own reasoning for why `provider`, not a new"
+          },
+          {
+            "line": 1484,
+            "text": "* the same checks, suite filing and storage as a whole batch — into ONE ai_generation_requests row:"
+          },
+          {
+            "line": 1566,
+            "text": "\"SELECT generated_payload, saved_count FROM ai_generation_requests WHERE id = $1\","
+          },
+          {
+            "line": 1581,
+            "text": "const res = await client.query(\"SELECT task_status, generated_payload, activity_log FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE\", [reviewRequestId, projectId]);"
+          },
+          {
+            "line": 1591,
+            "text": "`UPDATE ai_generation_requests"
+          },
+          {
+            "line": 2413,
+            "text": "\"UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb WHERE id = $1 AND project_id = $2\","
+          },
+          {
+            "line": 4132,
+            "text": "? await this.db.query(\"SELECT id, seq FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND agent_name = ANY($3::text[])\", [task, projectId, ZYRA_AGENT_NAMES])"
+          },
+          {
+            "line": 4133,
+            "text": ": await this.db.query(\"SELECT id, seq FROM ai_generation_requests WHERE seq = $1 AND project_id = $2 AND agent_name = ANY($3::text[])\", [seq, projectId, ZYRA_AGENT_NAMES]);"
+          },
+          {
+            "line": 6527,
+            "text": "FROM ai_generation_requests"
+          },
+          {
+            "line": 15328,
+            "text": "// Reads the zyra_token_usage ledger, not ai_generation_requests.token_total — that column"
+          },
+          {
+            "line": 15345,
+            "text": "FROM ai_generation_requests"
+          },
+          {
+            "line": 15353,
+            "text": "// ai_generation_requests row would before a user asked for anything."
+          },
+          {
+            "line": 15380,
+            "text": "FROM ai_generation_requests"
+          },
+          {
+            "line": 15503,
+            "text": "* Cases\"): the tile summed `generated_count` over ai_generation_requests, a column only the"
+          },
+          {
+            "line": 15617,
+            "text": "const prior = await client.query(\"SELECT id,proposal_request_digest FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3\", [projectId, principalKey, requestKey]);"
+          },
+          {
+            "line": 15637,
+            "text": "`INSERT INTO ai_generation_requests"
+          },
+          {
+            "line": 15650,
+            "text": "const rows = await this.db.query(\"SELECT id FROM ai_generation_requests WHERE project_id=$1 AND task_status='in_review' ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3\", [projectId, pageNumber(query.limit, 25, 1, 100), pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER)]);"
+          },
+          {
+            "line": 15695,
+            "text": "const result = await runner.query(\"SELECT r.*,testcase_proposal_review_snapshot(r.id) AS proposal_snapshot FROM ai_generation_requests r WHERE r.id=$1 AND r.project_id=$2\", [taskId,projectId]);"
+          },
+          {
+            "line": 17701,
+            "text": "// then flushed into one ai_generation_requests row (chat_session_id-linked) at the end of this"
+          },
+          {
+            "line": 17932,
+            "text": "// ai_generation_requests row(s), never auto-saving it."
+          },
+          {
+            "line": 18043,
+            "text": "`INSERT INTO ai_generation_requests"
+          },
+          {
+            "line": 18145,
+            "text": "// every `ai_generation_requests` row an in-session create batch staged, re-verified live against"
+          },
+          {
+            "line": 18159,
+            "text": "\"SELECT id, generated_payload FROM ai_generation_requests WHERE id = ANY($1::uuid[]) AND project_id = $2 AND task_status = 'in_review' ORDER BY id\","
+          },
+          {
+            "line": 18175,
+            "text": "// takes the same `ai_generation_requests` row lock first thing in its own transaction, so the two"
+          },
+          {
+            "line": 18182,
+            "text": "\"SELECT generated_payload FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_status = 'in_review' FOR UPDATE\","
+          },
+          {
+            "line": 18195,
+            "text": "\"UPDATE ai_generation_requests SET generated_payload = $2::jsonb, updated_at = now() WHERE id = $1\","
+          },
+          {
+            "line": 19654,
+            "text": "// `reviewRequestId`: the ai_generation_requests row applyZyraChatOperations staged this batch's"
+          },
+          {
+            "line": 19705,
+            "text": "* Locks only zyra_chat_sessions, never combined with ai_generation_requests in the same"
+          },
+          {
+            "line": 19707,
+            "text": "* ai_generation_requests → zyra_chat_sessions order, see its own comment) by construction, since"
+          },
+          {
+            "line": 19712,
+            "text": "* independently reachable ai_generation_requests row before this ever runs; only the chat"
+          },
+          {
+            "line": 19900,
+            "text": "// applyZyraChatOperations itself records this batch's ai_generation_requests row as pending"
+          },
+          {
+            "line": 20169,
+            "text": "`INSERT INTO ai_generation_requests"
+          },
+          {
+            "line": 20221,
+            "text": "const res = await this.db.query<{ requested_by: string | null }>(\"SELECT requested_by FROM ai_generation_requests WHERE id = $1 AND project_id = $2\", [taskId, projectId]);"
+          },
+          {
+            "line": 20240,
+            "text": "`UPDATE ai_generation_requests SET task_status = 'failed', activity_log = activity_log || $3::jsonb, updated_at = now()"
+          },
+          {
+            "line": 20253,
+            "text": "\"UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2\","
+          },
+          {
+            "line": 20270,
+            "text": "const taskRes = await this.db.query(\"SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2\", [taskId, projectId]);"
+          },
+          {
+            "line": 20297,
+            "text": "`UPDATE ai_generation_requests SET task_status = 'in_progress', activity_log = activity_log || $3::jsonb, updated_at = now()"
+          },
+          {
+            "line": 20368,
+            "text": "`UPDATE ai_generation_requests"
+          },
+          {
+            "line": 20395,
+            "text": "\"UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2\","
+          },
+          {
+            "line": 20449,
+            "text": "`SELECT * FROM ai_generation_requests WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,"
+          },
+          {
+            "line": 20464,
+            "text": "const existing = await this.db.query(\"SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2\", [taskId, projectId]);"
+          },
+          {
+            "line": 20522,
+            "text": "`UPDATE ai_generation_requests SET task_status = 'todo', feedback = $3, activity_log = activity_log || $4::jsonb, updated_at = now(),"
+          },
+          {
+            "line": 20672,
+            "text": "`UPDATE ai_generation_requests"
+          },
+          {
+            "line": 20709,
+            "text": "\"UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2\","
+          },
+          {
+            "line": 20759,
+            "text": "const existing = await client.query(\"SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE\", [taskId, projectId]);"
+          },
+          {
+            "line": 20775,
+            "text": "`UPDATE ai_generation_requests"
+          },
+          {
+            "line": 20797,
+            "text": "const existing = await client.query(\"SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE\", [taskId, projectId]);"
+          },
+          {
+            "line": 20825,
+            "text": "`UPDATE ai_generation_requests"
+          },
+          {
+            "line": 20845,
+            "text": "const existing = await this.db.query(\"SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2\", [taskId, projectId]);"
+          },
+          {
+            "line": 20861,
+            "text": "`UPDATE ai_generation_requests"
+          },
+          {
+            "line": 20870,
+            "text": "const fresh = await this.db.query(\"SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2\", [taskId, projectId]);"
+          },
+          {
+            "line": 20885,
+            "text": "// suite-tree project mutex first, then ai_generation_requests/target testcase rows and the"
+          },
+          {
+            "line": 20904,
+            "text": "const locked = await client.query(\"SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE\", [taskId,projectId]);"
+          },
+          {
+            "line": 20992,
+            "text": "\"UPDATE ai_generation_requests SET generated_payload=$3::jsonb,generated_count=GREATEST(generated_count,saved_count+$5+$4),saved_count=saved_count+$5,save_events=save_events||$6::jsonb,activity_log=activity_log||$7::jsonb,task_status=$8,updated_at=now() WHERE id=$1 AND project_id=$2\","
+          },
+          {
+            "line": 22495,
+            "text": "* idx_ai_generation_requests_sweep_archive_dedup (V108) rejecting a second unresolved proposal for"
+          },
+          {
+            "line": 22532,
+            "text": "`INSERT INTO ai_generation_requests"
+          },
+          {
+            "line": 22553,
+            "text": "String((err as { constraint?: string })?.constraint || \"\") === \"idx_ai_generation_requests_sweep_archive_dedup\";"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/zyra-draft-stream.ts",
+        "sha256": "5e1ff3f3c26082797f7882b66022f5130d18344b8f6a9a66459d838ae09fc143",
+        "matches": [
+          {
+            "line": 19,
+            "text": "*     path (applyZyraChatOperations) into one ai_generation_requests row, so what the review panel"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/legacy/zyra-task-activity-ru.ts",
+        "sha256": "006979b13a72a43db15efad7316bd26b2362f0f62de191dfae999baecf38fb97",
+        "matches": [
+          {
+            "line": 3,
+            "text": "* to a task whose language is \"ru\" (ai_generation_requests.language)."
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/rag/rag-ingestion.service.ts",
+        "sha256": "f9610c2c2d772f6c71abe28054debf156e6890bd9e3eb7bcab875d6c1113a3b5",
+        "matches": [
+          {
+            "line": 57,
+            "text": "// zyraBatchInsertTestCases (staged Zyra drafts, which write to ai_generation_requests, not"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Backend-Nest/src/zyra-archive-sweep/zyra-archive-sweep.service.ts",
+        "sha256": "add0d06dca5a2cb4c63234ad9044964a452d0eca958ea10d370662edf6659b4a",
+        "matches": [
+          {
+            "line": 232,
+            "text": "// Same predicate idx_ai_generation_requests_sweep_archive_dedup (V108) enforces at the DB level"
+          },
+          {
+            "line": 236,
+            "text": "\"SELECT sweep_testcase_id FROM ai_generation_requests WHERE provider = 'zyra_archive_sweep' AND task_status <> 'done' AND sweep_testcase_id IS NOT NULL\","
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Frontend/app/(app)/projects/[id]/requirements/page.tsx",
+        "sha256": "43064607ce45a3e38b9c0ac0e4a1587fbd2875061147a31646a5033fb9c8cf5d",
+        "matches": [
+          {
+            "line": 352,
+            "text": "// ai_generation_requests row still exists, but \"done\" is the case isLinked/tcCountFor already"
+          }
+        ]
+      },
+      {
+        "path": "Tesbo-Frontend/lib/api.ts",
+        "sha256": "962dcaf20576c2603f30c4b438bdbef9bf83ffb687024a9d89c65dc0ae468412",
+        "matches": [
+          {
+            "line": 945,
+            "text": "// server-side normalization of a non-create ai_generation_requests.generated_payload item — see"
+          },
+          {
+            "line": 996,
+            "text": "// V107_ai_generation_requests_system_actor.sql. Not rendered anywhere today; kept honest for"
+          },
+          {
+            "line": 1047,
+            "text": "// stores in ai_generation_requests.provider."
+          },
+          {
+            "line": 1147,
+            "text": "/** The ai_generation_requests id this proposal is staged under — only set on a \"proposed-*\" row. */"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -81,21 +81,27 @@ const BASE_ROW = {
   style: "strict",
   requested_count: 5,
   generated_count: 0,
-  generated_payload: "[]",
+  generated_payload: [],
+  proposal_snapshot: {
+    taskId: TASK_ID, projectId: PROJECT_ID, taskStatus: "todo", version: 0,
+    targetBinding: "coherent_review_read", operations: [], targets: [],
+    sourceLinks: { jiraIssueKeys: [], linearIssueKeys: [], notionPageIds: [], jira: [], linear: [], notion: [] },
+    dependencies: { revision: 0, customFields: [], customTags: [], suites: [] },
+  },
   saved_count: 0,
-  save_events: "[]",
+  save_events: [],
   created_at: "2026-09-01T00:00:00.000Z",
   updated_at: "2026-09-01T00:00:00.000Z",
   agent_name: "zyra",
   task_status: "todo",
   feedback: null,
   context: null,
-  jira_issue_keys: "[]",
+  jira_issue_keys: [],
   token_input: 0,
   token_output: 0,
   token_total: 0,
-  source_summary: "[]",
-  activity_log: "[]"
+  source_summary: [],
+  activity_log: []
 };
 
 describe("ai_generation_requests.requested_by — nullable system-actor column (V107)", () => {
@@ -110,6 +116,9 @@ describe("ai_generation_requests.requested_by — nullable system-actor column (
 
     expect(result.requestedBy).toBeNull();
     expect(result.provider).toBe("zyra_archive_sweep");
+    expect(result.proposalRevision).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.proposalSnapshot).toEqual(BASE_ROW.proposal_snapshot);
+    expect(dbQuery).toHaveBeenCalledTimes(1);
   });
 
   it("a normal human-initiated row (requested_by a real user id) is unaffected — same read path, non-null value round-trips exactly", async () => {
@@ -121,6 +130,8 @@ describe("ai_generation_requests.requested_by — nullable system-actor column (
     const result = await svc.zyraTask(PROJECT_ID, "u1", TASK_ID);
 
     expect(result.requestedBy).toBe(userId);
+    expect(result.proposalSnapshot).toEqual(BASE_ROW.proposal_snapshot);
+    expect(dbQuery).toHaveBeenCalledTimes(1);
   });
 
   it("a NULL requested_by row carries no other missing/undefined fields — toCamel maps every column through regardless of value", async () => {

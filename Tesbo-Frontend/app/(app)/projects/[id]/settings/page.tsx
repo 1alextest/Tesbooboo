@@ -41,6 +41,7 @@ import {
   FieldError,
   FieldLabel,
 } from "@/components/ui";
+import { ExternalMcpAccessPanel } from "@/components/project/ExternalMcpAccessPanel";
 import { ProjectIconPicker, type ProjectIconValue } from "@/components/ProjectIconPicker";
 import { avatarColor } from "@/lib/avatarColors";
 import {
@@ -911,10 +912,11 @@ export default function ProjectSettingsPage() {
       )}
       {activeTab === "apiTokens" && (
         <Card className="p-4 space-y-4">
+          <ExternalMcpAccessPanel projectId={projectId} canManage={canEditProjectSettings} />
           <div>
             <h2 className="text-base font-semibold text-[var(--foreground)]">API & MCP access</h2>
             <p className="mt-1 text-sm text-[var(--muted)]">
-              Generate API tokens so AI agents like Claude Code or Claude Desktop can read and write this project&apos;s test data.
+              Manage API credentials and explicitly approve which external AI clients can use this project through MCP.
             </p>
           </div>
           <div className="rounded-lg border border-[var(--border)] p-4 flex items-start gap-4">

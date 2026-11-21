@@ -1,0 +1,34 @@
+[Nest] 5  - 11/19/2026, 9:32:05 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project 11111111-1111-4111-8111-111111111111: Private database failure
+PASS src/legacy/suite-publication.spec.ts (25.194 s)
+[Nest] 5  - 11/19/2026, 9:32:07 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: connection reset
+[Nest] 5  - 11/19/2026, 9:32:07 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: db unavailable
+[Nest] 5  - 11/19/2026, 9:32:07 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: connection reset
+[Nest] 5  - 11/19/2026, 9:32:07 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private suite failure
+[Nest] 5  - 11/19/2026, 9:32:07 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private suite failure
+[Nest] 5  - 11/19/2026, 9:32:07 PM   ERROR [LegacyService] Zyra chat operation (move_to_suite) failed for project project-1: private move failure
+[Nest] 5  - 11/19/2026, 9:32:07 PM   ERROR [LegacyService] Zyra chat operation (move_to_suite) failed for project project-1: private move failure
+[Nest] 5  - 11/19/2026, 9:32:07 PM   ERROR [LegacyService] Zyra chat operation (move_to_suite) failed for project project-1: private move failure
+[Nest] 5  - 11/19/2026, 9:32:07 PM   ERROR [LegacyService] Zyra chat operation (move_to_suite) failed for project project-1: private move failure
+[Nest] 5  - 11/19/2026, 9:32:07 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private database detail
+[Nest] 5  - 11/19/2026, 9:32:07 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private database detail
+[Nest] 5  - 11/19/2026, 9:32:07 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private audit detail
+[Nest] 5  - 11/19/2026, 9:32:07 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private database detail
+[Nest] 5  - 11/19/2026, 9:32:07 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private database detail
+[Nest] 5  - 11/19/2026, 9:32:07 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project project-1: private audit detail
+PASS src/legacy/zyra-chat-operation-errors.spec.ts
+PASS src/behavior-graph/model-studio-runs.spec.ts
+PASS src/legacy/zyra-generation-speed.spec.ts
+PASS src/legacy/zyra-chat-intent.spec.ts
+PASS src/auth/api-token-rest.guard.spec.ts
+PASS src/legacy/zyra-response-parsing.spec.ts
+PASS src/legacy/testcase-proposal-review.spec.ts
+PASS src/legacy/zyra-similarity-feedback.spec.ts
+
+Test Suites: 9 passed, 9 total
+Tests:       383 passed, 383 total
+Snapshots:   0 total
+Time:        38.318 s
+Ran all test suites within paths "src/legacy/suite-publication.spec.ts", "src/behavior-graph/model-studio-runs.spec.ts", "src/auth/api-token-rest.guard.spec.ts", "src/legacy/testcase-proposal-review.spec.ts", "src/legacy/zyra-chat-operation-errors.spec.ts", "src/legacy/zyra-chat-intent.spec.ts", "src/legacy/zyra-generation-speed.spec.ts", "src/legacy/zyra-response-parsing.spec.ts", "src/legacy/zyra-similarity-feedback.spec.ts".
+Test results written to: ../../assurance-working/native-publication-unit-results.json
+[Nest] 5  - 11/19/2026, 9:32:18 PM    WARN [LegacyService] zyraSimilarityFeedbackForDrafts failed for project p1: embeddings provider unreachable
+[Nest] 5  - 11/19/2026, 9:32:18 PM    WARN [LegacyService] zyraSimilarityFeedbackForDrafts failed for project p1: db unavailable

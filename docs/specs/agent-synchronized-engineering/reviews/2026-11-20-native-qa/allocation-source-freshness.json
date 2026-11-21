@@ -1,0 +1,361 @@
+{
+  "source_commit": "1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea",
+  "source_tree": "390058d78ef0175b729570f75c66320a5895f3ed",
+  "scope": "59 original Blue allocation source/instruction/manifest inputs; hashing is freshness, not runtime proof",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "at_9519": "38f5e4b02ba352d90c1f4268434616c85d22053e5e032598d00c8e994726421d",
+      "at_1fe10058": "38f5e4b02ba352d90c1f4268434616c85d22053e5e032598d00c8e994726421d",
+      "byte_identical": true
+    },
+    {
+      "path": "CLAUDE.md",
+      "at_9519": "d82f42d90c90a7037b40ec03cc473d05655f820ebc13073a52b2d4696220119f",
+      "at_1fe10058": "d82f42d90c90a7037b40ec03cc473d05655f820ebc13073a52b2d4696220119f",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V107_ai_generation_requests_system_actor.sql",
+      "at_9519": "ca295d2fa92006a07e2f6c54cfe4029d29cc1c12f6eb7905eaecca4a05ca9f9f",
+      "at_1fe10058": "ca295d2fa92006a07e2f6c54cfe4029d29cc1c12f6eb7905eaecca4a05ca9f9f",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V108_ai_generation_requests_sweep_dedup.sql",
+      "at_9519": "079e98ec68c42db98a9344152c0ba9a9f07938beb15c940527431d0f243d2d8b",
+      "at_1fe10058": "079e98ec68c42db98a9344152c0ba9a9f07938beb15c940527431d0f243d2d8b",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V109_notifications_dedupe_key.sql",
+      "at_9519": "e4491ac9344b43405492e3fb2ed10c4c5083e5ef47bdbeca02856490daeb86db",
+      "at_1fe10058": "e4491ac9344b43405492e3fb2ed10c4c5083e5ef47bdbeca02856490daeb86db",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V115_attachments_soft_delete.sql",
+      "at_9519": "6da88d224c6b804ba9aa8c3355eb471c2a57db05208bee67762706b4ab31237e",
+      "at_1fe10058": "6da88d224c6b804ba9aa8c3355eb471c2a57db05208bee67762706b4ab31237e",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V116_zyra_chat_sessions_soft_delete.sql",
+      "at_9519": "b55bbeb1e52af9997dcc4dd0fd744d3c058d7a6916f3d87b0f72c7b8e841fcb3",
+      "at_1fe10058": "b55bbeb1e52af9997dcc4dd0fd744d3c058d7a6916f3d87b0f72c7b8e841fcb3",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V123_integration_ticket_comments.sql",
+      "at_9519": "3ada01c7d5b45e96daaefecd4b9efa187b3af0f7846190836b9c0871b9c2ba40",
+      "at_1fe10058": "3ada01c7d5b45e96daaefecd4b9efa187b3af0f7846190836b9c0871b9c2ba40",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V132_zyra_generation_language.sql",
+      "at_9519": "852ce936d50c360c17d6e572078672a99d978053a62f5f45f6d21bac364d075c",
+      "at_1fe10058": "852ce936d50c360c17d6e572078672a99d978053a62f5f45f6d21bac364d075c",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V133_notion_integration.sql",
+      "at_9519": "d464b2e39fc27073e09ec3c44b422fbd50094e5e244a7acd08b012101e5f71a5",
+      "at_1fe10058": "d464b2e39fc27073e09ec3c44b422fbd50094e5e244a7acd08b012101e5f71a5",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V135_project_scoped_run_task_seq.sql",
+      "at_9519": "8059a162d691a63faf4178431ae129264533d273022c89571c4f70353b91ca31",
+      "at_1fe10058": "8059a162d691a63faf4178431ae129264533d273022c89571c4f70353b91ca31",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V157_native_testcase_proposal_review.sql",
+      "at_9519": "cfd6a0091351f7f39807dd0a9832c706f31d712e0c64d2a61efae7f2f96e7c51",
+      "at_1fe10058": "cfd6a0091351f7f39807dd0a9832c706f31d712e0c64d2a61efae7f2f96e7c51",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V1_init_schema.sql",
+      "at_9519": "4a64fb25c2b1f40701b16ab5bc64c0f9d050798a6dfcd42206ea563b58374e1f",
+      "at_1fe10058": "4a64fb25c2b1f40701b16ab5bc64c0f9d050798a6dfcd42206ea563b58374e1f",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V2_test_cases_and_suites.sql",
+      "at_9519": "9a9875f7bb2b743756d0e76efdfda3af76965bca13f2728fe35b90871a185a85",
+      "at_1fe10058": "9a9875f7bb2b743756d0e76efdfda3af76965bca13f2728fe35b90871a185a85",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V35_zyra_agent_tasks.sql",
+      "at_9519": "9d54ed6bda3617b23761950229a9edfaa85d8485bf9f0177eb7455095e4abbd1",
+      "at_1fe10058": "9d54ed6bda3617b23761950229a9edfaa85d8485bf9f0177eb7455095e4abbd1",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V36_zyra_activity_sources.sql",
+      "at_9519": "14072201a7fd2bec63970bbc6f45fcd3e87d4aaf50ad00371225abf6c2d5e171",
+      "at_1fe10058": "14072201a7fd2bec63970bbc6f45fcd3e87d4aaf50ad00371225abf6c2d5e171",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V40_rename_zyra_agent.sql",
+      "at_9519": "fa2ed86b58cda5e98c75b6dff15aee445bb685cae78c1a2ed5c9b16a3fa44feb",
+      "at_1fe10058": "fa2ed86b58cda5e98c75b6dff15aee445bb685cae78c1a2ed5c9b16a3fa44feb",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V58_actors_identity.sql",
+      "at_9519": "2295da8c84e7f7b9014a1ff1ec11f0952c3fbeae06ea9708598e218ed577cf9d",
+      "at_1fe10058": "2295da8c84e7f7b9014a1ff1ec11f0952c3fbeae06ea9708598e218ed577cf9d",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V5_api_tokens_webhooks.sql",
+      "at_9519": "2a15fd4764278a2946c74019f29aae70d6d40f5cf487214ada63a7647fa500e5",
+      "at_1fe10058": "2a15fd4764278a2946c74019f29aae70d6d40f5cf487214ada63a7647fa500e5",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V61_attachments_audit_logs_actor_fk.sql",
+      "at_9519": "f4647e7fc511e4da330e0560fc9cb0caf7a2b9c3251c4d9a89da9d08cbaf2739",
+      "at_1fe10058": "f4647e7fc511e4da330e0560fc9cb0caf7a2b9c3251c4d9a89da9d08cbaf2739",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V65_mcp_agent_actor.sql",
+      "at_9519": "373065d93ad0af0cafca7750e633a8a9b4eedd4f2c811f61bd9bd5896af7bb1f",
+      "at_1fe10058": "373065d93ad0af0cafca7750e633a8a9b4eedd4f2c811f61bd9bd5896af7bb1f",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V66_testcase_linear_link.sql",
+      "at_9519": "017122f22c065b894f308ea4881b58bad4c9824d856a00c9e4317bdb9d41689c",
+      "at_1fe10058": "017122f22c065b894f308ea4881b58bad4c9824d856a00c9e4317bdb9d41689c",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V87_zyra_token_usage.sql",
+      "at_9519": "58452fc8eac44e5795bcb4526cca4e1e89ddd81f6199d09b96cdc616512fd174",
+      "at_1fe10058": "58452fc8eac44e5795bcb4526cca4e1e89ddd81f6199d09b96cdc616512fd174",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V89_zyra_chat_review.sql",
+      "at_9519": "31f19e63c46e6fb03f0eecbaae13c2de319149baf29b160fc7b27954b51eb5fb",
+      "at_1fe10058": "31f19e63c46e6fb03f0eecbaae13c2de319149baf29b160fc7b27954b51eb5fb",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/migrations/V8_ai_generation_history.sql",
+      "at_9519": "0d4468bf96d124673e1b4c81fa1919967f2fd216ab4c85f696c67e2d2df11b3d",
+      "at_1fe10058": "0d4468bf96d124673e1b4c81fa1919967f2fd216ab4c85f696c67e2d2df11b3d",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/package.json",
+      "at_9519": "02775ebb1bd47d325f6f2684b01d8da999f8c6f41466556aca30469355368b1b",
+      "at_1fe10058": "02775ebb1bd47d325f6f2684b01d8da999f8c6f41466556aca30469355368b1b",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/auth/api-token-rest.guard.ts",
+      "at_9519": "47d47da161c3012c9d764ddca070bdd75d4e76aa539490865c474d918ab102f8",
+      "at_1fe10058": "47d47da161c3012c9d764ddca070bdd75d4e76aa539490865c474d918ab102f8",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/auth/api-token.service.ts",
+      "at_9519": "28959f0f009383cbb8f6fb24b9ca6d8164063b7bcfd23a32b36331901dfa7de5",
+      "at_1fe10058": "28959f0f009383cbb8f6fb24b9ca6d8164063b7bcfd23a32b36331901dfa7de5",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/automation/automation.service.ts",
+      "at_9519": "7f65f3217e132a19daf8aa940b9c3fd315c1810e8ec0c67ca070c1f03f8b0ff0",
+      "at_1fe10058": "7f65f3217e132a19daf8aa940b9c3fd315c1810e8ec0c67ca070c1f03f8b0ff0",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/common/human-review-principal.ts",
+      "at_9519": "ddba247c680a53b4d091908061add30b04c8a2505fe6321bc58d93f20fde50c8",
+      "at_1fe10058": "ddba247c680a53b4d091908061add30b04c8a2505fe6321bc58d93f20fde50c8",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/common/testcase-publication.policy.ts",
+      "at_9519": "90f2accd42b37f5c8476833cd362646728c681ac8a91b73c9c6424ce6d8203c0",
+      "at_1fe10058": "90f2accd42b37f5c8476833cd362646728c681ac8a91b73c9c6424ce6d8203c0",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/legacy/legacy.controller.ts",
+      "at_9519": "c5725581c49f0ab2f07ec663f2935acd425aec711d6f0d0050b96bdf47eda455",
+      "at_1fe10058": "c5725581c49f0ab2f07ec663f2935acd425aec711d6f0d0050b96bdf47eda455",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/legacy/legacy.service.ts",
+      "at_9519": "e51f779469455c818bc274cf11be0716445c8a9558e80b0257336881bc8f8104",
+      "at_1fe10058": "e51f779469455c818bc274cf11be0716445c8a9558e80b0257336881bc8f8104",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/legacy/notification-events.ts",
+      "at_9519": "547e338568d32780fab9ef903a5baa76428f319601e24f16710870d1c3bc62bb",
+      "at_1fe10058": "547e338568d32780fab9ef903a5baa76428f319601e24f16710870d1c3bc62bb",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/legacy/zyra-draft-stream.ts",
+      "at_9519": "5e1ff3f3c26082797f7882b66022f5130d18344b8f6a9a66459d838ae09fc143",
+      "at_1fe10058": "5e1ff3f3c26082797f7882b66022f5130d18344b8f6a9a66459d838ae09fc143",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/legacy/zyra-task-activity-ru.ts",
+      "at_9519": "006979b13a72a43db15efad7316bd26b2362f0f62de191dfae999baecf38fb97",
+      "at_1fe10058": "006979b13a72a43db15efad7316bd26b2362f0f62de191dfae999baecf38fb97",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/mcp/mcp.service.ts",
+      "at_9519": "6a171831791944ab3ee1f85b1fe1f60a4210e4baa85791633a0fe4d2602b1533",
+      "at_1fe10058": "6a171831791944ab3ee1f85b1fe1f60a4210e4baa85791633a0fe4d2602b1533",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/mcp/mcp.tools.ts",
+      "at_9519": "810177d5684fe7498e0068f8ef2ea9d23171add241b4e0d07d0807e3b2aeab85",
+      "at_1fe10058": "810177d5684fe7498e0068f8ef2ea9d23171add241b4e0d07d0807e3b2aeab85",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/plan-limits/plan-limits.service.ts",
+      "at_9519": "c4404a3c9e0f690958f045fbeaf611f84be224a037a0a7e4e09feb21e308e547",
+      "at_1fe10058": "c4404a3c9e0f690958f045fbeaf611f84be224a037a0a7e4e09feb21e308e547",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/rag/rag-ingestion.service.ts",
+      "at_9519": "f9610c2c2d772f6c71abe28054debf156e6890bd9e3eb7bcab875d6c1113a3b5",
+      "at_1fe10058": "f9610c2c2d772f6c71abe28054debf156e6890bd9e3eb7bcab875d6c1113a3b5",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/storage/storage.service.ts",
+      "at_9519": "f9b28def7397dbe16f842db02f241ad280a6ba43f46e21031f388afc6440133a",
+      "at_1fe10058": "f9b28def7397dbe16f842db02f241ad280a6ba43f46e21031f388afc6440133a",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Backend-Nest/src/zyra-archive-sweep/zyra-archive-sweep.service.ts",
+      "at_9519": "add0d06dca5a2cb4c63234ad9044964a452d0eca958ea10d370662edf6659b4a",
+      "at_1fe10058": "add0d06dca5a2cb4c63234ad9044964a452d0eca958ea10d370662edf6659b4a",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/AGENTS.md",
+      "at_9519": "63f2c50380ed6303237cce215ce27af1d620d094c215e28d1b1538a3c070e3bb",
+      "at_1fe10058": "63f2c50380ed6303237cce215ce27af1d620d094c215e28d1b1538a3c070e3bb",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/(app)/projects/[id]/agents/page.tsx",
+      "at_9519": "4c32ecf1ae4f3e8bc006d5c4f45f1bb0b83c4429e8122b5e886c21f6ebbcc952",
+      "at_1fe10058": "4c32ecf1ae4f3e8bc006d5c4f45f1bb0b83c4429e8122b5e886c21f6ebbcc952",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/(app)/projects/[id]/agents/tasks/[taskId]/page.tsx",
+      "at_9519": "8bd8b2a9dba9b21457718eafb157a31acb42214dceb0f2c2ed8cc579ef23cc0b",
+      "at_1fe10058": "8bd8b2a9dba9b21457718eafb157a31acb42214dceb0f2c2ed8cc579ef23cc0b",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/(app)/projects/[id]/agents/tasks/page.tsx",
+      "at_9519": "f3a187dc8d641bde474ccf876c912002a023fba123f6a9e26b15e6d27872165d",
+      "at_1fe10058": "f3a187dc8d641bde474ccf876c912002a023fba123f6a9e26b15e6d27872165d",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/(app)/projects/[id]/agents/zyra/page.tsx",
+      "at_9519": "059daa5117a4595c1e9bb1713739b6fef465dd31660e058af2d517548e5c0446",
+      "at_1fe10058": "059daa5117a4595c1e9bb1713739b6fef465dd31660e058af2d517548e5c0446",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/(app)/projects/[id]/agents/zyra/settings/page.tsx",
+      "at_9519": "d8623356b10dd5cd5a287dfbf3ba2fed287a0ed8e2461766fd86699c488e3e1b",
+      "at_1fe10058": "d8623356b10dd5cd5a287dfbf3ba2fed287a0ed8e2461766fd86699c488e3e1b",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/(app)/projects/[id]/requirements/page.tsx",
+      "at_9519": "43064607ce45a3e38b9c0ac0e4a1587fbd2875061147a31646a5033fb9c8cf5d",
+      "at_1fe10058": "43064607ce45a3e38b9c0ac0e4a1587fbd2875061147a31646a5033fb9c8cf5d",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/(app)/projects/[id]/testcases/[tcId]/page.tsx",
+      "at_9519": "90c7cc39d82b4438108c138ca0ba7b9301bc2cc44c073bec7a7285ef7e15962d",
+      "at_1fe10058": "90c7cc39d82b4438108c138ca0ba7b9301bc2cc44c073bec7a7285ef7e15962d",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/app/globals.css",
+      "at_9519": "a756ae7d8c89af0e22fcece152a5c91cd7958305730e0673f084f739151f727d",
+      "at_1fe10058": "a756ae7d8c89af0e22fcece152a5c91cd7958305730e0673f084f739151f727d",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/components/TopBar.tsx",
+      "at_9519": "524a0e828de3ae47f12fc680a3249523e3346364b8256bbe053f958c0ee13911",
+      "at_1fe10058": "524a0e828de3ae47f12fc680a3249523e3346364b8256bbe053f958c0ee13911",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/components/agents/ReviewBoard.tsx",
+      "at_9519": "43c526a4bfd62df06db8a5a219f9028c7f0d0871394b68c93ea745f7732e0922",
+      "at_1fe10058": "43c526a4bfd62df06db8a5a219f9028c7f0d0871394b68c93ea745f7732e0922",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/components/agents/TaskQuickViewPanel.tsx",
+      "at_9519": "771177b354d1dc630a6562fc8973e924cb0eba3014818788c6fa4a4e325236b3",
+      "at_1fe10058": "771177b354d1dc630a6562fc8973e924cb0eba3014818788c6fa4a4e325236b3",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/components/agents/ZyraChatReviewPanel.tsx",
+      "at_9519": "373854562213bf9127b65634ff2944415cb2e81d226a4d298fd60e50c29b94c0",
+      "at_1fe10058": "373854562213bf9127b65634ff2944415cb2e81d226a4d298fd60e50c29b94c0",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/lib/api.ts",
+      "at_9519": "962dcaf20576c2603f30c4b438bdbef9bf83ffb687024a9d89c65dc0ae468412",
+      "at_1fe10058": "b8f6f6fdf4ce97aca68824b9eae3b08d22cbdb6c0abf56989429f3f74b5a492d",
+      "byte_identical": false
+    },
+    {
+      "path": "Tesbo-Frontend/lib/zyraCacheSync.ts",
+      "at_9519": "7f18aca9ef16019b811e51794d70e2b9fdef1840a8914f25e9da73f62195191c",
+      "at_1fe10058": "7f18aca9ef16019b811e51794d70e2b9fdef1840a8914f25e9da73f62195191c",
+      "byte_identical": true
+    },
+    {
+      "path": "Tesbo-Frontend/package.json",
+      "at_9519": "75f5759ed7776b065740e6f56d2392900a499ddf1d638adfba4acdacce7ca783",
+      "at_1fe10058": "75f5759ed7776b065740e6f56d2392900a499ddf1d638adfba4acdacce7ca783",
+      "byte_identical": true
+    },
+    {
+      "path": "package.json",
+      "at_9519": "72736314bf5ebe869927d4165090311e77259e31d311311b214655ca8dbb89d7",
+      "at_1fe10058": "72736314bf5ebe869927d4165090311e77259e31d311311b214655ca8dbb89d7",
+      "byte_identical": true
+    }
+  ]
+}

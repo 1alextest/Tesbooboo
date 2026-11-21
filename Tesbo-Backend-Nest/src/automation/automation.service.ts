@@ -1,9 +1,12 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { randomUUID } from "crypto";
 import * as path from "path";
 import { DatabaseService } from "../database/database.service";
+import type { PoolClient } from "pg";
 import { LegacyService, isUuid } from "../legacy/legacy.service";
+import { assertApprovedNewRunCases } from "../legacy/approved-run-cases.policy";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
+import { storageKeyExtension } from "../storage/storage-key";
 import { StorageService } from "../storage/storage.service";
 import {
   ACCEPTED_WIRE_STATUSES,
@@ -235,6 +238,28 @@ export class AutomationService {
    * the run both end up with the same one, while a resubmit *after* that run was soft-deleted opens
    * a genuine new run instead of resolving back to a dead one it can never attach cases to again.
    */
+  /**
+   * Resolve external-id replays under the same cycle lock as automation close.
+   * A closed Run is readable/idempotently reusable only when no new case
+   * attachments are requested. The lock makes this rule stable against closeRun.
+   */
+  private async reuseAutomationRun(runId: string, projectId: string, caseIds: string[]) {
+    return this.db.transaction(async (client) => {
+      const res = await client.query<{ id: string; closed_at: Date | null }>(
+        "SELECT id, closed_at FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
+        [runId, projectId]
+      );
+      const run = res.rows[0];
+      if (!run) throw new NotFoundException({ error: "Run not found" });
+      if (run.closed_at && caseIds.length) {
+        throw new ConflictException({ error: "Automation run is closed; cannot attach test cases" });
+      }
+      return run.closed_at
+        ? { attached: 0, unknown: [] as string[] }
+        : this.attachCases(runId, projectId, caseIds, client);
+    });
+  }
+
   async createRun(userId: string | null | undefined, projectId: string, body: Body) {
     await this.legacy.requireProjectAccess(userId, projectId);
     const actorId = (await this.resolveAutomationActorId()) ?? this.requireActor(userId);
@@ -266,7 +291,7 @@ export class AutomationService {
         [projectId, externalId]
       );
       if (existing.rows[0]) {
-        const attached = await this.attachCases(existing.rows[0].id, projectId, caseIds);
+        const attached = await this.reuseAutomationRun(existing.rows[0].id, projectId, caseIds);
         return {
           ...(await this.runSummary(existing.rows[0].id)),
           reused: true,
@@ -277,8 +302,13 @@ export class AutomationService {
     }
 
     let runId: string;
+    let attached: { attached: number; unknown: string[] };
     try {
-      const res = await this.db.query<{ id: string }>(
+      // Run creation and case attachment are one transaction. If an existing
+      // case is Draft/In Review, or is demoted while a CI shard is attaching
+      // it, reject the entire attempt rather than leaving an orphan run.
+      const created = await this.db.transaction(async (client) => {
+        const res = await client.query<{ id: string }>(
         `INSERT INTO cycles (
            project_id, name, description, environment, build_version, release_name, owner_id,
            status, started_at, source, triggered_by, commit_sha, branch_name, build_url, external_id
@@ -301,7 +331,11 @@ export class AutomationService {
           externalId
         ]
       );
-      runId = res.rows[0].id;
+        const attached = await this.attachCases(res.rows[0].id, projectId, caseIds, client);
+        return { runId: res.rows[0].id, attached };
+      });
+      runId = created.runId;
+      attached = created.attached;
     } catch (err) {
       // Two shards racing on the same externalId: the loser's insert violates the partial unique
       // index. Resolve to the winner's run instead of failing the shard's whole session.
@@ -322,7 +356,7 @@ export class AutomationService {
           [projectId, externalId]
         );
         if (!raced.rows[0]) throw err;
-        const attached = await this.attachCases(raced.rows[0].id, projectId, caseIds);
+        const attached = await this.reuseAutomationRun(raced.rows[0].id, projectId, caseIds);
         return {
           ...(await this.runSummary(raced.rows[0].id)),
           reused: true,
@@ -333,7 +367,6 @@ export class AutomationService {
       throw err;
     }
 
-    const attached = await this.attachCases(runId, projectId, caseIds);
     await this.legacy.logProjectActivity(projectId, actorId, "automation_run_created", "cycle", runId, name, {
       triggeredBy: triggeredByRaw ?? null,
       branch: this.boundedString(body?.branch, "branch", MAX_BRANCH_LENGTH),
@@ -362,13 +395,22 @@ export class AutomationService {
   private async attachCases(
     runId: string,
     projectId: string,
-    caseIds: string[]
+    caseIds: string[],
+    runner: PoolClient | DatabaseService = this.db
   ): Promise<{ attached: number; unknown: string[] }> {
     if (!caseIds.length) return { attached: 0, unknown: [] };
+    // A direct createRun call has no surrounding transaction. Take the SAME
+    // row locks and Approved check as a manual run-add; callers with an existing
+    // PoolClient (replay, result, close races) already own that transaction.
+    if (runner === this.db) {
+      return this.db.transaction((client) => this.attachCases(runId, projectId, caseIds, client));
+    }
     const { found, unknown } = await this.resolveCases(projectId, caseIds);
     if (!found.size) return { attached: 0, unknown };
+    await assertApprovedNewRunCases(runner as PoolClient, projectId, runId,
+      [...found.values()].map((row) => row.id));
 
-    const res = await this.db.query<{ id: string }>(
+    const res = await (runner as DatabaseService).query<{ id: string }>(
       `WITH input AS (
          SELECT id, ord FROM unnest($2::uuid[]) WITH ORDINALITY AS u(id, ord)
        ),
@@ -394,16 +436,19 @@ export class AutomationService {
            cycle_id, testcase_id, snapshot_title, position,
            snapshot_external_id, snapshot_priority, snapshot_type, snapshot_suite_id,
            snapshot_description, snapshot_preconditions, snapshot_postconditions, snapshot_steps,
-           snapshot_test_data, snapshot_automation_status, snapshot_automation_tags
+           snapshot_test_data, snapshot_automation_status, snapshot_automation_tags,
+           snapshot_approval_revision, snapshot_reviewed_content
          )
          SELECT $1, t.id, t.title, base.pos + i.ord,
                 t.external_id, t.priority, t.type, t.suite_id,
                 t.description, t.preconditions, t.postconditions, t.steps,
-                t.test_data, t.automation_status, t.automation_tags
+                t.test_data, t.automation_status, t.automation_tags,
+                encode(sha256(convert_to(testcase_approval_snapshot(t.id)::text,'UTF8')),'hex'),
+                testcase_approval_snapshot(t.id)
            FROM input i
-           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3
+           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3 AND t.status = 'Approved'
            CROSS JOIN base
-          WHERE EXISTS (SELECT 1 FROM cycles c WHERE c.id = $1 AND c.deleted_at IS NULL)
+          WHERE EXISTS (SELECT 1 FROM cycles c WHERE c.id = $1 AND c.deleted_at IS NULL AND c.closed_at IS NULL)
          ON CONFLICT (cycle_id, testcase_id) WHERE deleted_at IS NULL DO NOTHING
          RETURNING id
        )
@@ -429,11 +474,16 @@ export class AutomationService {
    * stored for visibility": a case that passes on the third attempt reads Passed with
    * retry_count = 2, which is what distinguishes it from one that passed first time. A
    * caller-supplied `retryCount` (Playwright knows its own attempt index) wins over the
-   * increment, so a re-reported result does not inflate the count.
+   * increment. Attempts with lower indexes cannot replace newer attempts; equal-index
+   * exact duplicates return without altering timestamps. A never-executed row accepts
+   * attempt zero, but a later manual reset to Untested cannot erase the retry
+   * watermark. Legacy callers without an
+   * explicit index keep the old increment behavior, but cannot provide causal ordering.
+   * A future versioned contract should require attempt identity for all SDKs.
    */
   async recordResult(userId: string | null | undefined, projectId: string, runId: string, body: Body) {
     await this.legacy.requireProjectAccess(userId, projectId);
-    const run = await this.requireRun(projectId, runId);
+    await this.requireRun(projectId, runId);
     const actorId = (await this.resolveAutomationActorId()) ?? this.requireActor(userId);
 
     const caseId = this.boundedString(body?.caseId, "caseId", MAX_CASE_ID_LENGTH);
@@ -471,10 +521,17 @@ export class AutomationService {
     const errorMessage = this.boundedString(body?.errorMessage, "errorMessage", MAX_ERROR_MESSAGE_LENGTH);
     const errorStack = this.boundedString(body?.errorStack, "errorStack", MAX_ERROR_STACK_LENGTH);
 
+    return this.db.transaction(async (client) => {
+      const lock = await client.query<{ id: string; closed_at: string | null }>(
+        "SELECT id, closed_at FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
+        [runId, projectId]
+      );
+      if (!lock.rows[0]) throw new NotFoundException({ error: "Run not found" });
+      if (lock.rows[0].closed_at) throw new ConflictException({ error: "Automation run is closed; results cannot be changed" });
     // A case the run was not created with is attached now. This is not case *creation*: the case
     // already exists and was already approved by a person; a suite that grew a test since the run
     // was opened should still report against it rather than silently dropping the result.
-    await this.attachCases(runId, projectId, [testcase.externalId]);
+    await this.attachCases(runId, projectId, [testcase.externalId], client);
 
     /*
      * One statement, resolving the execution through the run and case rather than taking an
@@ -486,7 +543,7 @@ export class AutomationService {
      * error_message. `defect_key`/`defect_url` are left to the existing manual flow for the same
      * reason.
      */
-    const res = await this.db.query<{ id: string; status: string; retry_count: number }>(
+    const res = await client.query<{ id: string; status: string; retry_count: number }>(
       `UPDATE executions e SET
          status = $3,
          executed_at = now(),
@@ -502,16 +559,71 @@ export class AutomationService {
        FROM cycle_items ci
        WHERE ci.id = e.cycle_item_id AND ci.cycle_id = $1 AND ci.testcase_id = $2
          AND e.deleted_at IS NULL
+         -- Explicit retry indexes must increase. An old shard is never allowed
+         -- to replace a newer attempt even when HTTP delivery is out of order.
+         AND (
+           $6::int IS NULL
+           OR $6::int > e.retry_count
+           -- Only a fresh, never-executed row can accept attempt zero.
+           -- A manual reset to Untested must not lower the retry watermark.
+           OR (e.status = 'Untested' AND e.executed_at IS NULL
+               AND e.reported_by = 'human' AND e.retry_count = 0 AND $6::int = 0)
+         )
        RETURNING e.id, e.status, e.retry_count`,
       [runId, testcase.id, status, actorId, durationMs, suppliedRetryCount, errorMessage, errorStack]
     );
     const updated = res.rows[0];
     if (!updated) {
-      // attachCases above opened the execution, so reaching here means it was soft-deleted.
-      throw new NotFoundException({ error: `The result row for case "${caseId}" in this run is no longer available` });
+      // A rejected conditional UPDATE may be a stale retry, an exact duplicate,
+      // or a concurrently deleted execution. Read only within this run/case.
+      const existing = await client.query<{
+        id: string;
+        status: string;
+        retry_count: number;
+        duration_ms: number | null;
+        error_message: string | null;
+        error_stack: string | null;
+        reported_by: string | null;
+      }>(
+        `SELECT e.id, e.status, e.retry_count, e.duration_ms, e.error_message, e.error_stack, e.reported_by
+           FROM executions e
+           JOIN cycle_items ci ON ci.id = e.cycle_item_id
+          WHERE ci.cycle_id = $1 AND ci.testcase_id = $2
+            AND ci.deleted_at IS NULL AND e.deleted_at IS NULL`,
+        [runId, testcase.id]
+      );
+      const current = existing.rows[0];
+      if (!current) {
+        throw new NotFoundException({ error: `The result row for case "${caseId}" in this run is no longer available` });
+      }
+      // Retried transport delivery of the exact same attempt is a no-op:
+      // do not change executed_at, updated_at or the run's last_result_at.
+      if (
+        suppliedRetryCount !== null &&
+        current.reported_by === "automation" &&
+        current.retry_count === suppliedRetryCount &&
+        current.status === status &&
+        current.duration_ms === durationMs &&
+        current.error_message === errorMessage &&
+        current.error_stack === errorStack
+      ) {
+        return {
+          runId,
+          caseId: testcase.externalId,
+          executionId: current.id,
+          status: current.status,
+          retryCount: current.retry_count,
+          runClosed: false
+        };
+      }
+      throw new ConflictException({
+        error: "An equal or newer automation attempt is already recorded for this case",
+        storedRetryCount: current.retry_count,
+        submittedRetryCount: suppliedRetryCount
+      });
     }
 
-    await this.db.query("UPDATE cycles SET last_result_at = now(), updated_at = now() WHERE id = $1", [runId]);
+    await client.query("UPDATE cycles SET last_result_at = now(), updated_at = now() WHERE id = $1", [runId]);
 
     return {
       runId,
@@ -519,8 +631,9 @@ export class AutomationService {
       executionId: updated.id,
       status: updated.status,
       retryCount: updated.retry_count,
-      runClosed: Boolean(run.closed_at)
+      runClosed: false
     };
+    });
   }
 
   private normalizeDuration(value: unknown): number | null {
@@ -566,19 +679,31 @@ export class AutomationService {
       throw new BadRequestException({ error: "status must be one of: completed, incomplete" });
     }
 
-    if (run.closed_at) {
+    const closed = await this.db.transaction(async (client) => {
+      const lock = await client.query<{ id: string; closed_at: string | null }>(
+        "SELECT id, closed_at FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
+        [runId, projectId]
+      );
+      const lockedRun = lock.rows[0];
+      if (!lockedRun) throw new NotFoundException({ error: "Run not found" });
+    if (lockedRun.closed_at) {
       // Closing twice is what a retried CI step does. Report the run as it stands rather than
       // reopening it or erroring — but say so, so an SDK does not treat it as a fresh close.
-      return { ...(await this.runSummary(runId)), alreadyClosed: true, mismatch: null };
+      return { alreadyClosed: true, counts: null };
     }
 
-    const counts = await this.resultCounts(runId);
-    await this.db.query(
+    const counts = await this.resultCounts(runId, client);
+    await client.query(
       `UPDATE cycles SET status = 'Completed', ended_at = now(), closed_at = now(), close_status = $2,
          updated_at = now() WHERE id = $1`,
       [runId, requested]
     );
 
+
+      return { alreadyClosed: false, counts };
+    });
+    if (closed.alreadyClosed) return { ...(await this.runSummary(runId)), alreadyClosed: true, mismatch: null };
+    const counts = closed.counts!;
     const mismatch = this.summaryMismatch(body?.summary, counts);
     await this.legacy.logProjectActivity(projectId, actorId, "automation_run_closed", "cycle", runId, run.name, {
       closeStatus: requested,
@@ -618,8 +743,8 @@ export class AutomationService {
     return Object.keys(diff).length ? diff : null;
   }
 
-  private async resultCounts(runId: string) {
-    const res = await this.db.query<Record<string, string>>(
+  private async resultCounts(runId: string, runner: PoolClient | DatabaseService = this.db) {
+    const res = await (runner as DatabaseService).query<Record<string, string>>(
       `SELECT
          COUNT(*)::int AS total,
          COUNT(*) FILTER (WHERE e.status = 'Passed')::int AS passed,
@@ -719,10 +844,16 @@ export class AutomationService {
     files: UploadedFile[]
   ) {
     const project = await this.legacy.requireProjectAccess(userId, projectId);
-    await this.requireRun(projectId, runId);
+    const run = await this.requireRun(projectId, runId);
+    if (run.closed_at) {
+      throw new ConflictException({ error: "This automated run is closed; evidence cannot be added" });
+    }
     const actorId = (await this.resolveAutomationActorId()) ?? this.requireActor(userId);
 
-    if (!files || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
+    // Array.isArray, not just a length check: multipart parsing is outside our types, so a single
+    // field or a malformed payload can arrive as a non-array and `.length` would then read a string
+    // length and count it as files.
+    if (!Array.isArray(files) || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
     if (!isEvidenceKind(kindInput)) {
       throw new BadRequestException({ error: `kind must be one of: ${EVIDENCE_KINDS.join(", ")}` });
     }
@@ -747,10 +878,6 @@ export class AutomationService {
     }
 
     this.assertValidEvidence(files, kind);
-
-    // All-or-nothing on the batch, like assertValidEvidenceFiles: the loop below writes one object
-    // per file, so a mid-loop rejection would leave the accepted ones stored and billed while the
-    // request answers an error.
     const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
     const quota = await this.planLimits.checkStorageAvailable(project.organization_id, totalBytes);
     if (!quota.allowed) {
@@ -767,31 +894,75 @@ export class AutomationService {
       };
     }
 
-    const created: Body[] = [];
-    for (const file of files) {
-      const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
-      const storageKey = `executions/${projectId}/${executionId}/${randomUUID()}${ext ? `.${ext}` : ""}`;
-      await this.storage.put(storageKey, file.buffer, file.mimetype);
-      const res = await this.db.query(
-        `INSERT INTO attachments
-           (project_id, entity_type, entity_id, file_name, content_type, file_size, storage_path, uploaded_by, evidence_kind)
-         VALUES ($1, 'execution', $2, $3, $4, $5, $6, $7, $8)
-         RETURNING id, file_name, content_type, file_size, evidence_kind, created_at`,
-        [
-          projectId,
-          executionId,
-          LegacyService.displayFileName(file.originalname),
-          file.mimetype,
-          file.size,
-          storageKey,
-          actorId,
-          kind
-        ]
-      );
-      created.push(res.rows[0]);
-    }
+    // Object storage cannot participate in a PostgreSQL transaction.
+    // Upload first, then acquire the same run lock as closeRun to commit
+    // evidence metadata. On a late close or DB failure, compensate by
+    // deleting the uploaded objects rather than leaving evidence attached
+    // to a finalized run.
+    const uploaded: Array<{ file: UploadedFile; storageKey: string }> = [];
+    try {
+      for (const file of files) {
+        const storageKey = `executions/${projectId}/${executionId}/${randomUUID()}${storageKeyExtension(file.originalname)}`;
+        // Record the key before uploading. Some storage failures occur after
+        // bytes have been written but before put() confirms success; those
+        // partially successful objects must be included in compensation.
+        // StorageService.delete is idempotent for absent keys (local/S3).
+        uploaded.push({ file, storageKey });
+        await this.storage.put(storageKey, file.buffer, file.mimetype);
+      }
 
-    return { list: created, total: created.length, skipped: null as null | "quota" };
+      const created = await this.db.transaction(async (client) => {
+        const locked = await client.query<{ id: string; closed_at: Date | null }>(
+          "SELECT id, closed_at FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
+          [runId, projectId]
+        );
+        if (!locked.rows[0]) throw new NotFoundException({ error: "Run not found" });
+        if (locked.rows[0].closed_at) {
+          throw new ConflictException({ error: "This automated run closed while evidence was uploading" });
+        }
+
+        const current = await client.query<{ id: string }>(
+          `SELECT e.id FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id
+             WHERE e.id = $1 AND ci.cycle_id = $2 AND ci.deleted_at IS NULL AND e.deleted_at IS NULL`,
+          [executionId, runId]
+        );
+        if (!current.rows[0]) throw new NotFoundException({ error: "Execution no longer exists" });
+
+        const saved: Body[] = [];
+        for (const { file, storageKey } of uploaded) {
+          const res = await client.query(
+            `INSERT INTO attachments
+               (project_id, entity_type, entity_id, file_name, content_type, file_size, storage_path, uploaded_by, evidence_kind)
+             VALUES ($1, 'execution', $2, $3, $4, $5, $6, $7, $8)
+             RETURNING id, file_name, content_type, file_size, evidence_kind, created_at`,
+            [
+              projectId,
+              executionId,
+              LegacyService.displayFileName(file.originalname),
+              file.mimetype,
+              file.size,
+              storageKey,
+              actorId,
+              kind
+            ]
+          );
+          saved.push(res.rows[0]);
+        }
+        return saved;
+      });
+      return { list: created, total: created.length, skipped: null as null | "quota" };
+    } catch (error) {
+      for (const { storageKey } of uploaded) {
+        try {
+          await this.storage.delete(storageKey);
+        } catch (cleanupError) {
+          this.logger.error(
+            `Could not remove uncommitted evidence object ${storageKey}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`
+          );
+        }
+      }
+      throw error;
+    }
   }
 
   /**

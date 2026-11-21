@@ -3,6 +3,7 @@ import { Module } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 import { PlanLimitsModule } from "./plan-limits/plan-limits.module";
 import { ProjectWriteLockGuard } from "./plan-limits/project-write-lock.guard";
+import { ApiTokenRestGuard } from "./auth/api-token-rest.guard";
 import { ConfigModule } from "./config/config.module";
 import { AppConfigService } from "./config/app-config.service";
 import { DatabaseModule } from "./database/database.module";
@@ -21,7 +22,9 @@ import { CustomTagsModule } from "./custom-tags/custom-tags.module";
 import { AutomationModule } from "./automation/automation.module";
 import { AnalyticsReportModule } from "./analytics-report/analytics-report.module";
 import { ReviewBoardModule } from "./review-board/review-board.module";
+import { GraphChangeReviewModule } from "./behavior-graph/graph-change-review.module";
 import { ZyraArchiveSweepModule } from "./zyra-archive-sweep/zyra-archive-sweep.module";
+import { SchedulesModule } from "./schedules/schedules.module";
 
 @Module({
   imports: [
@@ -45,12 +48,17 @@ import { ZyraArchiveSweepModule } from "./zyra-archive-sweep/zyra-archive-sweep.
     CustomTagsModule,
     PlanLimitsModule,
     AutomationModule,
+    SchedulesModule,
     ZyraArchiveSweepModule,
     AnalyticsReportModule,
-    ReviewBoardModule
+    ReviewBoardModule,
+    GraphChangeReviewModule
   ],
   // Global so every current and future mutating /api/projects/:id route is covered; the guard
   // itself no-ops on reads and on workspaces that are within their limits.
-  providers: [{ provide: APP_GUARD, useClass: ProjectWriteLockGuard }]
+  providers: [
+    { provide: APP_GUARD, useClass: ApiTokenRestGuard },
+    { provide: APP_GUARD, useClass: ProjectWriteLockGuard }
+  ]
 })
 export class AppModule {}

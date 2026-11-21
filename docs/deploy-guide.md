@@ -131,4 +131,17 @@ Point each domain to the corresponding droplet IP as a plain A record.
 ## Verification
 
 - Frontend: `https://app.example.com/`
-- Backend health: `https://api.example.com/health`
+- Backend health: `https://api.example.com/health` — `gitSha` must be the deployed commit, not `local`. The value is resolved from `RAILWAY_GIT_COMMIT_SHA` first (a Railway deployment triggered from GitHub; it describes the running deployment) and falls back to `GIT_SHA` (Jenkins/compose, or a `railway up` upload where the operator sets it), then `local`; see `Tesbo-Backend-Nest/src/build-provenance.ts`. A service-level `GIT_SHA` persists across Railway deploys, so it must never outrank the injected Railway value.
+- Railway deployments: the backend service redeploys from its connected GitHub branch whenever a service variable changes or someone presses Redeploy. A `railway up` upload is superseded by that next GitHub-triggered deployment, even though the upload may have been the newer code. Deploy from the connected branch when possible; when an upload is the only option, set `GIT_SHA` to the uploaded commit and do not change variables until the connected branch catches up.
+- MCP catalog and field contracts, from a fresh protocol session (the token comes from the environment, never argv):
+
+  ```bash
+  TESBO_MCP_URL="https://api.example.com/api/projects/<projectId>/mcp" \
+  TESBO_MCP_TOKEN="<project token>" \
+  EXPECTED_GIT_SHA="<deployed commit>" \
+  node scripts/mcp-deploy-check.mjs
+  ```
+
+  It fails on a missing required tool or authoring field, or a build mismatch, and warns when the build is unidentified. Required authoring fields are `attachments`, `postconditions`, `estimatedDuration` and `sourceRefs` on create/bulk create, plus `expectedRevision` on update.
+
+  It also recomputes the catalog fingerprint from the tools and initialize instructions the server actually returned, and fails when that differs from the fingerprint in `serverInfo.version` — the signal that a proxy, stale replica or cached catalog is serving a different tool set from the one the server claims. Tool count is informational: capabilities, not the number, are the requirement.

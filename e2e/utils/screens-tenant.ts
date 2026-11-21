@@ -1,3 +1,4 @@
+import { createTestcaseFixtureResponse } from "./testcase-approval";
 import { pbkdf2Sync, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -120,7 +121,7 @@ export async function createTestCase(
   data: { title?: string; status?: string; priority?: string; suiteId?: string } = {},
 ): Promise<{ id: string; title: string }> {
   const title = data.title ?? `E2E Screens Case ${uniqueSuffix()}`;
-  const res = await api.post(`/api/projects/${projectId}/testcases`, {
+  const res = await createTestcaseFixtureResponse(api, `/api/projects/${projectId}/testcases`, {
     data: { ...data, title },
   });
   const created = await res.json();
@@ -279,16 +280,24 @@ export function seedJiraRequirements(
     `SELECT id FROM integration_connections WHERE organization_id = ${literal(organizationId)} AND provider = 'jira';`,
   );
   if (!connectionId) throw new Error("Could not resolve the seeded Jira integration connection");
+  // The page treats a provider as connected only when this project is mapped to it; synced
+  // tickets alone do not make the source usable.
+  exec(
+    `INSERT INTO jira_project_mappings (jira_connection_id, project_id, jira_project_id, jira_project_key, jira_project_name) ` +
+      `VALUES (${literal(connectionId)}, ${literal(projectId)}, 'e2e-screens', 'E2E', 'E2E screens') ` +
+      `ON CONFLICT DO NOTHING;`,
+  );
 
   const values = keys
     .map(
       (key) =>
         `(${literal(projectId)}, ${literal(connectionId)}, ${literal(key)}, ${literal(key)}, ` +
-        `${literal(`Requirement ${key}`)}, 'Story', 'Open', ${literal(descriptions[key] ?? null)})`,
+        `${literal(`Requirement ${key}`)}, 'Story', 'Open', ${literal(descriptions[key] ?? null)}, 'e2e-screens')`,
     )
     .join(", ");
+  // The listing only returns tickets from the mapping's current remote project.
   exec(
-    `INSERT INTO jira_tickets (project_id, jira_connection_id, jira_issue_id, jira_issue_key, summary, issue_type, status, description) ` +
+    `INSERT INTO jira_tickets (project_id, jira_connection_id, jira_issue_id, jira_issue_key, summary, issue_type, status, description, mapped_remote_id) ` +
       `VALUES ${values} ON CONFLICT DO NOTHING;`,
   );
 }
@@ -309,16 +318,21 @@ export function seedLinearRequirements(
     `SELECT id FROM integration_connections WHERE organization_id = ${literal(organizationId)} AND provider = 'linear';`,
   );
   if (!connectionId) throw new Error("Could not resolve the seeded Linear integration connection");
+  exec(
+    `INSERT INTO linear_project_mappings (integration_connection_id, project_id, linear_team_id, linear_team_key, linear_team_name) ` +
+      `VALUES (${literal(connectionId)}, ${literal(projectId)}, 'e2e-screens', 'E2E', 'E2E screens') ` +
+      `ON CONFLICT DO NOTHING;`,
+  );
 
   const values = keys
     .map(
       (key) =>
         `(${literal(projectId)}, ${literal(connectionId)}, ${literal(key)}, ${literal(key)}, ` +
-        `${literal(`Requirement ${key}`)}, 'Story', 'Todo', ${literal(descriptions[key] ?? null)})`,
+        `${literal(`Requirement ${key}`)}, 'Story', 'Todo', ${literal(descriptions[key] ?? null)}, 'e2e-screens')`,
     )
     .join(", ");
   exec(
-    `INSERT INTO linear_tickets (project_id, integration_connection_id, linear_issue_id, linear_issue_key, summary, issue_type, status, description) ` +
+    `INSERT INTO linear_tickets (project_id, integration_connection_id, linear_issue_id, linear_issue_key, summary, issue_type, status, description, mapped_remote_id) ` +
       `VALUES ${values} ON CONFLICT DO NOTHING;`,
   );
 }

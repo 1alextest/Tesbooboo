@@ -1,24 +1,38 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, request as pwRequest, test } from "@playwright/test";
+import { expect, request as pwRequest, test, type Locator, type Page } from "@playwright/test";
 import { env } from "../utils/env";
+import { createApprovedTestcase } from "../utils/testcase-approval";
+import { literal, scalar } from "../utils/psql";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 const STATE_PATH = path.join(__dirname, "../.auth/state.json");
 
+/** The row's inline status select; the run page renders its filter selects above the table. */
+function executionStatus(page: Page, title: string): Locator {
+  return page.getByRole("row", { name: title }).getByRole("combobox");
+}
+
+/** Drawer renders a presentation panel; its testcase heading distinguishes it from the table. */
+function executionDrawer(page: Page, title: string): Locator {
+  return page.locator('div[role="presentation"] > div[role="presentation"]').filter({
+    has: page.getByRole("heading", { name: title, exact: true }),
+  });
+}
+
 async function setUpCycleWithOneCase(title: string) {
   const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
-  const cycle = await (
-    await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI Bug Dialog Cycle ${Date.now()}` } })
-  ).json();
+  const cycleResponse = await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI Bug Dialog Cycle ${Date.now()}` } });
+  expect(cycleResponse.ok(), await cycleResponse.text()).toBeTruthy();
+  const cycle = await cycleResponse.json();
   // The inline status <select> only renders when the run's own status is "In Progress"
   // (page.tsx: `const isInProgress = run.status === "In Progress"`) — cycles are created in
   // "Planning" by default (migrations/V9_cycle_status.sql), so this must be set explicitly.
-  const testcase = await (
-    await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title } })
-  ).json();
-  await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
-  await api.patch(`/api/cycles/${cycle.id}`, { data: { status: "In Progress" } });
+  const testcase = await createApprovedTestcase(api, ctx.projectId, { title });
+  const attached = await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
+  expect(attached.ok(), await attached.text()).toBe(true);
+  const started = await api.patch(`/api/cycles/${cycle.id}`, { data: { status: "In Progress" } });
+  expect(started.ok(), await started.text()).toBeTruthy();
   await api.dispose();
   return { cycle, testcase };
 }
@@ -49,7 +63,7 @@ test.describe("auto bug-filing on Failed", () => {
 
     try {
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}`);
-      await page.getByRole("combobox").first().selectOption("Failed");
+      await executionStatus(page, title).selectOption("Failed");
 
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeVisible();
       const titleInput = page.getByPlaceholder("Brief summary of the bug…");
@@ -88,17 +102,15 @@ test.describe("auto bug-filing on Failed", () => {
     const titleA = `UI Bug Severity Reset A ${stamp}`;
     const titleB = `UI Bug Severity Reset B ${stamp}`;
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
-    const cycle = await (
-      await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI Bug Severity Reset Cycle ${stamp}` } })
-    ).json();
-    const testcaseA = await (
-      await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: titleA } })
-    ).json();
-    const testcaseB = await (
-      await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: titleB } })
-    ).json();
-    await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcaseA.id, testcaseB.id] } });
-    await api.patch(`/api/cycles/${cycle.id}`, { data: { status: "In Progress" } });
+    const cycleResponse = await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI Bug Severity Reset Cycle ${stamp}` } });
+    expect(cycleResponse.ok(), await cycleResponse.text()).toBeTruthy();
+    const cycle = await cycleResponse.json();
+    const testcaseA = await createApprovedTestcase(api, ctx.projectId, { title: titleA });
+    const testcaseB = await createApprovedTestcase(api, ctx.projectId, { title: titleB });
+    const attached = await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcaseA.id, testcaseB.id] } });
+    expect(attached.ok(), await attached.text()).toBeTruthy();
+    const started = await api.patch(`/api/cycles/${cycle.id}`, { data: { status: "In Progress" } });
+    expect(started.ok(), await started.text()).toBeTruthy();
     await api.dispose();
 
     try {
@@ -106,7 +118,7 @@ test.describe("auto bug-filing on Failed", () => {
 
       // Fail the first case, pick a non-default severity, and skip — the dialog must not carry
       // that choice over into the next execution's report.
-      await page.getByRole("combobox").first().selectOption("Failed");
+      await executionStatus(page, titleA).selectOption("Failed");
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeVisible();
       const severitySelect = page.getByRole("combobox", { name: "Severity" });
 
@@ -120,7 +132,7 @@ test.describe("auto bug-filing on Failed", () => {
 
       // Fail the second case — its dialog must reset to Not selected, not inherit "Low". Severity is not
       // required, so File Bug works without picking one.
-      await page.getByRole("combobox").nth(1).selectOption("Failed");
+      await executionStatus(page, titleB).selectOption("Failed");
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "Severity" })).toHaveValue("");
       await expect(page.getByRole("button", { name: "Report Bug", exact: true })).toBeEnabled();
@@ -164,7 +176,7 @@ test.describe("auto bug-filing on Failed", () => {
 
     try {
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}`);
-      await page.getByRole("combobox").first().selectOption("Failed");
+      await executionStatus(page, title).selectOption("Failed");
 
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeVisible();
       await page.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -216,7 +228,7 @@ test.describe("auto bug-filing on Failed", () => {
 
     try {
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}`);
-      await page.getByRole("combobox").first().selectOption("Failed");
+      await executionStatus(page, title).selectOption("Failed");
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeVisible();
 
       // Ten: the most a bug takes (it used to be twelve, before a bug was capped at ten files).
@@ -315,8 +327,8 @@ test.describe("auto bug-filing on Failed", () => {
       const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
       try {
         const bugs = await (await api.get(`/api/projects/${ctx.projectId}/bugs`)).json();
-        const filedBug = bugs.find((b: { title: string }) => b.title === `Failed: ${title}`);
-        expect(filedBug, "the bug filed against this execution").toBeTruthy();
+        const filedBug = bugs.find((b: { title: string }) => b.title === "Login button does nothing");
+        expect(filedBug, "the bug must persist the selected Jira summary, not the testcase default").toBeTruthy();
         expect(filedBug.integrationProvider).toBe("JIRA");
         expect(filedBug.integrationIssueKey).toBe("PROJ-4242");
         expect(filedBug.externalUrl).toBe("https://e2e.atlassian.net/browse/PROJ-4242");
@@ -460,8 +472,8 @@ test.describe("auto bug-filing on Failed", () => {
       const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
       try {
         const bugs = await (await api.get(`/api/projects/${ctx.projectId}/bugs`)).json();
-        const filedBug = bugs.find((b: { title: string }) => b.title === `Failed: ${title}`);
-        expect(filedBug, "the bug filed against this execution").toBeTruthy();
+        const filedBug = bugs.find((b: { title: string }) => b.title === "Dropdown closes on scroll");
+        expect(filedBug, "the bug must persist the selected Linear summary, not the testcase default").toBeTruthy();
         expect(filedBug.integrationProvider).toBe("LINEAR");
         expect(filedBug.integrationIssueKey).toBe("ENG-77");
         expect(filedBug.externalUrl).toBe("https://linear.app/e2e/issue/ENG-77");
@@ -592,8 +604,8 @@ test.describe("auto bug-filing on Failed", () => {
 
       const picker = page.getByTestId("issue-picker");
       await expect(page.getByRole("heading", { name: "Link Jira tickets" })).toBeVisible();
-      await expect(picker.getByText("Already linked ticket", { exact: true })).toBeHidden();
-      await expect(picker.getByText("Not yet linked ticket", { exact: true })).toBeVisible();
+      await expect(picker.getByRole("checkbox", { name: `PROJ-${stamp}ALREADY — Already linked ticket Open`, exact: true })).toHaveCount(0);
+      await expect(picker.getByRole("checkbox", { name: `PROJ-${stamp}NEW — Not yet linked ticket Open`, exact: true })).toBeVisible();
     } finally {
       await cleanUp(cycle.id, testcase.id);
     }
@@ -657,6 +669,7 @@ test.describe("auto bug-filing on Failed", () => {
         expect(linkedToThisCase, "one bug per selected ticket, none duplicated").toHaveLength(2);
         const keys = linkedToThisCase.map((b: { integrationIssueKey: string }) => b.integrationIssueKey).sort();
         expect(keys).toEqual([`ENG-${stamp}A`, `ENG-${stamp}B`]);
+        expect(linkedToThisCase.map((b: { title: string }) => b.title).sort()).toEqual(["First linear ticket", "Second linear ticket"]);
         for (const bug of linkedToThisCase) {
           expect(bug.integrationProvider).toBe("LINEAR");
         }
@@ -893,14 +906,15 @@ test.describe("auto bug-filing on Failed", () => {
       await page.getByRole("button", { name: "Link Bug", exact: true }).click();
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeHidden();
 
-      // Open the run-drawer panel and confirm the single-bug layout shows it.
-      await page.getByRole("button", { name: title }).click();
+      // Linking reopens this execution's drawer; the table row is behind its backdrop.
+      const drawer = executionDrawer(page, title);
+      await expect(drawer).toBeVisible();
       await expect(page.getByLabel("Bug Key")).toHaveValue(existingBug.externalId);
       await expect(page.getByLabel("Bug Title")).toHaveValue(existingBug.title);
 
       // Pass 2: from inside the panel, "Log bug" reopens Report a Bug for the same execution --
       // link a Jira ticket without ever leaving the panel.
-      await page.getByRole("button", { name: "Log bug" }).click();
+      await drawer.getByRole("button", { name: "Log bug", exact: true }).click();
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeVisible();
       await page.getByRole("button", { name: "Yes, link existing" }).click();
       await page.getByRole("button", { name: "Jira ticket", exact: true }).click();
@@ -911,7 +925,7 @@ test.describe("auto bug-filing on Failed", () => {
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeHidden();
 
       // Pass 3: same again for Linear.
-      await page.getByRole("button", { name: "Log bug" }).click();
+      await drawer.getByRole("button", { name: "Log bug", exact: true }).click();
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeVisible();
       await page.getByRole("button", { name: "Yes, link existing" }).click();
       await page.getByRole("button", { name: "Linear ticket", exact: true }).click();
@@ -935,7 +949,16 @@ test.describe("auto bug-filing on Failed", () => {
       // And it survives a real reload, not just the in-memory refresh after each link.
       await page.reload();
       await page.getByRole("button", { name: title }).click();
-      await expect(page.locator('input[aria-label^="Bug "][aria-label$=" Key"]')).toHaveCount(3);
+      const reloadedKeyInputs = page.locator('input[aria-label^="Bug "][aria-label$=" Key"]');
+      const reloadedTitleInputs = page.locator('input[aria-label^="Bug "][aria-label$=" Title"]');
+      await expect(reloadedKeyInputs).toHaveCount(3);
+      await expect(reloadedTitleInputs).toHaveCount(3);
+      expect((await reloadedKeyInputs.evaluateAll((els) =>
+        els.map((el) => (el as HTMLInputElement).value))).sort())
+        .toEqual([existingBug.externalId, `PROJ-${stamp}MIX`, `ENG-${stamp}MIX`].sort());
+      expect((await reloadedTitleInputs.evaluateAll((els) =>
+        els.map((el) => (el as HTMLInputElement).value))).sort())
+        .toEqual([existingBug.title, "Mixed Jira ticket", "Mixed Linear ticket"].sort());
     } finally {
       const cleanupApi = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
       await cleanupApi.delete(`/api/bugs/${existingBug.id}`, { failOnStatusCode: false });
@@ -1041,6 +1064,9 @@ test.describe("auto bug-filing on Failed", () => {
       await expect(rowB).toBeVisible();
       await expect(rowB.locator('input[type="checkbox"]')).toBeChecked();
       await rowB.click();
+      // B no longer belongs to either the empty-query result or the working picks. Search it
+      // again to inspect the unchecked state, then confirm the same two remaining selections.
+      await picker.getByPlaceholder("Search by key or summary…").fill("cross ticket b");
       await expect(rowB.locator('input[type="checkbox"]')).not.toBeChecked();
       await picker.getByRole("button", { name: "Add Selected" }).click();
 
@@ -1093,22 +1119,27 @@ test.describe("auto bug-filing on Failed", () => {
     const { cycle, testcase } = await setUpCycleWithOneCase(title);
 
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
-    const bugToKeep = await (
-      await api.post(`/api/projects/${ctx.projectId}/bugs`, {
-        data: { title: `Keep Me Tesbo Bug ${stamp}`, severity: "Medium", links: [{ testcaseId: testcase.id, cycleId: cycle.id }] },
-      })
-    ).json();
-    const bugToUnlink = await (
-      await api.post(`/api/projects/${ctx.projectId}/bugs`, {
-        data: {
-          title: `Remove Me Jira Bug ${stamp}`,
-          severity: "Medium",
-          integrationProvider: "JIRA",
-          integrationIssueKey: `PROJ-${stamp}UNLINK`,
-          links: [{ testcaseId: testcase.id, cycleId: cycle.id }],
-        },
-      })
-    ).json();
+    const executionResponse = await api.get(`/api/cycles/${cycle.id}/executions`);
+    expect(executionResponse.ok(), await executionResponse.text()).toBeTruthy();
+    const executions = await executionResponse.json();
+    expect(executions).toHaveLength(1);
+    const execution = executions[0];
+    const keepResponse = await api.post(`/api/projects/${ctx.projectId}/bugs`, {
+      data: { title: `Keep Me Tesbo Bug ${stamp}`, severity: "Medium", links: [{ testcaseId: testcase.id, cycleId: cycle.id, executionId: execution.id }] },
+    });
+    expect(keepResponse.ok(), await keepResponse.text()).toBeTruthy();
+    const bugToKeep = await keepResponse.json();
+    const unlinkResponse = await api.post(`/api/projects/${ctx.projectId}/bugs`, {
+      data: {
+        title: `Remove Me Jira Bug ${stamp}`,
+        severity: "Medium",
+        integrationProvider: "JIRA",
+        integrationIssueKey: `PROJ-${stamp}UNLINK`,
+        links: [{ testcaseId: testcase.id, cycleId: cycle.id, executionId: execution.id }],
+      },
+    });
+    expect(unlinkResponse.ok(), await unlinkResponse.text()).toBeTruthy();
+    const bugToUnlink = await unlinkResponse.json();
     await api.dispose();
 
     try {
@@ -1116,8 +1147,8 @@ test.describe("auto bug-filing on Failed", () => {
       // Fail the row first (via the API, cheaper than driving the dialog) so both pre-linked bugs
       // are already attached before the panel is ever opened.
       const failApi = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
-      const executions = await (await failApi.get(`/api/cycles/${cycle.id}/executions`)).json();
-      await failApi.patch(`/api/cycles/${cycle.id}/executions/${executions[0].id}`, { data: { status: "Failed" } });
+      const failed = await failApi.patch(`/api/cycles/${cycle.id}/executions/${execution.id}`, { data: { status: "Failed" } });
+      expect(failed.ok(), await failed.text()).toBeTruthy();
       await failApi.dispose();
       await page.reload();
 
@@ -1160,7 +1191,7 @@ test.describe("auto bug-filing on Failed", () => {
       }
 
       // Available again in the picker (no longer excluded as "already linked").
-      await page.getByRole("button", { name: "Log bug" }).click();
+      await executionDrawer(page, title).getByRole("button", { name: "Log bug", exact: true }).click();
       await page.getByRole("button", { name: "Yes, link existing" }).click();
       await page.getByRole("button", { name: "Existing Tesbo bug", exact: true }).click();
       await page.getByRole("button", { name: "Choose an existing bug…" }).click();
@@ -1278,11 +1309,12 @@ test.describe("assigning a test execution", () => {
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}`);
       await page.getByText(testcase.title).first().click();
 
-      const assignSelect = page.getByRole("combobox", { name: "Assigned to" });
+      const drawer = executionDrawer(page, testcase.title);
+      const assignSelect = drawer.getByRole("combobox", { name: "Assigned to" });
       await expect(assignSelect).toBeVisible();
       await assignSelect.selectOption(me.userId);
-      await page.getByRole("button", { name: "Save" }).first().click();
-      await expect(page.getByText(testcase.title)).toBeHidden({ timeout: 10_000 });
+      await drawer.getByRole("button", { name: "Save", exact: true }).click();
+      await expect(drawer).toBeHidden({ timeout: 10_000 });
 
       const [afterAssign] = await (await api.get(`/api/cycles/${cycle.id}/executions`)).json();
       expect(afterAssign.assigneeId).toBe(me.userId);
@@ -1291,10 +1323,10 @@ test.describe("assigning a test execution", () => {
       // current selection, but this pins that a plain status edit elsewhere in the product
       // (the inline dropdown) must not silently clear what was just assigned.
       await page.getByText(testcase.title).first().click();
-      await expect(page.getByRole("combobox", { name: "Assigned to" })).toHaveValue(me.userId);
-      await page.getByRole("button", { name: "Passed", exact: true }).first().click();
-      await page.getByRole("button", { name: "Save" }).first().click();
-      await expect(page.getByText(testcase.title)).toBeHidden({ timeout: 10_000 });
+      await expect(assignSelect).toHaveValue(me.userId);
+      await drawer.getByRole("group", { name: "Execution status" }).getByRole("button", { name: "Passed", exact: true }).click();
+      await drawer.getByRole("button", { name: "Save", exact: true }).click();
+      await expect(drawer).toBeHidden({ timeout: 10_000 });
 
       const [afterStatus] = await (await api.get(`/api/cycles/${cycle.id}/executions`)).json();
       expect(afterStatus.status).toBe("Passed");
@@ -1302,9 +1334,9 @@ test.describe("assigning a test execution", () => {
 
       // Unassign via the drawer's "Unassigned" option.
       await page.getByText(testcase.title).first().click();
-      await page.getByRole("combobox", { name: "Assigned to" }).selectOption("");
-      await page.getByRole("button", { name: "Save" }).first().click();
-      await expect(page.getByText(testcase.title)).toBeHidden({ timeout: 10_000 });
+      await assignSelect.selectOption("");
+      await drawer.getByRole("button", { name: "Save", exact: true }).click();
+      await expect(drawer).toBeHidden({ timeout: 10_000 });
 
       const [afterUnassign] = await (await api.get(`/api/cycles/${cycle.id}/executions`)).json();
       expect(afterUnassign.assigneeId).toBeNull();
@@ -1376,17 +1408,15 @@ test.describe("bulk assignment (run detail)", () => {
   async function setUpCycleWithTwoCases(prefix: string) {
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
     const stamp = Date.now();
-    const cycle = await (
-      await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI Bulk Assign Cycle ${stamp}` } })
-    ).json();
-    const testcaseA = await (
-      await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `${prefix} A ${stamp}` } })
-    ).json();
-    const testcaseB = await (
-      await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `${prefix} B ${stamp}` } })
-    ).json();
-    await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcaseA.id, testcaseB.id] } });
-    await api.patch(`/api/cycles/${cycle.id}`, { data: { status: "In Progress" } });
+    const cycleResponse = await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI Bulk Assign Cycle ${stamp}` } });
+    expect(cycleResponse.ok(), await cycleResponse.text()).toBeTruthy();
+    const cycle = await cycleResponse.json();
+    const testcaseA = await createApprovedTestcase(api, ctx.projectId, { title: `${prefix} A ${stamp}` });
+    const testcaseB = await createApprovedTestcase(api, ctx.projectId, { title: `${prefix} B ${stamp}` });
+    const attached = await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcaseA.id, testcaseB.id] } });
+    expect(attached.ok(), await attached.text()).toBeTruthy();
+    const started = await api.patch(`/api/cycles/${cycle.id}`, { data: { status: "In Progress" } });
+    expect(started.ok(), await started.text()).toBeTruthy();
     await api.dispose();
     return { cycle, testcaseA, testcaseB };
   }
@@ -1494,20 +1524,18 @@ test.describe("removing cases from a run", () => {
   async function setUpCycleWithCases(count: number) {
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
     const stamp = Date.now();
-    const cycle = await (
-      await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI Run Count ${stamp}` } })
-    ).json();
+    const cycleResponse = await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI Run Count ${stamp}` } });
+    expect(cycleResponse.ok(), await cycleResponse.text()).toBeTruthy();
+    const cycle = await cycleResponse.json();
     const testcaseIds: string[] = [];
     for (let i = 0; i < count; i++) {
-      const tc = await (
-        await api.post(`/api/projects/${ctx.projectId}/testcases`, {
-          data: { title: `UI Run Count case ${i + 1} ${stamp}` },
-        })
-      ).json();
+      const tc = await createApprovedTestcase(api, ctx.projectId, { title: `UI Run Count case ${i + 1} ${stamp}` });
       testcaseIds.push(tc.id);
     }
-    await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds } });
-    await api.patch(`/api/cycles/${cycle.id}`, { data: { status: "In Progress" } });
+    const attached = await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds } });
+    expect(attached.ok(), await attached.text()).toBeTruthy();
+    const started = await api.patch(`/api/cycles/${cycle.id}`, { data: { status: "In Progress" } });
+    expect(started.ok(), await started.text()).toBeTruthy();
     await api.dispose();
     return { cycle, testcaseIds };
   }
@@ -1583,29 +1611,30 @@ test.describe("removing cases from a run", () => {
 test.describe("run detail — progress, defects and the bug modal", () => {
   test("EXE-U-30 every status gets its own colour in the run progress bar", { tag: '@tesbo.testId("TES-TC-1334")' }, async ({ page }) => {
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
-    const cycle = await (
-      await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI Progress Run ${Date.now()}` } })
-    ).json();
+    const cycleResponse = await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI Progress Run ${Date.now()}` } });
+    expect(cycleResponse.ok(), await cycleResponse.text()).toBeTruthy();
+    const cycle = await cycleResponse.json();
     const cases: string[] = [];
     try {
       // One case per status, so every segment has to be painted and none can hide behind another.
       for (const label of ["pass", "fail", "block", "skip", "pending"]) {
-        const tc = await (
-          await api.post(`/api/projects/${ctx.projectId}/testcases`, {
-            data: { title: `UI Progress ${label} ${Date.now()}` },
-          })
-        ).json();
+        const tc = await createApprovedTestcase(api, ctx.projectId, { title: `UI Progress ${label} ${Date.now()}` });
         cases.push(tc.id);
       }
-      await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: cases } });
-      const executions = await (await api.get(`/api/cycles/${cycle.id}/executions`)).json();
+      const attached = await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: cases } });
+      expect(attached.ok(), await attached.text()).toBeTruthy();
+      const executionResponse = await api.get(`/api/cycles/${cycle.id}/executions`);
+      expect(executionResponse.ok(), await executionResponse.text()).toBeTruthy();
+      const executions = await executionResponse.json();
+      expect(executions).toHaveLength(cases.length);
       const statuses = ["Passed", "Failed", "Blocked", "Skipped"];
       for (let i = 0; i < statuses.length; i++) {
-        await api.patch(`/api/cycles/${cycle.id}/executions/${executions[i].id}`, { data: { status: statuses[i] } });
+        const updated = await api.patch(`/api/cycles/${cycle.id}/executions/${executions[i].id}`, { data: { status: statuses[i] } });
+        expect(updated.ok(), await updated.text()).toBeTruthy();
       }
 
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}`);
-      await expect(page.getByText("Progress", { exact: true })).toBeVisible();
+      await expect(page.getByText("Execution Progress", { exact: true })).toBeVisible();
 
       const segments = page.locator("div.flex.h-2 > div");
       await expect(segments, "one segment per status present in the run").toHaveCount(5);
@@ -1623,7 +1652,7 @@ test.describe("run detail — progress, defects and the bug modal", () => {
     }
   });
 
-  test("EXE-U-31 Bug Key/Bug Title fields appear only when the case is Failed AND a bug is actually linked", { tag: '@tesbo.testId("TES-TC-1335")' }, async ({ page }) => {
+  test("EXE-U-31 authorized Bug Key/Bug Title associations remain visible for every execution result", { tag: '@tesbo.testId("TES-TC-1335")' }, async ({ page }) => {
     const { cycle, testcase } = await setUpCycleWithOneCase(`UI Defect Visibility ${Date.now()}`);
     // Driven from the full-page execute screen rather than the run's side panel: the panel opens
     // from a row interaction this file has no established pattern for, and the same rule governs
@@ -1636,7 +1665,7 @@ test.describe("run detail — progress, defects and the bug modal", () => {
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}/execute/${execution.id}`);
       await expect(page.getByText(testcase.title).first()).toBeVisible();
 
-      // Opens on Untested: a bug reference would be meaningless, so the fields are not offered.
+      // There is no association yet, so no bug detail is invented from the status alone.
       await expect(page.getByText("Bug Key")).toBeHidden();
 
       // Marking Failed changes only the execution's status. It must not, on its own, imply a bug
@@ -1665,11 +1694,17 @@ test.describe("run detail — progress, defects and the bug modal", () => {
       await expect(page.getByText("Bug Key")).toBeVisible();
       await expect(page.getByText("Bug Title")).toBeVisible();
 
-      // A bug linked while the case was Failed must not keep showing once the case moves to any
-      // other status — the fields are Failed-only, not "ever had a bug" only.
-      await page.getByRole("button", { name: "Passed", exact: true }).first().click();
-      await expect(page.getByText("Bug Key")).toBeHidden();
-      await expect(page.getByText("Bug Title")).toBeHidden();
+      const observed = await (await api.get(`/api/cycles/${cycle.id}/executions`)).json();
+      expect(observed.find((row: { id: string }) => row.id === execution.id).status).toBe("Untested");
+      // Only explicit result requests change the outcome. The accepted relationship remains
+      // visible after each persisted result, including Passed and an incidental finding.
+      for (const status of ["Passed", "Blocked", "Skipped", "Failed"]) {
+        const saved = await api.patch(`/api/cycles/${cycle.id}/executions/${execution.id}`, { data: { status } });
+        expect(saved.ok(), await saved.text()).toBe(true);
+        await page.reload();
+        await expect(page.getByLabel("Bug Key", { exact: true })).toHaveValue("PROJ-4471");
+        await expect(page.getByLabel("Bug Title", { exact: true })).toHaveValue(bugTitle);
+      }
     } finally {
       if (bugId) await api.delete(`/api/bugs/${bugId}`, { failOnStatusCode: false });
       await api.dispose();
@@ -1775,21 +1810,23 @@ test.describe("run detail — progress, defects and the bug modal", () => {
     let bugId = "";
     const testcaseIds: string[] = [];
     try {
-      const cycle = await (
-        await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI Bug Race Cycle ${stamp}` } })
-      ).json();
+      const cycleResponse = await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI Bug Race Cycle ${stamp}` } });
+      expect(cycleResponse.ok(), await cycleResponse.text()).toBeTruthy();
+      const cycle = await cycleResponse.json();
       cycleId = cycle.id;
-      const testcaseA = await (
-        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI Bug Race A ${stamp}` } })
-      ).json();
-      const testcaseB = await (
-        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI Bug Race B ${stamp}` } })
-      ).json();
+      const testcaseA = await createApprovedTestcase(api, ctx.projectId, { title: `UI Bug Race A ${stamp}` });
+      const testcaseB = await createApprovedTestcase(api, ctx.projectId, { title: `UI Bug Race B ${stamp}` });
       testcaseIds.push(testcaseA.id, testcaseB.id);
-      await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcaseA.id, testcaseB.id] } });
-      await api.patch(`/api/cycles/${cycle.id}`, { data: { status: "In Progress" } });
-      const executions = await (await api.get(`/api/cycles/${cycle.id}/executions`)).json();
+      const attached = await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcaseA.id, testcaseB.id] } });
+      expect(attached.ok(), await attached.text()).toBeTruthy();
+      const started = await api.patch(`/api/cycles/${cycle.id}`, { data: { status: "In Progress" } });
+      expect(started.ok(), await started.text()).toBeTruthy();
+      const executionResponse = await api.get(`/api/cycles/${cycle.id}/executions`);
+      expect(executionResponse.ok(), await executionResponse.text()).toBeTruthy();
+      const executions = await executionResponse.json();
+      expect(executions).toHaveLength(2);
       const execA = executions.find((e: { testcaseId: string }) => e.testcaseId === testcaseA.id);
+      expect(execA).toBeTruthy();
 
       const bugTitle = `E2E Bug Race ${stamp}`;
       const bug = await (
@@ -1806,7 +1843,8 @@ test.describe("run detail — progress, defects and the bug modal", () => {
       bugId = bug.id;
       // The panel gates Bug Key/Title on Failed too, so A must actually be Failed for this test to
       // exercise the same code path a real "wrong bug leaked through" report would hit.
-      await api.patch(`/api/cycles/${cycle.id}/executions/${execA.id}`, { data: { status: "Failed" } });
+      const failed = await api.patch(`/api/cycles/${cycle.id}/executions/${execA.id}`, { data: { status: "Failed" } });
+      expect(failed.ok(), await failed.text()).toBeTruthy();
 
       // Delay only the GET fetch scoped to test case A, so its response can land after the panel
       // has already moved on to test case B — the exact ordering that used to leak A's bug onto B.
@@ -1876,7 +1914,7 @@ test.describe("run detail — progress, defects and the bug modal", () => {
       await page.getByText(testcase.title).first().click();
       await expect(page.getByRole("heading", { name: testcase.title })).toBeVisible();
 
-      await page.getByRole("button", { name: "Failed", exact: true }).first().click();
+      await page.getByRole("group", { name: "Execution status" }).getByRole("button", { name: "Failed", exact: true }).click();
       await page.getByRole("button", { name: "Save", exact: true }).click();
 
       // Marking Failed and saving auto-opens the bug dialog; the drawer closes behind it.
@@ -1884,10 +1922,12 @@ test.describe("run detail — progress, defects and the bug modal", () => {
       await page.getByRole("button", { name: "Yes, link existing" }).click();
       await page.getByRole("button", { name: "Existing Tesbo bug" }).click();
       await page.getByRole("button", { name: "Choose an existing bug…" }).click();
-      await expect(page.getByRole("heading", { name: "Link an existing bug" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Link existing bugs", exact: true })).toBeVisible();
       await page.getByPlaceholder("Search bugs by title…").fill(existingBugTitle);
-      await page.getByText(existingBugTitle, { exact: true }).click();
-      await page.getByRole("button", { name: "Link Bug" }).click();
+      const picker = page.getByTestId("existing-bug-picker");
+      await picker.getByText(existingBugTitle, { exact: true }).click();
+      await picker.getByRole("button", { name: "Add Selected (1)", exact: true }).click();
+      await page.getByRole("button", { name: "Link Bug", exact: true }).click();
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeHidden();
 
       // The panel must reopen automatically, for this same test case, with the real linked bug's
@@ -1905,29 +1945,27 @@ test.describe("run detail — progress, defects and the bug modal", () => {
   });
 
   /*
-   * Regression: clicking the local "Failed" status button and then the "Log bug" footer button
-   * directly — without an intervening Save — used to reopen the panel showing "Untested" and no
-   * Bug Key/Title. openBugDialogFor(panelExecution) (the footer button's call) snapshots whatever
-   * panelExecution.status currently is, which is still the last-*saved* status, not the locally
-   * toggled one; onLogged then trusted that stale snapshot when reopening the panel. Since a
-   * successful "Log bug"/"Link Bug" always forces the execution to Failed server-side regardless
-   * (failLinkedExecutions), the fix reopens with status forced to "Failed" rather than trusting the
-   * snapshot, so the case doesn't visibly revert to Untested and the fields it just fetched stay
-   * visible instead of being hidden by the (now-wrong) status.
+   * A local result choice is not a saved observation. A standalone Log bug action preserves the
+   * actual execution and reloads it after linking, while showing the association at that result.
    */
-  test("EXE-U-31f clicking Log bug without Save first still ends up Failed with the bug visible, not Untested", async ({ page }) => {
+  test("EXE-U-31f Log bug without Save preserves the recorded result and shows the association", async ({ page }) => {
     const { cycle, testcase } = await setUpCycleWithOneCase(`UI Log Bug No Save ${Date.now()}`);
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
     try {
+      const [execution] = await (await api.get(`/api/cycles/${cycle.id}/executions`)).json();
+      const evidence = () => scalar(`SELECT jsonb_build_object('execution',to_jsonb(e),'snapshot',to_jsonb(ci))::text
+        FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id
+        WHERE e.id=${literal(execution.id)} AND ci.cycle_id=${literal(cycle.id)};`);
+      const before = evidence();
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}`);
       await page.getByText(testcase.title).first().click();
       await expect(page.getByRole("heading", { name: testcase.title })).toBeVisible();
 
-      // Toggle the local status button but never click Save, then go straight to Log bug — the
-      // natural thing to do, since the whole point of marking a case Failed is to report the bug
-      // it caused.
-      await page.getByRole("button", { name: "Failed", exact: true }).click();
-      await page.getByRole("button", { name: "Log bug" }).click();
+      // Choose a local value without submitting the explicit result writer, then report a finding.
+      await page.getByRole("group", { name: "Execution status" }).getByRole("button", { name: "Failed", exact: true }).click();
+      // The drawer's own action: the row has an icon with the same title, and the case title
+      // contains "Log bug" as text, so a bare role/name locator is ambiguous.
+      await page.getByTestId("panel-log-bug").click();
 
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeVisible();
       const bugTitle = `E2E No-Save Log Bug ${Date.now()}`;
@@ -1935,13 +1973,15 @@ test.describe("run detail — progress, defects and the bug modal", () => {
       await page.getByRole("button", { name: "Report Bug", exact: true }).click();
       await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeHidden();
 
-      // The panel must reopen on this same test case, as Failed, with the bug it just filed —
-      // immediately, not reverted to Untested with the fields hidden.
+      // The panel shows the accepted link while the full persisted observation remains intact.
       await expect(page.getByRole("heading", { name: testcase.title })).toBeVisible();
       const bugKeyInput = page.getByLabel("Bug Key");
       const bugTitleInput = page.getByLabel("Bug Title");
       await expect(bugTitleInput).toHaveValue(bugTitle, { timeout: 20_000 });
       await expect(bugKeyInput).toBeVisible();
+      expect(evidence()).toBe(before);
+      const current = await (await api.get(`/api/cycles/${cycle.id}/executions`)).json();
+      expect(current.find((row: { id: string }) => row.id === execution.id).status).toBe("Untested");
     } finally {
       const bugsRes = await api.get(`/api/projects/${ctx.projectId}/bugs`);
       const bugs = await bugsRes.json();
@@ -1963,7 +2003,7 @@ test.describe("run detail — progress, defects and the bug modal", () => {
 
       // The inline status control is a <select>, and marking Failed is what opens this modal — the
       // same pattern the passing tests at the top of this file use.
-      await page.getByRole("combobox").first().selectOption("Failed");
+      await executionStatus(page, testcase.title).selectOption("Failed");
 
       await expect(page.getByText("Report a Bug", { exact: true })).toBeVisible();
       await expect(page.getByLabel("Severity")).toBeVisible();
@@ -1994,7 +2034,7 @@ test.describe("run detail — progress, defects and the bug modal", () => {
     try {
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}`);
       await expect(page.getByText(testcase.title).first()).toBeVisible();
-      await page.getByRole("combobox").first().selectOption("Failed");
+      await executionStatus(page, testcase.title).selectOption("Failed");
       await expect(page.getByText("Report a Bug", { exact: true })).toBeVisible();
 
       const assign = page.getByLabel("Assign to");
@@ -2022,7 +2062,7 @@ test.describe("run detail — progress, defects and the bug modal", () => {
 
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}`);
       await expect(page.getByText(testcase.title).first()).toBeVisible();
-      await page.getByRole("combobox").first().selectOption("Failed");
+      await executionStatus(page, testcase.title).selectOption("Failed");
       await expect(page.getByText("Report a Bug", { exact: true })).toBeVisible();
 
       await page.getByLabel("Assign to").selectOption(me.userId);
@@ -2047,10 +2087,17 @@ test.describe("run detail — progress, defects and the bug modal", () => {
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
     try {
       const me = await (await api.get("/api/auth/me")).json();
-      const [execution] = await (await api.get(`/api/cycles/${cycle.id}/executions`)).json();
+      const beforeResponse = await api.get(`/api/cycles/${cycle.id}/executions`);
+      expect(beforeResponse.ok(), await beforeResponse.text()).toBeTruthy();
+      const before = await beforeResponse.json();
+      expect(before).toHaveLength(1);
+      const [execution] = before;
 
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}/execute/${execution.id}`);
       await page.getByRole("button", { name: "Failed", exact: true }).first().click();
+      // A local status choice is unsaved. The baseline page's explicit Log bug action owns
+      // opening this modal; linking a finding must preserve the recorded execution result.
+      await page.getByRole("button", { name: "Log bug", exact: true }).click();
       await expect(page.getByText("Report a Bug", { exact: true })).toBeVisible();
 
       await page.getByLabel("Assign to").selectOption(me.userId);
@@ -2063,6 +2110,12 @@ test.describe("run detail — progress, defects and the bug modal", () => {
       );
       expect(created, "the bug filed from this run must be findable via its link back to the testcase").toBeTruthy();
       expect(created.assigneeId).toBe(me.userId);
+      expect(created.links).toEqual(expect.arrayContaining([
+        expect.objectContaining({ testcaseId: testcase.id, cycleId: cycle.id, executionId: execution.id }),
+      ]));
+      const afterResponse = await api.get(`/api/cycles/${cycle.id}/executions`);
+      expect(afterResponse.ok(), await afterResponse.text()).toBeTruthy();
+      expect(await afterResponse.json()).toEqual(before);
     } finally {
       await api.dispose();
       await cleanUp(cycle.id, testcase.id);
@@ -2082,59 +2135,120 @@ test.describe("run detail — progress, defects and the bug modal", () => {
  */
 test.describe("execution evidence and automation provenance", () => {
   /** Drives the automation ingest to produce a real automated run with a failure and evidence. */
-  async function seedAutomatedRun(label: string) {
+  async function seedAutomatedRun(label: string, status = "fail") {
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
     try {
-      const testcase = await (
-        await api.post(`/api/projects/${ctx.projectId}/testcases`, {
-          data: { title: `UI Automation ${label} ${Date.now()}` },
-        })
-      ).json();
+      const testcase = await createApprovedTestcase(api, ctx.projectId, { title: `UI Automation ${label} ${Date.now()}` });
 
       const base = `/api/projects/${ctx.projectId}/automation`;
-      const run = await (
-        await api.post(`${base}/runs`, {
-          data: {
-            name: `UI Automation Run ${label} ${Date.now()}`,
-            triggeredBy: "github-actions",
-            branch: "release/ui-evidence",
-            commitSha: "abc1234def5678",
-            buildUrl: "https://github.com/acme/web/actions/runs/99",
-            caseIds: [testcase.externalId],
-          },
-        })
-      ).json();
+      const created = await api.post(`${base}/runs`, {
+        data: {
+          name: `UI Automation Run ${label} ${Date.now()}`,
+          triggeredBy: "github-actions",
+          branch: "release/ui-evidence",
+          commitSha: "abc1234def5678",
+          buildUrl: "https://github.com/acme/web/actions/runs/99",
+          caseIds: [testcase.externalId],
+        },
+      });
+      expect(created.ok(), await created.text()).toBeTruthy();
+      const run = await created.json();
+      expect(run.runId).toMatch(/^[0-9a-f-]{36}$/);
 
-      await api.post(`${base}/runs/${run.runId}/results`, {
+      const result = await api.post(`${base}/runs/${run.runId}/results`, {
         data: {
           caseId: testcase.externalId,
-          status: "fail",
+          status,
           durationMs: 2500,
           retryCount: 2,
           errorMessage: "AssertionError: expected the cart to be empty",
         },
       });
+      expect(result.ok(), await result.text()).toBeTruthy();
 
       // A 1x1 PNG, so the viewer has a real image to render.
       const png = Buffer.from(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==",
         "base64",
       );
-      await api.post(`${base}/runs/${run.runId}/results/${testcase.externalId}/evidence`, {
+      const screenshot = await api.post(`${base}/runs/${run.runId}/results/${testcase.externalId}/evidence`, {
         multipart: {
           kind: "screenshot",
           files: { name: "cart-failure.png", mimeType: "image/png", buffer: png },
         },
       });
-      await api.post(`${base}/runs/${run.runId}/results/${testcase.externalId}/evidence`, {
+      expect(screenshot.ok(), await screenshot.text()).toBeTruthy();
+      const trace = await api.post(`${base}/runs/${run.runId}/results/${testcase.externalId}/evidence`, {
         multipart: {
           kind: "trace",
           files: { name: "cart-trace.zip", mimeType: "application/zip", buffer: Buffer.from("PKtrace") },
         },
       });
+      expect(trace.ok(), await trace.text()).toBeTruthy();
       return { runId: run.runId as string, testcase };
     } finally {
       await api.dispose();
+    }
+  }
+
+  for (const surface of ["drawer", "full page"]) {
+    for (const mode of ["new", "existing"]) {
+      test(`a finalized Passed execution keeps its verdict and shows a ${mode} bug in the ${surface}`, async ({ page }) => {
+        const { runId, testcase } = await seedAutomatedRun(`sealed-${mode}`, "pass");
+        const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+        let existingBugId = "";
+        try {
+          const close = await api.patch(`/api/projects/${ctx.projectId}/automation/runs/${runId}/close`, {
+            data: { status: "completed" }
+          });
+          expect(close.ok(), await close.text()).toBeTruthy();
+          const before = await (await api.get(`/api/cycles/${runId}/executions`)).json();
+          const execution = (before.list ?? before)[0];
+          expect(execution.status).toBe("Passed");
+          const bugTitle = `E2E Sealed UI Bug ${mode} ${Date.now()}`;
+          if (mode === "existing") {
+            const response = await api.post(`/api/projects/${ctx.projectId}/bugs`, { data: { title: bugTitle } });
+            expect(response.ok(), await response.text()).toBeTruthy();
+            existingBugId = (await response.json()).id;
+          }
+
+          const url = `/projects/${ctx.projectId}/cycles/${runId}`;
+          await page.goto(surface === "drawer" ? url : `${url}/execute/${execution.id}`);
+          if (surface === "drawer") await page.getByRole("button", { name: testcase.title, exact: true }).click();
+          await page.getByRole("button", { name: "Log bug", exact: true }).filter({ hasText: /^Log bug$/ }).click();
+          await expect(page.getByText("Test case marked as Failed", { exact: true })).toHaveCount(0);
+          if (mode === "new") {
+            await page.getByPlaceholder("Brief summary of the bug…").fill(bugTitle);
+            await page.getByRole("button", { name: "Report Bug", exact: true }).click();
+          } else {
+            await page.getByRole("button", { name: "Yes, link existing" }).click();
+            await page.getByRole("button", { name: "Existing Tesbo bug", exact: true }).click();
+            await page.getByRole("button", { name: "Choose an existing bug…" }).click();
+            const picker = page.getByTestId("existing-bug-picker");
+            await picker.getByPlaceholder("Search bugs by title…").fill(bugTitle);
+            await picker.getByText(bugTitle, { exact: true }).click();
+            await picker.getByRole("button", { name: "Add Selected (1)", exact: true }).click();
+            await page.getByRole("button", { name: "Link Bug", exact: true }).click();
+          }
+          await expect(page.getByRole("heading", { name: "Report a Bug" })).toBeHidden();
+          await expect(page.getByLabel("Bug Title", { exact: true })).toBeVisible();
+          await expect(page.getByLabel("Bug Key", { exact: true })).toBeVisible();
+          await expect(page.getByLabel("Bug Title", { exact: true })).toHaveValue(bugTitle);
+          // An active Passed status button proves the local state was not forced to Failed.
+          await expect(page.getByRole("button", { name: "Passed", exact: true })).toHaveClass(/bg-\[var\(--success\)\]/);
+          expect(await (await api.get(`/api/cycles/${runId}/executions`)).json()).toEqual(before);
+          await page.reload();
+          if (surface === "drawer") await page.getByRole("button", { name: testcase.title, exact: true }).click();
+          await expect(page.getByLabel("Bug Title", { exact: true })).toBeVisible();
+          await expect(page.getByLabel("Bug Key", { exact: true })).toBeVisible();
+          await expect(page.getByLabel("Bug Title", { exact: true })).toHaveValue(bugTitle);
+          await expect(page.getByRole("button", { name: "Passed", exact: true })).toHaveClass(/bg-\[var\(--success\)\]/);
+        } finally {
+          if (existingBugId) await api.delete(`/api/bugs/${existingBugId}`, { failOnStatusCode: false });
+          await api.dispose();
+          await cleanUp(runId, testcase.id);
+        }
+      });
     }
   }
 
@@ -2163,7 +2277,7 @@ test.describe("execution evidence and automation provenance", () => {
       await expect(page.getByText("2 retries")).toBeVisible();
 
       // Evidence, grouped by kind: the screenshot renders inline, the trace gets its own viewer.
-      await expect(page.getByText("Evidence")).toBeVisible();
+      await expect(page.getByText("Evidence(2)", { exact: true })).toBeVisible();
       await expect(page.getByRole("img", { name: "cart-failure.png" })).toBeVisible();
       await expect(page.getByText("cart-trace.zip")).toBeVisible();
 
@@ -2224,7 +2338,7 @@ test.describe("execution evidence and automation provenance", () => {
 
       // And it settled showing the evidence, not the spinner.
       await expect(page.getByText("Loading evidence…")).toHaveCount(0);
-      await expect(page.getByText("Evidence")).toBeVisible();
+      await expect(page.getByText("Evidence(2)", { exact: true })).toBeVisible();
     } finally {
       await cleanUp(runId, testcase.id);
     }
@@ -2418,7 +2532,7 @@ test.describe("execution evidence and automation provenance", () => {
       await expect(page.getByText("Failure reported by automation")).toHaveCount(0);
       // The evidence panel itself is always present -- a person can attach evidence to a manual
       // result too, which they previously could not do anywhere in the UI.
-      await expect(page.getByText("Evidence")).toBeVisible();
+      await expect(page.getByText("Evidence", { exact: true })).toBeVisible();
       await expect(page.getByText(/No evidence attached/)).toBeVisible();
     } finally {
       await cleanUp(cycle.id, testcase.id);
@@ -2434,12 +2548,10 @@ test.describe("run header actions on an empty run", () => {
   test("Start Execution and Mark Completed stay disabled until the run has a case", { tag: '@tesbo.testId("TES-TC-EMPTYRUN-UI-1")' }, async ({ page }) => {
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
     const stamp = Date.now();
-    const cycle = await (
-      await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI Empty Run Buttons ${stamp}` } })
-    ).json();
-    const testcase = await (
-      await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI Empty Run Case ${stamp}` } })
-    ).json();
+    const cycleResponse = await api.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `UI Empty Run Buttons ${stamp}` } });
+    expect(cycleResponse.ok(), await cycleResponse.text()).toBeTruthy();
+    const cycle = await cycleResponse.json();
+    const testcase = await createApprovedTestcase(api, ctx.projectId, { title: `UI Empty Run Case ${stamp}` });
     try {
       await page.goto(`/projects/${ctx.projectId}/cycles/${cycle.id}`);
       const start = page.getByRole("button", { name: "Start Execution" });
@@ -2448,7 +2560,8 @@ test.describe("run header actions on an empty run", () => {
       // The run itself must not have moved.
       expect((await (await api.get(`/api/cycles/${cycle.id}`)).json()).status).toBe("Planning");
 
-      await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
+      const attached = await api.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
+      expect(attached.ok(), await attached.text()).toBeTruthy();
       await page.reload();
       await expect(start).toBeEnabled();
       await start.click();

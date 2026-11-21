@@ -1,0 +1,22 @@
+{
+  "verifier": "tesbo-native-review-trace/1.0",
+  "mode": "declared trace/input integrity only",
+  "source": "9519b56d3441dfec3a107db95ca602665454f407",
+  "tree": "31b5e09247237c29ef3d215ab60147c7e4f13ba7",
+  "profile_sha256": "cfdaa6f32ec9e22ad7210c9baa1c645689953fca8ce2eeb178bd3f451613f39a",
+  "script_sha256": "e3116e8b77350d3a3670a9a5bb4e9f36778ffd30714c4d0872ea39b23b9ce9ed",
+  "contracts": 11,
+  "source_files": 40,
+  "canonical_files": 8,
+  "errors": [],
+  "negative_controls": {
+    "removed_declared_contract": true,
+    "wrong_source_hash": true,
+    "undefined_canonical_reference": true,
+    "missing_consumer_edge": true
+  },
+  "semantic_verified": false,
+  "runtime_verified": false,
+  "full_scope_coverage_verified": false,
+  "graph_verifier": false
+}

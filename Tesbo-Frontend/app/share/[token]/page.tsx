@@ -5,7 +5,7 @@ import { useEffect, useState, useMemo } from "react";
 import {
   getPublicSharedRun,
   getPublicSharedExecutions,
-  type TestRunDetail,
+  type PublicSharedRun,
   type ExecutionItem,
 } from "@/lib/api";
 import { BrandLogo } from "@/components/BrandLogo";
@@ -140,7 +140,7 @@ export default function PublicSharedRunPage() {
   const params = useParams();
   const token = params.token as string;
 
-  const [run, setRun] = useState<TestRunDetail | null>(null);
+  const [run, setRun] = useState<PublicSharedRun | null>(null);
   const [executions, setExecutions] = useState<ExecutionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

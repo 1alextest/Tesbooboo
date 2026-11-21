@@ -212,12 +212,29 @@ Then tag each test with the case it validates:
  *   written, chmodded and reported as a success — and the reporter still sees nothing. That is the
  *   same silent-success failure this SDK exists to refuse, so it is stated before the offer.
  */
+/** Reads a file, treating absence as an expected answer rather than a failure. */
+function readIfPresent(filePath: string): string | null {
+  try {
+    return fs.readFileSync(filePath, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+/** Whether any line assigns `name` (leading whitespace allowed, CRLF tolerated). */
+function hasEnvAssignment(text: string, name: string): boolean {
+  return text.split("\n").some((line) => line.trimStart().startsWith(`${name}=`));
+}
+
 async function maybeWriteEnv(asker: Asker, config: ResolvedTesboConfig): Promise<void> {
   const envPath = path.resolve(process.cwd(), ".env");
-  const exists = fs.existsSync(envPath);
-  const current = exists ? fs.readFileSync(envPath, "utf-8") : "";
+  // Read once instead of exists-then-read: the token check and the append must not disagree, and a
+  // file that appears between the two calls would otherwise be overwritten rather than appended to.
+  const existing = readIfPresent(envPath);
+  const exists = existing !== null;
+  const current = existing ?? "";
 
-  if (new RegExp(`^\s*${ENV_TOKEN}=`, "m").test(current)) {
+  if (hasEnvAssignment(current, ENV_TOKEN)) {
     console.log(`\n${ENV_TOKEN} is already set in ${envPath} — leaving it alone.`);
     return;
   }
@@ -236,7 +253,8 @@ async function maybeWriteEnv(asker: Asker, config: ResolvedTesboConfig): Promise
   }
 
   const ignore = path.resolve(process.cwd(), ".gitignore");
-  const ignored = fs.existsSync(ignore) && /^\s*\.env\s*$/m.test(fs.readFileSync(ignore, "utf-8"));
+  const ignoreRules = readIfPresent(ignore);
+  const ignored = ignoreRules !== null && ignoreRules.split("\n").some((line) => line.trim() === ".env");
   if (!ignored) {
     console.warn(`\n  WARNING: .env is not in .gitignore. A committed token is a leaked token.`);
     if (!(await asker.confirm("  Write it anyway?"))) {
@@ -262,12 +280,22 @@ async function maybeWriteEnv(asker: Asker, config: ResolvedTesboConfig): Promise
  * whitespace *is* accepted, because git strips it. `\r` too, for a CRLF checkout.
  */
 export function configFileIsGitIgnored(cwd: string = process.cwd()): boolean {
+  let text: string;
   try {
-    const text = fs.readFileSync(path.resolve(cwd, ".gitignore"), "utf-8");
-    return new RegExp(`^/?${CONFIG_FILENAME.replace(/\./g, "\\.")}[ \t\r]*$`, "m").test(text);
+    text = fs.readFileSync(path.resolve(cwd, ".gitignore"), "utf-8");
   } catch {
     return false;
   }
+  // Compared line by line rather than interpolating the filename into a regular expression: the
+  // escaping was partial (only ".", not the rest of the RegExp metacharacters), and exact comparison
+  // is what the rule actually means. Trailing whitespace and CR are stripped, because git strips
+  // them; leading whitespace is significant to git and is left alone.
+  return text.split("\n").some((line) => {
+    let end = line.length;
+    while (end > 0 && (line[end - 1] === " " || line[end - 1] === "\t" || line[end - 1] === "\r")) end -= 1;
+    const candidate = line.slice(0, end);
+    return candidate === CONFIG_FILENAME || candidate === `/${CONFIG_FILENAME}`;
+  });
 }
 
 /**

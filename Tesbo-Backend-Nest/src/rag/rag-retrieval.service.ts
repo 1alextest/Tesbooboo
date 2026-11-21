@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
+import { knowledgeDocumentAiContextSql } from "../legacy/knowledge-document-revision";
 import { tracedEmbeddingCall } from "../observability/embedding-trace";
 import { EmbeddingKeyAllocation, embedTexts, resolveEmbeddingAllocation } from "./rag-ai-allocation";
 import { RagChunkingService } from "./rag-chunking.service";
@@ -272,7 +273,7 @@ export class RagRetrievalService {
               1 - (c.embedding <=> $2::vector) AS cosine_similarity
        FROM knowledge_document_chunks c
        LEFT JOIN knowledge_documents d ON c.source_type = 'document' AND d.id = c.source_id
-         AND d.is_deleted = false AND (d.document_type != 'ai_memory' OR d.status = 'approved')
+         AND d.project_id = c.project_id AND d.is_deleted = false AND ${knowledgeDocumentAiContextSql("d", "c.content_hash")}
        LEFT JOIN knowledge_files f ON c.source_type = 'file' AND f.id = c.source_id AND f.is_deleted = false
        WHERE c.project_id = $1 AND (d.id IS NOT NULL OR f.id IS NOT NULL)
        ORDER BY c.embedding <=> $2::vector
@@ -318,7 +319,7 @@ export class RagRetrievalService {
 
   private async ftsSearch(projectId: string, table: "knowledge_documents" | "knowledge_files", contentColumn: string, keyword: KeywordQuery): Promise<FtsRow[]> {
     const titleColumn = table === "knowledge_documents" ? "title" : "original_file_name";
-    const approvalFilter = table === "knowledge_documents" ? "AND (document_type != 'ai_memory' OR status = 'approved')" : "";
+    const approvalFilter = table === "knowledge_documents" ? `AND ${knowledgeDocumentAiContextSql()}` : "";
     const sourceType: RagSourceType = table === "knowledge_documents" ? "document" : "file";
     // Any-term match (served by the GIN index), then a coverage floor so one shared common word
     // isn't enough, then ranked — ts_rank on an OR query rewards documents matching more terms.

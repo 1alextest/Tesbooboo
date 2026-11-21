@@ -1,5 +1,6 @@
 import type { APIRequestContext } from "@playwright/test";
 import { exec, literal, scalar } from "./psql";
+import { createTestcaseFixtureResponse } from "./testcase-approval";
 
 /*
  * Bulk fixture builders for the aggregate-reporting suites (Wave 0, item 2).
@@ -87,7 +88,7 @@ export async function seedTestCase(
   projectId: string,
   opts: SeedCaseOptions,
 ): Promise<SeededCase> {
-  const res = await api.post(`/api/projects/${projectId}/testcases`, {
+  const res = await createTestcaseFixtureResponse(api, `/api/projects/${projectId}/testcases`, {
     data: {
       title: opts.title,
       suiteId: opts.suiteId ?? null,

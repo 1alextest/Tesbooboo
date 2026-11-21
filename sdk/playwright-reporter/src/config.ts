@@ -14,6 +14,18 @@
 /** The three values, as a caller may pass them inline. Each falls back to its env var. */
 import { CONFIG_FILENAME, NO_FILE_CONFIG, type FileConfig } from "./file-config";
 
+/**
+ * Removes trailing slashes from a pasted base URL.
+ *
+ * A `/+$/` regular expression is quadratic on a long run of slashes, and this value is pasted by a
+ * user (or read from config), so a single backward scan is both simpler and bounded.
+ */
+export function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
+}
+
 export interface TesboConfigInput {
   projectId?: string;
   token?: string;
@@ -81,7 +93,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  */
 export function normalizeBaseUrl(raw: string): BaseUrlNormalization {
   const notes: string[] = [];
-  const trimmed = raw.trim().replace(/\/+$/, "");
+  const trimmed = stripTrailingSlashes(raw.trim());
   if (!trimmed) return { origin: null, notes, error: "is empty" };
 
   if (!/^https?:\/\//i.test(trimmed)) {

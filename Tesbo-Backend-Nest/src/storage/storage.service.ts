@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import * as fs from "fs";
 import * as path from "path";
@@ -35,8 +35,32 @@ export class StorageService {
     return this.s3 !== null;
   }
 
+  /**
+   * Resolves a storage key to a local path, refusing anything that escapes the upload directory.
+   *
+   * Keys are generated server-side today (project/entity UUIDs plus a random name), but this is the
+   * single place a key becomes a filesystem path for every read, write and delete. Confining it here
+   * means a future key-building mistake — or a key read back from a corrupted row — cannot read,
+   * overwrite or unlink a file outside `UPLOAD_DIR`.
+   */
   private localPath(key: string): string {
-    return path.resolve(this.config.uploadDir, key);
+    // Keys are generated here from project/entity UUIDs and a sanitized extension. This allowlist
+    // states that contract at the boundary — letters, digits, slash, underscore, hyphen and one
+    // dot before the suffix — so a key carrying anything else (a traversal segment, a drive
+    // letter, a NUL) is refused before any path is built.
+    if (!/^[A-Za-z0-9/_-]+(?:\.[a-z0-9]{1,10})?$/.test(key)) {
+      throw new Error("Storage key contains unsupported characters");
+    }
+    // The root keeps its trailing separator and the resolved candidate is checked with a single
+    // startsWith against it — the containment check the static analysis models (resolved path,
+    // compared against a root), and one that also rejects a sibling directory whose name merely
+    // begins with the same text.
+    const root = path.resolve(this.config.uploadDir) + path.sep;
+    const full = path.resolve(root, key);
+    if (!full.startsWith(root)) {
+      throw new Error("Storage key escapes the upload directory");
+    }
+    return full;
   }
 
   // Applies the optional S3_BUCKET_FOLDER prefix (e.g. "local", "staging") so multiple
@@ -59,12 +83,45 @@ export class StorageService {
     }
     const fullPath = this.localPath(key);
     await fs.promises.mkdir(path.dirname(fullPath), { recursive: true });
-    await fs.promises.writeFile(fullPath, body);
+    // One handle for the write, closed in a finally: a failed write cannot leak it, and the path is
+    // the already-validated one (allowlisted key, confined under UPLOAD_DIR).
+    const handle = await fs.promises.open(fullPath, "w");
+    try {
+      await handle.writeFile(body);
+    } finally {
+      await handle.close();
+    }
   }
 
   async exists(key: string): Promise<boolean> {
     if (this.s3) return true; // checked lazily via the signed URL request itself
     return fs.existsSync(this.localPath(key));
+  }
+
+  /**
+   * Actually reads the object's size, unlike exists()'s lazy S3 answer. Local storage stats the
+   * file; S3 issues a HEAD. `expectedBytes` (the metadata row's file_size, when present) is
+   * compared so a truncated/partial object is not reported as intact.
+   *
+   * Failure is reported, not thrown: a missing object is the answer this method exists to expose.
+   */
+  async verify(key: string, expectedBytes?: number | null): Promise<{ available: boolean; bytes: number | null; byteMismatch: boolean }> {
+    try {
+      let bytes: number | null = null;
+      if (this.s3) {
+        const res = await this.s3.send(new HeadObjectCommand({ Bucket: this.config.s3Bucket, Key: this.prefixedKey(key) }));
+        bytes = typeof res.ContentLength === "number" ? res.ContentLength : null;
+      } else {
+        bytes = (await fs.promises.stat(this.localPath(key))).size;
+      }
+      return {
+        available: true,
+        bytes,
+        byteMismatch: expectedBytes != null && bytes != null && Number(expectedBytes) !== bytes
+      };
+    } catch {
+      return { available: false, bytes: null, byteMismatch: false };
+    }
   }
 
   // Reads the full object into memory — used where the caller needs the raw bytes

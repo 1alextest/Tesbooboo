@@ -4,7 +4,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { Pool, PoolClient } from "pg";
 
-type MigrationFile = {
+export type MigrationFile = {
   version: number;
   name: string;
   filename: string;
@@ -23,7 +23,7 @@ function loadEnv() {
   }
 }
 
-function normalizeDatabaseUrl(raw: string): string {
+export function normalizeDatabaseUrl(raw: string): string {
   const value = raw.trim();
   if (value.startsWith("jdbc:postgresql://")) return value.slice("jdbc:".length);
   if (value.startsWith("jdbc:postgres://")) return value.slice("jdbc:".length);
@@ -34,7 +34,7 @@ function migrationsDir(): string {
   return process.env.MIGRATIONS_DIR ?? path.join(process.cwd(), "migrations");
 }
 
-function parseMigrationFilename(filename: string): { version: number; name: string } | null {
+export function parseMigrationFilename(filename: string): { version: number; name: string } | null {
   const match = /^V(\d+)_(.+)\.sql$/i.exec(filename);
   if (!match) return null;
   return { version: Number.parseInt(match[1], 10), name: match[2] };
@@ -113,7 +113,7 @@ function indexMigrations(migrations: MigrationFile[]) {
   };
 }
 
-async function validateAppliedChecksums(client: PoolClient, migrations: MigrationFile[]) {
+export async function validateAppliedChecksums(client: PoolClient, migrations: MigrationFile[]) {
   const applied = await client.query<{ version: number; filename: string; checksum: string }>(
     "SELECT version, filename, checksum FROM schema_migrations"
   );
@@ -145,7 +145,7 @@ async function validateAppliedChecksums(client: PoolClient, migrations: Migratio
   }
 }
 
-function pendingMigrations(
+export function pendingMigrations(
   migrations: MigrationFile[],
   applied: { version: number; filename: string; checksum: string }[]
 ) {
@@ -160,7 +160,7 @@ function pendingMigrations(
   );
 }
 
-async function applyMigration(client: PoolClient, migration: MigrationFile) {
+export async function applyMigration(client: PoolClient, migration: MigrationFile) {
   const sql = fs.readFileSync(migration.path, "utf8");
   const started = Date.now();
 
@@ -180,10 +180,27 @@ async function applyMigration(client: PoolClient, migration: MigrationFile) {
   }
 }
 
-async function main() {
+export function configuredDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const raw = env.DATABASE_URL;
+  if (!raw?.trim()) throw new Error("DATABASE_URL is required; the migrator never defaults to a local database.");
+  const normalized = normalizeDatabaseUrl(raw);
+  let parsed: URL;
+  try { parsed = new URL(normalized); } catch {
+    throw new Error("DATABASE_URL must explicitly specify a PostgreSQL scheme, host and database.");
+  }
+  if (!["postgres:", "postgresql:"].includes(parsed.protocol) || !parsed.hostname || !parsed.pathname || parsed.pathname === "/") {
+    throw new Error("DATABASE_URL must explicitly specify a PostgreSQL scheme, host and database.");
+  }
+  return normalized;
+}
+
+export async function main() {
   loadEnv();
+  // Configuration is validated BEFORE the migrations directory is read: a blank or incomplete
+  // DATABASE_URL must fail without touching the filesystem, so a misconfigured deploy never
+  // proceeds far enough to look like it was about to migrate the wrong database.
+  const databaseUrl = configuredDatabaseUrl();
   const migrations = readMigrations();
-  const databaseUrl = normalizeDatabaseUrl(process.env.DATABASE_URL ?? "postgresql://localhost:5432/tesbo");
   const pool = new Pool({
     connectionString: databaseUrl,
     user: process.env.DATABASE_USER || undefined,
@@ -220,7 +237,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
+}

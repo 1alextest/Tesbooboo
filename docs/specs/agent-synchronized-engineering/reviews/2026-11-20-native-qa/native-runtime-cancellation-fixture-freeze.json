@@ -1,0 +1,32 @@
+{
+  "task": "Native cancellation terminal-focus fixture status correction",
+  "sourceBaseHead": "cab1c6928b32f6f7b74b30dbf75879ef127628be",
+  "file": "/workspace/scratch/8e9074abd0d0/tesbo-qa-loop/e2e/ui/cycles.spec.ts",
+  "sha256": "c60b6ff759695ab7815759a3fb15d0f668bd152165fe86e8ba1e3eaacc3b447a",
+  "legacyPrefixSha256": "9b0842a74cfa35e543728ce1cdd40abeb69477536ccb73a5201218533ac43054",
+  "legacyPrefixUnchanged": true,
+  "exactDiff": "diff --git a/e2e/ui/cycles.spec.ts b/e2e/ui/cycles.spec.ts\nindex 37ca8765..db8164ac 100644\n--- a/e2e/ui/cycles.spec.ts\n+++ b/e2e/ui/cycles.spec.ts\n@@ -2312,7 +2312,7 @@ test.describe(\"native manual retest — reviewed selection and recovery\", () =>\n           const disposition = outcome === \"created\"\n             ? await api.post(`/api/cycles/${source.cycleId}/retests`, { data: original })\n             : await api.post(`/api/cycles/${source.cycleId}/retests/requests/${original.requestKey}/cancel`, { data: original });\n-          expect(disposition.status(), await disposition.text()).toBe(outcome === \"created\" ? 201 : 200);\n+          expect(disposition.status(), await disposition.text()).toBe(201);\n           const terminal = await disposition.json();\n           expect(terminal).toMatchObject({ outcome, sourceCycleId: source.cycleId, requestKey: original.requestKey });\n           if (outcome === \"created\") targetId = terminal.cycleId;\n",
+  "evidence": {
+    "runId": 44703524270,
+    "jobId": 136177365716,
+    "testedMergeSha": "d5f1175644900b28845afdb4ed413c85f25454c0",
+    "failure": "Both cancelled terminal focus cases failed during setup at line2315: expected200 received201, with valid cancelled disposition; focus assertions not reached.",
+    "controller": "Tesbo-Backend-Nest/src/legacy/legacy.controller.ts:756-759 uses @Post with no status override",
+    "existingApiContract": "e2e/api/cycles.spec.ts:1679 requires exact201; passed in the observed run",
+    "jobLogPath": "/workspace/scratch/8e9074abd0d0/qa-loop-assurance/runtime-correction-smoke-136177365716.log",
+    "jobLogSha256": "a7d66954c3dc6df4feb4a153104d815ab743ff086cae13239c3667ada656ade5"
+  },
+  "change": "One shared setup assertion now requires exact201 for both created and cancelled POST dispositions. No product edits; all real disposition-body, recovery, focus and late-cancelled-create assertions retained.",
+  "checks": {
+    "e2eTypeScript": "PASS: npx tsc --noEmit",
+    "diffCheck": "PASS: git diff --check",
+    "selectedCollection": "PASS:260 tests in9files including20nativeUI, workers10 retries0",
+    "suiteCollection": "PASS:3009tests in91files",
+    "localApplicationDatabaseBrowserRuntime": "NOT RUN",
+    "runtimeAfterThisCorrection": "NOT RUN; exact full CI rerun still required"
+  },
+  "collectionFiles": [
+    "/workspace/scratch/8e9074abd0d0/qa-loop-assurance/native-ui-cancellation-status-selected-list.txt",
+    "/workspace/scratch/8e9074abd0d0/qa-loop-assurance/native-ui-cancellation-status-suite-list.txt"
+  ]
+}

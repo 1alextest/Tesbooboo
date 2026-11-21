@@ -113,6 +113,19 @@ describe("notion-render: block tree to markdown", () => {
     expect(md).toContain("| Name | Role |\n| --- | --- |\n| Ada | QA |");
   });
 
+  it("escapes a backslash before a pipe so a cell keeps the literal character", () => {
+    // Escaping only the pipe turns an existing "\|" into a broken escape and drops the backslash;
+    // the backslash must be escaped first.
+    const md = renderNotionBlocks([
+      {
+        ...block("table", { table_width: 1, has_column_header: false }),
+        has_children: true,
+        children: [block("table_row", { cells: [[rich("a\\|b")]] })]
+      }
+    ]);
+    expect(md).toContain("| a\\\\\\|b |");
+  });
+
   it("turns an unsupported block into a placeholder line instead of throwing", () => {
     const md = renderNotionBlocks([block("paragraph", { rich_text: [rich("before")] }), block("ai_block", {}), block("paragraph", { rich_text: [rich("after")] })]);
     expect(md).toContain("before");

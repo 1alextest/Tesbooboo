@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { createHash, randomBytes } from "crypto";
 import { DatabaseService } from "../database/database.service";
 
@@ -29,6 +29,27 @@ const RAW_TOKEN_BYTES = 24;
 const VALID_SCOPES = new Set(["read", "write"]);
 
 /**
+ * One parser for API-token scopes, shared by issuance and the project role gate.
+ *
+ * Existing UI sends explicit selections. Missing input is read-only; invalid or empty selections
+ * must never silently grant write access, and an unknown value must be rejected rather than
+ * dropped into a token with broader scope than the caller asked for.
+ */
+export function normalizeApiTokenScopes(input: unknown): string[] {
+  if (input === undefined || input === null) return ["read"];
+  if (!Array.isArray(input) && typeof input !== "string") {
+    throw new BadRequestException({ error: "scopes must be an array or comma-separated string" });
+  }
+  const requested = Array.isArray(input)
+    ? input.map((s) => (typeof s === "string" ? s.trim().toLowerCase() : ""))
+    : input.split(",").map((s) => s.trim().toLowerCase());
+  if (!requested.length || requested.some((s) => !VALID_SCOPES.has(s))) {
+    throw new BadRequestException({ error: "scopes must contain only read and/or write" });
+  }
+  return Array.from(new Set(requested));
+}
+
+/**
  * Issues, lists, revokes and validates project-scoped API tokens.
  *
  * Storage model (migrations/V5_api_tokens_webhooks.sql): only a SHA-256 hash of
@@ -55,15 +76,16 @@ export class ApiTokenService {
     return TOKEN_PREFIX + randomBytes(RAW_TOKEN_BYTES).toString("hex");
   }
 
-  private normalizeScopes(input: unknown): string[] {
-    const requested = Array.isArray(input)
-      ? input.map((s) => String(s).trim().toLowerCase())
-      : String(input ?? "")
-          .split(",")
-          .map((s) => s.trim().toLowerCase());
-    const filtered = requested.filter((s) => VALID_SCOPES.has(s));
-    // Default to read+write when nothing valid was supplied.
-    return filtered.length ? Array.from(new Set(filtered)) : ["read", "write"];
+  /**
+   * Whether the token exists in this project and who issued it. `userId` is nullable: a legacy
+   * token can outlive its issuer (user_id REFERENCES users ON DELETE CASCADE, but older rows were
+   * created before the issuer was always recorded). Existence and issuer are separate answers so a
+   * null issuer is not mistaken for "token not found".
+   */
+  async issuerOf(projectId: string, tokenId: string): Promise<{ exists: boolean; userId: string | null }> {
+    const res = await this.db.query("SELECT user_id FROM api_tokens WHERE id = $1 AND project_id = $2", [tokenId, projectId]);
+    const row = res.rows[0] as { user_id: string | null } | undefined;
+    return { exists: Boolean(row), userId: row?.user_id ?? null };
   }
 
   private toSummary(row: {
@@ -104,9 +126,9 @@ export class ApiTokenService {
     name: string,
     scopesInput?: unknown
   ): Promise<ApiTokenSummary & { token: string }> {
+    const scopes = normalizeApiTokenScopes(scopesInput).join(",");
     const rawToken = this.generateRawToken();
     const tokenHash = this.hashToken(rawToken);
-    const scopes = this.normalizeScopes(scopesInput).join(",");
     const res = await this.db.query(
       `INSERT INTO api_tokens (user_id, project_id, name, token_hash, scopes)
        VALUES ($1, $2, $3, $4, $5)

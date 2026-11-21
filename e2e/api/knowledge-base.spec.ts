@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import { emailDomain } from "../utils/env";
 import { zipEntryNames, zipEntryText } from "../utils/zip";
 import { exec, literal, scalar } from "../utils/psql";
@@ -665,6 +666,77 @@ test.describe("knowledge base v2 — folders and documents", () => {
     expect((await asOwner.get(kbUrl(`/documents/${doc.id}`))).status()).toBe(200);
   });
 
+  test("KB-A-50 the trash lists a deleted subtree and restores its contents with the folder", { tag: '@tesbo.testId("TES-TC-3031")' }, async () => {
+    const parent = await createFolder({ name: stamp("Trash parent") });
+    const child = await createFolder({ name: stamp("Trash child"), parentFolderId: parent.id });
+    const doc = await createDocument({ title: stamp("Trash doc"), folderId: child.id });
+    await asOwner.delete(kbUrl(`/folders/${parent.id}`), { failOnStatusCode: false });
+
+    const trashRes = await asOwner.get(kbUrl("/trash"), { failOnStatusCode: false });
+    expect(trashRes.status()).toBe(200);
+    const trash = await trashRes.json();
+    expect(trash.folders.find((f: any) => f.id === parent.id)).toMatchObject({ restorable: true });
+    // The child folder is inside the deleted parent: restoring it alone would leave it invisible.
+    expect(trash.folders.find((f: any) => f.id === child.id)).toMatchObject({ restorable: false });
+    expect(trash.documents.find((d: any) => d.id === doc.id)).toMatchObject({ restorable: false, folderId: child.id });
+
+    // Folders and documents deleted together come back together.
+    const restored = await asOwner.patch(kbUrl(`/folders/${parent.id}/restore`), { failOnStatusCode: false });
+    expect(restored.status(), await restored.text()).toBe(200);
+    expect(await restored.json()).toMatchObject({ isDeleted: false, restoredFolders: 2, restoredDocuments: 1 });
+    expect(isDeleted("knowledge_folders", child.id)).toBe(false);
+    expect(isDeleted("knowledge_documents", doc.id)).toBe(false);
+
+    const after = await (await asOwner.get(kbUrl("/trash"))).json();
+    expect(after.folders.map((f: any) => f.id)).not.toContain(parent.id);
+    expect(after.documents.map((d: any) => d.id)).not.toContain(doc.id);
+  });
+
+  test("KB-A-51 a document cannot be restored while its folder is deleted", { tag: '@tesbo.testId("TES-TC-3032")' }, async () => {
+    const folder = await createFolder({ name: stamp("Trash blocked folder") });
+    const doc = await createDocument({ title: stamp("Trash independent doc"), folderId: folder.id });
+    // Delete the document first, then the folder: the cascade skips an already-deleted document,
+    // so the two deletions have different instants and are restored separately.
+    await asOwner.delete(kbUrl(`/documents/${doc.id}`), { failOnStatusCode: false });
+    await asOwner.delete(kbUrl(`/folders/${folder.id}`), { failOnStatusCode: false });
+
+    const blocked = await asOwner.patch(kbUrl(`/documents/${doc.id}/restore`), { failOnStatusCode: false });
+    expect(blocked.status()).toBe(409);
+    expect(JSON.stringify(await blocked.json())).toContain("Restore the containing folder first");
+    expect(isDeleted("knowledge_documents", doc.id)).toBe(true);
+
+    const folderRes = await asOwner.patch(kbUrl(`/folders/${folder.id}/restore`), { failOnStatusCode: false });
+    expect(folderRes.status()).toBe(200);
+    // The earlier document deletion is not part of the folder's deletion instant.
+    expect(isDeleted("knowledge_documents", doc.id)).toBe(true);
+
+    const docRes = await asOwner.patch(kbUrl(`/documents/${doc.id}/restore`), { failOnStatusCode: false });
+    expect(docRes.status()).toBe(200);
+    expect(isDeleted("knowledge_documents", doc.id)).toBe(false);
+  });
+
+  test("KB-A-52 deleted files are listed in the trash but are not restorable", { tag: '@tesbo.testId("TES-TC-3033")' }, async () => {
+    const folder = await createFolder({ name: stamp("Trash files") });
+    // A file row is enough: restorability is decided by the delete policy, not by storage content.
+    const fileId = scalar(
+      "INSERT INTO knowledge_files (organization_id, project_id, folder_id, file_name, original_file_name, is_deleted, deleted_at) " +
+        `VALUES (${literal(tenant!.organizationId)}, ${literal(tenant!.mainProjectId)}, ${literal(folder.id)}, 'gone.txt', 'gone.txt', true, now()) RETURNING id;`,
+    );
+    const trash = await (await asOwner.get(kbUrl("/trash"))).json();
+    const entry = trash.files.find((f: any) => f.id === fileId);
+    expect(entry).toMatchObject({ restorable: false });
+    expect(entry.unavailableReason).toContain("permanently removed");
+  });
+
+  test("KB-A-53 the trash is project-scoped and refuses a caller with no session", { tag: '@tesbo.testId("TES-TC-3034")' }, async () => {
+    const folder = await createFolder({ name: stamp("Trash scoped") });
+    await asOwner.delete(kbUrl(`/folders/${folder.id}`), { failOnStatusCode: false });
+
+    const other = await (await asOwner.get(kbUrl("/trash", tenant!.secondProjectId))).json();
+    expect(other.folders.map((f: any) => f.id)).not.toContain(folder.id);
+    await expectUnauthenticated(await anon.get(kbUrl("/trash"), { failOnStatusCode: false }), "GET trash");
+  });
+
   test("KB-A-22 a document from another project is not reachable through this project's URL", { tag: '@tesbo.testId("TES-TC-354")' }, async () => {
     const created = await asOwner.post(kbUrl("/documents", tenant!.secondProjectId), {
       data: {
@@ -868,6 +940,7 @@ test.describe("knowledge base v2 — folders and documents", () => {
     expect(doc.status).toBe("draft");
 
     const approved = await asOwner.patch(kbUrl(`/documents/${doc.id}/approve-ai-memory`), {
+      data: { expectedRevision: doc.editRevision },
       failOnStatusCode: false,
     });
     expect(approved.status()).toBe(200);
@@ -891,6 +964,7 @@ test.describe("knowledge base v2 — folders and documents", () => {
   test("KB-A-29 an ai_memory document is rejected, and the status endpoints refuse a general document", { tag: '@tesbo.testId("TES-TC-361")' }, async () => {
     const memory = await createDocument({ title: stamp("Rejectable"), documentType: "ai_memory" });
     const rejected = await asOwner.patch(kbUrl(`/documents/${memory.id}/reject-ai-memory`), {
+      data: { expectedRevision: memory.editRevision },
       failOnStatusCode: false,
     });
     expect(rejected.status()).toBe(200);
@@ -927,6 +1001,114 @@ test.describe("knowledge base v2 — folders and documents", () => {
     });
     expect(res.status()).toBe(200);
     expect((await res.json()).status).toBe("published");
+  });
+
+  test("KB-A-72 submissions preserve exact revisions inside the autosave window and replay only their own receipt", async () => {
+    const doc = await createDocument({ title: stamp("Submitted"), contentText: "First submitted body" });
+    const submissionKey = randomUUID();
+    const submit = () => asOwner.post(kbUrl(`/documents/${doc.id}/submissions`), {
+      data: { expectedRevision: doc.editRevision, submissionKey }, failOnStatusCode: false,
+    });
+    const firstResponse = await submit();
+    expect(firstResponse.status(), await firstResponse.text()).toBe(201);
+    const first = await firstResponse.json();
+    expect(first).toMatchObject({ snapshotKind: "submitted", contentText: "First submitted body" });
+    expect(first.snapshotMetadata).toMatchObject({ authority: "candidate", expectedRevision: doc.editRevision });
+
+    const edit = await asOwner.patch(kbUrl(`/documents/${doc.id}`), { data: { contentText: "Later draft", expectedRevision: doc.editRevision } });
+    expect(edit.status()).toBe(200);
+    const current = await edit.json();
+    const secondResponse = await asOwner.post(kbUrl(`/documents/${doc.id}/submissions`), {
+      data: { expectedRevision: current.editRevision, submissionKey: randomUUID() }, failOnStatusCode: false,
+    });
+    expect(secondResponse.status()).toBe(201);
+    const second = await secondResponse.json();
+    expect(second.id).not.toBe(first.id);
+    expect(second.contentText).toBe("Later draft");
+    expect((await (await submit()).json()).id).toBe(first.id);
+    expect(await (await asOwner.get(kbUrl(`/documents/${doc.id}/versions/${first.id}`))).json()).toMatchObject(first);
+    const conflict = await asOwner.post(kbUrl(`/documents/${doc.id}/submissions`), {
+      data: { expectedRevision: current.editRevision, submissionKey }, failOnStatusCode: false,
+    });
+    expect(conflict.status()).toBe(409);
+    expect((await (await asOwner.get(kbUrl(`/documents/${doc.id}`))).json()).status).toBe("draft");
+  });
+
+  test("KB-A-73 missing, malformed and stale review revisions cannot approve newer content", async () => {
+    const doc = await createDocument({ title: stamp("Reviewed revision"), documentType: "ai_memory", contentText: "What the reviewer saw" });
+    for (const expectedRevision of [undefined, null, "", "not-a-revision"]) {
+      const result = await asOwner.patch(kbUrl(`/documents/${doc.id}/approve-ai-memory`), { data: { expectedRevision }, failOnStatusCode: false });
+      expect(result.status()).toBe(400);
+    }
+    await asOwner.patch(kbUrl(`/documents/${doc.id}`), { data: { contentText: "Changed while review was open" } });
+    const result = await asOwner.patch(kbUrl(`/documents/${doc.id}/approve-ai-memory`), {
+      data: { expectedRevision: doc.editRevision }, failOnStatusCode: false,
+    });
+    expect(result.status()).toBe(409);
+    expect((await (await asOwner.get(kbUrl(`/documents/${doc.id}`))).json())).toMatchObject({ status: "draft", reviewedBy: null, reviewedVersionId: null });
+    expect(scalar(`SELECT count(*) FROM knowledge_document_versions WHERE document_id = ${literal(doc.id)} AND snapshot_kind = 'approved';`)).toBe("0");
+  });
+
+  test("KB-A-74 an owner-issued API token cannot review AI memory", async () => {
+    const doc = await createDocument({ title: stamp("Machine review refused"), documentType: "ai_memory" });
+    const issued = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/apikeys`, { data: { name: stamp("KB review token"), scopes: ["read", "write"] } });
+    expect(issued.status()).toBe(201);
+    const token = await issued.json();
+    try {
+      for (const action of ["approve-ai-memory", "reject-ai-memory"]) {
+        const result = await anon.patch(kbUrl(`/documents/${doc.id}/${action}`), {
+          headers: { Authorization: `Bearer ${token.token}` }, data: { expectedRevision: doc.editRevision }, failOnStatusCode: false,
+        });
+        expect(result.status()).toBe(403);
+        expect((await result.json()).code).toBe("HUMAN_REVIEW_REQUIRED");
+      }
+      expect((await (await asOwner.get(kbUrl(`/documents/${doc.id}`))).json()).status).toBe("draft");
+      expect(scalar(`SELECT count(*) FROM knowledge_document_versions WHERE document_id = ${literal(doc.id)};`)).toBe("0");
+    } finally {
+      await asOwner.delete(`/api/projects/${tenant!.mainProjectId}/apikeys/${token.id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("KB-A-75 changing document type cannot turn a candidate into approved AI context", async () => {
+    const doc = await createDocument({ title: stamp("Type boundary") });
+    const converted = await asOwner.patch(kbUrl(`/documents/${doc.id}`), {
+      data: { documentType: "ai_memory", status: "approved" }, failOnStatusCode: false,
+    });
+    expect(converted.status()).toBe(200);
+    expect(await converted.json()).toMatchObject({ documentType: "ai_memory", status: "draft", reviewedBy: null });
+    const escaped = await asOwner.patch(kbUrl(`/documents/${doc.id}`), { data: { documentType: "general", status: "approved" }, failOnStatusCode: false });
+    expect(escaped.status()).toBe(400);
+    expect((await (await asOwner.get(kbUrl(`/documents/${doc.id}`))).json())).toMatchObject({ documentType: "ai_memory", status: "draft" });
+  });
+
+  test("KB-A-76 review preserves the exact body and repeat decisions do not create duplicate receipts", async () => {
+    const doc = await createDocument({ title: stamp("Immutable review"), documentType: "ai_memory", contentText: "Exact approved content" });
+    const decide = () => asOwner.patch(kbUrl(`/documents/${doc.id}/approve-ai-memory`), { data: { expectedRevision: doc.editRevision }, failOnStatusCode: false });
+    const [firstResponse, retryResponse] = await Promise.all([decide(), decide()]);
+    expect(firstResponse.status()).toBe(200);
+    expect(retryResponse.status()).toBe(200);
+    const approved = await firstResponse.json();
+    expect((await retryResponse.json()).reviewedVersionId).toBe(approved.reviewedVersionId);
+    const exact = await (await asOwner.get(kbUrl(`/documents/${doc.id}/versions/${approved.reviewedVersionId}`))).json();
+    expect(exact).toMatchObject({ snapshotKind: "approved", contentText: "Exact approved content" });
+    await asOwner.patch(kbUrl(`/documents/${doc.id}`), { data: { contentText: "Unreviewed successor", expectedRevision: approved.editRevision } });
+    expect(await (await asOwner.get(kbUrl(`/documents/${doc.id}/versions/${approved.reviewedVersionId}`))).json()).toEqual(exact);
+    expect((await (await asOwner.get(kbUrl(`/documents/${doc.id}`))).json())).toMatchObject({ status: "draft", reviewedVersionId: null });
+    const history = await (await asOwner.get(kbUrl(`/documents/${doc.id}/history`))).json();
+    expect(history.events.some((event: { changedSummary: string }) => /^Approved exact version /.test(event.changedSummary))).toBe(true);
+  });
+
+  test("KB-A-77 submission and exact-version reads retain project and document boundaries", async () => {
+    const doc = await createDocument({ title: stamp("Scoped submission") });
+    const payload = { expectedRevision: doc.editRevision, submissionKey: randomUUID() };
+    await expectUnauthenticated(await anon.post(kbUrl(`/documents/${doc.id}/submissions`), { data: payload, failOnStatusCode: false }), "anonymous submission");
+    expect((await asGuest.post(kbUrl(`/documents/${doc.id}/submissions`), { data: payload, failOnStatusCode: false })).status()).toBe(404);
+    expect((await asOwner.post(kbUrl(`/documents/${doc.id}/submissions`), { data: { ...payload, submissionKey: "bad-key" }, failOnStatusCode: false })).status()).toBe(400);
+    const submitted = await (await asOwner.post(kbUrl(`/documents/${doc.id}/submissions`), { data: payload })).json();
+    const otherDoc = await createDocument({ title: stamp("Other document") });
+    expect((await asOwner.get(kbUrl(`/documents/${otherDoc.id}/versions/${submitted.id}`), { failOnStatusCode: false })).status()).toBe(404);
+    expect((await asOwner.get(kbUrl(`/documents/${doc.id}/versions/${submitted.id}`, tenant!.secondProjectId), { failOnStatusCode: false })).status()).toBe(404);
+    await expectUnauthenticated(await anon.get(kbUrl(`/documents/${doc.id}/versions/${submitted.id}`), { failOnStatusCode: false }), "anonymous version read");
   });
 
   // ─── Search and summary ───────────────────────────────────────────────────
@@ -1322,7 +1504,7 @@ test.describe("knowledge base v2 — folders and documents", () => {
 
     // A manager is allowed both.
     expect(
-      (await asManager.patch(kbUrl(`/documents/${memory.id}/approve-ai-memory`), { failOnStatusCode: false })).status(),
+      (await asManager.patch(kbUrl(`/documents/${memory.id}/approve-ai-memory`), { data: { expectedRevision: memory.editRevision }, failOnStatusCode: false })).status(),
     ).toBe(200);
     expect((await asManager.patch(kbUrl(`/documents/${doc.id}/restore`), { failOnStatusCode: false })).status()).toBe(200);
   });

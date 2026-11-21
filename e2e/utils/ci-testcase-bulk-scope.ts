@@ -1,0 +1,424 @@
+import { randomUUID } from "node:crypto";
+import { expect, request as newRequest, test, type Page, type Request, type TestInfo } from "@playwright/test";
+import { Client } from "pg";
+import { hashPasswordForSeed } from "./password";
+import { verifySuiteDeleteScope } from "./ci-suite-delete-scope";
+import { approveMcpTestClient } from "./mcp-access";
+
+/** Existing bulk API/UI contract on the disposable smoke stack, with a truly separate tenant. */
+export async function verifyTestcaseBulkScope(page: Page, api: string, web: string, projectId: string, ownerId: string, testInfo: TestInfo) {
+  const db = new Client({ connectionString: process.env.DATABASE_URL }); await db.connect();
+  const machine = await newRequest.newContext({ storageState: { cookies: [], origins: [] } });
+  const other = await newRequest.newContext({ storageState: { cookies: [], origins: [] } });
+  const base = `${api}/api/projects/${projectId}`, stamp = randomUUID();
+  const tokens: string[] = [];
+  let sequence = 0;
+  async function post(url: string, data: Record<string, unknown>) {
+    const response = await page.request.post(url, { data }); expect(response.ok(), await response.text()).toBeTruthy(); return response.json();
+  }
+  try {
+    const org = (await db.query("INSERT INTO organizations (name,slug) VALUES ('CI Bulk Other Tenant',$1) RETURNING id", [`bulk-${stamp}`])).rows[0].id;
+    const email = `ci-bulk-${stamp}@tesbo.invalid`, password = "Ci-Bulk-2026!";
+    const outsider = (await db.query("INSERT INTO users (email,name,password_hash,active_organization_id) VALUES ($1,'CI Other Bulk Owner',$2,$3) RETURNING id", [email, hashPasswordForSeed(password), org])).rows[0].id;
+    await db.query("INSERT INTO organization_members (organization_id,user_id,role) VALUES ($1,$2,'owner')", [org, outsider]);
+    const foreignProject = (await db.query("INSERT INTO projects (organization_id,key,name) VALUES ($1,'BFOREIGN','CI Private Bulk Project') RETURNING id", [org])).rows[0].id;
+    await db.query("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'owner')", [foreignProject, outsider]);
+    const login = await other.post(`${api}/api/auth/password/login`, { data: { email, password } }); expect(login.ok(), await login.text()).toBeTruthy();
+    const suite = await post(`${base}/suites`, { name: "CI Bulk Local Suite" });
+    async function seed(title: string, foreign = false, deleted = false) {
+      // Declared native fixtures avoid embedding-worker bookkeeping between exact no-write checks.
+      return (await db.query("INSERT INTO testcases (project_id,suite_id,external_id,title,description,priority,owner_id,created_by,updated_by,deleted_at) VALUES ($1,$2,$3,$4,'Preserve bulk body','P2',$5,$5,$5,CASE WHEN $6::boolean THEN now() ELSE NULL END) RETURNING *", [foreign ? foreignProject : projectId, foreign ? null : suite.id, `BULK-TC-${++sequence}`, title, foreign ? outsider : ownerId, deleted])).rows[0];
+    }
+    const first = await seed("CI Bulk Selected One"), second = await seed("CI Bulk Selected Two"), control = await seed("CI Bulk Unselected Control");
+    const deleted = await seed("CI Bulk Already Deleted", false, true), foreign = await seed("CI PRIVATE Bulk Case", true);
+    const ids = [first.id, second.id, control.id, deleted.id, foreign.id];
+    const state = async () => ({
+      cases: (await db.query("SELECT * FROM testcases WHERE id=ANY($1::uuid[]) ORDER BY id", [ids])).rows,
+      history: (await db.query("SELECT * FROM testcase_versions WHERE testcase_id=ANY($1::uuid[]) ORDER BY testcase_id,version", [ids])).rows,
+    });
+    const activity = async () => (await db.query("SELECT * FROM audit_logs WHERE project_id=$1 AND action=ANY($2::text[]) ORDER BY created_at,id", [projectId, ["testcase_bulk_updated", "testcase_bulk_deleted"]])).rows;
+    const expectPreserved = (before: Awaited<ReturnType<typeof state>>, after: Awaited<ReturnType<typeof state>>, selected: string[], unchangedHistory: string[] = []) => {
+      for (const row of before.cases.filter((item) => !selected.includes(item.id))) {
+        expect(after.cases.find((item) => item.id === row.id)).toEqual(row);
+        expect(after.history.filter((item) => item.testcase_id === row.id)).toEqual(before.history.filter((item) => item.testcase_id === row.id));
+      }
+      for (const id of selected) {
+        const previous = before.history.filter((item) => item.testcase_id === id), next = after.history.filter((item) => item.testcase_id === id);
+        if (unchangedHistory.includes(id)) { expect(next).toEqual(previous); continue; }
+        expect(next.slice(0, previous.length)).toEqual(previous); expect(next).toHaveLength(previous.length + 1);
+        expect(next.at(-1)).toMatchObject({ changed_by: ownerId });
+      }
+    };
+    const tokenByScope: Record<string, string> = {};
+    for (const scope of ["read", "write"]) {
+      const issued = await post(`${base}/apikeys`, { name: `CI Bulk ${scope}`, scopes: [scope] }); tokens.push(issued.id); tokenByScope[scope] = issued.token;
+      await approveMcpTestClient(page.request, projectId, issued, api);
+    }
+    const nextContentRevision = (row: { review_dependency_revision: string }) => String(BigInt(row.review_dependency_revision) + 1n);
+    const endpoint = (kind: string) => `${base}/testcases/bulk-${kind}`;
+    const projectResponse = await page.request.get(base); expect(projectResponse.ok()).toBeTruthy();
+    const project = await projectResponse.json(); expect(project).toMatchObject({ id: projectId, key: expect.any(String) });
+    // Reuse the canonical route for stale-target and refresh-recovery journeys.
+    const repositoryUrl = `${web}/projects/${encodeURIComponent(project.key)}/testcases`;
+
+    await test.step("genuine anonymous, nonmember and bearer requests are refused before any row/history/activity write", async () => {
+      expect((await page.request.get(`${api}/api/projects/${foreignProject}/testcases/${foreign.id}`)).status()).toBe(404);
+      expect((await other.get(`${api}/api/projects/${foreignProject}/testcases/${foreign.id}`)).ok()).toBeTruthy();
+      const before = await state(), events = await activity();
+      for (const kind of ["update", "delete"]) {
+        const data = { testcaseIds: [first.id, foreign.id], priority: "P0" };
+        for (const [client, status, headers] of [
+          [machine, 400, {}], [other, 404, {}], [machine, 403, { Authorization: `Bearer ${tokenByScope.read}` }],
+          [machine, 403, { Authorization: `Bearer ${tokenByScope.write}` }],
+        ] as const) {
+          const response = await client.post(endpoint(kind), { data, headers });
+          expect(response.status(), await response.text()).toBe(status); expect(await state()).toEqual(before); expect(await activity()).toEqual(events);
+          if ("Authorization" in headers) expect(await response.json()).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
+        }
+      }
+    });
+
+    await test.step("session REST mixed update only affects the local selection once and logs the actual count", async () => {
+      const before = await state();
+      const response = await page.request.post(endpoint("update"), { data: { testcaseIds: [first.id, foreign.id, deleted.id, randomUUID(), first.id], priority: "P0" } });
+      expect(response.ok(), await response.text()).toBeTruthy();
+      const after = await state(); expectPreserved(before, after, [first.id]);
+      const original = before.cases.find((item) => item.id === first.id);
+      expect(after.cases.find((item) => item.id === first.id)).toEqual({ ...original, priority: "P0", updated_by: ownerId, updated_at: expect.any(Date), review_dependency_revision: nextContentRevision(original) });
+      const events = await activity(); expect(events).toHaveLength(1); expect(events[0].diff).toMatchObject({ testcaseIds: [first.id], requestedCount: 5 });
+    });
+
+    await test.step("human foreign/unknown/deleted and empty REST selections remain no-ops while machine publication is refused", async () => {
+      const before = await state();
+      for (const kind of ["update", "delete"]) {
+        for (const testcaseIds of [[foreign.id, deleted.id, randomUUID()], []]) {
+          const eventsBefore = await activity();
+          const refused = await machine.post(endpoint(kind), { headers: { Authorization: `Bearer ${tokenByScope.write}` }, data: { testcaseIds, priority: "P0" } });
+          expect(refused.status(), await refused.text()).toBe(403);
+          expect(await refused.json()).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
+          expect(await state()).toEqual(before); expect(await activity()).toEqual(eventsBefore);
+          const response = await page.request.post(endpoint(kind), { data: { testcaseIds, priority: "P0" } });
+          expect(response.ok(), await response.text()).toBeTruthy(); expect(await state()).toEqual(before);
+          const events = await activity();
+          if (testcaseIds.length) {
+            expect(events.slice(0, eventsBefore.length)).toEqual(eventsBefore); expect(events).toHaveLength(eventsBefore.length + 1);
+            expect(events.at(-1).diff).toMatchObject({ testcaseIds: [], requestedCount: testcaseIds.length });
+          } else expect(events).toEqual(eventsBefore);
+        }
+      }
+    });
+
+    await test.step("consented MCP clients cannot publish mixed or empty bulk selections through retired tools", async () => {
+      const before = await state(), events = await activity();
+      for (const name of ["bulk_update_testcases", "bulk_archive_testcases"]) {
+        for (const testcaseIds of [[first.id, foreign.id, deleted.id, randomUUID(), first.id], []]) {
+          const response = await machine.post(`${base}/mcp`, {
+            headers: { Authorization: `Bearer ${tokenByScope.write}` },
+            data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: { testcaseIds, priority: "P1" } } },
+          });
+          expect(response.status()).toBe(201); const rpc = await response.json(); expect(rpc.result).toBeUndefined();
+          expect(rpc.error).toMatchObject({ code: -32003, data: { code: "HUMAN_PUBLICATION_REQUIRED" } });
+          expect(await state()).toEqual(before); expect(await activity()).toEqual(events);
+        }
+      }
+    });
+
+    await test.step("the existing bulk modal updates local cases, survives a controlled refusal and reloads authoritative state", async () => {
+      await page.goto(`${web}/projects/${projectId}/testcases`);
+      await page.getByRole("checkbox", { name: `Select ${first.title}`, exact: true }).check();
+      await page.getByRole("checkbox", { name: `Select ${second.title}`, exact: true }).check();
+      await page.getByRole("button", { name: "Bulk actions", exact: true }).click();
+      const modal = page.getByRole("heading", { name: "Bulk actions", exact: true }).locator("..");
+      await modal.locator("select").filter({ has: page.locator('option[value="update"]') }).selectOption("update");
+      const priority = modal.locator("select").filter({ has: page.locator('option[value="P0"]') });
+      await expect(modal.getByRole("button", { name: "Confirm", exact: true })).toBeDisabled();
+      await expect(modal).toContainText("Choose at least one field to update.");
+      await testInfo.attach("bulk-update-no-changes-cannot-confirm", { body: await page.screenshot(), contentType: "image/png" });
+      await priority.selectOption("P0"); await expect(modal.getByRole("button", { name: "Confirm", exact: true })).toBeEnabled();
+      await priority.selectOption(""); await expect(modal.getByRole("button", { name: "Confirm", exact: true })).toBeDisabled();
+      await priority.selectOption("P0");
+      const before = await state();
+      // One controlled pre-delivery 403, not a real entitlement transition or backend outage.
+      let release!: () => void, reached!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; }), intercepted = new Promise<void>((resolve) => { reached = resolve; });
+      await page.route(endpoint("update"), async (route) => { reached(); await gate; await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "CI controlled bulk refusal" }) }); }, { times: 1 });
+      try {
+        await modal.getByRole("button", { name: "Confirm", exact: true }).click(); await intercepted;
+        for (const field of await modal.locator("select").all()) await expect(field).toBeDisabled();
+        await expect(modal.getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
+      } finally { release(); }
+      await expect(modal.getByText("CI controlled bulk refusal", { exact: true })).toBeVisible(); expect(await state()).toEqual(before);
+      await expect(priority).toHaveValue("P0"); await expect(modal).toContainText("2 test cases selected");
+      for (const field of await modal.locator("select").all()) await expect(field).toBeEnabled();
+      await testInfo.attach("bulk-refusal-keeps-input-and-selection", { body: await page.screenshot(), contentType: "image/png" });
+      const saved = page.waitForResponse((response) => response.url() === endpoint("update") && response.request().method() === "POST");
+      await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await saved).ok()).toBeTruthy();
+      await expect(modal).toBeHidden();
+      // The refused MCP call left the first case at P0. Repeating that field value only
+      // updates bookkeeping; the V150/V155 triggers preserve both history and content revision.
+      const after = await state(); expectPreserved(before, after, [first.id, second.id], [first.id]);
+      for (const id of [first.id, second.id]) {
+        const original = before.cases.find((row) => row.id === id);
+        expect(after.cases.find((row) => row.id === id)).toEqual({ ...original, priority: "P0", updated_by: ownerId, updated_at: expect.any(Date),
+          review_dependency_revision: id === first.id ? original.review_dependency_revision : nextContentRevision(original) });
+      }
+      await page.reload();
+      for (const title of [first.title, second.title]) await expect(page.getByRole("row").filter({ has: page.getByRole("button", { name: title, exact: true }) })).toContainText("P0");
+      await expect(page.locator("body")).not.toContainText(foreign.title);
+      await testInfo.attach("bulk-local-update-after-reload", { body: await page.screenshot(), contentType: "image/png" });
+    });
+
+    await test.step("machine mixed deletion is refused while the human REST and UI paths preserve the foreign case", async () => {
+      const before = await state(), eventsBefore = await activity();
+      const data = { testcaseIds: [first.id, foreign.id, deleted.id, randomUUID(), first.id] };
+      const refused = await machine.post(endpoint("delete"), { headers: { Authorization: `Bearer ${tokenByScope.write}` }, data });
+      expect(refused.status(), await refused.text()).toBe(403); expect(await refused.json()).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
+      expect(await state()).toEqual(before); expect(await activity()).toEqual(eventsBefore);
+      const response = await page.request.post(endpoint("delete"), { data });
+      expect(response.ok(), await response.text()).toBeTruthy(); const after = await state(); expectPreserved(before, after, [first.id]);
+      const original = before.cases.find((row) => row.id === first.id);
+      expect(after.cases.find((row) => row.id === first.id)).toEqual({ ...original, deleted_at: expect.any(Date), deleted_by: ownerId, updated_by: ownerId, updated_at: expect.any(Date), review_dependency_revision: nextContentRevision(original) });
+      const events = await activity(); expect(events.at(-1).diff).toMatchObject({ testcaseIds: [first.id], requestedCount: 5 });
+      await page.reload(); await expect(page.getByRole("button", { name: first.title, exact: true })).toHaveCount(0);
+      await page.getByRole("checkbox", { name: `Select ${second.title}`, exact: true }).check();
+      await page.getByRole("button", { name: "Bulk actions", exact: true }).click();
+      const modal = page.getByRole("heading", { name: "Bulk actions", exact: true }).locator("..");
+      await modal.locator("select").selectOption("delete");
+      await expect(modal).toContainText("Existing run results and test case version history are retained.");
+      await expect(modal).not.toContainText(/permanently deletes/i);
+      await testInfo.attach("bulk-delete-truthful-history-guidance", { body: await page.screenshot(), contentType: "image/png" });
+      const saved = page.waitForResponse((item) => item.url() === endpoint("delete") && item.request().method() === "POST");
+      await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await saved).ok()).toBeTruthy();
+      await expect(modal).toBeHidden(); await page.reload();
+      await expect(page.getByRole("button", { name: second.title, exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: control.title, exact: true })).toBeVisible();
+      const final = await state(); expectPreserved(after, final, [second.id]);
+      const previous = after.cases.find((row) => row.id === second.id);
+      expect(final.cases.find((row) => row.id === second.id)).toEqual({ ...previous, deleted_at: expect.any(Date), deleted_by: ownerId, updated_by: ownerId, updated_at: expect.any(Date), review_dependency_revision: nextContentRevision(previous) });
+      expect((await other.get(`${api}/api/projects/${foreignProject}/testcases/${foreign.id}`)).ok()).toBeTruthy();
+      await testInfo.attach("bulk-delete-keeps-unselected-local-and-foreign-records", { body: await page.screenshot(), contentType: "image/png" });
+    });
+
+    await test.step("the existing Activity UI counts changed rows, not foreign, missing or duplicate IDs", async () => {
+      await page.goto(`${web}/projects/${projectId}/activity`);
+      await expect(page.getByText("Bulk-updated 1 test case(s).", { exact: true }).first()).toBeVisible();
+      await expect(page.getByText("Bulk-updated 2 test case(s).", { exact: true })).toBeVisible();
+      await expect(page.getByText("Deleted 1 test case(s).", { exact: true }).first()).toBeVisible();
+      await expect(page.getByText("Bulk-updated 5 test case(s).", { exact: true })).toHaveCount(0);
+      await expect(page.getByText("Deleted 5 test case(s).", { exact: true })).toHaveCount(0);
+      await expect(page.locator("body")).not.toContainText(foreign.title);
+      await testInfo.attach("bulk-activity-counts-actual-project-rows", { body: await page.screenshot(), contentType: "image/png" });
+    });
+    await test.step("REST bulk-create checks real project access before empty/invalid payloads and preserves valid persisted batches", async () => {
+      const fullState = async () => ({
+        cases: (await db.query("SELECT * FROM testcases WHERE project_id=ANY($1::uuid[]) ORDER BY id", [[projectId, foreignProject]])).rows,
+        history: (await db.query("SELECT v.* FROM testcase_versions v JOIN testcases t ON t.id=v.testcase_id WHERE t.project_id=ANY($1::uuid[]) ORDER BY v.testcase_id,v.version", [[projectId, foreignProject]])).rows,
+        audit: (await db.query("SELECT * FROM audit_logs WHERE project_id=ANY($1::uuid[]) ORDER BY id", [[projectId, foreignProject]])).rows,
+      });
+      const before = await fullState(), path = `${base}/testcases/bulk-create`;
+      const ordinary = { testcases: [{ title: "CI must not create in another tenant" }] };
+      for (const body of [ordinary, { testcases: [] }, { testcases: [{ title: "x".repeat(513) }] }]) {
+        const denied = await other.post(path, { data: body }); expect(denied.status(), await denied.text()).toBe(404);
+        expect(await fullState()).toEqual(before);
+        const machineDenied = await machine.post(path, { headers: { Authorization: `Bearer ${tokenByScope.write}` }, data: body });
+        expect(machineDenied.status(), await machineDenied.text()).toBe(403);
+        expect(await machineDenied.json()).toMatchObject({ code: "HUMAN_PUBLICATION_REQUIRED" });
+        expect(await fullState()).toEqual(before);
+      }
+      expect((await machine.post(path, { data: ordinary })).status()).toBe(400); expect(await fullState()).toEqual(before);
+      expect((await machine.post(path, { headers: { Authorization: `Bearer ${tokenByScope.read}` }, data: ordinary })).status()).toBe(403);
+      expect(await fullState()).toEqual(before);
+      const deniedForeign = await page.request.post(`${api}/api/projects/${foreignProject}/testcases/bulk-create`, { data: ordinary });
+      expect(deniedForeign.status(), await deniedForeign.text()).toBe(404); expect(await fullState()).toEqual(before);
+      const empty = await page.request.post(path, { data: { testcases: [] } }); expect(empty.ok()).toBeTruthy();
+      expect(await empty.json()).toEqual({ created: [], createdCount: 0 }); expect(await fullState()).toEqual(before);
+      const titles = ["CI Bulk Created Session", "CI Bulk Created Session Two"];
+      const response = await page.request.post(path, { data: { testcases: titles.map((title) => ({ title, suiteId: suite.id, priority: "P1" })) } });
+      expect(response.status(), await response.text()).toBe(201); const result = await response.json();
+      expect(result.createdCount).toBe(2); expect(result.created).toHaveLength(2);
+      expect(result.created).toEqual(expect.arrayContaining(titles.map((title) => expect.objectContaining({ title, projectId, createdBy: ownerId, updatedBy: ownerId, suiteId: suite.id, priority: "P1" }))));
+      const createdIds: string[] = result.created.map((row: { id: string }) => row.id);
+      expect(new Set(createdIds).size).toBe(2);
+      const after = await fullState();
+      expect(after.cases.filter((row) => !createdIds.includes(row.id))).toEqual(before.cases);
+      expect(after.history).toEqual(before.history);
+      for (const row of before.audit) expect(after.audit.find((item) => item.id === row.id)).toEqual(row);
+      const addedEvents = after.audit.filter((row) => !before.audit.some((old) => old.id === row.id));
+      expect(addedEvents).toHaveLength(1);
+      expect(addedEvents[0]).toMatchObject({ action: "testcase_bulk_created", project_id: projectId, actor_id: ownerId, diff: { count: 2, testcaseIds: expect.arrayContaining(createdIds) } });
+      expect(addedEvents[0].diff.testcaseIds).toHaveLength(2);
+      await page.goto(`${web}/projects/${projectId}/testcases`); await page.reload();
+      await expect(page.getByRole("button", { name: "CI Bulk Created Session", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "CI Bulk Created Session Two", exact: true })).toBeVisible();
+      await expect(page.locator("body")).not.toContainText("CI must not create in another tenant");
+      await testInfo.attach("bulk-create-human-batch-readback-machine-refused", { body: await page.screenshot(), contentType: "image/png" });
+    });
+
+    await test.step("human Suite assignment validates targets while machine publication remains refused through REST and MCP", async () => {
+      const foreignSuiteResponse = await other.post(`${api}/api/projects/${foreignProject}/suites`, { data: { name: "CI PRIVATE assignment target" } });
+      expect(foreignSuiteResponse.ok(), await foreignSuiteResponse.text()).toBeTruthy();
+      const foreignSuite = (await foreignSuiteResponse.json()).id;
+      const removed = await post(`${base}/suites`, { name: "CI Deleted assignment target" });
+      expect((await page.request.delete(`${api}/api/suites/${removed.id}`)).ok()).toBeTruthy();
+      const deniedTitle = "CI Invalid Suite Must Not Persist";
+      const snapshot = async () => ({
+        selected: await state(),
+        created: (await db.query("SELECT * FROM testcases WHERE project_id=ANY($1::uuid[]) AND title=$2 ORDER BY id", [[projectId, foreignProject], deniedTitle])).rows,
+        audit: (await db.query("SELECT * FROM audit_logs WHERE project_id=ANY($1::uuid[]) ORDER BY id", [[projectId, foreignProject]])).rows,
+      });
+      for (const target of [foreignSuite, removed.id, randomUUID(), "not-a-suite-id"]) {
+        const before = await snapshot();
+        for (const bearer of [false, true]) {
+          const client = bearer ? machine : page.request;
+          const headers: Record<string, string> = bearer ? { Authorization: `Bearer ${tokenByScope.write}` } : {};
+          for (const writer of ["create", "update", "bulk-create", "bulk-update"] as const) {
+            const response = writer === "update"
+              ? await client.put(`${base}/testcases/${control.id}`, { headers, data: { suiteId: target, title: deniedTitle } })
+              : await client.post(writer === "create" ? `${base}/testcases` : `${base}/testcases/${writer}`, {
+                headers, data: writer === "bulk-create"
+                  ? { testcases: [{ title: deniedTitle, suiteId: suite.id }, { title: deniedTitle, suiteId: target }] }
+                  : writer === "bulk-update" ? { testcaseIds: [control.id, foreign.id], suiteId: target, priority: "P0" } : { title: deniedTitle, suiteId: target },
+              });
+            expect(response.status(), await response.text()).toBe(bearer ? 403 : 400);
+            expect(await response.json()).toMatchObject(bearer
+              ? { code: "HUMAN_PUBLICATION_REQUIRED" }
+              : { error: "suiteId must reference an active suite in this project" });
+            expect(await snapshot()).toEqual(before);
+          }
+        }
+        for (const name of ["create_testcase", "update_testcase", "bulk_update_testcases"]) {
+          const response = await machine.post(`${base}/mcp`, { headers: { Authorization: `Bearer ${tokenByScope.write}` }, data: {
+            jsonrpc: "2.0", id: 54, method: "tools/call", params: { name, arguments: { title: deniedTitle, testcaseId: control.id, testcaseIds: [control.id], suiteId: target } },
+          } });
+          expect(response.status()).toBe(201); const rpc = await response.json(); expect(rpc.result).toBeUndefined();
+          expect(rpc.error).toMatchObject({ code: -32003, data: { code: "HUMAN_PUBLICATION_REQUIRED" } });
+          expect(await snapshot()).toEqual(before);
+        }
+      }
+      await page.goto(`${web}/projects/${projectId}/testcases`); await page.reload();
+      await expect(page.getByRole("button", { name: control.title, exact: true })).toBeVisible();
+      await expect(page.locator("body")).not.toContainText(deniedTitle);
+      await expect(page.locator("body")).not.toContainText("CI PRIVATE");
+      await testInfo.attach("suite-assignment-refusals-preserve-authorized-repository", { body: await page.screenshot(), contentType: "image/png" });
+    });
+
+    await test.step("a real stale Suite choice preserves the existing bulk form and selection, then recovers to a valid target", async () => {
+      const stale = await post(`${base}/suites`, { name: "CI Stale bulk destination" });
+      const valid = await post(`${base}/suites`, { name: "CI Recovered bulk destination" });
+      await page.goto(`${web}/projects/${projectId}/testcases`); await page.reload();
+      await page.getByRole("checkbox", { name: `Select ${control.title}`, exact: true }).check();
+      await page.getByRole("button", { name: "Bulk actions", exact: true }).click();
+      const modal = page.getByRole("heading", { name: "Bulk actions", exact: true }).locator("..");
+      await modal.locator("select").filter({ has: page.locator('option[value="move"]') }).selectOption("move");
+      const target = modal.locator("select").filter({ has: page.locator(`option[value="${stale.id}"]`) });
+      await target.selectOption(stale.id);
+      // Actual Suite deletion after the browser loaded its choices; no intercepted response here.
+      expect((await page.request.delete(`${api}/api/suites/${stale.id}`)).ok()).toBeTruthy();
+      const before = await state(), events = await activity();
+      const refused = page.waitForResponse((item) => item.url() === endpoint("update") && item.request().method() === "POST");
+      await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await refused).status()).toBe(400);
+      await expect(modal.getByText("suiteId must reference an active suite in this project", { exact: true })).toBeVisible();
+      await expect(target).toHaveValue(stale.id); await expect(modal).toContainText("1 test case selected");
+      expect(await state()).toEqual(before); expect(await activity()).toEqual(events);
+      await testInfo.attach("stale-suite-refusal-keeps-bulk-form-and-selection", { body: await page.screenshot(), contentType: "image/png" });
+      await target.selectOption(valid.id);
+      const saved = page.waitForResponse((item) => item.url() === endpoint("update") && item.request().method() === "POST");
+      await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await saved).ok()).toBeTruthy();
+      await expect(modal).toBeHidden(); const after = await state(); expectPreserved(before, after, [control.id]);
+      const original = before.cases.find((row) => row.id === control.id);
+      expect(after.cases.find((row) => row.id === control.id)).toEqual({ ...original, suite_id: valid.id, updated_by: ownerId, updated_at: expect.any(Date), review_dependency_revision: nextContentRevision(original) });
+      await page.reload();
+      // Suite is not a default table column. Prove membership through the actual tree/list UI.
+      await page.getByRole("button", { name: valid.name, exact: true }).click();
+      await expect(page).toHaveURL(`${repositoryUrl}?suiteId=${valid.id}`);
+      await expect(page.getByRole("button", { name: control.title, exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "CI Bulk Created Session", exact: true })).toHaveCount(0);
+      await testInfo.attach("stale-suite-recovered-move-after-reload", { body: await page.screenshot(), contentType: "image/png" });
+      await page.getByRole("button", { name: suite.name, exact: true }).click();
+      await expect(page).toHaveURL(`${repositoryUrl}?suiteId=${suite.id}`);
+      await expect(page.getByRole("button", { name: "CI Bulk Created Session", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: control.title, exact: true })).toHaveCount(0);
+    });
+
+    await verifySuiteDeleteScope({ page, api, web, db, other, machine, projectId, foreignProject, ownerId, outsider, tokens: tokenByScope, testInfo });
+    for (const scenario of ["update", "move", "list-refresh", "archive", "delete"] as const) {
+      await test.step(`confirmed bulk ${scenario} recovers through existing read-only controls without resubmission`, async () => {
+        // Reuse the surviving control, DB/history oracle and two-tenant fixture, not
+        // new accounts or seed infrastructure. Every POST reaches the real writer.
+        await page.goto(repositoryUrl);
+        const statusFilter = page.locator("select").filter({ has: page.locator('option[value="Archived"]') });
+        if (scenario === "delete") await statusFilter.selectOption("Archived");
+        await page.getByRole("checkbox", { name: `Select ${control.title}`, exact: true }).check();
+        await page.getByRole("button", { name: "Bulk actions", exact: true }).click();
+        const modal = page.getByRole("heading", { name: "Bulk actions", exact: true }).locator("..");
+        const action = scenario === "list-refresh" ? "update" : scenario;
+        await modal.locator("select").filter({ has: page.locator('option[value="update"]') }).selectOption(action);
+        if (action === "update") await modal.locator("select").filter({ has: page.locator('option[value="P1"]') }).selectOption(scenario === "update" ? "P1" : "P2");
+        // Move keeps the existing explicit unassignment option; later scenarios
+        // prove its persisted No suites membership instead of guessing a UI patch.
+        const before = await state(), events = await activity();
+        const mutationUrl = endpoint(action === "delete" ? "delete" : "update");
+        let submissions = 0, refusedReads = 0;
+        const countSubmission = (req: Request) => { if (req.method() === "POST" && req.url() === mutationUrl) submissions += 1; };
+        page.on("request", countSubmission);
+        try {
+          await page.route((url) => scenario === "list-refresh" ? url.pathname === new URL(`${base}/testcases`).pathname : url.href === `${base}/suites`, (route) => {
+            refusedReads += 1;
+            return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "CI controlled bulk refresh failure" }) });
+          }, { times: 1 });
+          const saved = page.waitForResponse((response) => response.url() === mutationUrl && response.request().method() === "POST");
+          await modal.getByRole("button", { name: "Confirm", exact: true }).click(); expect((await saved).ok()).toBeTruthy();
+          const after = await state(); expectPreserved(before, after, [control.id]);
+          const updated = after.cases.find((row) => row.id === control.id);
+          const original = before.cases.find((row) => row.id === control.id);
+          expect(updated).toEqual({ ...original,
+            ...(scenario === "update" ? { priority: "P1" } : scenario === "move" ? { suite_id: null } : scenario === "list-refresh" ? { priority: "P2" } : scenario === "archive" ? { status: "Archived", deleted_at: null } : { deleted_at: expect.any(Date), deleted_by: ownerId }),
+            updated_by: ownerId, updated_at: expect.any(Date),
+            review_dependency_revision: scenario === "archive" ? original.review_dependency_revision : nextContentRevision(original) });
+          const nextEvents = await activity(); expect(nextEvents).toHaveLength(events.length + 1);
+          expect(nextEvents.at(-1).diff.testcaseIds).toEqual([control.id]);
+          await expect(modal).toBeHidden();
+          const warning = page.getByRole("alert").filter({ hasText: "Bulk action completed, but the repository could not be refreshed." });
+          if (scenario === "list-refresh") {
+            // The list loader already owns its inline Retry. Do not add a second
+            // competing warning/recovery control for an error it already handles.
+            await expect(warning).toHaveCount(0);
+            await expect(page.getByText("CI controlled bulk refresh failure", { exact: true })).toBeVisible();
+            await page.getByTestId("testcases-retry").click();
+          } else {
+            await expect(warning).toBeVisible();
+            await expect(page.getByRole("button", { name: "Bulk actions", exact: true })).toHaveCount(0);
+            await testInfo.attach(`confirmed-bulk-${scenario}-refresh-warning`, { body: await page.screenshot(), contentType: "image/png" });
+            await page.getByRole("button", { name: "Reload repository", exact: true }).click();
+          }
+          await expect(page).toHaveURL(repositoryUrl);
+          // Actual content, not early DOM absence, proves the read/reload finished.
+          await expect(page.getByRole("button", { name: "CI moveToDefault local 0", exact: true })).toBeVisible();
+          await expect(warning).toHaveCount(0);
+          if (scenario === "archive" || scenario === "delete") {
+            await expect(page.getByRole("button", { name: control.title, exact: true })).toHaveCount(0);
+            await statusFilter.selectOption("Archived");
+            if (scenario === "archive") await expect(page.getByRole("button", { name: control.title, exact: true })).toBeVisible();
+            else await expect(page.getByRole("button", { name: control.title, exact: true })).toHaveCount(0);
+          } else {
+            const row = page.getByRole("row").filter({ has: page.getByRole("button", { name: control.title, exact: true }) });
+            await expect(row).toContainText(updated.priority);
+            if (scenario === "move") {
+              const noSuites = page.getByRole("button", { name: /^No suites \d+$/ });
+              await expect(noSuites).toBeVisible(); await noSuites.click();
+              await expect(page).toHaveURL(`${repositoryUrl}?suiteId=none`);
+              await expect(page.getByRole("button", { name: control.title, exact: true })).toBeVisible();
+            }
+          }
+          await expect(page.locator("body")).not.toContainText("CI PRIVATE");
+          expect(refusedReads).toBe(1); expect(submissions).toBe(1);
+          expect(await state()).toEqual(after); expect(await activity()).toEqual(nextEvents);
+          await testInfo.attach(`confirmed-bulk-${scenario}-recovered-without-resubmission`, { body: await page.screenshot(), contentType: "image/png" });
+        } finally { page.off("request", countSubmission); }
+      });
+    }
+  } finally {
+    for (const id of tokens) expect((await page.request.delete(`${base}/apikeys/${id}`)).ok()).toBeTruthy();
+    await machine.dispose(); await other.dispose(); await db.end(); // Preserve synthetic history/audit until disposable DB teardown.
+  }
+}

@@ -38,21 +38,38 @@ const columns = [
 
 type TaskView = "tasks" | "kanban" | "review";
 
+const PLAIN_TEXT_BLOCK_TAGS = new Set([
+  "P", "DIV", "LI", "UL", "OL", "H1", "H2", "H3", "H4", "H5", "H6",
+  "BLOCKQUOTE", "PRE", "TABLE", "TR",
+]);
+
 function htmlToPlainText(html: string): string {
-  // The knowledge-base editor only ever produces rich-text markup (paragraphs, lists, headings,
-  // inline marks) — never <script>/<style> — so a generic tag strip is all this needs.
-  return html
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  // Parsed with DOMParser instead of a chain of tag-stripping regular expressions: a tag strip runs
+  // once and can leave a tag behind when the input is crafted (or when `&lt;script&gt;` is decoded
+  // after stripping), and the entity decoding was hand-rolled. The parser produces real text nodes,
+  // decodes entities correctly, and script/style contents are dropped rather than copied.
+  if (typeof DOMParser === "undefined") return html;
+  const body = new DOMParser().parseFromString(html, "text/html").body;
+  let out = "";
+  const walk = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      out += node.textContent ?? "";
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const element = node as HTMLElement;
+    if (element.tagName === "SCRIPT" || element.tagName === "STYLE") return;
+    if (element.tagName === "BR") {
+      out += "\n";
+      return;
+    }
+    const block = PLAIN_TEXT_BLOCK_TAGS.has(element.tagName);
+    if (block && out && !out.endsWith("\n")) out += "\n";
+    element.childNodes.forEach(walk);
+    if (block && out && !out.endsWith("\n")) out += "\n";
+  };
+  walk(body);
+  return out.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /**

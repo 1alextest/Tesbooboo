@@ -45,7 +45,8 @@ export type NotificationType =
   | "integration_sync_completed"
   | "integration_sync_failed"
   | "integration_issue_linked"
-  | "requirement_updated";
+  | "requirement_updated"
+  | "qa_change_review";
 
 /**
  * Not implemented — the extension point for the integration notifications (connected, disconnected,
@@ -107,7 +108,8 @@ export const NOTIFICATION_PRIORITY: Record<NotificationType, NotificationPriorit
   // A requirement is a ticket synced from Jira / Linear / Notion. "Requirement sync completed / failed"
   // are the integration_sync_* notifications above: the Requirements page's "Sync all sources" is the
   // same sync run, so there is one notification per run, not two.
-  requirement_updated: "Medium"
+  requirement_updated: "Medium",
+  qa_change_review: "High"
 };
 
 /** `notifications.title` is VARCHAR(255). */
@@ -174,7 +176,8 @@ export const notificationMessages = {
   integrationSyncCompleted: (provider: IntegrationProvider, projectName: string) => `${integrationLabel(provider)} sync completed successfully for ${projectName}.`,
   integrationSyncFailed: (provider: IntegrationProvider, projectName: string) => `${integrationLabel(provider)} sync failed for ${projectName}. Please review the connection.`,
   integrationIssueLinked: (issueId: string) => `${issueId} has been linked successfully.`,
-  requirementUpdated: (requirementId: string) => `Requirement ${requirementId} has been updated.`
+  requirementUpdated: (requirementId: string) => `Requirement ${requirementId} has been updated.`,
+  qaChangeReview: () => "A source or requirement change needs QA review."
 };
 
 /**
@@ -231,6 +234,7 @@ export const notificationLinks = {
   requirements: (projectId: string): NotificationLink => ({ linkEntityType: "requirements", linkEntityId: projectId }),
   /** The Zyra chat page (the id is the project's). */
   zyraChat: (projectId: string): NotificationLink => ({ linkEntityType: "zyra_chat", linkEntityId: projectId }),
+  zyraChangeReview: (projectId: string): NotificationLink => ({ linkEntityType: "zyra_change_review", linkEntityId: projectId }),
   zyraTask: (projectId: string, taskId: string): NotificationLink => ({ linkEntityType: "zyra_task", linkEntityId: `${projectId}:${taskId}` }),
   /** The task board (the id is the project's) — what the archive sweep's notification already uses. */
   zyraTaskBoard: (projectId: string): NotificationLink => ({ linkEntityType: "zyra_task_board", linkEntityId: projectId }),
