@@ -1,32 +1,48 @@
+# Trusted policy runs from the base repository DEFAULT BRANCH, never the PR merge.
+# The branch rulesets must independently require the exact "specification-assurance"
+# check published onto the PR head by this trusted workflow.
 name: Specification assurance review gate
+
 on:
-  pull_request:
-    types: [opened, reopened, synchronize, edited, ready_for_review]
-  pull_request_review:
-    types: [submitted, dismissed, edited]
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft]
+  # GitHub's pull_request_review workflow definition is PR-editable: deliberately
+  # DO NOT use it. A reviewer can request a fresh decision with this PR comment.
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to recompute after a reviewer decision
+        required: true
+        type: number
+
 permissions:
   contents: read
   pull-requests: read
+  checks: write
+
 jobs:
-  specification-assurance:
-    name: specification-assurance
-    # Run for any PR base; the trusted script filters to protected paths and fails closed.
+  assurance-policy-publisher:
+    name: assurance-policy-publisher
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request != null && github.event.comment.body == '/recheck-assurance')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      # Execute the policy from the trusted BASE. PR-authored scripts cannot approve themselves.
+      # This checkout MUST NEVER use github.event.pull_request.head.sha,
+      # a pull request merge ref, fork repository or its artifacts.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          repository: ${{ github.repository }}
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '22'
-      - name: Verify protected specification approval and exact-head review evidence
+          node-version: "22"
+      - name: Publish exact-PR-head authorization and review status
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          # Roster transport is provisional: collaborators may edit repository variables.
-          # Do not treat as a trusted approval source before configuring owner-controlled policy.
-          TESBO_ASSURANCE_INDEPENDENT_REVIEWERS: ${{ vars.TESBO_ASSURANCE_INDEPENDENT_REVIEWERS }}
-          TESBO_ASSURANCE_WHITE_REVIEWERS: ${{ vars.TESBO_ASSURANCE_WHITE_REVIEWERS }}
-        run: node scripts/assurance-pr-gate.mjs
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+        run: node scripts/publish-assurance-status.mjs
