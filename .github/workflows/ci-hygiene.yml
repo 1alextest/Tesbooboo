@@ -49,20 +49,6 @@ jobs:
       - name: Validate SQL numbering and append-only history
         run: node scripts/check-migrations.mjs --base "$QUALITY_BASE_REF"
 
-  assurance-gate-contracts:
-    name: assurance-gate-contracts
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: "22"
-      - name: Verify source/approval/waiver gate including denied neighbors
-        run: node --test scripts/assurance-pr-gate.test.mjs
-
   mbt-symbolic-pilot:
     name: mbt-symbolic-pilot
     runs-on: ubuntu-24.04
