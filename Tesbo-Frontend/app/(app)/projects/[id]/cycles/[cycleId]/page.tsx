@@ -66,6 +66,8 @@ import Modal from "@/components/ui/Modal";
 import ExecutionEvidencePanel from "@/components/ExecutionEvidencePanel";
 import { AutomationResultMeta, AutomationRunProvenance } from "@/components/AutomationResultMeta";
 import { formatSpent, RunTags } from "@/components/testruns/runDisplay";
+import RetestRunDialog from "@/components/testruns/RetestRunDialog";
+import { RetestRunChildren, RetestRunOrigin, RetestSourceObservation } from "@/components/testruns/RetestLineage";
 import { useLogBugDialog } from "@/components/LogBugDialog";
 import { useTopBarSlots } from "@/components/TopBarSlots";
 import { Breadcrumbs } from "@/components/workflows";
@@ -389,6 +391,7 @@ export default function TestRunDetailPage() {
   const router = useRouter();
   const projectId = params.id as string;
   const { currentUser } = useAppData();
+  const currentUserId = currentUser?.userId;
   const { project, projectMembers: members } = useProjectData();
   const projectName = String(project.name || "");
   const cycleId = params.cycleId as string;
@@ -400,10 +403,13 @@ export default function TestRunDetailPage() {
   }, [setTopBarFilled]);
 
   const [run, setRun] = useState<TestRunDetail | null>(null);
+  const [loadedViewScope, setLoadedViewScope] = useState("");
   const [modelProvenance, setModelProvenance] = useState<ModelStudioRunProvenance | null>(null);
   const [executions, setExecutions] = useState<ExecutionItem[]>([]);
-  // Keyed by testcaseId because that is what the remove endpoints take.
-  const [selectedRunCaseIds, setSelectedRunCaseIds] = useState<Set<string>>(new Set());
+  // One selection retains the exact occurrence; case IDs remain a projection for case removal.
+  const [selectedRunExecutions, setSelectedRunExecutions] = useState<Map<string, string>>(new Map());
+  const selectedRunCaseIds = useMemo(() => new Set(selectedRunExecutions.keys()), [selectedRunExecutions]);
+  const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
   const [bulkRemoveOpen, setBulkRemoveOpen] = useState(false);
   const [bulkRemoving, setBulkRemoving] = useState(false);
   const [bulkRemoveError, setBulkRemoveError] = useState<string | null>(null);
@@ -416,6 +422,36 @@ export default function TestRunDetailPage() {
   const [bulkStatusUpdating, setBulkStatusUpdating] = useState(false);
   const [bulkStatusError, setBulkStatusError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retestOpen, setRetestOpen] = useState(false);
+  const [retestExecutionIds, setRetestExecutionIds] = useState<string[]>([]);
+  const retestTrigger = useRef<HTMLButtonElement>(null);
+  const runHeading = useRef<HTMLHeadingElement>(null);
+  const backToRunsLink = useRef<HTMLAnchorElement>(null);
+  const viewScope = `${currentUserId || ""}:${projectId}:${cycleId}`;
+  const currentViewScope = useRef(viewScope);
+  currentViewScope.current = viewScope;
+  const loadSequence = useRef(0);
+  const restoreRetestFocus = useCallback(() => {
+    const closingScope = currentViewScope.current;
+    // The dialog is rendered before these sibling controls. Wait for this commit's refs,
+    // including a source read that settles in the same render as the recovery dismissal.
+    queueMicrotask(() => {
+      if (currentViewScope.current !== closingScope) return;
+      const selectedAction = retestTrigger.current;
+      const target = selectedAction?.isConnected && !selectedAction.disabled
+        ? selectedAction : runHeading.current ?? backToRunsLink.current;
+      if (target?.isConnected) target.focus();
+    });
+  }, []);
+  useEffect(() => {
+    if (loadedViewScope !== viewScope || selectedRunExecutions.size === 0) return;
+    const current = new Map(executions.map(item => [item.testcaseId, item.id]));
+    const retained = new Map([...selectedRunExecutions].filter(([testcaseId, executionId]) => current.get(testcaseId) === executionId));
+    if (retained.size === selectedRunExecutions.size) return;
+    setSelectedRunExecutions(retained);
+    setSelectionNotice("Some selected observations were removed or replaced. Their selection was cleared; select any replacement observation explicitly.");
+  }, [executions, selectedRunExecutions, loadedViewScope, viewScope]);
   /*
    * Governed-run provenance. This page knows only its cycle id; an ordinary run answers null and
    * nothing renders. A failed lookup is treated as "no provenance" rather than blocking the run.
@@ -504,17 +540,28 @@ export default function TestRunDetailPage() {
   const [copied, setCopied] = useState(false);
 
   const load = useCallback(() => {
+    const sequence = ++loadSequence.current;
+    setLoadError(null);
     return Promise.all([getTestRun(cycleId), listCycleExecutions(cycleId)])
       .then(([r, e]) => {
+        if (currentViewScope.current !== viewScope || sequence !== loadSequence.current) return;
+        if (r.id !== cycleId || r.projectId !== projectId) throw new Error("The returned Run does not match this project. Reload to check its current details.");
         setRun(r);
+        setLoadedViewScope(viewScope);
         setExecutions(e);
         setShareEnabled(r.shareEnabled ?? false);
         setShareToken(r.shareToken ?? null);
         return e;
       })
-      .catch(() => router.replace(`/projects/${projectId}/cycles`))
-      .finally(() => setLoading(false));
-  }, [cycleId, projectId, router]);
+      .catch((error) => {
+        if (currentViewScope.current === viewScope && sequence === loadSequence.current) {
+          setLoadError(error instanceof Error ? error.message : "The Run could not be loaded. Please try again.");
+        }
+      })
+      .finally(() => {
+        if (currentViewScope.current === viewScope && sequence === loadSequence.current) setLoading(false);
+      });
+  }, [cycleId, projectId, viewScope]);
 
   const { dialog: bugDialog, openBugDialogFor } = useLogBugDialog({
     projectId,
@@ -539,15 +586,25 @@ export default function TestRunDetailPage() {
 
 
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUserId) {
       router.replace("/login");
       return;
     }
-    load();
+    setLoading(true);
+    setRun(null);
+    setExecutions([]);
+    setSelectedRunExecutions(new Map());
+    setSelectionNotice(null);
+    setRetestOpen(false);
+    setRetestExecutionIds([]);
+    setPanelExecution(null);
+    void load();
+    let active = true;
     listPlans(projectId)
-      .then((plans) => setPlanNames(Object.fromEntries(plans.map((p) => [p.id, p.name]))))
+      .then((plans) => { if (active && currentViewScope.current === viewScope) setPlanNames(Object.fromEntries(plans.map((p) => [p.id, p.name]))); })
       .catch(() => {});
-  }, [router, load, projectId, currentUser]);
+    return () => { active = false; loadSequence.current += 1; };
+  }, [router, load, projectId, currentUserId, viewScope]);
 
   /* reset to first page whenever the filter/search/sort changes */
   useEffect(() => {
@@ -854,8 +911,8 @@ export default function TestRunDetailPage() {
     try {
       await removeTestCaseFromRun(cycleId, testcaseId);
       setExecutions((prev) => prev.filter((e) => e.testcaseId !== testcaseId));
-      setSelectedRunCaseIds((prev) => {
-        const next = new Set(prev);
+      setSelectedRunExecutions((prev) => {
+        const next = new Map(prev);
         next.delete(testcaseId);
         return next;
       });
@@ -876,7 +933,7 @@ export default function TestRunDetailPage() {
       await removeTestCasesFromRun(cycleId, testcaseIds);
       const removed = new Set(testcaseIds);
       setExecutions((prev) => prev.filter((e) => !removed.has(e.testcaseId)));
-      setSelectedRunCaseIds(new Set());
+      setSelectedRunExecutions(new Map());
       setBulkRemoveError(null);
       setBulkRemoveOpen(false);
     } catch (err) {
@@ -887,12 +944,9 @@ export default function TestRunDetailPage() {
   }
 
   /* ───── Assign selected test cases ─────
-     selectedRunCaseIds is keyed by testcaseId (same set the remove action uses); the bulk-assign
-     endpoint takes execution ids, so they're resolved through the already-loaded executions list. */
+     The endpoint receives the exact selected occurrences, including across in-place refreshes. */
   async function handleBulkAssign() {
-    const executionIds = executions
-      .filter((e) => selectedRunCaseIds.has(e.testcaseId))
-      .map((e) => e.id);
+    const executionIds = Array.from(selectedRunExecutions.values());
     if (!executionIds.length || bulkAssigning) return;
     setBulkAssigning(true);
     try {
@@ -900,7 +954,7 @@ export default function TestRunDetailPage() {
       await bulkAssignExecutions(cycleId, { executionIds, assigneeId });
       const updated = new Set(executionIds);
       setExecutions((prev) => prev.map((e) => (updated.has(e.id) ? { ...e, assigneeId } : e)));
-      setSelectedRunCaseIds(new Set());
+      setSelectedRunExecutions(new Map());
       setBulkAssignError(null);
       setBulkAssignOpen(false);
     } catch (err) {
@@ -911,21 +965,18 @@ export default function TestRunDetailPage() {
   }
 
   /* ───── Set status on selected test cases ─────
-     The bulk-status endpoint takes execution ids, so the testcase-keyed selection is resolved
-     through the loaded executions list the same way bulk-assign does. The server applies one
+     The bulk-status endpoint receives the same exact occurrences as bulk-assign. The server applies one
      status to the whole selection in a single transaction and refuses unknown values, so the
      local state is updated only with the status the server echoed back. */
   async function handleBulkStatus() {
-    const executionIds = executions
-      .filter((e) => selectedRunCaseIds.has(e.testcaseId))
-      .map((e) => e.id);
+    const executionIds = Array.from(selectedRunExecutions.values());
     if (!executionIds.length || bulkStatusUpdating || !bulkStatusValue) return;
     setBulkStatusUpdating(true);
     try {
       const { status } = await bulkUpdateExecutionStatus(cycleId, { executionIds, status: bulkStatusValue });
       const updated = new Set(executionIds);
       setExecutions((prev) => prev.map((e) => (updated.has(e.id) ? { ...e, status } : e)));
-      setSelectedRunCaseIds(new Set());
+      setSelectedRunExecutions(new Map());
       setBulkStatusError(null);
       setBulkStatusOpen(false);
       setBulkStatusValue("");
@@ -936,11 +987,12 @@ export default function TestRunDetailPage() {
     }
   }
 
-  function toggleRunCaseSelection(testcaseId: string) {
-    setSelectedRunCaseIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(testcaseId)) next.delete(testcaseId);
-      else next.add(testcaseId);
+  function toggleRunCaseSelection(execution: ExecutionItem) {
+    setSelectionNotice(null);
+    setSelectedRunExecutions((prev) => {
+      const next = new Map(prev);
+      if (next.get(execution.testcaseId) === execution.id) next.delete(execution.testcaseId);
+      else next.set(execution.testcaseId, execution.id);
       return next;
     });
   }
@@ -948,13 +1000,13 @@ export default function TestRunDetailPage() {
   // Only the rows on the current page — selecting "all" must not reach into other pages, and
   // toggling it off must not drop selections made on a page the user has since left.
   function toggleSelectAllRunCases() {
-    setSelectedRunCaseIds((prev) => {
-      const pageIds = pagedExecutions.map((e) => e.testcaseId);
-      const allPageSelected = pageIds.length > 0 && pageIds.every((id) => prev.has(id));
-      const next = new Set(prev);
-      for (const id of pageIds) {
-        if (allPageSelected) next.delete(id);
-        else next.add(id);
+    setSelectionNotice(null);
+    setSelectedRunExecutions((prev) => {
+      const allPageSelected = pagedExecutions.length > 0 && pagedExecutions.every(item => prev.get(item.testcaseId) === item.id);
+      const next = new Map(prev);
+      for (const item of pagedExecutions) {
+        if (allPageSelected) next.delete(item.testcaseId);
+        else next.set(item.testcaseId, item.id);
       }
       return next;
     });
@@ -1125,8 +1177,26 @@ export default function TestRunDetailPage() {
   );
 
 
-  if (loading || !run) {
-    return <PageLoader variant="screen" />;
+  const sourceAvailable = Boolean(run && loadedViewScope === viewScope && run.id === cycleId && run.projectId === projectId);
+  const retestDialog = currentUser && <RetestRunDialog key={viewScope} open={retestOpen} onOpen={() => setRetestOpen(true)} onClose={() => setRetestOpen(false)}
+    onRestoreFocus={restoreRetestFocus}
+    sourceRun={sourceAvailable && run ? run : { id: cycleId, name: "Unavailable source Run", environment: "" }}
+    allowCreate={sourceAvailable && !loadError} projectId={projectId} userId={currentUser.userId} executionIds={retestExecutionIds}
+    onCreated={id => { setRetestOpen(false); router.push(`/projects/${projectId}/cycles/${id}`); }} />;
+  const backToTestRuns = <Link ref={backToRunsLink} href={`/projects/${projectId}/cycles`} className="ml-4 text-sm text-[var(--accent-light)] hover:underline">Back to Test Runs</Link>;
+
+  if (loading) {
+    return <>{retestDialog}<div className="px-6 pt-4">{backToTestRuns}</div><PageLoader variant="screen" /></>;
+  }
+  if (!run || !sourceAvailable) {
+    return <>
+      {retestDialog}
+      <section className="p-6" aria-label="Run unavailable">
+        <p role="alert" className="mb-3 text-sm text-[var(--error-foreground)]">{loadError || "This Run is unavailable."}</p>
+        <Button variant="secondary" onClick={() => void load()}>Retry Run</Button>
+        {backToTestRuns}
+      </section>
+    </>;
   }
 
   const isInProgress = run.status === "In Progress";
@@ -1140,6 +1210,8 @@ export default function TestRunDetailPage() {
     // Full-bleed, full-height workspace: `tc-fullbleed` drops the wrapping .tesbo-page's
     // centered 1280px cap so this fills the content region below the 3.5rem TopBar,
     // matching the Test Plan detail workspace pattern.
+    <>
+    {retestDialog}
     <main className="tc-fullbleed flex flex-col p-4" style={{ height: "calc(100vh - 3.5rem)" }}>
       <div className="flex min-h-0 flex-1 flex-col">
         {/* TopBar takeover: breadcrumb (start) + actions (end) */}
@@ -1209,6 +1281,10 @@ export default function TestRunDetailPage() {
           )}
 
         {/* Page header: title + status + owner + description + meta */}
+        {loadError && <div className="mb-3 flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-[var(--error)]/20 p-3">
+          <p role="alert" className="text-sm text-[var(--error-foreground)]">The displayed Run could not be refreshed. {loadError}</p>
+          <Button variant="secondary" onClick={() => void load()}>Retry Run</Button>
+        </div>}
         {runStatusError && (
           <p role="alert" className="mb-3 shrink-0 rounded-lg border border-[var(--error)]/20 bg-[var(--error-soft)] p-3 text-sm text-[var(--error-foreground)]">
             {runStatusError}
@@ -1217,11 +1293,13 @@ export default function TestRunDetailPage() {
         <div className="mb-3 shrink-0">
           <div className="flex flex-wrap items-center gap-2.5">
             <RunAvatar name={run.name} size={28} />
-            <h1 className="text-[20px] font-semibold leading-tight tracking-[-0.02em] text-[var(--foreground)]">{run.name}</h1>
+            <h1 ref={runHeading} tabIndex={-1} className="text-[20px] font-semibold leading-tight tracking-[-0.02em] text-[var(--foreground)]">{run.name}</h1>
             <StatusChip tone={runStatusToTone(run.status)}>{run.status}</StatusChip>
             {ownerName && <MemberAvatar name={ownerName} seed={run.ownerId} size={24} />}
           </div>
           {run.description && <p className="mt-1 text-[13px] text-[var(--muted-soft)]">{run.description}</p>}
+          {run.retestManifest && <RetestRunOrigin manifest={run.retestManifest} />}
+          {currentUser && <RetestRunChildren key={viewScope} projectId={projectId} cycleId={cycleId} userId={currentUser.userId} />}
           {/*
             * "Automated · github-actions · main · a1b2c3d · Build ↗" — renders nothing on a manual
             * run, so the header is unchanged for every run a person created (Basecamp 10189985971 §4).
@@ -1422,10 +1500,18 @@ export default function TestRunDetailPage() {
             </div>
           </div>
 
-          {selectedRunCaseIds.size > 0 && !isCompleted && (
-            <div className="flex h-10 shrink-0 items-center gap-2.5 border-b border-[var(--border)] bg-[var(--brand-soft)] px-4 text-[12px]">
+          {selectionNotice && <p role="status" data-testid="run-selection-changed" className="border-b border-[var(--border)] bg-[var(--surface-secondary)] px-4 py-3 text-sm">{selectionNotice}</p>}
+          {selectedRunCaseIds.size > 0 && (
+            <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2.5 border-b border-[var(--border)] bg-[var(--brand-soft)] px-4 py-2 text-[12px]">
               <span className="font-medium text-[var(--brand-primary)]">{selectedRunCaseIds.size} selected</span>
               <div className="h-4 w-px bg-[var(--border-strong)]" />
+              <button ref={retestTrigger} type="button" data-testid="run-retest-selected" disabled={Boolean(loadError)} onClick={() => {
+                setRetestExecutionIds(Array.from(selectedRunExecutions.values()));
+                setRetestOpen(true);
+              }} className="flex items-center gap-1 font-medium text-[var(--brand-primary)] hover:underline disabled:opacity-50">
+                <IconRefresh size={13} /> Retest selected
+              </button>
+              {!isCompleted && <>
               <button
                 type="button"
                 data-testid="run-bulk-remove"
@@ -1464,9 +1550,10 @@ export default function TestRunDetailPage() {
                 <IconCircleCheck size={13} />
                 Set status
               </button>
+              </>}
               <button
                 type="button"
-                onClick={() => setSelectedRunCaseIds(new Set())}
+                onClick={() => { setSelectedRunExecutions(new Map()); setSelectionNotice(null); }}
                 className="ml-auto flex items-center gap-1 text-[var(--muted)] hover:text-[var(--foreground)]"
               >
                 <IconX size={12} stroke={2} />
@@ -1490,7 +1577,6 @@ export default function TestRunDetailPage() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-[var(--border)] bg-[var(--surface-secondary)] text-left text-[11px] uppercase tracking-wide text-[var(--muted-soft)]">
-                    {!isCompleted && (
                       <th className="w-9 px-3 py-2.5">
                         <input
                           type="checkbox"
@@ -1498,13 +1584,12 @@ export default function TestRunDetailPage() {
                           data-testid="run-select-all"
                           checked={
                             pagedExecutions.length > 0 &&
-                            pagedExecutions.every((e) => selectedRunCaseIds.has(e.testcaseId))
+                            pagedExecutions.every((e) => selectedRunExecutions.get(e.testcaseId) === e.id)
                           }
                           onChange={toggleSelectAllRunCases}
                           className="h-3.5 w-3.5 cursor-pointer accent-[var(--brand-primary)]"
                         />
                       </th>
-                    )}
                     <th className="px-5 py-2.5 font-semibold">
                       <SortableColumnHeader label="ID" column="id" runSort={runSort} onToggle={toggleRunSort} />
                     </th>
@@ -1524,17 +1609,15 @@ export default function TestRunDetailPage() {
                     const assigneeName = e.assigneeId ? memberNames[e.assigneeId] : null;
                     return (
                       <tr key={e.id} className="group hover:bg-[var(--surface-secondary)]">
-                        {!isCompleted && (
                           <td className="px-3 py-3">
                             <input
                               type="checkbox"
                               aria-label={`Select ${e.title || e.snapshotTitle || "test case"}`}
-                              checked={selectedRunCaseIds.has(e.testcaseId)}
-                              onChange={() => toggleRunCaseSelection(e.testcaseId)}
+                              checked={selectedRunExecutions.get(e.testcaseId) === e.id}
+                              onChange={() => toggleRunCaseSelection(e)}
                               className="h-3.5 w-3.5 cursor-pointer accent-[var(--brand-primary)]"
                             />
                           </td>
-                        )}
                         <td className="whitespace-nowrap px-5 py-3 font-mono text-[12px] text-[var(--muted-soft)]">{e.externalId || "—"}</td>
                         <td className="px-5 py-3">
                           <button
@@ -2112,6 +2195,7 @@ export default function TestRunDetailPage() {
         {panelExecution && (
           <div className="flex h-full flex-col">
             <div className="flex-1 space-y-5 overflow-y-auto p-5">
+              {run.retestManifest && <RetestSourceObservation manifest={run.retestManifest} executionId={panelExecution.id} />}
               {/* Meta row */}
               <div className="flex flex-wrap items-center gap-4 text-[12.5px]">
                 {panelExecution.priority ? <PriorityBadge priority={panelExecution.priority as Priority} /> : <span className="text-[var(--muted-soft)]">—</span>}
@@ -2302,5 +2386,6 @@ export default function TestRunDetailPage() {
         )}
       </Drawer>
     </main>
+    </>
   );
 }

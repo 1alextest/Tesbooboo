@@ -743,6 +743,33 @@ export class LegacyController {
     return this.legacy.getCycle(cycleId, req.userId);
   }
 
+  @Get("/api/cycles/:cycleId/retests/preview")
+  previewRetest(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Query("executionIds") executionIds?: string) {
+    return this.legacy.previewNativeRetest(cycleId, req.userId, typeof executionIds === "string" ? executionIds.split(",") : []);
+  }
+
+  @Get("/api/cycles/:cycleId/retests/requests/:requestKey")
+  readRetestRequest(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Param("requestKey") requestKey: string) {
+    return this.legacy.readNativeRetestRequest(cycleId, req.userId, requestKey, { kind:req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Post("/api/cycles/:cycleId/retests/requests/:requestKey/cancel")
+  @PlanRunWrite("retestRecovery")
+  cancelRetestRequest(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Param("requestKey") requestKey: string, @Body() body: Record<string,any>) {
+    return this.legacy.cancelNativeRetestRequest(cycleId,req.userId,requestKey,body,{kind:req.apiToken ? "api_token" : "human_session"});
+  }
+
+  @Get("/api/cycles/:cycleId/retests")
+  listRetests(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string) {
+    return this.legacy.listNativeRetests(cycleId, req.userId);
+  }
+
+  @Post("/api/cycles/:cycleId/retests")
+  @PlanRunWrite("retest")
+  createRetest(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
+    return this.legacy.createNativeRetest(cycleId, req.userId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
   @Patch("/api/cycles/:cycleId")
   @PlanRunWrite("cycle")
   updateCycle(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {

@@ -28,6 +28,14 @@ paths = ['''^(?:/repo/)?docs/specs/agent-synchronized-engineering/reviews/2026-1
 regexTarget = "match"
 regexes = ['''^(?:api\.ts": "b8f6f6fdf4ce97aca68824b9eae3b08d22cbdb6c0abf56989429f3f74b5a492d|04_MCP_API_CONTRACTS\.md": "5893a48fe504a8d5c6b47bb552c493685e950fab62d44334702a92edc7c9474d)"$''']
 
+[[allowlists]]
+description = "Exact non-secret refusal prose in the frozen native backend correction review"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^(?:/repo/)?docs/specs/agent-synchronized-engineering/reviews/2026-11-20-native-qa/native-backend-fix-review\.md$''']
+regexTarget = "match"
+regexes = ['''^new-key 404, anonymous[/]foreign $''']
+
 # These two 40-character values are separately verified Git commit objects,
 # not Sourcegraph access tokens. Preserve the immutable original Blue receipt.
 # A rule-local secret allowlist avoids suppressing unrelated Sourcegraph-pattern matches.

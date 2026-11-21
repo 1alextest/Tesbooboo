@@ -1,0 +1,30 @@
+{
+  "frozenAt": "2026-11-20T09:35:19.784119+00:00",
+  "baseHead": "228a06a30156c8e3fee09938d0d0262cdd552e61",
+  "testedMerge": "d53ed043a7203475605b8e4a93ccfc29baae35a3",
+  "files": [
+    {
+      "path": "e2e/ui/cycles.spec.ts",
+      "beforeSha256": "739d0fd9d66c553620e696331f98ec51b0f81aa6a577f892894186620ffda77f",
+      "afterSha256": "22d4810771a9df92188554ac6b9bf0e9ef62290c30ada07ab0cd31c1673d86f5"
+    },
+    {
+      "path": "e2e/ui/executions.spec.ts",
+      "beforeSha256": "ffe939db07c4517c4ea5af20de79e4511758589c44fbe1ebba2f882b825eb011",
+      "afterSha256": "f524e1f6178fdb537a20aa6db9bfa840a45355f12084139d9fd90a4a657b1abf"
+    }
+  ],
+  "newLegacyPrefixSha256": "b9a47460a8ac7ba427c3c553af6e6eddedcf85d24dcd572e3d4907b044ffef07",
+  "preservedNative21BlockSha256": "92cfd58630e0bde0cea5e4579f47a06830ac0ac9156c2a90f3b864679f0679fc",
+  "preservedProductSha256": "6bb698196ef9bb8c11651bf379bdf4f091bd93b6f7a349f36c2daa7bfd0f056c",
+  "patchSha256": "7777e7d687728ef5e89e6b0783408f1ef8cedc6d92f9a2a4aa9853d063cd2bf3",
+  "scope": "Exactly two selector lines; no assertions, product changes, native edits, skips, retries, timeouts or added tests",
+  "checks": {
+    "e2eTypescript": "PASS",
+    "diffCheck": "PASS",
+    "selectedCollection": "261 tests in 9 files",
+    "suiteCollection": "3010 tests in 91 files",
+    "localRuntime": "NOT RUN",
+    "correctedHeadRuntime": "PENDING"
+  }
+}

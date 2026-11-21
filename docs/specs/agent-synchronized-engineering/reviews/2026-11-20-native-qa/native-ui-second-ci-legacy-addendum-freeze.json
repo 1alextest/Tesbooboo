@@ -1,0 +1,13 @@
+{
+  "frozenAt": "2026-11-20T09:07:26.209267+00:00",
+  "priorFreezeSha256": "1d3d5347cf59843f20d2fe1314839cd949b0b1cefa728975d5c338d3f0e99cc7",
+  "cyclesWholeFileSha256BeforeNativeAppend": "f2669c9e2eadfcb4cb01fe224724d586f0b325b2bb9507758e017329c94db36f",
+  "cyclesLegacyPrefixSha256": "38419004f3fc0fcfa929ab790da0f211b101417fb2ecd218633678d555aa5cb6",
+  "preservedNative20BlockSha256": "ed06b8ff95ec6da570f5a4bcd42785d405d55d7100f38d77e4f262c23ca3e59b",
+  "executionsSha256": "ffe939db07c4517c4ea5af20de79e4511758589c44fbe1ebba2f882b825eb011",
+  "addendumPatchSha256": "b102f861e66fb696348f9c7447cba2a12ed8b4e8227cbdfffaeda788d9bee73f",
+  "scope": [
+    "Same guarded legacy UPDATE returned through CTE SELECT for both existing SQL transports",
+    "Only two evidence selectors changed to exact DOM spelling Evidence(2)"
+  ]
+}

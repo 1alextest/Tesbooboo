@@ -75,6 +75,20 @@ jobs:
             Tesbo-Frontend/package-lock.json
             e2e/package-lock.json
             sdk/playwright-reporter/package-lock.json
+      - name: Start read-only Stripe price fixture and verify refused writes
+        env:
+          STRIPE_SECRET_KEY: sk_test_tesbo_ci
+        run: |
+          nohup node e2e/utils/stripe-readonly-fixture.mjs >/tmp/tesbo-stripe-ci.log 2>&1 &
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9977/health >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:9977/health
+          auth_header='Author''ization'
+          curl -fsS -H "$auth_header: Bearer $STRIPE_SECRET_KEY"             http://127.0.0.1:9977/v1/prices/price_tesbo_ci_monthly_usd >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST             -H "$auth_header: Bearer $STRIPE_SECRET_KEY"             http://127.0.0.1:9977/v1/customers)" = "405"
+          test "$(curl -s -o /dev/null -w '%{http_code}'             -H "$auth_header: Bearer $STRIPE_SECRET_KEY"             http://127.0.0.1:9977/v1/prices/unknown)" = "404"
       - name: Build isolated backend
         working-directory: Tesbo-Backend-Nest
         run: |
@@ -82,6 +96,7 @@ jobs:
           npm run build
           npm run migrate
           nohup node dist/main.js >/tmp/tesbo-backend.log 2>&1 &
+          echo $! >/tmp/tesbo-backend.pid
       - name: Prepare the disposable Review Board database
         working-directory: Tesbo-Backend-Nest
         run: |
@@ -293,6 +308,60 @@ jobs:
             api/executions.spec.ts api/attachments.spec.ts \
             --workers=1 --retries=0 --output=test-results-compatibility \
             -g "supports the create -> read -> update -> list -> delete lifecycle|supports adding and removing test cases|the same id repeated inside one request is added once|AUT-01 a full session|adding a test case to a cycle auto-creates an Untested execution|an execution attachment uploads and appears in its list|from-cases seeds the run with its cases|from-cases refuses a Draft case"
+      - name: Verify native manual retest and Run execution impact set
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-native-retest
+        run: |
+          # All native Run/Execution/Plan/readable URL files against the ordinary application.
+          # Full billing API/UI suites are executed below with billing enabled on the same
+          # disposable migrated database; none of their assertions are removed or skipped.
+          npx playwright test -c playwright.config.ts --list | tail -n 1
+          npx playwright test -c playwright.config.ts \
+            api/cycles.spec.ts api/executions.spec.ts api/route-resolve.spec.ts \
+            api/plans.spec.ts ui/cycles.spec.ts ui/executions.spec.ts ui/readable-urls.spec.ts \
+            --workers=10 --retries=0 --output=test-results-native-retest --list
+          npx playwright test -c playwright.config.ts \
+            api/cycles.spec.ts api/executions.spec.ts api/route-resolve.spec.ts \
+            api/plans.spec.ts ui/cycles.spec.ts ui/executions.spec.ts ui/readable-urls.spec.ts \
+            --workers=10 --retries=0 --output=test-results-native-retest
+      - name: Verify billing API and UI against read-only Stripe CI fixture
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-native-billing
+          TESBO_CI_STRIPE_READONLY_FIXTURE: "1"
+          STRIPE_SECRET_KEY: sk_test_tesbo_ci
+          STRIPE_WEBHOOK_SECRET: whsec_tesbo_ci
+          STRIPE_PRICE_ID_PRO_MONTHLY: price_tesbo_ci_monthly_usd
+          STRIPE_PRICE_ID_PRO_ANNUAL: price_tesbo_ci_annual_usd
+        run: |
+          # Switch ONLY after native and unrelated smoke cases complete; do not subject
+          # unrelated tenants to the now-enabled Launch billing limits.
+          old_pid=$(cat /tmp/tesbo-backend.pid)
+          kill "$old_pid"
+          for _ in $(seq 1 30); do
+            if ! kill -0 "$old_pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          if curl -fsS --max-time 2 http://127.0.0.1:7000/health >/dev/null 2>&1; then
+            echo "Original backend is still serving: refusing ambiguous billing evidence" >&2
+            exit 1
+          fi
+          pushd ../Tesbo-Backend-Nest >/dev/null
+          nohup node dist/main.js >/tmp/tesbo-backend-billing.log 2>&1 &
+          echo $! >/tmp/tesbo-backend-billing.pid
+          popd >/dev/null
+          for _ in $(seq 1 60); do
+            if curl -fsS --max-time 2 http://127.0.0.1:7000/api/billing/pricing >/tmp/tesbo-ci-billing-quote.json; then break; fi
+            sleep 1
+          done
+          node -e 'const p=require("/tmp/tesbo-ci-billing-quote.json");if(p.currency!=="usd"||!(p.monthlyAmount>0)||!(p.annualAmount>0))process.exit(1)'
+          npx playwright test -c playwright.config.ts \
+            api/billing.spec.ts ui/billing.spec.ts \
+            --workers=2 --retries=0 --output=test-results-native-billing --list
+          npx playwright test -c playwright.config.ts \
+            api/billing.spec.ts ui/billing.spec.ts \
+            --workers=2 --retries=0 --output=test-results-native-billing
       - name: Capture smoke evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -304,6 +373,8 @@ jobs:
             e2e/playwright-report*/
             e2e/test-results*/
             /tmp/tesbo-backend.log
+            /tmp/tesbo-backend-billing.log
+            /tmp/tesbo-stripe-ci.log
             /tmp/tesbo-web.log
 
   dependency-audit:
