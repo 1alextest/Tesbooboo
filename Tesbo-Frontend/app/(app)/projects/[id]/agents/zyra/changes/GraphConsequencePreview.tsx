@@ -31,7 +31,14 @@ export function GraphConsequencePreview({ projectId, historyId }: {
   async function toggle(): Promise<void> {
     if (open) {
       setOpen(false);
-      active.current?.abort();
+      // A pending request can be abandoned and immediately reopened. Remove its active
+      // identity and loading state synchronously, and fence its late completion.
+      if (active.current) {
+        active.current.abort();
+        active.current = null;
+        generation.current++;
+      }
+      setLoading(false);
       return;
     }
     setOpen(true);
