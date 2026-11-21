@@ -20,6 +20,8 @@ const valid = [review('blue', 'INDEPENDENT', specialist), review('white', 'WHITE
 test('only protected spec/assurance material triggers the gate', () => {
   assert.equal(requiresAssurance('docs/specs/agent-synchronized-engineering/design.md'), true);
   assert.equal(requiresAssurance('scripts/assurance-pr-gate.mjs'), true);
+  assert.equal(requiresAssurance('scripts/publish-assurance-status.mjs'), true);
+  assert.equal(requiresAssurance('.github/workflows/ci-hygiene.yml'), true);
   assert.equal(requiresAssurance('Tesbo-Backend-Nest/src/app.module.ts'), false);
   assert.equal(check([], { changedFiles: ['README.md'] }).status, 'not_applicable');
 });
