@@ -34,12 +34,29 @@ export function parseReviewBody(body, head) {
   return { role, receipt, decision, waiverReason: waiverReason ?? null };
 }
 
+/** Parse a trusted repo-admin-controlled comma-separated GitHub login roster. */
+export function parseReviewerRoster(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const logins = value.split(',').map(item => item.trim().toLowerCase());
+  if (logins.some(login => !/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(login)) ||
+      new Set(logins).size !== logins.length) return null;
+  return logins;
+}
+
+function validReviewerRoster(roster) {
+  return roster && ['INDEPENDENT', 'WHITE'].every(role =>
+    Array.isArray(roster[role]) && roster[role].length > 0 &&
+    roster[role].every(login => typeof login === 'string' &&
+      /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(login) && login === login.toLowerCase()) &&
+    new Set(roster[role]).size === roster[role].length);
+}
+
 /**
  * Use GitHub review objects, not PR-authored JSON saying a role approved.
  * A later dismissed/change-requested review by the same actor invalidates an earlier approval.
  * Every approval must be anchored to the exact current PR head.
  */
-export function evaluateAssuranceReviews({ changedFiles, reviews, head, author, draft = false }) {
+export function evaluateAssuranceReviews({ changedFiles, reviews, head, author, draft = false, authorizedReviewers = null }) {
   if (!Array.isArray(changedFiles) || !Array.isArray(reviews) || !SHA.test(head) || !author) {
     return { status: 'blocked', errors: ['Invalid or incomplete GitHub review inputs'], approvals: [] };
   }
@@ -47,6 +64,7 @@ export function evaluateAssuranceReviews({ changedFiles, reviews, head, author, 
   if (protectedFiles.length === 0) return { status: 'not_applicable', protectedFiles, errors: [], approvals: [] };
   const errors = [];
   if (draft) errors.push('Draft PR cannot satisfy final assurance');
+  if (!validReviewerRoster(authorizedReviewers)) errors.push('Trusted independent/White reviewer roster is missing or invalid');
   const latest = new Map();
   const chronological = [...reviews].sort((a, b) =>
     String(a.submitted_at ?? '').localeCompare(String(b.submitted_at ?? '')) ||
@@ -60,7 +78,8 @@ export function evaluateAssuranceReviews({ changedFiles, reviews, head, author, 
   for (const [login, review] of latest) {
     if (login === author.toLowerCase() || review.state !== 'APPROVED' || review.commit_id !== head) continue;
     const attestation = parseReviewBody(review.body, head);
-    if (!attestation) continue;
+    if (!attestation || !validReviewerRoster(authorizedReviewers) ||
+        !authorizedReviewers[attestation.role].includes(login)) continue;
     approvals.push({ ...attestation, login, reviewId: review.id });
   }
   const specialist = approvals.filter(r => r.role === 'INDEPENDENT');
@@ -95,7 +114,7 @@ async function githubPages(api, suffix, token) {
   throw new Error('GitHub review/file pagination exceeded safe limit');
 }
 
-export async function run({ repository, prNumber, token }) {
+export async function run({ repository, prNumber, token, authorizedReviewers = null }) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) ||
       !Number.isSafeInteger(prNumber) || prNumber < 1 || !token) throw new Error('Invalid GitHub gate configuration');
   const api = `https://api.github.com/repos/${repository}`;
@@ -108,7 +127,7 @@ export async function run({ repository, prNumber, token }) {
   };
   const reviews = await githubPages(api, `/pulls/${prNumber}/reviews`, token);
   const outcome = evaluateAssuranceReviews({ changedFiles: files.map(f => f.filename), reviews,
-    head: pr.head.sha, author: pr.user.login, draft: pr.draft });
+    head: pr.head.sha, author: pr.user.login, draft: pr.draft, authorizedReviewers });
   if (!['review_provisionally_verified', 'approved_exception'].includes(outcome.status)) return outcome;
   // Exact head fetch (not default branch) makes a deleted/renamed/past receipt fail closed.
   for (const approval of outcome.approvals) {
@@ -126,8 +145,13 @@ export async function main(env = process.env) {
   if (!eventPath) throw new Error('Missing GITHUB_EVENT_PATH');
   const event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
   const prNumber = event?.pull_request?.number;
+  // Only trusted workflow/repository variables supply these rosters, never PR metadata.
+  const authorizedReviewers = {
+    INDEPENDENT: parseReviewerRoster(env.TESBO_ASSURANCE_INDEPENDENT_REVIEWERS),
+    WHITE: parseReviewerRoster(env.TESBO_ASSURANCE_WHITE_REVIEWERS),
+  };
   const report = await run({ repository: env.GITHUB_REPOSITORY, prNumber,
-    token: env.GITHUB_TOKEN });
+    token: env.GITHUB_TOKEN, authorizedReviewers });
   console.log(JSON.stringify({ gate: 'tesbo-spec-assurance-v1', prNumber, ...report }, null, 2));
   if (report.status === 'blocked') process.exitCode = 1;
   return report;
