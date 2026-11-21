@@ -19,20 +19,18 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { requireApprovedMcpEndpoint } from "./mcp-approved-origin.mjs";
 
-const rawUrl = String(process.env.TESBO_MCP_URL || "").trim();
+const tokenFile = String(process.env.TESBO_MCP_TOKEN_FILE || path.join(homedir(), ".config/opencode/secrets/tesbo.token"));
 let endpoint;
 try {
-  endpoint = new URL(rawUrl);
-  if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.hash ||
-      !/^\/api\/projects\/[^/]+\/mcp\/?$/.test(endpoint.pathname)) {
-    throw new Error("invalid endpoint");
-  }
-} catch {
-  console.error("mcp-consent-probe: supply an HTTPS project MCP endpoint without embedded credentials.");
+  // Fail BEFORE opening the token: a caller-supplied URL cannot redirect a local
+  // credential to an unrelated HTTPS host, even without an HTTP 3xx response.
+  endpoint = requireApprovedMcpEndpoint(String(process.env.TESBO_MCP_URL || "").trim(), tokenFile);
+} catch (error) {
+  console.error(`mcp-consent-probe: ${error instanceof Error ? error.message : "unapproved endpoint"}`);
   process.exit(2);
 }
-const tokenFile = String(process.env.TESBO_MCP_TOKEN_FILE || path.join(homedir(), ".config/opencode/secrets/tesbo.token"));
 let token = "";
 try {
   token = readFileSync(tokenFile, "utf8").trim();
