@@ -197,3 +197,203 @@ an owner decision, not fixed by adding another schedule.
 Product verification still follows `CLAUDE.md`: exact impacted selection,
 explicit execution approval, correct build/environment, and honest reporting of
 what actually ran. None of these static checks certifies system-wide correctness.
+
+## Coordinator-attested AI assurance — operational contract v1
+
+**Named scope:** correct the specification-assurance verifier and publisher to
+support independent AI analytical review with owner-authorized integration. This
+extends the existing GitHub review/check owners and the existing verifier scripts.
+It does not create a Tesbo approval service, evidence database, agent runtime or a
+new canonical specification. The canonical eight-file package, its FROZEN status,
+product acceptance, Skill assignment and release authority retain their owners.
+
+The selected model separates these facts:
+
+| Fact | Authority / evidence | Meaning |
+|---|---|---|
+| Independent and White analysis | Actual distinct worker invocations, pinned inputs, original outputs and methods | Analytical work, including legitimate no-new-finding, changes-required and hold outcomes |
+| Receipt import | Repository owner or an explicitly delegated coordinator, authenticated by GitHub's native review metadata | The coordinator attests that it observed the identified worker outputs |
+| Development integration | Existing owner-authorized integration policy, applicable CI and access controls | Permission to integrate within that scope; not a product approval or release |
+| Main/release | Existing separately authorized release process and actual repository rules | Unchanged; an analytical check cannot replace the main approval rule |
+
+The machine contract is
+`tesbo-coordinator-attested-ai-assurance/v1`. Its policy is the small
+[`.github/assurance-policy.json`](../.github/assurance-policy.json) file executed
+from an installed, immutable default-branch source revision. Runtime reads verify
+that its local bytes match that revision's GitHub bytes and that the default and
+PR target refs have not moved. A candidate's policy file cannot activate itself.
+Repository-owner identity comes from GitHub's stable numeric user ID; the PR author
+may also be that owner. `delegatedImporterIds` is empty by default. It permits only
+explicitly authorized numeric GitHub identities from the trusted policy. It does
+not infer analytical authority from a collaborator's `maintain`/`admin` label or
+require two human GitHub accounts. This first contract supports a personal-owner
+repository; organization ownership needs an explicit approved authority mapping,
+not an invented organization-to-human fallback.
+
+### Provenance the mechanism can and cannot establish
+
+The accepted provenance label is
+`owner-authorized-coordinator-observation`. It means the authorized coordinator
+observed actual original worker invocations and registered their results. The
+coordinator must preserve tool-issued invocation identities and disclose input
+exposure and limitations; it must never invent worker identities or write the
+Independent and White outputs itself while pretending they came from workers.
+White reads the exact Independent output before issuing its own scoped judgment.
+Workers must differ from each other and from the implementation invocation.
+
+GitHub authenticates the submitting account. That does **not** establish that a
+human personally examined the output, that a worker has a cryptographic identity,
+or that separate agent invocations guarantee intellectual independence. The
+available coordinator tools expose observed worker invocations; no independently
+verifiable worker issuer/credential is presumed. The checker verifies bindings and
+current authenticated import metadata. Substantive review quality remains the
+actual analytical work and its disclosed evidence, not a hash or a green badge.
+
+### Native records, outside the candidate commit
+
+Freeze the candidate head before review. Store original outputs and their import
+as native GitHub **COMMENTED** review records anchored to that commit. Keeping them
+outside its tree avoids the impossible requirement for a commit to contain its own
+final SHA in a newly added receipt. Do not manufacture GitHub `APPROVED` reviews or
+copy an agent result into a supposed human sign-off.
+
+Each body is one marker line followed by canonical JSON. Use the exported
+`recordBody(kind, value)` helper in `scripts/assurance-pr-gate.mjs`; it sorts object
+keys and serializes the exact body whose SHA-256 is imported. Noncanonical JSON,
+duplicate keys, excessive size and trailing content are rejected. The marker kinds
+are `TESBO-AI-RECEIPT: 1`, `TESBO-AI-IMPORT: 1` and `TESBO-AI-REVOKE: 1`.
+
+Both receipt and import carry a `subject` object containing `repositoryId`,
+`prNumber`, `headSha`, `baseSha` and `policySha`. `policySha` is the immutable installed
+default-branch **source commit**, not a candidate-provided policy label. The source
+revision includes the verifier and policy, so changing it requires fresh bindings.
+
+An AI receipt contains:
+
+- `contract`, `role` (`INDEPENDENT` or `WHITE`) and the exact `subject`.
+- The actual `invocationId` and common `implementationInvocationId`.
+- `inputManifestSha256`, computed with `inputManifestDigest(snapshot)` from the
+  authenticated repository/PR/head/base and complete changed-file identities.
+  `coveredPaths` declares the protected paths actually covered. This identifies
+  the review input delta; it cannot prove a worker read every line.
+- `method: { name, revision, sha256 }` identifying the actual method/charter input.
+- `output: { text, sha256 }`, preserving original output text and its UTF-8 digest.
+- Explicit `limits`, including unavailable or unrun proof.
+- Independent `disposition: reviewed` or a refusal outcome. White accepts only
+  `disposition: admit_scope` and includes `independentReceiptSha256`, the exact
+  complete Independent **review body** digest. `hold` is a refusal; `FROZEN` is not
+  a supported substitute for a scoped analytical judgment.
+
+After both actual outputs exist, the owner/delegated coordinator submits a separate
+COMMENTED import with `contract`, `subject`, `provenance`,
+`attestation: observed-distinct-worker-outputs`, and exactly two `receipts` entries:
+`{ role, reviewId, bodySha256 }`. The native review's authenticated account supplies
+importer identity; body text cannot supply or elevate it. The raw receipts may be
+transported through the same owner account because their analytical identities are
+the actual worker invocations, not two fabricated GitHub users.
+
+An authorized revocation is an append-only COMMENTED record using the revoke
+marker, its subject, `importReviewId` and a reason. The latest authorized control
+record on the PR is decisive; a revocation, malformed new control or stale control
+cannot fall back to a previous successful import. A subsequent explicit new import
+is a new authorized decision, not silent restoration. Preserve all earlier
+records. Never edit a record to change a prior judgment. Native GraphQL
+`lastEditedAt` metadata is required alongside the REST body/state/commit identity;
+edited records are rejected even if their original text is restored. Missing
+referenced records, unavailable edit metadata and REST/GraphQL disagreement refuse.
+GitHub's [review deletion API](https://docs.github.com/en/rest/pulls/reviews#delete-a-pending-review-for-a-pull-request)
+only deletes pending reviews; submitted reviews cannot be deleted through that
+endpoint. Using submitted COMMENTED reviews therefore avoids ordinary comment
+deletion as a way to remove the latest control record. This is a provider API
+boundary, not a claim that GitHub supplies an immutable historical ledger.
+The mechanism cannot reconstruct historical records that GitHub no longer exposes;
+retaining this append-only history remains part of the import authority's duty.
+
+### Evaluation and status publication
+
+The verifier checks the complete native snapshot, including an exact match to
+GitHub's `changed_files` count and unique changed-file names. Renaming a protected file out
+of its directory cannot hide its previous protected path. A valid unrelated diff
+may be `not_applicable`; that is not product or release acceptance. Draft PRs and
+unsupported target branches cannot satisfy integration assurance.
+
+The publisher performs two complete evaluations before writing and compares their
+evidence-state digests, including head, base, owner, trusted source/policy bytes,
+input identities and native receipt/import/revocation state. It re-evaluates after
+writing a success and changes that same check to failure if evidence moved or
+became unavailable during publication. It acknowledges the actual Checks API
+head/conclusion; failed or unknown writes are not reported as successful delivery.
+Closed PRs are skipped without a status write.
+
+`analytical_evidence_accepted` means the described coordinator-attested evidence
+passed these mechanical predicates. It does not grant merge authority, report
+canonical FROZEN, convert NOT RUN into PASS, or establish installed Skills or
+production behavior. There is no automatic waiver or fabricated positive fallback.
+
+### Trusted execution and freshness
+
+The separate workflow uses **only** default-branch `workflow_dispatch` and a
+bounded schedule. It has a repository-wide concurrency group, no concurrent
+publisher cancellation, an explicit default-ref guard and checkout of immutable
+`github.sha`. It never checks out or executes candidate code, downloads candidate
+artifacts as executables, accepts a caller-selected workflow script, or uses
+`pull_request_target`/`issue_comment`. The publisher also checks the runtime event,
+repository ID and ref. Fetch permissions are read-only; only its job receives
+`checks: write`. There are no scanner suppressions.
+
+Dispatch can select one positive PR number. An empty selection refreshes up to 50
+open PRs; overflow and unavailable pagination fail explicitly instead of silently
+ignoring the tail. The schedule runs every 15 minutes. A workflow can complete
+successfully after truthfully publishing refused PR checks: policy refusal is a
+valid evaluated outcome. A failed API/write or an incomplete queue is a refresh
+failure and is not represented as complete.
+
+A successful check records its observed time, state digest, trusted policy source
+and a 30-minute fresh-merge deadline. **GitHub does not automatically expire a green
+check.** Scheduling can be delayed or unavailable and cannot ensure instantaneous
+revocation. Immediately before an authorized merge, dispatch a fresh evaluation
+and verify the exact head/base/policy/import state, all required CI, unresolved
+review holds, and the observation's age. The owner/merge coordinator must retain
+that final check; a 15-minute schedule is not an atomic merge/approval transaction.
+No claim of a race-free atomic GitHub snapshot or instantaneous revocation is made.
+
+GitHub Actions app identity alone also does not uniquely identify one trusted
+workflow. The final merge decision must verify the intended workflow/source/run
+provenance, and repository controls must keep untrusted workflows from obtaining
+an equivalent check-writing authority. This foundation does not invent a dedicated
+GitHub App credential or change repository settings to claim that condition holds.
+
+### Validation and rollout
+
+Run the local boundary suite with:
+
+```bash
+node --test scripts/assurance-pr-gate.test.mjs scripts/publish-assurance-status.test.mjs
+```
+
+The suite uses explicitly synthetic transport fixtures. It exercises the valid
+single-owner import path, untrusted/self-labelled records, distinct actual-role
+identity requirements, exact input/output/White bindings, native edits/deletions,
+revocation, moved refs/policy, API denial, queue bounds and publication races. It
+proves the parser/adapter/publisher logic under those inputs; it does not perform
+real worker authentication, a live Checks API write, a denied real merge or any
+product/database test.
+
+Keep rollout states separate:
+
+1. **Proposed foundation:** local/CI code tests and actual recorded analytical
+   review of that candidate. Its own proposed policy has no installed authority.
+2. **Installed/advisory:** separately authorized promotion of verifier, policy and
+   workflow to the trusted default branch; confirm actual execution and status
+   publication. Main's existing approval/release rules remain unchanged.
+3. **Required/enforced:** an authorized administrator configures the real required
+   check/source and applicable approval controls, then demonstrates permitted and
+   refused merges with fresh source-bound evidence. Workflow existence is not
+   evidence that this has occurred.
+
+At this implementation checkpoint the available connector can publish actual
+COMMENTED review data. No check-creation, workflow-dispatch or ruleset-writing
+connector has been established. That is an operational admission gap, not a reason
+to fabricate green checks or human approval. Existing GitHub Actions can perform
+its declared operations after the separately authorized trusted installation is
+actually demonstrated.

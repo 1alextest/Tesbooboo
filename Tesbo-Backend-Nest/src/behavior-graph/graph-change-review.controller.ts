@@ -5,6 +5,7 @@ import { ProjectSourceGraphCoordinator } from "./project-source-graph.coordinato
 import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
 import { ProjectSourceBindingManagement } from "./project-source-binding.management";
 import { GraphReviewRunLinks } from "./graph-review-run-links";
+import { explainQaConsequenceReceipt } from "./qa-consequence-preview";
 
 /**
  * Native Zyra project review surface over the existing graph_history ledger.
@@ -45,6 +46,21 @@ export class GraphChangeReviewController {
     // Query parsers can return arrays/objects. Keep malformed limits invalid
     // without coercing them, and retain the history service's auth-first guard.
     return { entries: await this.history.listForUser(request.userId, projectId, limit, beforeId) };
+  }
+
+  /**
+   * An evidence-bounded explanation of an existing native QA receipt.
+   * Authorization is enforced by the single-statement history reader; the
+   * client cannot supply its own graph/Policy or promote AI interpretations.
+   */
+  @Get(":historyId/analysis")
+  async analyzeReceipt(
+    @Req() request: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("historyId") historyId: string
+  ) {
+    const receipt = await this.history.readReceiptForUser(request.userId, projectId, historyId);
+    return explainQaConsequenceReceipt(receipt);
   }
 
   @Get(":historyId/runs")
