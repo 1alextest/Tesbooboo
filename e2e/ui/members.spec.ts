@@ -90,6 +90,16 @@ test.describe("team members", () => {
     return table.locator("tbody tr").filter({ hasText: text });
   }
 
+  function projectMemberPicker(page: Page): Locator {
+    // Roster role selects can render before workspace candidates load. Wait for the add form's
+    // member picker so selectOption cannot latch onto an existing member's role dropdown.
+    return page
+      .locator("form")
+      .filter({ has: page.getByRole("button", { name: "Add member", exact: true }) })
+      .getByRole("combobox")
+      .filter({ has: page.getByRole("option", { name: "Select member…", exact: true }) });
+  }
+
   function uniqueEmail(label: string): string {
     return testAddress(`ui-invite-${label}`);
   }
@@ -366,7 +376,7 @@ test.describe("team members", () => {
       // The guest is in the workspace but not in this project, so they're a candidate the
       // "Add workspace member" picker offers. Selected by value (the user id) rather than by
       // label, which the option renders as "name (email)".
-      await page.getByRole("combobox").first().selectOption(tenant!.guest.userId);
+      await projectMemberPicker(page).selectOption(tenant!.guest.userId);
       await page.getByRole("button", { name: "Add member" }).click();
 
       const projectTable = page
@@ -397,7 +407,7 @@ test.describe("team members", () => {
       await expect(page.getByRole("heading", { name: "Project members" })).toBeVisible();
       await expect(page.getByRole("button", { name: "Custom Fields" })).toBeVisible();
 
-      await page.getByRole("combobox").first().selectOption(tenant!.guest.userId);
+      await projectMemberPicker(page).selectOption(tenant!.guest.userId);
       await page.getByRole("button", { name: "Add member" }).click();
 
       const projectTable = page

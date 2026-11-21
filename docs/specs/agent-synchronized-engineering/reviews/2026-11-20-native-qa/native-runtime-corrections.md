@@ -25,13 +25,46 @@ The resolver now avoids repeating the two reads when its resolved UUID matches t
 
 The new case in the existing `e2e/ui/readable-urls.spec.ts` holds only the real bare-project resolver GET. It waits until the authenticated project page has consumed both prefetches, checks the initial one/one counts and UUID URL, then releases the request. It requires the actual 200 response and identity, canonical readable URL and final one/one counts. The original exact-once case remains. No fabricated response, sleep, retry, broader timeout or weaker assertion was introduced.
 
-A controlled probe of the actual unfixed source reproduced two project and two member calls after consumption-before-resolution. The corrected source produced one each and preserved take-once behavior, a fresh second invocation, expiry and readable-key prefetch. This is module evidence, not application/database/browser execution. E2E TypeScript and whitespace checks passed; corrected-build browser verification is pending the new PR's isolated CI.
+A controlled probe of the actual unfixed source reproduced two project and two member calls after consumption-before-resolution. The corrected source produced one each and preserved take-once behavior, a fresh second invocation, expiry and readable-key prefetch. This is module evidence, not application/database/browser execution. E2E TypeScript and whitespace checks passed at source publication; the subsequent first browser result is recorded below.
 
 ### Coupled verification scope
 
 The CI impact lane retains all seven native Run/Execution/Plan/readable-URL files and adds complete `api/projects.spec.ts`, `ui/projects.spec.ts` and `ui/members.spec.ts` files to exercise intentional refresh after writes. It retains ten requested workers and zero retries. The separate full 42-case billing lane and its existing two requested workers remain unchanged; this does not claim ten-worker billing execution.
 
 Two newly selected successful-rename fixtures contradicted the existing 30-character maximum: the API rename was 40 characters and the UI rename 45. Only their unique renamed values changed, to 28 and 19 characters respectively. Exact persisted-name/description assertions, boundary/refusal tests and cleanup remain. Backend `validateProjectFields`, used by create and update, and frontend `PROJECT_NAME_MAX_LENGTH` establish the mismatch; no new runtime failure is claimed for these source-proven invalid inputs.
+
+### First fixed-source runtime: prefetch passed, expanded impact failed
+
+[PR187 run 44960038068 / job 137016598789](https://github.com/1alextest/Tesbooboo/actions/runs/44960038068/job/137016598789) executed checkout `074842b4e0caa3941c9ba39bc4fcc5e812edfc50`, tree `fcca5d7737ec7071a00b2ea2df7ab036837576d6`, with parents `a0bc3c65276e6bcd4eda2742a857883acba55a2b` and fixed head `8dac2273c034aeb05da6ffaebab4c940ee742b6b`. The complete detailed report contains **329 executions: 318 passed, nine failed and two timed out, with zero skips, flaky results, retries or not-run cases**.
+
+All seven original files plus the new held-resolver case passed **220/220**, including all 32 native retest cases and the mixed Tesbo/Jira/Linear title case. Both the ordinary exactly-once UUID case and the new forced late-resolver case passed. The expanded files contributed the eleven unexpected outcomes:
+
+| File | Selected | Passed | Unexpected |
+|---|---:|---:|---:|
+| `api/projects.spec.ts` | 76 | 70 | 6 |
+| `ui/projects.spec.ts` | 15 | 11 | 4 |
+| `ui/members.spec.ts` | 18 | 17 | 1 |
+
+Billing and the billing-cache fixture steps were skipped after the failed impact stage; this run supplies no new billing result. The original artifact 14729307525 was downloaded once and its digest checked: 67,193,231 bytes, SHA256 `494343b2e3685df568fcd9202e9ea2242b0472bb4a01317b276ee8aca753f062`. The complete job log SHA256 is `019b756643b0c3e834ea2fda12b5e82d07702eca78ea5f152d0ccc197e6cd6b3`.
+
+The UI traces distinguish test defects from product behavior: the icon fixture was rejected for an overlong name before navigation to an undefined ID; the deletion refusal uses a different exact inline message; the QA-role fieldsets and controls are actually disabled; and the member locator selected the roster role dropdown instead of the add-member picker. Corrections retain real icon set/reload/clear persistence, wrong-name deletion refusal and exact-name success, QA refusal and authorized editing after role refresh, and member add/remove readbacks. Fieldset containers use their native disabled property while individual textbox/Save/Delete checks still exercise Playwright's disabled-control contract. The same matcher/locator corrections cover sibling authorized-role scenarios.
+
+API source inspection also distinguishes stale expectations from product defects:
+
+| Failed expectation | Existing authoritative contract | Corrected proof |
+|---|---|---|
+| An explicit key collision must be rejected | `insertProjectWithUniqueKey` deliberately allocates a numeric suffix; the existing `project-keys` cases establish that behavior | Two distinct persisted projects have the exact base/base2 keys; the original project remains unchanged and both are cleaned up |
+| Anonymous overview/settings must return 401/403 | `requireUser` returns 400 with `{error: 'Authentication required'}` | Require that exact refusal body/status and unchanged stored settings |
+| Archive through PATCH; read `listed.total` | The testcase writer is PUT; the list is an array with `X-Total-Count` | Assert successful PUT and Archived readback, successful DELETE, exact surviving ID and count 1 from the real header and overview |
+| The cached overview changes immediately after deleting a run | The existing Redis aggregate cache is intentionally TTL-only for 10 seconds; live SQL already excludes deleted cycles | Clear only the newly created fixture project's `project-overview:<project UUID>` key, then assert exact null rollup/pass rate and the strictly earlier activity time while the audit feed still remembers the deleted run |
+
+The existing loopback-only cache fixture command is extended with a closed selector for `project-overview`; its default `entitlement` behavior is retained. Arbitrary keys/namespaces, malformed UUIDs, remote or credentialed Redis targets and nonzero Redis databases remain refused. The two overview callers use their own freshly created project IDs and reject remote API targets. Production cache configuration, TTL and invalidation are unchanged. The helper's exact-key and refusal contract tests run before its E2E callers. This proves fresh API aggregates after a controlled fixture invalidation; it does not claim immediate browser-card refresh or change the independent browser overview cache.
+
+A passing prefetch subset does not waive these full-file failures. All ten selected native/project/member files and both billing files remain required on the corrected combined head, with no retry, skip, timeout expansion or relaxed persistence/refusal check.
+
+During that run, PR181 advanced development to `ea7b19d1902da053a37dc0d34b687ad9a18129cc`. The integration commit `9044f9107236c87395df8ad8101d84f4b7e10a16` preserves both histories, and its tree `122e6f1fa52f268a5bffeb1d84482bf2a2bdd7b5` differs from the new development by exactly the same six reviewed blobs. Independent review confirmed no overlapping paths or change to project/member request owners; integrated TypeScript and collection passed. The original runtime above certifies only its recorded source tree. Corrective combined-head CI remains required.
+
+Read-only collection is 3,045 tests across 91 files. An initial local 3,011 count omitted 34 theme registrations because screens metadata was absent (17 routes times two themes); temporary synthetic screens metadata restored exactly those 34 identities without a DB-success substitution or runtime claim.
 
 ### Findings not fixed and delivery limits
 

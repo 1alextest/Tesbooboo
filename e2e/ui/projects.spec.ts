@@ -158,10 +158,10 @@ test.describe("project settings", () => {
 
     try {
       const suffix = Date.now().toString().slice(-8);
-      const name = `UI Icon Settings Project ${suffix}`;
-      const created = await (
-        await api.post("/api/projects", { data: { name, key: `E2EUIICON${suffix}` } })
-      ).json();
+      const name = `UI Icon Project ${suffix}`;
+      const createRes = await api.post("/api/projects", { data: { name, key: `E2EUIICON${suffix}` } });
+      expect(createRes.ok(), await createRes.text()).toBeTruthy();
+      const created = await createRes.json();
       projectId = created.id;
 
       await page.goto(`/projects/${projectId}/settings`);
@@ -213,14 +213,18 @@ test.describe("project settings", () => {
       const modal = page.getByRole("heading", { name: "Confirm project deletion" }).locator("..");
       await expect(modal).toBeVisible();
 
-      await modal.locator('input[type="text"]').fill("definitely not the project name");
+      const confirmationName = modal.locator('input[type="text"]');
+      await confirmationName.fill("definitely not the project name");
       await modal.getByRole("button", { name: "Delete project permanently" }).click();
-      await expect(
-        page.getByText("Project deletion cancelled. Entered name does not match."),
-      ).toBeVisible();
-      expect((await api.get(`/api/projects/${projectId}`)).ok()).toBeTruthy();
+      const mismatchError = modal.getByRole("alert");
+      await expect(mismatchError).toHaveText("Entered name does not match. Deletion cancelled.");
+      await expect(mismatchError).toBeVisible();
+      await expect(confirmationName).toHaveAttribute("aria-invalid", "true");
+      const afterMismatch = await api.get(`/api/projects/${projectId}`);
+      expect(afterMismatch.ok()).toBeTruthy();
+      expect((await afterMismatch.json()).name).toBe(name);
 
-      await modal.locator('input[type="text"]').fill(name);
+      await confirmationName.fill(name);
       await modal.getByRole("button", { name: "Delete project permanently" }).click();
       await page.waitForURL(/\/projects$/);
 
@@ -296,7 +300,9 @@ test.describe("project settings controls by role (UI)", () => {
     const form = settingsForm(page);
 
     await expect(page.getByText(NOTICE)).toBeVisible();
-    await expect(form).toBeDisabled();
+    // Playwright's disabled matcher targets form controls, not the fieldset container itself.
+    // Check the native fieldset property and then the actual controls it disables.
+    await expect(form).toHaveJSProperty("disabled", true);
     // The values are still readable — read-only, not hidden.
     await expect(form.getByRole("textbox").first()).toHaveValue(before.name);
     for (const box of await form.getByRole("textbox").all()) await expect(box).toBeDisabled();
@@ -348,7 +354,7 @@ test.describe("project settings controls by role (UI)", () => {
       const form = settingsForm(page);
 
       await expect(page.getByText(NOTICE)).toHaveCount(0);
-      await expect(form).toBeEnabled();
+      await expect(form).toHaveJSProperty("disabled", false);
       for (const box of await form.getByRole("textbox").all()) await expect(box).toBeEnabled();
       await expect(form.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
       await expect(page.getByRole("button", { name: "Delete project", exact: true })).toBeEnabled();
@@ -386,13 +392,19 @@ test.describe("project settings controls by role (UI)", () => {
 
   test("PSU-06 the gate follows the stored project role: promoting the same QA user re-enables the controls", async ({ browser }) => {
     const qaPage = await settingsAs(browser, "qa");
-    await expect(settingsForm(qaPage)).toBeDisabled();
+    const form = settingsForm(qaPage);
+    await expect(form).toHaveJSProperty("disabled", true);
+    for (const box of await form.getByRole("textbox").all()) await expect(box).toBeDisabled();
+    await expect(form.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    await expect(qaPage.getByRole("button", { name: "Delete project", exact: true })).toBeDisabled();
 
     setProjectRole(tenant!.mainProjectId, tenant!.qa.userId, "manager");
     try {
       await qaPage.reload();
       await expect(qaPage.getByRole("heading", { name: "General", level: 2 })).toBeVisible();
-      await expect(settingsForm(qaPage)).toBeEnabled();
+      await expect(form).toHaveJSProperty("disabled", false);
+      for (const box of await form.getByRole("textbox").all()) await expect(box).toBeEnabled();
+      await expect(form.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
       await expect(qaPage.getByText(NOTICE)).toHaveCount(0);
       await expect(qaPage.getByRole("button", { name: "Delete project", exact: true })).toBeEnabled();
     } finally {

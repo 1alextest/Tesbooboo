@@ -1,4 +1,6 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
 import { env } from "../utils/env";
 import { dbControlAvailable } from "../utils/psql";
 import { anonymousContext } from "../utils/rbac-tenant";
@@ -85,25 +87,37 @@ test.describe("project CRUD", () => {
     await request.delete(`/api/projects/${created.id}`);
   });
 
-  test("rejects creating a project whose key collides with an existing one", { tag: '@tesbo.testId("TES-TC-408")' }, async ({ request }) => {
-    const suffix = Date.now().toString().slice(-8);
+  test("allocates a distinct key when an explicit project key already exists", { tag: '@tesbo.testId("TES-TC-408")' }, async ({ request }) => {
+    const suffix = uniqueSuffix();
     const key = `DUPE${suffix}`;
+    const createdIds: string[] = [];
+    try {
+      const firstRes = await request.post("/api/projects", { data: { name: `Dup A ${suffix}`, key } });
+      expect(firstRes.status(), await firstRes.text()).toBe(201);
+      const first = await firstRes.json();
+      createdIds.push(first.id);
+      expect(first.key).toBe(key);
 
-    const firstRes = await request.post("/api/projects", { data: { name: `Dup A ${suffix}`, key } });
-    expect(firstRes.ok()).toBeTruthy();
-    const first = await firstRes.json();
+      // insertProjectWithUniqueKey deliberately allocates the next free suffix for an explicit
+      // collision too. The original key and project identity must remain unchanged.
+      const secondRes = await request.post("/api/projects", {
+        data: { name: `Dup B ${suffix}`, key },
+        failOnStatusCode: false,
+      });
+      expect(secondRes.status(), await secondRes.text()).toBe(201);
+      const second = await secondRes.json();
+      createdIds.push(second.id);
+      expect(second.id).not.toBe(first.id);
+      expect(second.key).toBe(`${key}2`);
 
-    // Known rough edge, pinned deliberately: (organization_id, key) is unique at the DB level
-    // but createProject() doesn't catch that constraint violation, so a collision falls through
-    // to the generic unhandled-exception handler as a 500 rather than a clean 4xx. If that's
-    // ever fixed, this assertion should be tightened to the new status rather than loosened.
-    const secondRes = await request.post("/api/projects", {
-      data: { name: `Dup B ${suffix}`, key },
-      failOnStatusCode: false,
-    });
-    expect(secondRes.ok()).toBeFalsy();
-
-    await request.delete(`/api/projects/${first.id}`);
+      for (const project of [first, second]) {
+        const read = await request.get(`/api/projects/${project.id}`);
+        expect(read.status(), await read.text()).toBe(200);
+        expect(await read.json()).toMatchObject({ id: project.id, name: project.name, key: project.key });
+      }
+    } finally {
+      await deleteProjects(request, createdIds);
+    }
   });
 
   test("a rename never changes the project key, even when the PATCH tries to send one", async ({ request }) => {
@@ -910,6 +924,18 @@ test.describe("projects overview", () => {
     return entry!;
   }
 
+  function clearFixtureOverviewCache(projectId: string): void {
+    if (!env.targetIsLocal) throw new Error("Project overview cache fixtures require a local disposable target");
+    // ProjectOverviewCacheService deliberately keeps aggregate data for ten seconds without
+    // write invalidation. These cases verify its fresh projection after a real delete, not TTL
+    // expiry: clear only the freshly created fixture project's exact Redis key after the write.
+    execFileSync(
+      process.execPath,
+      [path.join(__dirname, "../utils/entitlement-cache-invalidate.cjs"), projectId, "project-overview"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 5000 },
+    );
+  }
+
   test("PVW-A-01 the route is not swallowed as a project id", { tag: '@tesbo.testId("TES-TC-1187")' }, async () => {
     // `/api/projects/:id` is declared right beside this route, and Nest matches in declaration
     // order — get that ordering wrong and "overview" is read as a project id and 404s. This is the
@@ -923,8 +949,9 @@ test.describe("projects overview", () => {
     const anon = await anonymousContext();
     try {
       const res = await anon.get("/api/projects/overview", { failOnStatusCode: false });
-      expect(res.status(), "the overview answered an unauthenticated caller").toBeGreaterThanOrEqual(401);
-      expect(res.status()).toBeLessThan(500);
+      // LegacyService.requireUser owns this route's exact refusal contract.
+      expect(res.status()).toBe(400);
+      expect(await res.json()).toEqual({ error: "Authentication required" });
     } finally {
       await anon.dispose();
     }
@@ -952,16 +979,21 @@ test.describe("projects overview", () => {
       const live = await createTestCase(api, project.id, { title: `E2E Overview Live ${uniqueSuffix()}` });
       const archived = await createTestCase(api, project.id, { title: `E2E Overview Archived ${uniqueSuffix()}` });
       const removed = await createTestCase(api, project.id, { title: `E2E Overview Deleted ${uniqueSuffix()}` });
-      await api.patch(`/api/projects/${project.id}/testcases/${archived.id}`, { data: { status: "Archived" } });
-      await api.delete(`/api/projects/${project.id}/testcases/${removed.id}`);
+      const archiveRes = await api.put(`/api/projects/${project.id}/testcases/${archived.id}`, { data: { status: "Archived" } });
+      expect(archiveRes.status(), await archiveRes.text()).toBe(200);
+      const archivedRead = await api.get(`/api/projects/${project.id}/testcases/${archived.id}`);
+      expect(archivedRead.status(), await archivedRead.text()).toBe(200);
+      expect((await archivedRead.json()).status).toBe("Archived");
+      const deleteRes = await api.delete(`/api/projects/${project.id}/testcases/${removed.id}`);
+      expect(deleteRes.status(), await deleteRes.text()).toBe(200);
 
-      // Pinned against listTestCases' own total rather than against "1": that endpoint backs the
-      // repository table, and the card's number has to be the same number the table reports.
-      const listed = await (
-        await api.get(`/api/projects/${project.id}/testcases`, { params: { limit: 1 } })
-      ).json();
+      const listed = await api.get(`/api/projects/${project.id}/testcases`, { params: { limit: 1 } });
+      expect(listed.status(), await listed.text()).toBe(200);
+      // The REST controller returns array rows and publishes its total in X-Total-Count.
+      expect(listed.headers()["x-total-count"]).toBe("1");
+      expect((await listed.json()).map((row: { id: string }) => row.id)).toEqual([live.id]);
       const entry = await overviewFor(project.id);
-      expect(entry.testCaseCount).toBe(listed.total);
+      expect(entry.testCaseCount).toBe(Number(listed.headers()["x-total-count"]));
       expect(entry.testCaseCount, "archived or deleted cases are being counted").toBe(1);
       expect(live.id).toBeTruthy();
     } finally {
@@ -1158,12 +1190,13 @@ test.describe("projects overview", () => {
   });
 
   /*
-   * Hard-delete remediation Phase 2 (#1 in the progress log's 17-site gap sweep). The overview's
-   * runCounts/currentPassRate roll-up joins `cycles`/`cycle_items` with no `deleted_at IS NULL`
-   * filter, so a soft-deleted run (hard-delete remediation Phase 1) kept driving both numbers
-   * forever even though the run itself already 404s.
+   * Hard-delete remediation Phase 2 regression: the overview's runCounts/currentPassRate roll-up
+   * must retain its deleted-row filters. An earlier query let a soft-deleted run drive both
+   * numbers forever even though the run itself already 404ed. Verify the fresh projection;
+   * the deliberate ten-second aggregate cache is cleared only for this disposable project.
    */
   test("PVW-A-14 a soft-deleted run stops driving the run-count roll-up and pass rate", async () => {
+    if (!env.targetIsLocal) throw new Error("Project overview cache fixtures require a local disposable target");
     const project = await createProject(api);
     try {
       const run = await seedRun(api, project.id, { statuses: ["Passed"] });
@@ -1175,6 +1208,7 @@ test.describe("projects overview", () => {
       const deleteRes = await api.delete(`/api/cycles/${run.cycleId}`);
       expect(deleteRes.ok(), `deleting the run — ${await deleteRes.text()}`).toBeTruthy();
 
+      clearFixtureOverviewCache(project.id);
       const after = await overviewFor(project.id);
       expect(after.runCounts, "a soft-deleted run must no longer drive the run-count roll-up").toBeNull();
       expect(after.currentPassRate).toBeNull();
@@ -1184,8 +1218,8 @@ test.describe("projects overview", () => {
   });
 
   /*
-   * Same site (#1), the other half of the same two statements: the lastActivityAt union selected
-   * `cycles.created_at`/`updated_at` with no deleted_at filter either, so a soft-deleted run's
+   * Same historical defect, the other half of the same two statements: the lastActivityAt union
+   * used to select `cycles.created_at`/`updated_at` without a deleted_at filter, so a soft-deleted run's
    * timestamps kept the project reading as "just active" forever. Proven as a differential against
    * the activity feed on purpose: the feed deliberately keeps showing a deleted run's creation,
    * marked "(deleted)" (site #17 — see activity.spec.ts's ACT-A-18), while this card's lastActivityAt
@@ -1200,6 +1234,7 @@ test.describe("projects overview", () => {
    * that fix #1 has to exclude.
    */
   test("PVW-A-15 a soft-deleted run's timestamp stops feeding lastActivityAt, though the audit feed still remembers it", async () => {
+    if (!env.targetIsLocal) throw new Error("Project overview cache fixtures require a local disposable target");
     const project = await createProject(api);
     try {
       await createTestCase(api, project.id, { title: `E2E Overview Last-Activity Run ${uniqueSuffix()}` });
@@ -1229,6 +1264,7 @@ test.describe("projects overview", () => {
       const testcaseEntryAfter = feedAfter.list.find((i: { entityType: string }) => i.entityType === "testcase");
       expect(testcaseEntryAfter, "the test case's own creation must still be in the feed").toBeTruthy();
 
+      clearFixtureOverviewCache(project.id);
       const after = await overviewFor(project.id);
       expect(
         Math.abs(new Date(after.lastActivityAt!).getTime() - new Date(testcaseEntryAfter!.createdAt).getTime()),
@@ -1394,7 +1430,8 @@ test.describe("project settings save (test run environments)", () => {
           data: { settings: { testRunEnvironments: envs(1) } },
           failOnStatusCode: false,
         });
-        expect([401, 403]).toContain(res.status());
+        expect(res.status()).toBe(400);
+        expect(await res.json()).toEqual({ error: "Authentication required" });
       } finally {
         await anon.dispose();
       }
