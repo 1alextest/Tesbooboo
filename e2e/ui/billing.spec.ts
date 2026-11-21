@@ -185,7 +185,7 @@ test.describe("billing settings", () => {
     await openBillingTab();
 
     // The whole product standardizes on DD Mon YYYY, not the browser-locale date order.
-    await expect(page.getByText(/Renews \\d{2} [A-Za-z]{3} \\d{4} · billed annually/)).toBeVisible();
+    await expect(page.getByText(/Renews \d{2} [A-Za-z]{3} \d{4} · billed annually/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Manage billing" })).toBeVisible();
     // Already on the top plan — offering an upgrade would send them into a duplicate subscription.
     await expect(page.getByRole("button", { name: "Upgrade to Pro" })).toHaveCount(0);
