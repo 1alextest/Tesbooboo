@@ -51,8 +51,9 @@ consent or approving a credential yourself.
    `gitSha` equal to the expected commit. A different SHA means a stale service or the wrong
    service/host — stop and resolve that before judging the catalog.
 
-3. **Human checkpoint — approve the credential (only if the negative probe below says consent is
-   missing).** Send the user this exact runbook and wait:
+3. **Human checkpoint (only after the negative probe in step 4 confirms missing consent).**
+   Keep the credential unapproved until its fail-closed behavior has been observed. If approval is
+   needed, send the user this exact runbook and wait:
    - Open `<frontend>/projects/<projectId>/settings/api-tokens`.
    - In **External AI & MCP Access**, press **Enable external MCP** when it is off.
    - Under **Approve a named client**, select the token the verification file holds, give it a
@@ -61,13 +62,14 @@ consent or approving a credential yourself.
    - Say when done. Do not create a new token unless the user asks; if they do, have them update
      the token file themselves.
 
-4. **Negative probe (before approval).** An unapproved credential must be refused, not served an
+4. **Negative probe (before any approval; run this before performing step 3).** An unapproved credential must be refused, not served an
    empty catalog:
    ```bash
    TESBO_MCP_URL="https://<backend-host>/api/projects/<projectId>/mcp" node scripts/mcp-consent-probe.mjs
    ```
-   It prints only `{status, code, message}` (or the tool count if a catalog was served); the
-   credential never reaches stdout or argv.
+   It prints only a bounded, static diagnostic `{status, code, message}` (or the tool count if a
+   catalog was served); it refuses non-HTTPS endpoints and redirects so a token cannot be forwarded
+   to an unexpected destination. The credential never reaches stdout or argv.
    Expect HTTP 201 with JSON-RPC `-32001` "External MCP access requires an enabled project and a
    current approved client credential". Success here means the gate is live; a served catalog means
    consent was already granted (fine) or the gate regressed (fail loudly).
