@@ -35,6 +35,18 @@ describe('read-only, evidence-bounded QA consequence preview', () => {
     expect(result.coverageAssertion).toBe('none');
   });
 
+  it('keeps a mixed mapped and unmapped source change unproven despite a candidate', () => {
+    const result = explainQaConsequenceReceipt({ ...receipt, changed: {
+      ...receipt.changed, addedNodeIds: ['unmapped-new-component'],
+      addedEdgeIds: ['unreviewed-dependency']
+    } });
+    expect(result.candidateEffects).toHaveLength(1);
+    expect(result.changedNodeIds).toEqual(['req', 'unmapped-new-component']);
+    expect(result.unlinkedOrUnprovenChange).toBe(true);
+    expect(result.coverageAssertion).toBe('none');
+    expect(result.executionAssertion).toBe('none');
+  });
+
   it('does not fabricate changes when a case is merely unlinked', () => {
     const result = explainQaConsequenceReceipt({ ...receipt, candidates: [], changed: {
       addedNodeIds: [], modifiedNodeIds: [], removedNodeIds: [],

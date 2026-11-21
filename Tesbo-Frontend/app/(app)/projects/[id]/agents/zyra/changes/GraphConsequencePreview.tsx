@@ -81,7 +81,8 @@ export function GraphConsequencePreview({ projectId, historyId }: {
             </ul>
           ) : <p>No explicit test-case effect was identified. This does not mean no behavior is affected.</p>}
           {analysis.unlinkedOrUnprovenChange && <p role="status">
-            A change was observed without an evidenced test-case mapping. QA must assess the missing impact.
+            The observed change still has unproven consequences. Candidate references do not establish
+            complete mappings or verified test outcomes; QA must assess the remaining impact.
           </p>}
           <p className="text-xs text-[var(--muted)]">
             Evidence: {analysis.basis}. Source freshness, policy and user-manual consequences,

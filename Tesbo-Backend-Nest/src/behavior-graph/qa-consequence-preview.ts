@@ -73,9 +73,11 @@ export function explainQaConsequenceReceipt(receipt: QaChangeReviewReceipt): QaC
     candidateEffects: effects,
     unlinkedCaseNodeIds: [...receipt.unlinkedCaseNodeIds].sort(),
     changedNodeIds,
-    unlinkedOrUnprovenChange: effects.length === 0 && (changedNodeIds.length > 0 ||
+    // A reference-derived candidate is not independent assurance of actual consequences.
+    // Mixed source deltas remain unproven even when one possible case link is nominated.
+    unlinkedOrUnprovenChange: changedNodeIds.length > 0 ||
       receipt.changed.addedEdgeIds.length > 0 || receipt.changed.modifiedEdgeIds.length > 0 ||
-      receipt.changed.removedEdgeIds.length > 0),
+      receipt.changed.removedEdgeIds.length > 0,
     unsupportedClaims: [
       'approved_policy_consequences',
       'user_manual_consequences',
