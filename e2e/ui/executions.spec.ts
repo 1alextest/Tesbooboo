@@ -327,8 +327,8 @@ test.describe("auto bug-filing on Failed", () => {
       const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
       try {
         const bugs = await (await api.get(`/api/projects/${ctx.projectId}/bugs`)).json();
-        const filedBug = bugs.find((b: { title: string }) => b.title === `Failed: ${title}`);
-        expect(filedBug, "the bug filed against this execution").toBeTruthy();
+        const filedBug = bugs.find((b: { title: string }) => b.title === "Login button does nothing");
+        expect(filedBug, "the bug must persist the selected Jira summary, not the testcase default").toBeTruthy();
         expect(filedBug.integrationProvider).toBe("JIRA");
         expect(filedBug.integrationIssueKey).toBe("PROJ-4242");
         expect(filedBug.externalUrl).toBe("https://e2e.atlassian.net/browse/PROJ-4242");
@@ -472,8 +472,8 @@ test.describe("auto bug-filing on Failed", () => {
       const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
       try {
         const bugs = await (await api.get(`/api/projects/${ctx.projectId}/bugs`)).json();
-        const filedBug = bugs.find((b: { title: string }) => b.title === `Failed: ${title}`);
-        expect(filedBug, "the bug filed against this execution").toBeTruthy();
+        const filedBug = bugs.find((b: { title: string }) => b.title === "Dropdown closes on scroll");
+        expect(filedBug, "the bug must persist the selected Linear summary, not the testcase default").toBeTruthy();
         expect(filedBug.integrationProvider).toBe("LINEAR");
         expect(filedBug.integrationIssueKey).toBe("ENG-77");
         expect(filedBug.externalUrl).toBe("https://linear.app/e2e/issue/ENG-77");
@@ -669,6 +669,7 @@ test.describe("auto bug-filing on Failed", () => {
         expect(linkedToThisCase, "one bug per selected ticket, none duplicated").toHaveLength(2);
         const keys = linkedToThisCase.map((b: { integrationIssueKey: string }) => b.integrationIssueKey).sort();
         expect(keys).toEqual([`ENG-${stamp}A`, `ENG-${stamp}B`]);
+        expect(linkedToThisCase.map((b: { title: string }) => b.title).sort()).toEqual(["First linear ticket", "Second linear ticket"]);
         for (const bug of linkedToThisCase) {
           expect(bug.integrationProvider).toBe("LINEAR");
         }
