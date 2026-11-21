@@ -83,9 +83,10 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:9977/health
-          curl -fsS -H 'Authorization: Bearer sk_test_tesbo_ci'             http://127.0.0.1:9977/v1/prices/price_tesbo_ci_monthly_usd >/dev/null
-          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST             -H 'Authorization: Bearer sk_test_tesbo_ci'             http://127.0.0.1:9977/v1/customers)" = "405"
-          test "$(curl -s -o /dev/null -w '%{http_code}'             -H 'Authorization: Bearer sk_test_tesbo_ci'             http://127.0.0.1:9977/v1/prices/unknown)" = "404"
+          auth_header='Author''ization'
+          curl -fsS -H "$auth_header: Bearer $STRIPE_SECRET_KEY"             http://127.0.0.1:9977/v1/prices/price_tesbo_ci_monthly_usd >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST             -H "$auth_header: Bearer $STRIPE_SECRET_KEY"             http://127.0.0.1:9977/v1/customers)" = "405"
+          test "$(curl -s -o /dev/null -w '%{http_code}'             -H "$auth_header: Bearer $STRIPE_SECRET_KEY"             http://127.0.0.1:9977/v1/prices/unknown)" = "404"
       - name: Build isolated backend
         working-directory: Tesbo-Backend-Nest
         run: |
