@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, writeFileSync, chmodSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, rmSync, symlinkSync, unlinkSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { requireApprovedMcpEndpoint } from "./mcp-approved-origin.mjs";
@@ -249,5 +251,49 @@ test("POSIX file permission and symlink attacks cannot redirect a credential", (
     const link = path.join(x.dir, "token.link");
     symlinkSync(x.token, link);
     assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp", link), /regular file/);
+  } finally { x.dispose(); }
+});
+
+test("post-deploy credential is never sent before verified same-origin health and exact build", () => {
+  const x = privateMcpFixture();
+  try {
+    const hook = path.join(x.dir, "mock-fetch.mjs");
+    const events = path.join(x.dir, "events.txt");
+    // Isolated child process intercepts fetch: not one real network connection.
+    writeFileSync(hook, `
+import { appendFileSync } from "node:fs";
+globalThis.fetch = async (url, init = {}) => {
+  const path = new URL(url).pathname;
+  appendFileSync(process.env.TESBO_MCP_TEST_EVENTS, path + ":" + (init.headers?.Authorization ? "AUTH" : "NONE") + "\\n");
+  const health = path === "/api/health";
+  return new Response(JSON.stringify(health ? { gitSha: process.env.TESBO_MCP_TEST_HEALTH } :
+    { jsonrpc: "2.0", result: { tools: [] } }), { status: health ? 200 : 201,
+    headers: { "content-type": "application/json" } });
+};
+`, { mode: 0o600 });
+    const checker = fileURLToPath(new URL("./mcp-deploy-check.mjs", import.meta.url));
+    function invoke(sha) {
+      writeFileSync(events, "");
+      return spawnSync(process.execPath, ["--import", pathToFileURL(hook).href, checker], {
+        env: { ...process.env,
+          TESBO_MCP_URL: "https://trusted.example.test/api/projects/example/mcp",
+          TESBO_MCP_TOKEN_FILE: x.token,
+          TESBO_MCP_TOKEN: "synthetic-token-only",
+          EXPECTED_GIT_SHA: "a".repeat(40),
+          TESBO_MCP_TEST_HEALTH: sha,
+          TESBO_MCP_TEST_EVENTS: events },
+        encoding: "utf8", timeout: 12000
+      });
+    }
+    const denied = invoke("b".repeat(40));
+    assert.equal(denied.status, 1, denied.stderr);
+    assert.match(denied.stderr, /token not sent/);
+    assert.equal(readFileSync(events, "utf8"), "/api/health:NONE\n");
+
+    const allowed = invoke("a".repeat(40));
+    // No required tools are present in this deliberately tiny mock catalog;
+    // an authenticated request may occur ONLY after build identity matched.
+    assert.equal(allowed.status, 1, allowed.stdout + allowed.stderr);
+    assert.match(readFileSync(events, "utf8"), /^\/api\/health:NONE\n\/api\/projects\/example\/mcp:AUTH\n/);
   } finally { x.dispose(); }
 });
