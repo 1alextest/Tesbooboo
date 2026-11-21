@@ -14,7 +14,9 @@ The compose defaults of `:1010`/`:1011` belong to the open-source stack, not thi
 capability discovery, upstream/downstream mapping, one authoritative owner per fact, truthful failures,
 authorization boundaries, boundary-level testing, delivery-versus-verification, right-sizing,
 findings-without-scope-creep, preventive lessons, dependency evaluation and application neutrality.
-Read it before design or implementation work.
+It also requires recording capability opportunities noticed while building as enhancement candidates
+after checking the specs, current implementation and work record for an existing owner — never as
+implemented scope. Read it before design or implementation work.
 
 The detailed scope classification (coupled / defect on path / adjacent / new initiative), the
 no-unsanctioned-pivot rule and the red-run rules are in
