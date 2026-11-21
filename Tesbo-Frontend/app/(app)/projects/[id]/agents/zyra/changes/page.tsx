@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ModelDraftPreview } from "./ModelDraftPreview";
 import { SourceBindingSettings } from "./SourceBindingSettings";
 import { ReviewCaseRunSetup } from "./ReviewCaseRunSetup";
+import { GraphConsequencePreview } from "./GraphConsequencePreview";
 import { useParams } from "@/lib/routeParams";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -247,6 +248,7 @@ export default function ZyraChangeReviewPage() {
                       Evidence basis: {receipt.evidence.basis}. Source freshness unverified;
                       execution and coverage unverified. QA must choose and run applicable cases separately.
                     </p>
+                    <GraphConsequencePreview key={`${projectId}:${entry.id}`} projectId={projectId} historyId={entry.id} />
                     <ReviewCaseRunSetup projectId={projectId} receiptId={entry.id}
                       candidateCaseIds={receipt.candidates.map((candidate) =>
                         canonicalReviewCaseId(candidate.caseNodeId, projectId)
