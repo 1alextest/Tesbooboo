@@ -10,7 +10,10 @@ export function requiresAssurance(filename) {
   return /^docs\/specs\/agent-synchronized-engineering\//.test(filename) ||
     filename === 'scripts/assurance-pr-gate.mjs' ||
     filename === 'scripts/assurance-pr-gate.test.mjs' ||
-    filename === '.github/workflows/assurance-pr-gate.yml';
+    filename === '.github/workflows/assurance-pr-gate.yml' ||
+    filename === '.github/workflows/ci-hygiene.yml' ||
+    filename === 'scripts/publish-assurance-status.mjs' ||
+    filename === 'scripts/publish-assurance-status.test.mjs';
 }
 
 export function parseReviewBody(body, head) {
