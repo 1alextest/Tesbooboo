@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, writeFileSync, chmodSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { requireApprovedMcpEndpoint } from "./mcp-approved-origin.mjs";
 import { REQUIRED_TOOLS, PROPOSAL_TOOLS, catalogFingerprint, catalogGaps, schemaGaps, summarize } from "./mcp-deploy-check.mjs";
 
 const text = { type: "string" };
@@ -196,4 +200,54 @@ test("a session without a reported version fails", () => {
   const result = summarize({ tools: validTools(), serverVersion: "", health: { gitSha: "abc123" } });
   assert.equal(result.ok, false);
   assert.match(result.errors.join("\n"), /did not report serverInfo.version/);
+});
+
+function privateMcpFixture() {
+  const dir = mkdtempSync(path.join(tmpdir(), "tesbo-approved-origin-"));
+  const token = path.join(dir, "tesbo.token");
+  const origin = path.join(dir, "tesbo-approved-origin");
+  writeFileSync(token, "synthetic-token-only", { mode: 0o600 });
+  writeFileSync(origin, "https://trusted.example.test\n", { mode: 0o600 });
+  return { token, origin, dir, dispose: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+test("MCP credential requires a separately approved exact HTTPS origin", () => {
+  const x = privateMcpFixture();
+  try {
+    const url = requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp", x.token);
+    assert.equal(url.origin, "https://trusted.example.test");
+    assert.throws(() => requireApprovedMcpEndpoint("https://attacker.example.test/api/projects/example/mcp", x.token), /origin differs/);
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test:4433/api/projects/example/mcp", x.token), /origin differs/);
+    assert.throws(() => requireApprovedMcpEndpoint("http://trusted.example.test/api/projects/example/mcp", x.token), /must be HTTPS/);
+    assert.throws(() => requireApprovedMcpEndpoint("https://user:password@trusted.example.test/api/projects/example/mcp", x.token), /embedded credentials/);
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp?redirect=1", x.token), /embedded credentials/);
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/other/api/mcp", x.token), /project-scoped/);
+  } finally { x.dispose(); }
+});
+
+test("missing or malformed approved-origin file fails closed", () => {
+  const x = privateMcpFixture();
+  try {
+    writeFileSync(x.origin, "https://trusted.example.test/path", { mode: 0o600 });
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp", x.token), /exact HTTPS origin/);
+    writeFileSync(x.origin, "https://trusted.example.test", { mode: 0o600 });
+    unlinkSync(x.origin);
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp", x.token), /unavailable/);
+  } finally { x.dispose(); }
+});
+
+test("POSIX file permission and symlink attacks cannot redirect a credential", () => {
+  if (process.platform === "win32") return; // Windows ACLs are an OS setup prerequisite.
+  const x = privateMcpFixture();
+  try {
+    chmodSync(x.origin, 0o644);
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp", x.token), /must be private/);
+    chmodSync(x.origin, 0o600);
+    chmodSync(x.token, 0o644);
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp", x.token), /must be private/);
+    chmodSync(x.token, 0o600);
+    const link = path.join(x.dir, "token.link");
+    symlinkSync(x.token, link);
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp", link), /regular file/);
+  } finally { x.dispose(); }
 });
