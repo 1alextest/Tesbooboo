@@ -325,6 +325,9 @@ jobs:
             api/cycles.spec.ts api/executions.spec.ts api/route-resolve.spec.ts \
             api/plans.spec.ts ui/cycles.spec.ts ui/executions.spec.ts ui/readable-urls.spec.ts \
             --workers=10 --retries=0 --output=test-results-native-retest
+      - name: Verify fail-closed billing entitlement cache fixture
+        working-directory: e2e
+        run: node --test utils/entitlement-cache-invalidate.test.cjs
       - name: Verify billing API and UI against read-only Stripe CI fixture
         working-directory: e2e
         env:
