@@ -27,6 +27,7 @@
 import { createHash } from "node:crypto";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { requireApprovedMcpEndpoint } from "./mcp-approved-origin.mjs";
 
 export const REQUIRED_TOOLS = [
   "list_projects",
@@ -226,19 +227,43 @@ async function main() {
     console.error("TESBO_MCP_URL and TESBO_MCP_TOKEN must be set (token is read from the environment only).");
     process.exit(2);
   }
+  if (!/^[0-9a-f]{40}$/i.test(expectedGitSha)) {
+    console.error("MCP deployment check requires the exact expected 40-character Git commit SHA.");
+    process.exit(2);
+  }
+  const tokenFile = String(process.env.TESBO_MCP_TOKEN_FILE || "");
+  if (!tokenFile) {
+    console.error("MCP deployment check requires a private token-file origin binding; use verify-production-mcp.sh.");
+    process.exit(2);
+  }
   let parsedEndpoint;
   try {
-    parsedEndpoint = new URL(endpoint);
-    if (parsedEndpoint.protocol !== "https:" || parsedEndpoint.username || parsedEndpoint.password ||
-        parsedEndpoint.hash || !/^\/api\/projects\/[^/]+\/mcp\/?$/.test(parsedEndpoint.pathname)) {
-      throw new Error("invalid endpoint");
-    }
-  } catch {
-    console.error("MCP deploy check requires a credential-free HTTPS project MCP endpoint.");
+    parsedEndpoint = requireApprovedMcpEndpoint(endpoint, tokenFile);
+  } catch (error) {
+    console.error(`MCP deploy check: ${error instanceof Error ? error.message : "unapproved MCP origin"}`);
     process.exit(2);
   }
 
   try {
+    // The first network request is UNAUTHENTICATED. Never transmit the bearer
+    // until a strictly same-origin health read verifies the intended build.
+    const healthUrl = String(process.env.TESBO_API_HEALTH_URL || "").trim() ||
+      `${parsedEndpoint.origin}/api/health`;
+    const parsedHealth = new URL(healthUrl);
+    if (parsedHealth.origin !== parsedEndpoint.origin ||
+        parsedHealth.pathname !== "/api/health" || parsedHealth.search ||
+        parsedHealth.username || parsedHealth.password || parsedHealth.hash) {
+      throw new Error("Health endpoint must be the same-origin credential-free /api/health resource");
+    }
+    const healthResponse = await fetch(healthUrl, {
+      redirect: "manual", headers: { Accept: "application/json" }
+    });
+    if (!healthResponse.ok) throw new Error("Verified deployment health is unavailable");
+    const health = await healthResponse.json();
+    if (typeof health?.gitSha !== "string" || health.gitSha !== expectedGitSha) {
+      throw new Error("Health gitSha does not match the explicitly expected deployment; token not sent");
+    }
+
     const initialized = await rpc(
       endpoint,
       token,
@@ -253,19 +278,7 @@ async function main() {
     const listed = await rpc(endpoint, token, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, initialized.session);
     const tools = Array.isArray(listed.json?.result?.tools) ? listed.json.result.tools : null;
 
-    const healthUrl = String(process.env.TESBO_API_HEALTH_URL || "").trim() || `${parsedEndpoint.origin}/api/health`;
-    const parsedHealth = new URL(healthUrl);
-    if (parsedHealth.origin !== parsedEndpoint.origin || parsedHealth.pathname !== "/api/health" ||
-        parsedHealth.username || parsedHealth.password || parsedHealth.hash) {
-      throw new Error("Health endpoint must be the same-origin /api/health resource");
-    }
-    let health = null;
-    try {
-      const response = await fetch(healthUrl, { redirect: "manual", headers: { Accept: "application/json" } });
-      if (response.ok) health = await response.json();
-    } catch {
-      health = null;
-    }
+
 
     const result = summarize({
       tools,
