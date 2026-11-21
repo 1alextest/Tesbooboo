@@ -20,9 +20,16 @@ import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-const url = String(process.env.TESBO_MCP_URL || "").trim();
-if (!url) {
-  console.error("mcp-consent-probe: set TESBO_MCP_URL to the project MCP endpoint.");
+const rawUrl = String(process.env.TESBO_MCP_URL || "").trim();
+let endpoint;
+try {
+  endpoint = new URL(rawUrl);
+  if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.hash ||
+      !/^\/api\/projects\/[^/]+\/mcp\/?$/.test(endpoint.pathname)) {
+    throw new Error("invalid endpoint");
+  }
+} catch {
+  console.error("mcp-consent-probe: supply an HTTPS project MCP endpoint without embedded credentials.");
   process.exit(2);
 }
 const tokenFile = String(process.env.TESBO_MCP_TOKEN_FILE || path.join(homedir(), ".config/opencode/secrets/tesbo.token"));
@@ -38,7 +45,8 @@ if (!token) {
   process.exit(2);
 }
 
-const response = await fetch(url, {
+const response = await fetch(endpoint, {
+  redirect: "manual",
   method: "POST",
   headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
   body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
@@ -53,9 +61,10 @@ try {
 
 if (body?.error) {
   // Server error text is safe here: it is the protocol message, not the request. Keep it bounded.
-  console.log(JSON.stringify({ status: response.status, code: body.error.code, message: String(body.error.message || "").slice(0, 300) }));
+  console.log(JSON.stringify({ status: response.status, code: body.error.code, message: body.error.code === -32001 ? "external MCP consent is not approved" : "protocol error (message withheld)" }));
 } else if (Array.isArray(body?.result?.tools)) {
   console.log(JSON.stringify({ status: response.status, catalog: body.result.tools.length, message: "credential is approved; catalog served" }));
 } else {
   console.log(JSON.stringify({ status: response.status, message: "no JSON-RPC error and no tool list in the response" }));
+  process.exitCode = 1;
 }
