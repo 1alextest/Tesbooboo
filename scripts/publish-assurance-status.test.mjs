@@ -1,114 +1,123 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { publishAssuranceStatus } from './publish-assurance-status.mjs';
+import { publishAssuranceStatus, refreshAssurance, main } from './publish-assurance-status.mjs';
+import { fixtureSnapshot, fixtureHead, fixtureSource, fixturePolicyRaw,
+  gateOptions, revoke, withGitHub } from './assurance-test-fixtures.mjs';
 
-const head = 'a'.repeat(40);
-const nextHead = 'b'.repeat(40);
-const repository = 'owner/tesbo';
-const independentReceipt = 'docs/specs/agent-synchronized-engineering/reviews/independent-blue.md';
-const whiteReceipt = 'docs/specs/agent-synchronized-engineering/reviews/white-final.md';
+const options = () => ({ ...gateOptions(), now: new Date('2026-11-22T00:01:00Z'), runId: '1234' });
 
-function approval(login, role, receipt) {
-  return { id: login === 'blue' ? 1 : 2, state: 'APPROVED', commit_id: head,
-    submitted_at: '2026-11-21T01:00:00Z',
-    user: { login, type: 'User' },
-    body: `TESBO-ASSURANCE: ${role}\nTESBO-HEAD: ${head}\nTESBO-EVIDENCE: ${receipt}\nTESBO-DECISION: ${role === 'WHITE' ? 'FROZEN' : 'REVIEWED'}` };
-}
-
-async function withGitHub({ permissions = { blue: 'maintain', white: 'admin' },
-  approvals = [approval('blue', 'INDEPENDENT', independentReceipt), approval('white', 'WHITE', whiteReceipt)],
-  moveHead = false, failPermissions = false }, action) {
-  const original = globalThis.fetch;
-  let prReads = 0;
-  const checks = [];
-  globalThis.fetch = async (url, opts = {}) => {
-    const u = String(url);
-    if (u.endsWith('/check-runs')) {
-      const payload = JSON.parse(opts.body);
-      checks.push(payload);
-      return { ok: true, json: async () => ({ name: payload.name, head_sha: payload.head_sha }) };
-    }
-    if (u.endsWith('/pulls/7')) {
-      prReads++;
-      return { ok: true, json: async () => ({ head: { sha: moveHead && prReads > 1 ? nextHead : head },
-        user: { login: 'author' }, draft: false }) };
-    }
-    if (u.includes('/pulls/7/files?')) {
-      return { ok: true, json: async () => [{ filename: 'docs/specs/agent-synchronized-engineering/requirements.md' }] };
-    }
-    if (u.includes('/pulls/7/reviews?')) {
-      return { ok: true, json: async () => approvals };
-    }
-    if (u.includes('/collaborators/')) {
-      if (failPermissions) return { ok: false, status: 403 };
-      const login = u.split('/collaborators/')[1].split('/')[0];
-      return { ok: true, json: async () => ({ permission: permissions[login] ?? 'read' }) };
-    }
-    if (u.includes('/contents/')) {
-      return { ok: true, json: async () => ({ type: 'file', size: 150 }) };
-    }
-    throw new Error('Unexpected GitHub endpoint in test: ' + u);
-  };
-  try { return await action(checks); } finally { globalThis.fetch = original; }
-}
-
-test('trusted current-head, distinct human/admin roles generate one successful PR-head check', async () => {
-  await withGitHub({}, async checks => {
-    const value = await publishAssuranceStatus({ repository, prNumber: 7, token: 'placeholder-token' });
-    assert.equal(value.status, 'review_provisionally_verified');
-    assert.equal(value.conclusion, 'success');
-    assert.equal(value.head, head);
+test('stable owner-imported AI evidence publishes a scoped exact-head check and rereads after publication', async () => {
+  await withGitHub({}, async ({ checks, getCaptures }) => {
+    const result = await publishAssuranceStatus(options());
+    assert.equal(result.outcome, 'analytical_evidence_accepted');
+    assert.equal(result.conclusion, 'success');
+    assert.equal(result.head, fixtureHead);
     assert.equal(checks.length, 1);
-    assert.equal(checks[0].name, 'specification-assurance');
-    assert.equal(checks[0].head_sha, head);
+    assert.equal(checks[0].head_sha, fixtureHead);
+    assert.equal(getCaptures(), 3);
+    assert.match(checks[0].output.summary, /not cryptographic worker authentication/);
+    assert.match(checks[0].output.summary, /not.*human review/);
+    assert.match(checks[0].output.summary, /2026-11-22T00:31:00.000Z/);
+    assert.ok(!checks[0].output.summary.includes('synthetic-test-token'));
+  });
+});
+test('same-head withdrawal between initial and final reads publishes failure', async () => {
+  await withGitHub({ beforeCapture: (count, snapshot) => { if (count === 2) revoke(snapshot); } }, async ({ checks }) => {
+    const result = await publishAssuranceStatus(options());
+    assert.equal(result.conclusion, 'failure');
+    assert.equal(result.head, fixtureHead);
+    assert.match(checks[0].output.summary, /receipt\/import state changed/);
+    assert.match(checks[0].output.summary, /revocation/);
+  });
+});
+test('same-head deleted receipt or edited import during evaluation cannot keep green', async () => {
+  for (const mutate of [snapshot => { snapshot.reviews.shift(); },
+    snapshot => { snapshot.reviews[2].lastEditedAt = '2026-11-22T00:02:00Z'; }]) {
+    await withGitHub({ beforeCapture: (count, snapshot) => { if (count === 2) mutate(snapshot); } }, async ({ checks }) => {
+      assert.equal((await publishAssuranceStatus(options())).conclusion, 'failure');
+      assert.equal(checks[0].conclusion, 'failure');
+    });
+  }
+});
+test('base or trusted policy movement during evaluation invalidates the result', async () => {
+  for (const mutate of [snapshot => { snapshot.pr.base.sha = 'e'.repeat(40); },
+    snapshot => { snapshot.policySha = 'e'.repeat(40); }]) {
+    await withGitHub({ beforeCapture: (count, snapshot) => { if (count === 2) mutate(snapshot); } }, async ({ checks }) => {
+      assert.equal((await publishAssuranceStatus(options())).conclusion, 'failure');
+      assert.equal(checks[0].conclusion, 'failure');
+    });
+  }
+});
+test('new head cannot inherit an old successful observation', async () => {
+  await withGitHub({ beforeCapture: (count, snapshot) => { if (count === 2) snapshot.pr.head.sha = 'e'.repeat(40); } }, async ({ checks }) => {
+    const result = await publishAssuranceStatus(options());
+    assert.equal(result.conclusion, 'failure');
+    assert.equal(checks[0].head_sha, 'e'.repeat(40));
+  });
+});
+test('withdrawal during Checks API publication invalidates that same check afterward', async () => {
+  await withGitHub({ afterCreate: snapshot => revoke(snapshot) }, async ({ checks }) => {
+    const result = await publishAssuranceStatus(options());
+    assert.equal(result.conclusion, 'failure');
+    assert.equal(checks.length, 2);
     assert.equal(checks[0].conclusion, 'success');
-    assert.equal(checks[0].output.summary.includes('placeholder-token'), false);
+    assert.equal(checks[1].method, 'PATCH');
+    assert.equal(checks[1].id, checks[0].id);
+    assert.equal(checks[1].conclusion, 'failure');
   });
 });
-
-test('missing approvals publish a failure check; do not silently skip governance', async () => {
-  await withGitHub({ approvals: [] }, async checks => {
-    const result = await publishAssuranceStatus({ repository, prNumber: 7, token: 'placeholder-token' });
-    assert.equal(result.status, 'blocked');
-    assert.equal(checks[0].conclusion, 'failure');
-    assert.match(checks[0].output.summary, /Missing independent/);
-  });
-});
-
-test('role escalation is refused when the repository administrator did not grant permission', async () => {
-  await withGitHub({ permissions: { blue: 'write', white: 'maintain' } }, async checks => {
-    const result = await publishAssuranceStatus({ repository, prNumber: 7, token: 'placeholder-token' });
-    assert.equal(result.status, 'blocked');
+test('unavailable final evidence cannot silently reuse the initial pass', async () => {
+  await withGitHub({ deny: ({ url, captures }) => captures >= 2 && url.pathname.endsWith('/reviews') }, async ({ checks }) => {
+    assert.equal((await publishAssuranceStatus(options())).conclusion, 'failure');
     assert.equal(checks[0].conclusion, 'failure');
   });
 });
-
-test('a new head during review cannot inherit an older successful check', async () => {
-  await withGitHub({ moveHead: true }, async checks => {
-    const result = await publishAssuranceStatus({ repository, prNumber: 7, token: 'placeholder-token' });
-    assert.equal(result.status, 'blocked');
-    assert.equal(result.head, nextHead);
-    assert.equal(checks[0].head_sha, nextHead);
-    assert.equal(checks[0].conclusion, 'failure');
-    assert.match(checks[0].output.summary, /changed or was not bound/);
+test('Checks API failure is an unreported outcome, never claimed as success', async () => {
+  await withGitHub({ deny: ({ url, method }) => url.pathname.endsWith('/check-runs') && method === 'POST' }, async () => {
+    await assert.rejects(publishAssuranceStatus(options()), /unavailable/);
   });
 });
-
-test('permission API denial generates an explicit failed check, never an approved fallback', async () => {
-  await withGitHub({ failPermissions: true }, async checks => {
-    const result = await publishAssuranceStatus({ repository, prNumber: 7, token: 'placeholder-token' });
-    assert.equal(result.status, 'blocked');
+test('invalidation write failure remains an explicit operational failure', async () => {
+  await withGitHub({ afterCreate: snapshot => revoke(snapshot), deny: ({ method }) => method === 'PATCH' }, async () => {
+    await assert.rejects(publishAssuranceStatus(options()), /unavailable/);
+  });
+});
+test('closed PRs are not written or certified by queue refresh', async () => {
+  const snapshot = fixtureSnapshot(); snapshot.pr.state = 'closed';
+  await withGitHub({ snapshot }, async ({ checks }) => {
+    const result = await publishAssuranceStatus(options());
+    assert.equal(result.skipped, true);
+    assert.equal(checks.length, 0);
+  });
+});
+test('a missing import is a truthful failed PR check, not a refresh infrastructure error', async () => {
+  const snapshot = fixtureSnapshot(); snapshot.reviews.pop();
+  await withGitHub({ snapshot }, async ({ checks }) => {
+    const results = await refreshAssurance({ ...gateOptions(), prNumber: undefined });
+    assert.equal(results.length, 1);
+    assert.equal(results[0].conclusion, 'failure');
     assert.equal(checks[0].conclusion, 'failure');
   });
 });
-
-test('a failed Checks API write cannot be misreported as a verified success', async () => {
-  const original = globalThis.fetch;
-  globalThis.fetch = async url => {
-    if (String(url).endsWith('/check-runs')) return { ok: false, status: 403 };
-    return { ok: true, json: async () => ({ head: { sha: head }, user: { login: 'author' }, draft: false }) };
-  };
-  try {
-    await assert.rejects(publishAssuranceStatus({ repository, prNumber: 7, token: 'placeholder-token' }), /GitHub check-run API failed/);
-  } finally { globalThis.fetch = original; }
+test('bounded schedule refuses overflow instead of silently ignoring the queue tail', async () => {
+  await withGitHub({ openPRs: Array.from({ length: 51 }, (_, i) => ({ number: i + 1 })) }, async ({ checks }) => {
+    await assert.rejects(refreshAssurance({ ...gateOptions(), prNumber: undefined }), /bound exceeded/);
+    assert.equal(checks.length, 0);
+  });
+});
+test('workflow entrypoint refuses PR events, wrong repository ID and non-default refs', async () => {
+  const baseEnv = { GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch',
+    GITHUB_REPOSITORY: 'owner/tesbo', GITHUB_TOKEN: 'synthetic-test-token',
+    GITHUB_REPOSITORY_ID: '7', GITHUB_SHA: fixtureSource, GITHUB_REF: 'refs/heads/main', PR_NUMBER: '7' };
+  await assert.rejects(main({ ...baseEnv, GITHUB_EVENT_NAME: 'pull_request_target' }), /installed schedule or dispatch/);
+  await withGitHub({}, async ({ checks }) => {
+    await assert.rejects(main({ ...baseEnv, GITHUB_REF: 'refs/heads/untrusted' }), /trusted repository/);
+    await assert.rejects(main({ ...baseEnv, GITHUB_REPOSITORY_ID: '8' }), /trusted repository/);
+    assert.equal(checks.length, 0);
+  });
+});
+test('selection cannot smuggle an alternate repository or executable string', async () => {
+  await assert.rejects(publishAssuranceStatus({ ...options(), repository: '../elsewhere' }), /Invalid/);
+  await assert.rejects(refreshAssurance({ ...gateOptions(), prNumber: '7; echo unexpected' }), /Invalid PR selection/);
+  assert.equal(JSON.parse(fixturePolicyRaw).contract, 'tesbo-coordinator-attested-ai-assurance/v1');
 });
