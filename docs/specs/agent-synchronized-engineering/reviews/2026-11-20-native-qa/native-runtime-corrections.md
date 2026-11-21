@@ -1,5 +1,45 @@
 # Native retest runtime findings and corrections
 
+## 2026-11-21 follow-up: UUID prefetch duplication
+
+This follow-up addresses the previously recorded duplicate-read finding under the owner's continuing failed-job recovery authority. The older runtime records below remain historical; their then-open title and billing findings must not be read as the current implementation state.
+
+The remote-title correction was merged with [PR173](https://github.com/1alextest/Tesbooboo/pull/173). [PR179](https://github.com/1alextest/Tesbooboo/pull/179) subsequently corrected the isolated billing fixture's entitlement-cache invalidation and the annual/monthly copy expectation. Its final smoke recorded 219 native/related passes and 40 billing passes with two existing Stripe-write skips. PR173's own merge had a red final billing run; the later recovery does not rewrite that result.
+
+### Fresh failure and exact source
+
+Development `a0bc3c65276e6bcd4eda2742a857883acba55a2b`, tree `90ebe0f31100a8950ae9d2db3ba729d43c5595ce`, failed [push run 44957310956, job 137008164422](https://github.com/1alextest/Tesbooboo/actions/runs/44957310956/job/137008164422): **219 selected, 218 passed, one failed, zero skipped and zero not run**. All 32 native retest cases passed. The failed ordinary UUID URL case expected one project GET and received two; its trace independently records two member GETs too. All four returned 200 with identical corresponding response-content hashes. Billing did not execute after this failure.
+
+Artifact 14728383948 was downloaded once and verified: 43,200,284 bytes, SHA256 `85c8af12bcbb3143159da8f5a0509dbad0f355eee1fc97ee857a28a1f8fee258`. The failure trace is 352,163 bytes, SHA256 `155144bb63fe0acb81b17c9da9d1123001638f4959dde43db028f9cb2a7dd64b`. Network ordering proves duplicate successful reads; callback ordering is established separately by the controlled-source probe and guarded browser regression.
+
+### Reused owner and preservation boundary
+
+| Required capability | Existing owner and current behavior | Decision |
+|---|---|---|
+| Overlap project reads with authentication | `AppDataProvider` starts `prefetchProjectForPath` before the session result; protected rendering still waits for authenticated state | Reuse unchanged |
+| Distinguish started reads from unconsumed promises | `lib/projectPrefetch.ts` starts UUID reads immediately, but its resolver previously used the consumable map as a started-state check | Extend this owner with an invocation-local UUID identity |
+| Consume and refresh project/member data | `ProjectDataProvider` takes each promise once and directly requests data for intentional refresh | Reuse unchanged; retain full project/member coverage |
+| Resolve readable project links | `routeParams.tsx` consumes the real resolver and updates the visible URL | Reuse unchanged |
+
+The resolver now avoids repeating the two reads when its resolved UUID matches the UUID this invocation already started, ignoring UUID letter case. A genuinely different resolved identity keeps the prior fallback. The take-once deletion, 15-second TTL, start timestamps, readable-key flow, server authorization, session gate, rejected-promise handling and explicit refetch methods are unchanged. There is no permanent fetched-project set.
+
+The new case in the existing `e2e/ui/readable-urls.spec.ts` holds only the real bare-project resolver GET. It waits until the authenticated project page has consumed both prefetches, checks the initial one/one counts and UUID URL, then releases the request. It requires the actual 200 response and identity, canonical readable URL and final one/one counts. The original exact-once case remains. No fabricated response, sleep, retry, broader timeout or weaker assertion was introduced.
+
+A controlled probe of the actual unfixed source reproduced two project and two member calls after consumption-before-resolution. The corrected source produced one each and preserved take-once behavior, a fresh second invocation, expiry and readable-key prefetch. This is module evidence, not application/database/browser execution. E2E TypeScript and whitespace checks passed; corrected-build browser verification is pending the new PR's isolated CI.
+
+### Coupled verification scope
+
+The CI impact lane retains all seven native Run/Execution/Plan/readable-URL files and adds complete `api/projects.spec.ts`, `ui/projects.spec.ts` and `ui/members.spec.ts` files to exercise intentional refresh after writes. It retains ten requested workers and zero retries. The separate full 42-case billing lane and its existing two requested workers remain unchanged; this does not claim ten-worker billing execution.
+
+Two newly selected successful-rename fixtures contradicted the existing 30-character maximum: the API rename was 40 characters and the UI rename 45. Only their unique renamed values changed, to 28 and 19 characters respectively. Exact persisted-name/description assertions, boundary/refusal tests and cleanup remain. Backend `validateProjectFields`, used by create and update, and frontend `PROJECT_NAME_MAX_LENGTH` establish the mismatch; no new runtime failure is claimed for these source-proven invalid inputs.
+
+### Findings not fixed and delivery limits
+
+- A pending readable-key resolver can repopulate the prefetch map after `clearProjectPrefetch()`. The source review found this separate lifecycle race; this correction does not claim to fix it or demonstrate a cross-user disclosure.
+- The API's in-flight GET map and the route resolver's identity cache have separate session-scope questions. They are adjacent owners, not part of this bounded UUID repair. A same-document session-transition regression should precede any separate lifecycle correction.
+- Requirements, Cases, Manuals, Policies, Tasks, Evidence and Bugs reconciliation cannot be written/read back through Tesbo MCP because that connector is not exposed in this session. The GitHub work record is preserved; native synchronization is blocked, not complete.
+- Production deployment, the external own-driver QA loop and a new cache or agent platform are outside this increment. Merge to development remains conditional on the complete corrected-head gates; this source record is not a green-run claim.
+
 ## Evidence boundary
 
 This is a later correction record. The earlier source-review receipts and their hashes remain unchanged. Source review did not catch the recovery-trigger focus defect subsequently demonstrated by the real browser.

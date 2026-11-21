@@ -150,7 +150,7 @@ test.describe("project CRUD", () => {
     expect(getRes.ok()).toBeTruthy();
     expect((await getRes.json()).name).toBe(name);
 
-    const updatedName = `${name} (renamed)`;
+    const updatedName = `E2E Renamed Project ${suffix}`;
     const patchRes = await request.patch(`/api/projects/${created.id}`, {
       data: { name: updatedName, description: "updated description", settings: { foo: "bar" } },
     });

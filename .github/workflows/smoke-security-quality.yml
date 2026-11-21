@@ -308,22 +308,24 @@ jobs:
             api/executions.spec.ts api/attachments.spec.ts \
             --workers=1 --retries=0 --output=test-results-compatibility \
             -g "supports the create -> read -> update -> list -> delete lifecycle|supports adding and removing test cases|the same id repeated inside one request is added once|AUT-01 a full session|adding a test case to a cycle auto-creates an Untested execution|an execution attachment uploads and appears in its list|from-cases seeds the run with its cases|from-cases refuses a Draft case"
-      - name: Verify native manual retest and Run execution impact set
+      - name: Verify native retest, project prefetch and Run execution impact set
         working-directory: e2e
         env:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-native-retest
         run: |
-          # All native Run/Execution/Plan/readable URL files against the ordinary application.
+          # Full native Run/Execution/Plan/readable URL files plus project/member refresh owners.
           # Full billing API/UI suites are executed below with billing enabled on the same
           # disposable migrated database; none of their assertions are removed or skipped.
           npx playwright test -c playwright.config.ts --list | tail -n 1
           npx playwright test -c playwright.config.ts \
             api/cycles.spec.ts api/executions.spec.ts api/route-resolve.spec.ts \
             api/plans.spec.ts ui/cycles.spec.ts ui/executions.spec.ts ui/readable-urls.spec.ts \
+            api/projects.spec.ts ui/projects.spec.ts ui/members.spec.ts \
             --workers=10 --retries=0 --output=test-results-native-retest --list
           npx playwright test -c playwright.config.ts \
             api/cycles.spec.ts api/executions.spec.ts api/route-resolve.spec.ts \
             api/plans.spec.ts ui/cycles.spec.ts ui/executions.spec.ts ui/readable-urls.spec.ts \
+            api/projects.spec.ts ui/projects.spec.ts ui/members.spec.ts \
             --workers=10 --retries=0 --output=test-results-native-retest
       - name: Verify fail-closed billing entitlement cache fixture
         working-directory: e2e

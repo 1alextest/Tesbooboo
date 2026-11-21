@@ -34,7 +34,7 @@ test.describe("project settings", () => {
       // The General tab is the default — no ?tab= needed. Name/Description have no
       // id/label pairing in the markup, so scope structurally within the form.
       await page.goto(`/projects/${projectId}/settings`);
-      const updatedName = `${name} (renamed via UI)`;
+      const updatedName = `UI Renamed ${suffix}`;
       await page.locator('form input[type="text"]').first().fill(updatedName);
       await page.locator("form textarea").fill("Updated via the e2e UI suite");
       await page.getByRole("button", { name: "Save", exact: true }).click();
