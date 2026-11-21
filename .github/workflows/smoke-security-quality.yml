@@ -61,6 +61,14 @@ jobs:
       # Verify selected human-publication mechanics without exposing the new external
       # proposal inlet in deployments awaiting the S0 Skills/authority gate.
       TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED: "1"
+      # This entire job uses disposable localhost Postgres. The synthetic Stripe key is NOT
+      # a Stripe account credential; the app's Stripe SDK talks only to the read-only loopback
+      # fixture, which refuses all payment-writing methods and unknown resources.
+      TESBO_CI_STRIPE_READONLY_FIXTURE: "1"
+      STRIPE_SECRET_KEY: sk_test_tesbo_ci
+      STRIPE_WEBHOOK_SECRET: whsec_tesbo_ci
+      STRIPE_PRICE_ID_PRO_MONTHLY: price_tesbo_ci_monthly_usd
+      STRIPE_PRICE_ID_PRO_ANNUAL: price_tesbo_ci_annual_usd
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -75,6 +83,17 @@ jobs:
             Tesbo-Frontend/package-lock.json
             e2e/package-lock.json
             sdk/playwright-reporter/package-lock.json
+      - name: Start read-only Stripe price fixture and verify refused writes
+        run: |
+          nohup node e2e/utils/stripe-readonly-fixture.mjs >/tmp/tesbo-stripe-ci.log 2>&1 &
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9977/health >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:9977/health
+          curl -fsS -H 'Authorization: Bearer sk_test_tesbo_ci'             http://127.0.0.1:9977/v1/prices/price_tesbo_ci_monthly_usd >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST             -H 'Authorization: Bearer sk_test_tesbo_ci'             http://127.0.0.1:9977/v1/customers)" = "405"
+          test "$(curl -s -o /dev/null -w '%{http_code}'             -H 'Authorization: Bearer sk_test_tesbo_ci'             http://127.0.0.1:9977/v1/prices/unknown)" = "404"
       - name: Build isolated backend
         working-directory: Tesbo-Backend-Nest
         run: |
