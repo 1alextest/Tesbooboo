@@ -21,7 +21,8 @@ async function requestJson(url, token, body) {
       Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'tesbo-assurance-status'
+      'User-Agent': 'tesbo-assurance-status',
+      'Content-Type': 'application/json'
     },
     ...(body ? { body: JSON.stringify(body) } : {})
   });
