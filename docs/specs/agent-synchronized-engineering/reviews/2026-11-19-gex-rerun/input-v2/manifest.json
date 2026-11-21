@@ -1,0 +1,87 @@
+{
+  "run_id": "GEX-ASER-2026-11-19",
+  "revision": "1.4.29-candidate-v2",
+  "scope": "Design adequacy and integration of the graph and governed-method amendments and their material native consumers; no whole-product runtime certification",
+  "canonical_input_archive_sha256": "6094687758ebf1e5dfa3c6ed8e2209b8967a190523815ba1e1197d11867374ef",
+  "application_repository": "1alextest/Tesbooboo",
+  "application_source_sha": "6897f989b055a955280f810c7daace86f74057fa",
+  "application_source_git": "/workspace/scratch/307cd95373fe/tesbo",
+  "view_source_sha": "7a80a3fb832902b135cc5fbc965e142bf6db9fa3",
+  "method_repository": "NesberryEnterprise/Nesberry",
+  "method_source_sha": "d83549c85a4dcd047fb40dc4fba4ec62737ab0fc",
+  "method_root": "/workspace/scratch/ce8c3109f396/assurance-source-recovery/Nesberry-d83549c85a4dcd047fb40dc4fba4ec62737ab0fc",
+  "files": [
+    {
+      "path": "canonical/00_README.md",
+      "bytes": 146346,
+      "sha256": "c3819ab140da8a1e5a67d781dc42dbb8a6d7eed6f6e3f95dd04b3a63e87bd366"
+    },
+    {
+      "path": "canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 201535,
+      "sha256": "f3114cb689747ae9e8edc08065d6e06e6f68c7c9aaf3b83b852c46d01340a688"
+    },
+    {
+      "path": "canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 125442,
+      "sha256": "eb38644b42431718b1cd84c4bcade7dfbb4af86749236980ac1be01d34c4afc7"
+    },
+    {
+      "path": "canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 326457,
+      "sha256": "1f912ca27c9d3cdb3514a2c15aac1c80ede6528a4bb170ed903e54c8f964103d"
+    },
+    {
+      "path": "canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 162975,
+      "sha256": "ea32eca4c982979c9fe85e14a3850b3308ddbe89d1d71796ab20d4c98a800c09"
+    },
+    {
+      "path": "canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 318857,
+      "sha256": "c4c841dff2a435b3432f39f4974f94176f9c3720485ccd239f52fe8bfe48b652"
+    },
+    {
+      "path": "canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 111058,
+      "sha256": "c4e79c5006caefda4aa3bc043e34a96da913186cedde0e7a8be95f38b5d810ea"
+    },
+    {
+      "path": "canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 113681,
+      "sha256": "cc31758cc02401fc8113f0964008c9bc676bc85d9aaacb8fc5e10788a8e33939"
+    },
+    {
+      "path": "views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 22931,
+      "sha256": "a2eaeaa1b072609552fe9ad556ce06d1b5044df9557562aa2f81b4208efeaaf3"
+    },
+    {
+      "path": "views/README.md",
+      "bytes": 33957,
+      "sha256": "ef57b24414ac3c5f8f54670fe3f85a3dea3a74d1cbba14232b3e5945bc268dd8"
+    },
+    {
+      "path": "views/design.md",
+      "bytes": 108612,
+      "sha256": "5306b9a8dc4b208b5a0c75c33490c47eb6794ecefd93169566bd20ce5004b5b3"
+    },
+    {
+      "path": "views/implementation-plan.md",
+      "bytes": 79849,
+      "sha256": "8c4115494fc1837b0b961681aacfae45bb609a3dc25743a2104f5f0104e80109"
+    },
+    {
+      "path": "views/requirements.md",
+      "bytes": 76501,
+      "sha256": "04dab7657e9ff94304303db26592b0b9085e67cf1c59df79b34ac20efbc2fbe9"
+    },
+    {
+      "path": "views/skills-governance.md",
+      "bytes": 48516,
+      "sha256": "ddfb416d055a2d28dc574a225e6fdad414c183d0016f819276eda4f160f761ff"
+    }
+  ],
+  "previous_input_manifest_sha256": "806f3ecac0d97b5ba6fd4e5a1f1bdfa58c2943c90f176b0f61f2328268bfa2b2",
+  "view_source_note": "Base before working proposed reconciliation. Exact reviewed document bytes are identified by the file hashes below."
+}

@@ -1,0 +1,82 @@
+{
+  "basis": "Actual isolated reverse application from exact v16 bytes; no product test",
+  "command": "git apply --reverse --no-index <transition.patch>",
+  "checks": [
+    {
+      "target": "input-v15",
+      "members": 14,
+      "matched": true
+    },
+    {
+      "target": "input-v14",
+      "members": 14,
+      "matched": true
+    },
+    {
+      "target": "input-v13",
+      "members": 14,
+      "matched": true
+    },
+    {
+      "target": "input-v12",
+      "members": 14,
+      "matched": true
+    },
+    {
+      "target": "input-v11",
+      "members": 14,
+      "matched": true
+    },
+    {
+      "target": "input-v10",
+      "members": 14,
+      "matched": true
+    },
+    {
+      "target": "input-v9",
+      "members": 14,
+      "matched": true
+    },
+    {
+      "target": "input-v8",
+      "members": 14,
+      "matched": true
+    },
+    {
+      "target": "input-v7",
+      "members": 14,
+      "matched": true
+    },
+    {
+      "target": "input-v6",
+      "members": 14,
+      "matched": true
+    },
+    {
+      "target": "input-v5",
+      "members": 14,
+      "matched": true
+    },
+    {
+      "target": "input-v4",
+      "members": 14,
+      "matched": true
+    },
+    {
+      "target": "input-v3",
+      "members": 14,
+      "matched": true
+    },
+    {
+      "target": "input-v2",
+      "members": 14,
+      "matched": true
+    },
+    {
+      "target": "input-v1",
+      "members": 14,
+      "matched": true
+    }
+  ],
+  "all_input_members_match": true
+}

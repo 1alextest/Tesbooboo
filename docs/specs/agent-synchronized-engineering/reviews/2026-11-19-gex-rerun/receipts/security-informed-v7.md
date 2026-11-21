@@ -1,0 +1,26 @@
+# Security — informed current-target delta v7
+
+**Run:** GEX-ASER-2026-11-19. **Reviewer:** `/root/security_review`. **Disposition:** bounded document delta adequate; **RELEASE-BLOCK retained for governed exposure on unchanged application source**. No new material security contract omission established; no implementation finding closed.
+
+**Binding:** `/workspace/scratch/ce8c3109f396/assurance-run-20261119/input-v7/manifest.json`, SHA-256 `d6e054ec4567344b1b458b1bf6efbdedb78cb1d80e5c7f5c5767dbebf6e445be`. All fourteen members independently matched bytes/hashes. Application remains `1alextest/Tesbooboo@6897f989b055a955280f810c7daace86f74057fa`; incoming documentation reference is `2a3708cec25acca0261dcb2461106a8ce0faf036`. Unchanged Security charter/orchestration remain bound to method `d83549c85a4dcd047fb40dc4fba4ec62737ab0fc`. Canonical06 remains identical, inactive candidate text.
+
+## Actual checks and changed obligations
+
+Read the complete v5→v7 changes in canonical01/03/05 and four changed views, retained Model Studio lifecycle, RUN-CONTEXT and QA's frozen v6/v7 deltas. Independently compared the corrected selection clause against Draft/CURRENT/HISTORICAL counterexamples. Checks were document comparison and hashing; no unchanged-source rescan, product execution, shared infrastructure/provider mutation or Skill activation. QA's checks and root's CI reports are attributed evidence, not my execution. Original Security v1 and v5 hashes/modes remain unchanged; the exact-source Critical Preflight transfer correction remains recorded in v5.
+
+| Changed boundary | Assessment and remaining proof |
+|---|---|
+| **Meaning, consequences and authority** | C01/C03 preserve typed claims, exact source owners/revisions/effective scope and ACLs; traversal cannot transfer authority. An artifact named Policy is not automatically binding; expired/inapplicable norms and contradictory manuals require accountable resolution. Inference cannot create authoritative edges, official defects or verdicts. SEM01/02/03/08 add useful denied-effect and valid-no-change fixtures; none is executed. |
+| **Optional prediction, cause and bounded exploration** | Separate mechanism, temporal association, tested alternatives and verified cause. Prediction requires qualified labels, independent holdouts/calibration and abstention; manual/deterministic/no-prediction outcomes remain valid. Scores cannot suppress mandatory coverage or convert partial traversal into completeness. Cross-project evaluation does not authorize cross-project retrieval or provider disclosure; inherited access/egress controls still apply. Independent outcome, privacy and budget proof remain gates. |
+| **Effective assignment versus model selection** | V7 resolves QA6-D1 at document level: effective assigned Skill revision and CURRENT active model are distinct owners. Authorized Draft preview and explicitly consented HISTORICAL work remain available, with selected revision/mode/scope pins; neither implies activation/current coverage. Retired generation/dispatch remains denied under retained MBT-C02. Action-time authority/revision revalidation cannot silently substitute another selection. Runtime positive/negative/race proof remains unrun. |
+| **History, learning and aliases** | Corrections/rejections and original attempts survive regeneration, rollback and model changes; self-generated examples cannot establish efficacy. Append-only history remains subject to existing retention/disclosure policy. C05 assigns twelve supplementary labels to existing families with additional discriminating fixtures, not extra canonical definitions or execution credit. Earlier tests with matching family IDs do not prove these variants. |
+
+## Retained gates and CI boundary
+
+S0-01 remains conditionally HIGH: actual private-source entitlement or an accountable all-configured-sources/all-eligible-projects sharing policy is still unproved; deployment remains UNKNOWN. S5-01 remains HIGH: actual principal and independent action-bound human assent require final-native-owner enforcement across every writer. All-reader/egress controls, P18 consent, true authority/root recovery, atomic native effects/provenance, immutable history, resource limits, authentic UI/runtime evidence and applicable predecessor/Graph/White gates remain open as previously scoped.
+
+Root reports incoming `2a3708c` current-tree-security succeeded; the initial `7a80` failure's actual historical match remains unresolved, and final-delivery CI awaits the future commit. This distinguishes current success from historical disposition and final-tree proof. I did not inspect those CI logs. Neither result certifies the pinned product, deployed policy, PR167 implementation or this amendment's security. C05 retains exact rule/path disposition and fresh final-tree checks without broad exclusions.
+
+**Evidence locators:** input-v7 canonical01:1034–1050; canonical03:1641–1666 and retained lifecycle at 890; canonical05:1803–1826; corresponding views; `receipts/qa-informed-v6.md` and `qa-informed-v7.md`. The semantic extension supplies no method-effectiveness evidence or activation authority.
+
+**Signed and frozen:** `/root/security_review`, 20 November 2026 UTC. Advisory only; no freeze, release, merge or human operational assent.

@@ -1,0 +1,19 @@
+--- reviewed36
++++ concurrent37
+@@ -1,6 +1,6 @@
+ # Tesbo: Shared Human-and-Agent Engineering Platform — Specification Package
+ 
+-**Revision:** 1.4.36 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN 
++**Revision:** 1.4.37 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN 
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Status:** source-informed proposals plus scoped native preview increments; NOT FROZEN; no package-wide completion or deployment certification.
+ **Historical v1.4.27 working proposed baseline:** 124 FR, 12 NFR, 93 AC, 91 implementation tasks and 490 planned QA checks (QA-448–490 NOT RUN; owner approval pending). **Previous v1.4.19 proposed baseline:** 114 FR, 12 NFR, 81 AC, 83 tasks and 447 planned QA checks. **Previous v1.4.18 baseline:** 105 FR, 12 NFR, 72 AC, 77 tasks and 423 planned QA checks. The new QA-404–423 are NOT RUN; historical execution/coverage claims retain their original dates and limitations. This document amendment does not certify application behavior.
+@@ -767,3 +767,8 @@
+ 
+ 
+ **Current36 integration boundary:** The published35 Graph Analytics closure contracts are preserved and govern mixed model/policy/requirement obligation scope, distinct evidence sufficiency and observed PASS/FAIL, per-impact actions, total ranking, authorized-visible snapshot identity and current-authority rollover. Their new fixtures extend the same five GA-AC checks and remain NOT RUN. The DMIS approval-to-posting workflow is the named pilot context, not a universal actor/schema/method or a claimed live test. The incoming short source-checkout claim belongs to its separate review; this run's inspected source remains6897 and its delivery parent is1fe. Earlier current-state statements are historical when this latest explicit qualification differs. This chapter preserves the independently reviewed CURRENT/HISTORICAL, separate Skill assignment, prepared-Run and source-status qualifications above. No empirical benefit, deployment, activation or implementation acceptance is inherited.
++
++
++## Revision 1.4.37 — Graph Analytics review resolution
++
++Build on reconciled v1.4.36, which already retains the Graph Analytics and broader semantic-assurance obligations. This amendment addresses the subsequent Graph Analytics review. Earlier proof receipts retain their artifact/source pins. These are Tesbo contracts. DMIS supplies synthetic fixtures without changes to or reliance on a live DMIS system. Implementation and independent acceptance are pending.

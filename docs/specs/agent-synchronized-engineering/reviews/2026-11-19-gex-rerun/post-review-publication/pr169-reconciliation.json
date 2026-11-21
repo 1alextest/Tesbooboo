@@ -1,0 +1,44 @@
+{
+  "incoming_merge": "ed71aa544108760f711ed4cb1bb7b7ba008ef417",
+  "previous_delivery_commit": "5b1e83461ccbb69f0fc8356301fdcb769c07db0e",
+  "incoming_candidate_zip_sha256": "214e29f6d784e814da12ec417917304a73d373073ef5a1384714b4c1e95b6a0f",
+  "files": [
+    {
+      "path": "docs/specs/agent-synchronized-engineering/README.md",
+      "incoming_git_sha": "40d0f84b27f6cc15fe036ea75de64b6d94598bae",
+      "incoming_additions": 8,
+      "incoming_deletions": 0,
+      "incoming_addition_preserved_exactly": true,
+      "result_git_sha": "fb7f2affeecbb4af0d1eb978f94fcdbda62dc9c2"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/implementation-plan.md",
+      "incoming_git_sha": "8e5ad5f86fec782cddfb865a10ef6ab3d1c09f94",
+      "incoming_additions": 10,
+      "incoming_deletions": 0,
+      "incoming_addition_preserved_exactly": true,
+      "result_git_sha": "4890f3f6a644a2503c6942ff11149531f4b01aa9"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/reviews/2026-11-20-v1435-executable-preflight.md",
+      "incoming_git_sha": "abc84651f89297aca052493ac2961d1e2c844f3b",
+      "incoming_additions": 32,
+      "incoming_deletions": 0,
+      "incoming_addition_preserved_exactly": true,
+      "result_git_sha": "abc84651f89297aca052493ac2961d1e2c844f3b"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/reviews/2026-11-20-v1435-semantic-remediation.md",
+      "incoming_git_sha": "b17324d3b269156960c3e2aba292f2c5c01a841a",
+      "incoming_additions": 30,
+      "incoming_deletions": 0,
+      "incoming_addition_preserved_exactly": true,
+      "result_git_sha": "b17324d3b269156960c3e2aba292f2c5c01a841a"
+    }
+  ],
+  "reverse_publication_patch_reconstructs_all_six_frozen_views": true,
+  "primary_review_changed": false,
+  "new_semantic_clearance": false,
+  "subsequent_concurrent_merge": "4d67d8c8fab50b69cc9b8954541fab98bf436d07",
+  "qualification": "The subsequent concurrent merge placed the same incoming annotations inside two views. Those two incoming view blobs and its separate pr169-delta-merge.md are retained exactly; updated reverse patch recovers v16."
+}

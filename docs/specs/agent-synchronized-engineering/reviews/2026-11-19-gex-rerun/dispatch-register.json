@@ -1,0 +1,580 @@
+{
+  "run": "GEX-ASER-2026-11-19",
+  "record_basis": "Actual dispatches in this conversation and preserved reviewer invocation receipts. Followups are separate informed reviews; file existence alone is not claimed completion.",
+  "initial_dispatches": [
+    {
+      "task": "/root/blue_member_a",
+      "role": "Blue A",
+      "initial_input": "input-v1",
+      "dispatch_api": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "review_mode": "cold"
+    },
+    {
+      "task": "/root/blue_member_b",
+      "role": "Blue B",
+      "initial_input": "input-v1",
+      "dispatch_api": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "review_mode": "cold"
+    },
+    {
+      "task": "/root/red_member_a",
+      "role": "Red A",
+      "initial_input": "input-v1",
+      "dispatch_api": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "review_mode": "cold"
+    },
+    {
+      "task": "/root/red_member_b",
+      "role": "Red B",
+      "initial_input": "input-v1",
+      "dispatch_api": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "review_mode": "cold"
+    },
+    {
+      "task": "/root/grey_journeys",
+      "role": "Grey",
+      "initial_input": "input-v1",
+      "dispatch_api": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "review_mode": "cold inventory before canonical05; later informed crosswalk"
+    },
+    {
+      "task": "/root/security_review",
+      "role": "Security",
+      "initial_input": "input-v1",
+      "dispatch_api": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "review_mode": "original source review with disclosed incidental historical rows"
+    },
+    {
+      "task": "/root/elephant_gold",
+      "role": "Elephant-Gold",
+      "initial_input": "input-v1",
+      "dispatch_api": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "review_mode": "cold"
+    },
+    {
+      "task": "/root/white_pre_gate",
+      "role": "White pre",
+      "initial_input": "input-v1",
+      "dispatch_api": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "review_mode": "informed gate; predecessor receipts required"
+    },
+    {
+      "task": "/root/green_member_a",
+      "role": "Green A",
+      "initial_input": "input-v2",
+      "dispatch_api": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "review_mode": "cold"
+    },
+    {
+      "task": "/root/green_member_b",
+      "role": "Green B",
+      "initial_input": "input-v3",
+      "dispatch_api": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "review_mode": "cold"
+    },
+    {
+      "task": "/root/qa_review",
+      "role": "QA",
+      "initial_input": "input-v3",
+      "dispatch_api": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "review_mode": "cold original; then separate informed Grey challenge"
+    },
+    {
+      "task": "/root/purple_review",
+      "role": "Purple",
+      "initial_input": "input-v4",
+      "dispatch_api": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "review_mode": "cold"
+    }
+  ],
+  "limits": [
+    "All analytical agents share the model family; no cross-model independence or human operational authority is asserted.",
+    "Parent problem diagnosis, prior review archive and method-transfer outputs were excluded from original cold briefs. White intentionally receives predecessor receipts.",
+    "Existing authored proposal and read-only preparation overlap do not prove historical Gate A-D chronological compliance.",
+    "Security receipt discloses narrow incidental historical-row exposure; do not call it wholly unexposed discovery."
+  ],
+  "informed_continuations": [
+    {
+      "task": "/root/blue_member_a",
+      "receipt": "receipts/blue-a-informed-v11.md",
+      "sha256": "c90118617c1486efc0b2a35dfc9f6a5d1e9a396f7ada15ca2c4cfe16ed13d94e",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/blue_member_a",
+      "receipt": "receipts/blue-a-informed-v12.md",
+      "sha256": "798a36611b68d4a371ae29c49d04610dea600f0543841f83d3bb77290981d82e",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/blue_member_a",
+      "receipt": "receipts/blue-a-informed-v16.md",
+      "sha256": "6b95b7c600beedc0abaed8874463ae74e67f44cd653ce1564e0e1ce5f885ac19",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/blue_member_a",
+      "receipt": "receipts/blue-a-informed-v5.md",
+      "sha256": "ee95b53c501ddc66d279e03c82d140aeaeeaf3f5108048e789bb221d3bfc85a8",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/blue_member_a",
+      "receipt": "receipts/blue-a-informed-v7.md",
+      "sha256": "8a1cb2f2a51c31816315639b55667db716844658a865209d2f50abf64d382f67",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/blue_member_b",
+      "receipt": "receipts/blue-b-informed-v12.md",
+      "sha256": "1b1e7c5823c2e0a5aa8e1760c724cad5c802a18f11f5bcd61c98ffc0f19c33f9",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/blue_member_b",
+      "receipt": "receipts/blue-b-informed-v16.md",
+      "sha256": "88a7b66b4f240e6d578ff696498842b8687900f824ea56aac8847530d9e3039d",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/blue_member_b",
+      "receipt": "receipts/blue-b-informed-v5.md",
+      "sha256": "2387ad26784a3fd949c9f372e01b94ab6bead5bfa660f4a6444210621409f613",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/blue_member_b",
+      "receipt": "receipts/blue-b-informed-v7.md",
+      "sha256": "18c0fb82951fb2ff0a42965e4e5cca87cca9957c4894c0270d9a5f10a08febf9",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/elephant_gold",
+      "receipt": "receipts/elephant-gold-informed-v16.md",
+      "sha256": "664da46144b672c5254142ef8a958ed321c13c5dbf87438a2004c10182df8885",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/elephant_gold",
+      "receipt": "receipts/elephant-gold-informed-v7.md",
+      "sha256": "0e7dc526cd4e31e75470e27862139d1318d67254a5df765bd177a78c54687841",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/green_member_a",
+      "receipt": "receipts/green-a-informed-v10.md",
+      "sha256": "aadd7b68d88c72bed1361942162edf2853269490e296187e38a1640cc19dbd71",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/green_member_a",
+      "receipt": "receipts/green-a-informed-v11.md",
+      "sha256": "47ebaaab7d693f41ecfe41e3ee34cc64754dc21f5a1b94d130bde77a55a79e52",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/green_member_a",
+      "receipt": "receipts/green-a-informed-v12.md",
+      "sha256": "0062ebfc64236df76f5bb071147dcf6695d8bddce52e6925949d7c79ab25e02c",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/green_member_a",
+      "receipt": "receipts/green-a-informed-v16.md",
+      "sha256": "b0f553c37582ccb6d5db975e5bf7138a417086646a51417bab1bea4cb5c44387",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/green_member_a",
+      "receipt": "receipts/green-a-informed-v5.md",
+      "sha256": "38db29f5403a41e7396907422bafb3ee812b42d8b0857272e86658c391a83ff1",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/green_member_a",
+      "receipt": "receipts/green-a-informed-v7.md",
+      "sha256": "04547c507f35dbf8a75376210903581aa0bf4f98fda873367eb784a65fe9ef4e",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/green_member_b",
+      "receipt": "receipts/green-b-informed-v10.md",
+      "sha256": "4447b3cb4f3212346d0d7dab5f05d58d8e79aebe7ec0be3bddeefa31bbce262e",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/green_member_b",
+      "receipt": "receipts/green-b-informed-v11.md",
+      "sha256": "a3ef91dd0ef89dad22706823d7e10bca231c0e9a55c250f96e0624bfbbb93df2",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/green_member_b",
+      "receipt": "receipts/green-b-informed-v12.md",
+      "sha256": "2544415cf07d5c52bcdafee60eca902c937f62899eb55f21189b5177dd2ee8e1",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/green_member_b",
+      "receipt": "receipts/green-b-informed-v16.md",
+      "sha256": "28c8091f7bf3ef02b8d738c046ff55d0cc3f171e8e48f353486cad4c9287089f",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/green_member_b",
+      "receipt": "receipts/green-b-informed-v5.md",
+      "sha256": "2629bdda068868a5b4dba5fd5e0deb3ff99cb54128c7eda9d1b8390c2167e3af",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/green_member_b",
+      "receipt": "receipts/green-b-informed-v7.md",
+      "sha256": "4678d0a43967940af878339f8d387c0ce850b76116404e4d8c1af7b85ef0ad90",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/grey_journeys",
+      "receipt": "receipts/grey-informed-v14.md",
+      "sha256": "9a28229ccbaa23b98900cecdf0f71623bd1a89a860e5b5c595390d7410fc9776",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/grey_journeys",
+      "receipt": "receipts/grey-informed-v16.md",
+      "sha256": "64fffa8214825eb6e4d92a150b332b149301c8f185ceebeb0f2604ab548b140a",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/grey_journeys",
+      "receipt": "receipts/grey-informed-v5.md",
+      "sha256": "e63550ca174217c197198034b0a059319436c354732df8610e8a8aa37aa05da7",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/grey_journeys",
+      "receipt": "receipts/grey-informed-v9.md",
+      "sha256": "62706ae310e08e7b6dafff830a94537a3c3daf7c7f1f327819d13b40d4ce86f3",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/purple_review",
+      "receipt": "receipts/purple-informed-v14.md",
+      "sha256": "049f183ac6e3497e9b2fe36bf99aba53bac049da809281a12455163fdcf2b3e9",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/purple_review",
+      "receipt": "receipts/purple-informed-v16.md",
+      "sha256": "6440362c7374e299888b050ff4f0a1f53006072351888a2d625fb706650ab78c",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/purple_review",
+      "receipt": "receipts/purple-informed-v7.md",
+      "sha256": "e3b75eb9a33165605ff4e4860ce4597aa75f4a2a989cafd1011cd5cd62862473",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/purple_review",
+      "receipt": "receipts/purple-informed-v8.md",
+      "sha256": "f5f9d88c1a50e364bcbd4cc7514e6da503906a09a3e452088df36afb96be5045",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/purple_review",
+      "receipt": "receipts/purple-informed-v9.md",
+      "sha256": "4548cd65dc2e70ed7b78c5ef0fbd700d3594983402185a4b854fa0947a136b8f",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/qa_review",
+      "receipt": "receipts/qa-grey-informed-v3.md",
+      "sha256": "a89bd6ddfd3e8909a2eb46b633c6ec9d5dcb720d32ddab683452a3d23649f389",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/qa_review",
+      "receipt": "receipts/qa-informed-v11.md",
+      "sha256": "758c7c290829774ef3a0a8988209450a8c3a56c8ee4a0f50de5b981324cd04c4",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/qa_review",
+      "receipt": "receipts/qa-informed-v12.md",
+      "sha256": "e693c429915243df45503e9701741a837743ffe6869fac75d5aaaa26d660817a",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/qa_review",
+      "receipt": "receipts/qa-informed-v16.md",
+      "sha256": "98f3ae0ad89d0697669858cf335b0a5df6af489d212378e143b4c873724fa739",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/qa_review",
+      "receipt": "receipts/qa-informed-v6.md",
+      "sha256": "a64760b5e9860ac23016bef67475d51702e3e91b90136bd773157be8524a7ca6",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/qa_review",
+      "receipt": "receipts/qa-informed-v7.md",
+      "sha256": "f24bfe9f21f7787c02dfafa28e6aab0d982632fe16e098393cf4457eca3bf280",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/red_member_a",
+      "receipt": "receipts/red-a-informed-v12.md",
+      "sha256": "7e5e3b96aaadbfcc2694a422f3d760cd6d96ebafefaa0eb4b1d631a66525bd59",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/red_member_a",
+      "receipt": "receipts/red-a-informed-v16.md",
+      "sha256": "86824b2320c6206bdcd0800a7948019269badec17a26b1fdc5a08037259488f2",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/red_member_a",
+      "receipt": "receipts/red-a-informed-v5.md",
+      "sha256": "eb612e90e674ba38dfd1f8947129fac467d8a0ccfcb5b01f34a162ed3cb64da0",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/red_member_a",
+      "receipt": "receipts/red-a-informed-v7.md",
+      "sha256": "bda85c6da065fe3cf46b9b01f51759cbc444cbe629fc5be419613ddc165cd308",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/red_member_b",
+      "receipt": "receipts/red-b-informed-v12.md",
+      "sha256": "c0349a7e6d753d66c5519f48d30fc12a8e2ae010691d8fd83cd923a6141e6a31",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/red_member_b",
+      "receipt": "receipts/red-b-informed-v16.md",
+      "sha256": "c360023e56355197fb0c454a0a15a0a14bc95a0e54fb8107c338604796630449",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/red_member_b",
+      "receipt": "receipts/red-b-informed-v5.md",
+      "sha256": "cc21bfc968e25e036bcda2e9c99645440924ce66a86abd033e1ed026df54c21e",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/red_member_b",
+      "receipt": "receipts/red-b-informed-v9.md",
+      "sha256": "c7d52600daac9442de25a071e25c08e0d18c330e13a2507d118af30a35d72d9c",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/security_review",
+      "receipt": "receipts/security-informed-v11-ci-addendum.md",
+      "sha256": "bf6b9cedb9bcae71802de6a74f046ded8d362c684fd41104dc3801d24ac8e0bb",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/security_review",
+      "receipt": "receipts/security-informed-v11.md",
+      "sha256": "f1423a0a01d70953a92c29fb10b7591c7037238eb0ee6d8246d842265376c408",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/security_review",
+      "receipt": "receipts/security-informed-v14.md",
+      "sha256": "cf07269b4425103eee54550409f0c4ebc42e5e391efb8c6630fecc55fd0939c4",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/security_review",
+      "receipt": "receipts/security-informed-v16.md",
+      "sha256": "54bc2bb65eda9ee1978dae8e6654aa52e89961c9ed35d491e6f2b304acae06f2",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/security_review",
+      "receipt": "receipts/security-informed-v5.md",
+      "sha256": "ec645ed9c0e2a7e47273f9682ed37ea6b5041779dde587cf336acea562bdba17",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    },
+    {
+      "task": "/root/security_review",
+      "receipt": "receipts/security-informed-v7.md",
+      "sha256": "eaca1fbd5f5ac3d17e30f41c2e2ac2d5aa73a7b504ced968e312069fe9e74648",
+      "dispatch_api": "collaboration.followup_task or message during that actual running followup",
+      "mode": "informed; read receipt for exact target and exposure",
+      "basis": "Actual continuation invocations; file rows are associated receipts, not additional independent team members or fabricated timestamps"
+    }
+  ],
+  "final_closeout_invocations": [
+    {
+      "task": "/root/graph_final",
+      "dispatch_api": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "review_mode": "informed manual Graph closeout after actual specialist receipts",
+      "target": "input-v16",
+      "receipt": "receipts/graph-final-v16.md",
+      "status": "completed; actual frozen manual receipt",
+      "receipt_sha256": "caac12bae9e0ee34397e289cce96fb2b6a31d9d2558f6e72993a40f10075a7ec"
+    },
+    {
+      "task": "/root/white_pre_gate",
+      "dispatch_api": "collaboration.followup_task",
+      "review_mode": "final informed White gate after reading completed manual Graph and actual specialists; original pre-gate preserved",
+      "target": "input-v16",
+      "receipt": "receipts/white-final-v16.md",
+      "status": "completed; actual frozen final White receipt",
+      "receipt_sha256": "d6a050be4d04c13e21d0711ce1d8b1829733ce3ab3b54efd14ad67c50e1518b4",
+      "verdict": "NOT FROZEN for architecture/full assurance; bounded documentation delivery supported; no additional material documentation blocker"
+    }
+  ],
+  "publication_scope": {
+    "source_audit": "6897f989b055a955280f810c7daace86f74057fa",
+    "merged_delivery_parent": "1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea",
+    "frozen_docs_manifest": "9dba403c3bb129ce5a5fcab4064a6afccdc669e588ba983e124680bbcf4e7062",
+    "limit": "No automatic transfer of historical implementation findings or other runs participant/runtime claims",
+    "later_canonical": {
+      "revision": "1.4.37",
+      "archive_sha256": "1ed8afd0a978ab9b257c10d61549f6085c7f1f593713a26b0ae56a4540562848",
+      "scope": "Preserved external successor, not covered by the final v16 reviews"
+    }
+  },
+  "review_sequence_corrections": [
+    {
+      "observer": "/root/graph_final",
+      "gap": "Final material clauses extended beyond latest Blue/Red v12 signatures",
+      "action": "Actual Blue A/B and Red A/B v16 deltas obtained and read by Graph before its freeze",
+      "remaining": "Does not supply implementation-author/deployer participation or runtime proof"
+    }
+  ]
+}

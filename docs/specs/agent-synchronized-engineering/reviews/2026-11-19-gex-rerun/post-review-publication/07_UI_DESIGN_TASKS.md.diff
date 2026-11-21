@@ -1,0 +1,19 @@
+--- reviewed36
++++ concurrent37
+@@ -1,6 +1,6 @@
+ # UI/UX Design Tasks and Screen Specifications
+ 
+-**Document ID:** TESBO-UX-007 | **Revision:** 1.4.36 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** proposed extensions plus limited native inspector; full graphical UI/AT and independent sign-off remain open; NOT FROZEN.
++**Document ID:** TESBO-UX-007 | **Revision:** 1.4.37 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** proposed extensions plus limited native inspector; full graphical UI/AT and independent sign-off remain open; NOT FROZEN.
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ 
+ **Platform UI rule:** Project settings determine target kind/adapter, allowed test actions, test-case templates/fields and suite hierarchy, imported-source mapping, issue tracker and evidence classification. DMIS labels and web browser affordances are pilot fixtures, not universal UI controls. A project with no case import or issue tracker sees no required workbook/GitLab fields. Unsupported target adapters show `NOT_SUPPORTED` with no mock execution.
+@@ -758,3 +758,8 @@
+ 
+ 
+ **Current36 integration boundary:** The published35 Graph Analytics closure contracts are preserved and govern mixed model/policy/requirement obligation scope, distinct evidence sufficiency and observed PASS/FAIL, per-impact actions, total ranking, authorized-visible snapshot identity and current-authority rollover. Their new fixtures extend the same five GA-AC checks and remain NOT RUN. The DMIS approval-to-posting workflow is the named pilot context, not a universal actor/schema/method or a claimed live test. The incoming short source-checkout claim belongs to its separate review; this run's inspected source remains6897 and its delivery parent is1fe. Earlier current-state statements are historical when this latest explicit qualification differs. This chapter preserves the independently reviewed CURRENT/HISTORICAL, separate Skill assignment, prepared-Run and source-status qualifications above. No empirical benefit, deployment, activation or implementation acceptance is inherited.
++
++
++## Revision 1.4.37 — Graph Analytics review resolution
++
++Show mixed alongside the evidence stage, link the native discrepancy and preserve both authorized attempts. Label unknown frontier, scoped no-impact, recorded historical and recomputed historical distinctly. Show conflicts outside known denominator. Keep existing Reports shell and both export controls in rendered evidence. Preserve same-scope return and focus during async recovery, refresh and scope loss. Visual and accessibility proof remains pending.
