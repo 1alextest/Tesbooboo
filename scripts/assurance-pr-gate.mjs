@@ -34,7 +34,7 @@ export function parseReviewBody(body, head) {
   return { role, receipt, decision, waiverReason: waiverReason ?? null };
 }
 
-/** Parse a trusted repo-admin-controlled comma-separated GitHub login roster. */
+/** Parse a configured roster; authorization depends on protecting its configuration source. */
 export function parseReviewerRoster(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
   const logins = value.split(',').map(item => item.trim().toLowerCase());
@@ -145,7 +145,7 @@ export async function main(env = process.env) {
   if (!eventPath) throw new Error('Missing GITHUB_EVENT_PATH');
   const event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
   const prNumber = event?.pull_request?.number;
-  // Only trusted workflow/repository variables supply these rosters, never PR metadata.
+  // Do not trust this configuration until workflow provenance and variable write access are secured.
   const authorizedReviewers = {
     INDEPENDENT: parseReviewerRoster(env.TESBO_ASSURANCE_INDEPENDENT_REVIEWERS),
     WHITE: parseReviewerRoster(env.TESBO_ASSURANCE_WHITE_REVIEWERS),
