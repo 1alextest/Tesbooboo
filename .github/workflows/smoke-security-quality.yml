@@ -76,6 +76,8 @@ jobs:
             e2e/package-lock.json
             sdk/playwright-reporter/package-lock.json
       - name: Start read-only Stripe price fixture and verify refused writes
+        env:
+          STRIPE_SECRET_KEY: sk_test_tesbo_ci
         run: |
           nohup node e2e/utils/stripe-readonly-fixture.mjs >/tmp/tesbo-stripe-ci.log 2>&1 &
           for _ in $(seq 1 30); do
