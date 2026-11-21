@@ -201,7 +201,7 @@ async function rpc(endpoint, token, body, session) {
     Accept: "application/json"
   };
   if (session) headers["Mcp-Session-Id"] = session;
-  const response = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+  const response = await fetch(endpoint, { method: "POST", redirect: "manual", headers, body: JSON.stringify(body) });
   if (!response.ok) throw new Error(`MCP endpoint returned HTTP ${response.status}`);
   const text = await response.text();
   let json;
@@ -226,6 +226,17 @@ async function main() {
     console.error("TESBO_MCP_URL and TESBO_MCP_TOKEN must be set (token is read from the environment only).");
     process.exit(2);
   }
+  let parsedEndpoint;
+  try {
+    parsedEndpoint = new URL(endpoint);
+    if (parsedEndpoint.protocol !== "https:" || parsedEndpoint.username || parsedEndpoint.password ||
+        parsedEndpoint.hash || !/^\/api\/projects\/[^/]+\/mcp\/?$/.test(parsedEndpoint.pathname)) {
+      throw new Error("invalid endpoint");
+    }
+  } catch {
+    console.error("MCP deploy check requires a credential-free HTTPS project MCP endpoint.");
+    process.exit(2);
+  }
 
   try {
     const initialized = await rpc(
@@ -242,10 +253,15 @@ async function main() {
     const listed = await rpc(endpoint, token, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, initialized.session);
     const tools = Array.isArray(listed.json?.result?.tools) ? listed.json.result.tools : null;
 
-    const healthUrl = String(process.env.TESBO_API_HEALTH_URL || "").trim() || `${new URL(endpoint).origin}/api/health`;
+    const healthUrl = String(process.env.TESBO_API_HEALTH_URL || "").trim() || `${parsedEndpoint.origin}/api/health`;
+    const parsedHealth = new URL(healthUrl);
+    if (parsedHealth.origin !== parsedEndpoint.origin || parsedHealth.pathname !== "/api/health" ||
+        parsedHealth.username || parsedHealth.password || parsedHealth.hash) {
+      throw new Error("Health endpoint must be the same-origin /api/health resource");
+    }
     let health = null;
     try {
-      const response = await fetch(healthUrl, { headers: { Accept: "application/json" } });
+      const response = await fetch(healthUrl, { redirect: "manual", headers: { Accept: "application/json" } });
       if (response.ok) health = await response.json();
     } catch {
       health = null;
