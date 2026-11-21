@@ -56,6 +56,7 @@ echo "verify-production-mcp: endpoint host ${host}"
 echo "verify-production-mcp: expected gitSha ${EXPECTED_GIT_SHA}"
 echo "verify-production-mcp: credential source ${token_file}"
 
+TESBO_MCP_TOKEN_FILE="$token_file" \
 TESBO_MCP_TOKEN="$(cat "$token_file")" \
 EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" \
   exec node scripts/mcp-deploy-check.mjs
