@@ -136,13 +136,14 @@ export function setBillingState(organizationId: string, patch: Partial<BillingSt
     ([column, value]) => `${column} = ${literal(value as string | number | boolean | null)}`,
   );
   if (assignments.length === 0) return;
+  // These billing-state writes bypass BillingService and require exact-key cache invalidation.
+  // Refuse remote targets *before* mutating any state: a rejected fixture must have no side effects.
+  if (!env.targetIsLocal) throw new Error("Billing E2E cache invalidation requires a local disposable target");
   exec(
     `UPDATE organizations SET ${assignments.join(", ")}, updated_at = now() ` +
       `WHERE id = ${literal(organizationId)};`,
   );
-  // Direct SQL bypasses BillingService's Redis invalidation; preserve the real cached policy
-  // and invalidate only the disposable test workspace's exact entitlement key.
-  if (!env.targetIsLocal) throw new Error("Billing E2E cache invalidation requires a local disposable target");
+  // Preserve the real cached policy; invalidate only this disposable workspace's entitlement key.
   execFileSync(
     process.execPath,
     [path.join(__dirname, "entitlement-cache-invalidate.cjs"), organizationId],
