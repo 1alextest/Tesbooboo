@@ -10,7 +10,7 @@ permissions:
 jobs:
   specification-assurance:
     name: specification-assurance
-    if: github.event.pull_request.base.ref == 'development' || github.event.pull_request.base.ref == 'main' || github.event.pull_request.base.ref == 'feat/graph-consequence-integrated-20261121'
+    # Run for any PR base; the trusted script filters to protected paths and fails closed.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
