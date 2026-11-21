@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, forwardRef, HttpException, Inject, Injectable, Logger, NotFoundException, NotImplementedException, OnModuleInit } from "@nestjs/common";
 import { assertApprovedNewRunCases } from "./approved-run-cases.policy";
+import { retestCreateInput, retestDigest, retestExecutionIds, retestRequestKey } from "./native-retest";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
@@ -70,7 +71,7 @@ import { runWithZyraDraftSink, runWithoutZyraDraftSink, runWithZyraLiveBatch, zy
 import { Subject } from "rxjs";
 
 type Body = Record<string, any>;
-export type PlanRunWriteTarget = "plan" | "planItem" | "cycle" | "execution" | "historyImport" | "sharing";
+export type PlanRunWriteTarget = "plan" | "planItem" | "cycle" | "execution" | "historyImport" | "sharing" | "retest" | "retestRecovery";
 
 /** Everything processZyraSaveEntriesSequential/Batched need that isn't `selected` or `client` itself. */
 type TicketProvider = "jira" | "linear" | "notion";
@@ -4116,9 +4117,12 @@ export class LegacyService implements OnModuleInit {
     if (cycle) {
       const seq = isUuid(cycle) ? null : seqOf(cycle, "RUN");
       if (!isUuid(cycle) && seq === null) throw new NotFoundException({ error: "Test run not found" });
+      // A retained retest receipt may outlive its source Run. Resolve only its authorized identity
+      // so a lost-response recovery page can mount; ordinary Run/result reads remain active-only.
+      const retainedIdentity = LegacyService.NATIVE_RETEST_SOURCE_IDENTITY_SQL;
       const res = isUuid(cycle)
-        ? await this.db.query("SELECT id, seq FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL", [cycle, projectId])
-        : await this.db.query("SELECT id, seq FROM cycles WHERE seq = $1 AND project_id = $2 AND deleted_at IS NULL", [seq, projectId]);
+        ? await this.db.query(`SELECT c.id, c.seq FROM cycles c WHERE c.id = $1 AND c.project_id = $2 AND ${retainedIdentity}`, [cycle, projectId])
+        : await this.db.query(`SELECT c.id, c.seq FROM cycles c WHERE c.seq = $1 AND c.project_id = $2 AND ${retainedIdentity}`, [seq, projectId]);
       if (!res.rows[0]) throw new NotFoundException({ error: "Test run not found" });
       out.cycleId = res.rows[0].id;
       out.cycleRef = `${prefix}-RUN-${res.rows[0].seq}`;
@@ -6620,6 +6624,21 @@ export class LegacyService implements OnModuleInit {
       case "plan": projectId = await this.requirePlanAccess(uid, params.planId ?? ""); break;
       case "planItem": projectId = await this.requirePlanItemAccess(uid, params.planId ?? "", params.itemId ?? ""); break;
       case "historyImport": projectId = await this.requireRunHistoryAccess(uid, params.cycleId ?? ""); break;
+      case "retestRecovery":
+        await this.requireNativeRetestSourceAccess(uid, params.cycleId ?? "", true);
+        return; // Explicit terminal cancellation/reconciliation cannot create or clear a Run.
+      case "retest": {
+        const source = await this.requireNativeRetestSourceAccess(uid, params.cycleId ?? "");
+        projectId = source.projectId;
+        // A deleted source can only recover a previously committed receipt. The native owner
+        // checks that exact key/digest under lock and refuses every fresh creation with 404.
+        if (source.deleted) return;
+        if (typeof body?.requestKey === "string" && isUuid(body.requestKey)) {
+          const terminal = await this.db.query("SELECT 1 FROM cycle_retest_requests WHERE project_id=$1 AND request_key=$2", [projectId,body.requestKey]);
+          if (terminal.rows.length) return; // The owner verifies binding and only returns/refuses this immutable outcome.
+        }
+        break;
+      }
       case "execution":
         projectId = await this.requireCycleAccess(uid, params.cycleId ?? "");
         await this.executionOwner(params.cycleId ?? "", params.executionId ?? "", true);
@@ -7050,6 +7069,278 @@ export class LegacyService implements OnModuleInit {
   async createCycleFromCasesForUser(userId: string | null | undefined, projectId: string, body: Body) {
     const { cycle, requested, added, skipped } = await this.createCycleWithTestcasesForUser(userId, projectId, body);
     return { ...(cycle as Body), requested, added, skipped };
+  }
+
+  /** Native retest review: old observations and current approved definitions have different owners. */
+  private async nativeRetestBasis(client: PoolClient, projectId: string, cycle: Body, ids: string[], lockCases = false) {
+    const sourceQuery = `SELECT e.id::text AS execution_id, ci.id::text AS cycle_item_id, ci.testcase_id::text AS testcase_id,
+              ci.snapshot_title, ci.snapshot_external_id, ci.snapshot_approval_revision,
+              ci.snapshot_reviewed_content,
+              to_jsonb(e) AS result,
+              jsonb_build_object('title',ci.snapshot_title,'description',ci.snapshot_description,
+                'preconditions',ci.snapshot_preconditions,'postconditions',ci.snapshot_postconditions,
+                'steps',ci.snapshot_steps,'testData',ci.snapshot_test_data) AS legacy_definition
+         FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id
+        WHERE ci.cycle_id=$1 AND e.id=ANY($2::uuid[]) AND ci.deleted_at IS NULL AND e.deleted_at IS NULL
+        ORDER BY e.id`;
+    let sourceRows = await client.query(sourceQuery, [cycle.id, ids]);
+    if (sourceRows.rows.length !== ids.length) {
+      throw new NotFoundException({ error: "One or more selected executions are unavailable in this source run" });
+    }
+    const caseIds = sourceRows.rows.map((row) => String(row.testcase_id));
+    if (lockCases) {
+      await client.query(
+        "SELECT id FROM testcases WHERE project_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL ORDER BY id FOR SHARE",
+        [projectId, caseIds]
+      );
+      // Match native Bug/run lock order: parent Run, cases, memberships, executions, then Bugs.
+      // Parent locking serializes supported result/import/upload writers; explicit child locks
+      // also fence a direct occurrence edit. A fresh read after waiting cannot preserve old data.
+      await client.query(`SELECT ci.id FROM cycle_items ci JOIN executions e ON e.cycle_item_id=ci.id
+        WHERE ci.cycle_id=$1 AND e.id=ANY($2::uuid[]) ORDER BY ci.id FOR SHARE OF ci`,[cycle.id,ids]);
+      await client.query("SELECT id FROM executions WHERE id=ANY($1::uuid[]) ORDER BY id FOR SHARE",[ids]);
+      sourceRows = await client.query(sourceQuery,[cycle.id,ids]);
+      if (sourceRows.rows.length !== ids.length || sourceRows.rows.some((row,index)=>row.testcase_id !== caseIds[index])) {
+        throw new ConflictException({ code:"RETEST_PREVIEW_CHANGED", error:"A selected source occurrence changed; review a fresh retest preview" });
+      }
+    }
+    // Fresh statement after locks: dependency edits use the same testcase serialization point.
+    const current = await client.query(
+      `SELECT testcases.id::text AS id, title, external_id, status,
+              ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision,
+              ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current,
+              testcase_approval_snapshot(id) AS reviewed_content
+         FROM testcases WHERE project_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL`, [projectId, caseIds]
+    );
+    const byCase = new Map(current.rows.map((row) => [String(row.id), row]));
+    const evidence = await client.query(
+      `SELECT id::text, entity_id::text AS execution_id, file_name, content_type, file_size, uploaded_by, created_at
+         FROM attachments WHERE project_id=$1 AND entity_type='execution' AND entity_id=ANY($2::uuid[])
+          AND deleted_at IS NULL ORDER BY id FOR SHARE`, [projectId, ids]
+    );
+    // Unlink and Bug deletion use the Bug-owner lock even when no Run is changed. Acquire those
+    // owners before the fresh active-link read; a pre-wait join is not an accepted source receipt.
+    await client.query(`SELECT b.id FROM bugs b
+      WHERE b.project_id=$1 AND b.deleted_at IS NULL AND EXISTS (
+        SELECT 1 FROM bug_links bl WHERE bl.bug_id=b.id AND bl.cycle_id=$2
+          AND bl.execution_id=ANY($3::uuid[]) AND bl.deleted_at IS NULL)
+      ORDER BY b.id FOR SHARE`,[projectId,cycle.id,ids]);
+    const links = await client.query(
+      `SELECT bl.id::text, bl.bug_id::text, bl.execution_id::text
+         FROM bug_links bl JOIN bugs b ON b.id=bl.bug_id
+        WHERE b.project_id=$1 AND bl.cycle_id=$2 AND bl.execution_id=ANY($3::uuid[])
+          AND b.deleted_at IS NULL AND bl.deleted_at IS NULL ORDER BY bl.id FOR SHARE OF bl`,
+      [projectId, cycle.id, ids]
+    );
+    const occurrences = sourceRows.rows.map((row) => {
+      const target = byCase.get(row.testcase_id);
+      return {
+        sourceCycleItemId: row.cycle_item_id, sourceExecutionId: row.execution_id, testcaseId: row.testcase_id,
+        sourceTitle: row.snapshot_title, sourceExternalId: row.snapshot_external_id,
+        sourceApprovalRevision: row.snapshot_approval_revision,
+        sourceDefinition: row.snapshot_reviewed_content ?? row.legacy_definition,
+        sourceDefinitionBasis: row.snapshot_reviewed_content ? "reviewed_snapshot" : "legacy_snapshot_unknown_approval",
+        sourceResult: row.result,
+        sourceEvidence: evidence.rows.filter((item) => item.execution_id === row.execution_id).map(toCamel),
+        sourceBugLinks: links.rows.filter((item) => item.execution_id === row.execution_id).map(toCamel),
+        currentCase: target ? {
+          id: target.id, title: target.title, externalId: target.external_id, status: target.status,
+          approvalRevision: target.approval_revision, approvalCurrent: target.approval_current === true,
+          reviewedContent: target.reviewed_content
+        } : null,
+        eligible: target?.approval_current === true,
+        definitionChanged: row.snapshot_approval_revision !== target?.approval_revision
+      };
+    });
+    const basis = {
+      projectId, sourceCycleId: String(cycle.id),
+      sourceRun: { id: cycle.id, name: cycle.name, source: cycle.source, environment: cycle.environment,
+        buildVersion: cycle.build_version, status: cycle.status },
+      occurrences
+    };
+    // Convert pg Date values identically to their HTTP representation before computing the digest.
+    const normalized = JSON.parse(JSON.stringify(basis)) as typeof basis;
+    return { ...normalized, previewDigest: retestDigest(normalized) };
+  }
+
+  async previewNativeRetest(cycleId: string, userId: string | null | undefined, rawIds: unknown) {
+    const projectId = await this.requireCycleAccess(userId, cycleId);
+    const ids = retestExecutionIds(rawIds);
+    return this.db.transaction(async (client) => {
+      const source = await client.query("SELECT * FROM cycles WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL FOR SHARE", [cycleId, projectId]);
+      if (!source.rows[0]) throw new NotFoundException({ error: "Source run not found" });
+      await this.requireCurrentProjectAuthority(client, projectId, userId);
+      return this.nativeRetestBasis(client, projectId, source.rows[0], ids);
+    });
+  }
+
+  private nativeRetestReceipt(row: Body, replayed: boolean) {
+    return { outcome: "created" as const, cycleId: String(row.id), sourceCycleId: String(row.retest_source_cycle_id),
+      requestKey: String(row.retest_request_key), requestDigest: row.retest_request_digest,
+      manifestDigest: row.retest_manifest_digest, manifest: row.retest_manifest,
+      available: row.deleted_at == null, replayed };
+  }
+
+  private static readonly NATIVE_RETEST_SOURCE_IDENTITY_SQL = `(c.deleted_at IS NULL OR EXISTS (
+    SELECT 1 FROM cycle_retest_requests request WHERE request.project_id=c.project_id
+      AND request.source_cycle_id=c.id))`;
+
+  /** Native recovery can fence an unresolved command even when its source was already deleted. */
+  private async requireNativeRetestSourceAccess(userId: string | null | undefined, cycleId: string, allowUnresolvedDeleted = false) {
+    const uid = this.requireUser(userId);
+    if (!isUuid(cycleId)) throw new NotFoundException({ error: "Source run not found" });
+    const source = await this.db.query(
+      `SELECT c.project_id,c.deleted_at FROM cycles c WHERE c.id=$1 AND
+        ${allowUnresolvedDeleted ? "TRUE" : LegacyService.NATIVE_RETEST_SOURCE_IDENTITY_SQL}`, [cycleId]
+    );
+    if (!source.rows[0]) throw new NotFoundException({ error: "Source run not found" });
+    const projectId = String(source.rows[0].project_id);
+    await this.requireProjectAccess(uid, projectId);
+    return { projectId, deleted: source.rows[0].deleted_at != null };
+  }
+
+  private async lockNativeRetestRequest(client: PoolClient, projectId: string, cycleId: string, userId: string, requestKey: string, creating = false) {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`native-retest:${projectId}:${requestKey}`]);
+    const source = await client.query(`SELECT * FROM cycles WHERE id=$1 AND project_id=$2 FOR ${creating ? "UPDATE" : "SHARE"}`, [cycleId,projectId]);
+    if (!source.rows[0]) throw new NotFoundException({ error: "Source run not found" });
+    const authority = await this.requireCurrentProjectAuthority(client, projectId, userId);
+    const prior = await client.query("SELECT * FROM cycle_retest_requests WHERE project_id=$1 AND request_key=$2", [projectId,requestKey]);
+    return { source:source.rows[0], authority, prior:prior.rows[0] };
+  }
+
+  private assertNativeRetestRequestBinding(row: Body, cycleId: string, userId: string, requestDigest?: string) {
+    if (row.source_cycle_id !== cycleId.toLowerCase() || row.requested_by !== userId ||
+        (requestDigest !== undefined && row.request_digest !== requestDigest)) {
+      throw new ConflictException({ code:"RETEST_REQUEST_CONFLICT", error:"This request key already belongs to a different retest request" });
+    }
+  }
+
+  private async nativeRetestRequestResult(client: PoolClient, row: Body) {
+    if (row.outcome === "cancelled") {
+      return { outcome:"cancelled" as const, projectId:String(row.project_id),sourceCycleId:String(row.source_cycle_id),
+        requestKey:String(row.request_key),requestDigest:row.request_digest,requestedBy:String(row.requested_by),
+        cancelledAt:new Date(row.decided_at).toISOString() };
+    }
+    const created = await client.query("SELECT * FROM cycles WHERE id=$1 AND project_id=$2", [row.destination_cycle_id,row.project_id]);
+    if (!created.rows[0]) throw new Error("The retained native retest destination is unavailable");
+    return this.nativeRetestReceipt(created.rows[0],true);
+  }
+
+  async readNativeRetestRequest(cycleId: string, userId: string | null | undefined, rawKey: unknown, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    const { projectId } = await this.requireNativeRetestSourceAccess(uid, cycleId, true);
+    const requestKey = retestRequestKey(rawKey);
+    return this.db.transaction(async (client) => {
+      const { prior } = await this.lockNativeRetestRequest(client,projectId,cycleId,uid,requestKey);
+      if (!prior) throw new NotFoundException({ error:"No terminal retest outcome was found for this request" });
+      this.assertNativeRetestRequestBinding(prior,cycleId,uid);
+      return this.nativeRetestRequestResult(client,prior);
+    });
+  }
+
+  async cancelNativeRetestRequest(cycleId: string, userId: string | null | undefined, rawKey: unknown, body: Body, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    const { projectId } = await this.requireNativeRetestSourceAccess(uid,cycleId,true);
+    cycleId = cycleId.toLowerCase();
+    const input = retestCreateInput(body), requestKey = retestRequestKey(rawKey);
+    if (input.requestKey !== requestKey) throw new BadRequestException({ error:"The URL and original request key must match" });
+    const requestDigest = retestDigest({sourceCycleId:cycleId,actorId:uid,...input});
+    return this.db.transaction(async (client) => {
+      const { source,prior } = await this.lockNativeRetestRequest(client,projectId,cycleId,uid,requestKey);
+      if (prior) {
+        this.assertNativeRetestRequestBinding(prior,cycleId,uid,requestDigest);
+        return this.nativeRetestRequestResult(client,prior);
+      }
+      const cancelled = await client.query(`INSERT INTO cycle_retest_requests
+        (project_id,request_key,source_cycle_id,request_digest,requested_by,outcome)
+        VALUES ($1,$2,$3,$4,$5,'cancelled') RETURNING *`, [projectId,requestKey,cycleId,requestDigest,uid]);
+      await this.logProjectActivity(projectId,uid,"run_retest_cancelled","cycle",cycleId,source.name,
+        {requestKey,requestDigest,sourceExecutionIds:input.executionIds,principalKind:"human_session"},client);
+      return this.nativeRetestRequestResult(client,cancelled.rows[0]);
+    });
+  }
+
+  async createNativeRetest(cycleId: string, userId: string | null | undefined, body: Body, principal?: ReviewPrincipal) {
+    // This is the native human retest sibling. External executor assignment has its separate owner.
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    const { projectId } = await this.requireNativeRetestSourceAccess(uid, cycleId);
+    cycleId = cycleId.toLowerCase();
+    const input = retestCreateInput(body);
+    const requestDigest = retestDigest({ sourceCycleId: cycleId, actorId: uid, ...input });
+    return this.db.transaction(async (client) => {
+      const { source,authority,prior } = await this.lockNativeRetestRequest(client,projectId,cycleId,uid,input.requestKey,true);
+      if (prior) {
+        this.assertNativeRetestRequestBinding(prior,cycleId,uid,requestDigest);
+        const result = await this.nativeRetestRequestResult(client,prior);
+        if (result.outcome === "cancelled") {
+          throw new ConflictException({code:"RETEST_REQUEST_CANCELLED",error:"This retest request was cancelled; review again before creating a new retest",disposition:result});
+        }
+        return result;
+      }
+      if (source.deleted_at != null) throw new NotFoundException({ error: "Source run not found" });
+      const basis = await this.nativeRetestBasis(client, projectId, source, input.executionIds, true);
+      if (basis.previewDigest !== input.expectedPreviewDigest) {
+        throw new ConflictException({ code: "RETEST_PREVIEW_CHANGED", error: "The source observation or current case definition changed; review a fresh retest preview" });
+      }
+      if (basis.occurrences.some((item) => !item.eligible)) {
+        throw new ConflictException({ code: "TESTCASE_APPROVAL_REQUIRED", error: "Every selected case needs a current exact human approval before retesting" });
+      }
+      // Recheck the canonical entitlement after every source/definition wait, using this native
+      // transaction. A preguard request/Redis cache cannot authorize a newly locked project.
+      await this.planLimits.assertProjectWritable(String(authority.organization_id), projectId, client);
+      const created = await this.createCycleWithTestcasesForUser(uid, projectId, {
+        name: input.name, description: input.description, environment: input.environment,
+        buildVersion: input.buildVersion, ownerId: uid,
+        testcaseIds: basis.occurrences.map((item) => item.testcaseId)
+      }, client);
+      if (created.added !== basis.occurrences.length) throw new ConflictException({ error: "The exact selected cases could not be added; no retest was created" });
+      const targets = await client.query(
+        `SELECT ci.id::text AS cycle_item_id,e.id::text AS execution_id,ci.testcase_id::text AS testcase_id,
+                ci.snapshot_approval_revision,ci.snapshot_reviewed_content
+           FROM cycle_items ci JOIN executions e ON e.cycle_item_id=ci.id
+          WHERE ci.cycle_id=$1 AND ci.deleted_at IS NULL AND e.deleted_at IS NULL`, [created.cycle.id]
+      );
+      const byCase = new Map(targets.rows.map((row) => [row.testcase_id, row]));
+      const manifest = {
+        schemaVersion: 1, projectId, sourceCycleId: cycleId, cycleId: created.cycle.id,
+        createdBy: uid, principalKind: "human_session", createdAt: new Date().toISOString(),
+        sourceRun: basis.sourceRun, sourcePreviewDigest: basis.previewDigest,
+        targetRun: { name: input.name, environment: input.environment, buildVersion: input.buildVersion },
+        occurrences: basis.occurrences.map((item) => {
+          const target = byCase.get(item.testcaseId);
+          if (!target || target.snapshot_approval_revision !== item.currentCase?.approvalRevision) {
+            throw new ConflictException({ error: "The retest definition changed; no retest was created" });
+          }
+          return { ...item, cycleItemId: target.cycle_item_id, executionId: target.execution_id,
+            targetApprovalRevision: target.snapshot_approval_revision, targetDefinition: target.snapshot_reviewed_content };
+        })
+      };
+      const saved = await client.query(
+        `UPDATE cycles SET retest_source_cycle_id=$2,retest_request_key=$3,retest_request_digest=$4,
+            retest_manifest=$5::jsonb,retest_manifest_digest=encode(sha256(convert_to(($5::jsonb)::text,'UTF8')),'hex')
+          WHERE id=$1 RETURNING *`, [created.cycle.id, cycleId, input.requestKey, requestDigest, JSON.stringify(manifest)]
+      );
+      await client.query(`INSERT INTO cycle_retest_requests
+        (project_id,request_key,source_cycle_id,request_digest,requested_by,outcome,destination_cycle_id)
+        VALUES ($1,$2,$3,$4,$5,'created',$6)`, [projectId,input.requestKey,cycleId,requestDigest,uid,created.cycle.id]);
+      await this.logProjectActivity(projectId, uid, "run_retest_created", "cycle", created.cycle.id, input.name,
+        { sourceCycleId: cycleId, requestKey: input.requestKey, manifestDigest: saved.rows[0].retest_manifest_digest,
+          sourceExecutionIds: input.executionIds }, client);
+      return this.nativeRetestReceipt(saved.rows[0], false);
+    });
+  }
+
+  async listNativeRetests(cycleId: string, userId: string | null | undefined) {
+    const projectId = await this.requireCycleAccess(userId, cycleId);
+    const result = await this.db.query(
+      `SELECT id,name,status,created_at FROM cycles
+        WHERE project_id=$1 AND retest_source_cycle_id=$2 AND deleted_at IS NULL ORDER BY created_at,id`,
+      [projectId, cycleId]
+    );
+    return result.rows.map(toCamel);
   }
 
   /**

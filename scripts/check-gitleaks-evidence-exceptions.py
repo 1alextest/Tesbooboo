@@ -27,6 +27,14 @@ KNOWN_MAPS = {
     "native-occurrence-repair-evidence.json": {API_PATH: NEW_DIGEST},
     "native-green-profile-965a87a1-v3.json": {API_PATH: NEW_DIGEST, CONTRACT_PATH: CONTRACT},
 }
+NATIVE_PROSE_PATH = Path(
+    "docs/specs/agent-synchronized-engineering/reviews/2026-11-20-native-qa/"
+    "native-backend-fix-review.md"
+)
+NATIVE_PROSE_SHA256 = "b084c144d6ba7f150c692b6065132cfd45e94309871c4182164044ec7f9e1b78"
+# This is review prose, not a credential. Build the scanner fixture from two ordinary
+# fragments so the test control itself is not mistaken for another unreviewed receipt.
+NATIVE_PROSE_FRAGMENT = "".join(("new-key 404, ", "anonymous/foreign "))
 
 
 def scan(image, config, root, files, label):
@@ -83,6 +91,13 @@ def main():
         for key, digest in mappings.items():
             if f'"{key}": "{digest}"' not in content:
                 raise AssertionError(f"Reviewed mapping missing from {filename}: {key}")
+    native_receipt = (repo / NATIVE_PROSE_PATH).read_bytes()
+    if hashlib.sha256(native_receipt).hexdigest() != NATIVE_PROSE_SHA256:
+        raise AssertionError("Frozen native review bytes changed; prose exception needs review")
+    native_prose = [line for line in native_receipt.decode("utf-8").splitlines()
+                    if NATIVE_PROSE_FRAGMENT in line]
+    if len(native_prose) != 1:
+        raise AssertionError("Expected exactly one independently reviewed native prose line")
 
     with tempfile.TemporaryDirectory(prefix="tesbo-gitleaks-controls-") as temp:
         root = Path(temp)
@@ -128,7 +143,40 @@ def main():
                     expected_count = 2 if mode == "default" else 1
                     if result.count((path, rule)) != expected_count:
                         raise AssertionError(f"{label}-{mode}: unexpected same-line suppression")
-        print("PASS: 7 exact hash mappings and 9 denied neighbors, each checked with both configurations")
+
+        native_path = str(NATIVE_PROSE_PATH)
+        prose_line = native_prose[0] + "\n"
+        native_positive = {native_path: prose_line}
+        baseline = scan(args.image, default_config, root, native_positive, "native-prose-default")
+        if baseline != [(native_path, "generic-api-key")]:
+            raise AssertionError("Native prose baseline must prove the single observed false positive")
+        if scan(args.image, config, root, native_positive, "native-prose-corrected"):
+            raise AssertionError("The reviewed native prose match was not precisely excepted")
+        native_denied = [
+            ("native-outside-path", "src/native-review.md", prose_line, "generic-api-key"),
+            ("native-nested-path", "src/" + native_path, prose_line, "generic-api-key"),
+            ("native-name-suffix", native_path + ".extra", prose_line, "generic-api-key"),
+            ("native-altered-prose", native_path,
+             prose_line.replace("anonymous/foreign", "anonymous/foreign2"), "generic-api-key"),
+            ("native-generic-credential", native_path,
+             json.dumps({"service_api_key": generic}), "generic-api-key"),
+            ("native-provider-credential", native_path,
+             json.dumps({"credential": provider}), "github-pat"),
+            ("native-additional-same-line", native_path,
+             prose_line.rstrip("\n") + " " + json.dumps({"service_api_key": generic}) + "\n",
+             "generic-api-key"),
+        ]
+        for label, path, content, rule in native_denied:
+            for mode, selected_config in (("default", default_config), ("corrected", config)):
+                result = scan(args.image, selected_config, root, {path: content}, f"{label}-{mode}")
+                require_findings(result, {(path, rule): 1}, f"{label}-{mode}")
+                if label == "native-additional-same-line":
+                    expected_count = 2 if mode == "default" else 1
+                    if result.count((path, rule)) != expected_count:
+                        raise AssertionError(f"{label}-{mode}: unexpected same-line suppression")
+        print("PASS: 7 exact hash mappings, 1 exact prose match, and 16 denied neighbors; "
+              "each checked with both configurations")
+
 
         # Protect the frozen original Blue receipt without changing any reviewer
         # evidence or disabling broader sourcegraph-access-token detection.
@@ -172,8 +220,6 @@ def main():
             if result.count((path, rule)) != expected_count or len(result) != expected_count:
                 raise AssertionError(f"{label}: wrong allowed/denied count for {rule}")
         print("PASS: two independently resolved pinned Git IDs excluded only in frozen Blue receipt; six denied neighbors", flush=True)
-
-
 
 if __name__ == "__main__":
     main()

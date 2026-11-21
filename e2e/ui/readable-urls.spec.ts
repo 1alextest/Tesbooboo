@@ -77,7 +77,7 @@ test.describe("readable URLs", () => {
 
   test("the sidebar keeps the readable project key when moving between sections", async ({ page }) => {
     await page.goto(`/projects/${projectKey}/bugs`);
-    await page.locator("aside").first().getByRole("link", { name: "Test Cases", exact: true }).click();
+    await page.locator("aside").first().getByRole("link", { name: "Test cases", exact: true }).click();
     await expectPath(page, new RegExp(`^/projects/${projectKey}/testcases$`));
     await expect(page.locator("aside a[href*='/projects/']").first()).toHaveAttribute("href", new RegExp(`^/projects/${projectKey}`));
   });
@@ -105,10 +105,10 @@ test.describe("readable URLs", () => {
 
   test("an unknown project key or bug ref shows a not-found message, not a blank page or a crash", async ({ page }) => {
     await page.goto(`/projects/NO-SUCH-PROJECT-KEY/bugs`);
-    await expect(page.getByRole("alert")).toContainText("Page not found");
+    await expect(page.getByRole("alert").filter({ has: page.getByRole("heading", { name: "Page not found", exact: true }) })).toContainText("Page not found");
 
     await page.goto(`/projects/${projectKey}/bugs/ZZZ-BUG-99999999`);
-    await expect(page.getByRole("alert")).toContainText("Page not found");
+    await expect(page.getByRole("alert").filter({ has: page.getByRole("heading", { name: "Page not found", exact: true }) })).toContainText("Page not found");
   });
 });
 
@@ -216,7 +216,7 @@ test.describe("project prefetch on a hard load", () => {
 
       // key: the lookup is refused, so the user sees not-found rather than anyone's project.
       await page.goto(`/projects/${projectKey}/bugs`);
-      await expect(page.getByRole("alert")).toContainText("Page not found");
+      await expect(page.getByRole("alert").filter({ has: page.getByRole("heading", { name: "Page not found", exact: true }) })).toContainText("Page not found");
 
       // Nothing the speculative requests asked for ever came back as data.
       expect(statuses.every((s) => s >= 400)).toBe(true);

@@ -381,7 +381,9 @@ export function useLogBugDialog(params: {
     for (const issue of selectedIssues) {
       try {
         await createBug(projectId, {
-          title: bugTitle.trim(),
+          // An existing remote ticket owns its own subject. The free-form Bug title belongs
+          // only to newly filed bugs; do not overwrite the remote ticket's identity with it.
+          title: issue.summary.trim() || issue.key,
           description: bugDesc.trim(),
           severity: bugSeverity || undefined,
           priority: bugPriority || null,

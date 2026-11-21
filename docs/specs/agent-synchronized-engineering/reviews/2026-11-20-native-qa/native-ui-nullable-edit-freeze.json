@@ -1,0 +1,60 @@
+{
+  "task": "Nullable optional Run settings at the existing card Edit form boundary",
+  "sourceBaseHead": "cab1c6928b32f6f7b74b30dbf75879ef127628be",
+  "files": [
+    {
+      "path": "/workspace/scratch/8e9074abd0d0/tesbo-qa-loop/Tesbo-Frontend/app/(app)/projects/[id]/cycles/page.tsx",
+      "sha256": "6bb698196ef9bb8c11651bf379bdf4f091bd93b6f7a349f36c2daa7bfd0f056c"
+    },
+    {
+      "path": "/workspace/scratch/8e9074abd0d0/tesbo-qa-loop/e2e/ui/cycles.spec.ts",
+      "sha256": "739d0fd9d66c553620e696331f98ec51b0f81aa6a577f892894186620ffda77f"
+    }
+  ],
+  "productChange": "openEdit maps nullable description, environment and buildVersion to empty strings using nullish fallbacks before storing controlled form state. Existing stored/API nulls, required-environment validation, permissions and manifests remain unchanged.",
+  "newTest": {
+    "title": "a retest without an environment opens card Edit and keeps its history when settings are supplied",
+    "addedCases": 1,
+    "addedLines": 97,
+    "flow": [
+      "Own isolated project with a configured Staging environment",
+      "Real reviewed retest creation with blank optional environment/build",
+      "API verifies exact null environment and build plus unchanged creation manifest settings",
+      "Exact destination card Edit opens without page errors and displays empty form fields",
+      "Save stays disabled while environment is absent, even after description/build are supplied",
+      "Configured environment permits save; exact target API readback persists supplied values",
+      "Source execution observations and complete historical retest manifest compare unchanged",
+      "Fresh page reload and reopening Edit preserve all supplied values"
+    ]
+  },
+  "preservation": {
+    "legacyPrefixSha256": "38419004f3fc0fcfa929ab790da0f211b101417fb2ecd218633678d555aa5cb6",
+    "legacyPrefixUnchanged": true,
+    "priorNative20Sha256": "ed06b8ff95ec6da570f5a4bcd42785d405d55d7100f38d77e4f262c23ca3e59b",
+    "priorNative20Unchanged": true,
+    "exact201CancellationSetupPreserved": true,
+    "existingEightScreenshotAttachmentsUnchanged": true
+  },
+  "validation": {
+    "frontendTypeScript": "PASS: npx tsc --noEmit --incremental false",
+    "e2eTypeScript": "PASS: npx tsc --noEmit",
+    "scopedEslint": "PASS: changed cycles list page",
+    "diffCheck": "PASS: git diff --check",
+    "selectedCollection": "PASS: 261 tests in 9 files, including 21 native UI cases; requested workers 10 and retries 0",
+    "suiteCollection": "PASS: 3010 tests in 91 files",
+    "localApplicationDatabaseBrowserRuntime": "NOT RUN",
+    "exactNewScenarioRuntime": "Pending isolated CI; no runtime pass claimed"
+  },
+  "observedBeforeFix": "The existing ordinary card Edit failure was observed in CI run 44703524270 / job 136177365716. The native writer persists the same nullable environment/build values; the new exact retest-to-Edit regression has not yet run.",
+  "collectionFiles": [
+    {
+      "path": "/workspace/scratch/8e9074abd0d0/qa-loop-assurance/native-ui-nullable-edit-selected-list.txt",
+      "sha256": "143854511228b6a2c7612ec14e964ff4b25877b6e72ae37806d175327199b3ed"
+    },
+    {
+      "path": "/workspace/scratch/8e9074abd0d0/qa-loop-assurance/native-ui-nullable-edit-suite-list.txt",
+      "sha256": "727b1eb7f9b5897faa1ebb31e3d8afc7bc38daf50fbb462d95a6b971edcb3d13"
+    }
+  ],
+  "deltaPatch": "/workspace/scratch/8e9074abd0d0/qa-loop-assurance/native-ui-nullable-edit.patch"
+}
