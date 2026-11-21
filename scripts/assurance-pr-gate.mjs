@@ -34,29 +34,29 @@ export function parseReviewBody(body, head) {
   return { role, receipt, decision, waiverReason: waiverReason ?? null };
 }
 
-/** Parse a configured roster; authorization depends on protecting its configuration source. */
-export function parseReviewerRoster(value) {
-  if (typeof value !== 'string' || !value.trim()) return null;
-  const logins = value.split(',').map(item => item.trim().toLowerCase());
-  if (logins.some(login => !/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(login)) ||
-      new Set(logins).size !== logins.length) return null;
-  return logins;
+/**
+ * Authority is GitHub-maintained collaborator permission, not a PR-authored
+ * role marker or a repository Actions variable writable by other collaborators.
+ * A role marker only nominates the review for the already-authorized role.
+ *
+ * Independent reviewers need MAINTAIN/ADMIN; White must have ADMIN. GitHub
+ * membership and permission changes require an authorized repository admin.
+ * A missing/denied API permission lookup is never interpreted as approval.
+ */
+export function hasAssuranceRole(permission, role) {
+  if (typeof permission !== 'string') return false;
+  return role === 'WHITE' ? permission === 'admin' :
+    role === 'INDEPENDENT' ? ['maintain', 'admin'].includes(permission) : false;
 }
 
-function validReviewerRoster(roster) {
-  return roster && ['INDEPENDENT', 'WHITE'].every(role =>
-    Array.isArray(roster[role]) && roster[role].length > 0 &&
-    roster[role].every(login => typeof login === 'string' &&
-      /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(login) && login === login.toLowerCase()) &&
-    new Set(roster[role]).size === roster[role].length);
-}
+const GITHUB_LOGIN = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
 
 /**
  * Use GitHub review objects, not PR-authored JSON saying a role approved.
  * A later dismissed/change-requested review by the same actor invalidates an earlier approval.
  * Every approval must be anchored to the exact current PR head.
  */
-export function evaluateAssuranceReviews({ changedFiles, reviews, head, author, draft = false, authorizedReviewers = null }) {
+export function evaluateAssuranceReviews({ changedFiles, reviews, head, author, draft = false, reviewerPermissions = null }) {
   if (!Array.isArray(changedFiles) || !Array.isArray(reviews) || !SHA.test(head) || !author) {
     return { status: 'blocked', errors: ['Invalid or incomplete GitHub review inputs'], approvals: [] };
   }
@@ -64,7 +64,9 @@ export function evaluateAssuranceReviews({ changedFiles, reviews, head, author, 
   if (protectedFiles.length === 0) return { status: 'not_applicable', protectedFiles, errors: [], approvals: [] };
   const errors = [];
   if (draft) errors.push('Draft PR cannot satisfy final assurance');
-  if (!validReviewerRoster(authorizedReviewers)) errors.push('Trusted independent/White reviewer roster is missing or invalid');
+  if (!reviewerPermissions || typeof reviewerPermissions !== 'object' || Array.isArray(reviewerPermissions)) {
+    errors.push('Administrator-maintained GitHub collaborator permissions are unavailable');
+  }
   const latest = new Map();
   const chronological = [...reviews].sort((a, b) =>
     String(a.submitted_at ?? '').localeCompare(String(b.submitted_at ?? '')) ||
@@ -78,8 +80,7 @@ export function evaluateAssuranceReviews({ changedFiles, reviews, head, author, 
   for (const [login, review] of latest) {
     if (login === author.toLowerCase() || review.state !== 'APPROVED' || review.commit_id !== head) continue;
     const attestation = parseReviewBody(review.body, head);
-    if (!attestation || !validReviewerRoster(authorizedReviewers) ||
-        !authorizedReviewers[attestation.role].includes(login)) continue;
+    if (!attestation || !hasAssuranceRole(reviewerPermissions?.[login], attestation.role)) continue;
     approvals.push({ ...attestation, login, reviewId: review.id });
   }
   const specialist = approvals.filter(r => r.role === 'INDEPENDENT');
@@ -114,7 +115,7 @@ async function githubPages(api, suffix, token) {
   throw new Error('GitHub review/file pagination exceeded safe limit');
 }
 
-export async function run({ repository, prNumber, token, authorizedReviewers = null }) {
+export async function run({ repository, prNumber, token }) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) ||
       !Number.isSafeInteger(prNumber) || prNumber < 1 || !token) throw new Error('Invalid GitHub gate configuration');
   const api = `https://api.github.com/repos/${repository}`;
@@ -126,8 +127,26 @@ export async function run({ repository, prNumber, token, authorizedReviewers = n
     status: 'not_applicable', errors: [], approvals: [], protectedFiles: []
   };
   const reviews = await githubPages(api, `/pulls/${prNumber}/reviews`, token);
+  // Never use Actions variables, PR text or client-provided roster data for
+  // reviewer authority. Re-read current GitHub-administered repository roles.
+  const candidates = new Set();
+  for (const review of reviews) {
+    const login = review?.user?.login?.toLowerCase?.();
+    if (review?.state !== 'APPROVED' || review.user.type !== 'User' ||
+        review.commit_id !== pr.head.sha || !GITHUB_LOGIN.test(login ?? '') ||
+        !parseReviewBody(review.body, pr.head.sha)) continue;
+    candidates.add(login);
+    if (candidates.size > 40) throw new Error('Assurance reviewer lookup bound exceeded');
+  }
+  const reviewerPermissions = Object.create(null);
+  for (const login of [...candidates].sort()) {
+    const result = await githubJson(`${api}/collaborators/${encodeURIComponent(login)}/permission`, token);
+    // The permission endpoint is sourced from GitHub repository membership.
+    // No response field from PR comments, Actions vars or skill text can grant a role.
+    reviewerPermissions[login] = typeof result?.permission === 'string' ? result.permission : null;
+  }
   const outcome = evaluateAssuranceReviews({ changedFiles: files.map(f => f.filename), reviews,
-    head: pr.head.sha, author: pr.user.login, draft: pr.draft, authorizedReviewers });
+    head: pr.head.sha, author: pr.user.login, draft: pr.draft, reviewerPermissions });
   if (!['review_provisionally_verified', 'approved_exception'].includes(outcome.status)) return outcome;
   // Exact head fetch (not default branch) makes a deleted/renamed/past receipt fail closed.
   for (const approval of outcome.approvals) {
@@ -145,13 +164,8 @@ export async function main(env = process.env) {
   if (!eventPath) throw new Error('Missing GITHUB_EVENT_PATH');
   const event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
   const prNumber = event?.pull_request?.number;
-  // Do not trust this configuration until workflow provenance and variable write access are secured.
-  const authorizedReviewers = {
-    INDEPENDENT: parseReviewerRoster(env.TESBO_ASSURANCE_INDEPENDENT_REVIEWERS),
-    WHITE: parseReviewerRoster(env.TESBO_ASSURANCE_WHITE_REVIEWERS),
-  };
   const report = await run({ repository: env.GITHUB_REPOSITORY, prNumber,
-    token: env.GITHUB_TOKEN, authorizedReviewers });
+    token: env.GITHUB_TOKEN });
   console.log(JSON.stringify({ gate: 'tesbo-spec-assurance-v1', prNumber, ...report }, null, 2));
   if (report.status === 'blocked') process.exitCode = 1;
   return report;
