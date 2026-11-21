@@ -184,23 +184,20 @@ test.describe("billing settings", () => {
     setProPlan(orgId, { billing_interval: "annual", current_period_end: isoDaysFromNow(200) });
     await openBillingTab();
 
-    // Deliberately loose on the interval word — see the copy test below.
-    await expect(page.getByText(/Renews \w+ \d{1,2}, \d{4} · billed annual/)).toBeVisible();
+    // The whole product standardizes on DD Mon YYYY, not the browser-locale date order.
+    await expect(page.getByText(/Renews \\d{2} [A-Za-z]{3} \\d{4} · billed annually/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Manage billing" })).toBeVisible();
     // Already on the top plan — offering an upgrade would send them into a duplicate subscription.
     await expect(page.getByRole("button", { name: "Upgrade to Pro" })).toHaveCount(0);
   });
 
   test("the renewal line reads as a sentence for both billing intervals", { tag: '@tesbo.testId("TES-TC-641")' }, async () => {
-    test.fail();
-    // KNOWN GAP: BillingTab.tsx interpolates the raw billingInterval into "billed {interval}", so an
-    // annual subscription reads "billed annual" instead of "billed annually". Monthly happens to
-    // read correctly, which is why this went unnoticed. Fixing it is a one-word change at
-    // Tesbo-Frontend/components/settings/BillingTab.tsx:256 — at which point Playwright reports this
-    // case as "unexpectedly passing", and that's the cue to delete the test.fail() above.
     setProPlan(orgId, { billing_interval: "annual", current_period_end: isoDaysFromNow(200) });
     await openBillingTab();
     await expect(page.getByText(/billed annually/)).toBeVisible();
+    setProPlan(orgId, { billing_interval: "monthly", current_period_end: isoDaysFromNow(200) });
+    await page.reload();
+    await expect(page.getByText(/billed monthly/)).toBeVisible();
   });
 
   test("a scheduled cancellation is shown on the plan card without removing access", { tag: '@tesbo.testId("TES-TC-642")' }, async () => {
