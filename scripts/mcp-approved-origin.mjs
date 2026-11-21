@@ -69,5 +69,10 @@ export function readApprovedMcpCredential(rawUrl, tokenFile) {
     throw new Error("MCP credential file is unreadable");
   }
   if (!token) throw new Error("MCP credential file is empty");
+  // RFC 6750 section 2.1 bearer syntax. In particular, reject control characters
+  // before native header validation can include the credential in an exception.
+  if (!/^[A-Za-z0-9._~+\/-]+=*$/.test(token)) {
+    throw new Error("MCP credential file contains an invalid bearer value");
+  }
   return { endpoint, token };
 }

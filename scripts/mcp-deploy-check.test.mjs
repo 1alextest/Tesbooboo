@@ -354,6 +354,8 @@ globalThis.fetch = async (url, init = {}) => {
   const authorization = init.headers?.Authorization ?? init.headers?.authorization ?? null;
   appendFileSync(process.env.TESBO_MCP_TEST_EVENTS, JSON.stringify({ pathname, authorization, redirect: init.redirect, environmentBearerPresent: Boolean(process.env.TESBO_MCP_TOKEN) }) + "\\n");
   const mode = process.env.TESBO_MCP_TEST_MODE;
+  if (mode === "native-header-validation") new Request(url, init);
+  if (mode === "transport-error") throw new Error("Synthetic transport rejected " + authorization);
   if (pathname === "/api/health") {
     return new Response(JSON.stringify({ gitSha: "a".repeat(40) }), {
       status: mode === "health-redirect" ? 302 : 200,
@@ -448,6 +450,25 @@ test("the expected numeric consent denial remains usable without reflecting the 
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), { status: 201, code: -32001, message: "external MCP consent is not approved" });
   assert.ok(!result.stdout.includes("synthetic-file-token"));
+});
+
+test("malformed file credentials fail before authenticated fetch can echo an invalid header", () => {
+  for (const script of ["mcp-consent-probe.mjs", "mcp-deploy-check.mjs"]) {
+    const result = invokeSyntheticMcp({ script, mode: "native-header-validation", fileToken: "synthetic-first-line\nsynthetic-second-line" });
+    assert.ok(!result.stdout.includes("synthetic-first-line"));
+    assert.ok(!result.stderr.includes("synthetic-first-line"));
+    assert.equal(result.status, script === "mcp-consent-probe.mjs" ? 2 : 1);
+    assert.equal(result.requests.filter(row => row.authorization).length, 0);
+    assert.match(result.stderr, /invalid bearer value/);
+  }
+});
+
+test("consent transport exceptions cannot print a reflected credential", () => {
+  const result = invokeSyntheticMcp({ script: "mcp-consent-probe.mjs", mode: "transport-error" });
+  assert.equal(result.status, 1);
+  assert.ok(!result.stdout.includes("synthetic-file-token"));
+  assert.ok(!result.stderr.includes("synthetic-file-token"));
+  assert.match(result.stderr, /request failed \(details withheld\)/);
 });
 
 test("an unapproved HTTPS origin refuses before any network request", () => {

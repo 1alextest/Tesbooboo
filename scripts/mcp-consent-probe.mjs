@@ -31,12 +31,21 @@ try {
   console.error(`mcp-consent-probe: ${error instanceof Error ? error.message : "unapproved endpoint"}`);
   process.exit(2);
 }
-const response = await fetch(endpoint, {
-  redirect: "manual",
-  method: "POST",
-  headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-  body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
-});
+let response;
+try {
+  response = await fetch(endpoint, {
+    redirect: "manual",
+    signal: AbortSignal.timeout(15000),
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  });
+} catch {
+  // Transport/header errors can include the Authorization value. Never print
+  // an exception, stack or cause from the credential-bearing request.
+  console.error("mcp-consent-probe: MCP request failed (details withheld)");
+  process.exit(1);
+}
 
 let body = null;
 try {
