@@ -58,3 +58,16 @@ export function requireApprovedMcpEndpoint(rawUrl, tokenFile) {
   }
   return endpoint;
 }
+
+/** Read the bearer from the same private file whose origin policy was checked. */
+export function readApprovedMcpCredential(rawUrl, tokenFile) {
+  const endpoint = requireApprovedMcpEndpoint(rawUrl, tokenFile);
+  let token;
+  try {
+    token = readFileSync(tokenFile, "utf8").trim();
+  } catch {
+    throw new Error("MCP credential file is unreadable");
+  }
+  if (!token) throw new Error("MCP credential file is empty");
+  return { endpoint, token };
+}

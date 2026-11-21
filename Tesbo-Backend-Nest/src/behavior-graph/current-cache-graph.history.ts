@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException, Injectable } from "@nestjs/common";
+import { ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
 import { CurrentCacheGraphReader } from "./current-cache-graph.reader";
 import { prepareQaChangeReviewReceipt, type QaChangeReviewReceipt } from "./qa-change-review-receipt";
@@ -105,6 +105,49 @@ export class CurrentCacheGraphHistory {
       throw new ForbiddenException({ error: "Project membership required for graph history" });
     }
     return result.rows[0].entries;
+  }
+
+  /**
+   * Read one exact existing QA observation for a member. The membership check and the
+   * selected receipt are evaluated inside the SAME SQL statement; this cannot expose
+   * another project's receipt after a role revocation or project archival.
+   *
+   * This is read-only. It does not capture sources, generate tests, or approve anything.
+   */
+  async readReceiptForUser(
+    userId: string | null | undefined, projectId: string, historyId: unknown
+  ): Promise<QaChangeReviewReceipt> {
+    if (!userId) throw new ForbiddenException({ error: "Authenticated project membership required" });
+    if (typeof historyId !== "string" || !/^[1-9][0-9]{0,18}$/.test(historyId) ||
+        BigInt(historyId) > 9223372036854775807n) {
+      throw new NotFoundException({ error: "QA change receipt not found" });
+    }
+    const result = await this.db.query<{ authorized: boolean; receipt: QaChangeReviewReceipt | null }>(
+      `WITH allowed AS MATERIALIZED (
+         SELECT DISTINCT p.id FROM projects p
+          JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=$2::uuid
+          JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id=$2::uuid
+         WHERE p.id=$1::uuid
+           AND (to_jsonb(p)->>'deleted_at') IS NULL
+           AND (to_jsonb(p)->>'archived_at') IS NULL
+           AND COALESCE((to_jsonb(p)->>'is_archived')::boolean,false)=false
+           AND (to_jsonb(pm)->>'deleted_at') IS NULL
+           AND (to_jsonb(om)->>'deleted_at') IS NULL
+       )
+       SELECT EXISTS(SELECT 1 FROM allowed) AS authorized,
+              (SELECT h.review_receipt_json
+                 FROM graph_capture_history h JOIN allowed a ON a.id=h.project_id
+                WHERE h.id=$3::bigint AND h.review_receipt_json IS NOT NULL) AS receipt`,
+      [projectId, userId, historyId]
+    );
+    if (!result.rows[0]?.authorized) {
+      throw new ForbiddenException({ error: "Project membership required for graph receipt" });
+    }
+    const receipt = result.rows[0].receipt;
+    if (!receipt || receipt.projectId !== projectId) {
+      throw new NotFoundException({ error: "QA change receipt not found" });
+    }
+    return receipt;
   }
 
   /** Only invoked by the server-owned binding+Git verifier coordinator. */

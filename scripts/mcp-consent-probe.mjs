@@ -15,34 +15,22 @@
  *   live and this credential is not approved (expected before the human approval step).
  *   A served tool list → consent is already granted for this credential; the number is informational.
  */
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { requireApprovedMcpEndpoint } from "./mcp-approved-origin.mjs";
+import { readApprovedMcpCredential } from "./mcp-approved-origin.mjs";
 
 const tokenFile = String(process.env.TESBO_MCP_TOKEN_FILE || path.join(homedir(), ".config/opencode/secrets/tesbo.token"));
 let endpoint;
+let token;
 try {
   // Fail BEFORE opening the token: a caller-supplied URL cannot redirect a local
   // credential to an unrelated HTTPS host, even without an HTTP 3xx response.
-  endpoint = requireApprovedMcpEndpoint(String(process.env.TESBO_MCP_URL || "").trim(), tokenFile);
+  ({ endpoint, token } = readApprovedMcpCredential(String(process.env.TESBO_MCP_URL || "").trim(), tokenFile));
 } catch (error) {
   console.error(`mcp-consent-probe: ${error instanceof Error ? error.message : "unapproved endpoint"}`);
   process.exit(2);
 }
-let token = "";
-try {
-  token = readFileSync(tokenFile, "utf8").trim();
-} catch {
-  console.error(`mcp-consent-probe: token file missing or unreadable: ${tokenFile}`);
-  process.exit(2);
-}
-if (!token) {
-  console.error(`mcp-consent-probe: token file is empty: ${tokenFile}`);
-  process.exit(2);
-}
-
 const response = await fetch(endpoint, {
   redirect: "manual",
   method: "POST",
@@ -58,8 +46,13 @@ try {
 }
 
 if (body?.error) {
-  // Server error text is safe here: it is the protocol message, not the request. Keep it bounded.
-  console.log(JSON.stringify({ status: response.status, code: body.error.code, message: body.error.code === -32001 ? "external MCP consent is not approved" : "protocol error (message withheld)" }));
+  // An untrusted error code can contain arbitrary text or an object, including
+  // the bearer. Emit only an integer and fixed diagnostic text.
+  const code = Number.isSafeInteger(body.error.code) ? body.error.code : null;
+  const message = code === null ? "malformed protocol error (details withheld)"
+    : code === -32001 ? "external MCP consent is not approved" : "protocol error (message withheld)";
+  console.log(JSON.stringify({ status: response.status, code, message }));
+  if (code === null) process.exitCode = 1;
 } else if (Array.isArray(body?.result?.tools)) {
   console.log(JSON.stringify({ status: response.status, catalog: body.result.tools.length, message: "credential is approved; catalog served" }));
 } else {

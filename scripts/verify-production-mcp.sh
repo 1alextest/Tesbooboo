@@ -49,14 +49,14 @@ if [[ -z "${EXPECTED_GIT_SHA:-}" ]]; then
   EXPECTED_GIT_SHA="$(git rev-parse "origin/$branch")"
 fi
 
-# Only the host and the expected commit are printed. The credential is exported, never echoed, and
-# the checker redacts server error text.
+# Only the host and the expected commit are printed. The checker reads the
+# validated private credential file itself; this wrapper never reads the bearer.
 host="$(node -e 'process.stdout.write(new URL(process.env.TESBO_MCP_URL).host)')"
 echo "verify-production-mcp: endpoint host ${host}"
 echo "verify-production-mcp: expected gitSha ${EXPECTED_GIT_SHA}"
 echo "verify-production-mcp: credential source ${token_file}"
 
+unset TESBO_MCP_TOKEN
 TESBO_MCP_TOKEN_FILE="$token_file" \
-TESBO_MCP_TOKEN="$(cat "$token_file")" \
 EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" \
   exec node scripts/mcp-deploy-check.mjs

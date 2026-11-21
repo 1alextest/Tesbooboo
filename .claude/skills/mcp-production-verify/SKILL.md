@@ -18,9 +18,10 @@ consent or approving a credential yourself.
 - **The consent step belongs to a human.** External MCP access starts off; credentials must be
   approved by a project owner/manager in the product UI. Never call the consent endpoint with an
   agent session, never reuse an admin/privilege bypass, and never ask another session to do it.
-- **The token never enters argv, chat, logs or a file you write.** It is read by the wrapper from a
-  file and exported only to the checker. Do not paste it into a command, a tool call body, or an
-  evidence file.
+- **The token never enters argv, chat, logs or a file you write.** The probe and checker read it from a
+  validated private file through the shared credential reader; the wrapper passes only its path.
+  The checker ignores an environment bearer. Do not paste the token into a command, a tool call
+  body, or an evidence file.
 - **Verify the endpoint you mean.** The MCP URL carries the project id; confirm host and project id
   match the deployment being checked (the frontend proxy may point at a differently-named host than
   the one in an old note). Only the host is printed, never the token.
@@ -89,11 +90,12 @@ This closes the exposure class where a plausible-looking, arbitrary HTTPS projec
    It prints the host, expected SHA and credential source, then delegates to
    `scripts/mcp-deploy-check.mjs`, which verifies:
    - health `gitSha` equals the expected commit;
-   - required tool names are discoverable and their input schemas are present and closed
-     (`additionalProperties: false` where required);
+   - required tool names are discoverable, and any exposed proposal staging schema includes the
+     checked authoring fields, required request key, and update revision guard;
    - the catalog fingerprint recomputed from the returned tools equals the one the server reported
      at initialize;
-   - proposal-review tools stay absent unless `REQUIRE_PROPOSAL_PREVIEW=1` is deliberately set.
+   - `REQUIRE_PROPOSAL_PREVIEW=1` requires the proposal-review tools; without that flag an exposed
+     preview is still valid and its staging schema is checked.
 
 6. **Read the result, not just the exit code.** Successful output must show `health: <expected sha>`
    and a fingerprint that is not `unavailable`. Required tools list is authoritative; the count line
