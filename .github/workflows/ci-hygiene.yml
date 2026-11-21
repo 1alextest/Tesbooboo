@@ -61,7 +61,7 @@ jobs:
         with:
           node-version: "22"
       - name: Verify source/approval/waiver gate including denied neighbors
-        run: node --test scripts/assurance-pr-gate.test.mjs
+        run: node --test scripts/assurance-pr-gate.test.mjs scripts/publish-assurance-status.test.mjs
 
   mbt-symbolic-pilot:
     name: mbt-symbolic-pilot
