@@ -100,6 +100,7 @@ export function evaluateAssuranceReviews({ changedFiles, reviews, head, author, 
 
 async function githubJson(url, token) {
   const response = await fetch(url, {
+    redirect: "error",
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'tesbo-assurance-gate' }
   });
