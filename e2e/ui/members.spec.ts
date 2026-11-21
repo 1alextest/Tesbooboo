@@ -465,8 +465,18 @@ test.describe("team members", () => {
       await expect(page.getByRole("heading", { name: "Team" })).toBeVisible();
     }
 
+    const projectRes = await page.request.get(new URL(`/api/projects/${tenant!.mainProjectId}`, env.apiBaseUrl).toString());
+    expect(projectRes.ok(), await projectRes.text()).toBeTruthy();
+    const project = await projectRes.json();
+    expect(project.id).toBe(tenant!.mainProjectId);
+    expect(project.key).toEqual(expect.any(String));
+    expect(project.key).not.toBe("");
+
+    // The UUID entry point redirects, then the shared route provider canonicalizes it to this
+    // project's persisted readable key while retaining the members tab.
+    const settingsUrl = new URL(`/projects/${encodeURIComponent(project.key)}/settings?tab=members`, env.webBaseUrl);
     await page.goto(`/projects/${tenant!.mainProjectId}/members`);
-    await expect(page).toHaveURL(new RegExp(`/projects/${tenant!.mainProjectId}/settings\\?tab=members`));
+    await expect(page).toHaveURL(settingsUrl.toString());
     await expect(page.getByRole("heading", { name: "Project members" })).toBeVisible();
   });
 });
