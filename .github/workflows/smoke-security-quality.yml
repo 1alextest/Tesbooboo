@@ -337,6 +337,10 @@ jobs:
           STRIPE_WEBHOOK_SECRET: whsec_tesbo_ci
           STRIPE_PRICE_ID_PRO_MONTHLY: price_tesbo_ci_monthly_usd
           STRIPE_PRICE_ID_PRO_ANNUAL: price_tesbo_ci_annual_usd
+          # Billing tests directly change a disposable organization\u0027s DB plan state.
+          # Keep entitlement read assertions authoritative; cache invalidation is separately tested
+          # against the default cached backend earlier in this workflow.
+          ENTITLEMENT_CACHE_ENABLED: "false"
         run: |
           # Switch ONLY after native and unrelated smoke cases complete; do not subject
           # unrelated tenants to the now-enabled Launch billing limits.
