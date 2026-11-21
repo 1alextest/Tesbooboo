@@ -1,21 +1,16 @@
-# Trusted policy runs from the base repository DEFAULT BRANCH, never the PR merge.
-# The branch rulesets must independently require the exact "specification-assurance"
-# check published onto the PR head by this trusted workflow.
+# Trusted policy must run from repository DEFAULT BRANCH, never a PR merge,
+# fork checkout, untrusted artifact or user-controlled action.
+# A repository-authorized owner/coordinator dispatches a fresh evaluation via
+# POST /repos/{owner}/{repo}/dispatches with:
+# {"event_type":"specification-assurance-recheck","client_payload":{"pr_number":123}}
+# This trigger does not automatically recheck PR updates. Until an authorized
+# dispatcher and a required exact-head ruleset check are active, this is inert
+# preparation, NOT merge enforcement.
 name: Specification assurance review gate
 
 on:
-  pull_request_target:
-    types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft]
-  # GitHub's pull_request_review workflow definition is PR-editable: deliberately
-  # DO NOT use it. A reviewer can request a fresh decision with this PR comment.
-  issue_comment:
-    types: [created]
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: Pull request number to recompute after a reviewer decision
-        required: true
-        type: number
+  repository_dispatch:
+    types: [specification-assurance-recheck]
 
 permissions:
   contents: read
@@ -25,14 +20,10 @@ permissions:
 jobs:
   assurance-policy-publisher:
     name: assurance-policy-publisher
-    if: >-
-      github.event_name != 'issue_comment' ||
-      (github.event.issue.pull_request != null && github.event.comment.body == '/recheck-assurance')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      # This checkout MUST NEVER use github.event.pull_request.head.sha,
-      # a pull request merge ref, fork repository or its artifacts.
+      # Repository dispatch runs on the default branch. Never check out PR code.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: ${{ github.repository }}
@@ -41,8 +32,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
-      - name: Publish exact-PR-head authorization and review status
+      - name: Publish exact-PR-head review and evidence status
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
         run: node scripts/publish-assurance-status.mjs
