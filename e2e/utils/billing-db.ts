@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { APIRequestContext } from "@playwright/test";
@@ -138,6 +139,14 @@ export function setBillingState(organizationId: string, patch: Partial<BillingSt
   exec(
     `UPDATE organizations SET ${assignments.join(", ")}, updated_at = now() ` +
       `WHERE id = ${literal(organizationId)};`,
+  );
+  // Direct SQL bypasses BillingService's Redis invalidation; preserve the real cached policy
+  // and invalidate only the disposable test workspace's exact entitlement key.
+  if (!env.targetIsLocal) throw new Error("Billing E2E cache invalidation requires a local disposable target");
+  execFileSync(
+    process.execPath,
+    [path.join(__dirname, "entitlement-cache-invalidate.cjs"), organizationId],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 5000 },
   );
 }
 
