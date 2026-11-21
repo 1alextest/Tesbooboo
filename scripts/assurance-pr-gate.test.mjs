@@ -105,7 +105,7 @@ test('the live GitHub gate checks evidence on the exact PR head, not a previous 
     return { ok: true, json: async () => data };
   };
   try {
-    const outcome = await run({ repository: 'example/tesbo', prNumber: 7, token: 'not-a-real-token', authorizedReviewers: trustedRoster });
+    const outcome = await run({ repository: 'example/tesbo', prNumber: 7, token: 'not-a-real-token' });
     assert.equal(outcome.status, 'review_provisionally_verified');
     assert.equal(urls.filter(u => u.includes('/contents/')).length, 2);
     assert.equal(urls.filter(u => u.includes('/collaborators/') && u.endsWith('/permission')).length, 2);
