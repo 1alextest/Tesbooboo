@@ -124,7 +124,7 @@ export async function run({ repository, prNumber, token }) {
   const files = await githubPages(api, `/pulls/${prNumber}/files`, token);
   if (!files.every(f => typeof f.filename === 'string')) throw new Error('Invalid changed-file list');
   if (!files.some(f => requiresAssurance(f.filename))) return {
-    status: 'not_applicable', errors: [], approvals: [], protectedFiles: []
+    head: pr.head.sha, status: 'not_applicable', errors: [], approvals: [], protectedFiles: []
   };
   const reviews = await githubPages(api, `/pulls/${prNumber}/reviews`, token);
   // Never use Actions variables, PR text or client-provided roster data for
@@ -147,6 +147,7 @@ export async function run({ repository, prNumber, token }) {
   }
   const outcome = evaluateAssuranceReviews({ changedFiles: files.map(f => f.filename), reviews,
     head: pr.head.sha, author: pr.user.login, draft: pr.draft, reviewerPermissions });
+  outcome.head = pr.head.sha;
   if (!['review_provisionally_verified', 'approved_exception'].includes(outcome.status)) return outcome;
   // Exact head fetch (not default branch) makes a deleted/renamed/past receipt fail closed.
   for (const approval of outcome.approvals) {
