@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import {previewDraftModel} from './model-studio-preview.core.mts';
+import {generateModelPaths} from './model-studio-generator.mts';
+const model={schemaVersion:'tesbo-fsm-draft/1',semantics:'SEQUENTIAL_FSM',initialStateId:'start',states:[{id:'start',label:'Start'},{id:'done',label:'Done'}],transitions:[{id:'finish',from:'start',to:'done',action:'Finish',expectedObservation:'Approved outcome appears'},{id:'retry',from:'done',to:'start',action:'Retry',expectedObservation:'Starting context is restored'}]};
+const preview=previewDraftModel(model);
+assert.equal(preview.approval,'NOT_APPROVED'); assert.equal(preview.runtimeEvidence,'NONE'); assert.equal(preview.modelId,null);
+const input={definition:preview.definition,revisionId:'fixture-r1',contentHash:preview.candidateDigest,options:{strategy:'edge_coverage',maxPaths:20,maxDepth:12,seed:'qa-v3'}};
+const generated=generateModelPaths(input);
+assert.equal(generated.coverageAssertion,'none'); assert.equal(generated.executionAssertion,'none'); assert.equal(generated.forecast.coveredTransitions,2);
+console.log('P1 PASS valid sequential preview/generation returns proposals and no verified authority');
+assert.deepEqual(generateModelPaths(input),generated); console.log('P2 PASS identical pure inputs retain exact output');
+assert.throws(()=>previewDraftModel({...model,transitions:[{...model.transitions[0],guard:'role=admin'}]}),e=>e.code==='INVALID_MODEL'); console.log('P3 PASS guard-bearing input refused, not erased');
+assert.throws(()=>previewDraftModel({...model,semantics:'CONCURRENT_FSM'}),e=>e.code==='UNSUPPORTED_SEMANTICS'); console.log('P4 PASS concurrent semantics explicitly unsupported');
+const limited=generateModelPaths({...input,options:{...input.options,maxPaths:1}}); assert.deepEqual(limited.forecast.uncoveredTransitionIds,['retry']); assert.equal(limited.coverageAssertion,'none'); console.log('P5 PASS bounded output keeps omitted transition visible and claims no coverage');
+console.log('5 selected / 5 executed / 5 passed. Hermetic pure-source controls only; no Nest, DB, UI, target execution, deployed observation, or human outcome.');

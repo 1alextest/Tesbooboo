@@ -1,0 +1,23 @@
+--- reviewed36
++++ concurrent37
+@@ -1,6 +1,6 @@
+ # Technical Architecture and Data Design
+ 
+-**Document ID:** TESBO-TD-003 | **Revision:** 1.4.36 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** source-informed design plus scoped native increments; NOT FROZEN.
++**Document ID:** TESBO-TD-003 | **Revision:** 1.4.37 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** source-informed design plus scoped native increments; NOT FROZEN.
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Stack:** existing Next.js, NestJS, PostgreSQL/pgvector, Redis/BullMQ and Railway fork.  
+ **Audited fork:** T-454 source verification `1alextest/Tesbooboo@5989e5e2c646666ed087a7885389b2ffce4bad42` (development); prior historical audit `124f1280afd7ee0e400755796ac46ba9f956b05f`. Production SHA/migrations were not verified.  
+@@ -1812,3 +1812,12 @@
+ 
+ 
+ **Current36 integration boundary:** The published35 Graph Analytics closure contracts are preserved and govern mixed model/policy/requirement obligation scope, distinct evidence sufficiency and observed PASS/FAIL, per-impact actions, total ranking, authorized-visible snapshot identity and current-authority rollover. Their new fixtures extend the same five GA-AC checks and remain NOT RUN. The DMIS approval-to-posting workflow is the named pilot context, not a universal actor/schema/method or a claimed live test. The incoming short source-checkout claim belongs to its separate review; this run's inspected source remains6897 and its delivery parent is1fe. Earlier current-state statements are historical when this latest explicit qualification differs. This chapter preserves the independently reviewed CURRENT/HISTORICAL, separate Skill assignment, prepared-Run and source-status qualifications above. No empirical benefit, deployment, activation or implementation acceptance is inherited.
++
++
++## Revision 1.4.37 — Graph Analytics review resolution
++
++Use the existing graph/change-review owner to reconcile the assessed frontier against independent change and mapped-consumer input (FR-116), including downstream consumers and applicable guards, known omissions, justified exclusions and termination. Bind a reviewed completeness witness to the exact scope, captures, authority and extraction profile. If no independently supported, disclosable witness is available, keep the result limited, with identical treatment for absent and restricted proof. Invalidate the witness on material dependency or authority changes.
++
++Requirements/Policy and Model Studio retain their source authority. Use a versioned, reviewed equivalence decision through the existing Change Packet adjudication owner. Its withdrawal or supersession recomputes current projections and invalidates affected handoffs; history retains the previous decision. Unresolved authority conflicts remain a separate unknown partition and prevent a complete denominator claim. Among eligible obligations, verified FAIL and mixed evidence increment verified, never met. An authorized correction remains attributable; no latest-arrival rule.
++
++Fence index publication on the current binding, desired cursor/profile and rebuild epoch in the existing index owner. An obsolete worker finishing last cannot publish current results, even within one binding generation. Define owner-approved steady/burst load, latency, lag, backlog, progress, attempt/deadline and escalation bounds before rollout. Monotonic progress means reaching the worker's pinned target without regressing published state; a moving head alone cannot reset a stalled worker's budget.

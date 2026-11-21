@@ -1,0 +1,54 @@
+{
+  "commit": "ac49fa64d87723c9c1be4491a6fe06c7672e3af6",
+  "basis": "Actual root GitHub workflow lookup; applies to incoming documentation commit, not final follow-up",
+  "workflow_runs": [
+    {
+      "id": 44683516743,
+      "name": "CI hygiene",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 44683516726,
+      "name": "Core code quality",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 44683516578,
+      "name": "Mutation effectiveness",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 44683516586,
+      "name": "Free repository security",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 44683516501,
+      "name": "Repository secret guard",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 44683516559,
+      "name": "Smoke and supply-chain security",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 44683516530,
+      "name": "Behavioral quality",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 44683516523,
+      "name": "Security analysis",
+      "status": "completed",
+      "conclusion": "success"
+    }
+  ]
+}

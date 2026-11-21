@@ -1,0 +1,11 @@
+--- a/views/skills-governance.md
++++ b/views/skills-governance.md
+@@ -179,7 +179,7 @@
+ 
+ Choose discovery lenses from the context. Human roles, machine actors, scheduled jobs, events, contracts and handoffs may each be useful. User type, module and context are optional lenses. Inspect or reuse evidence only for an authorized purpose and audience. Carry restrictions into derived outputs. Use permitted references or redaction where appropriate and report unresolved or inaccessible evidence explicitly.
+ 
+-**Purpose and status:** This is a candidate refinement of the existing operating method, owned by this canonical brief; canonical 03 owns the corresponding governed evaluation mechanism. It makes the existing discovery, reuse, outcome, authority and lesson-learning principles operational. It does not alter original team charters or install, approve or activate a Skill. A user direction can expose an opportunity without proving a reviewer violated a rule or that the proposed solution is universally desirable.
++**Purpose and status:** This is a candidate refinement of the existing operating method, owned by canonical 06; canonical 03 owns the corresponding governed evaluation mechanism. It makes the existing discovery, reuse, outcome, authority and lesson-learning principles operational. It does not alter original team charters or install, approve or activate a Skill. A user direction can expose an opportunity without proving a reviewer violated a rule or that the proposed solution is universally desirable.
+ 
+ For a material correction, missed opportunity, false alarm or repeated friction, preserve **observation → consequence → failure class → invariant → agnostic principle → reusable question → context-specific example**. Label the observed evidence and causal hypothesis separately. First classify whether guidance was missing, ambiguous, not reached, not applied, or its result not checked; use `UNRESOLVED` if the record cannot distinguish these. Compare against existing guidance and repair its owner rather than adding another overlapping checklist. Feature-specific facts and examples stay in the case record; recurring reasoning belongs in the reusable method.
+ 

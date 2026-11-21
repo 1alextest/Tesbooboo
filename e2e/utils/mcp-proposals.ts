@@ -24,36 +24,57 @@ export async function stageAndApplyMcpTestcases(
     expect(response.ok(), await response.text()).toBe(true);
     return (await response.json()).editRevision;
   }
-  const before = await Promise.all(operations.map(officialState));
-  const response = await machine.post(`${base}/mcp`, {
-    headers: { Authorization: `Bearer ${token}` },
-    data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: {
-      name: "stage_testcase_changes", arguments: { requestKey: randomUUID(), operations }
-    } },
-  });
-  expect(response.ok(), await response.text()).toBe(true);
-  const rpc = await response.json();
-  expect(rpc.error, JSON.stringify(rpc.error)).toBeUndefined();
-  expect(rpc.result.isError).toBe(false);
-  const staged = JSON.parse(rpc.result.content[0].text);
-  expect(staged.publication).toBe("unpublished");
-  expect(staged.taskId).toBe(staged.task.id);
-  expect(staged).not.toHaveProperty("testcaseId");
-  expect(await Promise.all(operations.map(officialState))).toEqual(before);
-  const taskEndpoint = `${base}/agents/zyra/tasks/${staged.taskId}`;
-  const read = await human.get(taskEndpoint);
-  expect(read.ok(), await read.text()).toBe(true);
-  const reviewed = await read.json();
-  expect(reviewed.proposalRevision).toBe(staged.task.proposalRevision);
-  expect(reviewed.proposalSnapshot).toBeTruthy();
-  const saved = await human.post(`${taskEndpoint}/save`, {
-    data: { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: operations.map((_, index) => index) },
-  });
-  expect(saved.ok(), await saved.text()).toBe(true);
-  const published = await saved.json();
+  async function stageAndSave(current: TestcaseProposalOperation[]) {
+    const before = await Promise.all(current.map(officialState));
+    const response = await machine.post(`${base}/mcp`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: {
+        name: "stage_testcase_changes", arguments: { requestKey: randomUUID(), operations: current }
+      } },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    const rpc = await response.json();
+    expect(rpc.error, JSON.stringify(rpc.error)).toBeUndefined();
+    expect(rpc.result.isError).toBe(false);
+    const staged = JSON.parse(rpc.result.content[0].text);
+    expect(staged.publication).toBe("unpublished");
+    expect(staged.taskId).toBe(staged.task.id);
+    expect(staged).not.toHaveProperty("testcaseId");
+    expect(await Promise.all(current.map(officialState))).toEqual(before);
+    const taskEndpoint = `${base}/agents/zyra/tasks/${staged.taskId}`;
+    const read = await human.get(taskEndpoint);
+    expect(read.ok(), await read.text()).toBe(true);
+    const reviewed = await read.json();
+    expect(reviewed.proposalRevision).toBe(staged.task.proposalRevision);
+    expect(reviewed.proposalSnapshot).toBeTruthy();
+    const saved = await human.post(`${taskEndpoint}/save`, {
+      data: { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: current.map((_, index) => index) },
+    });
+    return { before, staged, reviewed, saved };
+  }
+
+  let attempt = await stageAndSave(operations);
+  if (attempt.saved.status() === 409) {
+    /*
+     * A concurrent bookkeeping write can move the review basis between staging and Save (the
+     * product then correctly refuses the stale review). Re-stage once, exactly as a reviewer would
+     * after clicking reload — but only when the official records are provably untouched, so a real
+     * concurrent content edit still surfaces as the conflict instead of being retried away.
+     */
+    const refusal = await attempt.saved.json().catch(() => null);
+    const current = await Promise.all(operations.map(officialState));
+    if (refusal?.code === "PROPOSAL_REVIEW_CONFLICT" && JSON.stringify(current) === JSON.stringify(attempt.before)) {
+      const refreshed = await Promise.all(operations.map((operation) => operation.opType === "create"
+        ? operation
+        : testcaseUpdateProposal(human, projectId, operation.testcaseId, operation.fields, operation.opType)));
+      attempt = await stageAndSave(refreshed);
+    }
+  }
+  expect(attempt.saved.ok(), await attempt.saved.text()).toBe(true);
+  const published = await attempt.saved.json();
   expect(published.saveReceipt).toMatchObject({ principalKind: "human_session", reviewerId: expect.any(String) });
   expect(published.savedCount).toBe(operations.length);
-  return { staged, reviewed, published };
+  return { staged: attempt.staged, reviewed: attempt.reviewed, published };
 }
 
 /** Fetch the exact target revision for an explicitly requested successful proposal fixture. */
