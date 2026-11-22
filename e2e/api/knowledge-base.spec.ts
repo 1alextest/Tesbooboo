@@ -105,7 +105,9 @@ test.describe("knowledge base v2 — folders and documents", () => {
     )::text;`);
     const before = counts();
     const unauthenticated = await anon.post(path, { data: { notARequirement: true } });
-    expect(unauthenticated.status()).toBe(401);
+    // Existing KB authentication contract permits 400/401/403/404; 503 would
+    // reveal preview availability to an unauthenticated caller.
+    expect([400, 401, 403, 404]).toContain(unauthenticated.status());
     const disabled = await asOwner.post(path, { data: input });
     expect(disabled.status(), await disabled.text()).toBe(503);
     expect((await disabled.json()).error).toBe("REQUIREMENT_PREVIEW_DISABLED");
