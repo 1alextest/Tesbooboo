@@ -168,6 +168,59 @@ describe("requirement bundle lifecycle boundary", () => {
     expect(f.query.mock.calls.some(([sql])=>/UPDATE |INSERT |workspace_ai_keys/.test(sql))).toBe(false);
   });
 
+  function failureFixture(status: string, failFirstRead=false) {
+    const f=fixture();f.row.task_status=status;
+    let initialLookup=failFirstRead;
+    f.query.mockImplementation(async(sql,values=[])=>{
+      if(sql.includes("FROM ai_generation_requests")){
+        if(initialLookup){initialLookup=false;throw new Error("Transient task lookup failure");}
+        return {rows:[f.row],rowCount:1};
+      }
+      if(sql.startsWith("UPDATE ai_generation_requests")){
+        if(sql.includes("SET task_status = 'failed'")){
+          if(!["todo","in_progress"].includes(f.row.task_status))return {rows:[],rowCount:0};
+          f.row.task_status="failed";
+        }
+        f.row.activity_log.push(...JSON.parse(String(values[2])));
+        return {rows:[f.row],rowCount:1};
+      }
+      return {rows:[],rowCount:0};
+    });
+    const notify=jest.spyOn(f.internals,"notifyZyraTask").mockResolvedValue(undefined);
+    const provider=jest.spyOn(f.internals,"generateZyraWithProvider").mockResolvedValue({drafts:[]});
+    jest.spyOn(f.internals.logger,"error").mockImplementation(()=>undefined);
+    return {...f,notify,provider};
+  }
+
+  it.each(["generation", "feedback"].flatMap(kind=>["todo", "in_review", "done"].map(status=>({kind,status}))))(
+    "keeps a $status bundle unchanged after the queued $kind worker's first lookup fails", async({kind,status})=>{
+      const f=failureFixture(status,true),before=JSON.stringify(f.row);
+      if(kind==="generation")await f.internals.processZyraTask(project,task,{userId:user});
+      else await f.internals.processZyraFeedback(project,task,{});
+      expect(JSON.stringify(f.row)).toBe(before);
+      expect(f.query.mock.calls.some(([sql])=>/UPDATE |INSERT |workspace_ai_keys/.test(sql))).toBe(false);
+      expect(f.provider).not.toHaveBeenCalled();expect(f.notify).not.toHaveBeenCalled();
+    }
+  );
+
+  it("the shared failure writer preserves an external bundle even after its typed payload was damaged",async()=>{
+    const f=failureFixture("in_progress");f.row.generated_payload=[];
+    const before=JSON.stringify(f.row);
+    await f.internals.markZyraTaskFailed(project,task,"Obsolete worker failure");
+    expect(JSON.stringify(f.row)).toBe(before);
+    expect(f.query.mock.calls.some(([sql])=>/UPDATE |INSERT /.test(sql))).toBe(false);
+    expect(f.notify).not.toHaveBeenCalled();
+  });
+
+  it.each(["todo", "in_progress", "done"])("preserves ordinary %s failure handling and notification semantics",async status=>{
+    const f=failureFixture(status);f.row.provider="openai";f.row.generated_payload=[{title:"Ordinary draft"}];
+    await f.internals.markZyraTaskFailed(project,task,"Provider refused this ordinary task");
+    expect(f.row.task_status).toBe(status==="done"?"done":"failed");
+    expect(f.row.activity_log).toHaveLength(1);
+    expect(f.row.activity_log[0].title).toBe(status==="done"?"Generation failed after task was already updated":"Generation failed");
+    expect(f.notify).toHaveBeenCalledTimes(status==="done"?0:1);
+  });
+
   it("retains ordinary task feedback and never regenerates a damaged external bundle", async () => {
     const f=fixture();
     f.row.generated_payload=[];

@@ -346,6 +346,17 @@ type Body=Record<string,any>;
       await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,reviewer]);
     });
 
+    it.each(["todo", "in_review", "done"])("the shared provider failure writer leaves a %s bundle untouched",async status=>{
+      const staged=await stageBundle(ops());
+      await admin.query("UPDATE ai_generation_requests SET task_status=$2 WHERE id=$1",[staged.id,status]);
+      const before=(await admin.query("SELECT * FROM ai_generation_requests WHERE id=$1",[staged.id])).rows;
+      const officialBefore=await docCounts(),svc=service();
+      await (svc as unknown as Body).markZyraTaskFailed(project,staged.id,"A queued worker could not read this bundle");
+      expect((await admin.query("SELECT * FROM ai_generation_requests WHERE id=$1",[staged.id])).rows).toEqual(before);
+      expect((svc as unknown as Body).notifyZyraTask).not.toHaveBeenCalled();
+      expect(await docCounts()).toEqual(officialBefore);
+    });
+
     it("recovers the same request after its document or suite changed without restaging",async()=>{
       const documentId=await requirementDoc("Retry base"),suiteId=await suite("Retry suite"),key=randomUUID();
       const operations=ops({documentId,expectedRevision:await revision(documentId)});

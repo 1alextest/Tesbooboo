@@ -20932,28 +20932,30 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   private async markZyraTaskFailed(projectId: string, taskId: string, detail: string) {
     const failedAt = new Date().toISOString();
     const activity = [{ actor: "agent", stage: "failed", title: "Generation failed", detail, createdAt: failedAt }];
-    const res = await this.db.query(
-      `UPDATE ai_generation_requests SET task_status = 'failed', activity_log = activity_log || $3::jsonb, updated_at = now()
-       WHERE id = $1 AND project_id = $2 AND task_status IN ('todo', 'in_progress') RETURNING id`,
-      [taskId, projectId, JSON.stringify(activity)]
-    );
-    if (res.rowCount === 0) {
+    const failed = await this.db.transaction(async client => {
+      // The worker's initial task lookup may itself have failed. Re-establish ownership here,
+      // under the mutation lock, before either a status change or the late-failure activity.
+      const current = await client.query("SELECT provider, generated_payload FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
+      if (!current.rows[0] || this.isRequirementBundleTask(current.rows[0])) return false;
+      const res = await client.query(
+        `UPDATE ai_generation_requests SET task_status = 'failed', activity_log = activity_log || $3::jsonb, updated_at = now()
+         WHERE id = $1 AND project_id = $2 AND task_status IN ('todo', 'in_progress') RETURNING id`,
+        [taskId, projectId, JSON.stringify(activity)]
+      );
+      if (res.rowCount) return true;
       const note = [{
-        actor: "agent",
-        stage: "failed",
-        title: "Generation failed after task was already updated",
+        actor: "agent", stage: "failed", title: "Generation failed after task was already updated",
         detail: `${detail} (the task had already moved on by the time this was recorded, so its status was left as-is)`,
         createdAt: failedAt
       }];
-      await this.db.query(
+      await client.query(
         "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2",
         [taskId, projectId, JSON.stringify(note)]
       );
-    } else {
-      // Only when this call is what moved the task to 'failed'. A task the user already closed or
-      // saved (the rowCount === 0 branch above) did not fail from their point of view.
-      await this.notifyZyraTask(projectId, taskId, "failed");
-    }
+      return false;
+    });
+    // Notify only after this transaction committed an ordinary task's transition to failed.
+    if (failed) await this.notifyZyraTask(projectId, taskId, "failed");
   }
 
   private async processZyraTask(projectId: string, taskId: string, options: { userId: string; knowledgeItemIds?: string[] }) {
