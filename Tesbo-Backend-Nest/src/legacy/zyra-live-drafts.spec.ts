@@ -166,6 +166,35 @@ describe("the OpenAI stream is read into the plain response's shape", () => {
   });
 });
 
+describe("provider stream failures keep private diagnostics out of product errors", () => {
+  const privateDetail = "synthetic-stream-private-request sk-synthetic-stream-key";
+  const readers = LegacyService as unknown as {
+    readOpenAiStream: (response: Response) => Promise<Body>;
+    readAnthropicStream: (response: Response) => Promise<Body>;
+  };
+  for (const [provider, read] of [["OpenAI", readers.readOpenAiStream], ["Anthropic", readers.readAnthropicStream]] as const) {
+    it(`${provider} error events are safe and retain rate-limit guidance`, async () => {
+      const event = { type: "error", error: { type: "rate_limit_error", message: `rate limit exceeded ${privateDetail}` } };
+      const response = new Response(`data: ${JSON.stringify(event)}\n\n`);
+      const failure = await read(response).then(() => null, (error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toMatch(/rate-limited|quota/i);
+      expect((failure as Error).message).not.toContain(privateDetail);
+    });
+
+    it(`${provider} failed body reads do not surface transport details`, async () => {
+      const body = (async function* () {
+        yield new TextEncoder().encode("event: opening\n\n");
+        throw new Error(privateDetail);
+      })();
+      const failure = await read({ body } as unknown as Response).then(() => null, (error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).not.toContain(privateDetail);
+      expect((failure as Error).message).toMatch(/retry|try again/i);
+    });
+  }
+});
+
 describe("a turn's live drafts go to the watching client and never into its trace", () => {
   it("forwards a draft, records no step for it", () => {
     const forwarded: unknown[][] = [];

@@ -1,6 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, forwardRef, HttpException, Inject, Injectable, Logger, NotFoundException, NotImplementedException, OnModuleInit } from "@nestjs/common";
 import { assertApprovedNewRunCases } from "./approved-run-cases.policy";
-import { publicAiProviderFailure } from "../common/public-ai-provider-failure";
 import { retestCreateInput, retestDigest, retestExecutionIds, retestRequestKey } from "./native-retest";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import * as fs from "fs";
@@ -2682,15 +2681,21 @@ export class LegacyService implements OnModuleInit {
   // Single place that knows how each wire authenticates. Custom providers keep their
   // explicit header/scheme overrides; catalog providers get their wire's convention.
   private providerAuthHeaders(provider: string, apiKey: string, authHeaderName: string | null, authScheme: string | null): Headers {
-    const wire = providerWire(provider);
-    if (wire === "anthropic") return this.buildAnthropicAuthHeaders(apiKey, authHeaderName, authScheme);
-    if (wire === "azure") {
-      // Azure authenticates with a bare api-key header — not Bearer.
-      const headers = new Headers({ "Content-Type": "application/json" });
-      headers.set(authHeaderName || "api-key", apiKey);
-      return headers;
+    try {
+      const wire = providerWire(provider);
+      if (wire === "anthropic") return this.buildAnthropicAuthHeaders(apiKey, authHeaderName, authScheme);
+      if (wire === "azure") {
+        // Azure authenticates with a bare api-key header — not Bearer.
+        const headers = new Headers({ "Content-Type": "application/json" });
+        headers.set(authHeaderName || "api-key", apiKey);
+        return headers;
+      }
+      return this.buildBearerAuthHeaders(apiKey, authHeaderName, authScheme);
+    } catch {
+      // Native Headers errors quote invalid names/values, including a credential.
+      // This is local configuration validation, before protected fetch even starts.
+      throw new Error("AI provider authentication headers are invalid. Check the key, header name, and authentication scheme in Workspace → Integrations.");
     }
-    return this.buildBearerAuthHeaders(apiKey, authHeaderName, authScheme);
   }
 
   private isProviderAuthError(status: number, message?: string): boolean {
@@ -2698,10 +2703,11 @@ export class LegacyService implements OnModuleInit {
     return /invalid x-api-key|authentication_error|invalid[_ ]api[_ ]key|incorrect api key|unauthorized|permission_error|forbidden/i.test(String(message || ""));
   }
 
-  // Turn a raw provider HTTP failure into a clear, actionable message for the user.
-  // Returns "" when the failure isn't a recognized auth/permission/rate-limit case.
-  private describeProviderError(provider: string, status: number, rawMessage?: string): string {
-    const label = providerDefinition(provider)?.label || provider || "AI provider";
+  // Provider diagnostics are untrusted: they can echo credentials, URLs, or submitted
+  // context. Use them only to classify the failure, never as presentation fallback.
+  // Every downstream chat/progress/audit/HTTP consumer receives this safe description.
+  private static describeProviderError(provider: string, status: number, rawMessage?: string): string {
+    const label = providerDefinition(provider)?.label || "AI provider";
     const message = String(rawMessage || "");
     if (status === 401 || /invalid x-api-key|authentication_error|invalid[_ ]api[_ ]key|incorrect api key|unauthorized/i.test(message)) {
       return `The ${label} API key is invalid or has been revoked. Update it in Workspace → Integrations, then use "Test connection" to verify.`;
@@ -2709,16 +2715,95 @@ export class LegacyService implements OnModuleInit {
     if (status === 403 || /permission_error|forbidden|does not have access|not allowed/i.test(message)) {
       return `The ${label} API key was rejected for permissions — check the account's plan, billing, or model access, then update the key in Workspace → Integrations.`;
     }
-    if (status === 429 || /rate.?limit|overloaded|quota|insufficient_quota/i.test(message)) {
+    if (status === 429 || /rate.?limit|quota|insufficient_quota/i.test(message)) {
       return `${label} is rate-limited or out of quota right now. Wait a moment and retry, or check the account's usage limits.`;
     }
-    return "";
+    if (/overloaded/i.test(message)) {
+      return `The ${label} service is overloaded. Try again shortly.`;
+    }
+    if (status === 408 || status === 504) {
+      return `${label} did not answer in time (HTTP ${status}). Try again shortly.`;
+    }
+    if (status >= 500 && status <= 599) {
+      return `${label} is temporarily unavailable (HTTP ${status}). Try again shortly.`;
+    }
+    if (status === 404 || /model.{0,80}(?:not.?found|does not exist|unavailable)/i.test(message)) {
+      return `The ${label} model or endpoint is unavailable. Check the model and base URL in Workspace → Integrations, then retry.`;
+    }
+    if (status >= 400 && status <= 499) {
+      return `${label} rejected the request (HTTP ${status}). Check the model and request settings in Workspace → Integrations, then retry.`;
+    }
+    return `${label} request failed. Check the provider connection and try again.`;
   }
 
-  // Untrusted provider messages must never be persisted as Zyra reply, progress,
-  // trace, activity or task status. Only status-classified public messages escape.
+  // Fetch and body-reader exceptions can quote a URL or part of a provider response.
+  // Keep this boundary around provider I/O only; local validation errors and already
+  // billed draft parsing retain their existing diagnostics/usage outside it.
+  private static async providerIo<T>(provider: string, operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      // Transport errors do not own an HTTP response status. Inspect only exact
+      // timeout kinds; never activate an arbitrary message/toString/getResponse.
+      let name: unknown;
+      let code: unknown;
+      try {
+        if (error !== null && (typeof error === "object" || typeof error === "function")) {
+          name = (error as { name?: unknown }).name;
+          code = (error as { code?: unknown }).code;
+        }
+      } catch { /* An unsafe error-kind getter also fails closed. */ }
+      const timeout = name === "TimeoutError" || name === "AbortError" || code === "ETIMEDOUT";
+      const safe = new Error(timeout
+        ? `${providerDefinition(provider)?.label || "AI provider"} request timed out. Try again.`
+        : LegacyService.describeProviderError(provider, 0));
+      // A native timeout is resumable; an HTTP rejection must not become one.
+      if (timeout) safe.name = name === "AbortError" ? "AbortError" : "TimeoutError";
+      throw safe;
+    }
+  }
+
+  private fetchAiProvider(provider: string, url: string, init: RequestInit): Promise<Response> {
+    return LegacyService.providerIo(provider, () => fetch(url, init));
+  }
+
+  private async readAiProviderJson(provider: string, response: Response): Promise<Body> {
+    try {
+      return await LegacyService.providerIo(provider, () => response.json() as Promise<Body>);
+    } catch (error) {
+      // A failed endpoint may return HTML or an empty body. Its HTTP status still
+      // gives useful guidance; a successful but unreadable response must fail.
+      if (!response.ok && !this.isZyraTimeoutError(error)) return {};
+      throw error;
+    }
+  }
+
+  private static async *providerStreamChunks(provider: string, response: Response): AsyncGenerator<Uint8Array> {
+    if (!response.body) throw new Error(LegacyService.describeProviderError(provider, 0));
+    const iterator = (response.body as unknown as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
+    try {
+      while (true) {
+        const chunk = await LegacyService.providerIo(provider, () => iterator.next());
+        if (chunk.done) return;
+        yield chunk.value;
+      }
+    } finally {
+      if (iterator.return) await LegacyService.providerIo(provider, () => iterator.return!());
+    }
+  }
+
+  // Pull a clean, user-facing message out of any thrown error (incl. Nest HttpException payloads).
   private extractAiErrorMessage(err: unknown): string {
-    return publicAiProviderFailure(err);
+    const anyErr = err as { getResponse?: () => unknown; message?: string };
+    if (anyErr && typeof anyErr.getResponse === "function") {
+      const resp = anyErr.getResponse();
+      if (resp && typeof resp === "object") {
+        const obj = resp as Record<string, unknown>;
+        return String(obj.error || obj.message || anyErr.message || "AI request failed.");
+      }
+      if (typeof resp === "string") return resp;
+    }
+    return err instanceof Error ? err.message : String(err);
   }
 
   async createWorkspace(userId: string | null | undefined, body: Body) {
@@ -3665,13 +3750,13 @@ export class LegacyService implements OnModuleInit {
       const query = new URLSearchParams(existingQuery);
       query.set("limit", "100");
       if (cursor) query.set("after_id", cursor);
-      const res = await fetch(`${root}?${query.toString()}`, { method: "GET", headers });
+      const res = await this.fetchAiProvider(provider, `${root}?${query.toString()}`, { method: "GET", headers });
       if (!res.ok) {
-        const errBody = await res.json().catch(() => ({} as Body)) as Body;
+        const errBody = await this.readAiProviderJson(provider, res);
         const raw = String(errBody.error?.message || errBody.error || res.status);
-        throw new Error(this.describeProviderError(provider, res.status, raw) || raw);
+        throw new Error(LegacyService.describeProviderError(provider, res.status, raw));
       }
-      const data = await res.json() as Body;
+      const data = await this.readAiProviderJson(provider, res);
       const batch = normalizeJsonArray(data.data);
       rows.push(...batch);
       if (providerWire(provider) !== "anthropic" || !data.has_more || !batch.length) break;
@@ -15790,7 +15875,7 @@ export class LegacyService implements OnModuleInit {
       }
       if (providerWire(provider) === "anthropic") {
         const headers = this.providerAuthHeaders(provider, key.api_key, key.auth_header_name, key.auth_scheme);
-        const res = await fetch(normalizeAnthropicMessagesUrlFor(provider, key.base_url), {
+        const res = await this.fetchAiProvider(provider, normalizeAnthropicMessagesUrlFor(provider, key.base_url), {
           method: "POST",
           headers,
           body: JSON.stringify({
@@ -15799,23 +15884,23 @@ export class LegacyService implements OnModuleInit {
             messages: [{ role: "user", content: "hi" }]
           })
         });
-        const body = await res.json().catch(() => ({} as Body)) as Body;
+        const body = await this.readAiProviderJson(provider, res);
         if (!res.ok) {
           const raw = String(body.error?.message || body.error || res.statusText);
-          return { ok: false, provider, model, error: this.describeProviderError(provider, res.status, raw) || raw, latencyMs: Math.round(performance.now() - start) };
+          return { ok: false, provider, model, error: LegacyService.describeProviderError(provider, res.status, raw), latencyMs: Math.round(performance.now() - start) };
         }
         return { ok: true, provider, model, latencyMs: Math.round(performance.now() - start) };
       }
       const authHeaders = this.providerAuthHeaders(provider, String(key.api_key || ""), key.auth_header_name, key.auth_scheme);
-      const res = await fetch(providerChatUrl(provider, key.base_url, model), {
+      const res = await this.fetchAiProvider(provider, providerChatUrl(provider, key.base_url, model), {
         method: "POST",
         headers: authHeaders,
         body: JSON.stringify({ model, max_tokens: 5, messages: [{ role: "user", content: "hi" }] })
       });
-      const body = await res.json().catch(() => ({} as Body)) as Body;
+      const body = await this.readAiProviderJson(provider, res);
       if (!res.ok) {
         const raw = String(body.error?.message || body.error || res.statusText);
-        return { ok: false, provider, model, error: this.describeProviderError(provider, res.status, raw) || raw, latencyMs: Math.round(performance.now() - start) };
+        return { ok: false, provider, model, error: LegacyService.describeProviderError(provider, res.status, raw), latencyMs: Math.round(performance.now() - start) };
       }
       return { ok: true, provider, model, latencyMs: Math.round(performance.now() - start) };
     } catch (err) {
@@ -18605,7 +18690,7 @@ export class LegacyService implements OnModuleInit {
             createdAt: new Date().toISOString() });
           continue;
         }
-        this.logger.error(`Zyra chat operation (${op.type}) failed for project ${projectId}: ${this.extractAiErrorMessage(err)}`);
+        this.logger.error(`Zyra chat operation (${op.type}) failed for project ${projectId}.`);
         activity.push({
           actor: "agent",
           title: "An operation failed unexpectedly",
@@ -19053,8 +19138,8 @@ export class LegacyService implements OnModuleInit {
           [updateTargetIds]
         );
         for (const row of existingRows.rows) updateTargetFieldsById.set(row.id, { severity: row.severity, component: row.component });
-      } catch (err) {
-        this.logger.warn(`Existing severity/component lookup failed for update-redirect targets in project ${params.projectId}, leaving both fields untouched: ${this.extractAiErrorMessage(err)}`);
+      } catch {
+        this.logger.warn(`Existing severity/component lookup failed for update-redirect targets in project ${params.projectId}, leaving both fields untouched.`);
       }
     }
     // Resolve each draft's model-reported sourceRefs against the exact labels offered in THIS
@@ -19429,8 +19514,8 @@ export class LegacyService implements OnModuleInit {
           ].join("\n")
         : null;
       return { feedback, matchesByIndex };
-    } catch (err) {
-      this.logger.warn(`zyraSimilarityFeedbackForDrafts failed for project ${projectId}: ${this.extractAiErrorMessage(err)}`);
+    } catch {
+      this.logger.warn(`zyraSimilarityFeedbackForDrafts failed for project ${projectId}.`);
       return { feedback: null, matchesByIndex: noMatches };
     }
   }
@@ -21053,10 +21138,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         outcome: `Generated ${drafts.length} testcase draft(s) using ${knowledge.length} knowledge-base item(s), ${jira.length} Jira ticket(s), and ${linear.length} Linear ticket(s). Coverage plan: ${this.zyraThinking({ story, context, acceptanceCriteria, feedback, knowledgeCount: knowledge.length, jiraCount: jira.length, linearCount: linear.length })}`
       });
     } catch (error) {
-      // Reflect only status-classified failure categories, never response detail.
-      const summary = this.extractAiErrorMessage(error) || "Zyra failed to generate testcase drafts.";
-      // A provider's nested detail is untrusted and may contain credentials.
-      const detail = summary;
+      // Provider failures are already safe at ingress. Do not revive nested response
+      // detail or an original stack here: the task's activity is product content too.
+      const detail = this.extractAiErrorMessage(error) || "Zyra failed to generate testcase drafts.";
       this.logger.error(`Zyra task ${taskId} (project ${projectId}) failed: ${detail}`);
       // A provider response that arrived (and was billed) but failed to parse into usable drafts
       // carries its usage on the thrown error (see generateZyraWithOpenAi/Anthropic) — without
@@ -21362,8 +21446,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         ].filter(Boolean).join(" ")
       });
     } catch (error) {
-      const summary = this.extractAiErrorMessage(error) || "Zyra failed to regenerate testcase drafts.";
-      const detail = summary;
+      const detail = this.extractAiErrorMessage(error) || "Zyra failed to regenerate testcase drafts.";
       this.logger.error(`Zyra task ${taskId} (project ${projectId}) feedback regeneration failed: ${detail}`);
       // See processZyraTask's identical check: a response that arrived and was billed but failed
       // to parse still carries its usage on the thrown error.
@@ -22083,13 +22166,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         const chatHeaders = this.providerAuthHeaders(provider, key.api_key, key.auth_header_name, key.auth_scheme);
         for (const candidate of providerModelCandidates(provider, model)) {
           requestModel = candidate;
-          const res = await fetch(chatUrl, {
+          const res = await this.fetchAiProvider(provider, chatUrl, {
             method: "POST",
             headers: chatHeaders,
             body: JSON.stringify({ model: candidate, max_tokens: 220, messages: [{ role: "user", content: prompt }] })
           });
           if (!res.ok) continue;
-          const data = await res.json() as Body;
+          const data = await this.readAiProviderJson(provider, res);
           const text = normalizeJsonArray(data.content).map((item) => item?.text || "").join("\n").trim();
           if (text) {
             void recordStandaloneGeneration({
@@ -22108,13 +22191,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         return "";
       }
       const headers = this.providerAuthHeaders(provider, String(key.api_key || ""), key.auth_header_name, key.auth_scheme);
-      const res = await fetch(providerChatUrl(provider, key.base_url, model), {
+      const res = await this.fetchAiProvider(provider, providerChatUrl(provider, key.base_url, model), {
         method: "POST",
         headers,
         body: JSON.stringify({ model, max_tokens: 220, messages: [{ role: "user", content: prompt }] })
       });
       if (!res.ok) return "";
-      const data = await res.json() as Body;
+      const data = await this.readAiProviderJson(provider, res);
       const text = String(data.choices?.[0]?.message?.content || "").trim();
       if (text) {
         void recordStandaloneGeneration({
@@ -24219,13 +24302,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         signal: LegacyService.zyraProviderSignal(LegacyService.ZYRA_ROUTER_TIMEOUT_MS)
       };
       if (attempt) attempt.model = requestModel;
-      const res = await fetch(url, request);
+      const res = await this.fetchAiProvider(provider, url, request);
       if (!res.ok) {
-        const errBody = await res.json().catch(() => ({} as Body)) as Body;
+        const errBody = await this.readAiProviderJson(provider, res);
         const rawMessage = String(errBody.error?.message || errBody.error || res.status);
-        throw new Error(this.describeProviderError("anthropic", res.status, rawMessage) || `Anthropic request failed: ${rawMessage}`);
+        throw new Error(LegacyService.describeProviderError(provider, res.status, rawMessage));
       }
-      const data = await res.json() as Body;
+      const data = await this.readAiProviderJson(provider, res);
       const text = normalizeJsonArray(data.content).map((item: Body) => item?.text || "").join("\n");
       const parsed = this.parseModelJson(text, []);
       if (!parsed) throw new Error("Anthropic returned no parseable JSON.");
@@ -24248,13 +24331,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       signal: LegacyService.zyraProviderSignal(LegacyService.ZYRA_ROUTER_TIMEOUT_MS)
     };
     if (attempt) attempt.model = model;
-    const res = await fetch(url, request);
+    const res = await this.fetchAiProvider(provider, url, request);
     if (!res.ok) {
-      const errBody = await res.json().catch(() => ({} as Body)) as Body;
+      const errBody = await this.readAiProviderJson(provider, res);
       const rawMessage = String(errBody.error?.message || errBody.error || res.status);
-      throw new Error(this.describeProviderError(String(key.provider || "openai"), res.status, rawMessage) || `OpenAI request failed: ${rawMessage}`);
+      throw new Error(LegacyService.describeProviderError(provider, res.status, rawMessage));
     }
-    const data = await res.json() as Body;
+    const data = await this.readAiProviderJson(provider, res);
     const content = String(data.choices?.[0]?.message?.content || "{}");
     const parsed = this.parseModelJson(content, []);
     if (!parsed) throw new Error("OpenAI returned no parseable JSON.");
@@ -24420,7 +24503,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       openAiBody.stream_options = { include_usage: true };
     }
     const headers = this.providerAuthHeaders(params.provider, params.apiKey, params.authHeaderName ?? null, params.authScheme ?? null);
-    const response = await fetch(providerChatUrl(params.provider, params.baseUrl, String(openAiBody.model)), {
+    const response = await this.fetchAiProvider(params.provider, providerChatUrl(params.provider, params.baseUrl, String(openAiBody.model)), {
       method: "POST",
       headers,
       body: JSON.stringify(openAiBody),
@@ -24429,13 +24512,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const streamed = Boolean(liveFeed) && response.ok && String(response.headers.get("content-type") || "").includes("text/event-stream");
     const body = streamed
       ? await LegacyService.readOpenAiStream(response, liveFeed)
-      : await response.json().catch(() => ({} as Body)) as Body;
+      : await this.readAiProviderJson(params.provider, response);
     if (!response.ok) {
       const rawMessage = String(body.error?.message || body.error || response.statusText);
-      const friendly = this.describeProviderError(params.provider, response.status, rawMessage);
+      const friendly = LegacyService.describeProviderError(params.provider, response.status, rawMessage);
       throw new BadRequestException({
-        error: friendly || `${providerDefinition(params.provider)?.label || params.provider} testcase generation failed`,
-        detail: rawMessage,
+        error: friendly,
+        detail: friendly,
         ...(this.isProviderAuthError(response.status, rawMessage) ? { code: "ai_key_invalid" } : {})
       });
     }
@@ -24475,13 +24558,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   }): Promise<ZyraAiResult> {
     let lastMessage = "";
     const anthropicUrl = normalizeAnthropicMessagesUrl(params.baseUrl);
-    const anthropicHeaders = this.buildAnthropicAuthHeaders(params.apiKey, params.authHeaderName ?? null, params.authScheme ?? null);
+    const anthropicHeaders = this.providerAuthHeaders(params.provider, params.apiKey, params.authHeaderName ?? null, params.authScheme ?? null);
     // A batch this size is streamed: a plain request returns no headers until it is finished, and
     // Node's fetch gives up on that after 5 minutes however long the abort signal allows.
     // …and whenever a live batch is listening (zyraDraftSink), whatever the size.
     const stream = params.input.requestedCount > LegacyService.ZYRA_STREAM_ABOVE || Boolean(zyraDraftSink());
     let maxTokens = Math.min(LegacyService.ZYRA_GEN_MAX_TOKENS, 2000 + params.input.requestedCount * 1500);
-    const send = (model: string) => fetch(anthropicUrl, {
+    const send = (model: string) => this.fetchAiProvider(params.provider, anthropicUrl, {
       method: "POST",
       headers: anthropicHeaders,
       body: JSON.stringify({
@@ -24515,7 +24598,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     // The streamed answer comes back shaped like the plain one, so everything below reads both alike.
     // Each attempt gets its own live parser (zyraLiveDraftFeed), so a retried request starts clean.
     const readBody = async (response: Response): Promise<Body> =>
-      response.ok && stream ? LegacyService.readAnthropicStream(response, zyraLiveDraftFeed()) : (await response.json().catch(() => ({} as Body))) as Body;
+      response.ok && stream ? LegacyService.readAnthropicStream(response, zyraLiveDraftFeed()) : await this.readAiProviderJson(params.provider, response);
     for (const model of providerModelCandidates(params.provider, params.model)) {
       let response = await send(model);
       let body = await readBody(response);
@@ -24529,11 +24612,11 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       }
       if (!response.ok) {
         const rawMessage = String(body.error?.message || body.error || response.statusText);
-        const friendly = this.describeProviderError("anthropic", response.status, rawMessage);
-        lastMessage = friendly || rawMessage;
+        const friendly = LegacyService.describeProviderError("anthropic", response.status, rawMessage);
+        lastMessage = friendly;
         // Auth/permission failures are not model-specific — stop trying candidates and surface a clear message.
         if (this.isProviderAuthError(response.status, rawMessage)) {
-          throw new BadRequestException({ error: lastMessage, detail: rawMessage, code: "ai_key_invalid" });
+          throw new BadRequestException({ error: lastMessage, detail: lastMessage, code: "ai_key_invalid" });
         }
         if (!/model|not.?found|invalid/i.test(rawMessage)) break;
         continue;
@@ -24558,7 +24641,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         requestId: response.headers.get("request-id") || undefined
       };
     }
-    throw new BadRequestException({ error: "Claude testcase generation failed", detail: lastMessage || "No compatible Claude model was accepted." });
+    throw new BadRequestException({ error: lastMessage || "Claude testcase generation failed", detail: lastMessage || "No compatible Claude model was accepted." });
   }
 
   private generateZyraDrafts(input: {
@@ -24644,13 +24727,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       signal: LegacyService.zyraProviderSignal(LegacyService.ZYRA_ROUTER_TIMEOUT_MS)
     };
     if (attempt) attempt.model = model;
-    const res = await fetch(url, request);
+    const res = await this.fetchAiProvider(provider, url, request);
     if (!res.ok) {
-      const errBody = await res.json().catch(() => ({} as Body)) as Body;
+      const errBody = await this.readAiProviderJson(provider, res);
       const rawMessage = String(errBody.error?.message || errBody.error || res.status);
-      throw new Error(this.describeProviderError(String(key.provider || "openai"), res.status, rawMessage) || `OpenAI chat failed: ${rawMessage}`);
+      throw new Error(LegacyService.describeProviderError(provider, res.status, rawMessage));
     }
-    const data = await res.json() as Body;
+    const data = await this.readAiProviderJson(provider, res);
     const content = String(data.choices?.[0]?.message?.content || "{}");
     const zyraUsage = parseProviderUsage("openai", data.usage);
     const parsed = this.parseModelJson(content);
@@ -24666,7 +24749,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   private async zyraChatWithAnthropic(key: Body, model: string, context: string, message: string, attempt?: ZyraProviderAttempt): Promise<Body> {
     let lastStatus = "";
     const chatUrl = normalizeAnthropicMessagesUrl(key.base_url);
-    const chatHeaders = this.buildAnthropicAuthHeaders(key.api_key, key.auth_header_name, key.auth_scheme);
+    const chatHeaders = this.providerAuthHeaders("anthropic", key.api_key, key.auth_header_name, key.auth_scheme);
     for (const candidate of providerModelCandidates(String(key.provider || "anthropic"), model)) {
       const body = {
         model: candidate,
@@ -24699,12 +24782,12 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         signal: LegacyService.zyraProviderSignal(LegacyService.ZYRA_ROUTER_TIMEOUT_MS)
       };
       if (attempt) attempt.model = candidate;
-      const res = await fetch(chatUrl, request);
+      const res = await this.fetchAiProvider("anthropic", chatUrl, request);
       if (!res.ok) {
-        const data = await res.json().catch(() => ({} as Body)) as Body;
+        const data = await this.readAiProviderJson("anthropic", res);
         const rawStatus = String(data.error?.message || data.error || res.status);
-        const friendly = this.describeProviderError("anthropic", res.status, rawStatus);
-        lastStatus = friendly || rawStatus;
+        const friendly = LegacyService.describeProviderError("anthropic", res.status, rawStatus);
+        lastStatus = friendly;
         // Auth/permission failures won't be fixed by another model candidate — fail fast and clearly.
         if (this.isProviderAuthError(res.status, rawStatus)) {
           throw new Error(lastStatus);
@@ -24712,7 +24795,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         if (!/model|not.?found|invalid/i.test(rawStatus)) break;
         continue;
       }
-      const data = await res.json() as Body;
+      const data = await this.readAiProviderJson("anthropic", res);
       const rawText = normalizeJsonArray(data.content).map((item) => item?.text || "").join("\n").trim();
       const zyraUsage = parseProviderUsage("anthropic", data.usage);
       const parsed = this.parseModelJson(rawText || "{}");
@@ -24821,8 +24904,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           if (byKey.has(row.key)) return; // most recently updated wins for a duplicated key
           byKey.set(row.key, { title: row.title, content: focused[i] ?? "", citation: { sourceType: "document", sourceId: row.id } });
         });
-      } catch (err) {
-        this.logger.warn(`Update drafting: requirement lookup failed for project ${params.projectId}: ${this.extractAiErrorMessage(err)}`);
+      } catch {
+        this.logger.warn(`Update drafting: requirement lookup failed for project ${params.projectId}.`);
       }
       return byKey;
     };
@@ -24832,8 +24915,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       let retrieved: typeof params.sources.knowledge = [];
       try {
         retrieved = (await this.zyraTaskKnowledge(params.projectId, [], [query])).knowledge;
-      } catch (err) {
-        this.logger.warn(`Update drafting: knowledge retrieval failed for project ${params.projectId}, using the turn's sources only: ${this.extractAiErrorMessage(err)}`);
+      } catch {
+        this.logger.warn(`Update drafting: knowledge retrieval failed for project ${params.projectId}, using the turn's sources only.`);
       }
       const requirements = await requirementDocs(batch);
       const seen = new Set<string>();
@@ -24944,7 +25027,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         const url = normalizeAnthropicMessagesUrl(key.base_url);
         const request = {
           method: "POST",
-          headers: this.buildAnthropicAuthHeaders(key.api_key, key.auth_header_name, key.auth_scheme),
+          headers: this.providerAuthHeaders(provider, key.api_key, key.auth_header_name, key.auth_scheme),
           body: JSON.stringify({
             model: candidate,
             max_tokens: maxTokens,
@@ -24954,16 +25037,16 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           signal: signal()
         };
         if (attempt) attempt.model = candidate;
-        const res = await fetch(url, request);
+        const res = await this.fetchAiProvider(provider, url, request);
         if (!res.ok) {
-          const data = await res.json().catch(() => ({} as Body)) as Body;
+          const data = await this.readAiProviderJson(provider, res);
           const rawStatus = String(data.error?.message || data.error || res.status);
-          lastStatus = this.describeProviderError("anthropic", res.status, rawStatus) || rawStatus;
+          lastStatus = LegacyService.describeProviderError(provider, res.status, rawStatus);
           if (this.isProviderAuthError(res.status, rawStatus)) throw new Error(lastStatus);
           if (!/model|not.?found|invalid/i.test(rawStatus)) break;
           continue;
         }
-        const data = await res.json() as Body;
+        const data = await this.readAiProviderJson(provider, res);
         const rawText = normalizeJsonArray(data.content).map((item) => item?.text || "").join("\n").trim();
         return { parsed: this.parseModelJson(rawText || "{}"), usage: parseProviderUsage("anthropic", data.usage), rawText };
       }
@@ -24977,13 +25060,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       signal: signal()
     };
     if (attempt) attempt.model = model;
-    const res = await fetch(url, request);
+    const res = await this.fetchAiProvider(provider, url, request);
     if (!res.ok) {
-      const errBody = await res.json().catch(() => ({} as Body)) as Body;
+      const errBody = await this.readAiProviderJson(provider, res);
       const rawMessage = String(errBody.error?.message || errBody.error || res.status);
-      throw new Error(this.describeProviderError(provider, res.status, rawMessage) || `Update drafting failed: ${rawMessage}`);
+      throw new Error(LegacyService.describeProviderError(provider, res.status, rawMessage));
     }
-    const data = await res.json() as Body;
+    const data = await this.readAiProviderJson(provider, res);
     const rawText = String(data.choices?.[0]?.message?.content || "{}");
     return {
       parsed: this.parseModelJson(rawText),
@@ -25618,7 +25701,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     let buffer = "";
     let text = "";
     let usage: Body = {};
-    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+    for await (const chunk of LegacyService.providerStreamChunks("openai", response)) {
       buffer += decoder.decode(chunk, { stream: true });
       let newline: number;
       while ((newline = buffer.indexOf("\n")) >= 0) {
@@ -25627,7 +25710,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         if (!line.startsWith("data:") || line === "data: [DONE]") continue;
         let event: Body;
         try { event = JSON.parse(line.slice(5)) as Body; } catch { continue; }
-        if (event.error) throw new Error(String(event.error?.message || "The AI provider's stream failed."));
+        if (event.error) throw new Error(LegacyService.describeProviderError("openai", 0, String(event.error?.message || event.error?.type || "")));
         const delta = String(event.choices?.[0]?.delta?.content || "");
         if (delta) {
           text += delta;
@@ -25644,7 +25727,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     let buffer = "";
     let text = "";
     const usage: Body = {};
-    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+    for await (const chunk of LegacyService.providerStreamChunks("anthropic", response)) {
       buffer += decoder.decode(chunk, { stream: true });
       let newline: number;
       while ((newline = buffer.indexOf("\n")) >= 0) {
@@ -25660,7 +25743,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         }
         else if (event.type === "message_start") Object.assign(usage, event.message?.usage || {});
         else if (event.type === "message_delta") Object.assign(usage, event.usage || {});
-        else if (event.type === "error") throw new Error(String(event.error?.message || "The AI provider's stream failed."));
+        else if (event.type === "error") throw new Error(LegacyService.describeProviderError("anthropic", 0, String(event.error?.message || event.error?.type || "")));
       }
     }
     return { content: [{ type: "text", text }], usage };

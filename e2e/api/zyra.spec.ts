@@ -8039,7 +8039,7 @@ test.describe("zyra — product behavior and real tracing export in disposable C
   let productOutcomes: unknown[] = [];
 
   type StoredMessage = { id: string; role: string; content: string; status: string; actionType?: string; testcases?: unknown[] };
-  type Answer = { sessionId: string; user: StoredMessage; assistant: StoredMessage; elapsedMs: number };
+  type Answer = { sessionId: string; user: StoredMessage; assistant: StoredMessage; elapsedMs: number; responseBody: unknown };
 
   test.beforeAll(async () => {
     const mode = process.env.E2E_LANGFUSE_EXPECTED_MODE;
@@ -8137,14 +8137,15 @@ test.describe("zyra — product behavior and real tracing export in disposable C
     return (await read.json()).messages;
   }
 
-  async function send(tenant: RbacTenant, owner: APIRequestContext, sessionId: string, prompt: string): Promise<Answer> {
+  async function send(tenant: RbacTenant, owner: APIRequestContext, sessionId: string, prompt: string, turnId?: string): Promise<Answer> {
     const started = performance.now();
     const response = await owner.post(endpoint(tenant, `/chat/sessions/${sessionId}/messages`), {
-      data: { message: prompt, background: false }, failOnStatusCode: false,
+      data: { message: prompt, background: false, ...(turnId ? { turnId } : {}) }, failOnStatusCode: false,
     });
     const elapsedMs = performance.now() - started;
     expect(response.status(), await response.text()).toBe(201);
-    const reply = (await response.json()).message as StoredMessage;
+    const responseBody = await response.json();
+    const reply = responseBody.message as StoredMessage;
     const stored = await messages(tenant, owner, sessionId);
     expect(stored, "one accepted message must persist exactly one user row and one assistant row").toHaveLength(2);
     const user = stored.find((row) => row.role === "user")!;
@@ -8160,7 +8161,7 @@ test.describe("zyra — product behavior and real tracing export in disposable C
       assistant: { role: assistant.role, content: assistant.content, status: assistant.status, actionType: assistant.actionType, testcases: assistant.testcases },
       messageCount: stored.length, testcaseCount: 0, generationRequestCount: 0,
     });
-    return { sessionId, user, assistant, elapsedMs };
+    return { sessionId, user, assistant, elapsedMs, responseBody };
   }
 
   function queueAnswer(ai: FakeAiServer, prompt: string, reply = SCRIPTED_REPLY): void {
@@ -8335,32 +8336,41 @@ test.describe("zyra — product behavior and real tracing export in disposable C
     expect(capture.exports.flatMap((item) => item.spans).filter((span) => spanAttributes(span)["session.id"] === sessionId)).toEqual([]);
   });
 
-  test("ZYR-OBS-07 provider failure settles one product reply and exports a masked, truthful error observation", async () => {
+  test("ZYR-OBS-07 provider failure stays private in replies, progress, persistence and error observations", async () => {
     await allocate(tenantA, ownerA, aiA);
     const sessionId = await newSession(tenantA, ownerA);
-    const errorKey = "sk-e2e-observation-provider-error-12345";
-    aiA.failNextWith(500, `Synthetic provider failure ${errorKey}`);
-    const answer = await send(tenantA, ownerA, sessionId, "Explain the failing observation fixture.");
-    expect(answer.assistant.content.length).toBeGreaterThan(0);
+    const privateMarkers = ["sk-e2e-observation-provider-error-12345", "synthetic-private-request-context", "synthetic-private-url-token"];
+    const safeReason = "AI provider is temporarily unavailable (HTTP 500). Try again shortly.";
+    aiA.failNextWith(500, `Synthetic provider failure ${privateMarkers[0]} request=${privateMarkers[1]} https://gateway.invalid/?token=${privateMarkers[2]}`);
+    // Attach while the provider is still pending: the existing progress registry
+    // deliberately drops completed turns rather than retaining a second message store.
+    aiA.delayNextReplyMs(1_500);
+    const turnId = randomUUID();
+    const pending = send(tenantA, ownerA, sessionId, "Explain the failing observation fixture.", turnId);
+    await expect.poll(() => aiA.requests.length).toBe(1);
+    const stream = await ownerA.get(endpoint(tenantA, `/chat/sessions/${sessionId}/turns/${turnId}/events`), { failOnStatusCode: false });
+    expect(stream.status(), await stream.text()).toBe(200);
+    const progress = parseSseEvents(await stream.text());
+    const answer = await pending;
+    expect(answer.assistant.content).toContain(safeReason);
+    expect(answer.assistant.content).toContain("no test cases were generated or changed");
+    expect(answer.user).toMatchObject({ trace: { steps: expect.arrayContaining([
+      expect.objectContaining({ stage: "routing", status: "failed", meta: expect.objectContaining({ reason: safeReason }) }),
+    ]) } });
+    expect(progress).toContainEqual(expect.objectContaining({ kind: "update", stage: "routing", meta: expect.objectContaining({ status: "failed", reason: safeReason }) }));
+    expect(progress).toContainEqual(expect.objectContaining({ kind: "complete" }));
+    const activity = JSON.parse(scalar(`SELECT COALESCE(json_agg(row_to_json(entry)), '[]'::json)::text FROM
+      (SELECT action, diff FROM audit_logs WHERE project_id = ${literal(tenantA.mainProjectId)} AND entity_id = ${literal(sessionId)}) entry;`) || "[]");
+    expect(activity).toContainEqual({ action: "zyra_chat_ai_failed", diff: { message: safeReason, stage: "routing" } });
+    const productSurfaces = JSON.stringify({ response: answer.responseBody, messages: await messages(tenantA, ownerA, sessionId), activity, progress });
+    for (const marker of privateMarkers) expect(productSurfaces).not.toContain(marker);
     expect(aiA.requests).toHaveLength(1);
-    // OBS07: a provider-controlled error is not a safe product reply, trace
-    // status, activity payload or debugging detail. Synthetic key-shaped text
-    // must be absent regardless of observability feature configuration.
-    expect(answer.assistant.content).toContain("AI provider is unavailable");
-    const stored = await messages(tenantA, ownerA, sessionId);
-    expect(JSON.stringify({ answer, stored })).not.toContain(errorKey);
-    const audit = scalar(`SELECT COALESCE(jsonb_agg(diff), '[]'::jsonb)::text
-       FROM audit_logs WHERE project_id=${literal(tenantA.mainProjectId)}
-         AND entity_id=${literal(sessionId)} AND action='zyra_chat_ai_failed';`);
-    expect(audit).not.toContain(errorKey);
-    expect(audit).toContain("AI provider is unavailable");
     const spans = await assertObserved(answer, tenantA, true);
     if (expectedMode === "enabled") {
-      const raw = capture.exports.map((item) => item.raw).join("\n");
-      expect(raw).not.toContain(errorKey);
+      const wire = capture.exports.map((item) => item.raw).join("\n");
+      for (const marker of privateMarkers) expect(wire).not.toContain(marker);
       const router = spans.find((span) => span.name === "router")!;
-      expect(String(spanAttributes(router)["langfuse.observation.output"])).not.toContain(errorKey);
-      expect(String(spanAttributes(router)["langfuse.observation.output"])).toContain("AI provider is unavailable");
+      expect(String(spanAttributes(router)["langfuse.observation.output"])).toContain(safeReason);
     }
   });
 

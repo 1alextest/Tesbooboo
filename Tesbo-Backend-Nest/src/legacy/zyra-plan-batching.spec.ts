@@ -202,8 +202,12 @@ describe("Anthropic generation of a large batch", () => {
   });
 
   it("surfaces an error the provider reports inside a 200 stream instead of returning no drafts", async () => {
-    global.fetch = jest.fn().mockResolvedValue(sseResponse([drafts(1).slice(0, 10)], { errorEvent: "Overloaded" })) as unknown as typeof fetch;
-    await expect(run(30)).rejects.toThrow(/Overloaded/);
+    const privateDetail = "synthetic-stream-overload-private-detail";
+    global.fetch = jest.fn().mockResolvedValue(sseResponse([drafts(1).slice(0, 10)], { errorEvent: `Overloaded ${privateDetail}` })) as unknown as typeof fetch;
+    const error = await run(30).then(() => null, (failure: unknown) => failure);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/service is overloaded.*Try again/);
+    expect((error as Error).message).not.toContain(privateDetail);
   });
 
   it("keeps the complete drafts when a streamed batch is cut off mid-object at the model's ceiling", async () => {
@@ -369,6 +373,8 @@ function makePlanDb(initial: Body | null): { svc: LegacyService; plan: () => Bod
 }
 
 describe("zyraRefillPlan — a paged plan plans its next tickets when the queue can't fill a batch", () => {
+  afterEach(() => jest.restoreAllMocks());
+
   const base = (): Body => ({
     planId: "plan-1", status: "running", originalMessage: "generate for all tickets", batchSize: 50,
     remainingScenarios: ["q1", "q2"], doneCount: 10, coveredCount: 10, totalCount: 12,
@@ -399,12 +405,20 @@ describe("zyraRefillPlan — a paged plan plans its next tickets when the queue 
   it("pauses with a message and keeps the cursor when planning fails, so 'continue' retries the same page", async () => {
     const { svc, plan, messages } = makePlanDb(base());
     stub(svc);
-    jest.spyOn(internals(svc), "zyraPlanFill").mockRejectedValue(new Error("provider down"));
+    const privateDetail = "synthetic-plan-refill-private-provider-detail";
+    jest.spyOn(global, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: { message: privateDetail } }), { status: 500 }));
+    const provider = svc as unknown as { zyraJsonCompletion: (provider: string, model: string, key: Body, system: string, user: string) => Promise<Body> };
+    // Exercise the real ingress boundary: an arbitrary thrown Error here would
+    // bypass the provider adapter and cannot stand in for its public failure.
+    jest.spyOn(internals(svc), "zyraPlanFill").mockImplementation(async () => {
+      await provider.zyraJsonCompletion("openai", "gpt-4o-mini", { provider: "openai", api_key: "synthetic-only" }, "Plan", "User");
+      throw new Error("The synthetic provider should have rejected the request.");
+    });
     expect(await internals(svc).zyraRefillPlan("p1", "u1", "s1", base(), 50)).toBe(false);
     expect(plan()).toMatchObject({ status: "paused", ticketCursor: "c1", ticketsHasMore: true, remainingScenarios: ["q1", "q2"] });
     expect(String(messages[0][4])).toMatch(/Pausing here/);
-    expect(String(messages[0][4])).toMatch(/AI provider request failed/);
-    expect(String(messages[0][4])).not.toMatch(/provider down/);
+    expect(String(messages[0][4])).toContain("temporarily unavailable (HTTP 500)");
+    expect(String(messages[0][4])).not.toContain(privateDetail);
   });
 
   it("pauses when the project has no AI key any more", async () => {
