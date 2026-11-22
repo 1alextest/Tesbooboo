@@ -70,7 +70,7 @@ test("requirement change bundles stage inertly, retry idempotently and refuse ch
     tasks.push(staged.id);
     expect(staged).toMatchObject({ taskStatus: "in_review", drafts: [] });
     expect(staged.requirementBundle).toHaveLength(3);
-    expect(staged.skillContext).toMatchObject({ status: "unavailable" });
+    expect(staged.skillContext).toMatchObject({ status: "unassigned" });
     expect(staged.proposalRevision).toMatch(/^[a-f0-9]{64}$/);
     expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(ctx.projectId)} AND title=${literal(operations[1].draft.title)};`)).toBe("0");
     expect(scalar(`SELECT COUNT(*)::int FROM knowledge_documents WHERE project_id=${literal(ctx.projectId)} AND title=${literal(operations[0].title)};`)).toBe("0");
@@ -91,7 +91,7 @@ test("requirement change bundles stage inertly, retry idempotently and refuse ch
     tokenId = token.id;
     const overMcp = await stageMcp(mcp, token.token, bundleOperations({ title: `E2E MCP requirement ${Date.now()}` }).operations);
     tasks.push(overMcp.taskId);
-    expect(overMcp).toMatchObject({ publication: "unpublished", skillContext: { status: "unavailable" } });
+    expect(overMcp).toMatchObject({ publication: "unpublished", skillContext: { status: "unassigned" } });
     expect(overMcp.task.requirementBundle).toHaveLength(3);
   } finally {
     if (tokenId) await request.delete(`${base}/apikeys/${tokenId}`, { failOnStatusCode: false });
@@ -200,5 +200,145 @@ test("a bundle is unreachable from another project and mismatched link criteria 
   } finally {
     for (const id of tasks) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
     if (otherProjectId) await request.delete(`/api/projects/${otherProjectId}`, { failOnStatusCode: false });
+  }
+});
+
+test("governed skills allow protected publication, exact approval and separate coverage readings", async ({ request }) => {
+  const suffix = Date.now();
+  const skillDocs: string[] = [];
+  const taskIds: string[] = [];
+  const cycleIds: string[] = [];
+  let requirementId = "";
+  try {
+    const makeSkill = async (module: string, subtype: string, operation: string) => {
+      const created = await request.post(`${base}/skills`, { data: {
+        title: `E2E governed skill ${operation} ${suffix}`, module, subtype,
+        skillKey: `SKL-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`,
+        instructions: "Require observable outcomes, exact reviewed sources and explicit uncertainty."
+      } });
+      expect(created.ok(), await created.text()).toBe(true);
+      const doc = await created.json();
+      expect(doc, "created skill document").toMatchObject({ documentType: "skill" });
+      skillDocs.push(doc.id);
+      const submitted = await request.post(`${base}/knowledge-base/documents/${doc.id}/submissions`, {
+        data: { expectedRevision: doc.editRevision, submissionKey: randomUUID() }
+      });
+      expect(submitted.ok(), await submitted.text()).toBe(true);
+      const version = await submitted.json();
+      const approved = await request.patch(`${base}/skills/${doc.id}/approve`, { data: { versionId: version.id } });
+      expect(approved.ok(), await approved.text()).toBe(true);
+      const approval = await approved.json();
+      expect(approval, "approved skill").toMatchObject({ status: "approved" });
+      return { documentId: doc.id as string, versionId: approval.approvedVersionId as string };
+    };
+    const assign = async (skill: { documentId: string; versionId: string }, module: string, subtype: string, operation: string) => {
+      const assigned = await request.post(`${base}/skill-assignments`, { data: { skillDocumentId: skill.documentId, versionId: skill.versionId, module, subtype, operation } });
+      expect(assigned.ok(), await assigned.text()).toBe(true);
+      const body = await assigned.json();
+      expect(body.resolution?.status, `assignment resolution: ${JSON.stringify(body)}`).toBe("resolved");
+      return body;
+    };
+
+    const requirementSkill = await makeSkill("requirements", "functional", "requirement_revision");
+    await assign(requirementSkill, "requirements", "functional", "requirement_revision");
+    await assign(requirementSkill, "requirements", "functional", "requirement_case_link");
+    const caseSkill = await makeSkill("test_cases", "manual", "testcase_create");
+    await assign(caseSkill, "test_cases", "manual", "testcase_create");
+    const assignmentRows = JSON.parse(scalar(`SELECT COALESCE(json_agg(json_build_object(
+      'module',a.module,'subtype',a.subtype,'operation',a.operation,'status',a.status,
+      'type',d.document_type,'kind',v.snapshot_kind,'digest',v.snapshot_metadata->>'contentDigest')),'[]'::json)::text
+      FROM skill_assignments a
+      JOIN knowledge_documents d ON d.id=a.skill_document_id AND d.project_id=a.project_id
+      JOIN knowledge_document_versions v ON v.id=a.skill_version_id AND v.document_id=a.skill_document_id
+      WHERE a.project_id=${literal(ctx.projectId)} AND a.status='active';`) || "[]");
+    expect(assignmentRows, "active skill assignments").toHaveLength(3);
+    const effectiveBeforeStaging = await request.get(`${base}/skills/effective?module=requirements&subtype=functional&operation=requirement_revision`);
+    expect(effectiveBeforeStaging.ok(), await effectiveBeforeStaging.text()).toBe(true);
+    expect(await effectiveBeforeStaging.json(), `effective skill must resolve before staging: ${JSON.stringify(assignmentRows)}`).toMatchObject({ status: "resolved" });
+
+    const title = `E2E governed requirement ${suffix}`;
+    const caseTitle = `E2E governed case ${suffix}`;
+    const requirementOperationId = randomUUID(), testcaseOperationId = randomUUID();
+    const operations = [
+      { opType: "requirement_revision", operationId: requirementOperationId, title, description: "Published through the governed path.", criteria: [{ key: "AC-1", text: "The obligation is observable" }, { key: "AC-2", text: "The second obligation is observable" }] },
+      { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle, description: "Candidate case for the governed requirement." } },
+      { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] },
+    ];
+    const stagedResponse = await stageRest(request, operations);
+    expect(stagedResponse.status(), await stagedResponse.text()).toBe(201);
+    const staged = await stagedResponse.json();
+    taskIds.push(staged.id);
+    expect(staged.skillContext).toMatchObject({ status: "resolved" });
+    expect(staged.skillContext.assignments).toHaveLength(3);
+
+    const appliedResponse = await request.post(`${base}/requirements/proposals/${staged.id}/apply`, {
+      data: { expectedProposalRevision: staged.proposalRevision }
+    });
+    expect(appliedResponse.ok(), await appliedResponse.text()).toBe(true);
+    const applied = await appliedResponse.json();
+    requirementId = applied.receipt.requirement.documentId;
+    const requirementVersionId = applied.receipt.requirement.versionId as string;
+    const caseId = applied.receipt.testcase.id as string;
+
+    const coverage = async () => (await request.get(`${base}/requirements/${requirementId}/coverage`)).json();
+    let readings = await coverage();
+    expect(readings.readings).toMatchObject({ authored: true, approved: false, executed: false, passing: false });
+    expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(ctx.projectId)} AND title=${literal(caseTitle)};`)).toBe("1");
+    expect(scalar(`SELECT COUNT(*)::int FROM requirement_case_links WHERE requirement_id=${literal(requirementId)} AND state='active';`)).toBe("1");
+
+    const approvedRequirement = await request.post(`${base}/requirements/${requirementId}/approve`, { data: { versionId: requirementVersionId } });
+    expect(approvedRequirement.ok(), await approvedRequirement.text()).toBe(true);
+    expect((await approvedRequirement.json()).approvedVersionId).toBeTruthy();
+
+    const caseBefore = await (await request.get(`${base}/testcases/${caseId}`)).json();
+    const approvedCase = await request.post(`${base}/testcases/${caseId}/approve`, {
+      data: { expectedRevision: caseBefore.editRevision, expectedApprovalRevision: caseBefore.approvalRevision }
+    });
+    expect(approvedCase.ok(), await approvedCase.text()).toBe(true);
+    const caseAfter = await (await request.get(`${base}/testcases/${caseId}`)).json();
+
+    readings = await coverage();
+    const approvedLink = (readings.cases as Array<Record<string, any>>).find((item) => item.requirementVersionId === readings.approvedVersionId) || readings.cases[0];
+    const reapplied = await request.post(`${base}/requirements/${requirementId}/links/${approvedLink.linkId}/reapply`, {
+      data: { expectedCaseRevision: caseAfter.editRevision, expectedApprovalRevision: caseAfter.approvalRevision }
+    });
+    expect(reapplied.ok(), await reapplied.text()).toBe(true);
+    readings = await coverage();
+    expect(readings.readings).toMatchObject({ authored: true, approved: true, executed: false, passing: false });
+
+    // Fixture setup only: the human publication/approval decisions above were API calls. The
+    // persisted attempt is created in the native Run/execution tables so the coverage reader is
+    // exercised against real evidence, not a stubbed payload.
+    const attempt = async (status: string, at: string) => {
+      const runId = scalar(`INSERT INTO cycles(project_id,name) VALUES (${literal(ctx.projectId)},${literal(`E2E coverage ${status} ${suffix}`)}) RETURNING id;`);
+      cycleIds.push(runId);
+      const itemId = scalar(`INSERT INTO cycle_items(cycle_id,testcase_id,snapshot_approval_revision) VALUES (${literal(runId)},${literal(caseId)},${literal(caseAfter.approvalRevision)}) RETURNING id;`);
+      exec(`INSERT INTO executions(cycle_item_id,status,executed_by,executed_at)
+            SELECT ${literal(itemId)},${literal(status)},pm.user_id,${literal(at)}::timestamptz
+              FROM project_members pm WHERE pm.project_id=${literal(ctx.projectId)}
+             ORDER BY CASE pm.role WHEN 'owner' THEN 0 ELSE 1 END, pm.user_id LIMIT 1;`);
+    };
+    await attempt("Passed", new Date().toISOString());
+    readings = await coverage();
+    expect(readings.readings).toMatchObject({ approved: true, executed: true, passing: true, mixed: false });
+
+    await attempt("Failed", new Date(Date.now() + 1000).toISOString());
+    readings = await coverage();
+    expect(readings.readings).toMatchObject({ executed: true, passing: false, mixed: true });
+    expect(readings.cases[0].latestAttempt.status).toBe("Failed");
+  } finally {
+    for (const id of taskIds) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+    if (requirementId) {
+      exec(`DELETE FROM requirement_case_links WHERE project_id=${literal(ctx.projectId)} AND requirement_id=${literal(requirementId)};`);
+      exec(`DELETE FROM requirement_profiles WHERE document_id=${literal(requirementId)};`);
+      exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(requirementId)} AND project_id=${literal(ctx.projectId)};`);
+      exec(`DELETE FROM knowledge_documents WHERE id=${literal(requirementId)} AND project_id=${literal(ctx.projectId)};`);
+    }
+    for (const id of skillDocs) { exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`); exec(`DELETE FROM knowledge_documents WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`); }
+    for (const id of cycleIds) {
+      exec(`DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id=${literal(id)});`);
+      exec(`DELETE FROM cycle_items WHERE cycle_id=${literal(id)};`);
+      exec(`DELETE FROM cycles WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+    }
   }
 });

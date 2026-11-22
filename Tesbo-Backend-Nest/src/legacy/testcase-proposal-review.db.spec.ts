@@ -9,6 +9,7 @@ import { RequestCacheService } from "../request-cache/request-cache.service";
 import type { AppConfigService } from "../config/app-config.service";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
 import { KNOWLEDGE_DOCUMENT_REVISION_SQL } from "./knowledge-document-revision";
+import { TESTCASE_APPROVAL_CURRENT_SQL, TESTCASE_APPROVAL_REVISION_SQL, TESTCASE_EDIT_REVISION_SQL } from "./testcase-edit-revision";
 
 const url=process.env.DATABASE_URL || "";
 const human={kind:"human_session" as const};
@@ -41,6 +42,7 @@ type Body=Record<string,any>;
     const plans={assertCustomFieldsEnabled:jest.fn().mockResolvedValue(undefined)} as unknown as PlanLimitsService;
     internals.customFields=new CustomFieldsService(db,plans,new ProjectLookupService(db,new RequestCacheService({} as AppConfigService)),svc);
     internals.customTags=new CustomTagsService(db,svc,internals.testcasesListCache);
+    internals.ragIngestion={enqueueEmbedding:jest.fn().mockResolvedValue(undefined)};
     jest.spyOn(internals,"enqueueTestcaseEmbedding").mockReturnValue(undefined);
     jest.spyOn(internals,"notifyZyraTask").mockResolvedValue(undefined);
     jest.spyOn(internals,"queueZyraTicketComments").mockResolvedValue(undefined);
@@ -266,7 +268,7 @@ type Body=Record<string,any>;
       const first=await stageBundle(operations,key);
       expect(first.requirementBundle).toHaveLength(3);
       expect(first.drafts).toEqual([]);
-      expect(first.skillContext).toMatchObject({status:"unavailable"});
+      expect(first.skillContext).toMatchObject({status:"unassigned"});
       expect(first.proposalRevision).toMatch(/^[a-f0-9]{64}$/);
       expect(first.taskStatus).toBe("in_review");
       expect((first.proposalSnapshot as Body).operations).toHaveLength(3);
@@ -490,6 +492,158 @@ type Body=Record<string,any>;
       (broken[2] as Body).testcaseOperationId=randomUUID();
       await expect(stageBundle(broken)).rejects.toMatchObject({status:400});
       await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[foreignProject,foreignUser]);
+    });
+
+    const skillFor=async(module:string,subtype:string,operation:string)=>{
+      const doc=await service().createSkillCandidate(project,user,{title:`Skill ${operation} ${randomUUID()}`,module,subtype,skillKey:`SKL-${randomUUID().replaceAll("-","").slice(0,10).toUpperCase()}`,instructions:"Require observable outcomes, exact sources and explicit uncertainty."});
+      const submitted=await service().submitKnowledgeDocument(project,user,doc.id,{expectedRevision:doc.editRevision,submissionKey:randomUUID()},human);
+      const approved=await service().approveSkillVersion(project,user,doc.id,{versionId:submitted.id},human);
+      const assignment=await service().assignSkill(project,user,{skillDocumentId:doc.id,versionId:approved.approvedVersionId,module,subtype,operation},human);
+      return {doc,versionId:approved.approvedVersionId as string,assignmentId:String(assignment.assignment.id)};
+    };
+    const publishSkills=async()=>{
+      const requirement=await skillFor("requirements","functional","requirement_revision");
+      await service().assignSkill(project,user,{skillDocumentId:requirement.doc.id,versionId:requirement.versionId,module:"requirements",subtype:"functional",operation:"requirement_case_link"},human);
+      const cases=await skillFor("test_cases","manual","testcase_create");
+      return {requirement,cases};
+    };
+    const cleanupSkills=async(ids:string[])=>{for(const id of ids){await admin.query("UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=$1",[id]);await admin.query("DELETE FROM knowledge_documents WHERE id=$1",[id]);}};
+    const revisionsOf=async(id:string)=>(await admin.query(
+      `SELECT ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision, ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision, ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current FROM testcases WHERE id=$1`,[id]
+    )).rows[0] as Body;
+    const attempt=async(caseId:string,approvalRevision:string,status:string,at:Date)=>{
+      const run=(await admin.query("INSERT INTO cycles(project_id,name,source,status) VALUES ($1,$2,'manual','In Progress') RETURNING id",[project,`Coverage ${randomUUID()}`])).rows[0].id;
+      const item=(await admin.query("INSERT INTO cycle_items(cycle_id,testcase_id,snapshot_approval_revision) VALUES ($1,$2,$3) RETURNING id",[run,caseId,approvalRevision])).rows[0].id;
+      await admin.query("INSERT INTO executions(cycle_item_id,status,executed_by,executed_at) VALUES ($1,$2,$3,$4)",[item,status,user,at]);
+    };
+
+    it("resolves exact skills, applies atomically and reports authored/approved/executed/passing separately",async()=>{
+      const skills=await publishSkills();
+      const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
+      let requirementId="";
+      try{
+        const staged=await stageBundle(ops());
+        expect(staged.skillContext).toMatchObject({status:"resolved"});
+        expect(staged.skillContext.assignments).toHaveLength(3);
+        const applied=await service().applyRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human);
+        expect(applied.replayed).toBe(false);
+        requirementId=applied.receipt.requirement.documentId;
+        const caseId=applied.receipt.testcase.id;
+        expect(applied.receipt.link.testcaseApprovalRevision).toBeNull();
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind='submitted'",[requirementId])).rows[0].n).toBe(1);
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM testcases WHERE id=$1 AND status='Draft'",[caseId])).rows[0].n).toBe(1);
+
+        let coverage=await service().requirementCoverage(project,user,requirementId);
+        expect(coverage.readings).toMatchObject({authored:true,approved:false,executed:false,passing:false});
+
+        const approved=await service().approveRequirementVersion(project,user,requirementId,{versionId:applied.receipt.requirement.versionId},human);
+        expect(approved.approvedVersionId).toBeTruthy();
+        coverage=await service().requirementCoverage(project,user,requirementId);
+        expect(coverage.readings).toMatchObject({authored:true,approved:false,executed:false,passing:false});
+
+        const before=await revisionsOf(caseId);
+        await service().approveTestCaseForUser(user,project,caseId,{expectedRevision:before.edit_revision,expectedApprovalRevision:before.approval_revision},human);
+        const after=await revisionsOf(caseId);
+        const reapplied=await service().reapplyRequirementCaseLink(project,user,requirementId,coverage.cases[0].linkId,{expectedCaseRevision:after.edit_revision,expectedApprovalRevision:after.approval_revision},human);
+        expect(reapplied.replayed).toBe(false);
+        coverage=await service().requirementCoverage(project,user,requirementId);
+        expect(coverage.readings).toMatchObject({authored:true,approved:true,executed:false,passing:false});
+
+        await attempt(caseId,after.approval_revision,"Passed",new Date());
+        coverage=await service().requirementCoverage(project,user,requirementId);
+        expect(coverage.readings).toMatchObject({approved:true,executed:true,passing:true,mixed:false});
+
+        await attempt(caseId,after.approval_revision,"Failed",new Date(Date.now()+1000));
+        coverage=await service().requirementCoverage(project,user,requirementId);
+        expect(coverage.readings).toMatchObject({executed:true,passing:false,mixed:true});
+        expect(coverage.cases[0].latestAttempt?.status).toBe("Failed");
+      }finally{
+        if(requirementId){
+          await admin.query("DELETE FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2",[project,requirementId]);
+          await admin.query("DELETE FROM requirement_profiles WHERE document_id=$1",[requirementId]);
+          await admin.query("UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=$1",[requirementId]);
+          await admin.query("DELETE FROM knowledge_documents WHERE id=$1",[requirementId]);
+        }
+        await cleanupSkills(skillIds);
+      }
+    });
+
+    it("refuses apply when a pinned skill is revoked between review and apply, writing nothing",async()=>{
+      const skills=await publishSkills();
+      let requirementTitle="";
+      try{
+        const staged=await stageBundle(ops());
+        requirementTitle=String(staged.requirementBundle[0].title);
+        await service().deactivateSkillAssignment(project,user,skills.requirement.assignmentId,{},human);
+        const before=(await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE project_id=$1 AND title=$2",[project,requirementTitle])).rows[0].n;
+        await expect(service().applyRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human))
+          .rejects.toMatchObject({status:409,response:{code:"SKILL_CONTEXT_UNAVAILABLE"}});
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE project_id=$1 AND title=$2",[project,requirementTitle])).rows[0].n).toBe(before);
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM testcases WHERE project_id=$1 AND title=$2",[project,staged.requirementBundle[1].draft.title])).rows[0].n).toBe(0);
+        expect((await admin.query("SELECT task_status FROM ai_generation_requests WHERE id=$1",[staged.id])).rows[0].task_status).toBe("in_review");
+      }finally{
+        await cleanupSkills([skills.requirement.doc.id,skills.cases.doc.id]);
+      }
+    });
+
+    it("re-resolves after a lock wait and refuses an assignment change with a refreshed-proposal reason",async()=>{
+      const skills=await publishSkills();
+      const locker=new Client({connectionString:url});await locker.connect();
+      try{
+        const staged=await stageBundle(ops());
+        await locker.query("BEGIN");
+        await locker.query("SELECT id FROM ai_generation_requests WHERE id=$1 FOR UPDATE",[staged.id]);
+        const pending=service().applyRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human);
+        await new Promise(resolve=>setTimeout(resolve,200));
+        const v2=await skillFor("requirements","functional","requirement_revision");
+        await service().assignSkill(project,user,{skillDocumentId:v2.doc.id,versionId:v2.versionId,module:"requirements",subtype:"functional",operation:"requirement_revision"},human);
+        await locker.query("COMMIT");
+        await expect(pending).rejects.toMatchObject({status:409,response:{code:"SKILL_CONTEXT_STALE"}});
+        expect((await admin.query("SELECT task_status FROM ai_generation_requests WHERE id=$1",[staged.id])).rows[0].task_status).toBe("in_review");
+        await cleanupSkills([v2.doc.id]);
+      }finally{
+        await locker.query("ROLLBACK").catch(()=>undefined);
+        await locker.end();
+        await cleanupSkills([skills.requirement.doc.id,skills.cases.doc.id]);
+      }
+    });
+
+    it("refuses unauthorized apply, ambiguous assignments, and recovers an exact apply retry without duplicate effects",async()=>{
+      const skills=await publishSkills();
+      let requirementId="";
+      try{
+        const reviewer=(await admin.query("INSERT INTO users(email,name) VALUES ($1,'Apply reviewer') RETURNING id",[`apply-reviewer-${randomUUID()}@tesbo.invalid`])).rows[0].id;
+        await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[org,reviewer]);
+        await admin.query("UPDATE users SET active_organization_id=$2 WHERE id=$1",[reviewer,org]);
+        await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[project,reviewer]);
+        const staged=await stageBundle(ops());
+        await expect(service().applyRequirementProposal(project,reviewer,staged.id,{expectedProposalRevision:staged.proposalRevision},human)).rejects.toMatchObject({status:403});
+
+        const wildcard=await admin.query(
+          `INSERT INTO skill_assignments(project_id,module,subtype,operation,skill_document_id,skill_version_id,assigned_by)
+           VALUES ($1,'requirements','*','requirement_revision',$2,$3,$4) RETURNING id`,
+          [project,skills.requirement.doc.id,skills.requirement.versionId,user]
+        );
+        await expect(service().applyRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human))
+          .rejects.toMatchObject({status:409,response:{code:"SKILL_ASSIGNMENT_CONFLICT"}});
+        await admin.query("DELETE FROM skill_assignments WHERE id=$1",[wildcard.rows[0].id]);
+
+        const applied=await service().applyRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human);
+        requirementId=applied.receipt.requirement.documentId;
+        const casesBefore=(await admin.query("SELECT COUNT(*)::int AS n FROM testcases WHERE project_id=$1 AND title=$2",[project,staged.requirementBundle[1].draft.title])).rows[0].n;
+        const retried=await service().applyRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human);
+        expect(retried.replayed).toBe(true);
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM testcases WHERE project_id=$1 AND title=$2",[project,staged.requirementBundle[1].draft.title])).rows[0].n).toBe(casesBefore);
+        await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,reviewer]);
+      }finally{
+        if(requirementId){
+          await admin.query("DELETE FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2",[project,requirementId]);
+          await admin.query("DELETE FROM requirement_profiles WHERE document_id=$1",[requirementId]);
+          await admin.query("UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=$1",[requirementId]);
+          await admin.query("DELETE FROM knowledge_documents WHERE id=$1",[requirementId]);
+        }
+        await cleanupSkills([skills.requirement.doc.id,skills.cases.doc.id]);
+      }
     });
   });
 });

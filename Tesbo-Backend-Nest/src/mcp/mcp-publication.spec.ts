@@ -23,7 +23,7 @@ function fixture(options: { actor?: string | null; consent?: boolean; writable?:
     requireProjectAccess: jest.fn().mockResolvedValue({ organization_id: "workspace" }),
     stageTestcaseChanges: jest.fn().mockResolvedValue(task),
     listTestcaseProposals: jest.fn().mockResolvedValue({ list: [task] }),
-    stageRequirementChangeBundle: jest.fn().mockResolvedValue({ ...task, requirementBundle: [], skillContext: { status: "unavailable" } }),
+    stageRequirementChangeBundle: jest.fn().mockResolvedValue({ ...task, requirementBundle: [], skillContext: { status: "unassigned" } }),
     requirementProposalTask: jest.fn().mockResolvedValue({ ...task, requirementBundle: [] }),
     listRequirementProposals: jest.fn().mockResolvedValue({ list: [] }),
     zyraTask: jest.fn().mockResolvedValue(task),
@@ -113,7 +113,7 @@ describe("MCP-P07 protected testcase publication and unpublished proposal previe
       title: "Requirement", criteria: [{ key: "AC-1", text: "Obligation" }] }];
     const staged = await f.call("stage_requirement_change_bundle", { requestKey: "bundle-1", operations });
     expect(staged.error).toBeUndefined();
-    expect(JSON.parse(staged.result.content[0].text)).toMatchObject({ publication: "unpublished", taskId, skillContext: { status: "unavailable" } });
+    expect(JSON.parse(staged.result.content[0].text)).toMatchObject({ publication: "unpublished", taskId, skillContext: { status: "unassigned" } });
     expect(f.legacy.stageRequirementChangeBundle).toHaveBeenCalledWith(projectId, "issuer-user",
       expect.objectContaining({ requestKey: "bundle-1", operations }), expect.objectContaining({ kind: "api_token", transport: "mcp" }));
     const forged = await f.call("stage_requirement_change_bundle", { requestKey: "bundle-2", operations, principal: { kind: "human_session" } });

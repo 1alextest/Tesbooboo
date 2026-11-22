@@ -29,6 +29,7 @@ import { requireHumanReviewPrincipal, type ReviewPrincipal } from "../common/hum
 import { readMcpAccess } from "../mcp/mcp-access";
 import { expectedProposalRevision, MAX_TESTCASE_PROPOSAL_OPERATIONS, proposalDigest, selectedProposalIndexes, TESTCASE_PROPOSAL_FIELDS, type TestcaseProposalPrincipal } from "./testcase-proposal-review";
 import { expectedKnowledgeDocumentRevision, knowledgeDocumentAiContextSql, knowledgeDocumentContentDigest, KNOWLEDGE_DOCUMENT_REVISION_SQL } from "./knowledge-document-revision";
+import { requirementBundleTargets, resolveEffectiveSkills, skillResolutionMatches, type SkillResolution } from "../skills/skills-governance";
 import { isCoverageAnalysisRequest, notificationLinks, notificationMessages, runLabel, type NotificationLink, type NotificationType } from "./notification-events";
 import { runInZyraLanguage, zyraReplyLanguage } from "./zyra-language-context";
 import { localizeZyraTaskEntry } from "./zyra-task-activity-ru";
@@ -88,11 +89,11 @@ const TICKET_PROVIDER_LABELS: Record<TicketProvider, string> = { jira: "Jira", l
 const REQUIREMENT_BUNDLE_OPERATION_KINDS = new Set(["requirement_revision", "testcase_create", "requirement_case_link"]);
 const REQUIREMENT_CRITERION_KEY = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/;
 const REQUIREMENT_MAX_CRITERIA = 50;
-/** Stable across retries; the request digest must not change because time passed. */
+/** Legacy bundles staged before the resolver carry no basis and remain publication-blocked. */
 const REQUIREMENT_SKILL_CONTEXT = Object.freeze({
-  status: "unavailable" as const,
+  status: "unassigned" as const,
   authority: "governed-effective-skills",
-  reason: "No approved effective-skill resolver is available in this deployment"
+  reason: "This bundle was staged before effective skills were resolved; stage a refreshed proposal"
 });
 
 // See getIntegrationConnection: the access token the caller just had refused (401), to force one renewal.
@@ -13584,7 +13585,8 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
-  private async writeKnowledgeGovernedVersion(client: PoolClient, doc: Body, uid: string, kind: "submitted" | "approved" | "rejected", expectedRevision: string, actorKind: string, submissionKey: string | null = null) {
+  private async writeKnowledgeGovernedVersion(client: PoolClient, doc: Body, uid: string, kind: "submitted" | "approved" | "rejected", expectedRevision: string, actorKind: string, submissionKey: string | null = null,
+    options: { authority?: string; criteria?: unknown; skillContext?: unknown; sourceVersionId?: string } = {}) {
     const metadata = {
       schemaVersion: 1, actorId: uid, actorKind, expectedRevision,
       contentDigest: knowledgeDocumentContentDigest(doc), documentType: doc.document_type,
@@ -13592,7 +13594,10 @@ export class LegacyService implements OnModuleInit {
       sourceProvider: doc.source_provider, sourceExternalId: doc.source_external_id,
       sourceUrl: doc.source_url, sourceRole: doc.source_role, isReadOnly: doc.is_read_only,
       // This is the existing document review, not a Skills assignment or authority bootstrap.
-      authority: kind === "submitted" ? "candidate" : "ai_memory_review"
+      authority: options.authority ?? (kind === "submitted" ? "candidate" : "ai_memory_review"),
+      ...(options.criteria === undefined ? {} : { criteria: options.criteria }),
+      ...(options.skillContext === undefined ? {} : { skillContext: options.skillContext }),
+      ...(options.sourceVersionId === undefined ? {} : { sourceVersionId: options.sourceVersionId })
     };
     const result = await client.query(
       `INSERT INTO knowledge_document_versions
@@ -16038,19 +16043,23 @@ export class LegacyService implements OnModuleInit {
         await this.assertRequirementDocumentBase(client, projectId, String(bundle.requirement.documentId), String(bundle.requirement.expectedRevision));
       }
       if (bundle.testcase) await this.assertProposalReferences(client, projectId, bundle.testcase.draft);
+      // Resolve inside the producer's transaction and pin the exact assignment/version basis into
+      // the reviewed task. An unassigned or conflicting basis is still stageable, but apply refuses
+      // it; a later assignment change cannot silently rewrite what this reviewer saw.
+      const skillContext = await resolveEffectiveSkills(client, projectId, requirementBundleTargets(bundle.operations));
       const result = await client.query(
         `INSERT INTO ai_generation_requests
-          (project_id,requested_by,provider,model,user_story,requested_count,generated_count,generated_payload,agent_name,task_status,proposal_request_key,proposal_request_digest,proposal_provenance,activity_log)
-         VALUES ($1,$2,'external_requirement_proposal',NULL,$3,$4,$4,$5::jsonb,$6,'in_review',$7,$8,$9::jsonb,$10::jsonb) RETURNING id`,
+          (project_id,requested_by,provider,model,user_story,requested_count,generated_count,generated_payload,agent_name,task_status,proposal_request_key,proposal_request_digest,proposal_provenance,activity_log,skill_context)
+         VALUES ($1,$2,'external_requirement_proposal',NULL,$3,$4,$4,$5::jsonb,$6,'in_review',$7,$8,$9::jsonb,$10::jsonb,$11::jsonb) RETURNING id`,
         [projectId, uid, title, bundle.operations.length, JSON.stringify(bundle.operations), ZYRA_AGENT_NAME, requestKey,
           requestDigest, JSON.stringify(provenance),
           JSON.stringify([{ actor: principal.kind === "api_token" ? "agent" : "user", stage: "in_review",
             title: "Submitted requirement change bundle",
             detail: "One requirement revision, one testcase candidate and one link intent await human review. Nothing was published.",
-            createdAt: new Date().toISOString(), provenance, skillContext: REQUIREMENT_SKILL_CONTEXT }])]
+            createdAt: new Date().toISOString(), provenance, skillContext }]), JSON.stringify(skillContext)]
       );
       await this.logProjectActivity(projectId, producerActorId, "requirement_proposals_staged", "ai_generation_request", result.rows[0].id, title,
-        { provenance, requestDigest, operationCount: bundle.operations.length, skillContext: REQUIREMENT_SKILL_CONTEXT }, client);
+        { provenance, requestDigest, operationCount: bundle.operations.length, skillContext }, client);
       return String(result.rows[0].id);
     });
     return this.zyraTask(projectId, uid, taskId);
@@ -16149,6 +16158,538 @@ export class LegacyService implements OnModuleInit {
     });
   }
 
+  // ─── Work Package A Slice 2: governed Skills + protected publication ───────────────────────
+
+  /** Create an inert skill candidate in the native KB identity/version owner. */
+  async createSkillCandidate(projectId: string, userId: string | null | undefined, body: Body): Promise<Body> {
+    const uid = this.requireUser(userId);
+    const project = await this.requireProjectAccess(uid, projectId);
+    const title = String(body.title || "").trim();
+    const module = String(body.module || "").trim();
+    const subtype = String(body.subtype || "*").trim() || "*";
+    const instructions = typeof body.instructions === "string" ? body.instructions.trim() : "";
+    if (!title || title.length > 512) throw new BadRequestException({ error: "Skill title must contain 1–512 characters" });
+    if (!["requirements", "test_cases", "user_manuals", "policies", "tasks_issues", "files_evidence", "skills"].includes(module)) {
+      throw new BadRequestException({ error: "Unknown skill module" });
+    }
+    if (!instructions || instructions.length > 20000) throw new BadRequestException({ error: "Skill instructions must contain 1–20000 characters" });
+    const skillKey = String(body.skillKey || `SKL-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`).trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$/.test(skillKey)) throw new BadRequestException({ error: "skillKey must be 2–64 safe characters" });
+    const contentJson = { schemaVersion: "tesbo-skill/1", module, subtype, instructions };
+    const contentText = `${title}\n\n${instructions}`;
+    const contentHtml = `<h1>${this.escapeProposalHtml(title)}</h1><pre>${this.escapeProposalHtml(instructions)}</pre>`;
+    const inserted = await this.db.transaction(async client => {
+      const folderId = await this.kbRootFolderId(client, projectId, String(project.organization_id));
+      const doc = (await client.query(
+        `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, status, created_by, updated_by)
+         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,'skill','draft',$8,$8) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [project.organization_id, projectId, folderId, title, JSON.stringify(contentJson), contentHtml, contentText, uid]
+      )).rows[0];
+      await client.query("INSERT INTO skill_profiles(document_id,project_id,skill_key,module,subtype) VALUES ($1,$2,$3,$4,$5)", [doc.id, projectId, skillKey, module, subtype]);
+      await this.logProjectActivity(projectId, uid, "skill_candidate_created", "knowledge_document", doc.id, title, { skillKey, module, subtype }, client);
+      return doc;
+    });
+    this.enqueueEmbedding(String(inserted.organization_id), projectId, "document", String(inserted.id), "created");
+    return { ...toCamel(inserted), skillKey, module, subtype, state: "draft", effective: false };
+  }
+
+  /** Human-only approval of the exact submitted skill version. Approval stays separate from assignment. */
+  async approveSkillVersion(projectId: string, userId: string | null | undefined, documentId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(documentId)) throw new NotFoundException({ error: "Skill not found" });
+    const versionId = String(body.versionId || "");
+    if (!isUuid(versionId)) throw new BadRequestException({ error: "versionId must identify the submitted skill version under review" });
+    const result = await this.db.transaction(async client => {
+      const { doc, role } = await this.lockKnowledgeReviewDocument(client, projectId, uid, documentId);
+      this.kbRequireOwnerOrManager(role);
+      if (doc.document_type !== "skill") throw new BadRequestException({ error: "Only skill documents can be approved here" });
+      const profile = (await client.query("SELECT * FROM skill_profiles WHERE document_id=$1 AND project_id=$2", [documentId, projectId])).rows[0];
+      if (!profile) throw new BadRequestException({ error: "The skill has no native profile" });
+      const version = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [versionId, documentId])).rows[0];
+      if (!version || version.snapshot_kind !== "submitted") throw new BadRequestException({ error: "versionId must identify a submitted version of this skill" });
+      const reviewed = doc.reviewed_version_id
+        ? (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [doc.reviewed_version_id, documentId])).rows[0]
+        : null;
+      if (doc.status === "approved" && reviewed?.snapshot_kind === "approved" && reviewed.snapshot_metadata?.sourceVersionId === versionId) {
+        return { doc, profile, approvedVersionId: String(reviewed.id), replayed: true };
+      }
+      if (version.snapshot_metadata?.contentDigest !== knowledgeDocumentContentDigest(doc)) {
+        throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "The skill changed after this version was submitted; approve the exact submitted version or request a new submission" });
+      }
+      const approved = await this.writeKnowledgeGovernedVersion(client, doc, uid, "approved", doc.edit_revision, "human_session", null,
+        { authority: "skill_review", sourceVersionId: versionId });
+      const updated = (await client.query(
+        `UPDATE knowledge_documents SET status='approved', reviewed_by=$2, reviewed_at=now(), reviewed_version_id=$3, updated_at=now()
+          WHERE id=$1 AND project_id=$4 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [documentId, uid, approved.id, projectId]
+      )).rows[0];
+      await this.logProjectActivity(projectId, uid, "skill_approved", "knowledge_document", documentId, doc.title,
+        { versionId: approved.id, sourceVersionId: versionId, profileId: profile.skill_key }, client);
+      return { doc: updated, profile, approvedVersionId: String(approved.id), replayed: false };
+    });
+    this.enqueueEmbedding(String(result.doc.organization_id), projectId, "document", documentId, "updated");
+    return { ...toCamel(result.doc), skillProfile: toCamel(result.profile), approvedVersionId: result.approvedVersionId, replayed: result.replayed };
+  }
+
+  /** Human-only assignment of an approved immutable version to one project authoring context. */
+  async assignSkill(projectId: string, userId: string | null | undefined, body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    const skillDocumentId = String(body.skillDocumentId || "");
+    const versionId = String(body.versionId || "");
+    const module = String(body.module || "").trim();
+    const subtype = String(body.subtype || "*").trim() || "*";
+    const operation = String(body.operation || "*").trim() || "*";
+    const precedence = body.precedence === undefined ? 0 : Number(body.precedence);
+    if (!isUuid(skillDocumentId) || !isUuid(versionId)) throw new BadRequestException({ error: "skillDocumentId and versionId must be skill identities" });
+    if (!module) throw new BadRequestException({ error: "module is required" });
+    if (!Number.isInteger(precedence) || precedence < -1000 || precedence > 1000) throw new BadRequestException({ error: "precedence must be an integer between -1000 and 1000" });
+    const assignment = await this.db.transaction(async client => {
+      await this.requireCurrentProjectAuthority(client, projectId, uid);
+      const doc = (await client.query("SELECT id,document_type,project_id,is_deleted FROM knowledge_documents WHERE id=$1 AND project_id=$2", [skillDocumentId, projectId])).rows[0];
+      if (!doc || doc.is_deleted || doc.document_type !== "skill") throw new NotFoundException({ error: "Skill not found" });
+      const version = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [versionId, skillDocumentId])).rows[0];
+      if (!version || version.snapshot_kind !== "approved") throw new BadRequestException({ error: "Only an approved immutable skill version can be assigned" });
+      const profile = (await client.query("SELECT * FROM skill_profiles WHERE document_id=$1", [skillDocumentId])).rows[0];
+      if (!profile || profile.module !== module) throw new BadRequestException({ error: "The assignment module must match the skill profile" });
+      await client.query(
+        `UPDATE skill_assignments SET status='inactive', deactivated_by=$4, deactivated_at=now()
+          WHERE project_id=$1 AND module=$2 AND subtype=$3 AND operation=$5 AND status='active'`,
+        [projectId, module, subtype, uid, operation]
+      );
+      const created = (await client.query(
+        `INSERT INTO skill_assignments(project_id,module,subtype,operation,skill_document_id,skill_version_id,assigned_by,precedence)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [projectId, module, subtype, operation, skillDocumentId, versionId, uid, precedence]
+      )).rows[0];
+      // A wildcard and an exact assignment can both match one context. Refuse the ambiguous state
+      // instead of choosing by precedence or lexical order.
+      const resolved = await resolveEffectiveSkills(client, projectId, [{ module, subtype: subtype === "*" ? "*" : subtype, operation: operation === "*" ? "*" : operation }]);
+      if (resolved.status === "conflict") {
+        throw new ConflictException({ code: "SKILL_ASSIGNMENT_CONFLICT", error: "Another active assignment already matches this context; deactivate it before assigning a new skill", conflicts: resolved.conflicts });
+      }
+      await this.logProjectActivity(projectId, uid, "skill_assigned", "skill_assignment", created.id, `${profile.skill_key} → ${module}/${subtype}/${operation}`,
+        { skillDocumentId, versionId, precedence }, client);
+      return { created, resolved };
+    });
+    return { assignment: toCamel(assignment.created), resolution: assignment.resolved };
+  }
+
+  async deactivateSkillAssignment(projectId: string, userId: string | null | undefined, assignmentId: string, _body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(assignmentId)) throw new NotFoundException({ error: "Skill assignment not found" });
+    return this.db.transaction(async client => {
+      const current = (await client.query("SELECT * FROM skill_assignments WHERE id=$1 AND project_id=$2 FOR UPDATE", [assignmentId, projectId])).rows[0];
+      if (!current) throw new NotFoundException({ error: "Skill assignment not found" });
+      if (current.status === "inactive") return { assignment: toCamel(current), replayed: true };
+      const updated = (await client.query(
+        `UPDATE skill_assignments SET status='inactive', deactivated_by=$3, deactivated_at=now()
+          WHERE id=$1 AND project_id=$2 RETURNING *`, [assignmentId, projectId, uid]
+      )).rows[0];
+      await this.logProjectActivity(projectId, uid, "skill_assignment_deactivated", "skill_assignment", assignmentId, current.skill_version_id, {}, client);
+      return { assignment: toCamel(updated), replayed: false };
+    });
+  }
+
+  /** Read-only effective resolution for the caller's existing project/context. */
+  async effectiveSkills(projectId: string, userId: string | null | undefined, query: Body = {}) {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    const module = String(query.module || "requirements");
+    const subtype = String(query.subtype || "functional");
+    const operation = String(query.operation || "requirement_revision");
+    return resolveEffectiveSkills(this.db, projectId, [{ module, subtype, operation }]);
+  }
+
+  /** Protected apply of the exact reviewed bundle. One native transaction; no partial publication. */
+  async applyRequirementProposal(projectId: string, userId: string | null | undefined, taskId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(taskId)) throw new NotFoundException({ error: "Requirement proposal not found" });
+    const revision = expectedProposalRevision(body.expectedProposalRevision);
+    const decisionKey = proposalDigest({ action: "requirement_bundle_apply", revision, reviewerId: uid });
+    let organizationId: string | null = null;
+    const result = await this.db.transaction(async client => {
+      const authority = await this.requireProposalAuthority(client, projectId, uid);
+      if (String(authority.caller_role) !== "owner" && String(authority.caller_role) !== "manager") {
+        throw new ForbiddenException({ error: "Only project owners and managers can apply a requirement change bundle" });
+      }
+      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
+      const existing = locked.rows[0];
+      if (!existing) throw new NotFoundException({ error: "Requirement proposal not found" });
+      // Re-read current human authority after the task wait, before any reviewed content is used.
+      const authorityAfterWait = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      if (!["owner", "manager"].includes(String(authorityAfterWait.caller_role))) {
+        throw new ForbiddenException({ error: "Only project owners and managers can apply a requirement change bundle" });
+      }
+      if (!this.taskHasRequirementBundle(existing.generated_payload)) throw new BadRequestException({ error: "This task is not a requirement change bundle" });
+      const prior = normalizeJsonArray(existing.save_events).find((event: Body) => event.decisionKey === decisionKey);
+      if (prior) return { receipt: prior, replayed: true };
+      if (existing.task_status !== "in_review") throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "This bundle is not awaiting review; reload it before applying" });
+      const reviewed = await this.readTestcaseProposal(client, projectId, taskId);
+      if (reviewed.proposal_review_revision !== revision) {
+        throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "The proposal, its bases or its pinned skills changed since review; reload and review the exact revision again" });
+      }
+      const snapshot = reviewed.proposal_snapshot as Body;
+      const operations = normalizeJsonArray(snapshot.operations);
+      const targets = requirementBundleTargets(operations);
+      const currentSkills = await resolveEffectiveSkills(client, projectId, targets);
+      const pinnedSkills = existing.skill_context as SkillResolution | Body;
+      if (currentSkills.status !== "resolved") {
+        throw new ConflictException({
+          code: currentSkills.status === "conflict" ? "SKILL_ASSIGNMENT_CONFLICT" : "SKILL_CONTEXT_UNAVAILABLE",
+          error: currentSkills.status === "conflict"
+            ? "The required effective skills are ambiguous; resolve the assignment conflict before applying"
+            : "A required approved effective skill is no longer assigned; the bundle stays staged",
+          missing: currentSkills.missing, conflicts: currentSkills.conflicts
+        });
+      }
+      if (!skillResolutionMatches(pinnedSkills, currentSkills)) {
+        throw new ConflictException({
+          code: "SKILL_CONTEXT_STALE",
+          error: "The effective skills changed after this revision was reviewed; refresh the proposal and review it again",
+          pinned: pinnedSkills, current: currentSkills
+        });
+      }
+      const requirementOperation = operations.find((entry: Body) => entry.opType === "requirement_revision") as Body;
+      const caseOperation = operations.find((entry: Body) => entry.opType === "testcase_create") as Body | undefined;
+      const linkOperation = operations.find((entry: Body) => entry.opType === "requirement_case_link") as Body | undefined;
+      const requirement = await this.applyRequirementRevision(client, projectId, uid, requirementOperation, currentSkills);
+      organizationId = requirement.organizationId;
+      let testcase: Body | null = null;
+      if (caseOperation) {
+        const fields = { ...caseOperation.draft, status: "Draft" };
+        await this.assertProposalReferences(client, projectId, fields);
+        const saved = await this.insertTestCaseWithClient(client, projectId, uid, fields);
+        const fresh = (await client.query(
+          `SELECT testcases.*, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision,
+                  ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision, ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current
+             FROM testcases WHERE id=$1 AND project_id=$2`, [saved.id, projectId]
+        )).rows[0];
+        testcase = { id: String(saved.id), title: String(fresh.title), editRevision: String(fresh.edit_revision),
+          approvalRevision: String(fresh.approval_revision), approvalCurrent: fresh.approval_current === true, status: String(fresh.status) };
+      }
+      let link: Body | null = null;
+      if (linkOperation) {
+        if (!testcase) throw new BadRequestException({ error: "A requirement_case_link requires the reviewed testcase_create in the same bundle" });
+        const inserted = (await client.query(
+          `INSERT INTO requirement_case_links
+             (project_id,requirement_id,requirement_version_id,criterion_keys,testcase_id,testcase_revision,testcase_approval_revision,state,proposed_by,applied_by,applied_at)
+           VALUES ($1,$2,$3,$4::text[],$5,$6,$7,'active',$8,$8,now()) RETURNING *`,
+          [projectId, requirement.documentId, requirement.versionId, linkOperation.criterionKeys, testcase.id,
+            testcase.editRevision, testcase.approvalCurrent ? testcase.approvalRevision : null, uid]
+        )).rows[0];
+        link = toCamel(inserted);
+      }
+      const receipt = {
+        id: randomUUID(), decisionKey, proposalRevision: revision, reviewerId: uid, principalKind: "human_session",
+        action: "requirement_bundle_apply", skillContext: currentSkills, proposalSnapshot: snapshot,
+        requirement, testcase, link, appliedAt: new Date().toISOString()
+      };
+      const activity = [{ actor: "user", stage: "done", title: "Applied requirement change bundle",
+        detail: "Published the reviewed requirement version, Draft case candidate and exact link in one transaction. Requirement approval remains a separate human decision.",
+        createdAt: receipt.appliedAt, reviewerId: uid, proposalRevision: revision }];
+      await client.query(
+        "UPDATE ai_generation_requests SET task_status='done', save_events=save_events||$3::jsonb, activity_log=activity_log||$4::jsonb, updated_at=now() WHERE id=$1 AND project_id=$2",
+        [taskId, projectId, JSON.stringify([receipt]), JSON.stringify(activity)]
+      );
+      await this.logProjectActivity(projectId, uid, "requirement_bundle_applied", "ai_generation_request", taskId, existing.user_story,
+        { decisionKey, proposalRevision: revision, requirementDocumentId: requirement.documentId, requirementVersionId: requirement.versionId,
+          testcaseId: testcase?.id ?? null, linkId: link?.id ?? null, skillContext: currentSkills }, client);
+      return { receipt, replayed: false };
+    });
+    if (result.receipt?.requirement?.documentId && organizationId) {
+      this.enqueueEmbedding(organizationId, projectId, "document", String(result.receipt.requirement.documentId), "updated");
+    }
+    return { taskId, taskStatus: "done", ...result };
+  }
+
+  /** Approve the exact submitted requirement version. Approval is human-only and separate from apply. */
+  async approveRequirementVersion(projectId: string, userId: string | null | undefined, documentId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(documentId)) throw new NotFoundException({ error: "Requirement not found" });
+    const versionId = String(body.versionId || "");
+    if (!isUuid(versionId)) throw new BadRequestException({ error: "versionId must identify the submitted requirement version under review" });
+    let organizationId: string | null = null;
+    const result = await this.db.transaction(async client => {
+      const { doc, role } = await this.lockKnowledgeReviewDocument(client, projectId, uid, documentId);
+      this.kbRequireOwnerOrManager(role);
+      organizationId = String(doc.organization_id);
+      if (doc.document_type !== "requirement_note") throw new BadRequestException({ error: "Only native requirement notes can be approved here" });
+      if (doc.source_provider) throw new ConflictException({ code: "REQUIREMENT_EXTERNAL_OWNED", error: "A provider-synced requirement remains read-only" });
+      const version = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [versionId, documentId])).rows[0];
+      if (!version || version.snapshot_kind !== "submitted") throw new BadRequestException({ error: "versionId must identify a submitted version of this requirement" });
+      if (doc.reviewed_version_id) {
+        const reviewed = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [doc.reviewed_version_id, documentId])).rows[0];
+        if (reviewed?.snapshot_kind === "approved" && reviewed.snapshot_metadata?.sourceVersionId === versionId) {
+          return { doc, approvedVersionId: String(reviewed.id), links: 0, replayed: true };
+        }
+      }
+      if (version.snapshot_metadata?.contentDigest !== knowledgeDocumentContentDigest(doc)) {
+        throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "The requirement changed after this version was submitted; approve the exact submitted version or stage a refreshed revision" });
+      }
+      // Re-resolve the exact basis the reviewed version pinned (requirement, link and case targets),
+      // not only the requirement target, or every approval would compare against a smaller digest.
+      const pinnedTargets = normalizeJsonArray(version.snapshot_metadata?.skillContext?.assignments)
+        .map((assignment: Body) => assignment?.target)
+        .filter((target: Body) => target && typeof target.module === "string" && typeof target.subtype === "string" && typeof target.operation === "string");
+      const current = await resolveEffectiveSkills(client, projectId,
+        pinnedTargets.length ? pinnedTargets : requirementBundleTargets([{ opType: "requirement_revision" }]));
+      if (current.status !== "resolved") {
+        throw new ConflictException({ code: current.status === "conflict" ? "SKILL_ASSIGNMENT_CONFLICT" : "SKILL_CONTEXT_UNAVAILABLE", error: "A required approved effective skill is not currently resolved", missing: current.missing, conflicts: current.conflicts });
+      }
+      if (!skillResolutionMatches(version.snapshot_metadata?.skillContext, current)) {
+        throw new ConflictException({ code: "SKILL_CONTEXT_STALE", error: "The effective skills changed after this requirement version was submitted; stage and review a refreshed revision", current });
+      }
+      const criteria = (doc.content_json as Body | null)?.criteria;
+      const approved = await this.writeKnowledgeGovernedVersion(client, doc, uid, "approved", doc.edit_revision, "human_session", null,
+        { authority: "requirement_review", criteria, skillContext: current, sourceVersionId: versionId });
+      const updated = (await client.query(
+        `UPDATE knowledge_documents SET status='approved', reviewed_by=$2, reviewed_at=now(), reviewed_version_id=$3, updated_at=now()
+          WHERE id=$1 AND project_id=$4 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [documentId, uid, approved.id, projectId]
+      )).rows[0];
+      const links = await client.query(
+        `INSERT INTO requirement_case_links
+           (project_id,requirement_id,requirement_version_id,criterion_keys,testcase_id,testcase_revision,testcase_approval_revision,state,proposed_by,applied_by,applied_at)
+         SELECT l.project_id,l.requirement_id,$4,l.criterion_keys,l.testcase_id,l.testcase_revision,l.testcase_approval_revision,'active',l.proposed_by,$5,now()
+           FROM requirement_case_links l
+          WHERE l.project_id=$1 AND l.requirement_id=$2 AND l.requirement_version_id=$3 AND l.state='active'
+            AND NOT EXISTS (SELECT 1 FROM requirement_case_links x
+                             WHERE x.requirement_version_id=$4 AND x.testcase_id=l.testcase_id
+                               AND x.criterion_keys=l.criterion_keys AND x.state IN ('proposed','active'))
+         RETURNING id`,
+        [projectId, documentId, versionId, approved.id, uid]
+      );
+      await this.logProjectActivity(projectId, uid, "requirement_approved", "knowledge_document", documentId, doc.title,
+        { versionId: approved.id, sourceVersionId: versionId, linkRowsCreated: links.rowCount, skillContext: current }, client);
+      return { doc: updated, approvedVersionId: String(approved.id), links: links.rowCount, replayed: false };
+    });
+    if (organizationId) this.enqueueEmbedding(organizationId, projectId, "document", documentId, "updated");
+    return { ...toCamel(result.doc), approvedVersionId: result.approvedVersionId, sourceVersionId: versionId, linkRowsCreated: result.links, replayed: result.replayed };
+  }
+
+  /**
+   * Re-apply one active link to the case's current approved revision. Human-only and explicit:
+   * the earlier link is retired, never rewritten, so historical coverage stays attributable.
+   */
+  async reapplyRequirementCaseLink(projectId: string, userId: string | null | undefined, documentId: string, linkId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(documentId) || !isUuid(linkId)) throw new NotFoundException({ error: "Requirement link not found" });
+    const expectedCaseRevision = String(body.expectedCaseRevision || "");
+    const expectedApprovalRevision = String(body.expectedApprovalRevision || "");
+    if (!/^[a-f0-9]{64}$/.test(expectedCaseRevision) || !/^[a-f0-9]{64}$/.test(expectedApprovalRevision)) {
+      throw new BadRequestException({ error: "expectedCaseRevision and expectedApprovalRevision must be the current case revisions" });
+    }
+    return this.db.transaction(async client => {
+      const access = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      if (!["owner", "manager"].includes(String(access.caller_role))) throw new ForbiddenException({ error: "Only project owners and managers can re-apply a requirement link" });
+      const doc = (await client.query(
+        `SELECT id,document_type,source_provider,reviewed_version_id FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE`,
+        [documentId, projectId]
+      )).rows[0];
+      if (!doc || doc.document_type !== "requirement_note" || doc.source_provider) throw new NotFoundException({ error: "Native requirement not found" });
+      const link = (await client.query("SELECT * FROM requirement_case_links WHERE id=$1 AND project_id=$2 AND requirement_id=$3 FOR UPDATE", [linkId, projectId, documentId])).rows[0];
+      if (!link) throw new NotFoundException({ error: "Requirement link not found" });
+      if (link.state !== "active") {
+        const prior = (await client.query(
+          `SELECT * FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 AND testcase_id=$3
+             AND testcase_revision=$4 AND testcase_approval_revision=$5 AND criterion_keys=$6 AND state='active' LIMIT 1`,
+          [projectId, documentId, link.testcase_id, expectedCaseRevision, expectedApprovalRevision, link.criterion_keys]
+        )).rows[0];
+        if (prior) return { link: toCamel(prior), retiredLinkId: String(link.id), replayed: true };
+        throw new ConflictException({ code: "LINK_NOT_ACTIVE", error: "This link is no longer active; load the current requirement coverage and choose an active link" });
+      }
+      const testcase = (await client.query(
+        `SELECT testcases.id, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision,
+                ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision, ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current
+           FROM testcases WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL FOR UPDATE`, [link.testcase_id, projectId]
+      )).rows[0];
+      if (!testcase) throw new NotFoundException({ error: "Test case not found" });
+      if (String(testcase.edit_revision) !== expectedCaseRevision) throw new ConflictException({ code: "CASE_REVISION_CONFLICT", error: "The case changed since this revision was read" });
+      if (testcase.approval_current !== true || String(testcase.approval_revision) !== expectedApprovalRevision) {
+        throw new ConflictException({ code: "CASE_NOT_APPROVED", error: "The case is not currently approved at the reviewed revision" });
+      }
+      const requirementVersionId = doc.reviewed_version_id ? String(doc.reviewed_version_id) : String(link.requirement_version_id);
+      // One live relation per case/criteria. Retire every active/proposed generation that would
+      // collide with the current approved basis, not only the row the caller happened to read.
+      await client.query(
+        `UPDATE requirement_case_links SET state='retired', retired_by=$5, retired_at=now()
+          WHERE project_id=$1 AND requirement_id=$2 AND testcase_id=$3 AND criterion_keys=$4
+            AND state IN ('proposed','active')`,
+        [projectId, documentId, link.testcase_id, link.criterion_keys, uid]
+      );
+      const created = (await client.query(
+        `INSERT INTO requirement_case_links
+           (project_id,requirement_id,requirement_version_id,criterion_keys,testcase_id,testcase_revision,testcase_approval_revision,state,proposed_by,applied_by,applied_at)
+         VALUES ($1,$2,$3,$4::text[],$5,$6,$7,'active',$8,$8,now()) RETURNING *`,
+        [projectId, documentId, requirementVersionId, link.criterion_keys, link.testcase_id, expectedCaseRevision, expectedApprovalRevision, uid]
+      )).rows[0];
+      await this.logProjectActivity(projectId, uid, "requirement_link_reapplied", "requirement_case_link", created.id, doc.id,
+        { retiredLinkId: linkId, requirementVersionId, testcaseId: link.testcase_id, testcaseRevision: expectedCaseRevision, approvalRevision: expectedApprovalRevision }, client);
+      return { link: toCamel(created), retiredLinkId: String(linkId), replayed: false };
+    });
+  }
+
+  /** Authored/approved/executed/passing remain distinct; only persisted exact-basis attempts qualify. */
+  async requirementCoverage(projectId: string, userId: string | null | undefined, documentId: string) {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    if (!isUuid(documentId)) throw new NotFoundException({ error: "Requirement not found" });
+    const doc = (await this.db.query(
+      `SELECT id,title,content_json,reviewed_version_id,document_type,source_provider
+         FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false`, [documentId, projectId]
+    )).rows[0];
+    if (!doc || doc.document_type !== "requirement_note" || doc.source_provider) throw new NotFoundException({ error: "Native requirement not found" });
+    const approvedVersionId = doc.reviewed_version_id ? String(doc.reviewed_version_id) : null;
+    const latestSubmittedRow = (await this.db.query(
+      `SELECT id FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind='submitted' ORDER BY version_number DESC LIMIT 1`, [documentId]
+    )).rows[0];
+    const latestSubmitted = latestSubmittedRow ? String(latestSubmittedRow.id) : null;
+    const rows = (await this.db.query(
+      `SELECT l.id, l.criterion_keys, l.testcase_id, l.testcase_revision, l.testcase_approval_revision,
+              l.requirement_version_id, testcases.title,
+              ${TESTCASE_EDIT_REVISION_SQL} AS current_edit_revision,
+              ${TESTCASE_APPROVAL_REVISION_SQL} AS current_approval_revision,
+              ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current,
+              attempt.attempt_count, attempt.latest_status, attempt.latest_at, attempt.conflicting_attempts
+         FROM requirement_case_links l
+         JOIN testcases ON testcases.id=l.testcase_id AND testcases.project_id=l.project_id
+         LEFT JOIN LATERAL (
+           SELECT COUNT(*)::int AS attempt_count,
+                  (ARRAY_AGG(e.status ORDER BY e.executed_at DESC, e.id DESC))[1] AS latest_status,
+                  MAX(e.executed_at) AS latest_at,
+                  BOOL_OR(e.status='Passed') AND BOOL_OR(e.status='Failed') AS conflicting_attempts
+             FROM executions e
+             JOIN cycle_items ci ON ci.id=e.cycle_item_id AND ci.testcase_id=l.testcase_id
+             JOIN cycles c ON c.id=ci.cycle_id AND c.project_id=l.project_id
+            WHERE e.deleted_at IS NULL AND e.executed_at IS NOT NULL AND e.executed_by IS NOT NULL
+              AND l.testcase_approval_revision IS NOT NULL
+              AND ci.snapshot_approval_revision = l.testcase_approval_revision
+         ) attempt ON true
+        WHERE l.project_id=$1 AND l.requirement_id=$2 AND l.state='active'
+          AND l.requirement_version_id = ANY($3::uuid[])
+        ORDER BY l.testcase_id,l.id`,
+      [projectId, documentId, [approvedVersionId, latestSubmitted].filter(Boolean)]
+    )).rows;
+    const criteria = normalizeJsonArray((doc.content_json as Body | null)?.criteria);
+    const cases = rows.map((row: Body) => {
+      const onApprovedVersion = approvedVersionId !== null && String(row.requirement_version_id) === approvedVersionId;
+      const approved = onApprovedVersion && String(row.testcase_revision) === String(row.current_edit_revision)
+        && row.testcase_approval_revision !== null && String(row.testcase_approval_revision) === String(row.current_approval_revision)
+        && row.approval_current === true;
+      const executed = approved && Number(row.attempt_count || 0) > 0;
+      return {
+        linkId: String(row.id), testcaseId: String(row.testcase_id), title: String(row.title),
+        criterionKeys: normalizeJsonArray(row.criterion_keys).map(String), requirementVersionId: String(row.requirement_version_id),
+        authored: true, approved, executed, passing: executed && row.latest_status === "Passed",
+        latestAttempt: row.latest_status ? { status: String(row.latest_status), executedAt: row.latest_at } : null,
+        attemptCount: Number(row.attempt_count || 0), conflictingAttempts: row.conflicting_attempts === true,
+        reasons: [
+          ...(onApprovedVersion ? [] : ["REQUIREMENT_VERSION_SUPERSEDED"]),
+          ...(approved || !onApprovedVersion ? [] : ["CASE_REVISION_CHANGED_OR_NOT_APPROVED"]),
+          ...(executed || !approved ? [] : ["NO_QUALIFYING_ATTEMPT"])
+        ]
+      };
+    });
+    const summary = criteria.map((criterion: Body) => {
+      const key = String(criterion.key);
+      const linked = cases.filter(item => item.criterionKeys.includes(key));
+      return {
+        key, text: String(criterion.text || ""), authored: linked.length > 0,
+        approved: linked.some(item => item.approved), executed: linked.some(item => item.executed),
+        passing: linked.some(item => item.passing), mixed: linked.some(item => item.conflictingAttempts),
+        caseCount: linked.length
+      };
+    });
+    return {
+      requirementId: documentId, approvedVersionId, latestSubmittedVersionId: latestSubmitted,
+      readings: {
+        authored: cases.length > 0,
+        approved: approvedVersionId !== null && cases.some(item => item.approved),
+        executed: cases.some(item => item.executed),
+        passing: cases.some(item => item.passing),
+        mixed: cases.some(item => item.conflictingAttempts)
+      },
+      criteria: summary, cases,
+      basis: "Current approved requirement version and its exact active links; historical attempts remain readable and are not deleted."
+    };
+  }
+
+  private escapeProposalHtml(value: string): string {
+    return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  private async kbRootFolderId(client: PoolClient, projectId: string, organizationId: string): Promise<string> {
+    const existing = (await client.query("SELECT id FROM knowledge_folders WHERE project_id=$1 AND is_root=true AND is_deleted=false LIMIT 1", [projectId])).rows[0];
+    if (existing) return String(existing.id);
+    return String((await client.query(
+      `INSERT INTO knowledge_folders(organization_id,project_id,name,is_root) VALUES ($1,$2,'Knowledge base',true) RETURNING id`,
+      [organizationId, projectId]
+    )).rows[0].id);
+  }
+
+  private async allocateRequirementKey(client: PoolClient, projectId: string): Promise<string> {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const key = `REQ-${randomUUID().replaceAll("-", "").slice(0, 8 + attempt).toUpperCase()}`;
+      const taken = await client.query("SELECT 1 FROM requirement_profiles WHERE project_id=$1 AND requirement_key=$2", [projectId, key]);
+      if (!taken.rows[0]) return key;
+    }
+    throw new ConflictException({ error: "Could not allocate a requirement key" });
+  }
+
+  /** Apply one reviewed requirement revision as an immutable submitted KB version. */
+  private async applyRequirementRevision(client: PoolClient, projectId: string, uid: string, operation: Body, skillContext: SkillResolution) {
+    const title = String(operation.title || "").trim();
+    const description = typeof operation.description === "string" ? operation.description : "";
+    const criteria = normalizeJsonArray(operation.criteria);
+    const contentJson = { schemaVersion: "tesbo-requirement/1", description, criteria };
+    const contentText = [title, description, ...criteria.map((criterion: Body) => `${criterion.key}: ${criterion.text}`)].filter(Boolean).join("\n");
+    const contentHtml = `<h1>${this.escapeProposalHtml(title)}</h1><p>${this.escapeProposalHtml(description)}</p><ul>${criteria.map((criterion: Body) => `<li><strong>${this.escapeProposalHtml(String(criterion.key))}</strong> ${this.escapeProposalHtml(String(criterion.text))}</li>`).join("")}</ul>`;
+    let doc: Body;
+    if (operation.documentId) {
+      const current = (await client.query(
+        `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS}, ${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS edit_revision
+           FROM knowledge_documents WHERE id=$1 AND project_id=$2 FOR UPDATE`, [operation.documentId, projectId]
+      )).rows[0];
+      if (!current || current.is_deleted) throw new NotFoundException({ error: "Requirement document not found in this project" });
+      if (current.document_type !== "requirement_note") throw new BadRequestException({ code: "REQUIREMENT_DOCUMENT_TYPE", error: "The target document is not a requirement note" });
+      if (current.source_provider) throw new ConflictException({ code: "REQUIREMENT_EXTERNAL_OWNED", error: "A provider-synced requirement is read-only and cannot be revised natively" });
+      if (String(current.edit_revision) !== String(operation.expectedRevision)) throw new ConflictException({ code: "REQUIREMENT_REVISION_CONFLICT", error: "The requirement changed since this revision was based on it" });
+      doc = (await client.query(
+        `UPDATE knowledge_documents
+            SET title=$2, content_json=$3::jsonb, content_html=$4, content_text=$5, updated_by=$6, updated_at=now(),
+                status='draft', reviewed_by=NULL, reviewed_at=NULL, reviewed_version_id=NULL
+          WHERE id=$1 AND project_id=$7
+          RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}, ${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS edit_revision`,
+        [operation.documentId, title, JSON.stringify(contentJson), contentHtml, contentText, uid, projectId]
+      )).rows[0];
+      await client.query("UPDATE requirement_profiles SET state='active', updated_at=now() WHERE document_id=$1", [operation.documentId]);
+    } else {
+      const folderId = await this.kbRootFolderId(client, projectId, String((await client.query("SELECT organization_id FROM projects WHERE id=$1", [projectId])).rows[0].organization_id));
+      const requirementKey = await this.allocateRequirementKey(client, projectId);
+      doc = (await client.query(
+        `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, status, created_by, updated_by)
+         SELECT organization_id,id,$2,$3,$4::jsonb,$5,$6,'requirement_note','draft',$7,$7 FROM projects WHERE id=$1
+         RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}, ${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS edit_revision`,
+        [projectId, folderId, title, JSON.stringify(contentJson), contentHtml, contentText, uid]
+      )).rows[0];
+      await client.query("INSERT INTO requirement_profiles(document_id,project_id,requirement_key,state) VALUES ($1,$2,$3,'active')", [doc.id, projectId, requirementKey]);
+    }
+    const version = await this.writeKnowledgeGovernedVersion(client, doc, uid, "submitted", String(doc.edit_revision), "human_session", String(operation.operationId),
+      { authority: "requirement_candidate", criteria, skillContext });
+    return { documentId: String(doc.id), versionId: String(version.id), versionNumber: Number(version.version_number),
+      editRevision: String(doc.edit_revision), organizationId: String(doc.organization_id) };
+  }
+
   private taskHasRequirementBundle(payload: unknown): boolean {
     return normalizeJsonArray(payload).some(entry => REQUIREMENT_BUNDLE_OPERATION_KINDS.has(String(entry?.opType || "")));
   }
@@ -16226,7 +16767,7 @@ export class LegacyService implements OnModuleInit {
         const documentId = entry.documentId === undefined ? null : String(entry.documentId);
         const expectedRevision = entry.expectedRevision === undefined ? null : String(entry.expectedRevision);
         if (documentId && !expectedRevision) throw new BadRequestException({ error: "Revising an existing requirement requires expectedRevision" });
-        requirement = { opType, operationId, documentId, expectedRevision, title, description, criteria: normalizedCriteria, reason, skillContext: REQUIREMENT_SKILL_CONTEXT };
+        requirement = { opType, operationId, documentId, expectedRevision, title, description, criteria: normalizedCriteria, reason };
         return requirement;
       }
       if (opType === "testcase_create") {
@@ -27089,7 +27630,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     item.drafts = await Promise.all(caseEntries.map((entry: Body) => this.normalizeAiTaskDraftEntry(entry, snapshot?.targets)));
     if (bundleEntries.length) {
       item.requirementBundle = bundleEntries;
-      item.skillContext = bundleEntries.find((entry: Body) => entry.skillContext)?.skillContext || REQUIREMENT_SKILL_CONTEXT;
+      item.skillContext = row.skill_context && Object.keys(row.skill_context).length
+        ? row.skill_context
+        : bundleEntries.find((entry: Body) => entry.skillContext)?.skillContext || REQUIREMENT_SKILL_CONTEXT;
     }
     if (this.isRequirementBundleTask(row)) item.requirementDecision = this.requirementDecisionReceipt(row);
     if (snapshot) {

@@ -1721,6 +1721,53 @@ export class LegacyController {
     return this.legacy.withdrawRequirementProposal(projectId, req.userId, taskId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
+  // Work Package A Slice 2 — protected apply, exact-version approval and evidence readback.
+  @Post("/api/projects/:projectId/requirements/proposals/:taskId/apply")
+  applyRequirementProposal(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string, @Body() body: Record<string, any>) {
+    return this.legacy.applyRequirementProposal(projectId, req.userId, taskId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Post("/api/projects/:projectId/requirements/:documentId/approve")
+  approveRequirementVersion(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.approveRequirementVersion(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Get("/api/projects/:projectId/requirements/:documentId/coverage")
+  requirementCoverage(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string) {
+    return this.legacy.requirementCoverage(projectId, req.userId, documentId);
+  }
+
+  @Post("/api/projects/:projectId/requirements/:documentId/links/:linkId/reapply")
+  reapplyRequirementCaseLink(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Param("linkId") linkId: string, @Body() body: Record<string, any>) {
+    return this.legacy.reapplyRequirementCaseLink(projectId, req.userId, documentId, linkId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  // Governed Skills: agents may create candidates; only a human session can approve or assign.
+  @Post("/api/projects/:projectId/skills")
+  createSkillCandidate(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.createSkillCandidate(projectId, req.userId, body);
+  }
+
+  @Get("/api/projects/:projectId/skills/effective")
+  effectiveSkills(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Query() query: Record<string, any>) {
+    return this.legacy.effectiveSkills(projectId, req.userId, query);
+  }
+
+  @Patch("/api/projects/:projectId/skills/:documentId/approve")
+  approveSkillVersion(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.approveSkillVersion(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Post("/api/projects/:projectId/skill-assignments")
+  assignSkill(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.assignSkill(projectId, req.userId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Patch("/api/projects/:projectId/skill-assignments/:assignmentId/deactivate")
+  deactivateSkillAssignment(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("assignmentId") assignmentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.deactivateSkillAssignment(projectId, req.userId, assignmentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
   @Get("/api/projects/:projectId/agents/zyra/tasks/:taskId")
   getZyraTask(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string) {
     return this.legacy.zyraTask(projectId, req.userId, taskId);
