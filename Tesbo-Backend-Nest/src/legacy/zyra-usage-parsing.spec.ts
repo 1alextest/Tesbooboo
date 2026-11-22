@@ -5,7 +5,7 @@ import * as aiTrace from "../observability/ai-trace";
 process.env.SECRETS_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
 
 /*
- * Usage parsing for the router/planner call paths.
+ * Usage parsing for the router/planner and update-authoring call paths.
  *
  * These were the last Zyra model calls that discarded provider cache accounting: OpenAI's
  * `prompt_tokens_details.cached_tokens` was dropped on the floor, and Anthropic's cache read/create
@@ -27,6 +27,7 @@ type Internals = {
   summarizeForZyraMemory: (provider: string, model: string, key: Record<string, unknown>, prompt: string, scope: { projectId: string }) => Promise<string>;
   zyraAiAllocation: (projectId: string) => Promise<{ key: unknown }>;
   transcribeKnowledgeFile: (projectId: string, fileId: string, buffer: Buffer, ext: string, mimeType: string, fileName: string) => Promise<void>;
+  authorZyraUpdates: (params: Record<string, unknown>) => Promise<{ operations: Array<Record<string, unknown>> }>;
 };
 
 function makeLegacy(): LegacyService {
@@ -81,6 +82,28 @@ function prepareRouter(svc: LegacyService, key: Record<string, unknown> = openAi
   };
   for (const [method, value] of Object.entries(responses)) jest.spyOn(internal, method).mockResolvedValue(value);
 }
+
+function prepareUpdateAuthoring(svc: LegacyService, provider: string) {
+  const internal = svc as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+  jest.spyOn(internal, "findProjectTestcase").mockResolvedValue({ id: "synthetic-case" });
+  jest.spyOn(internal, "getTestCase").mockResolvedValue({ id: "synthetic-case", externalId: "SYN-TC-1", title: "Synthetic case", steps: [] });
+  jest.spyOn(internal, "zyraTaskKnowledge").mockResolvedValue({ knowledge: [] });
+  return {
+    projectId: "synthetic-project", provider,
+    model: provider === "anthropic" ? "claude-haiku-4-5" : "gpt-4.1",
+    key: provider === "anthropic" ? anthropicKey : openAiKey,
+    message: "Update the synthetic title",
+    raw: { operations: [{ type: "update", testcaseId: "synthetic-case", fields: { description: "Keep this field" } }] },
+    trace: { span: null, traceId: null },
+    sources: { knowledge: [], jira: [], existingTestcases: [], bugs: [] }
+  };
+}
+
+const authoredUpdate = {
+  updates: [{ externalId: "SYN-TC-1", fields: { title: "Synthetic updated title" }, sourceRefs: [] }],
+  // A completion is content, not a trusted source of provider accounting or request identity.
+  __zyraModel: "invented-model", __zyraUsage: { input: 999, output: 999, total: 1998 }
+};
 
 describe("Zyra provider usage parsing (cached input tokens)", () => {
   let svc: LegacyService;
@@ -346,5 +369,109 @@ describe("Zyra provider usage parsing (cached input tokens)", () => {
     expect(requestedModels.at(-1)).not.toBe(model);
     expect(recorded).toHaveBeenCalledTimes(1);
     expect(recorded.mock.calls[0][0]).toMatchObject({ model: requestedModels.at(-1), errorMessage: "synthetic transport failure" });
+  });
+
+  describe.each(["openai", "anthropic"])("%s update authoring consumer", (provider) => {
+    it.each([
+      "absent", "null", "empty", "wrong type", "input only", "output only", "malformed", "partial malformed", "measured zero", "cache only", "full"
+    ])("preserves %s provider usage without changing the authored fields", async (kind) => {
+      const anthropic = provider === "anthropic";
+      const cases: Record<string, [unknown, Usage | undefined]> = {
+        absent: [undefined, undefined],
+        null: [null, undefined],
+        empty: [{}, undefined],
+        "wrong type": ["unknown", undefined],
+        "input only": [anthropic ? { input_tokens: 12 } : { prompt_tokens: 12 }, { input: 12 }],
+        "output only": [anthropic ? { output_tokens: 3 } : { completion_tokens: 3 }, { output: 3 }],
+        malformed: [anthropic
+          ? { input_tokens: "12", output_tokens: -1, cache_read_input_tokens: false }
+          : { prompt_tokens: "12", completion_tokens: -1, total_tokens: Number.POSITIVE_INFINITY, prompt_tokens_details: { cached_tokens: false } }, undefined],
+        "partial malformed": [anthropic ? { input_tokens: 12, output_tokens: "2" } : { prompt_tokens: 12, completion_tokens: "2" }, { input: 12 }],
+        "measured zero": [anthropic
+          ? { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+          : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, prompt_tokens_details: { cached_tokens: 0 } }, { input: 0, output: 0, total: 0, cached: 0 }],
+        "cache only": [anthropic ? { cache_read_input_tokens: 3 } : { prompt_tokens_details: { cached_tokens: 3 } }, { cached: 3 }],
+        full: [anthropic
+          ? { input_tokens: 7, output_tokens: 2, cache_read_input_tokens: 3 }
+          : { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12, prompt_tokens_details: { cached_tokens: 3 } }, { input: 10, output: 2, total: 12, cached: 3 }]
+      };
+      const [usage, expected] = cases[kind];
+      const params = prepareUpdateAuthoring(svc, provider);
+      const recorded = jest.spyOn(aiTrace, "recordGeneration").mockImplementation(() => undefined);
+      const ledger = jest.spyOn(svc as unknown as { recordZyraTokenUsage: (...args: unknown[]) => Promise<void> }, "recordZyraTokenUsage");
+      mockResponse(completion(provider, usage, authoredUpdate));
+      const result = await (svc as unknown as Internals).authorZyraUpdates(params);
+      expect(result.operations).toEqual([{
+        type: "update", testcaseId: "synthetic-case",
+        fields: { description: "Keep this field", title: "Synthetic updated title" }, __sourceRefs: []
+      }]);
+      expect(recorded).toHaveBeenCalledTimes(1);
+      expect(recorded.mock.calls[0][1]).toMatchObject({ name: "update_authoring", model: params.model });
+      expect(recorded.mock.calls[0][1].usage).toEqual(expected);
+      expect(ledger).toHaveBeenCalledWith("synthetic-project", "chat_generate", provider, params.model, expected || {});
+      const writes = (svc as unknown as { db: { query: jest.Mock } }).db.query.mock.calls;
+      if (!expected || kind === "cache only" || kind === "measured zero") {
+        expect(writes.filter(([sql]) => String(sql).includes("INSERT INTO zyra_token_usage"))).toEqual([]);
+      }
+    });
+  });
+
+  it.each(["success", "transport failure", "HTTP failure", "authentication failure"])("update authoring retains the actual fallback model on %s", async (outcome) => {
+    const params = prepareUpdateAuthoring(svc, "anthropic");
+    const recorded = jest.spyOn(aiTrace, "recordGeneration").mockImplementation(() => undefined);
+    const requestedModels: string[] = [];
+    global.fetch = jest.fn(async (_url: unknown, init?: RequestInit) => {
+      requestedModels.push(JSON.parse(String(init?.body)).model);
+      if (requestedModels.length === 1) return { ok: false, status: 404, json: async () => ({ error: { message: "model not found" } }) };
+      if (outcome === "transport failure") throw new Error("synthetic transport failure");
+      if (outcome === "HTTP failure") return { ok: false, status: 503, json: async () => ({ error: { message: "synthetic unavailable" } }) };
+      if (outcome === "authentication failure") return { ok: false, status: 401, json: async () => ({ error: { message: "synthetic unauthorized" } }) };
+      return { ok: true, json: async () => completion("anthropic", { input_tokens: 10, output_tokens: 2 }, authoredUpdate) };
+    }) as unknown as typeof fetch;
+    const result = await (svc as unknown as Internals).authorZyraUpdates(params);
+    expect(requestedModels).toEqual(["claude-haiku-4-5", "claude-sonnet-4-6"]);
+    expect(recorded).toHaveBeenCalledTimes(1);
+    expect(recorded.mock.calls[0][1]).toMatchObject({ name: "update_authoring", model: requestedModels[1] });
+    const writes = (svc as unknown as { db: { query: jest.Mock } }).db.query.mock.calls.filter(([sql]) => String(sql).includes("INSERT INTO zyra_token_usage"));
+    if (outcome === "success") {
+      expect(result.operations[0].fields).toEqual({ description: "Keep this field", title: "Synthetic updated title" });
+      expect(result.operations[0]).not.toHaveProperty("__authoringError");
+      expect(recorded.mock.calls[0][1].usage).toEqual({ input: 10, output: 2, total: 12 });
+      expect(writes).toHaveLength(1);
+      expect(writes[0][1]).toEqual(["synthetic-project", "chat_generate", "anthropic", requestedModels[1], 10, 2, 12]);
+    } else {
+      expect(result.operations[0].fields).toEqual({ description: "Keep this field" });
+      expect(result.operations[0].__authoringError).toEqual(expect.stringContaining("so nothing was staged for it"));
+      expect(recorded.mock.calls[0][1].errorMessage).toEqual(expect.stringContaining("drafting it failed"));
+      expect(recorded.mock.calls[0][1].usage).toBeUndefined();
+      expect(writes).toEqual([]);
+    }
+  });
+
+  it("update authoring keeps actual models local to concurrent batches", async () => {
+    const params = prepareUpdateAuthoring(svc, "anthropic");
+    const internal = svc as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+    jest.spyOn(internal, "findProjectTestcase").mockImplementation(async (_projectId, id) => ({ id }));
+    jest.spyOn(internal, "getTestCase").mockImplementation(async (id) => ({ id, externalId: `SYN-TC-${id}`, title: "Synthetic case", steps: [] }));
+    const recorded = jest.spyOn(aiTrace, "recordGeneration").mockImplementation(() => undefined);
+    global.fetch = jest.fn(async (_url: unknown, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body));
+      const firstBatch = request.messages[0].content.includes('"SYN-TC-1"');
+      if (firstBatch && request.model === "claude-haiku-4-5") return { ok: false, status: 404, json: async () => ({ error: { message: "model not found" } }) };
+      const ids = firstBatch ? [1, 2, 3, 4, 5] : [6];
+      return { ok: true, json: async () => completion("anthropic", { input_tokens: ids.length, output_tokens: 1 }, {
+        updates: ids.map((id) => ({ externalId: `SYN-TC-${id}`, fields: { title: `Updated ${id}` }, sourceRefs: [] }))
+      }) };
+    }) as unknown as typeof fetch;
+    const result = await (svc as unknown as Internals).authorZyraUpdates({
+      ...params, raw: { operations: [1, 2, 3, 4, 5, 6].map((id) => ({ type: "update", testcaseId: String(id), fields: {} })) }
+    });
+    expect(result.operations.map((op) => op.fields)).toEqual([1, 2, 3, 4, 5, 6].map((id) => ({ title: `Updated ${id}` })));
+    expect(recorded).toHaveBeenCalledTimes(2);
+    const observations = recorded.mock.calls.map(([, data]) => data);
+    expect(observations.find((data) => (data.input as { cases: number }).cases === 5)?.model).toBe("claude-sonnet-4-6");
+    expect(observations.find((data) => (data.input as { cases: number }).cases === 1)?.model).toBe("claude-haiku-4-5");
+    const writes = (svc as unknown as { db: { query: jest.Mock } }).db.query.mock.calls.filter(([sql]) => String(sql).includes("INSERT INTO zyra_token_usage"));
+    expect(writes.map(([, values]) => [values[3], values[4]]).sort()).toEqual([["claude-haiku-4-5", 1], ["claude-sonnet-4-6", 5]]);
   });
 });

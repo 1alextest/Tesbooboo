@@ -12,7 +12,7 @@ import { PasswordService } from "../auth/password.service";
 import { AppConfigService } from "../config/app-config.service";
 import { DatabaseService } from "../database/database.service";
 import { endZyraTurn, recordExistingCoverage, recordGeneration, recordJiraContext, recordKnowledgeContext, recordReconciliation, recordStandaloneGeneration, recordStandaloneTool, startZyraTurn, type TurnHandle } from "../observability/ai-trace";
-import { parseProviderUsage } from "../observability/provider-usage";
+import { parseProviderUsage, type ProviderUsage } from "../observability/provider-usage";
 import { storageKeyExtension } from "../storage/storage-key";
 import { StorageService } from "../storage/storage.service";
 import { encryptSecret, decryptSecret } from "../common/crypto.util";
@@ -20243,21 +20243,17 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         let decision: ZyraChatDecision;
         try {
           decision = await runWithZyraLiveBatch(batchLive, () => this.generateZyraPlanPiece({ ...pieceContext, scenarios: batch, onContext: emitContext }));
-          void recordStandaloneGeneration({
+          void recordStandaloneTool({
             traceSeed: batchTraceSeed,
             name: "zyra.plan.generate_batch",
-            provider,
-            model,
             input: { planId, sessionId, scenarios: batch.slice(0, 20), batchSize: batch.length, doneCount, totalCount },
             output: { draftedCount: LegacyService.zyraDraftedCount(decision) },
             metadata: { projectId, sessionId, planId }
           });
         } catch (err) {
-          void recordStandaloneGeneration({
+          void recordStandaloneTool({
             traceSeed: batchTraceSeed,
             name: "zyra.plan.generate_batch",
-            provider,
-            model,
             input: { planId, sessionId, scenarios: batch.slice(0, 20), batchSize: batch.length, doneCount, totalCount },
             errorMessage: err instanceof Error ? err.message : String(err),
             metadata: { projectId, sessionId, planId }
@@ -24645,10 +24641,11 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         "",
         this.zyraStaticSourcePrompt({ ...sources, linear: [] } as unknown as ZyraGenerationInput)
       ].join("\n");
+      const attempt: ZyraProviderAttempt = {};
       try {
-        const { parsed, usage, rawText } = await this.zyraAuthorJson(params.key, params.provider, params.model, system, user, Math.min(16000, 2000 + batch.length * 2000));
-        await this.recordZyraTokenUsage(params.projectId, "chat_generate", params.provider, params.model, usage);
-        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: params.model, input: { cases: cases.length, sourcesShown }, output: parsed, rawOutput: parsed ? undefined : rawText, usage });
+        const { parsed, usage, rawText } = await this.zyraAuthorJson(params.key, params.provider, params.model, system, user, Math.min(16000, 2000 + batch.length * 2000), attempt);
+        await this.recordZyraTokenUsage(params.projectId, "chat_generate", params.provider, attempt.model || params.model, usage || {});
+        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: attempt.model || params.model, input: { cases: cases.length, sourcesShown }, output: parsed, rawOutput: parsed ? undefined : rawText, usage });
         const byId = new Map<string, Body>();
         for (const entry of normalizeJsonArray(parsed?.updates)) {
           if (entry && typeof entry === "object" && entry.externalId) byId.set(String(entry.externalId).toUpperCase(), entry);
@@ -24673,7 +24670,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         }
       } catch (err) {
         const reason = this.isZyraTimeoutError(err) ? "drafting it timed out" : `drafting it failed (${this.extractAiErrorMessage(err)})`;
-        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: params.model, input: { cases: cases.length, sourcesShown }, errorMessage: reason });
+        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: attempt.model || params.model, input: { cases: cases.length, sourcesShown }, errorMessage: reason });
         for (const { op, row } of batch) op.__authoringError = `${row.externalId}: ${reason}, so nothing was staged for it — ask again to retry.`;
       }
     };
@@ -24697,12 +24694,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
    * One JSON completion with the generation budget (ZYRA_GENERATE_TIMEOUT_MS, caller-chosen
    * max_tokens) — the router helpers above are pinned to the router's 60s/4096-token budget.
    */
-  private async zyraAuthorJson(key: Body, provider: string, model: string, system: string, user: string, maxTokens: number): Promise<{ parsed: Body | null; usage: { input: number; output: number; total: number; cached?: number }; rawText: string }> {
+  private async zyraAuthorJson(key: Body, provider: string, model: string, system: string, user: string, maxTokens: number, attempt?: ZyraProviderAttempt): Promise<{ parsed: Body | null; usage: ProviderUsage | undefined; rawText: string }> {
     const signal = () => LegacyService.zyraProviderSignal(LegacyService.ZYRA_GENERATE_TIMEOUT_MS);
     if (providerWire(provider) === "anthropic") {
       let lastStatus = "";
       for (const candidate of providerModelCandidates(String(key.provider || "anthropic"), model)) {
-        const res = await fetch(normalizeAnthropicMessagesUrl(key.base_url), {
+        const url = normalizeAnthropicMessagesUrl(key.base_url);
+        const request = {
           method: "POST",
           headers: this.buildAnthropicAuthHeaders(key.api_key, key.auth_header_name, key.auth_scheme),
           body: JSON.stringify({
@@ -24712,7 +24710,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
             messages: [{ role: "user", content: user }]
           }),
           signal: signal()
-        });
+        };
+        if (attempt) attempt.model = candidate;
+        const res = await fetch(url, request);
         if (!res.ok) {
           const data = await res.json().catch(() => ({} as Body)) as Body;
           const rawStatus = String(data.error?.message || data.error || res.status);
@@ -24723,20 +24723,19 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         }
         const data = await res.json() as Body;
         const rawText = normalizeJsonArray(data.content).map((item) => item?.text || "").join("\n").trim();
-        const usage = data.usage || {};
-        const cached = Number(usage.cache_read_input_tokens || 0) + Number(usage.cache_creation_input_tokens || 0);
-        const input = Number(usage.input_tokens || 0) + cached;
-        const output = Number(usage.output_tokens || 0);
-        return { parsed: this.parseModelJson(rawText || "{}"), usage: { input, output, total: input + output, ...(cached ? { cached } : {}) }, rawText };
+        return { parsed: this.parseModelJson(rawText || "{}"), usage: parseProviderUsage("anthropic", data.usage), rawText };
       }
       throw new Error(`Claude update drafting failed: ${lastStatus || "No compatible model was accepted."}`);
     }
-    const res = await fetch(providerChatUrl(provider, key.base_url, model), {
+    const url = providerChatUrl(provider, key.base_url, model);
+    const request = {
       method: "POST",
       headers: this.providerAuthHeaders(provider, String(key.api_key || ""), key.auth_header_name, key.auth_scheme),
       body: JSON.stringify({ model, response_format: { type: "json_object" }, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
       signal: signal()
-    });
+    };
+    if (attempt) attempt.model = model;
+    const res = await fetch(url, request);
     if (!res.ok) {
       const errBody = await res.json().catch(() => ({} as Body)) as Body;
       const rawMessage = String(errBody.error?.message || errBody.error || res.status);
@@ -24744,16 +24743,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     }
     const data = await res.json() as Body;
     const rawText = String(data.choices?.[0]?.message?.content || "{}");
-    const usage = data.usage || {};
-    const cached = Number(usage.prompt_tokens_details?.cached_tokens || 0);
     return {
       parsed: this.parseModelJson(rawText),
-      usage: {
-        input: Number(usage.prompt_tokens || 0),
-        output: Number(usage.completion_tokens || 0),
-        total: Number(usage.total_tokens || 0),
-        ...(cached ? { cached } : {})
-      },
+      usage: parseProviderUsage("openai", data.usage),
       rawText
     };
   }

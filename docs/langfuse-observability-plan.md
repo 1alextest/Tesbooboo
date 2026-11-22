@@ -12,13 +12,16 @@ Zyra memory summarization (`summarizeForZyraMemory`), knowledge-base transcripti
 (`IntegrationSyncDecisions.summarize`) emit standalone Langfuse generations with usage/error
 metadata where available. Provider usage parsing now carries cached input tokens (OpenAI
 `prompt_tokens_details.cached_tokens`, Anthropic cache read/create counts) through the router,
-scenario planner/top-up, tool finalizer and memory-summary generations. RAG ingestion/testcase
-embedding jobs and the one-off testcase backfill are traced via `embedding-trace.ts`,
-background `continueZyraChatPlan` batch generations rejoin the originating turn's trace (seeded from
-the chat message id stored in `active_plan`), and the interactive `applyZyraChatOperations` call
-records a `zyra.apply_operations` tool span. **Still open:** plans created before that plan field
-existed fall back to standalone per-batch traces, broader usage parsing/trace attachment gaps may
-remain in other AI paths, scores/evals (Phase 3), dashboards/alerts (Phase 4), and §9 e2e coverage.
+scenario planner/top-up, tool finalizer, memory-summary and update-authoring generations. RAG
+ingestion/testcase embedding jobs and the one-off testcase backfill are traced via
+`embedding-trace.ts`. Background `continueZyraChatPlan` batch orchestration tool observations
+rejoin the originating turn's trace (seeded from the chat message id stored in `active_plan`), and
+the interactive `applyZyraChatOperations` call records a `zyra.apply_operations` tool span.
+The aggregate batch observation does not assert a single executed provider/model or token count.
+**Still open:** plans created before that plan field existed fall back to standalone per-batch
+traces; per-provider background trace correlation is incomplete; broader usage parsing/trace
+attachment gaps may remain in other AI paths; scores/evals (Phase 3), dashboards/alerts (Phase 4),
+and §9 e2e coverage remain open.
 Keep this header in sync with reality.
 The August 25 spike used **self-hosted Langfuse OSS v4.17.0**, project `Tesbo Test Manager` (org
 `Tesbo`). That historical version and deployment state have not been reverified by this PR recovery.
@@ -332,10 +335,12 @@ behaviour characterised, cost gap found. Findings are §0 and §7. No repo chang
    `generateZyraWithProvider` → `applyZyraChatOperations`.
    **Existing source**: the router, reconciliation guardrail and interactive generation path.
    **Added in this candidate**: the tool finalizer, scenario planning/top-up, background batch
-   generation attached by the stored originating message ID, and an `applyZyraChatOperations`
+   orchestration tool observations attached by the stored originating message ID, and an `applyZyraChatOperations`
    tool observation that reports actual partial/failure outcomes. Empty operation lists create no
    apply observation. Older plans without a stored message ID retain standalone per-batch traces.
-   Source tests do not establish that these observations reached a deployed Langfuse instance.
+   The aggregate batch can include multiple provider calls; its observation has no provider/model
+   or usage assertion. Per-provider background trace correlation remains incomplete. Source tests
+   do not establish that these observations reached a deployed Langfuse instance.
 5. Shutdown flush in `main.ts` (§8). **Implemented** — `main.ts` registers `SIGTERM`/`SIGINT` handlers
    that call `stopLangfuse()` (which force-flushes then shuts down the SDK). Not yet validated in a
    live traced runtime session.
@@ -357,7 +362,10 @@ behaviour characterised, cost gap found. Findings are §0 and §7. No repo chang
 `summarizeForZyraMemory`, `transcribeKnowledgeFile`, `embedTexts` (inside `RagEmbeddingProcessor`
 and the one-off testcase backfill) and `integration-sync-decisions` are traced. Usage parsing now
 keeps real provider usage, including cached input tokens, for `zyraJsonCompletion`, `zyraChatWith*`,
-`summarizeForZyraMemory`, the scenario planner/top-up and the tool-decision finalizer. BullMQ
+`summarizeForZyraMemory`, the scenario planner/top-up, the tool-decision finalizer and
+`zyraAuthorJson` update authoring. Each update-authoring batch carries its own trusted attempted
+model into its success and failure observations. On success, that model also supplies the existing
+token-ledger call; the ledger schema and its existing partial-count accounting are unchanged. BullMQ
 processors flush per job. The standalone backfill starts and stops tracing only for an execution
 run; dry runs do not start the tracing SDK. Integration-sync decisions include organization,
 project, run and native ticket identities and use a distinct invocation seed so repeated or
@@ -369,7 +377,8 @@ model on both success and failure. Transcription setup failures before a provide
 unsupported transcription without an allocated model key create no generation observation.
 Interactive and embedding status messages use fixed text; provider error details are confined to
 masked output. Non-suite operation failures also mark the apply tool observation as failed while
-preserving the existing suite-specific staging and reply behavior.
+preserving the existing suite-specific staging and reply behavior. These repaired call sites do
+not establish complete coverage of every AI path or per-provider background trace correlation.
 
 ### Phase 3 — Scores and evals (~1–1.5 days)
 
@@ -417,9 +426,10 @@ traceIdFor(generationTask) = await createTraceId(taskId)          // ai_generati
 
 Same id every time, from data we already store. A support report maps to its trace by computing the
 id — no column, no backfill, and it works for rows written before the feature shipped. Background
-plan resumption stores the originating message id in `active_plan` and seeds its batch traces from
-it, so they land on the originating turn's trace; a plan created before that field existed falls
-back to a standalone per-batch seed.
+plan resumption stores the originating message id in `active_plan` and seeds its outer batch tool
+observations from it, so they land on the originating turn's trace; a plan created before that
+field existed falls back to a standalone per-batch seed. This correlation does not establish
+attachment of every provider generation performed inside the batch.
 
 This also removes the migration from scope, which shrinks the e2e surface (§9) and the review risk.
 
