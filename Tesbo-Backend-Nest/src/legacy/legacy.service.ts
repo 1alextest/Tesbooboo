@@ -16316,6 +16316,17 @@ export class LegacyService implements OnModuleInit {
       if (!profile) throw new BadRequestException({ error: "The skill has no native profile" });
       const version = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [versionId, documentId])).rows[0];
       if (!version || version.snapshot_kind !== "submitted") throw new BadRequestException({ error: "versionId must identify a submitted version of this skill" });
+      // Approval is tied to the exact submission the reviewer loaded. A newer submission makes
+      // that decision stale even when the older version's digest still matches the working copy.
+      const latestSubmitted = (await client.query(
+        `SELECT id,version_number FROM knowledge_document_versions
+          WHERE document_id=$1 AND snapshot_kind='submitted' ORDER BY version_number DESC LIMIT 1`, [documentId]
+      )).rows[0];
+      if (latestSubmitted && String(latestSubmitted.id) !== versionId) {
+        throw new ConflictException({ code: "SKILL_VERSION_SUPERSEDED",
+          error: "A newer submitted version is awaiting review; open the current submission before approving",
+          currentVersionId: String(latestSubmitted.id), currentVersionNumber: Number(latestSubmitted.version_number) });
+      }
       const reviewed = doc.reviewed_version_id
         ? (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [doc.reviewed_version_id, documentId])).rows[0]
         : null;
@@ -16417,12 +16428,16 @@ export class LegacyService implements OnModuleInit {
     const documentIds = docs.map((doc: Body) => String(doc.id));
     const profiles = documentIds.length ? (await this.db.query("SELECT * FROM skill_profiles WHERE project_id=$1 AND document_id=ANY($2::uuid[])", [projectId, documentIds])).rows : [];
     const versions = documentIds.length ? (await this.db.query(
-      `SELECT id,document_id,version_number,snapshot_kind,snapshot_metadata,created_by,created_at
-         FROM knowledge_document_versions WHERE document_id=ANY($1::uuid[]) ORDER BY version_number DESC`, [documentIds]
+      `SELECT v.id,v.document_id,v.version_number,v.snapshot_kind,v.snapshot_metadata,v.created_by,v.created_at,u.name AS created_by_name
+         FROM knowledge_document_versions v LEFT JOIN users u ON u.id=v.created_by
+        WHERE v.document_id=ANY($1::uuid[]) ORDER BY v.version_number DESC`, [documentIds]
     )).rows : [];
     const assignments = documentIds.length ? (await this.db.query(
-      `SELECT * FROM skill_assignments WHERE project_id=$1 AND skill_document_id=ANY($2::uuid[])
-        ORDER BY assigned_at DESC,id`, [projectId, documentIds]
+      `SELECT a.*, v.version_number, v.snapshot_metadata->>'contentDigest' AS content_digest
+         FROM skill_assignments a
+         JOIN knowledge_document_versions v ON v.id=a.skill_version_id AND v.document_id=a.skill_document_id
+        WHERE a.project_id=$1 AND a.skill_document_id=ANY($2::uuid[])
+        ORDER BY a.assigned_at DESC,a.id`, [projectId, documentIds]
     )).rows : [];
     const profileByDoc = new Map(profiles.map((profile: Body) => [String(profile.document_id), profile]));
     const versionsByDoc = new Map<string, Body[]>();
@@ -16430,7 +16445,7 @@ export class LegacyService implements OnModuleInit {
       const list = versionsByDoc.get(String(row.document_id)) || [];
       list.push({
         id: String(row.id), versionNumber: Number(row.version_number), kind: String(row.snapshot_kind),
-        createdAt: row.created_at, createdBy: row.created_by,
+        createdAt: row.created_at, createdBy: row.created_by, createdByName: row.created_by_name ?? null,
         contentDigest: row.snapshot_metadata?.contentDigest ?? null,
         authority: row.snapshot_metadata?.authority ?? null,
         sourceVersionId: row.snapshot_metadata?.sourceVersionId ?? null
