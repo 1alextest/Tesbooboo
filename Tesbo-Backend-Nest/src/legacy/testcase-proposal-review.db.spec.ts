@@ -15,7 +15,7 @@ const human={kind:"human_session" as const};
 type Body=Record<string,any>;
 
 (/\/tesbo_ci(?:\?|$)/.test(url) ? describe : describe.skip)("native testcase proposal review — migrated PostgreSQL",()=>{
-  let admin:Client,pool:Pool,project:string,user:string,token:string,foreignProject:string;
+  let admin:Client,pool:Pool,project:string,user:string,token:string,foreignProject:string,org:string;
   const stamp=randomUUID(),applicationName=`proposal-review-${stamp}`;
   const previousPreview=process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
   beforeAll(async()=>{
@@ -23,7 +23,7 @@ type Body=Record<string,any>;
     admin=new Client({connectionString:url});await admin.connect();
     pool=new Pool({connectionString:url,max:6,application_name:applicationName});
     user=(await admin.query("INSERT INTO users(email,name) VALUES ($1,'Proposal review QA') RETURNING id",[`proposal-${stamp}@tesbo.invalid`])).rows[0].id;
-    const org=(await admin.query("INSERT INTO organizations(name,slug) VALUES ('Proposal review QA',$1) RETURNING id",[`proposal-${stamp}`])).rows[0].id;
+    org=(await admin.query("INSERT INTO organizations(name,slug) VALUES ('Proposal review QA',$1) RETURNING id",[`proposal-${stamp}`])).rows[0].id;
     project=(await admin.query("INSERT INTO projects(organization_id,key,name) VALUES ($1,'PVR','Proposal review QA') RETURNING id",[org])).rows[0].id;
     foreignProject=(await admin.query("INSERT INTO projects(organization_id,key,name) VALUES ($1,'PVF','Unrelated proposal project') RETURNING id",[org])).rows[0].id;
     await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'owner')",[org,user]);
@@ -255,7 +255,7 @@ type Body=Record<string,any>;
       service().stageRequirementChangeBundle(project,user,{requestKey:key,operations},principal as never);
     const docCounts=async()=>({
       documents:(await admin.query("SELECT id FROM knowledge_documents WHERE project_id=$1 ORDER BY id",[project])).rows,
-      versions:(await admin.query("SELECT id FROM knowledge_document_versions v JOIN knowledge_documents d ON d.id=v.document_id WHERE d.project_id=$1 ORDER BY v.id",[project])).rows,
+      versions:(await admin.query("SELECT v.id FROM knowledge_document_versions v JOIN knowledge_documents d ON d.id=v.document_id WHERE d.project_id=$1 ORDER BY v.id",[project])).rows,
       cases:(await admin.query("SELECT id FROM testcases WHERE project_id=$1 ORDER BY id",[project])).rows,
       approvals:(await admin.query("SELECT r.id FROM testcase_approval_receipts r JOIN testcases t ON t.id=r.testcase_id WHERE t.project_id=$1 ORDER BY r.id",[project])).rows
     });
@@ -321,6 +321,10 @@ type Body=Record<string,any>;
 
     it("authorizes rejection and withdrawal without publishing",async()=>{
       const reviewer=(await admin.query("INSERT INTO users(email,name) VALUES ($1,'Bundle reviewer') RETURNING id",[`bundle-reviewer-${randomUUID()}@tesbo.invalid`])).rows[0].id;
+      // Project access resolves through the caller's active workspace, so a reviewer who only has a
+      // project_members row would 404 before the role guard ran and prove the wrong refusal.
+      await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[org,reviewer]);
+      await admin.query("UPDATE users SET active_organization_id=$2 WHERE id=$1",[reviewer,org]);
       await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[project,reviewer]);
       const rejected=await stageBundle(ops());
       await expect(service().rejectRequirementProposal(project,reviewer,rejected.id,{},human)).rejects.toMatchObject({status:403});
