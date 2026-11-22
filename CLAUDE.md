@@ -13,10 +13,21 @@ The compose defaults of `:1010`/`:1011` belong to the open-source stack, not thi
 [AGENTS.md](AGENTS.md) is the canonical owner of the shared engineering principles: reuse-first and
 capability discovery, upstream/downstream mapping, one authoritative owner per fact, truthful failures,
 authorization boundaries, boundary-level testing, delivery-versus-verification, right-sizing,
-findings-without-scope-creep, preventive lessons, dependency evaluation and application neutrality.
+findings-without-scope-creep, **decision discovery and authority for unresolved product decisions**,
+preventive lessons, dependency evaluation and application neutrality.
 It also requires recording capability opportunities noticed while building as enhancement candidates
 after checking the specs, current implementation and work record for an existing owner — never as
 implemented scope. Read it before design or implementation work.
+
+In particular, do not silently choose an intended behavior when the specification, existing behavior or
+competing requirements leave a consequential product decision unresolved. Investigate the evidence,
+state the interpretations and consequences, and surface the decision to the user or the authorized
+owner before implementing it; record the blocked decision rather than assuming an answer.
+
+Use the [evidence-grounded decision procedure](docs/agent-skills/evidence-grounded-decisions/SKILL.md)
+to apply AGENTS.md principles 17 and 13 across coding, UX/UI and assurance work. It provides
+independent-agent discovery, coordination handoffs and proportionate decision briefs; AGENTS.md
+remains the owner of the binding principles.
 
 The detailed scope classification (coupled / defect on path / adjacent / new initiative), the
 no-unsanctioned-pivot rule and the red-run rules are in
@@ -295,13 +306,3 @@ The baseline: **any change that alters what the product does**, anywhere in
   fix. A fix without a failing-first test does not satisfy this rule.
 
 Exempt: docs, comments, formatting, and changes wholly inside `e2e/` itself.
-
-
-## Evidence-grounded decision engineering — binding (2026-11-22)
-
-Claude, coding agents, UX/UI authors and the Blue/Red/Green/White/QA/Security/Grey/Purple/Graph/Elephant-Gold assurance lenses follow [the shared decision skill](docs/agent-skills/evidence-grounded-decisions/SKILL.md). Investigate authoritative requirements, Tesbo policies, manuals, task/issue history, linked graph obligations and actual code before escalating an unresolved consequential decision. Every question identifies the trigger, evidence versus uncertainty, choices, downstream consequences, recommended option, accountable decision owner and record location. Do not invent product policy or ask for approval when existing authoritative decisions already settle it. Record accepted decisions and downstream obligations in native Tesbo requirements, cases, policies, manuals, issues and evidence where those tools are available and authorized. The seller-visibility issue is a generalizable example, not a Tesbo feature rule.
-
-
-### Proactive decision discovery (2026-11-22)
-
-**Required for all agents, including subagents and UX/UI specialists:** independently detect consequential unmade decisions rather than waiting for Claude or the user to formulate a question. Inspect hidden assumptions, missing states and oracles, conflicting contracts, affected parties and downstream effects. Report candidate gaps through the available coordination channel even without interactive ask-user support. First search decided ground; only genuinely unresolved authority-reserved choices reach the user. Discovery, investigation, decision presentation and decision recording are distinct responsibilities. Follow the canonical evidence-grounded decision skill, including its **Proactive decision discovery** section. Seller-profile visibility is an illustrative example, not an adopted policy.

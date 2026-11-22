@@ -2,7 +2,9 @@
 
 **Status:** Adopted guidance. **Scope:** Coding, UX/UI, specification authors, Claude/other agents, and assurance teams. Principle-first and application-agnostic; project details are examples, not universal rules.
 
-## Governing principle
+## Canonical owner and purpose
+
+[AGENTS.md](../../../AGENTS.md) owns the binding engineering principles, including principle 17 on discovering unresolved decisions and principle 13 on reporting findings within scope. Use this procedure to apply those principles across agents and roles. It supplies discovery, investigation, coordination, presentation and recording details; it grants no product permission and does not select unresolved product policy.
 
 When a change depends on an unsettled consequential decision, do not silently manufacture product policy or ask an ungrounded multiple-choice question. Reconstruct the applicable decision context, distinguish evidence from assumption, identify who has authority, and communicate why the decision matters. Continue independently where a prior authoritative rule resolves the ambiguity; request human judgment only for genuinely unresolved or authority-reserved decisions. A question is a traceable engineering artifact.
 
@@ -44,12 +46,12 @@ For a seller-profile visibility issue, an agent could independently notice that 
 ## At the decision point
 
 1. **Recognize:** distinguish implementation discretion, established product policy, contradiction, missing requirements, and high-impact uncertainty. Do not convert an observed bug into an assumed requirement.
-2. **Investigate:** consult relevant specs, existing code/runtime behavior, policies, prior decisions, security/access constraints, tests, lifecycle rules and linked records, to the extent available and permitted. Label missing evidence; never imply an investigation occurred when it did not.
+2. **Investigate:** consult relevant specs, existing code/runtime behavior, policies, manuals, task/issue history, prior decisions, linked graph obligations, security/access constraints, tests, lifecycle rules and linked records, to the extent available and permitted. Label missing evidence; never imply an investigation occurred when it did not.
 3. **Explain the trigger:** cite the issue/requirement/observation and the exact conflict or unknown; explain why a decision is needed now.
 4. **Assess consequences:** identify affected actors, permissions, records, state transitions, entry points, APIs, discoverability, caching, dependencies, reversibility and potential downstream obligations. Distinguish changing underlying record state from changing visibility or access.
 5. **Present options:** state meaningful alternatives, a recommendation grounded in evidence, trade-offs, risks, assumptions, confidence and the cost of deferral. Avoid false certainty and forced choices; allow a user-authored decision.
 6. **Respect authority:** independently resolve decided implementation details; seek authorized human judgment for unresolved product policy, consequential trade-offs, trust boundaries and other reserved decisions. Never use agent consensus to replace product ownership. Do not block unrelated safe work; do not turn every detail into an approval request.
-7. **Preserve the decision:** record trigger, evidence references, rejected alternatives, decision-maker, rationale, scope, affected obligations, residual unknowns and change conditions in the project's existing authoritative records. Align implementation, coverage and documentation with the decision. Reopen only on new material evidence or changed context.
+7. **Preserve the decision:** record trigger, evidence references, rejected alternatives, decision-maker, rationale, scope, affected obligations, residual unknowns and change conditions in the project's existing authoritative records. For Tesbo, update the applicable native requirements, cases, policies, manuals, tasks/issues and files/evidence where those tools are available and authorized. Align implementation, coverage and documentation with the decision. Reopen only on new material evidence or changed context.
 
 ## Decision-brief contract (concise, proportional to risk)
 
