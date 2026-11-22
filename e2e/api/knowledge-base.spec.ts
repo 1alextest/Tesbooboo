@@ -176,7 +176,11 @@ test.describe("knowledge base v2 — folders and documents", () => {
     const maximumBody = await maximum.json();
     if (enabled) expect(maximumBody.contentJson.criteria).toHaveLength(50);
     else expect(maximumBody.error).toBe("REQUIREMENT_PREVIEW_DISABLED");
-    for (const invalid of [null, { ...input, title: "" }, { ...input, projectId: tenant!.secondProjectId },
+    // Strict JSON parsing rejects a scalar body before application guards in either rollout mode.
+    const malformedTransport = await asOwner.post(path, { data: null });
+    expect(malformedTransport.status()).toBe(400);
+    expect(await malformedTransport.text()).not.toContain("REQUIREMENT_PREVIEW_DISABLED");
+    for (const invalid of [{ ...input, contentJson: null }, { ...input, title: "" }, { ...input, projectId: tenant!.secondProjectId },
       { ...input, contentJson: { ...input.contentJson, criteria: [input.contentJson.criteria[0], input.contentJson.criteria[0]] } },
       { ...input, contentJson: { ...input.contentJson, criteria: [{ ...input.contentJson.criteria[0], normative: "true" }] } },
       { ...input, contentJson: { ...input.contentJson, criteria: Array(51).fill(input.contentJson.criteria[0]) } },
