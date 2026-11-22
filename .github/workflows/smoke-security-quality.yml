@@ -489,15 +489,14 @@ jobs:
           }
           trap 'if [ -f /tmp/tesbo-backend-billing.pid ]; then kill "$(cat /tmp/tesbo-backend-billing.pid)" 2>/dev/null || true; fi' EXIT
           npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts --project=api --list | tail -n 1
+          selection='WPA-0[123]'
           for mode in disabled enabled; do
             stop_preview_backend
             preview_flag=()
             expected_flag=0
-            selection='WPA-0[13]'
             if [ "$mode" = enabled ]; then
               preview_flag=(TESBO_REQUIREMENT_PREVIEW_ENABLED=1)
               expected_flag=1
-              selection='WPA-0[23]'
             fi
             (
               cd ../Tesbo-Backend-Nest

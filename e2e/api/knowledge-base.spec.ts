@@ -84,7 +84,7 @@ test.describe("knowledge base v2 — folders and documents", () => {
     if (tenant) purgeKb(tenant);
   });
 
-  test("WPA-01 preview-only requirement refuses disabled/anonymous requests without native writes", async () => {
+  test("WPA-01 preview-only requirement respects rollout and anonymous denial without native writes", async () => {
     const projectId = tenant!.mainProjectId;
     const path = `/api/projects/${projectId}/knowledge-base/requirements/preview`;
     const input = {
@@ -109,9 +109,14 @@ test.describe("knowledge base v2 — folders and documents", () => {
     // Existing KB authentication contract permits 400/401/403/404; 503 would
     // reveal preview availability to an unauthenticated caller.
     expect([400, 401, 403, 404]).toContain(unauthenticated.status());
-    const disabled = await asOwner.post(path, { data: input });
-    expect(disabled.status(), await disabled.text()).toBe(503);
-    expect((await disabled.json()).error).toBe("REQUIREMENT_PREVIEW_DISABLED");
+    const authorized = await asOwner.post(path, { data: input });
+    if (process.env.E2E_REQUIREMENT_PREVIEW_ENABLED === "1") {
+      expect(authorized.status(), await authorized.text()).toBe(200);
+      expect(await authorized.json()).toMatchObject({ canPublish: false, disposition: "preview_only" });
+    } else {
+      expect(authorized.status(), await authorized.text()).toBe(503);
+      expect((await authorized.json()).error).toBe("REQUIREMENT_PREVIEW_DISABLED");
+    }
     expect(counts()).toBe(before);
   });
 
@@ -142,34 +147,43 @@ test.describe("knowledge base v2 — folders and documents", () => {
     return (await response.json()).messages.length;
   }
 
-  test("WPA-02 enabled preview validates bounded candidates through HTTP without publishing", async () => {
-    expect(process.env.E2E_REQUIREMENT_PREVIEW_ENABLED, "Run this acceptance against an explicitly opted-in disposable backend").toBe("1");
+  test("WPA-02 bounded HTTP candidates obey explicit rollout without publishing", async () => {
+    // The whole KB file remains runnable in either declared mode. Disabled requests must refuse
+    // before validation; the opted-in CI lane must prove each positive and negative schema case.
+    const enabled = process.env.E2E_REQUIREMENT_PREVIEW_ENABLED === "1";
     const projectId = tenant!.mainProjectId;
     const path = `/api/projects/${projectId}/knowledge-base/requirements/preview`;
     const before = previewState(projectId);
     const messagesBefore = await ownerOutboxCount();
     const input = requirementCandidate();
     const response = await asOwner.post(path, { data: input });
-    expect(response.status(), await response.text()).toBe(200);
+    expect(response.status(), await response.text()).toBe(enabled ? 200 : 503);
     const preview = await response.json();
-    expect(preview).toMatchObject({ title: "Preview acceptance", disposition: "preview_only", canPublish: false,
-      authoritativeRequirementId: null, publicationBlocker: "SKILL_CONTEXT_UNAVAILABLE", coverageAssertion: "none", executionAssertion: "none",
-      contentJson: { description: "Bounded read-only candidate", criteria: [{ key: "AC-1", text: "Deny unauthorized changes", normative: true }] } });
-    expect(preview.candidateDigest).toMatch(/^[a-f0-9]{64}$/);
+    if (enabled) {
+      expect(preview).toMatchObject({ title: "Preview acceptance", disposition: "preview_only", canPublish: false,
+        authoritativeRequirementId: null, publicationBlocker: "SKILL_CONTEXT_UNAVAILABLE", coverageAssertion: "none", executionAssertion: "none",
+        contentJson: { description: "Bounded read-only candidate", criteria: [{ key: "AC-1", text: "Deny unauthorized changes", normative: true }] } });
+      expect(preview.candidateDigest).toMatch(/^[a-f0-9]{64}$/);
+    } else expect(preview.error).toBe("REQUIREMENT_PREVIEW_DISABLED");
     const replay = await asOwner.post(`${path}/`, { data: input });
-    expect(replay.status()).toBe(200);
-    expect((await replay.json()).candidateDigest).toBe(preview.candidateDigest);
+    expect(replay.status()).toBe(enabled ? 200 : 503);
+    const replayBody = await replay.json();
+    if (enabled) expect(replayBody.candidateDigest).toBe(preview.candidateDigest);
+    else expect(replayBody.error).toBe("REQUIREMENT_PREVIEW_DISABLED");
     const maximum = await asOwner.post(path, { data: { ...input, contentJson: { ...input.contentJson,
       criteria: Array.from({ length: 50 }, (_, index) => ({ key: `AC-${index + 1}`, text: "Bounded criterion", normative: false })) } } });
-    expect(maximum.status()).toBe(200);
-    expect((await maximum.json()).contentJson.criteria).toHaveLength(50);
+    expect(maximum.status()).toBe(enabled ? 200 : 503);
+    const maximumBody = await maximum.json();
+    if (enabled) expect(maximumBody.contentJson.criteria).toHaveLength(50);
+    else expect(maximumBody.error).toBe("REQUIREMENT_PREVIEW_DISABLED");
     for (const invalid of [null, { ...input, title: "" }, { ...input, projectId: tenant!.secondProjectId },
       { ...input, contentJson: { ...input.contentJson, criteria: [input.contentJson.criteria[0], input.contentJson.criteria[0]] } },
       { ...input, contentJson: { ...input.contentJson, criteria: [{ ...input.contentJson.criteria[0], normative: "true" }] } },
       { ...input, contentJson: { ...input.contentJson, criteria: Array(51).fill(input.contentJson.criteria[0]) } },
       { ...input, contentJson: { ...input.contentJson, description: "X".repeat(20001) } }]) {
       const rejected = await asOwner.post(path, { data: invalid });
-      expect(rejected.status(), await rejected.text()).toBe(400);
+      expect(rejected.status(), await rejected.text()).toBe(enabled ? 400 : 503);
+      if (!enabled) expect((await rejected.json()).error).toBe("REQUIREMENT_PREVIEW_DISABLED");
     }
     for (const caller of [anon, asGuest]) {
       const denied = await caller.post(path, { data: { malformed: true } });
