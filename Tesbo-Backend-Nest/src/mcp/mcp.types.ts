@@ -54,6 +54,7 @@ Typical shapes:
 - A cycle is a test run: create_cycle_from_testcases seeds it with test cases, each becoming one execution; record results with record_execution_result / bulk_record_execution_results.
 - A bug can link to a test case, a cycle, and/or a specific execution (create_bug/update_bug's links, link_testcase_to_bug/unlink_testcase_from_bug). Associations preserve the execution result and its evidence; use the authorized result writer to record an observed failure explicitly.
 - The Knowledge Base is a separate document/folder tree, not part of the test-case hierarchy — start with search_knowledge_base or list_knowledge_folders.
+- When list_requirements is advertised, native requirement proposals have provisional REQ-PROP identities, immutable criteria revisions and exact proposed case associations. They are unpublished and carry incomplete governance; provider requirements and Knowledge Base citations keep their existing owners.
 - Versioned QA impact review is shared with the existing Zyra Change Review page: list_qa_graph_changes reads committed revisions and explicit case candidates. Use get_testcase for an existing candidate's full canonical details rather than cloning test cases.
 - capture_qa_graph_change is an optional write-scoped, project-bound observation of an administrator-approved Git source. It accepts no source path, manifest, semantic claim, test outcome or approval from the caller; missing bindings fail closed. A code change or missing explicit reference prompts QA investigation, not a Failed execution or proven coverage.
 - Captured changes and notifications do not run tests or approve them. Only actually executed tests with attributable evidence may receive results through the existing execution tools, under human QA review.
@@ -63,6 +64,8 @@ Rules worth knowing before calling a write tool:
 - The unpublished proposal review preview is off by default. Only when stage_testcase_changes is advertised can this client prepare unpublished create/update/archive proposals without a model key. Otherwise use native human editing; do not assume a missing staging capability is available.
 - When the preview is available, supply an explicit requestKey; updates and archives bind the current get_testcase editRevision. Read the resulting task with get_testcase_proposal_task or list_testcase_proposals.
 - A task ID identifies a proposal workflow, never a newly published test case. A human must inspect the exact proposal revision and save selected changes in Tesbo. There is no MCP apply or approval tool.
+- Requirement-bound tasks created by stage_requirement_testcase_changes are stricter: their immutable requirement and incomplete skill context blocks every publication route, including a human Save. Review is available; a preview flag is not approval authority. Do not restage governed work through an unrelated tool to evade that boundary.
+- Proposed association counts do not establish approved or executed coverage. Native requirement execution/passing applicability is unavailable until exact requirement/criterion, case approval and target build/scope evidence can be bound; relinking cannot make an old Passed result current.
 - Stage restore as an update with status Draft. A new case is published as Draft; human publication and subsequent test-case approval are separate decisions.
 - Suite creation and editing require the native human action. Machine clients can read suites; cached create_suite/update_suite calls are refused without changing the suite.
 - Every id-addressed tool is already scoped to this token's project; passing an id from another project fails with a clear "not found" / "belongs to a different project" error rather than acting on it.
@@ -167,5 +170,7 @@ export interface McpTool {
   hiddenFromDiscovery?: boolean;
   /** Default-off unpublished proposal preview; only server configuration can enable it. */
   proposalPreviewOnly?: boolean;
+  /** Separate default-off native requirement proposal availability; grants no publication authority. */
+  nativeRequirementsPreviewOnly?: boolean;
   handler: (args: Record<string, unknown>, ctx: McpToolContext) => Promise<unknown>;
 }

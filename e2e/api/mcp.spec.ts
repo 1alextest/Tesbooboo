@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { expect, test, request as newRequestContext, type APIRequestContext } from "@playwright/test";
 import { env } from "../utils/env";
@@ -14,6 +14,22 @@ const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.js
 // Account B: a second, fully independent account/org/project (see global-setup.ts and
 // api/authorization.spec.ts, which establishes this same fixture pair for cross-tenant checks).
 const ctxB = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context-b.json"), "utf-8"));
+
+const nativeRequirementReadTools = ["list_requirements", "get_requirement", "get_requirement_coverage"];
+const nativeRequirementWriteTools = ["create_requirement", "add_requirement_revision", "link_requirement_case", "retire_requirement_case_link", "retire_requirement", "stage_requirement_testcase_changes"];
+
+function expectProposalPreviewCatalog(names: string[]) {
+  // These journeys require the existing proposal preview. The isolated native profile adds
+  // exactly nine tools; assert the configured contract rather than inferring it from the reply.
+  const nativeEnabled = process.env.TESBO_NATIVE_REQUIREMENTS_PREVIEW_ENABLED === "1";
+  const expectedCount = nativeEnabled ? 58 : 49;
+  expect(names, "fresh credential-visible proposal preview catalog").toHaveLength(expectedCount);
+  expect(new Set(names).size, "MCP names must be unique").toBe(expectedCount);
+  for (const name of [...nativeRequirementReadTools, ...nativeRequirementWriteTools]) {
+    if (nativeEnabled) expect(names).toContain(name);
+    else expect(names).not.toContain(name);
+  }
+}
 
 async function createCase(request: import("@playwright/test").APIRequestContext, data: Record<string, unknown> = {}) {
   const res = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
@@ -281,8 +297,7 @@ test("MCP-P07 disposable proposal review lifecycle preserves project and run bou
     const catalog = (await rpc("tools/list")).result.tools as Array<{ name: string }>;
     // Credential-visible catalog: the retired direct testcase publishers are hidden, so this is
     // fewer than the full registry even though the token has write scope.
-    expect(catalog).toHaveLength(49);
-    expect(new Set(catalog.map(item => item.name)).size).toBe(49);
+    expectProposalPreviewCatalog(catalog.map(item => item.name));
     expect(catalog.map(item => item.name)).toContain("list_qa_graph_changes");
     expect(catalog.map(item => item.name)).toEqual(
       expect.arrayContaining([
@@ -755,8 +770,7 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
       // This test runs only in the explicitly enabled isolated preview profile. Counts are the
       // credential-visible catalog: retired direct publishers are hidden, and the governed-run
       // tool from the Model Studio work is visible to a write token.
-      expect(names, "freshly initialized deployed preview catalog").toHaveLength(49);
-      expect(new Set(names).size, "MCP names must be unique").toBe(49);
+      expectProposalPreviewCatalog(names);
       expect(names).toEqual(expect.arrayContaining([
         "list_qa_graph_changes", "capture_qa_graph_change", "preview_behavior_model_draft", "create_behavior_model",
         "save_behavior_model_revision", "link_behavior_model_case", "get_behavior_model_coverage", "archive_behavior_model",
@@ -5523,4 +5537,149 @@ test("MCP-P18 project consent, named credentials and revocation cover both alias
     if (foreignTokenId) await owner.delete(`/api/projects/${tenant!.secondProjectId}/apikeys/${foreignTokenId}`, { failOnStatusCode: false });
     await Promise.all([owner.dispose(), qa.dispose(), machine.dispose()]);
   }
+});
+
+test.describe("MCP native requirement proposal contracts", () => {
+  let owner: APIRequestContext;
+  let machine: APIRequestContext;
+
+  test.beforeAll(async () => {
+    const tenant = await provisionRbacTenant("mcp-lifecycle");
+    expect(tenant, "native requirement MCP tests require the existing disposable fixture").not.toBeNull();
+    owner = await loginAs(tenant!.owner);
+    machine = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
+  });
+  test.afterAll(async () => { await Promise.all([owner, machine].filter(Boolean).map(context => context.dispose())); });
+
+  async function project() {
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 10);
+    const response = await owner.post("/api/projects", { data: { name: `E2E MCP native requirements ${suffix}`, key: `NR${suffix}` } });
+    expect(response.status(), await response.text()).toBe(201);
+    return response.json();
+  }
+  async function rpc(projectId: string, token: string, method: string, params: Record<string, unknown> = {}, client = machine, alias = false) {
+    const response = await client.post(alias ? "/api/mcp" : `/api/projects/${projectId}/mcp`, {
+      headers: { Authorization: `Bearer ${token}` }, data: { jsonrpc: "2.0", id: 42, method, params },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    return response.json();
+  }
+  async function call(projectId: string, token: string, name: string, args: Record<string, unknown> = {}) {
+    const envelope = await rpc(projectId, token, "tools/call", { name, arguments: args });
+    expect(envelope.error, JSON.stringify(envelope.error)).toBeUndefined();
+    expect(envelope.result.isError).toBe(false);
+    return JSON.parse(envelope.result.content[0].text);
+  }
+  function proposalBody() {
+    return { submissionKey: randomUUID(), title: `E2E MCP proposal ${randomUUID()}`, criteria: [{ key: "AC-1", text: "Unpublished criteria remain reviewable." }] };
+  }
+  const readTools = nativeRequirementReadTools;
+  const writeTools = nativeRequirementWriteTools;
+
+  test("MCP-NREQ-01 exact proposal revisions and case tasks are readable through MCP while human Save remains governed", async () => {
+    const fixture = await project();
+    const base = `/api/projects/${fixture.id}`;
+    let credential: any;
+    try {
+      const issued = await issueMcpTestToken(owner, `${base}/apikeys`, { data: { name: "Native proposal producer", scopes: ["read", "write"] } });
+      expect(issued.ok(), await issued.text()).toBe(true); credential = await issued.json();
+      for (const alias of [false, true]) {
+        const listed = await rpc(fixture.id, credential.token, "tools/list", {}, machine, alias);
+        expect(listed.error).toBeUndefined();
+        const names = listed.result.tools.map((tool: any) => tool.name);
+        for (const name of [...readTools, ...writeTools]) expect(names).toContain(name);
+        expect(names).not.toContain("approve_requirement");
+        expect(names).not.toContain("apply_requirement_testcases");
+      }
+      const body = proposalBody();
+      const created = await call(fixture.id, credential.token, "create_requirement", body);
+      expect(created.requirement).toMatchObject({ publication: "unpublished", state: "draft", identityKind: "proposal_task",
+        taskId: created.requirement.id, nativeDocumentId: null });
+      expect(created.requirement.currentVersion).toMatchObject({ identityKind: "proposal_operation",
+        operationId: created.requirement.currentVersion.id, nativeVersionId: null });
+      const requirementId = created.requirement.id;
+      expect((await call(fixture.id, credential.token, "get_requirement", { requirementId })).requirement).toEqual(created.requirement);
+      expect((await call(fixture.id, credential.token, "create_requirement", body)).requirement.id).toBe(requirementId);
+      const revised = await call(fixture.id, credential.token, "add_requirement_revision", {
+        requirementId, ...body, submissionKey: randomUUID(), title: `${body.title} revised`,
+        expectedVersionId: created.requirement.currentVersion.id, expectedContentDigest: created.requirement.currentVersion.contentDigest,
+      });
+      expect(revised.versions).toHaveLength(2);
+      const version = revised.requirement.currentVersion;
+      const testcase = await createApprovedTestcase(owner, fixture.id, { title: `E2E governed target ${randomUUID()}` });
+      const basis = { requirementId, requirementVersionId: version.id, requirementContentDigest: version.contentDigest, criterionKeys: ["AC-1"] };
+      const linked = await call(fixture.id, credential.token, "link_requirement_case", {
+        submissionKey: randomUUID(), ...basis, testcaseId: testcase.id, testcaseRevision: testcase.editRevision, testcaseApprovalRevision: testcase.approvalRevision,
+      });
+      expect(linked.coverage.currentProposedLinkCount).toBe(1);
+      expect(linked.link).toMatchObject({ identityKind: "proposal_operation", state: "proposed" });
+      const staged = await call(fixture.id, credential.token, "stage_requirement_testcase_changes", {
+        ...basis, requestKey: randomUUID(), title: "Native requirement case proposal", operations: [
+          { opType: "update", testcaseId: testcase.id, expectedRevision: testcase.editRevision, fields: { title: "Must remain unpublished" } },
+        ],
+      });
+      expect(staged.publication).toBe("unpublished");
+      expect(staged.taskId).toBe(requirementId);
+      const taskResponse = await owner.get(`${base}/agents/zyra/tasks/${staged.taskId}`);
+      expect(taskResponse.ok(), await taskResponse.text()).toBe(true);
+      const task = await taskResponse.json();
+      expect(task.proposalSnapshot.stagedOperations.map((operation: any) => operation.operationKind))
+        .toEqual(expect.arrayContaining(["requirement_revision", "requirement_case_link", "testcase_revision"]));
+      expect(task.proposalGovernance.requirement).toMatchObject({ id: requirementId, versionId: version.id, contentDigest: version.contentDigest, criterionKeys: ["AC-1"] });
+      const saved = await owner.post(`${base}/agents/zyra/tasks/${staged.taskId}/save`, { data: { expectedProposalRevision: task.proposalRevision, selectedDraftIndexes: [0] } });
+      expect(saved.status(), await saved.text()).toBe(403);
+      expect((await saved.json()).code).toBe("SKILL_CONTEXT_UNAVAILABLE");
+      const currentCase = await owner.get(`${base}/testcases/${testcase.id}`);
+      expect(currentCase.ok(), await currentCase.text()).toBe(true);
+      expect(testcaseEditState(await currentCase.json())).toEqual(testcaseEditState(testcase));
+      const coverage = await call(fixture.id, credential.token, "get_requirement_coverage", { requirementId });
+      expect(coverage.approval).toMatchObject({ status: "blocked", eligibleCount: 0 });
+      expect(coverage.execution).toMatchObject({ status: "unavailable", eligibleCount: null });
+      expect(coverage.passing).toMatchObject({ status: "unavailable", eligibleCount: null });
+      await call(fixture.id, credential.token, "retire_requirement_case_link", { requirementId, linkId: linked.link.id });
+      const retired = await call(fixture.id, credential.token, "retire_requirement", { requirementId, expectedVersionId: version.id, expectedContentDigest: version.contentDigest });
+      expect(retired.requirement.state).toBe("retired");
+      expect(retired.versions).toHaveLength(2);
+    } finally {
+      if (credential) await owner.delete(`${base}/apikeys/${credential.id}`, { failOnStatusCode: false });
+      await owner.delete(base, { failOnStatusCode: false });
+    }
+  });
+
+  test("MCP-NREQ-02 read-only scope and a fresh default-off catalog cannot be bypassed with cached write tool names", async () => {
+    const fixture = await project();
+    const base = `/api/projects/${fixture.id}`;
+    const credentials: any[] = [];
+    let disabled: APIRequestContext | undefined;
+    try {
+      for (const scopes of [["read"], ["read", "write"]]) {
+        const issued = await issueMcpTestToken(owner, `${base}/apikeys`, { data: { name: `Native proposal ${scopes.join("-")}`, scopes } });
+        expect(issued.ok(), await issued.text()).toBe(true); credentials.push(await issued.json());
+      }
+      const catalog = await rpc(fixture.id, credentials[0].token, "tools/list");
+      const names = catalog.result.tools.map((tool: any) => tool.name);
+      for (const name of readTools) expect(names).toContain(name);
+      for (const name of writeTools) expect(names).not.toContain(name);
+      const denied = await rpc(fixture.id, credentials[0].token, "tools/call", { name: "create_requirement", arguments: proposalBody() });
+      expect(denied.error.code).toBe(-32002);
+      expect((await call(fixture.id, credentials[1].token, "list_requirements")).total).toBe(0);
+      const disabledOrigin = process.env.E2E_NATIVE_REQUIREMENTS_DISABLED_API_URL;
+      expect(disabledOrigin, "requires the same-build default-off CI backend").toBeTruthy();
+      disabled = await newRequestContext.newContext({ baseURL: disabledOrigin!, storageState: { cookies: [], origins: [] } });
+      for (const alias of [false, true]) {
+        const fresh = await rpc(fixture.id, credentials[1].token, "tools/list", {}, disabled, alias);
+        expect(fresh.error).toBeUndefined();
+        const exposed = fresh.result.tools.map((tool: any) => tool.name);
+        for (const name of [...readTools, ...writeTools]) expect(exposed).not.toContain(name);
+        const cached = await rpc(fixture.id, credentials[1].token, "tools/call", { name: "create_requirement", arguments: proposalBody() }, disabled, alias);
+        expect(cached.error).toBeDefined();
+        expect(cached.result).toBeUndefined();
+      }
+      expect((await call(fixture.id, credentials[1].token, "list_requirements")).total).toBe(0);
+    } finally {
+      await disabled?.dispose();
+      for (const credential of credentials) await owner.delete(`${base}/apikeys/${credential.id}`, { failOnStatusCode: false });
+      await owner.delete(base, { failOnStatusCode: false });
+    }
+  });
 });

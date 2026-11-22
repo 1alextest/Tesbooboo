@@ -1,6 +1,6 @@
 # Work Package A — Native requirements and testcase links (design note, revision 2)
 
-**Status:** Draft for review. Not approved, not implemented, no acceptance claimed.
+**Status:** Revision-2 design retained; D9 staging/review-first implementation is under review. Full Work Package A publication remains blocked; no product acceptance or deployment is claimed.
 **Date:** 2026-11-21 (revision 2)
 **Source commit:** `8686e3cbce03a7c73f609140071f8e4d740215a1` (`origin/development`)
 **Work package:** `implementation-plan.md` **lines 176–182** (“Work package A — Native requirements and testcase links (first authored-artifact integration)”).
@@ -326,16 +326,16 @@ All rows are planned; statuses distinguish executable-now from blocked.
 
 **Slice 1 (buildable and testable now, skills-independent)**
 
-1. Provisional migration: profile and typed-link tables, lineage indexes/constraints, staging operations table, review-lineage constraint. No content/version-table replacement, no backfill.
-2. KB type extension: typed criteria validation for `requirement_note` writes; requirement key/state profile; generalized review path with `requirement_review` authority, but approval remains gated by skills at runtime.
-3. Staging tools and review surface: requirement revisions, case operations (typed mirror of the existing case payload), link proposals; one proposal revision; blockers shown.
-4. Skills gate: `SKILL_CONTEXT_UNAVAILABLE` blocks apply/approval/activation; staged items remain inert. Rejection/withdrawal allowed.
-5. Lineage enforcement: FKs and service checks; wrong-requirement fixture.
-6. Coverage read with the four readings and edge controls, exercised on seeded/non-guarded data; no product-path approval is claimed.
+1. Staging migration: append-only `proposal_operations` under the existing `ai_generation_requests` task, with project/task/operation lineage and immutable payload/digest/provenance. No separate requirement content/version store, KB content write, active link or backfill.
+2. Validate typed criteria on the staged `requirement_revision` payload. Official identity, submitted/approved KB snapshots, requirement profile and the protected typed-link table remain the later apply output described in §§3–4; their absence must not be disguised by treating a task ID as a native document ID.
+3. Staging tools and the existing task review surface: requirement iterations, case operations and link intents share one task and one exact proposal revision. Existing case payloads are compatibility projections of their typed operations, with consistency enforced before review/apply. The current proposal and immutable history remain readable after withdrawal or preview disablement.
+4. Skills gate: `SKILL_CONTEXT_UNAVAILABLE` blocks apply/approval/activation; staged items remain inert. Authorized rejection/withdrawal remains available.
+5. Staged lineage, optimistic concurrency and principal-bound retry enforcement: FKs/service checks prove same-task operation identity, exact criterion/case bases, wrong-project refusal and no lost update.
+6. Report proposed association counts separately from the four eventual coverage readings. Approved/executed/passing remain blocked or unavailable in this slice; existing testcase execution history is never promoted into verified requirement coverage by creating or revising a proposal.
 
 **Acceptance proof for slice 1**
 
-- [ ] Typed requirement write rejects malformed/missing/duplicate criteria; submitted snapshots are immutable.
+- [ ] Typed staged requirement payload rejects malformed/missing/duplicate criteria; candidate operations are immutable. Official KB submitted-snapshot proof remains blocked with protected apply.
 - [ ] Staging records exact payloads/digests; proposal revision changes only with new content; replay is idempotent.
 - [ ] Apply/approval are refused with `SKILL_CONTEXT_UNAVAILABLE` while skills are unavailable; zero native versions/cases/active links/approval rows created.
 - [ ] Wrong requirement id/version and wrong project are refused by service and database; zero rows.
@@ -343,7 +343,7 @@ All rows are planned; statuses distinguish executable-now from blocked.
 - [ ] Preview flag off hides/refuses the new MCP tools and REST writes.
 - [ ] External mirror documents remain read-only and attributed; native operations leave them unchanged.
 - [ ] Unapproved/draft cases remain inadmissible to runs through every writer surface.
-- [ ] Coverage on controlled fixtures: draft link → authored only; unstarted item → not executed; stale attempt → excluded; Pass-then-Fail → executed but not passing; Fail-then-Pass → passing with history.
+- [ ] Existing passing executions and new/relinked proposals do not produce approved/executed/passing requirement coverage. The positive active-link/approved-version attempt matrix in §5 remains blocked on protected apply and skill authority.
 
 **Slice 2 (blocked input):** the minimal effective-skill resolution and pinning required by WP-A/R-ASE-25. Only after it ships can apply/approval/link activation and the positive WP-A rows run. Sequence decision: **D9**.
 
@@ -361,7 +361,7 @@ All rows are planned; statuses distinguish executable-now from blocked.
 | D6 | `sourceRefs` for requirements | Use the existing `knowledge_document` citation type for review context; the typed link remains the only relation (no new enum) |
 | D7 | Skills unavailable | **Resolved:** staging/review/reject allowed; apply/approval/activation and approved-or-better coverage blocked, in preview too |
 | D8 | Audit depth | Activity for accepted mutations; `audit_logs` for unauthorized/cross-tenant/stale refusals |
-| D9 | Slice sequencing | Either implement the minimal effective-skill resolver first (WP-A positive rows become runnable) or ship Slice 1 as staging/review-only with WP-A publication explicitly BLOCKED |
+| D9 | Slice sequencing | **Resolved for this increment:** staging/review-only first. Preserve the KB ownership and future protected-apply design; WP-A publication and its positive acceptance rows remain explicitly BLOCKED on effective skills. |
 | D10 | Migration number | Provisional only; assign after acceptance and reconciliation with the then-latest migrations |
 
 ---
@@ -372,4 +372,20 @@ All rows are planned; statuses distinguish executable-now from blocked.
 - `GET /api/health` (production, 2026-11-21) → `gitSha = 8686e3cb…`.
 - `scripts/mcp-deploy-check.mjs` against `…/projects/df072dfe-e4d0-406a-9350-e0d022c6323f/mcp` with `REQUIRE_PROPOSAL_PREVIEW=1` → 49 tools, fingerprint `6f1a2c05c69f8948` matches, `OK`. Catalog has `get_requirement_matrix`; no native requirement or skill tools; retired `link_requirement_to_testcase` absent.
 - Sources read: `docs/specs/agent-synchronized-engineering/{requirements.md,design.md,implementation-plan.md,README.md,skills-governance.md,AGENT_RULE_TEMPLATE.md}` at the pinned commit; `src/legacy/{legacy.service.ts,testcase-edit-revision.ts,testcase-proposal-review.ts,approved-run-cases.policy.ts}`; `src/behavior-graph/model-studio-repository.ts`; `src/behavior-graph/graph-review-run-links.ts`; `src/integration-sync/integration-sync.processor.ts`; `src/mcp/{mcp.tools.ts,mcp.types.ts}`; `src/common/testcase-publication.policy.ts`; migrations `V45, V101, V147, V148, V151, V155, V156, V157, V158`; `Tesbo-Frontend/app/(app)/projects/[id]/requirements/page.tsx`; document write/review services.
-- **No implementation, migration or acceptance run has been performed for this note. UI statements are source-only.**
+- **At the revision-2 evidence snapshot above, no implementation, migration or acceptance run had been performed. Those runtime/UI limitations remain historical and are not upgraded by the recovery below.**
+
+### Interrupted-work recovery — 2026-11-21
+
+The unpublished implementation was recovered from the worktree based on `0ad325e366174231c764a72b1b0718dbed28c50e`, then reconciled on `9f506df2b6fae0f74e2ae2c5172b9ef865ef2457`, which includes design PR #192. The original staged implementation had introduced separate `requirements` / `requirement_versions` tables. That conflicts with §3 and was not published unchanged. Its useful retry, exact-case-basis, provenance, refusal and UI work is being retained within the shared staging owner.
+
+The recovered Playwright receipt collected **3,034 tests in 92 files**, with **1,161 selected in 23 files**, at `2026-11-22T01:46:46.792134Z`. It explicitly records `runtimeResult: not-run`; synthetic context metadata was used only for collection and removed. The earlier report of 136 backend and 215 MCP unit/contract passes applies to that earlier unpublished source, not the reconciled candidate. Database/browser CI and Independent/White review must bind the reconciled source before any readiness claim.
+
+**Identity contract for the staging slice:** response aliases `requirement.id` and `currentVersion.id` identify a proposal task and proposal operation respectively. They carry `identityKind: proposal_task` / `proposal_operation`, explicit `taskId` / `operationId`, and null `nativeDocumentId` / `nativeVersionId`. They are not official KB identifiers. Adding case candidates uses that same review task; staged links remain inert operations. No native requirement, case, active relation or approval is created by these staging actions.
+
+**Source-context limit:** the current staging contract has not added a verified target-application source-commit input. New operations record `sourceContext: {status: "unavailable", reason: "TARGET_SOURCE_COMMIT_NOT_SUPPLIED"}`. Content digests, exact task/operation lineage and case edit/approval bases are concrete, but they do not stand in for §4.2's target-source pin. The Tesbo server build is not substituted for the application under change. This limit must remain visible through review and be resolved before later governed publication can claim complete source provenance.
+
+**Link-target limit:** every staged case candidate retains its exact requirement-operation basis and selected criteria. The separate link-intent endpoint currently accepts an existing official `testcaseId` and pins its edit/approval revisions; it cannot yet target a newly staged case operation. The linked-batch operation references and protected apply described in §§4 and 6 remain future work, so this slice does not claim the complete requirement → new case → active link journey.
+
+**Concurrent review edits:** requirement-bound case edits and deletions require the exact `expectedProposalRevision` shown to the reviewer. Missing revisions refuse the write, and stale revisions return a conflict before interpreting a mutable draft index. Each accepted mutation returns its review snapshot from the same locked transaction; a bulk operation may use only that returned revision for its next step and stops on any intervening change.
+
+The repository source and tests can be changed through this recovery. No authorized native Tesbo MCP connection is available in this session, so live Requirements, Test Cases, Manual, Policy, Task and Evidence record synchronization is **BLOCKED**, not inferred from source files or a passing test suite. The full external canonical package was not available; the accessible repository entry brief and the current ASE design/requirements remain the inspected inputs. No canonical freeze is claimed.

@@ -31,6 +31,41 @@ describe("native testcase proposal review boundary", () => {
     expect(f.access).not.toHaveBeenCalled(); expect(f.query).not.toHaveBeenCalled(); expect(f.transaction).not.toHaveBeenCalled();
   });
 
+  it("preserves empty-title fallback, coercion, truncation and ignored keys for unbound staging", async () => {
+    process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED="1";
+    const f=fixture(), writes: unknown[][]=[];
+    const clientQuery=jest.fn(async(sql:string,values:unknown[]=[])=>{
+      if(sql.startsWith("SELECT p.*"))return {rows:[{id:project,settings:{},caller_role:"owner",workspace_role:"owner"}]};
+      if(sql.includes("INSERT INTO ai_generation_requests")){writes.push(values);return {rows:[{id:task}]};}
+      return {rows:[]};
+    });
+    f.transaction.mockImplementation((work:(client:unknown)=>Promise<unknown>)=>work({query:clientQuery}));
+    jest.spyOn(f.svc,"zyraTask").mockResolvedValue({id:task} as never);
+    const requests=[
+      {title:"",reason:42,expectedTitle:"Proposed testcase changes",expectedReason:"42"},
+      {title:"t".repeat(600),reason:"r".repeat(5000),expectedTitle:"t".repeat(512),expectedReason:"r".repeat(4000)}
+    ];
+    for(const [index,input] of requests.entries()){
+      await f.svc.stageTestcaseChanges(project,user,{requestKey:`legacy-normalization-${index}`,title:input.title,legacyHint:"ignored",
+        operations:[{opType:"create",draft:{title:"Existing unbound draft"},reason:input.reason,legacyHint:"ignored"}]},human);
+      expect(writes[index][2]).toBe(input.expectedTitle);
+      expect(JSON.parse(String(writes[index][4]))[0].reason).toBe(input.expectedReason);
+    }
+  });
+
+  it("keeps strict request validation on requirement-bound staging", async () => {
+    process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED="1";
+    const oldNative=process.env.TESBO_NATIVE_REQUIREMENTS_PREVIEW_ENABLED;
+    process.env.TESBO_NATIVE_REQUIREMENTS_PREVIEW_ENABLED="1";
+    try{
+      const f=fixture(), requirementContext={requirementId:project,requirementVersionId:task,requirementContentDigest:"a".repeat(64),criterionKeys:["AC-1"]};
+      for(const override of [{title:""},{title:"t".repeat(513)},{legacyHint:"ignored"},{operations:[{opType:"create",draft:{title:"Candidate"},reason:42}]}]){
+        await expect(f.svc.stageTestcaseChanges(project,user,{requestKey:"strict-bound",requirementContext,operations:[{opType:"create",draft:{title:"Candidate"}}],...override},human)).rejects.toBeInstanceOf(BadRequestException);
+      }
+      expect(f.transaction).not.toHaveBeenCalled();
+    }finally{if(oldNative===undefined)delete process.env.TESBO_NATIVE_REQUIREMENTS_PREVIEW_ENABLED;else process.env.TESBO_NATIVE_REQUIREMENTS_PREVIEW_ENABLED=oldNative;}
+  });
+
   it.each([undefined,{kind:"api_token" as const}])("requires an explicit human principal before Save reads or writes: %j", async principal => {
     const f=fixture();
     await expect(f.svc.zyraSave(project,user,task,{expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]},principal)).rejects.toBeInstanceOf(ForbiddenException);

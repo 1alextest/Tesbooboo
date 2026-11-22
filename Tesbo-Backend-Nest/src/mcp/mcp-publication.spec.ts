@@ -44,10 +44,16 @@ function fixture(options: { actor?: string | null; consent?: boolean; writable?:
 
 describe("MCP-P07 protected testcase publication and unpublished proposal preview", () => {
   const original = process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
-  beforeEach(() => { process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = "1"; });
+  const originalNative = process.env.TESBO_NATIVE_REQUIREMENTS_PREVIEW_ENABLED;
+  beforeEach(() => {
+    process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = "1";
+    process.env.TESBO_NATIVE_REQUIREMENTS_PREVIEW_ENABLED = "0";
+  });
   afterEach(() => {
     if (original === undefined) delete process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
     else process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = original;
+    if (originalNative === undefined) delete process.env.TESBO_NATIVE_REQUIREMENTS_PREVIEW_ENABLED;
+    else process.env.TESBO_NATIVE_REQUIREMENTS_PREVIEW_ENABLED = originalNative;
   });
 
   it.each([undefined, "0", "true"])("keeps the preview unavailable for server setting %p, regardless of client claims", async value => {

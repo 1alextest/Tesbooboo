@@ -113,4 +113,24 @@ describe("ApiTokenRestGuard", () => {
       .rejects.toMatchObject({ response: expect.objectContaining({ code: "HUMAN_PUBLICATION_REQUIRED" }) });
     expect(l.requireProjectAccess).not.toHaveBeenCalled();
   });
+
+  it.each(["requirements", "requirements/requirement", "requirements/requirement/coverage"])("keeps native proposal reads project-bound and read-scoped: %s", async suffix => {
+    const l = legacy(), guard = new ApiTokenRestGuard(l as unknown as LegacyService);
+    expect(await guard.canActivate(request(`/api/projects/${P}/${suffix}`, "GET", ["read"]))).toBe(true);
+    await expect(guard.canActivate(request(`/api/projects/${Q}/${suffix}`, "GET", ["read"]))).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(guard.canActivate(request(`/api/projects/${P}/${suffix}`, "GET", ["write"]))).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it.each(["requirements", "requirements/requirement/revisions", "requirements/requirement/links", "requirements/requirement/case-proposals", "requirements/requirement/retire"])("requires scoped writes for unpublished native proposal action: %s", async suffix => {
+    const l = legacy(), guard = new ApiTokenRestGuard(l as unknown as LegacyService);
+    expect(await guard.canActivate(request(`/api/projects/${P}/${suffix}`, "POST", ["write"]))).toBe(true);
+    await expect(guard.canActivate(request(`/api/projects/${P}/${suffix}`, "POST", ["read"]))).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(guard.canActivate(request(`/api/projects/${Q}/${suffix}`, "POST", ["write"]))).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it("delegates scoped native approval to its audited domain refusal", async () => {
+    const l = legacy();
+    expect(await new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(request(`/api/projects/${P}/requirements/requirement/revisions/version/approve`, "POST", ["read", "write"]))).toBe(true);
+    expect(l.requireProjectAccess).toHaveBeenCalledWith("user-1", P);
+  });
 });

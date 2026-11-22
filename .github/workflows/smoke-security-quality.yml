@@ -61,6 +61,10 @@ jobs:
       # Verify selected human-publication mechanics without exposing the new external
       # proposal inlet in deployments awaiting the S0 Skills/authority gate.
       TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED: "1"
+      # This availability flag permits unpublished proposals only. Effective skill authority
+      # remains unavailable, so requirement-bound case publication must still refuse.
+      TESBO_NATIVE_REQUIREMENTS_PREVIEW_ENABLED: "1"
+      E2E_NATIVE_REQUIREMENTS_DISABLED_API_URL: http://127.0.0.1:7001
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -97,6 +101,13 @@ jobs:
           npm run migrate
           nohup node dist/main.js >/tmp/tesbo-backend.log 2>&1 &
           echo $! >/tmp/tesbo-backend.pid
+          # Same compiled checkout and disposable DB, with the native preview flag UNSET.
+          # Start before fixtures exist: boot recovery cannot interrupt another test's work.
+          # The scheduler has an existing disable switch; no product configuration is changed.
+          nohup env -u TESBO_NATIVE_REQUIREMENTS_PREVIEW_ENABLED PORT=7001 \
+            SCHEDULES_WORKER_DISABLED=1 DB_POOL_MAX=5 \
+            node dist/main.js >/tmp/tesbo-backend-native-disabled.log 2>&1 &
+          echo $! >/tmp/tesbo-backend-native-disabled.pid
       - name: Prepare the disposable Review Board database
         working-directory: Tesbo-Backend-Nest
         run: |
@@ -134,10 +145,11 @@ jobs:
         working-directory: e2e
         run: |
           for _ in $(seq 1 90); do
-            if curl -fsS http://127.0.0.1:7000/health >/dev/null && curl -fsS http://127.0.0.1:3000/login >/dev/null; then break; fi
+            if curl -fsS http://127.0.0.1:7000/health >/dev/null && curl -fsS http://127.0.0.1:7001/health >/dev/null && curl -fsS http://127.0.0.1:3000/login >/dev/null; then break; fi
             sleep 2
           done
           curl -fsS http://127.0.0.1:7000/health
+          curl -fsS http://127.0.0.1:7001/health
           curl -fsS http://127.0.0.1:3000/login >/dev/null
           npx playwright test -c playwright.ci-smoke.config.ts --output=test-results-smoke
       - name: Verify model draft preview and existing graph/source/QA handoff E2E
@@ -308,6 +320,23 @@ jobs:
             api/executions.spec.ts api/attachments.spec.ts \
             --workers=1 --retries=0 --output=test-results-compatibility \
             -g "supports the create -> read -> update -> list -> delete lifecycle|supports adding and removing test cases|the same id repeated inside one request is added once|AUT-01 a full session|adding a test case to a cycle auto-creates an Untested execution|an execution attachment uploads and appears in its list|from-cases seeds the run with its cases|from-cases refuses a Draft case"
+      - name: Verify native requirement proposals and full shared review impact
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-native-requirements
+        run: |
+          # Complete owning files, not a new-test-only grep: existing provider Requirements,
+          # human testcase publication, MCP scopes and native review must all remain usable.
+          # Full testcase API/UI files already ran above; full Plan/Run files run below.
+          npx playwright test -c playwright.config.ts --list | tail -n 1
+          npx playwright test -c playwright.config.ts \
+            api/native-requirements.spec.ts ui/requirements.spec.ts api/mcp.spec.ts \
+            api/zyra.spec.ts ui/zyra.spec.ts api/auth.spec.ts api/authorization.spec.ts api/rbac.spec.ts \
+            --workers=10 --retries=0 --output=test-results-native-requirements --list
+          npx playwright test -c playwright.config.ts \
+            api/native-requirements.spec.ts ui/requirements.spec.ts api/mcp.spec.ts \
+            api/zyra.spec.ts ui/zyra.spec.ts api/auth.spec.ts api/authorization.spec.ts api/rbac.spec.ts \
+            --workers=10 --retries=0 --output=test-results-native-requirements
       - name: Verify fail-closed cache fixture commands
         working-directory: e2e
         run: node --test utils/entitlement-cache-invalidate.test.cjs
@@ -367,6 +396,18 @@ jobs:
           npx playwright test -c playwright.config.ts \
             api/billing.spec.ts ui/billing.spec.ts \
             --workers=2 --retries=0 --output=test-results-native-billing
+          # The lifecycle owner alone changes the disposable billing tenant's plan. Include its
+          # full file for the new native requirement read-only refusal, retaining all old cases.
+          PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report-native-billing-lifecycle npx playwright test -c playwright.config.ts \
+            api/billing-lifecycle.spec.ts --workers=10 --retries=0 --output=test-results-native-billing-lifecycle --list
+          PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report-native-billing-lifecycle npx playwright test -c playwright.config.ts \
+            api/billing-lifecycle.spec.ts --workers=10 --retries=0 --output=test-results-native-billing-lifecycle
+      - name: Stop default-off native backend companion
+        if: always()
+        run: |
+          if test -f /tmp/tesbo-backend-native-disabled.pid; then
+            kill "$(cat /tmp/tesbo-backend-native-disabled.pid)" 2>/dev/null || true
+          fi
       - name: Capture smoke evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -379,6 +420,7 @@ jobs:
             e2e/test-results*/
             /tmp/tesbo-backend.log
             /tmp/tesbo-backend-billing.log
+            /tmp/tesbo-backend-native-disabled.log
             /tmp/tesbo-stripe-ci.log
             /tmp/tesbo-web.log
 

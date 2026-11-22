@@ -47,7 +47,14 @@ export async function verifyMcpDiagnosticLifecycle(source: Page, api: string, we
     expect(discovery.ok(), await discovery.text()).toBe(true);
     const catalog = await discovery.json();
     expect(catalog.error).toBeUndefined();
-    expect(catalog.result.tools).toHaveLength(24);
+    const nativePreviewEnabled = process.env.TESBO_NATIVE_REQUIREMENTS_PREVIEW_ENABLED === "1";
+    const expectedReadToolCount = nativePreviewEnabled ? 27 : 24;
+    expect(catalog.result.tools).toHaveLength(expectedReadToolCount);
+    for (const name of ["list_requirements", "get_requirement", "get_requirement_coverage"]) {
+      const names = catalog.result.tools.map((tool: { name: string }) => tool.name);
+      if (nativePreviewEnabled) expect(names).toContain(name);
+      else expect(names).not.toContain(name);
+    }
     expect(catalog.result.tools.map((tool: { name: string }) => tool.name)).toContain("list_projects");
     expect(catalog.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("create_testcase");
     await page.clock.install();
@@ -71,9 +78,9 @@ export async function verifyMcpDiagnosticLifecycle(source: Page, api: string, we
         await capture("mcp-browser-project-read-timeout-with-cleared-input");
       } finally { held.release(); await page.unroute(endpoint, held.handler); }
       await start();
-      // Project grants now filter the credential-visible catalog: a read-scoped token sees 24 of the
-      // 59 registered tools, and the card reports what this token can actually use.
-      await expect(card().getByRole("status")).toContainText("Read permission and project identity verified; 24 MCP tools advertised");
+      // The card reports this read token's exact configured catalog, including the three native
+      // read tools only when the isolated native preview is enabled.
+      await expect(card().getByRole("status")).toContainText(`Read permission and project identity verified; ${expectedReadToolCount} MCP tools advertised`);
       await expect(input()).toHaveValue("");
       await expect(card()).toContainText("Write permissions and reporting were not tested");
       // Capture the whole actual success card, not an unrelated viewport above its status.

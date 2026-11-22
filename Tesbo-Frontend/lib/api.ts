@@ -1464,8 +1464,9 @@ export async function sendZyraFeedback(
   });
 }
 
-export async function deleteZyraTaskDraft(projectId: string, taskId: string, draftIndex: number): Promise<ZyraTask> {
-  return api<ZyraTask>(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}/drafts/${draftIndex}`, {
+export async function deleteZyraTaskDraft(projectId: string, taskId: string, draftIndex: number, expectedProposalRevision?: string): Promise<ZyraTask> {
+  const query = expectedProposalRevision ? `?expectedProposalRevision=${encodeURIComponent(expectedProposalRevision)}` : "";
+  return api<ZyraTask>(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}/drafts/${draftIndex}${query}`, {
     method: "DELETE",
   });
 }
@@ -1475,9 +1476,11 @@ export async function editZyraTaskDraft(
   projectId: string,
   taskId: string,
   draftIndex: number,
-  fields: Record<string, unknown>
+  fields: Record<string, unknown>,
+  expectedProposalRevision?: string
 ): Promise<ZyraTask> {
-  return api<ZyraTask>(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}/drafts/${draftIndex}`, {
+  const query = expectedProposalRevision ? `?expectedProposalRevision=${encodeURIComponent(expectedProposalRevision)}` : "";
+  return api<ZyraTask>(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}/drafts/${draftIndex}${query}`, {
     method: "PATCH",
     body: fields,
   });

@@ -1,4 +1,5 @@
 import { proposalReviewPreviewEnabled } from "../common/testcase-publication.policy";
+import { nativeRequirementsPreviewEnabled } from "../native-requirements/native-requirements.core";
 import { ForbiddenException } from "@nestjs/common";
 import { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
 import { previewDraftModel } from "../behavior-graph/model-studio-preview.core";
@@ -2093,8 +2094,10 @@ describe("MCP native model draft preview", () => {
   it("advertises a bounded exact schema and returns the shared native result without writes", async () => {
     const { svc, query } = setup();
     const list: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
-    expect(list.result.tools).toHaveLength(proposalReviewPreviewEnabled() ? 49 : 46);
-    expect(new Set(list.result.tools.map((tool: any) => tool.name)).size).toBe(proposalReviewPreviewEnabled() ? 49 : 46);
+    const catalogSize = 46 + (proposalReviewPreviewEnabled() ? 3 : 0) +
+      (nativeRequirementsPreviewEnabled() ? 8 + (proposalReviewPreviewEnabled() ? 1 : 0) : 0);
+    expect(list.result.tools).toHaveLength(catalogSize);
+    expect(new Set(list.result.tools.map((tool: any) => tool.name)).size).toBe(catalogSize);
     const tool = list.result.tools.find((t: any) => t.name === "preview_behavior_model_draft");
     expect(tool.inputSchema).toMatchObject({ additionalProperties: false, required: ["model"],
       properties: { model: { additionalProperties: false, properties: { states: { maxItems: 32 }, transitions: { maxItems: 64 } } } } });

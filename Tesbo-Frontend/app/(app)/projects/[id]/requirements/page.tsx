@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useParams } from "@/lib/routeParams";
 import { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
@@ -34,6 +34,7 @@ import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
 import { getPageCache, setPageCache } from "@/lib/pageDataCache";
 import { renderMarkdown } from "@/lib/markdown";
+import NativeRequirementProposals from "@/components/requirements/NativeRequirementProposals";
 
 const PAGE_SIZE = 25;
 
@@ -248,10 +249,12 @@ function SearchBar({
   );
 }
 
-export default function RequirementsPage() {
+function RequirementsPageContent() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const projectId = params.id as string;
+  const nativeView = searchParams.get("view") === "native";
   const { currentUser } = useAppData();
   const { project } = useProjectData();
   const projectName = String(project.name || "");
@@ -711,16 +714,14 @@ export default function RequirementsPage() {
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  if (loading) {
-    return <PageLoader variant="content" />;
-  }
-
   return (
     <StandardPageLayout
       header={
         <PageHeader
           title="Requirements"
-          subtitle={`Requirements to be developed, synced from ${connectedPhrase}, and turned into test coverage with Zyra. Full documents live in the Knowledge base's Requirements folder.`}
+          subtitle={nativeView
+            ? "Prepare native requirement and case proposals, inspect exact revisions, and review what remains blocked."
+            : `Browse requirements synced from ${connectedPhrase} and their saved test cases. Full documents live in the Knowledge base's Requirements folder.`}
           breadcrumb={
             <Breadcrumbs
               items={[
@@ -742,6 +743,31 @@ export default function RequirementsPage() {
         />
       }
     >
+      <div role="tablist" aria-label="Requirement sources" className="flex gap-2 border-b border-[var(--border)]">
+        {([ ["sources", "Connected sources"], ["native", "Native proposals"] ] as const).map(([view, label]) => (
+          <button
+            key={view}
+            id={`requirements-view-${view}`}
+            type="button"
+            role="tab"
+            aria-selected={nativeView === (view === "native")}
+            aria-controls={`requirements-panel-${view}`}
+            onClick={() => router.replace(`/projects/${projectId}/requirements${view === "native" ? "?view=native" : ""}`, { scroll: false })}
+            className={`border-b-2 px-3 py-2 text-sm font-medium ${nativeView === (view === "native") ? "border-[var(--brand-primary)] text-[var(--accent-light)]" : "border-transparent text-[var(--muted)]"}`}
+          >{label}</button>
+        ))}
+      </div>
+      <div id="requirements-panel-native" role="tabpanel" aria-labelledby="requirements-view-native" hidden={!nativeView}>
+        <NativeRequirementProposals
+          key={projectId}
+          projectId={projectId}
+          active={nativeView}
+          requirementId={searchParams.get("requirement")}
+          versionId={searchParams.get("version")}
+        />
+      </div>
+      <div id="requirements-panel-sources" role="tabpanel" aria-labelledby="requirements-view-sources" hidden={nativeView} className="space-y-6">
+      {loading ? <PageLoader variant="content" /> : <>
       {/* Source tabs + coverage stat strip */}
       {(anyConnected || tickets.length > 0) && (
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -1241,6 +1267,12 @@ export default function RequirementsPage() {
           )}
         </>
       )}
+      </>}
+      </div>
     </StandardPageLayout>
   );
+}
+
+export default function RequirementsPage() {
+  return <React.Suspense fallback={<PageLoader variant="content" />}><RequirementsPageContent /></React.Suspense>;
 }

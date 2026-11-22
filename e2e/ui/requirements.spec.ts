@@ -1,6 +1,8 @@
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { dbControlAvailable, exec, literal, scalar } from "../utils/psql";
+import { createApprovedTestcase } from "../utils/testcase-approval";
 import {
   createProject,
   deleteProjects,
@@ -70,6 +72,557 @@ test.describe("requirements page — truthful coverage reads", () => {
   }
 });
 
+test.describe("requirements page — unpublished native proposals", () => {
+  let api: APIRequestContext;
+  test.beforeAll(async () => {
+    expect(tenant, "native proposal journeys require the existing disposable screens tenant").not.toBeNull();
+    api = await screensApi();
+  });
+  test.afterAll(async () => { await api?.dispose(); });
+
+  const proposalBody = () => ({ submissionKey: randomUUID(), title: `E2E native UI ${randomUUID()}`,
+    description: "Persisted behavior proposal", criteria: [{ key: "AC-1", text: "The exact proposal can be reopened." }],
+    rationale: "Make the review basis explicit", sourceRefs: [] });
+  async function createProposal(projectId: string) {
+    const response = await api.post(`/api/projects/${projectId}/requirements`, { data: proposalBody() });
+    expect(response.status(), await response.text()).toBe(201);
+    return response.json();
+  }
+  async function readProposal(projectId: string, requirementId: string) {
+    const response = await api.get(`/api/projects/${projectId}/requirements/${requirementId}`);
+    expect(response.status(), await response.text()).toBe(200);
+    return response.json();
+  }
+  const detailPath = (projectId: string, requirementId: string) => `/projects/${projectId}/requirements?view=native&requirement=${requirementId}`;
+
+  test("NREQ-U-01 a user without a provider connection saves, reopens and revises an unpublished requirement", async ({ page }) => {
+    const project = await createProject(api);
+    try {
+      const title = `E2E new native proposal ${randomUUID()}`;
+      await page.goto(`/projects/${project.id}/requirements?view=native`);
+      const pane = page.getByTestId("native-requirement-proposals");
+      await expect(pane).toBeVisible();
+      await expect(pane.getByTestId("native-requirement-governance")).toContainText("Publication and approval are blocked");
+      await pane.getByRole("button", { name: "New requirement proposal", exact: true }).click();
+      const editor = page.getByRole("dialog", { name: "New requirement proposal", exact: true });
+      await editor.getByLabel("Title", { exact: true }).fill(title);
+      await editor.getByLabel("Description", { exact: true }).fill("The persisted description belongs to version one.");
+      await editor.getByLabel("Criterion 1 text", { exact: true }).fill("Version one criterion is retrievable.");
+      await editor.getByLabel("Rationale", { exact: true }).fill("Preserve review history.");
+      await editor.getByRole("button", { name: "Add source", exact: true }).click();
+      await editor.getByLabel("Source 1 label", { exact: true }).fill("Source specification");
+      await editor.getByLabel("Source 1 URL", { exact: true }).fill("https://example.com/specification");
+      const savedResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/projects/${project.id}/requirements` && response.request().method() === "POST");
+      await editor.getByRole("button", { name: "Save proposal", exact: true }).click();
+      const response = await savedResponse;
+      expect(response.status(), await response.text()).toBe(201);
+      const created = await response.json();
+      await expect(editor).toHaveCount(0);
+      await expect(pane.getByRole("heading", { name: title, exact: true })).toBeVisible();
+      const first = (await readProposal(project.id, created.requirement.id)).requirement.currentVersion;
+      expect(first).toMatchObject({ title, description: "The persisted description belongs to version one.",
+        criteria: [{ key: "AC-1", text: "Version one criterion is retrievable." }],
+        sourceRefs: [{ label: "Source specification", url: "https://example.com/specification" }] });
+      expect(created.requirement).toMatchObject({ identityKind: "proposal_task", taskId: created.requirement.id, nativeDocumentId: null });
+      expect(first).toMatchObject({ identityKind: "proposal_operation", operationId: first.id, nativeVersionId: null });
+      // The shared review is useful before any case is staged; it shows actual saved content.
+      await pane.getByRole("link", { name: "Review this shared proposal task", exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`/agents/tasks/${created.requirement.taskId}`));
+      const sharedReview = page.getByTestId("native-shared-proposal-review");
+      await expect(sharedReview.getByRole("heading", { name: title, exact: true })).toBeVisible();
+      await expect(sharedReview).toContainText("The persisted description belongs to version one.");
+      await expect(sharedReview).toContainText("Version one criterion is retrievable.");
+      await expect(sharedReview.getByRole("link", { name: "Source specification", exact: true })).toHaveAttribute("href", "https://example.com/specification");
+      await expect(page.getByTestId("native-case-proposal-governance")).toContainText("Publication and approval are blocked");
+      await page.goto(detailPath(project.id, created.requirement.id));
+      await page.reload();
+      await expect(pane.getByRole("heading", { name: title, exact: true })).toBeVisible();
+      await pane.getByRole("button", { name: "Revise proposal", exact: true }).click();
+      const revisionEditor = page.getByRole("dialog", { name: "Revise requirement proposal", exact: true });
+      await revisionEditor.getByLabel("Title", { exact: true }).fill(`${title} revised`);
+      await revisionEditor.getByLabel("Criterion 1 text", { exact: true }).fill("Version two criterion is retrievable.");
+      await revisionEditor.getByRole("button", { name: "Save proposal", exact: true }).click();
+      await expect(revisionEditor).toHaveCount(0);
+      const current = await readProposal(project.id, created.requirement.id);
+      expect(current.requirement.currentVersion.versionNumber).toBe(2);
+      expect(current.versions.find((version: any) => version.id === first.id)).toEqual(first);
+      await pane.getByRole("link", { name: "Version 1", exact: true }).click();
+      await expect(pane.getByText("Historical proposal revision", { exact: true })).toBeVisible();
+      await expect(pane.getByRole("heading", { name: title, exact: true })).toBeVisible();
+      await expect(pane.getByText("Version one criterion is retrievable.", { exact: true })).toBeVisible();
+      await pane.getByRole("link", { name: "Version 2 (current)", exact: true }).click();
+      await expect(pane.getByRole("heading", { name: `${title} revised`, exact: true })).toBeVisible();
+      await expect(pane.getByText("Unavailable", { exact: true })).toHaveCount(2);
+      await expect(pane.getByText("Unavailable", { exact: true }).nth(0)).toBeVisible();
+      await expect(pane.getByText("Unavailable", { exact: true }).nth(1)).toBeVisible();
+    } finally { await deleteProjects(api, [project.id]); }
+  });
+
+  test("NREQ-U-02 a real stale-save refusal preserves the user's text until they explicitly choose the current base", async ({ page }) => {
+    const project = await createProject(api);
+    try {
+      const initial = await createProposal(project.id);
+      const version = initial.requirement.currentVersion;
+      await page.goto(detailPath(project.id, initial.requirement.id));
+      await page.getByRole("button", { name: "Revise proposal", exact: true }).click();
+      const editor = page.getByRole("dialog", { name: "Revise requirement proposal", exact: true });
+      const unsavedTitle = `My unsaved revision ${randomUUID()}`;
+      await editor.getByLabel("Title", { exact: true }).fill(unsavedTitle);
+      await editor.getByLabel("Criterion 1 text", { exact: true }).fill("My text must survive the conflict.");
+      const competing = await api.post(`/api/projects/${project.id}/requirements/${initial.requirement.id}/revisions`, { data: {
+        ...proposalBody(), title: "Another reviewer saved this version", expectedVersionId: version.id, expectedContentDigest: version.contentDigest,
+      } });
+      expect(competing.status(), await competing.text()).toBe(201);
+      const current = await competing.json();
+      const refused = page.waitForResponse(response => new URL(response.url()).pathname.endsWith(`/${initial.requirement.id}/revisions`) && response.request().method() === "POST");
+      await editor.getByRole("button", { name: "Save proposal", exact: true }).click();
+      expect((await refused).status()).toBe(409);
+      await expect(editor.getByText("Your text is preserved. Review the current saved revision before choosing a new editing base.", { exact: true })).toBeVisible();
+      await expect(editor.getByLabel("Title", { exact: true })).toHaveValue(unsavedTitle);
+      await expect(editor.getByLabel("Criterion 1 text", { exact: true })).toHaveValue("My text must survive the conflict.");
+      await expect(editor.getByRole("button", { name: "Save proposal", exact: true })).toBeDisabled();
+      expect((await readProposal(project.id, initial.requirement.id)).requirement.currentVersion.id).toBe(current.requirement.currentVersion.id);
+      await editor.getByRole("button", { name: "Review latest saved revision", exact: true }).click();
+      await expect(editor.getByRole("heading", { name: "Another reviewer saved this version", exact: true })).toBeVisible();
+      await editor.getByRole("button", { name: "Keep my text and use this base", exact: true }).click();
+      await expect(editor.getByLabel("Title", { exact: true })).toHaveValue(unsavedTitle);
+      await editor.getByRole("button", { name: "Save proposal", exact: true }).click();
+      await expect(editor).toHaveCount(0);
+      const reconciled = await readProposal(project.id, initial.requirement.id);
+      expect(reconciled.requirement.currentVersion).toMatchObject({ title: unsavedTitle, versionNumber: 3, parentVersionId: current.requirement.currentVersion.id });
+      expect(reconciled.versions).toHaveLength(3);
+    } finally { await deleteProjects(api, [project.id]); }
+  });
+
+  test("NREQ-U-03 exact case association and case preparation use the existing review with publication disabled", async ({ page }) => {
+    const project = await createProject(api);
+    try {
+      const proposal = await createProposal(project.id);
+      const testcase = await createApprovedTestcase(api, project.id, { title: `E2E associated UI case ${randomUUID()}` });
+      await page.goto(detailPath(project.id, proposal.requirement.id));
+      const preparation = page.getByTestId("native-case-preparation");
+      await preparation.getByLabel("Find an existing case", { exact: true }).fill(testcase.title);
+      await preparation.getByRole("button", { name: "Search cases", exact: true }).click();
+      await preparation.getByRole("button", { name: `${testcase.externalId}: ${testcase.title} (Approved)`, exact: true }).click();
+      await expect(preparation.getByText(testcase.editRevision, { exact: true })).toBeVisible();
+      await preparation.getByRole("checkbox", { name: "Use this saved testcase revision", exact: true }).check();
+      await preparation.getByRole("checkbox", { name: "AC-1: The exact proposal can be reopened.", exact: true }).check();
+      const associationResponse = page.waitForResponse(response => new URL(response.url()).pathname.endsWith(`/${proposal.requirement.id}/links`) && response.request().method() === "POST");
+      await preparation.getByRole("button", { name: "Save proposed association", exact: true }).click();
+      expect((await associationResponse).status()).toBe(201);
+      await expect(page.getByText("Current proposal association", { exact: true })).toBeVisible();
+      const associated = await readProposal(project.id, proposal.requirement.id);
+      expect(associated.links[0]).toMatchObject({ testcaseId: testcase.id, testcaseRevision: testcase.editRevision,
+        testcaseApprovalRevision: testcase.approvalRevision, requirementVersionId: proposal.requirement.currentVersion.id, criterionKeys: ["AC-1"] });
+      const changed = await api.put(`/api/projects/${project.id}/testcases/${testcase.id}`, {
+        data: { expectedRevision: testcase.editRevision, description: "The saved testcase changed after this association." },
+      });
+      expect(changed.status(), await changed.text()).toBe(200);
+      const changedCaseResponse = await api.get(`/api/projects/${project.id}/testcases/${testcase.id}`);
+      expect(changedCaseResponse.ok(), await changedCaseResponse.text()).toBe(true);
+      const changedCase = await changedCaseResponse.json();
+      // A semantic edit invalidates exact approval; reassociation must preserve that fact.
+      expect(changedCase).toMatchObject({ status: "In Review", approvalCurrent: false });
+      expect(changedCase.editRevision).not.toBe(testcase.editRevision);
+      await page.reload();
+      const originalAssociation = page.getByTestId(`native-requirement-association-${associated.links[0].id}`);
+      await expect(originalAssociation.getByText("Stale association", { exact: true })).toBeVisible();
+      const retirementResponse = page.waitForResponse(response => new URL(response.url()).pathname.endsWith(`/links/${associated.links[0].id}/retire`) && response.request().method() === "POST");
+      await originalAssociation.getByRole("button", { name: "Retire proposed association", exact: true }).click();
+      await expect(page.getByRole("heading", { name: "Retire proposed association?", exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "Retire association", exact: true }).click();
+      expect((await retirementResponse).status()).toBe(200);
+      await expect(originalAssociation.getByText("Retired association", { exact: true })).toBeVisible();
+      await preparation.getByLabel("Find an existing case", { exact: true }).fill(testcase.title);
+      await preparation.getByRole("button", { name: "Search cases", exact: true }).click();
+      await preparation.getByRole("button", { name: `${testcase.externalId}: ${testcase.title} (In Review)`, exact: true }).click();
+      await preparation.getByRole("checkbox", { name: "Use this saved testcase revision", exact: true }).check();
+      await preparation.getByRole("checkbox", { name: "AC-1: The exact proposal can be reopened.", exact: true }).check();
+      await preparation.getByRole("button", { name: "Save proposed association", exact: true }).click();
+      await expect(page.getByText("Current proposal association", { exact: true })).toBeVisible();
+      const replacement = await readProposal(project.id, proposal.requirement.id);
+      expect(replacement.links).toHaveLength(2);
+      expect(replacement.links.find((link: any) => link.id === associated.links[0].id).retiredAt).not.toBeNull();
+      expect(replacement.links.find((link: any) => !link.retiredAt)).toMatchObject({
+        testcaseRevision: changedCase.editRevision, testcaseApprovalRevision: null,
+        caseSnapshot: { approvalCurrent: false },
+      });
+      expect(replacement.coverage).toMatchObject({ proposedLinkCount: 1, currentProposedLinkCount: 1, staleProposedLinkCount: 0 });
+      await preparation.getByLabel("Case proposal operation", { exact: true }).selectOption("create");
+      const title = `E2E proposed UI case ${randomUUID()}`;
+      await preparation.getByLabel("Case title", { exact: true }).fill(title);
+      await preparation.getByLabel("Step 1 action", { exact: true }).fill("Open the saved requirement proposal.");
+      await preparation.getByLabel("Step 1 expected result", { exact: true }).fill("Its exact criteria and revision are visible.");
+      const stagedResponse = page.waitForResponse(response => new URL(response.url()).pathname.endsWith(`/${proposal.requirement.id}/case-proposals`) && response.request().method() === "POST");
+      await preparation.getByRole("button", { name: "Stage case proposal", exact: true }).click();
+      const response = await stagedResponse;
+      expect(response.status(), await response.text()).toBe(201);
+      const staged = await response.json();
+      expect(staged.publication).toBe("unpublished");
+      expect(staged.taskId).toBe(proposal.requirement.taskId);
+      await preparation.getByRole("link", { name: "Open shared proposal review", exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`/agents/tasks/${staged.taskId}`));
+      const governance = page.getByTestId("native-case-proposal-governance");
+      await expect(governance).toContainText("Publication and approval are blocked");
+      await expect(governance).toContainText(proposal.requirement.currentVersion.id);
+      await expect(governance).toContainText(proposal.requirement.currentVersion.contentDigest);
+      const sharedReview = page.getByTestId("native-shared-proposal-review");
+      await expect(sharedReview.getByRole("heading", { name: proposal.requirement.currentVersion.title, exact: true })).toBeVisible();
+      await expect(sharedReview.getByRole("heading", { name: "Proposed case association", exact: true })).toHaveCount(2);
+      await expect(sharedReview).toContainText(changedCase.editRevision);
+      await expect(sharedReview).toContainText(title);
+      await expect(sharedReview).toContainText("Open the saved requirement proposal.");
+      await expect(sharedReview).toContainText("Its exact criteria and revision are visible.");
+      await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+      await expect(page.getByRole("button", { name: /Save selected/i })).toBeDisabled();
+      const casesResponse = await api.get(`/api/projects/${project.id}/testcases`, { params: { search: title, limit: 500 } });
+      expect(casesResponse.ok(), await casesResponse.text()).toBe(true);
+      expect((await casesResponse.json()).filter((row: any) => row.title === title)).toEqual([]);
+      expect((await readProposal(project.id, proposal.requirement.id)).caseProposals[0].id).toBe(staged.taskId);
+    } finally { await deleteProjects(api, [project.id]); }
+  });
+
+  test("NREQ-U-04 losing a successful save response preserves the submission key and recovers one persisted proposal", async ({ page }) => {
+    const project = await createProject(api);
+    let loseResponse = true;
+    const submittedKeys: string[] = [];
+    try {
+      await page.route(url => url.pathname === `/api/projects/${project.id}/requirements`, async route => {
+        if (route.request().method() !== "POST") return route.continue();
+        submittedKeys.push(route.request().postDataJSON().submissionKey);
+        if (!loseResponse) return route.continue();
+        const persisted = await route.fetch();
+        expect(persisted.status(), await persisted.text()).toBe(201);
+        await route.abort("failed");
+      });
+      await page.goto(`/projects/${project.id}/requirements?view=native`);
+      await page.getByRole("button", { name: "New requirement proposal", exact: true }).click();
+      const editor = page.getByRole("dialog", { name: "New requirement proposal", exact: true });
+      const title = `E2E recovered native proposal ${randomUUID()}`;
+      await editor.getByLabel("Title", { exact: true }).fill(title);
+      await editor.getByLabel("Criterion 1 text", { exact: true }).fill("One proposal is stored even when its response is lost.");
+      await editor.getByRole("button", { name: "Save proposal", exact: true }).click();
+      await expect(editor.getByText(/The save outcome is unconfirmed/)).toBeVisible();
+      await expect(editor.getByLabel("Title", { exact: true })).toHaveValue(title);
+      await expect(editor.getByLabel("Title", { exact: true })).toBeDisabled();
+      const before = await api.get(`/api/projects/${project.id}/requirements`);
+      expect(before.ok(), await before.text()).toBe(true);
+      const persisted = await before.json();
+      expect(persisted.total).toBe(1);
+      loseResponse = false;
+      await editor.getByRole("button", { name: "Check saved submission", exact: true }).click();
+      await expect(editor).toHaveCount(0);
+      expect(new Set(submittedKeys).size).toBe(1);
+      expect(submittedKeys.length).toBeGreaterThanOrEqual(2);
+      const after = await api.get(`/api/projects/${project.id}/requirements`);
+      expect(after.ok(), await after.text()).toBe(true);
+      expect((await after.json()).list[0].id).toBe(persisted.list[0].id);
+      expect((await readProposal(project.id, persisted.list[0].id)).versions).toHaveLength(1);
+    } finally { await deleteProjects(api, [project.id]); }
+  });
+
+  test("NREQ-U-05 unavailable proposal reads show unknown availability and recover the persisted list on retry", async ({ page }) => {
+    const project = await createProject(api);
+    let unavailable = true;
+    try {
+      const proposal = await createProposal(project.id);
+      await page.route(url => url.pathname === `/api/projects/${project.id}/requirements`, async route => {
+        if (unavailable && route.request().method() === "GET") return route.fulfill({ status: 503, json: { error: "Proposal service unavailable" } });
+        return route.continue();
+      });
+      await page.goto(`/projects/${project.id}/requirements?view=native`);
+      const pane = page.getByTestId("native-requirement-proposals");
+      await expect(pane.getByRole("alert")).toContainText("Proposal availability is unknown");
+      await expect(pane.getByRole("button", { name: "New requirement proposal", exact: true })).toBeDisabled();
+      await expect(pane.getByText("0 unpublished proposals", { exact: true })).toHaveCount(0);
+      unavailable = false;
+      await pane.getByRole("button", { name: "Refresh proposals", exact: true }).click();
+      await expect(pane.getByRole("alert")).toHaveCount(0);
+      await expect(pane.getByRole("link", { name: `${proposal.requirement.key}: ${proposal.requirement.currentVersion.title}`, exact: true })).toBeVisible();
+      await expect(pane.getByRole("button", { name: "New requirement proposal", exact: true })).toBeEnabled();
+    } finally { await deleteProjects(api, [project.id]); }
+  });
+
+  test("NREQ-U-06 a late detail reply cannot replace the requirement the user has opened", async ({ page }) => {
+    const project = await createProject(api);
+    let release: () => void = () => {};
+    try {
+      const first = await createProposal(project.id), second = await createProposal(project.id);
+      let started: () => void = () => {};
+      let completed: () => void = () => {};
+      const requested = new Promise<void>(resolve => { started = resolve; });
+      const held = new Promise<void>(resolve => { release = resolve; });
+      const delivered = new Promise<void>(resolve => { completed = resolve; });
+      await page.route(url => url.pathname === `/api/projects/${project.id}/requirements/${first.requirement.id}`, async route => {
+        const response = await route.fetch();
+        started(); await held;
+        // The first request may be aborted by navigation; only its completion is being delayed.
+        await route.fulfill({ response }).catch(() => {}).finally(completed);
+      });
+      await page.goto(`/projects/${project.id}/requirements?view=native`);
+      const pane = page.getByTestId("native-requirement-proposals");
+      await pane.getByRole("link", { name: `${first.requirement.key}: ${first.requirement.currentVersion.title}`, exact: true }).click();
+      await requested;
+      await pane.getByRole("link", { name: `${second.requirement.key}: ${second.requirement.currentVersion.title}`, exact: true }).click();
+      await expect(pane.getByRole("heading", { name: second.requirement.currentVersion.title, exact: true })).toBeVisible();
+      release();
+      await delivered;
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await expect(pane.getByRole("heading", { name: first.requirement.currentVersion.title, exact: true })).toHaveCount(0);
+      await expect(pane.getByRole("heading", { name: second.requirement.currentVersion.title, exact: true })).toBeVisible();
+    } finally { release(); await deleteProjects(api, [project.id]); }
+  });
+
+  test("NREQ-U-07 retirement preserves prepared fields and the original uncertain staging request across refresh", async ({ page }) => {
+    const project = await createProject(api);
+    let loseResponse = true;
+    let originalTaskId = "";
+    const submittedBodies: Array<Record<string, unknown>> = [];
+    try {
+      const proposal = await createProposal(project.id);
+      const stagePath = `/api/projects/${project.id}/requirements/${proposal.requirement.id}/case-proposals`;
+      await page.route(url => url.pathname === stagePath, async route => {
+        if (route.request().method() !== "POST") return route.continue();
+        submittedBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+        if (!loseResponse) return route.continue();
+        const persisted = await route.fetch();
+        expect(persisted.status(), await persisted.text()).toBe(201);
+        const staged = await persisted.json();
+        expect(staged.publication).toBe("unpublished");
+        originalTaskId = staged.taskId;
+        // The server stored this task; the browser must keep its exact uncertain submission.
+        await route.abort("failed");
+      });
+
+      await page.goto(detailPath(project.id, proposal.requirement.id));
+      const preparation = page.getByTestId("native-case-preparation");
+      await preparation.getByLabel("Case proposal operation", { exact: true }).selectOption("create");
+      const title = `E2E preserved retired preparation ${randomUUID()}`;
+      const preparedFields = [
+        ["Case title", title],
+        ["Case purpose", "Keep the author's prepared purpose while retirement is reconciled."],
+        ["Preconditions", "An exact requirement proposal revision is open."],
+        ["Test data", "Use the saved criterion AC-1."],
+        ["Postconditions and cleanup", "Leave all official cases unchanged."],
+        ["Step 1 action", "Refresh after another author retires the requirement proposal."],
+        ["Step 1 expected result", "The prepared text and original submission remain inspectable."],
+        ["Reason for the proposed change", "Recover the existing task without publishing or duplicating it."],
+      ] as const;
+      for (const [label, value] of preparedFields) await preparation.getByLabel(label, { exact: true }).fill(value);
+      const criterion = preparation.getByRole("checkbox", { name: "AC-1: The exact proposal can be reopened.", exact: true });
+      await criterion.check();
+      await preparation.getByRole("button", { name: "Stage case proposal", exact: true }).click();
+      await expect(preparation.getByText("The outcome is unconfirmed. Your exact submission is preserved. Check the same submission before making another change.", { exact: true })).toBeVisible();
+      expect(originalTaskId).not.toBe("");
+      expect(submittedBodies).toHaveLength(1);
+      expect(typeof submittedBodies[0].requestKey).toBe("string");
+
+      // A separate request changes the owner while the browser is retaining uncertain work.
+      const retiredResponse = await api.post(`/api/projects/${project.id}/requirements/${proposal.requirement.id}/retire`, { data: {
+        expectedVersionId: proposal.requirement.currentVersion.id,
+        expectedContentDigest: proposal.requirement.currentVersion.contentDigest,
+      } });
+      expect(retiredResponse.status(), await retiredResponse.text()).toBe(200);
+      expect((await retiredResponse.json()).requirement.state).toBe("retired");
+      await page.getByRole("button", { name: "Refresh proposals", exact: true }).click();
+      const retiredNotice = preparation.getByTestId("native-case-preparation-retired");
+      await expect(retiredNotice).toContainText("Your case-preparation text is preserved here in read-only form. New associations and case proposals are disabled.");
+      await expect(retiredNotice).toContainText("Its exact request key and content will be reused.");
+      for (const [label, value] of preparedFields) {
+        await expect(preparation.getByLabel(label, { exact: true })).toHaveValue(value);
+        await expect(preparation.getByLabel(label, { exact: true })).toBeDisabled();
+      }
+      await expect(criterion).toBeChecked();
+      await expect(criterion).toBeDisabled();
+      await expect(preparation.getByLabel("Case proposal operation", { exact: true })).toHaveValue("create");
+      await expect(preparation.getByLabel("Case proposal operation", { exact: true })).toBeDisabled();
+      const beforeRecovery = await readProposal(project.id, proposal.requirement.id);
+      expect(beforeRecovery.caseProposals.map((item: { id: string }) => item.id)).toEqual([originalTaskId]);
+
+      loseResponse = false;
+      const recoveredResponse = page.waitForResponse(response => new URL(response.url()).pathname === stagePath && response.request().method() === "POST");
+      await preparation.getByRole("button", { name: "Check saved submission", exact: true }).click();
+      const response = await recoveredResponse;
+      expect(response.status(), await response.text()).toBe(201);
+      const recovered = await response.json();
+      expect(recovered).toMatchObject({ taskId: originalTaskId, publication: "unpublished" });
+      expect(recovered.task.publicationBlocked.code).toBe("SKILL_CONTEXT_UNAVAILABLE");
+      expect(submittedBodies).toHaveLength(2);
+      expect(submittedBodies[1]).toEqual(submittedBodies[0]);
+      await expect(preparation.getByRole("button", { name: "Stage case proposal", exact: true })).toBeDisabled();
+      await expect(preparation.getByRole("link", { name: "Open shared proposal review", exact: true })).toHaveAttribute("href", `/projects/${project.id}/agents/tasks/${originalTaskId}#proposal-operation-${recovered.task.proposalSubmission.operationId}`);
+      for (const [label, value] of preparedFields) {
+        await expect(preparation.getByLabel(label, { exact: true })).toHaveValue(value);
+        await expect(preparation.getByLabel(label, { exact: true })).toBeDisabled();
+      }
+      const afterRecovery = await readProposal(project.id, proposal.requirement.id);
+      expect(afterRecovery.requirement.state).toBe("retired");
+      expect(afterRecovery.caseProposals.map((item: { id: string }) => item.id)).toEqual([originalTaskId]);
+      expect(afterRecovery.links).toEqual([]);
+      const officialCases = await api.get(`/api/projects/${project.id}/testcases`, { params: { search: title, limit: 500 } });
+      expect(officialCases.ok(), await officialCases.text()).toBe(true);
+      expect(await officialCases.json()).toEqual([]);
+    } finally { await deleteProjects(api, [project.id]); }
+  });
+
+  test("NREQ-U-08 a lost association response replays the retired original until a deliberate new association", async ({ page }) => {
+    const project = await createProject(api);
+    let loseResponse = true;
+    let originalLinkId = "";
+    const submittedBodies: Array<Record<string, unknown>> = [];
+    try {
+      const proposal = await createProposal(project.id);
+      const testcase = await createApprovedTestcase(api, project.id, { title: `E2E association recovery ${randomUUID()}` });
+      const linkPath = `/api/projects/${project.id}/requirements/${proposal.requirement.id}/links`;
+      await page.route(url => url.pathname === linkPath, async route => {
+        if (route.request().method() !== "POST") return route.continue();
+        submittedBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+        if (!loseResponse) return route.continue();
+        const persisted = await route.fetch();
+        expect(persisted.status(), await persisted.text()).toBe(201);
+        const association = await persisted.json();
+        originalLinkId = association.link.id;
+        expect(association.submission).toEqual({ linkId: originalLinkId, replayed: false });
+        await route.abort("failed");
+      });
+
+      await page.goto(detailPath(project.id, proposal.requirement.id));
+      const preparation = page.getByTestId("native-case-preparation");
+      await preparation.getByLabel("Find an existing case", { exact: true }).fill(testcase.title);
+      await preparation.getByRole("button", { name: "Search cases", exact: true }).click();
+      await preparation.getByRole("button", { name: `${testcase.externalId}: ${testcase.title} (Approved)`, exact: true }).click();
+      await preparation.getByRole("checkbox", { name: "Use this saved testcase revision", exact: true }).check();
+      await preparation.getByRole("checkbox", { name: "AC-1: The exact proposal can be reopened.", exact: true }).check();
+      await preparation.getByRole("button", { name: "Save proposed association", exact: true }).click();
+      await expect(preparation.getByText("The outcome is unconfirmed. Your exact submission is preserved. Check the same submission before making another change.", { exact: true })).toBeVisible();
+      expect(originalLinkId).not.toBe("");
+      expect(submittedBodies).toHaveLength(1);
+      expect(typeof submittedBodies[0].submissionKey).toBe("string");
+
+      const retiredResponse = await api.post(`${linkPath}/${originalLinkId}/retire`, { data: {} });
+      expect(retiredResponse.status(), await retiredResponse.text()).toBe(200);
+      expect((await retiredResponse.json()).link.retiredAt).not.toBeNull();
+      expect((await readProposal(project.id, proposal.requirement.id)).requirement.state).toBe("draft");
+      await page.getByRole("button", { name: "Refresh proposals", exact: true }).click();
+      const originalRow = page.getByTestId(`native-requirement-association-${originalLinkId}`);
+      await expect(originalRow.getByText("Retired association", { exact: true })).toBeVisible();
+      await expect(preparation.getByRole("button", { name: "Check saved submission", exact: true })).toBeEnabled();
+
+      loseResponse = false;
+      const recoveredResponse = page.waitForResponse(response => new URL(response.url()).pathname === linkPath && response.request().method() === "POST");
+      await preparation.getByRole("button", { name: "Check saved submission", exact: true }).click();
+      const recovered = await recoveredResponse;
+      expect(recovered.status(), await recovered.text()).toBe(201);
+      const receipt = await recovered.json();
+      expect(receipt.submission).toEqual({ linkId: originalLinkId, replayed: true });
+      expect(receipt.link).toMatchObject({ id: originalLinkId, current: false });
+      expect(receipt.link.retiredAt).not.toBeNull();
+      expect(submittedBodies).toHaveLength(2);
+      expect(submittedBodies[1]).toEqual(submittedBodies[0]);
+      await expect(page.getByText("Association submission confirmed. The original association is retired and remains in history; no active association was restored.", { exact: true })).toBeVisible();
+      const afterRecovery = await readProposal(project.id, proposal.requirement.id);
+      expect(afterRecovery.requirement.state).toBe("draft");
+      expect(afterRecovery.links).toHaveLength(1);
+      expect(afterRecovery.links[0].id).toBe(originalLinkId);
+      expect(afterRecovery.links[0].retiredAt).not.toBeNull();
+      expect(afterRecovery.coverage).toMatchObject({ proposedLinkCount: 0, currentProposedLinkCount: 0 });
+      expect(afterRecovery.caseProposals).toEqual([]);
+
+      // Only this separate user action may create a replacement, using a fresh submission key.
+      const replacementResponse = page.waitForResponse(response => new URL(response.url()).pathname === linkPath && response.request().method() === "POST");
+      await preparation.getByRole("button", { name: "Save proposed association", exact: true }).click();
+      const replaced = await replacementResponse;
+      expect(replaced.status(), await replaced.text()).toBe(201);
+      const replacement = await replaced.json();
+      expect(replacement.submission.replayed).toBe(false);
+      expect(replacement.link.id).not.toBe(originalLinkId);
+      expect(replacement.link.current).toBe(true);
+      expect(submittedBodies).toHaveLength(3);
+      expect(submittedBodies[2].submissionKey).not.toBe(submittedBodies[0].submissionKey);
+      const afterReplacement = await readProposal(project.id, proposal.requirement.id);
+      expect(afterReplacement.links).toHaveLength(2);
+      expect(afterReplacement.links.find((link: { id: string }) => link.id === originalLinkId).retiredAt).not.toBeNull();
+      expect(afterReplacement.coverage).toMatchObject({ proposedLinkCount: 1, currentProposedLinkCount: 1 });
+      expect(afterReplacement.caseProposals).toEqual([]);
+      const savedCase = await api.get(`/api/projects/${project.id}/testcases/${testcase.id}`);
+      expect(savedCase.ok(), await savedCase.text()).toBe(true);
+      expect(await savedCase.json()).toMatchObject({ editRevision: testcase.editRevision, approvalRevision: testcase.approvalRevision, approvalCurrent: true });
+    } finally { await deleteProjects(api, [project.id]); }
+  });
+  test("NREQ-U-09 a concurrent change stops bulk discard without retargeting the remaining selection", async ({ page }) => {
+    const project = await createProject(api);
+    try {
+      const proposal = await createProposal(project.id);
+      const titles = ["Other author's removal", "Selected candidate", "Unselected candidate", "First selected removal"]
+        .map(name => `E2E ${name} ${randomUUID()}`);
+      const stagedResponse = await api.post(`/api/projects/${project.id}/requirements/${proposal.requirement.id}/case-proposals`, { data: {
+        requestKey: randomUUID(), title: "Bulk review conflict",
+        requirementVersionId: proposal.requirement.currentVersion.id,
+        requirementContentDigest: proposal.requirement.currentVersion.contentDigest,
+        criterionKeys: ["AC-1"], operations: titles.map(title => ({ opType: "create", draft: { title } })),
+      } });
+      expect(stagedResponse.status(), await stagedResponse.text()).toBe(201);
+      const staged = await stagedResponse.json();
+      const taskPath = `/api/projects/${project.id}/agents/zyra/tasks/${staged.taskId}`;
+      const reviewedResponse = await api.get(taskPath);
+      expect(reviewedResponse.ok(), await reviewedResponse.text()).toBe(true);
+      const reviewed = await reviewedResponse.json();
+      const attemptedRevisions: Array<string | null> = [];
+      let firstRemovalRevision = "";
+      await page.route(url => url.pathname.startsWith(`${taskPath}/drafts/`), async route => {
+        if (route.request().method() !== "DELETE") return route.continue();
+        const url = new URL(route.request().url());
+        attemptedRevisions.push(url.searchParams.get("expectedProposalRevision"));
+        const response = await route.fetch();
+        if (url.pathname.endsWith("/3")) {
+          expect(response.status(), await response.text()).toBe(200);
+          const firstRemoval = await response.json();
+          firstRemovalRevision = firstRemoval.proposalRevision;
+          // Commit another author's real removal before the browser receives its first receipt.
+          const concurrent = await api.delete(`${taskPath}/drafts/0`, {
+            params: { expectedProposalRevision: firstRemovalRevision },
+          });
+          expect(concurrent.status(), await concurrent.text()).toBe(200);
+          expect((await concurrent.json()).drafts.map((draft: { title: string }) => draft.title)).toEqual([titles[1], titles[2]]);
+        }
+        await route.fulfill({ response });
+      });
+
+      await page.goto(`/projects/${project.id}/agents/tasks/${staged.taskId}`);
+      const table = page.getByRole("table").filter({ has: page.getByRole("columnheader", { name: "Testcase", exact: true }) });
+      await expect(table.getByText(titles[3], { exact: true })).toBeVisible();
+      await table.getByRole("checkbox", { name: "Select testcase 2", exact: true }).check();
+      await table.getByRole("checkbox", { name: "Select testcase 4", exact: true }).check();
+      const refusedResponse = page.waitForResponse(response => new URL(response.url()).pathname === `${taskPath}/drafts/1` && response.request().method() === "DELETE");
+      await page.getByRole("button", { name: "Delete selected", exact: true }).click();
+      const refused = await refusedResponse;
+      expect(refused.status(), await refused.text()).toBe(409);
+      expect((await refused.json()).code).toBe("PROPOSAL_REVIEW_CONFLICT");
+      expect(attemptedRevisions).toEqual([reviewed.proposalRevision, firstRemovalRevision]);
+      await expect(page.getByRole("alert")).toContainText("The shared proposal changed since review.");
+      await expect(table.getByText(titles[3], { exact: true })).toHaveCount(0);
+      await expect(table.getByRole("checkbox", { name: "Select testcase 2", exact: true })).toBeChecked();
+      await expect(table.getByText(titles[1], { exact: true })).toBeVisible();
+      await expect(table.getByText(titles[2], { exact: true })).toBeVisible();
+      const currentResponse = await api.get(taskPath);
+      expect(currentResponse.ok(), await currentResponse.text()).toBe(true);
+      const current = await currentResponse.json();
+      expect(current.drafts.map((draft: { title: string }) => draft.title)).toEqual([titles[1], titles[2]]);
+      expect(current.proposalSnapshot.stagedOperations).toEqual(expect.arrayContaining(reviewed.proposalSnapshot.stagedOperations));
+
+      await page.reload();
+      await expect(table.getByText(titles[0], { exact: true })).toHaveCount(0);
+      await expect(table.getByText(titles[1], { exact: true })).toBeVisible();
+      await expect(table.getByText(titles[2], { exact: true })).toBeVisible();
+      await expect(table.getByRole("checkbox", { name: "Select testcase 1", exact: true })).not.toBeChecked();
+      await expect(page.getByTestId("native-case-proposal-governance")).toContainText("Publication and approval are blocked");
+      const officialCases = await api.get(`/api/projects/${project.id}/testcases`);
+      expect(officialCases.ok(), await officialCases.text()).toBe(true);
+      expect(await officialCases.json()).toEqual([]);
+    } finally { await deleteProjects(api, [project.id]); }
+  });
+});
+
 test.describe("requirements page — sync error banner", () => {
   test.skip(!!skipReason, skipReason ?? "");
 
@@ -106,11 +659,11 @@ test.describe("requirements page — sync error banner", () => {
       await page.goto(`/projects/${project.id}/requirements`);
       await page.getByRole("button", { name: "Sync Jira" }).click();
 
-      const errorBanner = page.getByText(/browser blocked or could not reach the API/);
+      const errorBanner = page.getByText(/Request outcome unconfirmed\. This action may already have been applied\./);
       await expect(errorBanner).toBeVisible();
-      // fetchWithNetworkErrorMessage (lib/api.ts) retries once before surfacing anything, so this
-      // also confirms the mock actually engaged both attempts rather than being bypassed.
-      expect(syncAttempts).toBe(2);
+      // The current shared HTTP owner retries reads only. A lost sync POST response must
+      // remain unconfirmed and must not replay a potentially committed external action.
+      expect(syncAttempts).toBe(1);
 
       await page.getByRole("button", { name: "Dismiss" }).click();
       // The regression: Dismiss used to clear only a `syncError` state nothing here ever set — the

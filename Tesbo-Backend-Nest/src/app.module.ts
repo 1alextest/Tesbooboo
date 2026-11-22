@@ -15,6 +15,7 @@ import { SetupModule } from "./setup/setup.module";
 import { HealthModule } from "./health/health.module";
 import { AdminModule } from "./admin/admin.module";
 import { LegacyModule } from "./legacy/legacy.module";
+import { NativeRequirementsModule } from "./native-requirements/native-requirements.module";
 import { McpModule } from "./mcp/mcp.module";
 import { BillingModule } from "./billing/billing.module";
 import { CustomFieldsModule } from "./custom-fields/custom-fields.module";
@@ -42,6 +43,7 @@ import { SchedulesModule } from "./schedules/schedules.module";
     HealthModule,
     AdminModule,
     LegacyModule,
+    NativeRequirementsModule,
     McpModule,
     BillingModule,
     CustomFieldsModule,

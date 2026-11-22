@@ -132,6 +132,33 @@ test("workers, MCP, SDK, reports and current-development graph/model paths have 
   }
 });
 
+test("native requirement proposals retain exact-case, human-review, provider, tenant and plan consumers", () => {
+  const backend = plan(["Tesbo-Backend-Nest/src/native-requirements/native-requirements.repository.ts"]);
+  assert.equal(backend.status, "selection-only");
+  for (const domain of ["requirements", "testcases", "zyra", "mcp", "executions", "identity", "entitlements"]) hasDomain(backend, domain);
+  for (const spec of ["e2e/api/native-requirements.spec.ts", "e2e/ui/requirements.spec.ts", "e2e/api/mcp.spec.ts",
+    "e2e/api/zyra.spec.ts", "e2e/ui/zyra.spec.ts", "e2e/api/testcases.spec.ts", "e2e/ui/testcases.spec.ts",
+    "e2e/api/auth.spec.ts", "e2e/api/authorization.spec.ts", "e2e/api/rbac.spec.ts", "e2e/api/billing-lifecycle.spec.ts"]) hasSpec(backend, spec);
+  for (const file of ["Tesbo-Frontend/components/requirements/NativeRequirementProposals.tsx", "Tesbo-Frontend/lib/nativeRequirements.ts"]) {
+    const frontend = plan([file]);
+    assert.equal(frontend.status, "selection-only");
+    hasDomain(frontend, "requirements");
+    hasSpec(frontend, "e2e/ui/requirements.spec.ts");
+    hasSpec(frontend, "e2e/api/native-requirements.spec.ts");
+    hasSpec(frontend, "e2e/ui/zyra.spec.ts");
+  }
+  const sharedPage = plan(["Tesbo-Frontend/app/(app)/projects/[id]/requirements/page.tsx"]);
+  hasDomain(sharedPage, "requirements");
+  hasDomain(sharedPage, "integrations");
+  hasSpec(sharedPage, "e2e/api/integrations.spec.ts");
+  const database = backend.requiredChecks.find(check => check.id === "database-integrity");
+  assert.ok(database.evidence.includes("Tesbo-Backend-Nest/src/native-requirements/native-requirements.db.spec.ts"));
+  assert.ok(database.evidence.includes("Tesbo-Backend-Nest/src/legacy/testcase-proposal-review.db.spec.ts"));
+  const contracts = backend.requiredChecks.find(check => check.id === "api-mcp-contracts");
+  assert.ok(contracts.evidence.includes("Tesbo-Backend-Nest/src/mcp/mcp-native-requirements.spec.ts"));
+  assert.equal(backend.verification.status, "not-run", "A mapping never certifies proposal or publication behavior.");
+});
+
 test("Review Board selections require its runtime checks without a standing evidence gap", () => {
   const result = plan(["Tesbo-Backend-Nest/src/review-board/review-board.processor.ts"]);
   // The DB/Redis suites execute in the smoke workflow, so selecting this domain is a review and

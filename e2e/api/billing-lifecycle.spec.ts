@@ -1,5 +1,7 @@
 import { expect, request, test, type APIRequestContext } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import { env } from "../utils/env";
+import { issueMcpTestToken } from "../utils/mcp-access";
 import {
   activeProjectIdsOldestFirst,
   billingModuleUnavailableReason,
@@ -714,6 +716,67 @@ test.describe("payment lifecycle", () => {
         failOnStatusCode: false,
       });
       expect(nested.status()).toBe(403);
+    });
+
+    test("NREQ-B-01 a downgrade keeps native proposal history readable but refuses REST and MCP proposal writes", async () => {
+      // This file owns destructive entitlement changes. A fresh project in its disposable billing
+      // tenant guarantees a rank beyond the two retained Launch projects without touching account A.
+      setProPlan(orgId);
+      const createdProject = await createProject(`E2E native requirement lock ${randomUUID()}`);
+      expect(createdProject.status(), await createdProject.text()).toBe(201);
+      const project = await createdProject.json();
+      const base = `/api/projects/${project.id}`;
+      let token: any;
+      try {
+        const content = { submissionKey: randomUUID(), title: `E2E read-only proposal ${randomUUID()}`,
+          criteria: [{ key: "AC-1", text: "History remains readable after a downgrade." }] };
+        const created = await asBilling.post(`${base}/requirements`, { data: content });
+        expect(created.status(), await created.text()).toBe(201);
+        const { submission: _submission, ...detail } = await created.json();
+        const requirementId = detail.requirement.id, version = detail.requirement.currentVersion;
+        const endpoint = `${base}/requirements/${requirementId}`;
+        const tokenResponse = await issueMcpTestToken(asBilling, `${base}/apikeys`, { data: { name: "Read-only requirement boundary", scopes: ["read", "write"] } });
+        expect(tokenResponse.ok(), await tokenResponse.text()).toBe(true);
+        token = await tokenResponse.json();
+        setGraceWindow(orgId, -1);
+        expect(activeProjectIdsOldestFirst(orgId).indexOf(project.id)).toBeGreaterThanOrEqual(2);
+        for (const [route, data] of [
+          [`${base}/requirements`, { ...content, submissionKey: randomUUID() }],
+          [endpoint + "/revisions", { ...content, submissionKey: randomUUID(), expectedVersionId: version.id, expectedContentDigest: version.contentDigest }],
+          [endpoint + "/links", { requirementVersionId: version.id, requirementContentDigest: version.contentDigest, criterionKeys: ["AC-1"], testcaseId: randomUUID(), testcaseRevision: "a".repeat(64), testcaseApprovalRevision: null }],
+          [endpoint + "/case-proposals", { requirementVersionId: version.id, requirementContentDigest: version.contentDigest, criterionKeys: ["AC-1"], requestKey: randomUUID(), operations: [{ opType: "create", draft: { title: "Must not stage on a locked project" } }] }],
+          [endpoint + "/retire", { expectedVersionId: version.id, expectedContentDigest: version.contentDigest }],
+        ] as const) {
+          const refused = await asBilling.post(route, { data });
+          expect(refused.status(), await refused.text()).toBe(403);
+          expect((await refused.json()).error).toContain("read-only");
+        }
+        const read = await asBilling.get(endpoint);
+        expect(read.status(), await read.text()).toBe(200);
+        expect(await read.json()).toEqual(detail);
+        for (const route of ["/api/mcp", `${base}/mcp`]) {
+          const invoke = async (name: string, args: Record<string, unknown>) => {
+            const response = await anon.post(route, { headers: { Authorization: `Bearer ${token.token}` },
+              data: { jsonrpc: "2.0", id: 9, method: "tools/call", params: { name, arguments: args } } });
+            expect(response.ok(), await response.text()).toBe(true);
+            return response.json();
+          };
+          const available = await invoke("get_requirement", { requirementId });
+          expect(available.error).toBeUndefined();
+          expect(JSON.parse(available.result.content[0].text).requirement.id).toBe(requirementId);
+          const refused = await invoke("create_requirement", { ...content, submissionKey: randomUUID() });
+          expect(refused.error).toBeDefined();
+          expect(refused.error.message).toContain("read-only");
+          expect(refused.result).toBeUndefined();
+        }
+        const remaining = await asBilling.get(`${base}/requirements`);
+        expect(remaining.ok(), await remaining.text()).toBe(true);
+        expect((await remaining.json()).total).toBe(1);
+      } finally {
+        setProPlan(orgId);
+        if (token) await asBilling.delete(`${base}/apikeys/${token.id}`, { failOnStatusCode: false });
+        await asBilling.delete(base, { failOnStatusCode: false });
+      }
     });
 
     test("Notion writes on a read-only project are refused while its reads and a writable project's routes are untouched", async () => {

@@ -293,13 +293,19 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
         expect(created.ok()).toBe(true); keys.push(await created.json());
       }
       const [read, write] = keys;
+      const nativePreviewEnabled = process.env.TESBO_NATIVE_REQUIREMENTS_PREVIEW_ENABLED === "1";
       const readCatalog = await rpc(read.token, "tools/list");
-      expect(readCatalog.result.tools).toHaveLength(24);
+      expect(readCatalog.result.tools).toHaveLength(nativePreviewEnabled ? 27 : 24);
       expect(readCatalog.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("preview_behavior_model_draft");
+      for (const name of ["list_requirements", "get_requirement", "get_requirement_coverage"]) {
+        const readNames = readCatalog.result.tools.map((tool: { name: string }) => tool.name);
+        if (nativePreviewEnabled) expect(readNames).toContain(name);
+        else expect(readNames).not.toContain(name);
+      }
       // Credential-visible write tools; retired native publishers (including the suite creators)
-      // are hidden and refuse, so the catalog stays at the non-publisher count.
+      // are hidden and refuse. The configured native preview adds nine unpublished tools.
       const listed = await rpc(write.token, "tools/list");
-      expect(listed.result.tools).toHaveLength(49);
+      expect(listed.result.tools).toHaveLength(nativePreviewEnabled ? 58 : 49);
       expect(listed.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("create_suite");
       expect(listed.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("update_suite");
       expect(listed.result.tools.find((tool: { name: string }) => tool.name === "preview_behavior_model_draft").inputSchema.additionalProperties).toBe(false);

@@ -12,6 +12,8 @@ import { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
 import { ModelStudioRepository } from "../behavior-graph/model-studio-repository";
 import { humanPublicationRequired, isDirectTestcasePublisher, proposalReviewPreviewEnabled } from "../common/testcase-publication.policy";
 import { buildMcpTools } from "./mcp.tools";
+import { nativeRequirementsPreviewEnabled } from "../native-requirements/native-requirements.core";
+import { assertNativeRequirementToolAvailable } from "./native-requirements.tools";
 import {
   MCP_AGENT_SLUG,
   MCP_PROTOCOL_VERSION,
@@ -120,7 +122,9 @@ export class McpService {
   }
 
   private listToolsPayload() {
-    return this.tools.filter(t => !t.hiddenFromDiscovery && (!t.proposalPreviewOnly || proposalReviewPreviewEnabled())).map((t) => ({
+    return this.tools.filter(t => !t.hiddenFromDiscovery &&
+      (!t.proposalPreviewOnly || proposalReviewPreviewEnabled()) &&
+      (!t.nativeRequirementsPreviewOnly || nativeRequirementsPreviewEnabled())).map((t) => ({
       name: t.name,
       description: t.description,
       inputSchema: t.inputSchema
@@ -343,6 +347,7 @@ export class McpService {
       const refusal = humanPublicationRequired(principal.projectId as string);
       throw new McpError(RpcCode.ToolExecutionError, refusal.error, refusal);
     }
+    if (tool.nativeRequirementsPreviewOnly) assertNativeRequirementToolAvailable();
     if (tool.proposalPreviewOnly && !proposalReviewPreviewEnabled()) {
       throw new McpError(RpcCode.ToolExecutionError, "The unpublished proposal review preview is unavailable on this deployment", {
         code: "PROPOSAL_REVIEW_PREVIEW_DISABLED", stagingAvailable: false

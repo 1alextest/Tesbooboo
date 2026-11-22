@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { deleteZyraTaskDraft, editZyraTaskDraft, saveZyraTask, closeZyraTask, getZyraTask, type ZyraChatTestcaseRow, type ZyraTask } from "@/lib/api";
+import { ApiError, deleteZyraTaskDraft, editZyraTaskDraft, saveZyraTask, closeZyraTask, getZyraTask, type ZyraChatTestcaseRow, type ZyraTask } from "@/lib/api";
 import { refreshPageCachesAfterZyraSave } from "@/lib/zyraCacheSync";
 import { recallZyraSelection, rememberZyraSelection, subscribeZyraLiveBatch, zyraLiveBatchProgress } from "@/lib/zyraLiveBatches";
 import { useAppData } from "@/components/app/AppDataProvider";
@@ -144,6 +144,7 @@ export function ZyraChatReviewPanel({
   const workingRef = useRef(false);
   const closedRef = useRef(false);
   const resyncPendingRef = useRef(false);
+  const reviewConflictRef = useRef(false);
   const lastEventAtRef = useRef(0);
   useEffect(() => {
     rowsRef.current = rows;
@@ -156,8 +157,10 @@ export function ZyraChatReviewPanel({
   }, [reviewRequestId, selected, rows.length]);
 
   // Re-read the batch: keep the selection of the rows already shown, select every row that is new.
-  const resync = useCallback(async () => {
+  const resync = useCallback(async (explicitReload = false) => {
+    if (reviewConflictRef.current && !explicitReload) return;
     if (editingRef.current !== null || workingRef.current) { resyncPendingRef.current = true; return; }
+    const discardStaleSelection = explicitReload && reviewConflictRef.current;
     resyncPendingRef.current = false;
     const sequence = ++readSequenceRef.current;
     try {
@@ -170,7 +173,13 @@ export function ZyraChatReviewPanel({
       setRows(next);
       setProposal({ proposalRevision: task.proposalRevision, proposalSnapshot: task.proposalSnapshot });
       setReviewReadError(task.proposalRevision ? null : "The current proposal is not available for verified review.");
-      setSelected((prev) => [...prev.filter((index) => index < shown), ...next.map((_, index) => index).filter((index) => index >= shown)]);
+      reviewConflictRef.current = false;
+      if (discardStaleSelection) {
+        setSelected([]);
+        setError(null);
+      } else {
+        setSelected((prev) => [...prev.filter((index) => index < shown), ...next.map((_, index) => index).filter((index) => index >= shown)]);
+      }
       setStatus("in_review");
     } catch {
       if (sequence !== readSequenceRef.current) return;
@@ -190,7 +199,7 @@ export function ZyraChatReviewPanel({
         setLive({ staged: event.staged, total: event.total });
         // "Discard all" closed the batch — the server takes nothing more into it.
         if (closedRef.current) return;
-        if (workingRef.current || editingRef.current !== null || statusRef.current === "checking") {
+        if (workingRef.current || editingRef.current !== null || reviewConflictRef.current || statusRef.current === "checking") {
           resyncPendingRef.current = true;
           return;
         }
@@ -242,6 +251,7 @@ export function ZyraChatReviewPanel({
   useEffect(() => {
     let cancelled = false;
     const sequence = ++readSequenceRef.current;
+    reviewConflictRef.current = false;
     setProposal(null);
     getZyraTask(projectId, reviewRequestId)
       .then((task) => {
@@ -305,12 +315,16 @@ export function ZyraChatReviewPanel({
     try {
       // The server's response IS the batch after the removal — used as-is rather than mirrored by
       // local index arithmetic, so the cards can never drift from what the next action addresses.
-      const task = await deleteZyraTaskDraft(projectId, reviewRequestId, index);
+      const task = await deleteZyraTaskDraft(projectId, reviewRequestId, index, proposal?.proposalRevision);
       setRows(rowsFromTask(task));
       setProposal({ proposalRevision: task.proposalRevision, proposalSnapshot: task.proposalSnapshot });
       setSelected((prev) => prev.filter((item) => item !== index).map((item) => (item > index ? item - 1 : item)));
       if (editingIndex === index) { editingRef.current = null; setEditingIndex(null); }
     } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        reviewConflictRef.current = true;
+        setReviewReadError("The proposal changed. Your selection and open edits are preserved. Close any editor, then reload and review the current candidates before retrying.");
+      }
       setError(err instanceof Error ? err.message : t("review.err.discard"));
     } finally {
       endWork();
@@ -330,12 +344,16 @@ export function ZyraChatReviewPanel({
         ...(values.testData !== undefined ? { testData: values.testData } : {}),
         severity: values.severity,
         component: values.component,
-      });
+      }, proposal?.proposalRevision);
       setRows(rowsFromTask(task));
       setProposal({ proposalRevision: task.proposalRevision, proposalSnapshot: task.proposalSnapshot });
       editingRef.current = null;
       setEditingIndex(null);
     } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        reviewConflictRef.current = true;
+        setReviewReadError("The proposal changed. Your selection and open edits are preserved. Close any editor, then reload and review the current candidates before retrying.");
+      }
       setError(err instanceof Error ? err.message : t("review.err.saveEdit"));
     } finally {
       endWork();
@@ -423,7 +441,7 @@ export function ZyraChatReviewPanel({
       {error && <p role="alert" className="rounded-md border border-[var(--error)]/40 bg-[var(--error-soft)] px-2.5 py-1.5 text-xs text-[var(--error-foreground)]">{error}</p>}
       {reviewReadError && <div role="alert" className="text-xs text-[var(--error-foreground)]">
         <p>{reviewReadError}</p>
-        <Button size="sm" variant="secondary" disabled={working || editingIndex !== null} onClick={() => void resync()}>Reload proposal</Button>
+        <Button size="sm" variant="secondary" disabled={working || editingIndex !== null} onClick={() => void resync(true)}>Reload proposal</Button>
       </div>}
       {proposal?.proposalSnapshot && <details onToggle={(event) => setSnapshotOpen(event.currentTarget.open)} className="rounded border border-[var(--border)] p-2 text-xs">
         <summary>Inspect the saved proposal and target content</summary>

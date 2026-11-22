@@ -43,6 +43,8 @@ import { ZyraLanguageContext, zyraLanguage, zyraText } from "@/lib/zyra-i18n";
 import { formatDateTime } from "@/lib/date";
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
+import { nativeRequirementPath, nativeRequirementTaskGovernance, type NativeRequirementTask } from "@/lib/nativeRequirements";
+import NativeProposalTaskReview from "@/components/requirements/NativeProposalTaskReview";
 
 // "" is the unchosen "Select suite" placeholder — never submittable. "none" saves unassigned.
 type SaveMode = "" | "none" | "existing" | "new";
@@ -369,10 +371,18 @@ export default function ZyraTaskDetailPage() {
     saveMode === "none" ||
     (saveMode === "existing" && Boolean(targetSuiteId)) ||
     (saveMode === "new" && !newSuiteNameError);
-  const canSave = !working && !saveNeedsReload && Boolean(savingProposal?.proposalRevision) &&
+  const proposalGovernance = nativeRequirementTaskGovernance(task);
+  const publicationBlock = (task as NativeRequirementTask | null)?.publicationBlocked;
+  const publicationBlocked = Boolean((task as NativeRequirementTask | null)?.proposalGovernance || publicationBlock);
+  const publicationBlockMessage = publicationBlock?.error || "Publication is blocked because effective skill authority is unavailable. This proposal remains unpublished.";
+  const canSave = !publicationBlocked && !working && !saveNeedsReload && Boolean(savingProposal?.proposalRevision) &&
     (savingDraftIndexes || selectedDrafts).length > 0 && saveTargetValid;
 
   function openSaveModal(indexes?: number[]) {
+    if (publicationBlocked) {
+      setError(publicationBlockMessage);
+      return;
+    }
     if (!task?.proposalRevision || !task.proposalSnapshot) {
       setError("The current proposal could not be verified. Reload this task before reviewing it.");
       return;
@@ -401,6 +411,10 @@ export default function ZyraTaskDetailPage() {
 
   async function handleFeedback() {
     if (!task || !feedback.trim()) return;
+    if (publicationBlocked) {
+      setError("Automatic regeneration is unavailable for this governed proposal. Prepare a new change from its exact requirement revision.");
+      return;
+    }
     setWorking(true);
     setMessage(null);
     setError(null);
@@ -433,7 +447,7 @@ export default function ZyraTaskDetailPage() {
     setMessage(null);
     setError(null);
     try {
-      const updated = await deleteZyraTaskDraft(projectId, task.id, index);
+      const updated = await deleteZyraTaskDraft(projectId, task.id, index, task.proposalRevision);
       setTask(updated);
       setSelectedDrafts((prev) => prev.filter((item) => item !== index).map((item) => item > index ? item - 1 : item));
       setMessage(t("task.draftDeleted"));
@@ -453,9 +467,12 @@ export default function ZyraTaskDetailPage() {
       let updated = task;
       const indexes = [...selectedDrafts].sort((a, b) => b - a);
       for (const index of indexes) {
-        updated = await deleteZyraTaskDraft(projectId, task.id, index);
+        // Only this mutation's exact receipt can authorize the next selected index. A fresh
+        // GET could include another editor's removal and silently retarget that index.
+        updated = await deleteZyraTaskDraft(projectId, task.id, index, updated.proposalRevision);
+        setTask(updated);
+        setSelectedDrafts((prev) => prev.filter((item) => item !== index).map((item) => item > index ? item - 1 : item));
       }
-      setTask(updated);
       setSelectedDrafts([]);
       setMessage(t("task.draftsDeleted", { n: indexes.length }));
     } catch (err) {
@@ -541,7 +558,7 @@ export default function ZyraTaskDetailPage() {
   // Mirrors the backend guard in zyraFeedback: feedback only makes sense once there's something
   // to review, or to retry after a failure. Disabling it here for todo/in_progress avoids a
   // pointless round trip that the server would reject with a 409 anyway.
-  const canGiveFeedback = taskStatusNow === "in_review" || taskStatusNow === "failed";
+  const canGiveFeedback = !publicationBlocked && (taskStatusNow === "in_review" || taskStatusNow === "failed");
   const allDraftsSelected = task.drafts.length > 0 && selectedDrafts.length === task.drafts.length;
   const copyableDrafts = selectedDrafts.length > 0 ? selectedDrafts.map((i) => task.drafts[i]) : task.drafts;
   const draftsTsv = toTsv(
@@ -578,7 +595,30 @@ export default function ZyraTaskDetailPage() {
       }
     >
       {message && <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-sm">{message}</p>}
-      {error && <p className="rounded-lg border border-[var(--error)]/40 bg-[var(--error-soft)] px-3 py-2 text-sm text-[var(--error-foreground)]">{error}</p>}
+      {error && <p role="alert" className="rounded-lg border border-[var(--error)]/40 bg-[var(--error-soft)] px-3 py-2 text-sm text-[var(--error-foreground)]">{error}</p>}
+
+      {publicationBlocked && <Card className="space-y-3 border-[var(--warning-border)] p-4" data-testid="native-case-proposal-governance">
+        <h2 className="font-semibold">Publication and approval are blocked</h2>
+        <p className="text-sm">{publicationBlockMessage}</p>
+        <p className="text-sm text-[var(--muted)]">Official requirements and testcases are unchanged. This shared proposal is not an approval, execution result, or passing requirement coverage.</p>
+        {proposalGovernance && <>
+          <Link className="text-sm font-medium text-[var(--accent-light)] underline" href={nativeRequirementPath(projectId, proposalGovernance.requirement.id, proposalGovernance.requirement.versionId)}>
+            Inspect {proposalGovernance.requirement.key} requirement basis
+          </Link>
+          <dl className="grid gap-3 text-xs sm:grid-cols-2">
+            <div><dt className="text-[var(--muted)]">Requirement proposal operation ID</dt><dd className="mt-1 break-all font-mono">{proposalGovernance.requirement.versionId}</dd></div>
+            <div><dt className="text-[var(--muted)]">Requirement candidate content digest</dt><dd className="mt-1 break-all font-mono">{proposalGovernance.requirement.contentDigest}</dd></div>
+          </dl>
+          <ul className="space-y-1 text-sm">{proposalGovernance.requirement.criteria.map(criterion => <li key={criterion.key}><strong>{criterion.key}:</strong> {criterion.text}</li>)}</ul>
+        </>}
+        {task.proposalSnapshot && <details className="rounded-lg border border-[var(--border)] p-3 text-sm">
+          <summary className="cursor-pointer font-medium">Inspect exact proposed changes and target snapshots</summary>
+          <p className="mt-2 break-all text-xs">Proposal revision: {task.proposalRevision || "Unavailable"}</p>
+          <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs">{JSON.stringify(task.proposalSnapshot, null, 2)}</pre>
+        </details>}
+      </Card>}
+
+      {publicationBlocked && <NativeProposalTaskReview task={task} projectId={projectId} />}
 
       <Card className="p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -704,7 +744,7 @@ export default function ZyraTaskDetailPage() {
                     />
                   </span>
                 )}
-                <Button variant="secondary" onClick={() => openSaveModal()} disabled={done || selectedDrafts.length === 0}>{t("task.saveSelected")}</Button>
+                <Button variant="secondary" onClick={() => openSaveModal()} disabled={publicationBlocked || done || selectedDrafts.length === 0} title={publicationBlocked ? publicationBlockMessage : undefined}>{t("task.saveSelected")}</Button>
                 <Button variant="secondary" onClick={() => void handleDeleteSelectedDrafts()} disabled={done || working || selectedDrafts.length === 0}>{t("task.deleteSelected")}</Button>
               </div>
             </div>
@@ -764,7 +804,7 @@ export default function ZyraTaskDetailPage() {
                       <td className="max-w-[260px] px-3 py-3 text-[var(--muted)]">{draft.expectedSummary}</td>
                       <td className="px-3 py-3">
                         <div className="flex justify-end gap-2">
-                          <Button variant="secondary" onClick={() => openSaveModal([index])} disabled={done || working}>{t("save")}</Button>
+                          <Button variant="secondary" onClick={() => openSaveModal([index])} disabled={publicationBlocked || done || working} title={publicationBlocked ? publicationBlockMessage : undefined}>{t("save")}</Button>
                           <Button variant="secondary" onClick={() => void handleDeleteDraft(index)} disabled={done || working}>{t("task.delete")}</Button>
                         </div>
                       </td>

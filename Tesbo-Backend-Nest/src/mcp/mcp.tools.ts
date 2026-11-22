@@ -6,6 +6,7 @@ import { CurrentCacheGraphReader } from "../behavior-graph/current-cache-graph.r
 import { CurrentCacheGraphHistory } from "../behavior-graph/current-cache-graph.history";
 import { DIRECT_TESTCASE_PUBLISHERS, humanPublicationRequired, proposalReviewPreviewEnabled } from "../common/testcase-publication.policy";
 import { McpError, RpcCode, type McpTool, type McpToolContext } from "./mcp.types";
+import { buildNativeRequirementTools } from "./native-requirements.tools";
 
 /** Per-item cap for tools that loop over a single-record legacy call once per array entry — kept
  * smaller than LegacyService.MAX_BULK_TESTCASES (which backs one atomic SQL statement) since each
@@ -132,6 +133,19 @@ function canonicalizeSeverity(body: Record<string, unknown>): Record<string, unk
     throw new McpError(RpcCode.ToolExecutionError, `"severity" must be one of ${BUG_SEVERITIES.join(", ")} — got "${String(raw)}"`);
   }
   return { ...body, severity: match };
+}
+
+/** Both unrelated and requirement-bound proposals keep the existing case field contract. */
+function normalizeProposalOperations(value: unknown): unknown {
+  return Array.isArray(value) ? value.map(operation => {
+    if (!operation || typeof operation !== "object" || Array.isArray(operation)) return operation;
+    const key = operation.opType === "create" ? "draft" : "fields";
+    const fields = operation[key];
+    if (!fields || typeof fields !== "object" || Array.isArray(fields)) return operation;
+    validateTestcaseTextFields(fields);
+    validateTestcaseSourceRefs(fields);
+    return { ...operation, [key]: canonicalizeSeverity(fields) };
+  }) : value;
 }
 
 /**
@@ -1946,15 +1960,7 @@ export function buildMcpTools(): McpTool[] {
         }
         if (!ctx.tokenId) throw new McpError(RpcCode.ProjectScopeDenied, "An authenticated credential is required to stage testcase proposals");
         if (!ctx.actorId) throw new McpError(RpcCode.ToolExecutionError, "The MCP agent identity is unavailable; no proposal was staged", { code: "AGENT_IDENTITY_UNAVAILABLE" });
-        const submittedOperations = Array.isArray(args.operations) ? args.operations.map(operation => {
-          if (!operation || typeof operation !== "object" || Array.isArray(operation)) return operation;
-          const key = operation.opType === "create" ? "draft" : "fields";
-          const fields = operation[key];
-          if (!fields || typeof fields !== "object" || Array.isArray(fields)) return operation;
-          validateTestcaseTextFields(fields);
-          validateTestcaseSourceRefs(fields);
-          return { ...operation, [key]: canonicalizeSeverity(fields) };
-        }) : args.operations;
+        const submittedOperations = normalizeProposalOperations(args.operations);
         try {
           const task = await ctx.legacy.stageTestcaseChanges(ctx.projectId, ctx.userId,
             { requestKey, operations: submittedOperations, ...(args.title === undefined ? {} : { title: args.title }) },
@@ -1995,5 +2001,5 @@ export function buildMcpTools(): McpTool[] {
         });
       return tool.handler(args, ctx);
     }
-  }))];
+  })), ...buildNativeRequirementTools(operations, normalizeProposalOperations)];
 }
