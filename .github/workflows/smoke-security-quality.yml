@@ -262,6 +262,16 @@ jobs:
           npx playwright test -c playwright.config.ts api/requirements.spec.ts --workers=10 --output=test-results-requirements
           npx playwright test -c playwright.config.ts ui/zyra.spec.ts --workers=10 --output=test-results-requirements-ui -g "requirement change bundle" --list
           npx playwright test -c playwright.config.ts ui/zyra.spec.ts --workers=10 --output=test-results-requirements-ui -g "requirement change bundle"
+      - name: Verify governed Skills operator journey
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-skills
+        run: |
+          # Slice 2 operator surface: the owner creates/submits/approves skill versions and assigns
+          # them from Settings; an agent token stages a bundle; the owner applies it from the native
+          # task page. The same spec covers wrong-revision approval and QA role refusals.
+          npx playwright test -c playwright.config.ts ui/skills.spec.ts --workers=10 --output=test-results-skills --list
+          npx playwright test -c playwright.config.ts ui/skills.spec.ts --workers=10 --output=test-results-skills
       - name: Verify notification paging and unread counts
         working-directory: e2e
         env:

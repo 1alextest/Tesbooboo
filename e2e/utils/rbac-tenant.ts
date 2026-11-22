@@ -43,6 +43,8 @@ export type RbacTenantKind =
   | "project-settings-ui"
   | "custom-tags"
   | "custom-tags-ui"
+  // Governed Skills library and project assignment management (ui/skills.spec.ts).
+  | "skills-ui"
   | "reports"
   | "reports-ui"
   | "import-export"
