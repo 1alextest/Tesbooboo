@@ -566,7 +566,9 @@ describe("background batch observation classification", () => {
       expect(batch.extracted).toHaveBeenCalledWith(batch.failure);
       expect(batch.apply).not.toHaveBeenCalled();
       expect(batch.getActivePlan()).toMatchObject({ status: "paused", doneCount: 0, remainingScenarios: ["Synthetic scenario"], traceSeed: "originating-turn-seed" });
-      expect(String(batch.posted.mock.calls[0][4])).toContain("synthetic provider failure");
+      // Provider-controlled errors must not enter persisted plan messages.
+      expect(String(batch.posted.mock.calls[0][4])).toContain("AI provider request failed");
+      expect(String(batch.posted.mock.calls[0][4])).not.toContain("synthetic provider failure");
       expect(String(batch.posted.mock.calls[0][4])).toContain("Pausing here");
       expect(batch.notify).toHaveBeenCalledTimes(1);
     }
