@@ -40,6 +40,28 @@ function bundleOperations(overrides: { title?: string; criterionKeys?: string[] 
   };
 }
 
+async function createApprovedSkill(request: APIRequestContext, skillDocs: string[], module: string, subtype: string, operation: string) {
+  const created = await request.post(`${base}/skills`, { data: {
+    title: `E2E governed skill ${operation} ${Date.now()}`, module, subtype,
+    skillKey: `SKL-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`,
+    instructions: "Require observable outcomes, exact reviewed sources and explicit uncertainty."
+  } });
+  expect(created.ok(), await created.text()).toBe(true);
+  const doc = await created.json();
+  expect(doc, "created skill document").toMatchObject({ documentType: "skill" });
+  skillDocs.push(doc.id);
+  const submitted = await request.post(`${base}/knowledge-base/documents/${doc.id}/submissions`, {
+    data: { expectedRevision: doc.editRevision, submissionKey: randomUUID() }
+  });
+  expect(submitted.ok(), await submitted.text()).toBe(true);
+  const version = await submitted.json();
+  const approved = await request.patch(`${base}/skills/${doc.id}/approve`, { data: { versionId: version.id } });
+  expect(approved.ok(), await approved.text()).toBe(true);
+  const approval = await approved.json();
+  expect(approval, "approved skill").toMatchObject({ status: "approved" });
+  return { documentId: doc.id as string, versionId: approval.approvedVersionId as string };
+}
+
 async function stageRest(request: APIRequestContext, operations: unknown[], requestKey = randomUUID(), title = "E2E requirement change bundle") {
   return request.post(`${base}/requirements/proposals`, { data: { requestKey, operations, title }, failOnStatusCode: false });
 }
@@ -210,27 +232,7 @@ test("governed skills allow protected publication, exact approval and separate c
   const cycleIds: string[] = [];
   let requirementId = "";
   try {
-    const makeSkill = async (module: string, subtype: string, operation: string) => {
-      const created = await request.post(`${base}/skills`, { data: {
-        title: `E2E governed skill ${operation} ${suffix}`, module, subtype,
-        skillKey: `SKL-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`,
-        instructions: "Require observable outcomes, exact reviewed sources and explicit uncertainty."
-      } });
-      expect(created.ok(), await created.text()).toBe(true);
-      const doc = await created.json();
-      expect(doc, "created skill document").toMatchObject({ documentType: "skill" });
-      skillDocs.push(doc.id);
-      const submitted = await request.post(`${base}/knowledge-base/documents/${doc.id}/submissions`, {
-        data: { expectedRevision: doc.editRevision, submissionKey: randomUUID() }
-      });
-      expect(submitted.ok(), await submitted.text()).toBe(true);
-      const version = await submitted.json();
-      const approved = await request.patch(`${base}/skills/${doc.id}/approve`, { data: { versionId: version.id } });
-      expect(approved.ok(), await approved.text()).toBe(true);
-      const approval = await approved.json();
-      expect(approval, "approved skill").toMatchObject({ status: "approved" });
-      return { documentId: doc.id as string, versionId: approval.approvedVersionId as string };
-    };
+    const makeSkill = (module: string, subtype: string, operation: string) => createApprovedSkill(request, skillDocs, module, subtype, operation);
     const assign = async (skill: { documentId: string; versionId: string }, module: string, subtype: string, operation: string) => {
       const assigned = await request.post(`${base}/skill-assignments`, { data: { skillDocumentId: skill.documentId, versionId: skill.versionId, module, subtype, operation } });
       expect(assigned.ok(), await assigned.text()).toBe(true);
@@ -340,5 +342,131 @@ test("governed skills allow protected publication, exact approval and separate c
       exec(`DELETE FROM cycle_items WHERE cycle_id=${literal(id)};`);
       exec(`DELETE FROM cycles WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
     }
+  }
+});
+
+
+test("skill assignment overlap is refused in both insertion orders without losing the current assignment", async ({ request }) => {
+  const docs: string[] = [];
+  try {
+    const skill = await createApprovedSkill(request, docs, "requirements", "functional", "overlap");
+    const assign = (subtype: string, operation: string) => request.post(`${base}/skill-assignments`, {
+      data: { skillDocumentId: skill.documentId, versionId: skill.versionId, module: "requirements", subtype, operation }, failOnStatusCode: false,
+    });
+    for (const wildcardFirst of [false, true]) {
+      const first = await assign(wildcardFirst ? "*" : "functional", wildcardFirst ? "*" : "requirement_revision");
+      expect(first.ok(), await first.text()).toBe(true);
+      const active = (await first.json()).assignment;
+      const before = await request.get(`${base}/skills/effective?module=requirements&subtype=functional&operation=requirement_revision`);
+      const pin = await before.json();
+      expect(pin.status).toBe("resolved");
+      const refused = await assign(wildcardFirst ? "functional" : "*", wildcardFirst ? "requirement_revision" : "*");
+      expect(refused.status(), await refused.text()).toBe(409);
+      expect(await refused.json()).toMatchObject({ code: "SKILL_ASSIGNMENT_CONFLICT" });
+      const after = await request.get(`${base}/skills/effective?module=requirements&subtype=functional&operation=requirement_revision`);
+      expect(await after.json()).toMatchObject({ status: "resolved", digest: pin.digest });
+      expect(scalar(`SELECT COUNT(*) FROM skill_assignments WHERE project_id=${literal(ctx.projectId)} AND skill_document_id=${literal(skill.documentId)} AND status='active';`)).toBe("1");
+      const inactive = await request.patch(`${base}/skill-assignments/${active.id}/deactivate`, { data: {} });
+      expect(inactive.ok(), await inactive.text()).toBe(true);
+    }
+  } finally {
+    for (const id of docs) {
+      exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+      exec(`DELETE FROM knowledge_documents WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+    }
+  }
+});
+
+test("generic KB writes cannot bypass active Skill assignments and recovery never reactivates them", async ({ request }) => {
+  const docs: string[] = [];
+  const folders: string[] = [];
+  let machine: APIRequestContext | undefined;
+  let tokenId: string | undefined;
+  try {
+    const skill = await createApprovedSkill(request, docs, "requirements", "functional", "KB boundary");
+    const assigned = await request.post(`${base}/skill-assignments`, { data: {
+      skillDocumentId: skill.documentId, versionId: skill.versionId, module: "requirements", subtype: "functional", operation: "requirement_revision",
+    } });
+    expect(assigned.ok(), await assigned.text()).toBe(true);
+    const assignment = (await assigned.json()).assignment;
+    const root = scalar(`SELECT id FROM knowledge_folders WHERE project_id=${literal(ctx.projectId)} AND is_root=true LIMIT 1;`);
+    let parentId = root;
+    for (const name of ["Skill parent", "Skill child"]) {
+      const made = await request.post(`${base}/knowledge-base/folders`, { data: { name: `${name} ${Date.now()}`, parentFolderId: parentId } });
+      expect(made.ok(), await made.text()).toBe(true);
+      parentId = (await made.json()).id; folders.push(parentId);
+    }
+    const moved = await request.patch(`${base}/knowledge-base/documents/${skill.documentId}/move`, { data: { folderId: parentId } });
+    expect(moved.ok(), await moved.text()).toBe(true);
+    const ordinary = await request.post(`${base}/knowledge-base/documents`, { data: { title: `Ordinary sibling ${Date.now()}`, folderId: parentId, contentText: "Ordinary KB content" } });
+    expect(ordinary.ok(), await ordinary.text()).toBe(true);
+    docs.push((await ordinary.json()).id);
+    const issued = await issueMcpTestToken(request, `${base}/apikeys`, { data: { name: `E2E Skill KB boundary ${Date.now()}`, scopes: ["read", "write"] } });
+    expect(issued.ok(), await issued.text()).toBe(true);
+    const token = await issued.json(); tokenId = token.id;
+    machine = await newRequest.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] }, extraHTTPHeaders: { Authorization: `Bearer ${token.token}` } });
+    const protectedRefusal = await machine.patch(`${base}/skill-assignments/${assignment.id}/deactivate`, { data: {}, failOnStatusCode: false });
+    expect(protectedRefusal.status()).toBe(403);
+    expect(await protectedRefusal.json()).toMatchObject({ code: "HUMAN_REVIEW_REQUIRED" });
+    const docUrl = `${base}/knowledge-base/documents/${skill.documentId}`;
+    const pin = await (await request.get(`${base}/skills/effective?module=requirements&subtype=functional&operation=requirement_revision`)).json();
+    expect(pin.status).toBe("resolved");
+    for (const actor of [request, machine]) {
+      for (const refusal of [
+        await actor.delete(docUrl, { failOnStatusCode: false }),
+        await actor.patch(docUrl, { data: { documentType: "general" }, failOnStatusCode: false }),
+        await actor.delete(`${base}/knowledge-base/folders/${folders[0]}`, { failOnStatusCode: false }),
+      ]) {
+        expect(refusal.status(), await refusal.text()).toBe(409);
+        expect(await refusal.json()).toMatchObject({ code: "SKILL_ASSIGNMENT_ACTIVE" });
+      }
+      const noop = await actor.patch(`${docUrl}/restore`, { data: {}, failOnStatusCode: false });
+      expect(noop.ok(), await noop.text()).toBe(true);
+      for (const documentType of [null, "", false, 0, "skill"]) {
+        const unchanged = await actor.patch(docUrl, { data: { documentType }, failOnStatusCode: false });
+        expect(unchanged.ok(), await unchanged.text()).toBe(true);
+        expect(await unchanged.json()).toMatchObject({ documentType: "skill" });
+      }
+    }
+    expect(scalar(`SELECT COUNT(*) FROM knowledge_documents WHERE id IN (${docs.map(literal).join(",")}) AND is_deleted=false;`)).toBe("2");
+    const after = await (await request.get(`${base}/skills/effective?module=requirements&subtype=functional&operation=requirement_revision`)).json();
+    expect(after).toMatchObject({ status: "resolved", digest: pin.digest });
+
+    // Fixture a legacy trash state that predates the guard. Neither direct nor ancestor restore
+    // may make its still-active assignment effective again. This is disposable CI setup only.
+    exec(`BEGIN; UPDATE knowledge_folders SET is_deleted=true,deleted_at=now(),deletion_reason='manual' WHERE id IN (${folders.map(literal).join(",")}); UPDATE knowledge_documents SET is_deleted=true,deleted_at=now() WHERE id IN (${docs.map(literal).join(",")}); COMMIT;`);
+    for (const actor of [request, machine]) {
+      for (const restore of [
+        await actor.patch(`${docUrl}/restore`, { data: {}, failOnStatusCode: false }),
+        await actor.patch(`${base}/knowledge-base/folders/${folders[0]}/restore`, { data: {}, failOnStatusCode: false }),
+      ]) {
+        expect(restore.status(), await restore.text()).toBe(409);
+        expect(await restore.json()).toMatchObject({ code: "SKILL_ASSIGNMENT_ACTIVE" });
+      }
+    }
+    expect(scalar(`SELECT COUNT(*) FROM knowledge_documents WHERE id IN (${docs.map(literal).join(",")}) AND is_deleted=true;`)).toBe("2");
+    const deactivate = await request.patch(`${base}/skill-assignments/${assignment.id}/deactivate`, { data: {} });
+    expect(deactivate.ok(), await deactivate.text()).toBe(true);
+    const restore = await machine.patch(`${base}/knowledge-base/folders/${folders[0]}/restore`, { data: {} });
+    expect(restore.ok(), await restore.text()).toBe(true);
+    expect(await restore.json()).toMatchObject({ restoredFolders: 2, restoredDocuments: 2 });
+    const unavailable = await (await request.get(`${base}/skills/effective?module=requirements&subtype=functional&operation=requirement_revision`)).json();
+    expect(unavailable.status).toBe("unassigned");
+    expect(scalar(`SELECT status||':'||skill_version_id::text FROM skill_assignments WHERE id=${literal(assignment.id)};`)).toBe(`inactive:${skill.versionId}`);
+    for (const change of [
+      await machine.patch(docUrl, { data: { documentType: "general" } }),
+      await machine.patch(docUrl, { data: { documentType: "skill" } }),
+      await machine.delete(docUrl),
+      await machine.patch(`${docUrl}/restore`, { data: {} }),
+    ]) expect(change.ok(), await change.text()).toBe(true);
+    expect((await (await request.get(`${base}/skills/effective?module=requirements&subtype=functional&operation=requirement_revision`)).json()).status).toBe("unassigned");
+  } finally {
+    if (tokenId) await request.delete(`${base}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    await machine?.dispose();
+    for (const id of docs) {
+      exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+      exec(`DELETE FROM knowledge_documents WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+    }
+    for (const id of folders.reverse()) exec(`DELETE FROM knowledge_folders WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
   }
 });

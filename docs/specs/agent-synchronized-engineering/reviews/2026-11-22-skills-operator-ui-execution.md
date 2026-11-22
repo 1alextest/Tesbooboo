@@ -5,7 +5,7 @@
 ## Source-grounded starting point
 
 - PR #201 (closed) implemented V159, KB-backed project Skill identities/versions/assignments, `src/skills/skills-governance.ts` (deterministic, project-scoped resolver), pinned requirement/case/link review and atomic apply, exact-version requirement approval, coverage readback and a task-review Apply button. Reported CI includes 23 checks green at `a2e2e23e` and an isolated database/API/UI journey. **This is not the full Skills Library/assignment UI or production acceptance.**
-- PR #199 remains a **draft** separate governed Skill resolver foundation. Its unratified S0/root-policy/approval-quorum decision and distinct helper must not silently replace the PR #201 owner or be treated as approved authority.
+- PR #199 reconciles its earlier unused helper into the existing PR #201 resolver and native publication owners, repairing pin integrity, assignment overlap, current authority after waits and generic KB mutation boundaries. Current source, execution and review receipts are recorded on that PR; this repair does not ratify the unresolved S0/root-policy/approval-quorum decision or establish complete operator acceptance.
 - PR #155 is the draft release PR, separate from Skills UI acceptance.
 - Canonical subordinate integration view: `docs/specs/agent-synchronized-engineering/skills-governance.md`. Review routes, APIs and auth against their actual source before implementation.
 

@@ -29,7 +29,7 @@ import { requireHumanReviewPrincipal, type ReviewPrincipal } from "../common/hum
 import { readMcpAccess } from "../mcp/mcp-access";
 import { expectedProposalRevision, MAX_TESTCASE_PROPOSAL_OPERATIONS, proposalDigest, selectedProposalIndexes, TESTCASE_PROPOSAL_FIELDS, type TestcaseProposalPrincipal } from "./testcase-proposal-review";
 import { expectedKnowledgeDocumentRevision, knowledgeDocumentAiContextSql, knowledgeDocumentContentDigest, KNOWLEDGE_DOCUMENT_REVISION_SQL } from "./knowledge-document-revision";
-import { requirementBundleTargets, resolveEffectiveSkills, skillResolutionMatches, type SkillResolution } from "../skills/skills-governance";
+import { classifySkillResolution, findSkillAssignmentConflicts, requirementBundleTargets, resolveEffectiveSkills, type SkillResolution } from "../skills/skills-governance";
 import { isCoverageAnalysisRequest, notificationLinks, notificationMessages, runLabel, type NotificationLink, type NotificationType } from "./notification-events";
 import { runInZyraLanguage, zyraReplyLanguage } from "./zyra-language-context";
 import { localizeZyraTaskEntry } from "./zyra-task-activity-ru";
@@ -4089,6 +4089,34 @@ export class LegacyService implements OnModuleInit {
   /** Drops every memoized requireProjectAccess result for this project within the current request. */
   private invalidateProjectAccessCache(projectId: string): void {
     this.requestCache.invalidatePrefix(`access:${projectId}:`);
+  }
+
+  /** Serialize effective Skills from final resolution through commit. Acquire before domain or
+   * authority row locks, including on KB paths that can change assignment eligibility. */
+  private async lockSkillAssignments(client: PoolClient, projectId: string) {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`skill-assignments:${projectId}`]);
+  }
+
+  private async assertSkillsInactive(client: PoolClient, projectId: string, documentIds: string[]) {
+    if (!documentIds.length) return;
+    const active = await client.query(
+      "SELECT id FROM skill_assignments WHERE project_id=$1 AND skill_document_id=ANY($2::uuid[]) AND status='active' LIMIT 1",
+      [projectId, documentIds]
+    );
+    if (active.rows.length) {
+      throw new ConflictException({ code: "SKILL_ASSIGNMENT_ACTIVE", error: "Deactivate this Skill's assignments before changing its type or moving it to or from Trash." });
+    }
+  }
+
+  private assertCurrentSkillContext(pinned: unknown, current: SkillResolution) {
+    const state = classifySkillResolution(pinned, current);
+    if (state === "current") return;
+    const code = state === "conflict" ? "SKILL_ASSIGNMENT_CONFLICT"
+      : state === "stale" ? "SKILL_CONTEXT_STALE" : "SKILL_CONTEXT_UNAVAILABLE";
+    const error = state === "conflict" ? "The required effective skills are ambiguous; resolve the assignment conflict before proceeding."
+      : state === "stale" ? "The effective skills changed after review; refresh the proposal and review the exact revision again."
+      : "A required approved effective skill is not assigned; the candidate stays staged.";
+    throw new ConflictException({ code, error, pinned, current, missing: current.missing, conflicts: current.conflicts });
   }
 
   /**
@@ -11722,23 +11750,25 @@ export class LegacyService implements OnModuleInit {
     if (!targetParentId) throw new BadRequestException({ error: "parentFolderId is required" });
     await this.kbFolder(projectId, targetParentId);
 
-    const invalid = await this.db.query(
-      `WITH RECURSIVE descendants AS (
-         SELECT id FROM knowledge_folders WHERE id = $1
-         UNION ALL
-         SELECT kf.id FROM knowledge_folders kf JOIN descendants d ON kf.parent_folder_id = d.id
-       )
-       SELECT 1 FROM descendants WHERE id = $2`,
-      [folderId, targetParentId]
-    );
-    if (invalid.rows[0])
-      throw new BadRequestException({ error: "A folder cannot be moved into itself or one of its subfolders" });
-
     try {
-      const res = await this.db.query(
-        "UPDATE knowledge_folders SET parent_folder_id = $2, updated_by = $3, updated_at = now() WHERE id = $1 RETURNING *",
-        [folderId, targetParentId, uid]
-      );
+      const res = await this.db.transaction(async client => {
+        await this.lockSkillAssignments(client, projectId);
+        const current = (await client.query("SELECT * FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE", [folderId, projectId])).rows[0];
+        if (!current) throw new NotFoundException({ error: "Folder not found" });
+        if (current.is_root) throw new BadRequestException({ error: "The root folder cannot be moved" });
+        const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+        this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
+        const target = await client.query("SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false", [targetParentId, projectId]);
+        if (!target.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+        const invalid = await client.query(
+          `${LegacyService.DESCENDANTS_CTE} SELECT 1 FROM descendants WHERE id=$2`, [[folderId], targetParentId]
+        );
+        if (invalid.rows[0]) throw new BadRequestException({ error: "A folder cannot be moved into itself or one of its subfolders" });
+        return client.query(
+          "UPDATE knowledge_folders SET parent_folder_id=$2, updated_by=$3, updated_at=now() WHERE id=$1 AND project_id=$4 RETURNING *",
+          [folderId, targetParentId, uid, projectId]
+        );
+      });
       await this.logProjectActivity(projectId, uid, "moved", "knowledge_folder", folderId, res.rows[0].name, {});
       return toCamel(res.rows[0]);
     } catch (error) {
@@ -11905,12 +11935,26 @@ export class LegacyService implements OnModuleInit {
     const role = await this.kbProjectRole(uid, projectId);
     this.kbRequireMutateAccess(role, folder.created_by, uid);
 
-    const filesToPurge = await this.db.query<{ storage_key: string }>(
-      `${LegacyService.DESCENDANTS_CTE} SELECT storage_key FROM knowledge_files WHERE folder_id IN (SELECT id FROM descendants) AND is_deleted = false`,
-      [[folderId]]
-    );
-
-    await this.db.transaction((client) => this.cascadeSoftDeleteFolderTree(client, [folderId], uid, "manual"));
+    const filesToPurge = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const current = (await client.query("SELECT * FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE", [folderId, projectId])).rows[0];
+      if (!current) throw new NotFoundException({ error: "Folder not found" });
+      if (current.is_root) throw new BadRequestException({ error: "The root folder cannot be deleted" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
+      const documents = await client.query<{ id: string }>(
+        `${LegacyService.DESCENDANTS_CTE} SELECT id FROM knowledge_documents
+         WHERE project_id=$2 AND folder_id IN (SELECT id FROM descendants) AND is_deleted=false AND title <> $3`,
+        [[folderId], projectId, LegacyService.ZYRA_MEMORY_DOC_TITLE]
+      );
+      await this.assertSkillsInactive(client, projectId, documents.rows.map(row => row.id));
+      const files = await client.query<{ storage_key: string }>(
+        `${LegacyService.DESCENDANTS_CTE} SELECT storage_key FROM knowledge_files WHERE folder_id IN (SELECT id FROM descendants) AND is_deleted=false`,
+        [[folderId]]
+      );
+      await this.cascadeSoftDeleteFolderTree(client, [folderId], uid, "manual");
+      return files;
+    });
 
     // Storage cleanup runs after the DB commit and is best-effort: the soft-delete is the
     // source of truth, so a transient S3 failure here shouldn't surface as a failed delete.
@@ -11934,38 +11978,47 @@ export class LegacyService implements OnModuleInit {
     // Restore resolves nothing first (a deleted row is invisible to kbFolder), so the uuid guard
     // has to sit here rather than in the resolver.
     if (!isUuid(folderId)) throw new NotFoundException({ error: "Folder not found" });
-    // deleted_at is read as text on purpose: node-postgres parses timestamptz to a JS Date, which
-    // truncates PostgreSQL's microseconds. Comparing the rounded value back to the stored row made
-    // every restore match zero rows. The text form round-trips exactly.
-    const existing = await this.db.query<{
-      name: string;
-      is_deleted: boolean;
-      deleted_at: string | null;
-      deletion_reason: string | null;
-      source_provider: string | null;
-    }>(
-      "SELECT name, is_deleted, deleted_at::text AS deleted_at, deletion_reason, source_provider FROM knowledge_folders WHERE id = $1 AND project_id = $2",
-      [folderId, projectId]
-    );
-    if (!existing.rows[0]) throw new NotFoundException({ error: "Folder not found" });
-    if (existing.rows[0].deletion_reason === "integration_disconnect") {
-      const providerName = PROVIDER_FOLDER_NAMES[existing.rows[0].source_provider || ""];
-      const disconnectedWhat = providerName ? `${providerName} was disconnected` : "the integration was disconnected";
-      throw new BadRequestException({
-        error: `This folder was removed when ${disconnectedWhat} and can't be restored. Reconnect and sync to create a new one.`
-      });
-    }
-    // Restoring an active folder is a no-op, not an error: the Trash may be stale.
-    if (!existing.rows[0].is_deleted) {
-      const active = await this.db.query("SELECT * FROM knowledge_folders WHERE id = $1 AND project_id = $2", [folderId, projectId]);
-      return toCamel(active.rows[0]);
-    }
+    const restored = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      // deleted_at is read as text on purpose: node-postgres parses timestamptz to a JS Date, which
+      // truncates PostgreSQL's microseconds. Comparing the rounded value back to the stored row made
+      // every restore match zero rows. The text form round-trips exactly.
+      const existing = await client.query<{
+        name: string;
+        is_deleted: boolean;
+        deleted_at: string | null;
+        deletion_reason: string | null;
+        source_provider: string | null;
+      }>(
+        "SELECT name, is_deleted, deleted_at::text AS deleted_at, deletion_reason, source_provider FROM knowledge_folders WHERE id = $1 AND project_id = $2 FOR UPDATE",
+        [folderId, projectId]
+      );
+      if (!existing.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      if (existing.rows[0].deletion_reason === "integration_disconnect") {
+        const providerName = PROVIDER_FOLDER_NAMES[existing.rows[0].source_provider || ""];
+        const disconnectedWhat = providerName ? `${providerName} was disconnected` : "the integration was disconnected";
+        throw new BadRequestException({
+          error: `This folder was removed when ${disconnectedWhat} and can't be restored. Reconnect and sync to create a new one.`
+        });
+      }
+      // Restoring an active folder is a no-op, not an error: the Trash may be stale.
+      if (!existing.rows[0].is_deleted) {
+        const active = await client.query("SELECT * FROM knowledge_folders WHERE id = $1 AND project_id = $2", [folderId, projectId]);
+        return { folder: active.rows[0], folders: 0, documents: 0, replayed: true };
+      }
 
-    // Deleting a folder soft-deletes the whole subtree in one transaction, so every row it took
-    // down shares the folder's deleted_at. Restoring only the folder row (the old behaviour) left
-    // its documents and subfolders in Trash and produced an empty-looking folder.
-    const restored = await this.db.transaction(async (client) => {
+      // Deleting a folder soft-deletes the whole subtree in one transaction, so every row it took
+      // down shares the folder's deleted_at. Restoring only the folder row (the old behaviour) left
+      // its documents and subfolders in Trash and produced an empty-looking folder.
       const deletedAt = existing.rows[0].deleted_at;
+      const affected = await client.query<{ id: string }>(
+        `${LegacyService.DESCENDANTS_CTE} SELECT id FROM knowledge_documents
+         WHERE folder_id IN (SELECT id FROM descendants) AND project_id=$2 AND is_deleted=true AND deleted_at=$3::timestamptz`,
+        [[folderId], projectId, deletedAt]
+      );
+      await this.assertSkillsInactive(client, projectId, affected.rows.map(row => row.id));
       const folders = await client.query(
         `${LegacyService.DESCENDANTS_CTE}
          UPDATE knowledge_folders SET is_deleted = false, deleted_at = NULL, updated_by = $2, updated_at = now()
@@ -11986,6 +12039,7 @@ export class LegacyService implements OnModuleInit {
       return { folder: folder.rows[0], folders: folders.rowCount ?? 0, documents: documents.rowCount ?? 0 };
     });
     if (!restored.folder) throw new NotFoundException({ error: "Folder not found" });
+    if ("replayed" in restored && restored.replayed) return toCamel(restored.folder);
     await this.logProjectActivity(projectId, uid, "restored", "knowledge_folder", folderId, restored.folder.name, {});
     return { ...toCamel(restored.folder), restoredFolders: restored.folders, restoredDocuments: restored.documents };
   }
@@ -12509,6 +12563,7 @@ export class LegacyService implements OnModuleInit {
     this.assertKnowledgeDocumentBodyWritable(initial);
 
     const { row, before, contentChanged, nextTitle } = await this.db.transaction(async (client) => {
+      await this.lockSkillAssignments(client, projectId);
       // The existing version lock now covers the live write and coalesced diff too, not only
       // allocation. A snapshot cannot commit without the document change it describes.
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`kb-doc-version:${documentId}`]);
@@ -12518,8 +12573,13 @@ export class LegacyService implements OnModuleInit {
         [documentId, projectId]
       );
       if (!locked.rows[0]) throw new NotFoundException({ error: "Document not found" });
-      this.kbRequireMutateAccess(role, locked.rows[0].created_by, uid);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), locked.rows[0].created_by, uid);
       this.assertKnowledgeDocumentBodyWritable(locked.rows[0]);
+      const nextDocumentType = body.documentType || locked.rows[0].document_type;
+      if (nextDocumentType !== locked.rows[0].document_type) {
+        await this.assertSkillsInactive(client, projectId, [documentId]);
+      }
       return this.writeKnowledgeDocument(client, projectId, uid, documentId, body, locked.rows[0]);
     });
     await this.logProjectActivity(projectId, uid, "updated", "knowledge_document", documentId, nextTitle, {});
@@ -12662,11 +12722,20 @@ export class LegacyService implements OnModuleInit {
     if (!folderId) throw new BadRequestException({ error: "folderId is required" });
     await this.kbFolder(projectId, folderId);
 
-    const res = await this.db.query(
-      `UPDATE knowledge_documents SET folder_id = $2, updated_by = $3, updated_at = now()
-       WHERE id = $1 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-      [documentId, folderId, uid]
-    );
+    const res = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const current = (await client.query("SELECT created_by FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE", [documentId, projectId])).rows[0];
+      if (!current) throw new NotFoundException({ error: "Document not found" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
+      const target = await client.query("SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false", [folderId, projectId]);
+      if (!target.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+      return client.query(
+        `UPDATE knowledge_documents SET folder_id = $2, updated_by = $3, updated_at = now()
+         WHERE id = $1 AND project_id=$4 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [documentId, folderId, uid, projectId]
+      );
+    });
     await this.logProjectActivity(projectId, uid, "moved", "knowledge_document", documentId, res.rows[0].title, {});
     return toCamel(res.rows[0]);
   }
@@ -12711,10 +12780,22 @@ export class LegacyService implements OnModuleInit {
         error: `"${LegacyService.ZYRA_MEMORY_DOC_TITLE}" is managed by Zyra and can't be deleted — it holds everything Zyra has learned about this project. A project owner or manager can remove individual entries from it instead.`
       });
     }
-    await this.db.query(
-      "UPDATE knowledge_documents SET is_deleted = true, deleted_at = now(), updated_by = $2, updated_at = now() WHERE id = $1",
-      [documentId, uid]
-    );
+    await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const current = (await client.query(
+        `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE`,
+        [documentId, projectId]
+      )).rows[0];
+      if (!current) throw new NotFoundException({ error: "Document not found" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
+      if (this.isZyraMemoryDocument(current)) throw new BadRequestException({ error: "The managed Zyra memory document cannot be deleted." });
+      await this.assertSkillsInactive(client, projectId, [documentId]);
+      await client.query(
+        "UPDATE knowledge_documents SET is_deleted = true, deleted_at = now(), updated_by = $2, updated_at = now() WHERE id = $1 AND project_id=$3",
+        [documentId, uid, projectId]
+      );
+    });
     await this.logProjectActivity(projectId, uid, "deleted", "knowledge_document", documentId, doc.title, {});
     await this.notifyKnowledgeItem({ kind: "deleted", projectId, actorId: uid, itemId: documentId, name: doc.title, ownerId: doc.created_by ?? null, isDocument: true });
     return { success: true };
@@ -12857,41 +12938,48 @@ export class LegacyService implements OnModuleInit {
     const role = await this.kbProjectRole(uid, projectId);
     this.kbRequireOwnerOrManager(role);
     if (!isUuid(documentId)) throw new NotFoundException({ error: "Document not found" });
-    const existing = await this.db.query(
-      `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents WHERE id = $1 AND project_id = $2`,
-      [documentId, projectId]
-    );
-    const document = existing.rows[0];
-    if (!document) throw new NotFoundException({ error: "Document not found" });
-    // A document restored into a still-deleted folder would be invisible in every listing while
-    // looking restored. Deleting a folder and its contents together is one action; restoring the
-    // folder brings those documents back with it.
-    if (document.is_deleted && document.folder_id) {
-      const folder = await this.db.query<{ is_deleted: boolean; deletion_reason: string | null; source_provider: string | null }>(
-        "SELECT is_deleted, deletion_reason, source_provider FROM knowledge_folders WHERE id = $1 AND project_id = $2",
-        [document.folder_id, projectId]
+    const res = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const existing = await client.query(
+        `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents WHERE id = $1 AND project_id = $2 FOR UPDATE`,
+        [documentId, projectId]
       );
-      const parent = folder.rows[0];
-      if (parent?.is_deleted) {
-        if (parent.deletion_reason === "integration_disconnect") {
-          const providerName = PROVIDER_FOLDER_NAMES[parent.source_provider || ""];
-          const disconnectedWhat = providerName ? `${providerName} was disconnected` : "the integration was disconnected";
-          throw new BadRequestException({
-            error: `This document was removed when ${disconnectedWhat} and can't be restored. Reconnect and sync to create a new one.`
-          });
+      const document = existing.rows[0];
+      if (!document) throw new NotFoundException({ error: "Document not found" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      if (document.is_deleted) await this.assertSkillsInactive(client, projectId, [documentId]);
+      // A document restored into a still-deleted folder would be invisible in every listing while
+      // looking restored. Deleting a folder and its contents together is one action; restoring the
+      // folder brings those documents back with it.
+      if (document.is_deleted && document.folder_id) {
+        const folder = await client.query<{ is_deleted: boolean; deletion_reason: string | null; source_provider: string | null }>(
+          "SELECT is_deleted, deletion_reason, source_provider FROM knowledge_folders WHERE id = $1 AND project_id = $2",
+          [document.folder_id, projectId]
+        );
+        const parent = folder.rows[0];
+        if (parent?.is_deleted) {
+          if (parent.deletion_reason === "integration_disconnect") {
+            const providerName = PROVIDER_FOLDER_NAMES[parent.source_provider || ""];
+            const disconnectedWhat = providerName ? `${providerName} was disconnected` : "the integration was disconnected";
+            throw new BadRequestException({
+              error: `This document was removed when ${disconnectedWhat} and can't be restored. Reconnect and sync to create a new one.`
+            });
+          }
+          throw new ConflictException({ error: "Restore the containing folder first" });
         }
-        throw new ConflictException({ error: "Restore the containing folder first" });
       }
-    }
-    // Restoring an active document is a no-op, not an error: the Trash may be stale.
-    const res = document.is_deleted
-      ? await this.db.query(
-          `UPDATE knowledge_documents SET is_deleted = false, deleted_at = NULL, updated_by = $2, updated_at = now()
-           WHERE id = $1 AND project_id = $3 AND is_deleted = true RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-          [documentId, uid, projectId]
-        )
-      : existing;
-    if (!res.rows[0]) throw new NotFoundException({ error: "Document not found" });
+      // Restoring an active document is a no-op, not an error: the Trash may be stale.
+      const restored = document.is_deleted
+        ? await client.query(
+            `UPDATE knowledge_documents SET is_deleted = false, deleted_at = NULL, updated_by = $2, updated_at = now()
+             WHERE id = $1 AND project_id = $3 AND is_deleted = true RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+            [documentId, uid, projectId]
+          )
+        : existing;
+      if (!restored.rows[0]) throw new NotFoundException({ error: "Document not found" });
+      return restored;
+    });
     await this.logProjectActivity(projectId, uid, "restored", "knowledge_document", documentId, res.rows[0].title, {});
     return toCamel(res.rows[0]);
   }
@@ -16025,6 +16113,7 @@ export class LegacyService implements OnModuleInit {
     const producerActorId = principal.kind === "human_session" ? uid : principal.actorId ?? null;
     const provenance = { kind: principal.kind, principalKey, issuerId: uid, tokenId: principal.tokenId ?? null, actorId: producerActorId };
     const taskId = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
       await this.lockTestcaseSuiteWrites(client, projectId);
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority, "stage_requirement_change_bundle");
@@ -16202,8 +16291,10 @@ export class LegacyService implements OnModuleInit {
     const versionId = String(body.versionId || "");
     if (!isUuid(versionId)) throw new BadRequestException({ error: "versionId must identify the submitted skill version under review" });
     const result = await this.db.transaction(async client => {
-      const { doc, role } = await this.lockKnowledgeReviewDocument(client, projectId, uid, documentId);
-      this.kbRequireOwnerOrManager(role);
+      await this.lockSkillAssignments(client, projectId);
+      const { doc } = await this.lockKnowledgeReviewDocument(client, projectId, uid, documentId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
       if (doc.document_type !== "skill") throw new BadRequestException({ error: "Only skill documents can be approved here" });
       const profile = (await client.query("SELECT * FROM skill_profiles WHERE document_id=$1 AND project_id=$2", [documentId, projectId])).rows[0];
       if (!profile) throw new BadRequestException({ error: "The skill has no native profile" });
@@ -16248,6 +16339,7 @@ export class LegacyService implements OnModuleInit {
     if (!module) throw new BadRequestException({ error: "module is required" });
     if (!Number.isInteger(precedence) || precedence < -1000 || precedence > 1000) throw new BadRequestException({ error: "precedence must be an integer between -1000 and 1000" });
     const assignment = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
       const doc = (await client.query("SELECT id,document_type,project_id,is_deleted FROM knowledge_documents WHERE id=$1 AND project_id=$2", [skillDocumentId, projectId])).rows[0];
@@ -16266,12 +16358,11 @@ export class LegacyService implements OnModuleInit {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
         [projectId, module, subtype, operation, skillDocumentId, versionId, uid, precedence]
       )).rows[0];
-      // A wildcard and an exact assignment can both match one context. Refuse the ambiguous state
-      // instead of choosing by precedence or lexical order.
-      const resolved = await resolveEffectiveSkills(client, projectId, [{ module, subtype: subtype === "*" ? "*" : subtype, operation: operation === "*" ? "*" : operation }]);
-      if (resolved.status === "conflict") {
-        throw new ConflictException({ code: "SKILL_ASSIGNMENT_CONFLICT", error: "Another active assignment already matches this context; deactivate it before assigning a new skill", conflicts: resolved.conflicts });
-      }
+      // Conflict checks compare intersecting scopes in both directions, including a wildcard
+      // introduced after an exact assignment. Any refusal rolls the replacement back as well.
+      const conflicts = await findSkillAssignmentConflicts(client, projectId, { module, subtype, operation }, String(created.id));
+      if (conflicts.length) throw new ConflictException({ code: "SKILL_ASSIGNMENT_CONFLICT", error: "This scope overlaps another active Skill assignment.", conflicts });
+      const resolved = await resolveEffectiveSkills(client, projectId, [{ module, subtype, operation }]);
       await this.logProjectActivity(projectId, uid, "skill_assigned", "skill_assignment", created.id, `${profile.skill_key} → ${module}/${subtype}/${operation}`,
         { skillDocumentId, versionId, precedence }, client);
       return { created, resolved };
@@ -16285,10 +16376,11 @@ export class LegacyService implements OnModuleInit {
     await this.requireProjectAccess(uid, projectId);
     if (!isUuid(assignmentId)) throw new NotFoundException({ error: "Skill assignment not found" });
     return this.db.transaction(async client => {
-      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
-      this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
+      await this.lockSkillAssignments(client, projectId);
       const current = (await client.query("SELECT * FROM skill_assignments WHERE id=$1 AND project_id=$2 FOR UPDATE", [assignmentId, projectId])).rows[0];
       if (!current) throw new NotFoundException({ error: "Skill assignment not found" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
       if (current.status === "inactive") return { assignment: toCamel(current), replayed: true };
       const updated = (await client.query(
         `UPDATE skill_assignments SET status='inactive', deactivated_by=$3, deactivated_at=now()
@@ -16371,11 +16463,16 @@ export class LegacyService implements OnModuleInit {
 
   /** Read-only effective resolution for the caller's existing project/context. */
   async effectiveSkills(projectId: string, userId: string | null | undefined, query: Body = {}) {
-    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
     const module = String(query.module || "requirements");
     const subtype = String(query.subtype || "functional");
     const operation = String(query.operation || "requirement_revision");
-    return resolveEffectiveSkills(this.db, projectId, [{ module, subtype, operation }]);
+    return this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      await this.requireCurrentProjectAuthority(client, projectId, uid);
+      return resolveEffectiveSkills(client, projectId, [{ module, subtype, operation }]);
+    });
   }
 
   /** Protected apply of the exact reviewed bundle. One native transaction; no partial publication. */
@@ -16388,6 +16485,8 @@ export class LegacyService implements OnModuleInit {
     const decisionKey = proposalDigest({ action: "requirement_bundle_apply", revision, reviewerId: uid });
     let organizationId: string | null = null;
     const result = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      await this.lockTestcaseSuiteWrites(client, projectId);
       const authority = await this.requireProposalAuthority(client, projectId, uid);
       if (String(authority.caller_role) !== "owner" && String(authority.caller_role) !== "manager") {
         throw new ForbiddenException({ error: "Only project owners and managers can apply a requirement change bundle" });
@@ -16413,22 +16512,7 @@ export class LegacyService implements OnModuleInit {
       const targets = requirementBundleTargets(operations);
       const currentSkills = await resolveEffectiveSkills(client, projectId, targets);
       const pinnedSkills = existing.skill_context as SkillResolution | Body;
-      if (currentSkills.status !== "resolved") {
-        throw new ConflictException({
-          code: currentSkills.status === "conflict" ? "SKILL_ASSIGNMENT_CONFLICT" : "SKILL_CONTEXT_UNAVAILABLE",
-          error: currentSkills.status === "conflict"
-            ? "The required effective skills are ambiguous; resolve the assignment conflict before applying"
-            : "A required approved effective skill is no longer assigned; the bundle stays staged",
-          missing: currentSkills.missing, conflicts: currentSkills.conflicts
-        });
-      }
-      if (!skillResolutionMatches(pinnedSkills, currentSkills)) {
-        throw new ConflictException({
-          code: "SKILL_CONTEXT_STALE",
-          error: "The effective skills changed after this revision was reviewed; refresh the proposal and review it again",
-          pinned: pinnedSkills, current: currentSkills
-        });
-      }
+      this.assertCurrentSkillContext(pinnedSkills, currentSkills);
       const requirementOperation = operations.find((entry: Body) => entry.opType === "requirement_revision") as Body;
       const caseOperation = operations.find((entry: Body) => entry.opType === "testcase_create") as Body | undefined;
       const linkOperation = operations.find((entry: Body) => entry.opType === "requirement_case_link") as Body | undefined;
@@ -16492,8 +16576,10 @@ export class LegacyService implements OnModuleInit {
     if (!isUuid(versionId)) throw new BadRequestException({ error: "versionId must identify the submitted requirement version under review" });
     let organizationId: string | null = null;
     const result = await this.db.transaction(async client => {
-      const { doc, role } = await this.lockKnowledgeReviewDocument(client, projectId, uid, documentId);
-      this.kbRequireOwnerOrManager(role);
+      await this.lockSkillAssignments(client, projectId);
+      const { doc } = await this.lockKnowledgeReviewDocument(client, projectId, uid, documentId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
       organizationId = String(doc.organization_id);
       if (doc.document_type !== "requirement_note") throw new BadRequestException({ error: "Only native requirement notes can be approved here" });
       if (doc.source_provider) throw new ConflictException({ code: "REQUIREMENT_EXTERNAL_OWNED", error: "A provider-synced requirement remains read-only" });
@@ -16515,12 +16601,7 @@ export class LegacyService implements OnModuleInit {
         .filter((target: Body) => target && typeof target.module === "string" && typeof target.subtype === "string" && typeof target.operation === "string");
       const current = await resolveEffectiveSkills(client, projectId,
         pinnedTargets.length ? pinnedTargets : requirementBundleTargets([{ opType: "requirement_revision" }]));
-      if (current.status !== "resolved") {
-        throw new ConflictException({ code: current.status === "conflict" ? "SKILL_ASSIGNMENT_CONFLICT" : "SKILL_CONTEXT_UNAVAILABLE", error: "A required approved effective skill is not currently resolved", missing: current.missing, conflicts: current.conflicts });
-      }
-      if (!skillResolutionMatches(version.snapshot_metadata?.skillContext, current)) {
-        throw new ConflictException({ code: "SKILL_CONTEXT_STALE", error: "The effective skills changed after this requirement version was submitted; stage and review a refreshed revision", current });
-      }
+      this.assertCurrentSkillContext(version.snapshot_metadata?.skillContext, current);
       const criteria = (doc.content_json as Body | null)?.criteria;
       const approved = await this.writeKnowledgeGovernedVersion(client, doc, uid, "approved", doc.edit_revision, "human_session", null,
         { authority: "requirement_review", criteria, skillContext: current, sourceVersionId: versionId });
