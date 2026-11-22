@@ -38,6 +38,7 @@ jest.mock("../observability/embedding-trace", () => ({
 }));
 
 import { RagRetrievalService } from "./rag-retrieval.service";
+import { Logger } from "@nestjs/common";
 import type { DatabaseService } from "../database/database.service";
 import { RAG_CONFIDENT_SIMILARITY, RAG_GENERATION_CHAR_BUDGET, RAG_MAX_SOURCES, RAG_MIN_SIMILARITY, RAG_PASSAGE_CHARS, TESTCASE_SIMILARITY_THRESHOLD } from "./rag.constants";
 
@@ -74,6 +75,7 @@ function makeDb(annRows: AnnRow[], ftsDocRows: FtsRow[] = [], ftsFileRows: FtsRo
 const FAKE_ALLOCATION = { provider: "openai", api_key: "sk-test", base_url: null, auth_header_name: null, auth_scheme: null, model: "text-embedding-3-small", dimension: 1024, sendDimensionParam: true };
 
 describe("RagRetrievalService.retrieveWithDiagnostics", () => {
+  afterEach(() => jest.restoreAllMocks());
   beforeEach(() => {
     resolveEmbeddingAllocationMock.mockReset();
     embedTextsMock.mockReset();
@@ -81,6 +83,46 @@ describe("RagRetrievalService.retrieveWithDiagnostics", () => {
     tracedEmbeddingCallMock.mockImplementation((_ctx, fn) => fn());
     resolveEmbeddingAllocationMock.mockResolvedValue({ allocation: FAKE_ALLOCATION, reason: "Using the project's openai key for embeddings." });
     embedTextsMock.mockResolvedValue([[0.1, 0.2, 0.3]]);
+  });
+
+  it("an actual embedding failure stays private and does not claim a completed semantic search", async () => {
+    const privateDetail = "synthetic-private-rag-provider-context";
+    const actual = jest.requireActual<typeof import("./rag-ai-allocation")>("./rag-ai-allocation");
+    embedTextsMock.mockImplementation(actual.embedTexts);
+    jest.spyOn(global, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: { message: privateDetail } }), { status: 500 }));
+    const warning = jest.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
+    const db = makeDb([]);
+    const result = await new RagRetrievalService(db).retrieveWithDiagnostics("project-1", "synthetic login request", { traceSeed: "turn-1" });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ items: [], semanticSearchRan: false, topScore: null, confidence: "none" });
+    expect(result.reason).toBe("Using the project's openai key for embeddings.");
+    expect(JSON.stringify({ result, warnings: warning.mock.calls })).not.toContain(privateDetail);
+    expect(JSON.stringify(warning.mock.calls)).toContain("temporarily unavailable (HTTP 500)");
+    expect((db.query as jest.Mock).mock.calls.some(([sql]) => String(sql).includes("knowledge_document_chunks"))).toBe(false);
+    expect(tracedEmbeddingCallMock).toHaveBeenCalledWith(expect.objectContaining({ name: "kb-query-embedding", traceSeed: "turn-1" }), expect.any(Function));
+  });
+
+  it("rejects malformed provider vectors before either ANN consumer issues a vector query", async () => {
+    const privateDetail = "private-vector-context-review-198";
+    const actual = jest.requireActual<typeof import("./rag-ai-allocation")>("./rag-ai-allocation");
+    embedTextsMock.mockImplementation(actual.embedTexts);
+    jest.spyOn(global, "fetch").mockImplementation(async () => new Response(JSON.stringify({ data: [{ index: 0, embedding: [privateDetail] }] })));
+    const warning = jest.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
+    const db = makeDb([]);
+    const svc = new RagRetrievalService(db);
+    const knowledge = await svc.retrieveWithDiagnostics("project-1", "synthetic login request", { traceSeed: "turn-1" });
+    const testcases = await svc.findSimilarTestcases("project-1", "synthetic login request", { traceSeed: "turn-2" });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(knowledge).toMatchObject({ items: [], semanticSearchRan: false, topScore: null, confidence: "none" });
+    expect(testcases).toMatchObject({ matches: [], semanticSearchRan: false });
+    expect(knowledge.reason).toBe("Using the project's openai key for embeddings.");
+    expect(testcases.reason).toBe(knowledge.reason);
+    expect((db.query as jest.Mock).mock.calls.some(([sql]) => String(sql).includes("$2::vector"))).toBe(false);
+    expect(JSON.stringify({ knowledge, testcases, queries: (db.query as jest.Mock).mock.calls, warnings: warning.mock.calls })).not.toContain(privateDetail);
+    expect(warning).toHaveBeenCalledTimes(2);
+    for (const [message] of warning.mock.calls) expect(message).toContain("AI provider returned invalid embedding data.");
+    expect(tracedEmbeddingCallMock).toHaveBeenCalledWith(expect.objectContaining({ name: "kb-query-embedding", traceSeed: "turn-1" }), expect.any(Function));
+    expect(tracedEmbeddingCallMock).toHaveBeenCalledWith(expect.objectContaining({ name: "testcase-query-embedding", traceSeed: "turn-2" }), expect.any(Function));
   });
 
   function annRow(id: string, score: number): AnnRow {

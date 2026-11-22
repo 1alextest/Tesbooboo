@@ -1,6 +1,7 @@
 import { DatabaseService } from "../database/database.service";
 import { EmbeddingCapability, embeddingCapability, embeddingCapableProviderKeys, expectedDimension } from "./rag-embedding-providers";
 import { RAG_EMBEDDING_DIMENSION } from "./rag.constants";
+import { buildAiProviderHeaders, describeAiProviderFailure, readAiProviderJson, withAiProviderIo } from "../common/public-ai-provider-failure";
 
 export interface EmbeddingKeyAllocation {
   provider: string;
@@ -148,24 +149,40 @@ export function normalizeEmbeddingsUrl(baseUrl?: string | null): string {
 export async function embedTexts(allocation: EmbeddingKeyAllocation, inputs: string[]): Promise<number[][]> {
   const authHeader = String(allocation.auth_header_name || "Authorization");
   const scheme = String(allocation.auth_scheme || "Bearer").trim();
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  headers[authHeader] = scheme ? `${scheme} ${allocation.api_key}` : String(allocation.api_key);
+  const headers = buildAiProviderHeaders(() => {
+    const value = new Headers({ "Content-Type": "application/json" });
+    value.set(authHeader, scheme ? `${scheme} ${allocation.api_key}` : String(allocation.api_key));
+    return value;
+  });
 
   const body: Record<string, unknown> = { model: allocation.model, input: inputs };
   // Only sent where the provider honours it. Sending it to a provider that does not (Mistral)
   // is not harmlessly ignored everywhere — some reject an unknown field outright.
   if (allocation.sendDimensionParam) body.dimensions = RAG_EMBEDDING_DIMENSION;
 
-  const res = await fetch(normalizeEmbeddingsUrl(allocation.base_url), {
+  const res = await withAiProviderIo(() => fetch(normalizeEmbeddingsUrl(allocation.base_url), {
     method: "POST",
     headers,
     body: JSON.stringify(body)
-  });
+  }));
   if (!res.ok) {
-    const errBody = (await res.json().catch(() => ({}))) as { error?: { message?: string } | string };
+    const errBody = await readAiProviderJson<{ error?: { message?: string } | string }>(res);
     const rawMessage = typeof errBody.error === "string" ? errBody.error : errBody.error?.message || String(res.status);
-    throw new Error(rawMessage);
+    throw new Error(describeAiProviderFailure(res.status, rawMessage));
   }
-  const data = (await res.json()) as { data: Array<{ embedding: number[]; index: number }> };
-  return data.data.sort((a, b) => a.index - b.index).map((row) => row.embedding);
+  const data = await readAiProviderJson<{ data?: unknown }>(res);
+  const rows = data?.data;
+  // Parsed JSON is still untrusted. Validate before a caller records success or
+  // serializes a vector into a database parameter; never coerce provider cells.
+  // Width checks remain with the existing storage owners and their skip policy.
+  if (!Array.isArray(rows) || rows.length !== inputs.length || !rows.every((row: unknown): row is { index: number; embedding: number[] } => {
+    if (!row || typeof row !== "object") return false;
+    const value = row as Record<string, unknown>;
+    return typeof value.index === "number" && Number.isInteger(value.index) && value.index >= 0 && value.index < inputs.length &&
+      Array.isArray(value.embedding) && value.embedding.length > 0 &&
+      value.embedding.every((cell: unknown) => typeof cell === "number" && Number.isFinite(cell));
+  }) || new Set(rows.map((row) => row.index)).size !== rows.length) {
+    throw new Error("AI provider returned invalid embedding data. Try again or check the embedding model.");
+  }
+  return rows.sort((a, b) => a.index - b.index).map((row) => row.embedding);
 }

@@ -1,4 +1,4 @@
-import { Logger } from "@nestjs/common";
+import { BadRequestException, Logger } from "@nestjs/common";
 import { LegacyService } from "./legacy.service";
 import type { DatabaseService } from "../database/database.service";
 import type { EmailService } from "../auth/email.service";
@@ -69,8 +69,8 @@ type Internals = {
   normalizeAiDrafts: (raw: unknown, requestedCount: number) => DraftOut[];
   normalizeZyraTechniques: (raw: unknown) => string[];
   zyraSystemPrompt: () => string;
-  generateZyraWithOpenAi: (params: { provider: string; model: string; apiKey: string; projectId: string; input: GenerationInput }) => Promise<unknown>;
-  generateZyraWithAnthropic: (params: { provider: string; model: string; apiKey: string; projectId: string; input: GenerationInput }) => Promise<unknown>;
+  generateZyraWithOpenAi: (params: { provider: string; model: string; apiKey: string; projectId: string; input: GenerationInput; authHeaderName?: string | null; authScheme?: string | null }) => Promise<unknown>;
+  generateZyraWithAnthropic: (params: { provider: string; model: string; apiKey: string; projectId: string; input: GenerationInput; authHeaderName?: string | null; authScheme?: string | null }) => Promise<unknown>;
   zyraDynamicTaskPrompt: (input: GenerationInput & { knowledgeConfidence?: "none" | "weak" | "strong" }) => string;
   generateZyraChatTestcasesWithAi: (params: {
     projectId: string;
@@ -256,6 +256,235 @@ describe("Zyra provider call wrappers — usage survives a parse failure", () =>
 
     const result = await internals(svc).generateZyraWithOpenAi({ provider: "openai", model: "gpt-4o-mini", apiKey: "sk-test", projectId: "p1", input: emptyInput() });
     expect(result).toMatchObject({ usage: { input: 400, output: 120, total: 520 } });
+  });
+});
+
+describe("Zyra provider failures — safe presentation at every provider boundary", () => {
+  type ProviderInternals = Internals & {
+    zyraChatWithOpenAi: (key: Body, model: string, context: string, message: string) => Promise<unknown>;
+    zyraChatWithAnthropic: (key: Body, model: string, context: string, message: string) => Promise<unknown>;
+    zyraJsonCompletion: (provider: string, model: string, key: Body, system: string, user: string) => Promise<unknown>;
+    zyraAuthorJson: (key: Body, provider: string, model: string, system: string, user: string, maxTokens: number) => Promise<unknown>;
+    fetchProviderModels: (provider: string, key: string, baseUrl: string | null, header: string | null, scheme: string | null) => Promise<unknown>;
+    providerAuthHeaders: (provider: string, key: string, header: string | null, scheme: string | null) => Headers;
+    requireProjectAccess: () => Promise<void>;
+    zyraAiAllocation: () => Promise<{ key: Body }>;
+    extractAiErrorMessage: (error: unknown) => string;
+    isZyraTimeoutError: (error: unknown) => boolean;
+  };
+  const originalFetch = global.fetch;
+  const markers = ["sk-synthetic-provider-error-only", "private-request-canary", "private-response-canary"];
+  const rawFailure = `upstream diagnostics: ${markers[0]} https://gateway.invalid/?token=${markers[1]} payload=${markers[2]}`;
+  let svc: LegacyService;
+  let api: ProviderInternals;
+  let credentials: { apiKey: string; authHeaderName: string | null; authScheme: string | null };
+
+  const key = (provider: string): Body => ({ provider, api_key: credentials.apiKey, auth_header_name: credentials.authHeaderName, auth_scheme: credentials.authScheme, base_url: "https://gateway.invalid/v1" });
+  const callers: Array<[string, () => Promise<unknown>]> = [
+    ["OpenAI routing", () => api.zyraChatWithOpenAi(key("openai"), "gpt-4o-mini", "System", "User")],
+    ["Anthropic routing", () => api.zyraChatWithAnthropic(key("anthropic"), "claude-sonnet", "System", "User")],
+    ["OpenAI planning JSON", () => api.zyraJsonCompletion("openai", "gpt-4o-mini", key("openai"), "System", "User")],
+    ["Anthropic planning JSON", () => api.zyraJsonCompletion("anthropic", "claude-sonnet", key("anthropic"), "System", "User")],
+    ["OpenAI generation", () => api.generateZyraWithOpenAi({ provider: "openai", model: "gpt-4o-mini", ...credentials, projectId: "p1", input: emptyInput() })],
+    ["Anthropic generation", () => api.generateZyraWithAnthropic({ provider: "anthropic", model: "claude-sonnet", ...credentials, projectId: "p1", input: emptyInput() })],
+    ["OpenAI update authoring", () => api.zyraAuthorJson(key("openai"), "openai", "gpt-4o-mini", "System", "User", 100)],
+    ["Anthropic update authoring", () => api.zyraAuthorJson(key("anthropic"), "anthropic", "claude-sonnet", "System", "User", 100)],
+    ["model discovery", () => api.fetchProviderModels("openai", credentials.apiKey, "https://gateway.invalid/v1", credentials.authHeaderName, credentials.authScheme)],
+    ["custom gateway connection probe", () => svc.testZyraAiConnection("p1", "u1")]
+  ];
+
+  beforeEach(() => {
+    svc = makeLegacy();
+    api = svc as unknown as ProviderInternals;
+    credentials = { apiKey: "synthetic-only", authHeaderName: null, authScheme: null };
+    jest.spyOn(api, "requireProjectAccess").mockResolvedValue(undefined);
+    jest.spyOn(api, "zyraAiAllocation").mockImplementation(async () => ({ key: { ...key("synthetic-gateway"), default_model: "gpt-4o-mini" } }));
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  async function failureFrom(call: () => Promise<unknown>): Promise<string> {
+    let outcome: { ok?: boolean; error?: string };
+    try {
+      outcome = await call() as { ok?: boolean; error?: string };
+    } catch (error) {
+      // Include the complete HTTPException payload: an innocuous `error` beside a raw
+      // `detail` is still a leak through the API, even if chat only picks the first field.
+      const response = (error as { getResponse?: () => unknown }).getResponse?.();
+      return JSON.stringify({ message: api.extractAiErrorMessage(error), response });
+    }
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toBeTruthy();
+    return JSON.stringify(outcome);
+  }
+
+  it.each(callers)("%s never presents an unrecognized HTTP error body", async (_name, call) => {
+    global.fetch = jest.fn(async () => new Response(JSON.stringify({ error: { message: rawFailure } }), { status: 500 })) as typeof fetch;
+    const failure = await failureFrom(call);
+    for (const marker of markers) expect(failure).not.toContain(marker);
+    expect(failure).toMatch(/unavailable/i);
+    expect(failure).toMatch(/retry|try again/i);
+  });
+
+  it.each(callers)("%s does not expose rejected transport diagnostics", async (_name, call) => {
+    global.fetch = jest.fn().mockRejectedValue(new Error(rawFailure)) as typeof fetch;
+    const failure = await failureFrom(call);
+    for (const marker of markers) expect(failure).not.toContain(marker);
+    expect(failure).toMatch(/retry|try again/i);
+  });
+
+  it.each(callers)("%s keeps a rejected authentication header value private before fetch starts", async (_name, call) => {
+    credentials.apiKey = `${markers[0]}\ninvalid`;
+    global.fetch = jest.fn() as typeof fetch;
+    const failure = await failureFrom(call);
+    for (const marker of markers) expect(failure).not.toContain(marker);
+    expect(failure).toMatch(/authentication headers are invalid/i);
+    expect(failure).toMatch(/Workspace.*Integrations/);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["authHeaderName", "authScheme"] as const)("connection probe keeps an invalid %s private", async (field) => {
+    credentials[field] = `${markers[1]}\ninvalid`;
+    global.fetch = jest.fn() as typeof fetch;
+    const failure = await failureFrom(callers[9][1]);
+    for (const marker of markers) expect(failure).not.toContain(marker);
+    expect(failure).toMatch(/authentication headers are invalid/i);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["openai", null, null, "Authorization", "Bearer synthetic-only"],
+    ["anthropic", null, null, "x-api-key", "synthetic-only"],
+    ["azure-openai", null, null, "api-key", "synthetic-only"],
+    ["custom-gateway", "X-Workspace-Key", "Custom", "X-Workspace-Key", "Custom synthetic-only"],
+    ["anthropic", "X-Claude-Key", "Custom", "X-Claude-Key", "Custom synthetic-only"],
+    ["azure-openai", "X-Azure-Key", "unused", "X-Azure-Key", "synthetic-only"]
+  ] as const)("%s keeps its valid %s authentication header contract", (provider, name, scheme, expectedHeader, expectedValue) => {
+    const headers = api.providerAuthHeaders(provider, credentials.apiKey, name, scheme);
+    expect(headers.get(expectedHeader)).toBe(expectedValue);
+    expect(headers.get("Content-Type")).toBe("application/json");
+    if (provider === "anthropic") expect(headers.get("anthropic-version")).toBe("2023-06-01");
+  });
+
+  it.each(callers)("%s does not expose invalid provider JSON or report it as a healthy connection", async (_name, call) => {
+    // JSON parser diagnostics can quote the start of a malformed body, including a
+    // short fragment even when they truncate the rest of a credential or request.
+    const malformedMarker = "pvt-json";
+    global.fetch = jest.fn(async () => new Response(`${malformedMarker}${rawFailure}`, { status: 200 })) as typeof fetch;
+    const failure = await failureFrom(call);
+    for (const marker of markers) expect(failure).not.toContain(marker);
+    expect(failure).not.toContain(malformedMarker);
+    expect(failure).toMatch(/provider|OpenAI|Claude|draft|JSON/i);
+  });
+
+  it.each([
+    [401, "invalid x-api-key", /invalid or has been revoked/i],
+    [403, "permission_error", /permissions/i],
+    [429, "quota", /rate-limited|quota/i],
+    [408, "timeout", /did not answer in time/i],
+    [504, "gateway timeout", /did not answer in time/i],
+    [404, "model not found", /model|endpoint/i],
+    [400, "request rejected", /request|settings/i]
+  ] as const)("HTTP %s preserves useful guidance while discarding provider details", async (status, category, expected) => {
+    global.fetch = jest.fn(async () => new Response(JSON.stringify({ error: { message: `${category} ${rawFailure}` } }), { status })) as typeof fetch;
+    const failure = await failureFrom(callers[0][1]);
+    expect(failure).toMatch(expected);
+    for (const marker of markers) expect(failure).not.toContain(marker);
+  });
+
+  it.each(["openai", "anthropic"])("%s generation preserves the actionable invalid-key code without raw detail", async (provider) => {
+    global.fetch = jest.fn(async () => new Response(JSON.stringify({ error: { message: `invalid x-api-key ${rawFailure}` } }), { status: 401 })) as typeof fetch;
+    const call = provider === "openai" ? callers[4][1] : callers[5][1];
+    const failure = await failureFrom(call);
+    expect(failure).toContain("ai_key_invalid");
+    expect(failure).toMatch(/invalid or has been revoked/);
+    for (const marker of markers) expect(failure).not.toContain(marker);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["TimeoutError", "AbortError"])("%s remains resumable without exposing the transport message", async (name) => {
+    global.fetch = jest.fn().mockRejectedValue(Object.assign(new Error(rawFailure), { name })) as typeof fetch;
+    const error = await callers[0][1]().then(() => null, (failure: unknown) => failure);
+    expect(api.isZyraTimeoutError(error)).toBe(true);
+    expect(error).toMatchObject({ name });
+    expect(api.extractAiErrorMessage(error)).toMatch(/timed out/i);
+    for (const marker of markers) expect(api.extractAiErrorMessage(error)).not.toContain(marker);
+  });
+
+  it("ETIMEDOUT carries a safe timeout outcome instead of reflecting transport diagnostics", async () => {
+    global.fetch = jest.fn().mockRejectedValue(Object.assign(new Error(rawFailure), { code: "ETIMEDOUT" })) as typeof fetch;
+    const failure = await failureFrom(callers[0][1]);
+    expect(failure).toMatch(/timed out/i);
+    for (const marker of markers) expect(failure).not.toContain(marker);
+  });
+
+  it.each([
+    ["null", (): unknown => null],
+    ["string", (): unknown => rawFailure],
+    ["unsupported status", (): unknown => ({ status: "500", message: rawFailure })]
+  ] as const)("a rejected %s value fails safely at the provider boundary", async (_name, rejected) => {
+    global.fetch = jest.fn().mockRejectedValue(rejected()) as typeof fetch;
+    const failure = await failureFrom(callers[0][1]);
+    expect(failure).toContain("request failed");
+    for (const marker of markers) expect(failure).not.toContain(marker);
+  });
+
+  it("transport rejection never invokes untrusted conversion or response accessors", async () => {
+    const getResponse = jest.fn(() => ({ detail: rawFailure }));
+    const getStatus = jest.fn(() => { throw new Error(rawFailure); });
+    const toString = jest.fn(() => rawFailure);
+    global.fetch = jest.fn().mockRejectedValue({ message: rawFailure, getResponse, getStatus, toString }) as typeof fetch;
+    const failure = await failureFrom(callers[0][1]);
+    for (const marker of markers) expect(failure).not.toContain(marker);
+    expect(getResponse).not.toHaveBeenCalled();
+    expect(getStatus).not.toHaveBeenCalled();
+    expect(toString).not.toHaveBeenCalled();
+  });
+
+  it("an Error with an unsafe message getter is replaced before it reaches presentation", async () => {
+    const getMessage = jest.fn(() => { throw new Error(rawFailure); });
+    const rejected = Object.defineProperty(new Error(), "message", { get: getMessage });
+    global.fetch = jest.fn().mockRejectedValue(rejected) as typeof fetch;
+    const failure = await failureFrom(callers[0][1]);
+    for (const marker of markers) expect(failure).not.toContain(marker);
+    expect(getMessage).not.toHaveBeenCalled();
+  });
+
+  it("a throwing error-kind getter falls back to a safe generic failure", async () => {
+    const rejected = Object.defineProperty(new Error(), "name", { get: () => { throw new Error(rawFailure); } });
+    global.fetch = jest.fn().mockRejectedValue(rejected) as typeof fetch;
+    const failure = await failureFrom(callers[0][1]);
+    expect(failure).toContain("request failed");
+    for (const marker of markers) expect(failure).not.toContain(marker);
+  });
+
+  it("Anthropic model-candidate retry still uses the private failure to choose a compatible model", async () => {
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: `model not found ${rawFailure}` } }), { status: 404 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ content: [{ type: "text", text: '{"reply":"Recovered","action":"answer"}' }] }))) as typeof fetch;
+    const result = await api.zyraChatWithAnthropic(key("anthropic"), "configured-retired-model", "System", "User");
+    expect(result).toMatchObject({ reply: "Recovered" });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    const sent = (global.fetch as jest.Mock).mock.calls.map((call: [string, RequestInit]) => JSON.parse(String(call[1].body)).model);
+    expect(sent[0]).toBe("configured-retired-model");
+    expect(sent[1]).not.toBe(sent[0]);
+  });
+
+  it("Anthropic token-ceiling retry stays internal and still returns billed drafts", async () => {
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: `max_tokens: 9500 > 4000 ${rawFailure}` } }), { status: 400 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ content: [{ type: "text", text: '{"drafts":[{"title":"Recovered draft","stepsJson":"[]"}]}' }], usage: { input_tokens: 12, output_tokens: 4 } }))) as typeof fetch;
+    expect(await callers[5][1]()).toMatchObject({ drafts: [{ title: "Recovered draft" }], usage: { input: 12, output: 4, total: 16 } });
+    const sent = (global.fetch as jest.Mock).mock.calls.map((call: [string, RequestInit]) => JSON.parse(String(call[1].body)).max_tokens);
+    expect(sent).toEqual([9500, 4000]);
+  });
+
+  it("local validation diagnostics still pass through the existing product error extractor", () => {
+    expect(api.extractAiErrorMessage(new Error("The chosen test case is archived."))).toBe("The chosen test case is archived.");
+    expect(api.extractAiErrorMessage(new BadRequestException({ error: "The chosen test case is archived." }))).toBe("The chosen test case is archived.");
   });
 });
 

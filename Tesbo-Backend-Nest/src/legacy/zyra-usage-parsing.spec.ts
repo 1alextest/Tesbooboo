@@ -1,4 +1,5 @@
 import { LegacyService } from "./legacy.service";
+import { Logger } from "@nestjs/common";
 import type { DatabaseService } from "../database/database.service";
 import * as aiTrace from "../observability/ai-trace";
 
@@ -306,7 +307,7 @@ describe("Zyra provider usage parsing (cached input tokens)", () => {
     expect(global.fetch).toHaveBeenCalledTimes(1);
     expect(recorded).toHaveBeenCalledTimes(1);
     expect(recorded.mock.calls[0][0].name).toBe("knowledge.transcription");
-    expect(recorded.mock.calls[0][0].errorMessage).toBe(outcome === "success" ? undefined : "synthetic network failure");
+    expect(recorded.mock.calls[0][0].errorMessage).toBe(outcome === "success" ? undefined : "OpenAI request failed. Check the provider connection and try again.");
   });
 
   it.each(["wire", "finalizer", "router"])("%s uses the actual Anthropic fallback request model, never a completion-supplied identity", async (path) => {
@@ -363,12 +364,13 @@ describe("Zyra provider usage parsing (cached input tokens)", () => {
       const call = path === "finalizer"
         ? internal.finalizeZyraToolDecisionWithAi({ ...params, toolName: "test", toolDecision: { reply: "prior", testcases: [] } })
         : internal.planZyraChatScenarios({ ...params, knowledge: [], existingTestcases: [], maxScenarios: 1 });
-      await expect(call).rejects.toBe(failure);
+      await expect(call).rejects.toThrow(/request failed.*try again/i);
     }
     expect(requestedModels).toHaveLength(path === "planner" ? 1 : 2);
     expect(requestedModels.at(-1)).not.toBe(model);
     expect(recorded).toHaveBeenCalledTimes(1);
-    expect(recorded.mock.calls[0][0]).toMatchObject({ model: requestedModels.at(-1), errorMessage: "synthetic transport failure" });
+    expect(recorded.mock.calls[0][0]).toMatchObject({ model: requestedModels.at(-1), errorMessage: expect.stringMatching(/request failed.*try again/i) });
+    expect(JSON.stringify(recorded.mock.calls)).not.toContain("synthetic transport failure");
   });
 
   describe.each(["openai", "anthropic"])("%s update authoring consumer", (provider) => {
@@ -473,5 +475,59 @@ describe("Zyra provider usage parsing (cached input tokens)", () => {
     expect(observations.find((data) => (data.input as { cases: number }).cases === 1)?.model).toBe("claude-haiku-4-5");
     const writes = (svc as unknown as { db: { query: jest.Mock } }).db.query.mock.calls.filter(([sql]) => String(sql).includes("INSERT INTO zyra_token_usage"));
     expect(writes.map(([, values]) => [values[3], values[4]]).sort()).toEqual([["claude-haiku-4-5", 1], ["claude-sonnet-4-6", 5]]);
+  });
+});
+
+describe("knowledge transcription provider ingress", () => {
+  const originalFetch = global.fetch;
+  const privateDetail = "pvt-audio synthetic-private-transcription-context";
+  afterEach(() => { global.fetch = originalFetch; jest.restoreAllMocks(); });
+
+  it.each(["HTTP", "transport", "JSON", "api_key", "auth_header_name", "auth_scheme"])("keeps a failed %s transcription out of logs and observations", async (kind) => {
+    const svc = makeLegacy();
+    const key: Record<string, unknown> = { ...openAiKey };
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    const warning = jest.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
+    const internal = svc as unknown as Internals;
+    jest.spyOn(internal, "zyraAiAllocation").mockResolvedValue({ key });
+    if (kind === "HTTP") global.fetch = jest.fn(async () => new Response(JSON.stringify({ error: { message: privateDetail } }), { status: 500 })) as typeof fetch;
+    else if (kind === "transport") global.fetch = jest.fn().mockRejectedValue(new Error(privateDetail)) as typeof fetch;
+    else if (kind === "JSON") global.fetch = jest.fn(async () => new Response(privateDetail)) as typeof fetch;
+    else {
+      key[kind] = `${privateDetail}\ninvalid`;
+      global.fetch = jest.fn(async (url, init) => { new Request(url, init); return new Response("{}"); }) as typeof fetch;
+    }
+    await internal.transcribeKnowledgeFile("project-one", "file-one", Buffer.from("audio"), "mp3", "audio/mpeg", "sample.mp3");
+    const surfaces = JSON.stringify({ warnings: warning.mock.calls, observations: recorded.mock.calls });
+    expect(surfaces).not.toContain("pvt-audio");
+    expect(surfaces).not.toContain("synthetic-private-transcription-context");
+    expect((svc as unknown as { db: { query: jest.Mock } }).db.query).toHaveBeenCalledWith(expect.stringContaining("extraction_status = 'failed'"), ["file-one"]);
+    const headerFailure = ["api_key", "auth_header_name", "auth_scheme"].includes(kind);
+    expect(recorded).toHaveBeenCalledTimes(headerFailure ? 0 : 1);
+    expect(global.fetch).toHaveBeenCalledTimes(headerFailure ? 0 : 1);
+    if (kind === "HTTP") expect(recorded.mock.calls[0][0].errorMessage).toContain("HTTP 500");
+  });
+
+  it("keeps multipart boundary ownership, custom auth and successful transcript persistence", async () => {
+    const svc = makeLegacy();
+    const internal = svc as unknown as Internals & { enqueueEmbedding: (...args: unknown[]) => void };
+    const enqueue = jest.spyOn(internal, "enqueueEmbedding").mockImplementation(() => undefined);
+    const db = (svc as unknown as { db: { query: jest.Mock } }).db;
+    db.query.mockResolvedValue({ rows: [{ organization_id: "org-one" }] });
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    jest.spyOn(internal, "zyraAiAllocation").mockResolvedValue({ key: { ...openAiKey, auth_header_name: "X-Audio-Key", auth_scheme: "Custom" } });
+    global.fetch = jest.fn(async (_url, init) => {
+      expect(init?.body).toBeInstanceOf(FormData);
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Content-Type")).toBeNull();
+      expect(headers.get("X-Audio-Key")).toBe("Custom test-key");
+      expect((init?.body as FormData).get("model")).toBe("whisper-1");
+      expect(await ((init?.body as FormData).get("file") as Blob).text()).toBe("audio fixture");
+      return new Response(JSON.stringify({ text: " The synthetic transcript. " }));
+    }) as typeof fetch;
+    await internal.transcribeKnowledgeFile("project-one", "file-one", Buffer.from("audio fixture"), "mp3", "audio/mpeg", "sample.mp3");
+    expect(db.query).toHaveBeenCalledWith(expect.stringContaining("extraction_status = 'ready'"), ["file-one", "The synthetic transcript."]);
+    expect(enqueue).toHaveBeenCalledWith("org-one", "project-one", "file", "file-one", "transcribed");
+    expect(recorded.mock.calls[0][0]).toMatchObject({ output: { status: "ready", transcriptChars: 25 } });
   });
 });
