@@ -149,8 +149,19 @@ describe("effective governed Skill resolution (pure, native-owner inputs only)",
       expect(updated.status).toBe("resolved");
       expect(comparePinnedSkillResolution(first.digest, updated)).toBe("SKILL_CONTEXT_STALE");
     }
+    // A previously valid pin must become STALE when the human revokes or
+    // deactivates its assignment, rather than being misreported as a provider outage.
     expect(comparePinnedSkillResolution(first.digest, resolveGovernedSkills(context, inventory({ versions: [{ ...core, state: "revoked" }] }))))
+      .toBe("SKILL_CONTEXT_STALE");
+    expect(comparePinnedSkillResolution(first.digest, resolveGovernedSkills(context, inventory({ assignments: [{ ...coreAssignment, state: "inactive" }] }))))
+      .toBe("SKILL_CONTEXT_STALE");
+    // A genuinely incomplete authoritative read is unavailable, not stale.
+    expect(comparePinnedSkillResolution(first.digest, resolveGovernedSkills(context, inventory({ status: "partial" }))))
       .toBe("SKILL_CONTEXT_UNAVAILABLE");
+    // Contradictory composition is its own explicit human-review blocker.
+    expect(comparePinnedSkillResolution(first.digest, resolveGovernedSkills(context,
+      inventory({ assignments: [{ ...coreAssignment, weakensMandatoryRoot: true }] }))))
+      .toBe("SKILL_ASSIGNMENT_CONFLICT");
   });
   it("permits a workspace-scoped assignment only inside the same verified workspace", () => {
     const result = resolveGovernedSkills(context, inventory({ assignments: [{ ...coreAssignment, projectId: null }] }));
