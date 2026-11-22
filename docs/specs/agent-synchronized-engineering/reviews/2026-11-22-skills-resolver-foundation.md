@@ -16,6 +16,10 @@
 
 `governed-skill-resolver.spec.ts` exercises deterministic positive resolution, subtype/audience/operation/phase isolation, workspace/project isolation, missing authority, unavailable/partial inventory, candidates/revocations/expired assignments, unapproved activation, conflicting assignment owners and precedence, unauthorized root overrides, incomplete composition, dependencies/cycles, and version-pin drift. An isolated TypeScript transpilation and 15-case standalone behavior harness **passed**. This is not Nest/Jest/DB verification; current-head CI remains necessary.
 
+### Drift versus outage — independent falsifier
+
+The in-flight pin checker now preserves **different** failure consequences: a revoked/unassigned Skill is `SKILL_CONTEXT_STALE` relative to a formerly approved pin; an ambiguous or contradictory composition is `SKILL_ASSIGNMENT_CONFLICT`; a partial/unreadable authority source is `SKILL_CONTEXT_UNAVAILABLE`. An ordinary digest or principal/context mismatch remains stale. This matters because reassessment of human-changed governing rules is not equivalent to retrying a transient reader outage. The pure regression exercises each cause; the actual authoritative reader and UI guidance remain unimplemented.
+
 ## Admission blockers
 
 - Native Skills identity/assignment storage, approved immutable KB version binding, authorized human publication and active assignment operations **are not implemented**. A forged caller-supplied review digest would not establish human authority, which is why this helper is **internal-only**.
