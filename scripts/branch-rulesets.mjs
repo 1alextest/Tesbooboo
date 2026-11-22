@@ -5,7 +5,8 @@ export const REPO='1alextest/Tesbooboo';
 // trying to interpret arbitrary YAML, expressions, reusable workflows or dynamic matrices.
 // These exact files have unfiltered pull_request triggers for both target branches. Their
 // literal job names and the five directory matrix values produce the contexts below.
-// Reviewed source: 9f506df2b6fae0f74e2ae2c5172b9ef865ef2457. Contexts are defined here once.
+// Reviewed source: 9f506df2b6fae0f74e2ae2c5172b9ef865ef2457, with the smoke workflow
+// from 8becc53fae3fe6eb299f00c07e278647d4370be3. Contexts are defined here once.
 // A workflow edit (including a same-name job edit) requires source review and pin reconciliation.
 // Pins/active metadata establish installed configuration, not successful live check publication,
 // a unique GitHub Actions producer identity, or proof that GitHub denies an unauthorized merge.
@@ -16,7 +17,7 @@ export const WORKFLOW_SOURCES=[
   contexts:['sdk-quality','frontend-quality','backend-quality','architecture-quality']},
  {path:'.github/workflows/behavioral-quality.yml',sha:'39161db0ed9758a7c4161555a0b26d7679438fa7',
   contexts:['api-mcp-contracts','database-integrity','transactional-concurrency']},
- {path:'.github/workflows/smoke-security-quality.yml',sha:'569815aee277e911d670c136471f2c0d555c8b2e',
+ {path:'.github/workflows/smoke-security-quality.yml',sha:'1fe6478b188c0bb5dce20c6b756058a2ed7f232d',
   contexts:['playwright-smoke','dependency-audit','container-security']},
  {path:'.github/workflows/security-analysis.yml',sha:'39249b3ae3702887e51bafbd5d26ea4d7b6befad',
   contexts:['codeql-javascript-typescript','dependency-lock-integrity (sdk/playwright-reporter)',
