@@ -301,6 +301,19 @@ records. Never edit a record to change a prior judgment. Native GraphQL
 `lastEditedAt` metadata is required alongside the REST body/state/commit identity;
 edited records are rejected even if their original text is restored. Missing
 referenced records, unavailable edit metadata and REST/GraphQL disagreement refuse.
+Edit metadata and the evidence-state digest cover every review by the current
+owner or delegated importer, even when its current body has no protocol marker.
+GitHub does not expose the previous body through this snapshot, so an authorized
+edit at or after the latest control is ambiguous: it could have removed or
+relabelled a revocation. That edit invalidates an earlier import. An unedited
+ordinary comment does not block assurance, and an ordinary edit strictly before a
+later valid import is superseded by that explicit new decision. A valid recovery
+import must have a submission time strictly later than all such edits and uniquely
+later than other current controls. Tied control times refuse; numeric review IDs
+are allocated before submission and do not prove submission order. Missing edit
+or ordering metadata also refuses. This conservative boundary can require a new
+import after editing an ordinary comment; editing the old comment again is not a
+recovery mechanism.
 GitHub's [review deletion API](https://docs.github.com/en/rest/pulls/reviews#delete-a-pending-review-for-a-pull-request)
 only deletes pending reviews; submitted reviews cannot be deleted through that
 endpoint. Using submitted COMMENTED reviews therefore avoids ordinary comment
@@ -324,6 +337,10 @@ writing a success and changes that same check to failure if evidence moved or
 became unavailable during publication. It acknowledges the actual Checks API
 head/conclusion; failed or unknown writes are not reported as successful delivery.
 Closed PRs are skipped without a status write.
+Only accepted analytical evidence is described as an importer attestation in the
+published result. Blocked/unavailable evidence reports provenance as not
+established, and an unrelated source delta reports it as not applicable; the
+required provenance profile is identified separately from observed acceptance.
 
 `analytical_evidence_accepted` means the described coordinator-attested evidence
 passed these mechanical predicates. It does not grant merge authority, report

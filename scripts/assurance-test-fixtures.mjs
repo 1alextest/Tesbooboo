@@ -89,7 +89,9 @@ export async function withGitHub(options, action) {
         content: Buffer.from(policyRaw).toString('base64') };
       else if (suffix === '/pulls/7') data = snapshot.pr;
       else if (suffix === '/pulls/7/files') data = snapshot.files;
-      else if (suffix === '/pulls/7/reviews') data = snapshot.reviews;
+      // REST reviews do not expose GraphQL edit metadata. Keep the transports
+      // separate so a missed GraphQL lookup cannot accidentally pass a fixture.
+      else if (suffix === '/pulls/7/reviews') data = snapshot.reviews.map(({ editVerified, lastEditedAt, ...review }) => review);
       else if (suffix === '/pulls') data = options.openPRs ?? [{ number: 7 }];
       else if (suffix === '/check-runs' && method === 'POST') {
         const payload = JSON.parse(init.body);
