@@ -1327,6 +1327,86 @@ test.describe("zyra / agents (UI)", () => {
     }
   });
 
+  test("requirement change bundle applies from the native task page once effective skills resolve", async ({ browser }) => {
+    const suffix = Date.now();
+    const base = `/api/projects/${tenant!.mainProjectId}`;
+    const skillDocs: string[] = [];
+    let taskId = "";
+    let requirementId = "";
+    const makeSkill = async (module: string, subtype: string, operation: string) => {
+      const created = await api.post(`${base}/skills`, { data: {
+        title: `UI governed skill ${operation} ${suffix}`, module, subtype,
+        skillKey: `SKL-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`,
+        instructions: "Require observable outcomes and exact reviewed sources."
+      } });
+      expect(created.ok(), await created.text()).toBe(true);
+      const doc = await created.json();
+      skillDocs.push(doc.id);
+      const submitted = await api.post(`${base}/knowledge-base/documents/${doc.id}/submissions`, { data: {
+        expectedRevision: doc.editRevision, submissionKey: randomUUID()
+      } });
+      expect(submitted.ok(), await submitted.text()).toBe(true);
+      const version = await submitted.json();
+      const approved = await api.patch(`${base}/skills/${doc.id}/approve`, { data: { versionId: version.id } });
+      expect(approved.ok(), await approved.text()).toBe(true);
+      const approval = await approved.json();
+      const assigned = await api.post(`${base}/skill-assignments`, { data: {
+        skillDocumentId: doc.id, versionId: approval.approvedVersionId, module, subtype, operation
+      } });
+      expect(assigned.ok(), await assigned.text()).toBe(true);
+      return { documentId: doc.id as string, versionId: approval.approvedVersionId as string };
+    };
+    try {
+      const requirementSkill = await makeSkill("requirements", "functional", "requirement_revision");
+      await api.post(`${base}/skill-assignments`, { data: {
+        skillDocumentId: requirementSkill.documentId, versionId: requirementSkill.versionId,
+        module: "requirements", subtype: "functional", operation: "requirement_case_link"
+      } });
+      await makeSkill("test_cases", "manual", "testcase_create");
+
+      const title = `UI governed requirement ${suffix}`;
+      const caseTitle = `UI governed case ${suffix}`;
+      const requirementOperationId = randomUUID(), testcaseOperationId = randomUUID();
+      const stagedResponse = await api.post(`${base}/requirements/proposals`, { data: {
+        requestKey: `ui-governed-${suffix}`, title,
+        operations: [
+          { opType: "requirement_revision", operationId: requirementOperationId, title, description: "Applied from the native task review.", criteria: [{ key: "AC-1", text: "The obligation is observable" }] },
+          { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle } },
+          { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] },
+        ]
+      } });
+      expect(stagedResponse.status(), await stagedResponse.text()).toBe(201);
+      taskId = (await stagedResponse.json()).id;
+
+      const page = await open(browser, `/agents/tasks/${taskId}`);
+      const panel = page.getByTestId("requirement-change-bundle");
+      await expect(panel).toBeVisible();
+      await expect(panel.getByTestId("requirement-bundle-skills")).toContainText("requirements/functional/requirement_revision");
+      const apply = panel.getByTestId("requirement-bundle-apply");
+      await expect(apply).toBeVisible();
+      await apply.click();
+      await expect(apply).toHaveCount(0);
+      const after = await api.get(`${base}/requirements/proposals/${taskId}`);
+      expect(after.ok(), await after.text()).toBe(true);
+      expect(await after.json()).toMatchObject({ taskStatus: "done" });
+      expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(caseTitle)};`)).toBe("1");
+      requirementId = scalar(`SELECT id FROM knowledge_documents WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(title)};`);
+      expect(requirementId).not.toBe("");
+    } finally {
+      if (taskId) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(taskId)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      if (requirementId) {
+        exec(`DELETE FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)};`);
+        exec(`DELETE FROM requirement_profiles WHERE document_id=${literal(requirementId)};`);
+        exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(requirementId)};`);
+        exec(`DELETE FROM knowledge_documents WHERE id=${literal(requirementId)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      }
+      for (const id of skillDocs) {
+        exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(id)};`);
+        exec(`DELETE FROM knowledge_documents WHERE id=${literal(id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      }
+    }
+  });
+
   function modal(page: Page, title: string): Locator {
     return page
       .locator('div[role="presentation"]')
