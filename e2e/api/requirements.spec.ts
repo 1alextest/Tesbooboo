@@ -238,6 +238,9 @@ test("governed skills allow protected publication, exact approval and separate c
     const requirementSkill = await makeSkill("requirements", "functional", "requirement_revision");
     await assign(requirementSkill, "requirements", "functional", "requirement_case_link");
     await makeSkill("test_cases", "manual", "testcase_create");
+    const effectiveBeforeStaging = await request.get(`${base}/skills/effective?module=requirements&subtype=functional&operation=requirement_revision`);
+    expect(effectiveBeforeStaging.ok(), await effectiveBeforeStaging.text()).toBe(true);
+    expect(await effectiveBeforeStaging.json(), "effective skill must resolve before staging").toMatchObject({ status: "resolved" });
 
     const title = `E2E governed requirement ${suffix}`;
     const caseTitle = `E2E governed case ${suffix}`;
