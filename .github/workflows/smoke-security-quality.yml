@@ -316,7 +316,7 @@ jobs:
           # and folder restore now brings back the subtree deleted with it, so the delete/restore
           # contract needs to run. Select the impacted tests only: the UI file also carries
           # intentionally red editor-validation tests (KBU-25/26).
-          selection="KB-A-05|KB-A-07|KB-A-21|KB-A-50|KB-A-51|KB-A-52|KB-A-53|KB-A-7[2-7]|KBU-08|KBU-09|KBU-10|KBU-10b|KBU-24|KBU-25|KBU-26|KBU-6[5-9]"
+          selection="WPA-01|KB-A-05|KB-A-07|KB-A-21|KB-A-50|KB-A-51|KB-A-52|KB-A-53|KB-A-7[2-7]|KBU-08|KBU-09|KBU-10|KBU-10b|KBU-24|KBU-25|KBU-26|KBU-6[5-9]"
           npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts ui/knowledge-base.spec.ts --workers=10 --output=test-results-kb -g "$selection" --list
           npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts ui/knowledge-base.spec.ts --workers=10 --output=test-results-kb -g "$selection"
       - name: Verify scheduled runs end to end
@@ -461,6 +461,62 @@ jobs:
           npx playwright test -c playwright.config.ts \
             api/billing.spec.ts ui/billing.spec.ts \
             --workers=2 --retries=0 --output=test-results-native-billing
+      - name: Verify requirement preview authorization with billing enabled and preview off/on
+        working-directory: e2e
+        env:
+          TESBO_CI_STRIPE_READONLY_FIXTURE: "1"
+          STRIPE_SECRET_KEY: sk_test_tesbo_ci
+          STRIPE_WEBHOOK_SECRET: whsec_tesbo_ci
+          STRIPE_PRICE_ID_PRO_MONTHLY: price_tesbo_ci_monthly_usd
+          STRIPE_PRICE_ID_PRO_ANNUAL: price_tesbo_ci_annual_usd
+        run: |
+          # Use the migrated disposable stack and synthetic read-only Stripe fixture. New backend
+          # processes prove real default-off/opt-in HTTP behavior; no shared deployment is changed.
+          set -euo pipefail
+          stop_preview_backend() {
+            previous_pid=$(cat /tmp/tesbo-backend-billing.pid)
+            kill "$previous_pid"
+            for _ in $(seq 1 30); do
+              state=$(ps -o stat= -p "$previous_pid" 2>/dev/null | tr -d ' ' || true)
+              if [ -z "$state" ] || [ "$state" = Z ]; then break; fi
+              sleep 1
+            done
+            state=$(ps -o stat= -p "$previous_pid" 2>/dev/null | tr -d ' ' || true)
+            if { [ -n "$state" ] && [ "$state" != Z ]; } || curl -fsS --max-time 2 http://127.0.0.1:7000/health >/dev/null 2>&1; then
+              echo "Previous backend is still serving; refusing ambiguous preview evidence" >&2
+              exit 1
+            fi
+          }
+          trap 'if [ -f /tmp/tesbo-backend-billing.pid ]; then kill "$(cat /tmp/tesbo-backend-billing.pid)" 2>/dev/null || true; fi' EXIT
+          npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts --project=api --list | tail -n 1
+          selection='WPA-0[123]'
+          for mode in disabled enabled; do
+            stop_preview_backend
+            preview_flag=()
+            expected_flag=0
+            if [ "$mode" = enabled ]; then
+              preview_flag=(TESBO_REQUIREMENT_PREVIEW_ENABLED=1)
+              expected_flag=1
+            fi
+            (
+              cd ../Tesbo-Backend-Nest
+              nohup env -u TESBO_REQUIREMENT_PREVIEW_ENABLED "${preview_flag[@]}" \
+                LANGFUSE_ENABLED=false node dist/main.js >"/tmp/tesbo-backend-preview-$mode.log" 2>&1 &
+              echo $! >/tmp/tesbo-backend-billing.pid
+            )
+            ready=0
+            for _ in $(seq 1 60); do
+              if curl -fsS --max-time 2 http://127.0.0.1:7000/health >/dev/null; then ready=1; break; fi
+              sleep 1
+            done
+            test "$ready" = 1
+            E2E_REQUIREMENT_PREVIEW_ENABLED="$expected_flag" \
+              npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts --project=api \
+                --workers=10 --retries=0 -g "$selection" --list
+            PLAYWRIGHT_HTML_OUTPUT_DIR="playwright-report-preview-$mode" E2E_REQUIREMENT_PREVIEW_ENABLED="$expected_flag" \
+              npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts --project=api \
+                --workers=10 --retries=0 -g "$selection" --output="test-results-preview-$mode"
+          done
       - name: Capture smoke evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -474,6 +530,7 @@ jobs:
             /tmp/tesbo-backend.log
             /tmp/tesbo-backend-observability-*.log
             /tmp/tesbo-backend-billing.log
+            /tmp/tesbo-backend-preview-*.log
             /tmp/tesbo-stripe-ci.log
             /tmp/tesbo-web.log
 
