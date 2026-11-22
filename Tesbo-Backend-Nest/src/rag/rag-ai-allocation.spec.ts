@@ -1,5 +1,5 @@
 import { DatabaseService } from "../database/database.service";
-import { resolveEmbeddingAllocation } from "./rag-ai-allocation";
+import { embedTexts, resolveEmbeddingAllocation, type EmbeddingKeyAllocation } from "./rag-ai-allocation";
 import { RAG_EMBEDDING_DIMENSION } from "./rag.constants";
 
 /*
@@ -123,5 +123,47 @@ describe("resolveEmbeddingAllocation", () => {
   it("reports a reason even on the happy path, so callers can log which key was chosen", async () => {
     const result = await resolveEmbeddingAllocation(fakeDb({ allocated: openaiKey }), "p1");
     expect(result.reason.trim().length).toBeGreaterThan(0);
+  });
+});
+
+describe("embedding provider ingress", () => {
+  const originalFetch = global.fetch;
+  const privateDetail = "pvt-embed synthetic-private-embedding-context";
+  const allocation = (): EmbeddingKeyAllocation => ({
+    provider: "openai", api_key: "synthetic-only", base_url: "https://provider.invalid/v1", auth_header_name: null,
+    auth_scheme: null, model: "text-embedding-3-small", dimension: RAG_EMBEDDING_DIMENSION, sendDimensionParam: true
+  });
+
+  afterEach(() => { global.fetch = originalFetch; jest.restoreAllMocks(); });
+
+  it.each(["HTTP", "transport", "JSON", "api_key", "auth_header_name", "auth_scheme"])("keeps a failed %s request private", async (kind) => {
+    const key = allocation();
+    if (kind === "HTTP") global.fetch = jest.fn(async () => new Response(JSON.stringify({ error: { message: privateDetail } }), { status: 500 })) as typeof fetch;
+    else if (kind === "transport") global.fetch = jest.fn().mockRejectedValue(new Error(privateDetail)) as typeof fetch;
+    else if (kind === "JSON") global.fetch = jest.fn(async () => new Response(privateDetail)) as typeof fetch;
+    else {
+      key[kind as "api_key" | "auth_header_name" | "auth_scheme"] = `${privateDetail}\ninvalid`;
+      // Run native request/header validation without making a network request.
+      global.fetch = jest.fn(async (url, init) => { new Request(url, init); return new Response("{}"); }) as typeof fetch;
+    }
+    const error = await embedTexts(key, ["public synthetic input"]).then(() => null, (failure: unknown) => failure);
+    expect(typeof (error as Error)?.message).toBe("string");
+    expect((error as Error).message).not.toContain("pvt-embed");
+    expect((error as Error).message).not.toContain("synthetic-private-embedding-context");
+    expect((error as Error).message).toMatch(/failed|unavailable|headers are invalid/i);
+    if (kind === "HTTP") expect((error as Error).message).toContain("HTTP 500");
+    if (["api_key", "auth_header_name", "auth_scheme"].includes(kind)) expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("preserves vector order and custom auth with dimensions enabled=%s", async (sendDimensionParam) => {
+    const key = { ...allocation(), auth_header_name: "X-Embedding-Key", auth_scheme: "Custom", sendDimensionParam };
+    global.fetch = jest.fn(async () => new Response(JSON.stringify({ data: [
+      { index: 1, embedding: [0.4, 0.5] }, { index: 0, embedding: [0.1, 0.2] }
+    ] }))) as typeof fetch;
+    expect(await embedTexts(key, ["first", "second"])).toEqual([[0.1, 0.2], [0.4, 0.5]]);
+    const [url, init] = (global.fetch as jest.Mock).mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://provider.invalid/v1/embeddings");
+    expect(new Headers(init.headers).get("X-Embedding-Key")).toBe("Custom synthetic-only");
+    expect(JSON.parse(String(init.body))).toEqual({ model: key.model, input: ["first", "second"], ...(sendDimensionParam ? { dimensions: RAG_EMBEDDING_DIMENSION } : {}) });
   });
 });

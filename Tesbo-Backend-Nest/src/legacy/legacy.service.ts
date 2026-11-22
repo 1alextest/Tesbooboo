@@ -1,3 +1,4 @@
+import { buildAiProviderHeaders, describeAiProviderFailure, isAiProviderTimeout, readAiProviderJson as readProviderJson, withAiProviderIo } from "../common/public-ai-provider-failure";
 import { BadRequestException, ConflictException, ForbiddenException, forwardRef, HttpException, Inject, Injectable, Logger, NotFoundException, NotImplementedException, OnModuleInit } from "@nestjs/common";
 import { assertApprovedNewRunCases } from "./approved-run-cases.policy";
 import { retestCreateInput, retestDigest, retestExecutionIds, retestRequestKey } from "./native-retest";
@@ -2681,7 +2682,7 @@ export class LegacyService implements OnModuleInit {
   // Single place that knows how each wire authenticates. Custom providers keep their
   // explicit header/scheme overrides; catalog providers get their wire's convention.
   private providerAuthHeaders(provider: string, apiKey: string, authHeaderName: string | null, authScheme: string | null): Headers {
-    try {
+    return buildAiProviderHeaders(() => {
       const wire = providerWire(provider);
       if (wire === "anthropic") return this.buildAnthropicAuthHeaders(apiKey, authHeaderName, authScheme);
       if (wire === "azure") {
@@ -2691,11 +2692,7 @@ export class LegacyService implements OnModuleInit {
         return headers;
       }
       return this.buildBearerAuthHeaders(apiKey, authHeaderName, authScheme);
-    } catch {
-      // Native Headers errors quote invalid names/values, including a credential.
-      // This is local configuration validation, before protected fetch even starts.
-      throw new Error("AI provider authentication headers are invalid. Check the key, header name, and authentication scheme in Workspace → Integrations.");
-    }
+    });
   }
 
   private isProviderAuthError(status: number, message?: string): boolean {
@@ -2707,75 +2704,19 @@ export class LegacyService implements OnModuleInit {
   // context. Use them only to classify the failure, never as presentation fallback.
   // Every downstream chat/progress/audit/HTTP consumer receives this safe description.
   private static describeProviderError(provider: string, status: number, rawMessage?: string): string {
-    const label = providerDefinition(provider)?.label || "AI provider";
-    const message = String(rawMessage || "");
-    if (status === 401 || /invalid x-api-key|authentication_error|invalid[_ ]api[_ ]key|incorrect api key|unauthorized/i.test(message)) {
-      return `The ${label} API key is invalid or has been revoked. Update it in Workspace → Integrations, then use "Test connection" to verify.`;
-    }
-    if (status === 403 || /permission_error|forbidden|does not have access|not allowed/i.test(message)) {
-      return `The ${label} API key was rejected for permissions — check the account's plan, billing, or model access, then update the key in Workspace → Integrations.`;
-    }
-    if (status === 429 || /rate.?limit|quota|insufficient_quota/i.test(message)) {
-      return `${label} is rate-limited or out of quota right now. Wait a moment and retry, or check the account's usage limits.`;
-    }
-    if (/overloaded/i.test(message)) {
-      return `The ${label} service is overloaded. Try again shortly.`;
-    }
-    if (status === 408 || status === 504) {
-      return `${label} did not answer in time (HTTP ${status}). Try again shortly.`;
-    }
-    if (status >= 500 && status <= 599) {
-      return `${label} is temporarily unavailable (HTTP ${status}). Try again shortly.`;
-    }
-    if (status === 404 || /model.{0,80}(?:not.?found|does not exist|unavailable)/i.test(message)) {
-      return `The ${label} model or endpoint is unavailable. Check the model and base URL in Workspace → Integrations, then retry.`;
-    }
-    if (status >= 400 && status <= 499) {
-      return `${label} rejected the request (HTTP ${status}). Check the model and request settings in Workspace → Integrations, then retry.`;
-    }
-    return `${label} request failed. Check the provider connection and try again.`;
+    return describeAiProviderFailure(status, rawMessage, providerDefinition(provider)?.label || "AI provider");
   }
 
-  // Fetch and body-reader exceptions can quote a URL or part of a provider response.
-  // Keep this boundary around provider I/O only; local validation errors and already
-  // billed draft parsing retain their existing diagnostics/usage outside it.
-  private static async providerIo<T>(provider: string, operation: () => Promise<T>): Promise<T> {
-    try {
-      return await operation();
-    } catch (error) {
-      // Transport errors do not own an HTTP response status. Inspect only exact
-      // timeout kinds; never activate an arbitrary message/toString/getResponse.
-      let name: unknown;
-      let code: unknown;
-      try {
-        if (error !== null && (typeof error === "object" || typeof error === "function")) {
-          name = (error as { name?: unknown }).name;
-          code = (error as { code?: unknown }).code;
-        }
-      } catch { /* An unsafe error-kind getter also fails closed. */ }
-      const timeout = name === "TimeoutError" || name === "AbortError" || code === "ETIMEDOUT";
-      const safe = new Error(timeout
-        ? `${providerDefinition(provider)?.label || "AI provider"} request timed out. Try again.`
-        : LegacyService.describeProviderError(provider, 0));
-      // A native timeout is resumable; an HTTP rejection must not become one.
-      if (timeout) safe.name = name === "AbortError" ? "AbortError" : "TimeoutError";
-      throw safe;
-    }
+  private static providerIo<T>(provider: string, operation: () => Promise<T>): Promise<T> {
+    return withAiProviderIo(operation, providerDefinition(provider)?.label || "AI provider");
   }
 
   private fetchAiProvider(provider: string, url: string, init: RequestInit): Promise<Response> {
     return LegacyService.providerIo(provider, () => fetch(url, init));
   }
 
-  private async readAiProviderJson(provider: string, response: Response): Promise<Body> {
-    try {
-      return await LegacyService.providerIo(provider, () => response.json() as Promise<Body>);
-    } catch (error) {
-      // A failed endpoint may return HTML or an empty body. Its HTTP status still
-      // gives useful guidance; a successful but unreadable response must fail.
-      if (!response.ok && !this.isZyraTimeoutError(error)) return {};
-      throw error;
-    }
+  private readAiProviderJson(provider: string, response: Response): Promise<Body> {
+    return readProviderJson<Body>(response, providerDefinition(provider)?.label || "AI provider");
   }
 
   private static async *providerStreamChunks(provider: string, response: Response): AsyncGenerator<Uint8Array> {
@@ -13279,17 +13220,21 @@ export class LegacyService implements OnModuleInit {
       form.append("model", "whisper-1");
       const authHeader = String(key.auth_header_name || "Authorization");
       const scheme = String(key.auth_scheme || "Bearer").trim();
-      const headers: Record<string, string> = {};
-      headers[authHeader] = scheme ? `${scheme} ${key.api_key}` : String(key.api_key);
+      const headers = buildAiProviderHeaders(() => {
+        // FormData owns Content-Type, including its multipart boundary.
+        const value = new Headers();
+        value.set(authHeader, scheme ? `${scheme} ${key.api_key}` : String(key.api_key));
+        return value;
+      });
       const url = normalizeAudioTranscriptionsUrl(key.base_url);
       requestAttempted = true;
-      const res = await fetch(url, { method: "POST", headers, body: form });
+      const res = await this.fetchAiProvider("openai", url, { method: "POST", headers, body: form });
       if (!res.ok) {
-        const errBody = await res.json().catch(() => ({} as Body)) as Body;
+        const errBody = await this.readAiProviderJson("openai", res);
         const rawMessage = String(errBody.error?.message || errBody.error || res.status);
-        throw new Error(rawMessage);
+        throw new Error(LegacyService.describeProviderError("openai", res.status, rawMessage));
       }
-      const data = await res.json() as Body;
+      const data = await this.readAiProviderJson("openai", res);
       const text = String(data.text || "").trim().slice(0, LegacyService.KB_EXTRACTED_TEXT_LIMIT);
       await this.db.query(
         "UPDATE knowledge_files SET extracted_text = $2, extraction_status = 'ready', updated_at = now() WHERE id = $1",
@@ -25775,7 +25720,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // Never true for a rejection that came from the provider itself (a 4xx/5xx, malformed JSON) — those
   // already carry their own message and go through the normal failure path.
   private isZyraTimeoutError(err: unknown): boolean {
-    return err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+    return isAiProviderTimeout(err);
   }
 
   // The English classification decides; a Russian session gets the same entry from ZYRA_RU.failure.

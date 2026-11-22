@@ -13,6 +13,7 @@ import {
 import { startFakeAiServer, type FakeAiServer } from "../utils/fake-ai-server";
 import { env } from "../utils/env";
 import { parseSseEvents } from "../utils/sse";
+import { filesFormWith } from "../utils/uploads";
 import { issueMcpTestToken } from "../utils/mcp-access";
 import { readZyraProposal, saveReviewedZyraTask } from "../utils/zyra-proposals";
 import { messageTraceId, spanAttributes, startLangfuseCapture, type LangfuseCapture, type OtlpSpan } from "../utils/langfuse-capture";
@@ -8339,8 +8340,17 @@ test.describe("zyra — product behavior and real tracing export in disposable C
   test("ZYR-OBS-07 provider failure stays private in replies, progress, persistence and error observations", async () => {
     await allocate(tenantA, ownerA, aiA);
     const sessionId = await newSession(tenantA, ownerA);
-    const privateMarkers = ["sk-e2e-observation-provider-error-12345", "synthetic-private-request-context", "synthetic-private-url-token"];
+    const privateMarkers = ["sk-e2e-observation-provider-error-12345", "synthetic-private-request-context", "synthetic-private-url-token", "synthetic-private-embedding-context", "synthetic-private-transcription-context"];
     const safeReason = "AI provider is temporarily unavailable (HTTP 500). Try again shortly.";
+    // The chat-only allocation deliberately cannot embed. Add a native workspace
+    // OpenAI key so the real RAG resolver must execute its workspace fallback tier.
+    const embeddingKeyResponse = await ownerA.post("/api/workspace/ai-keys", {
+      data: { name: `E2E observation embedding ${randomUUID()}`, provider: "openai", apiKey: SYNTHETIC_KEY, baseUrl: aiA.backendBaseUrl, defaultModel: MODEL },
+      failOnStatusCode: false,
+    });
+    expect(embeddingKeyResponse.status(), await embeddingKeyResponse.text()).toBe(201);
+    const embeddingKeyId = (await embeddingKeyResponse.json()).id as string;
+    aiA.failNextWith(500, privateMarkers[3], "embedding");
     aiA.failNextWith(500, `Synthetic provider failure ${privateMarkers[0]} request=${privateMarkers[1]} https://gateway.invalid/?token=${privateMarkers[2]}`);
     // Attach while the provider is still pending: the existing progress registry
     // deliberately drops completed turns rather than retaining a second message store.
@@ -8352,6 +8362,7 @@ test.describe("zyra — product behavior and real tracing export in disposable C
     expect(stream.status(), await stream.text()).toBe(200);
     const progress = parseSseEvents(await stream.text());
     const answer = await pending;
+    expect(aiA.embeddingRequests.filter((request) => request.input.includes("Explain the failing observation fixture.")), "the canary must reach the actual live RAG embedding endpoint").toHaveLength(1);
     expect(answer.assistant.content).toContain(safeReason);
     expect(answer.assistant.content).toContain("no test cases were generated or changed");
     expect(answer.user).toMatchObject({ trace: { steps: expect.arrayContaining([
@@ -8362,15 +8373,68 @@ test.describe("zyra — product behavior and real tracing export in disposable C
     const activity = JSON.parse(scalar(`SELECT COALESCE(json_agg(row_to_json(entry)), '[]'::json)::text FROM
       (SELECT action, diff FROM audit_logs WHERE project_id = ${literal(tenantA.mainProjectId)} AND entity_id = ${literal(sessionId)}) entry;`) || "[]");
     expect(activity).toContainEqual({ action: "zyra_chat_ai_failed", diff: { message: safeReason, stage: "routing" } });
-    const productSurfaces = JSON.stringify({ response: answer.responseBody, messages: await messages(tenantA, ownerA, sessionId), activity, progress });
-    for (const marker of privateMarkers) expect(productSurfaces).not.toContain(marker);
-    expect(aiA.requests).toHaveLength(1);
-    const spans = await assertObserved(answer, tenantA, true);
-    if (expectedMode === "enabled") {
-      const wire = capture.exports.map((item) => item.raw).join("\n");
-      for (const marker of privateMarkers) expect(wire).not.toContain(marker);
-      const router = spans.find((span) => span.name === "router")!;
-      expect(String(spanAttributes(router)["langfuse.observation.output"])).toContain(safeReason);
+    const kbEndpoint = `/api/projects/${tenantA.mainProjectId}/knowledge-base`;
+    let folderId: string | undefined;
+    let fileId: string | undefined;
+    try {
+      // The upload starts the real async transcription owner. CI uses disposable
+      // local storage; only the external transcription endpoint is synthetic.
+      const allocated = await ownerA.post("/api/workspace/ai-keys/allocations", {
+        data: { projectId: tenantA.mainProjectId, workspaceAiKeyId: embeddingKeyId }, failOnStatusCode: false,
+      });
+      expect(allocated.status(), await allocated.text()).toBe(201);
+      const folder = await ownerA.post(`${kbEndpoint}/folders`, { data: { name: `E2E observation audio ${randomUUID()}` }, failOnStatusCode: false });
+      expect(folder.status(), await folder.text()).toBe(201);
+      folderId = (await folder.json()).id as string;
+      aiA.failNextWith(500, privateMarkers[4], "transcription");
+      // One silent PCM sample in a valid mono WAV container.
+      const wav = Buffer.from("524946462600000057415645666d74201000000001000100401f0000803e00000200100064617461020000000000", "hex");
+      const uploaded = await ownerA.post(`${kbEndpoint}/files/upload`, {
+        multipart: filesFormWith({ folderId }, [{ name: "observation.wav", mimeType: "audio/wav", body: wav }]), failOnStatusCode: false,
+      });
+      expect(uploaded.status(), await uploaded.text()).toBe(201);
+      fileId = (await uploaded.json()).list[0].id as string;
+      let file: Record<string, unknown> = {};
+      await expect.poll(async () => {
+        const read = await ownerA.get(`${kbEndpoint}/files/${fileId}`, { failOnStatusCode: false });
+        expect(read.status(), await read.text()).toBe(200);
+        file = await read.json();
+        return file.extractionStatus;
+      }, { timeout: 10_000, message: "the real transcription must settle its failed extraction" }).toBe("failed");
+      expect(file.extractedText).toBeNull();
+      expect(aiA.transcriptionRequests).toHaveLength(1);
+      expect(aiA.transcriptionRequests[0].contentType).toMatch(/^multipart\/form-data;\s*boundary=/i);
+      expect(aiA.transcriptionRequests[0].body).toContain('name="file"');
+      expect(aiA.transcriptionRequests[0].body).toContain("whisper-1");
+      const productSurfaces = JSON.stringify({ response: answer.responseBody, messages: await messages(tenantA, ownerA, sessionId), activity, progress, transcription: file });
+      for (const marker of privateMarkers) expect(productSurfaces).not.toContain(marker);
+      expect(aiA.requests).toHaveLength(1);
+      productOutcomes.push({ embeddingRequestCount: 1, transcriptionRequestCount: 1, transcriptionStatus: file.extractionStatus, transcript: file.extractedText });
+      const spans = await assertObserved(answer, tenantA, true);
+      if (expectedMode === "enabled") {
+        const embedding = spans.find((span) => span.name === "kb-query-embedding");
+        expect(embedding, "the actual query embedding must produce its own error observation").toBeDefined();
+        expect(spanAttributes(embedding!)["langfuse.observation.level"]).toBe("ERROR");
+        expect(String(spanAttributes(embedding!)["langfuse.observation.output"])).toContain(safeReason);
+        const transcriptionSpans = () => capture.exports.flatMap((item) => item.spans).filter((span) => span.name === "knowledge.transcription" && spanAttributes(span)["langfuse.observation.metadata.fileId"] === fileId);
+        await expect.poll(() => transcriptionSpans().length, { timeout: 10_000 }).toBeGreaterThan(0);
+        expect(spanAttributes(transcriptionSpans()[0])["langfuse.observation.level"]).toBe("ERROR");
+        expect(String(spanAttributes(transcriptionSpans()[0])["langfuse.observation.output"])).toContain("OpenAI is temporarily unavailable (HTTP 500)");
+        const wire = capture.exports.map((item) => item.raw).join("\n");
+        // Keep the full OTLP wire in memory, including on an assertion failure.
+        for (const marker of privateMarkers) expect(wire.includes(marker), `private provider marker reached OTLP: ${marker}`).toBe(false);
+        const router = spans.find((span) => span.name === "router")!;
+        expect(String(spanAttributes(router)["langfuse.observation.output"])).toContain(safeReason);
+      }
+    } finally {
+      if (fileId) {
+        const removed = await ownerA.delete(`${kbEndpoint}/files/${fileId}`, { failOnStatusCode: false });
+        expect(removed.status(), await removed.text()).toBe(200);
+      }
+      if (folderId) {
+        const removed = await ownerA.delete(`${kbEndpoint}/folders/${folderId}`, { failOnStatusCode: false });
+        expect(removed.status(), await removed.text()).toBe(200);
+      }
     }
   });
 
