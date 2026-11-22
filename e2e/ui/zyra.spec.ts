@@ -1293,6 +1293,40 @@ test.describe("zyra / agents (UI)", () => {
     return page;
   }
 
+  test("requirement change bundle is reviewed and rejected from the native task page without publishing", async ({ browser }) => {
+    const title = `E2E UI requirement bundle ${Date.now()}`;
+    const caseTitle = `E2E UI bundle case ${Date.now()}`;
+    const requirementOperationId = randomUUID(), testcaseOperationId = randomUUID();
+    const operations = [
+      { opType: "requirement_revision", operationId: requirementOperationId, title,
+        description: "A staged requirement revision.", criteria: [{ key: "AC-1", text: "The obligation is observable" }] },
+      { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle } },
+      { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] },
+    ];
+    const staged = await api.post(`/api/projects/${tenant!.mainProjectId}/requirements/proposals`, {
+      data: { requestKey: `ui-requirement-bundle-${Date.now()}`, operations, title },
+    });
+    expect(staged.status(), await staged.text()).toBe(201);
+    const task = await staged.json();
+    try {
+      const page = await open(browser, `/agents/tasks/${task.id}`);
+      const panel = page.getByTestId("requirement-change-bundle");
+      await expect(panel).toBeVisible();
+      await expect(page.getByTestId("requirement-bundle-candidate")).toContainText(title);
+      await expect(page.getByTestId("requirement-bundle-case")).toContainText(caseTitle);
+      await expect(page.getByTestId("requirement-bundle-link")).toContainText("AC-1");
+      await expect(page.getByTestId("requirement-bundle-publication-gate")).toContainText("Publication is blocked");
+      await panel.getByRole("button", { name: "Reject", exact: true }).click();
+      await expect(panel.getByRole("button", { name: "Reject", exact: true })).toHaveCount(0);
+      const after = await api.get(`/api/projects/${tenant!.mainProjectId}/requirements/proposals/${task.id}`);
+      expect(after.ok(), await after.text()).toBe(true);
+      expect(await after.json()).toMatchObject({ taskStatus: "done" });
+      expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(caseTitle)};`)).toBe("0");
+    } finally {
+      exec(`DELETE FROM ai_generation_requests WHERE id=${literal(task.id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+    }
+  });
+
   function modal(page: Page, title: string): Locator {
     return page
       .locator('div[role="presentation"]')

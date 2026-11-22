@@ -78,6 +78,22 @@ type TicketProvider = "jira" | "linear" | "notion";
 
 const TICKET_PROVIDER_LABELS: Record<TicketProvider, string> = { jira: "Jira", linear: "Linear", notion: "Notion" };
 
+/*
+ * Work Package A Slice 1: a requirement-revision candidate, a case candidate and a link intent are
+ * three typed entries of the SAME `generated_payload` array the existing review snapshot and
+ * proposal revision already cover. There is no parallel staged table, so no second representation
+ * can disagree with what the human reviewed.
+ */
+const REQUIREMENT_BUNDLE_OPERATION_KINDS = new Set(["requirement_revision", "testcase_create", "requirement_case_link"]);
+const REQUIREMENT_CRITERION_KEY = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/;
+const REQUIREMENT_MAX_CRITERIA = 50;
+/** Stable across retries; the request digest must not change because time passed. */
+const REQUIREMENT_SKILL_CONTEXT = Object.freeze({
+  status: "unavailable" as const,
+  authority: "governed-effective-skills",
+  reason: "No approved effective-skill resolver is available in this deployment"
+});
+
 // See getIntegrationConnection: the access token the caller just had refused (401), to force one renewal.
 interface IntegrationConnectionLoadOptions {
   rejectedAccessToken?: string;
@@ -15963,6 +15979,250 @@ export class LegacyService implements OnModuleInit {
     return this.zyraTask(projectId, uid, taskId);
   }
 
+  /**
+   * Work Package A Slice 1: stage one unpublished bundle in the existing proposal task owner.
+   *
+   * The typed entries live in `generated_payload` itself — the same array `testcase_proposal_review_snapshot()`
+   * returns and `proposalDigest()` covers. Nothing is published: no requirement document/version,
+   * testcase, active link or approval is created. Apply is refused by the Skills gate until an
+   * approved effective-skill resolver exists.
+   */
+  async stageRequirementChangeBundle(projectId: string, userId: string | null | undefined, body: Body, principal: TestcaseProposalPrincipal) {
+    if (process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED !== "1") {
+      throw new NotImplementedException({ code: "capability_unavailable", reason: "not_implemented", error: "External proposal submission is a disabled preview until governed effective-skill authority is implemented and accepted" });
+    }
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!principal || !["human_session", "api_token"].includes(principal.kind) ||
+        (principal.kind === "api_token" && !isUuid(String(principal.tokenId || "")))) {
+      throw new ForbiddenException({ error: "A trusted proposal producer identity is required" });
+    }
+    const requestKey = typeof body.requestKey === "string" ? body.requestKey.trim() : "";
+    if (!requestKey || requestKey.length > 160) throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
+    const bundle = this.normalizeRequirementBundle(body.operations);
+    const title = String(body.title || "Proposed requirement change bundle").trim().slice(0, 512);
+    const requestDigest = proposalDigest({ title, operations: bundle.operations });
+    const principalKey = principal.kind === "api_token" ? `api_token:${principal.tokenId}` : `human_session:${uid}`;
+    const producerActorId = principal.kind === "human_session" ? uid : principal.actorId ?? null;
+    const provenance = { kind: principal.kind, principalKey, issuerId: uid, tokenId: principal.tokenId ?? null, actorId: producerActorId };
+    const taskId = await this.db.transaction(async client => {
+      await this.requireCurrentProjectAuthority(client, projectId, uid);
+      if (principal.kind === "api_token") {
+        const token = await client.query("SELECT scopes FROM api_tokens WHERE id=$1 AND project_id=$2 AND user_id=$3 FOR SHARE", [principal.tokenId, projectId, uid]);
+        if (!token.rows[0] || !normalizeApiTokenScopes(token.rows[0].scopes).includes("write")) {
+          throw new ForbiddenException({ error: "A current write-scoped project token is required" });
+        }
+      }
+      if (bundle.requirement.documentId) {
+        await this.assertRequirementDocumentBase(client, projectId, String(bundle.requirement.documentId), String(bundle.requirement.expectedRevision));
+      }
+      if (bundle.testcase) await this.assertProposalReferences(client, projectId, bundle.testcase.draft);
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`requirement-proposal:${projectId}:${principalKey}:${requestKey}`]);
+      const prior = await client.query("SELECT id,proposal_request_digest FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
+      if (prior.rows[0]) {
+        if (prior.rows[0].proposal_request_digest !== requestDigest) {
+          throw new ConflictException({ code: "PROPOSAL_REQUEST_CONFLICT", error: "This requestKey already belongs to different proposal content" });
+        }
+        return String(prior.rows[0].id);
+      }
+      const result = await client.query(
+        `INSERT INTO ai_generation_requests
+          (project_id,requested_by,provider,model,user_story,requested_count,generated_count,generated_payload,agent_name,task_status,proposal_request_key,proposal_request_digest,proposal_provenance,activity_log)
+         VALUES ($1,$2,'external_requirement_proposal',NULL,$3,$4,$4,$5::jsonb,$6,'in_review',$7,$8,$9::jsonb,$10::jsonb) RETURNING id`,
+        [projectId, uid, title, bundle.operations.length, JSON.stringify(bundle.operations), ZYRA_AGENT_NAME, requestKey,
+          requestDigest, JSON.stringify(provenance),
+          JSON.stringify([{ actor: principal.kind === "api_token" ? "agent" : "user", stage: "in_review",
+            title: "Submitted requirement change bundle",
+            detail: "One requirement revision, one testcase candidate and one link intent await human review. Nothing was published.",
+            createdAt: new Date().toISOString(), provenance, skillContext: REQUIREMENT_SKILL_CONTEXT }])]
+      );
+      await this.logProjectActivity(projectId, producerActorId, "requirement_proposals_staged", "ai_generation_request", result.rows[0].id, title,
+        { provenance, requestDigest, operationCount: bundle.operations.length, skillContext: REQUIREMENT_SKILL_CONTEXT }, client);
+      return String(result.rows[0].id);
+    });
+    return this.zyraTask(projectId, uid, taskId);
+  }
+
+  async requirementProposalTask(projectId: string, userId: string | null | undefined, taskId: string) {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    if (!isUuid(taskId)) throw new NotFoundException({ error: "Requirement proposal not found" });
+    const task = await this.zyraTask(projectId, userId, taskId);
+    if (!this.taskHasRequirementBundle(task.proposalSnapshot?.operations || task.requirementBundle)) {
+      throw new NotFoundException({ error: "Requirement proposal not found" });
+    }
+    return task;
+  }
+
+  async listRequirementProposals(projectId: string, userId: string | null | undefined, query: Body = {}) {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    const limit = pageNumber(query.limit, 25, 1, 100), offset = pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const rows = await this.db.query(
+      `SELECT id FROM ai_generation_requests
+        WHERE project_id=$1 AND task_status IN ('in_review','failed')
+          AND generated_payload @> '[{"opType":"requirement_revision"}]'::jsonb
+        ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3`,
+      [projectId, limit, offset]
+    );
+    return { list: await Promise.all(rows.rows.map(row => this.requirementProposalTask(projectId, userId, String(row.id)))) };
+  }
+
+  /** Authorized rejection by a project owner/manager. Inert bundle; no native artifact is written. */
+  async rejectRequirementProposal(projectId: string, userId: string | null | undefined, taskId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(taskId)) throw new NotFoundException({ error: "Requirement proposal not found" });
+    this.kbRequireOwnerOrManager(await this.kbProjectRole(uid, projectId));
+    const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 2000) : "";
+    return this.closeRequirementProposal(projectId, uid, taskId, "rejected", reason);
+  }
+
+  /** The producer may withdraw their own bundle. */
+  async withdrawRequirementProposal(projectId: string, userId: string | null | undefined, taskId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(taskId)) throw new NotFoundException({ error: "Requirement proposal not found" });
+    const task = await this.db.query("SELECT requested_by, proposal_provenance FROM ai_generation_requests WHERE id=$1 AND project_id=$2", [taskId, projectId]);
+    const row = task.rows[0];
+    if (!row) throw new NotFoundException({ error: "Requirement proposal not found" });
+    if (row.requested_by !== uid && row.proposal_provenance?.issuerId !== uid) {
+      throw new ForbiddenException({ error: "Only the proposal producer or a project owner/manager can withdraw it" });
+    }
+    const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 2000) : "";
+    return this.closeRequirementProposal(projectId, uid, taskId, "withdrawn", reason);
+  }
+
+  private async closeRequirementProposal(projectId: string, uid: string, taskId: string, decision: "rejected" | "withdrawn", reason: string) {
+    return this.db.transaction(async client => {
+      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
+      const existing = locked.rows[0];
+      if (!existing) throw new NotFoundException({ error: "Requirement proposal not found" });
+      if (!this.taskHasRequirementBundle(existing.generated_payload)) throw new BadRequestException({ error: "This task is not a requirement change bundle" });
+      if (existing.task_status === "done") return this.formatAiTask(existing);
+      const now = new Date().toISOString();
+      const activity = [{
+        actor: "user", stage: "done",
+        title: decision === "rejected" ? "Rejected requirement change bundle" : "Withdrew requirement change bundle",
+        detail: reason || (decision === "rejected" ? "Rejected during human review; nothing was published." : "Withdrawn by its producer; nothing was published."),
+        createdAt: now, reviewerId: uid, decision
+      }];
+      const updated = await client.query(
+        `UPDATE ai_generation_requests SET task_status='done', activity_log=activity_log||$3::jsonb, updated_at=now()
+         WHERE id=$1 AND project_id=$2 AND task_status<>'done' RETURNING *`,
+        [taskId, projectId, JSON.stringify(activity)]
+      );
+      await this.logProjectActivity(projectId, uid, `requirement_proposal_${decision}`, "ai_generation_request", taskId, existing.user_story,
+        { decision, reason: reason || null, operationCount: normalizeJsonArray(existing.generated_payload).length }, client);
+      return this.formatAiTask(updated.rows[0] || existing);
+    });
+  }
+
+  private taskHasRequirementBundle(payload: unknown): boolean {
+    return normalizeJsonArray(payload).some(entry => REQUIREMENT_BUNDLE_OPERATION_KINDS.has(String(entry?.opType || "")));
+  }
+
+  private assertGuardedPublicationAvailable(payload: unknown): void {
+    if (!this.taskHasRequirementBundle(payload)) return;
+    throw new ConflictException({
+      code: "SKILL_CONTEXT_UNAVAILABLE",
+      error: "Requirement change bundles cannot be applied while the required approved effective skills are unavailable. Review, reject or withdraw the exact staged revision; nothing was published."
+    });
+  }
+
+  private async assertRequirementDocumentBase(client: PoolClient, projectId: string, documentId: string, expectedRevision: string) {
+    if (!isUuid(documentId)) throw new BadRequestException({ error: "documentId must be a requirement document id" });
+    if (!/^[a-f0-9]{64}$/.test(expectedRevision)) throw new BadRequestException({ error: "A revision of an existing requirement requires expectedRevision" });
+    const row = (await client.query(
+      `SELECT id, ${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS edit_revision, document_type, source_provider, is_deleted
+         FROM knowledge_documents WHERE id=$1 AND project_id=$2`, [documentId, projectId]
+    )).rows[0];
+    if (!row || row.is_deleted) throw new NotFoundException({ error: "Requirement document not found in this project" });
+    if (row.document_type !== "requirement_note") throw new BadRequestException({ code: "REQUIREMENT_DOCUMENT_TYPE", error: "The target document is not a requirement note" });
+    if (row.source_provider) throw new ConflictException({ code: "REQUIREMENT_EXTERNAL_OWNED", error: "A provider-synced requirement is read-only and cannot be revised natively" });
+    if (row.edit_revision !== expectedRevision) throw new ConflictException({ code: "REQUIREMENT_REVISION_CONFLICT", error: "The requirement changed since this revision was based on it" });
+  }
+
+  private normalizeRequirementBundle(rawOperations: unknown) {
+    if (!Array.isArray(rawOperations) || rawOperations.length < 1 || rawOperations.length > 3) {
+      throw new BadRequestException({ error: "operations must contain a requirement_revision, optional testcase_create and optional requirement_case_link" });
+    }
+    const seen = new Set<string>();
+    let requirement: Body | null = null;
+    let testcase: Body | null = null;
+    let link: Body | null = null;
+    const operations = rawOperations.map((raw: unknown) => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new BadRequestException({ error: "Each operation must be an object" });
+      const entry = raw as Body;
+      const opType = String(entry.opType || "");
+      if (!REQUIREMENT_BUNDLE_OPERATION_KINDS.has(opType)) throw new BadRequestException({ error: "Unsupported requirement bundle operation" });
+      const operationId = String(entry.operationId || "");
+      if (!isUuid(operationId) || seen.has(operationId)) throw new BadRequestException({ error: "Each operation requires a unique operationId UUID" });
+      seen.add(operationId);
+      const reason = typeof entry.reason === "string" ? entry.reason.slice(0, 4000) : "";
+      if (opType === "requirement_revision") {
+        if (requirement) throw new BadRequestException({ error: "A bundle contains exactly one requirement_revision" });
+        const title = typeof entry.title === "string" ? entry.title.trim() : "";
+        if (!title || title.length > 512) throw new BadRequestException({ error: "A requirement revision requires a title of at most 512 characters" });
+        const description = typeof entry.description === "string" ? entry.description.slice(0, 20000) : "";
+        const criteria = Array.isArray(entry.criteria) ? entry.criteria : [];
+        if (!criteria.length || criteria.length > REQUIREMENT_MAX_CRITERIA) throw new BadRequestException({ error: `A requirement revision requires 1–${REQUIREMENT_MAX_CRITERIA} criteria` });
+        const keys = new Set<string>();
+        const normalizedCriteria = criteria.map((criterion: unknown) => {
+          if (!criterion || typeof criterion !== "object" || Array.isArray(criterion)) throw new BadRequestException({ error: "Each criterion must be an object" });
+          const item = criterion as Body;
+          const key = String(item.key || "").trim();
+          const text = typeof item.text === "string" ? item.text.trim() : "";
+          if (!REQUIREMENT_CRITERION_KEY.test(key) || keys.has(key)) throw new BadRequestException({ error: "Criterion keys must be unique identifiers (1–32 characters)" });
+          if (!text || text.length > 4000) throw new BadRequestException({ error: "Each criterion requires text of at most 4000 characters" });
+          keys.add(key);
+          return { key, text, normative: item.normative === undefined ? true : item.normative === true };
+        });
+        const documentId = entry.documentId === undefined ? null : String(entry.documentId);
+        const expectedRevision = entry.expectedRevision === undefined ? null : String(entry.expectedRevision);
+        if (documentId && !expectedRevision) throw new BadRequestException({ error: "Revising an existing requirement requires expectedRevision" });
+        requirement = { opType, operationId, documentId, expectedRevision, title, description, criteria: normalizedCriteria, reason, skillContext: REQUIREMENT_SKILL_CONTEXT };
+        return requirement;
+      }
+      if (opType === "testcase_create") {
+        if (testcase) throw new BadRequestException({ error: "A bundle contains at most one testcase_create" });
+        const input = entry.draft ?? entry.fields ?? {};
+        if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(key => !TESTCASE_PROPOSAL_FIELDS.has(key))) {
+          throw new BadRequestException({ error: "The testcase candidate must use the native testcase field contract" });
+        }
+        const fields = this.normalizeProposalCaseFields(input);
+        if (typeof fields.title !== "string" || !fields.title.trim()) throw new BadRequestException({ error: "A testcase candidate requires title" });
+        if (fields.status !== undefined && fields.status !== "Draft") throw new BadRequestException({ error: "A testcase candidate must be a Draft proposal" });
+        testcase = { opType, operationId, draft: { ...fields, status: "Draft" }, reason };
+        return testcase;
+      }
+      if (link) throw new BadRequestException({ error: "A bundle contains at most one requirement_case_link" });
+      const requirementOperationId = String(entry.requirementOperationId || "");
+      const testcaseOperationId = String(entry.testcaseOperationId || "");
+      const criterionKeys = Array.isArray(entry.criterionKeys) ? entry.criterionKeys.map((key: unknown) => String(key)) : [];
+      if (!Array.isArray(entry.criterionKeys) || !criterionKeys.length || criterionKeys.length > REQUIREMENT_MAX_CRITERIA) {
+        throw new BadRequestException({ error: "A link intent requires 1–50 criterion keys" });
+      }
+      link = { opType, operationId, requirementOperationId, testcaseOperationId, criterionKeys, reason };
+      return link;
+    });
+    if (!requirement) throw new BadRequestException({ error: "A bundle requires one requirement_revision" });
+    if (link) {
+      const requirementKeys = new Set((requirement as Body).criteria.map((criterion: Body) => criterion.key));
+      if (!operations.some((entry: Body) => entry.operationId === (link as Body).requirementOperationId && entry.opType === "requirement_revision")) {
+        throw new BadRequestException({ error: "The link intent must reference the bundle's requirement revision" });
+      }
+      if (!testcase || !operations.some((entry: Body) => entry.operationId === (link as Body).testcaseOperationId && entry.opType === "testcase_create")) {
+        throw new BadRequestException({ error: "The link intent must reference a testcase candidate in this bundle" });
+      }
+      const unknown = (link as Body).criterionKeys.filter((key: string) => !requirementKeys.has(key));
+      if (unknown.length) throw new BadRequestException({ error: `The link intent names criteria that are not in the requirement revision: ${unknown.join(", ")}` });
+    }
+    // The assignments happen inside the map callback, which TypeScript's control-flow analysis
+    // does not follow; the runtime values are validated above.
+    return { operations, requirement: requirement as Body, testcase: testcase as unknown as Body | null, link: link as unknown as Body | null };
+  }
+
   async listTestcaseProposals(projectId: string, userId: string | null | undefined, query: Body = {}) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     const rows = await this.db.query("SELECT id FROM ai_generation_requests WHERE project_id=$1 AND task_status='in_review' ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3", [projectId, pageNumber(query.limit, 25, 1, 100), pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER)]);
@@ -21150,6 +21410,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // array, and whichever writes last silently discards the other's change.
       const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [taskId, projectId]);
       if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
+      this.assertGuardedPublicationAvailable(existing.rows[0].generated_payload);
       const drafts = normalizeJsonArray(existing.rows[0].generated_payload);
       if (!Number.isInteger(draftIndex) || draftIndex < 0 || draftIndex >= drafts.length) {
         throw new BadRequestException({ error: "Invalid testcase draft index" });
@@ -21188,6 +21449,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     await this.db.transaction(async (client) => {
       const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [taskId, projectId]);
       if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
+      this.assertGuardedPublicationAvailable(existing.rows[0].generated_payload);
       if (existing.rows[0].task_status !== "in_review") {
         throw new ConflictException({ error: `This batch is currently "${existing.rows[0].task_status}" and can no longer be edited — it may have already been saved or closed elsewhere. Reload and try again.` });
       }
@@ -21296,6 +21558,10 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId,projectId]);
       const existing = locked.rows[0];
       if (!existing) throw new NotFoundException({ error: "Zyra task not found" });
+      // Work Package A Slice 1: a requirement change bundle is staging-only until the required
+      // approved effective skills can be resolved and pinned. Refuse before any write so the
+      // blocked apply creates no requirement version, case, link or approval.
+      this.assertGuardedPublicationAvailable(existing.generated_payload);
       // A lost response is recovered from the committed native receipt, without another write.
       const prior = normalizeJsonArray(existing.save_events).find((event: Body) => event.decisionKey === decisionKey);
       if (prior) return { savedCount: prior.testcases.length, suiteId: prior.suiteId, testcases: prior.testcases, remaining: prior.remaining, saveReceipt: prior, replayed: true, touchedActions: [] };
@@ -26758,7 +27024,16 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const item = toCamel(row as QueryResultRow);
     const snapshot = row.proposal_snapshot as Body | undefined;
     const rawDrafts = normalizeJsonArray(snapshot?.operations || row.generated_payload);
-    item.drafts = await Promise.all(rawDrafts.map((entry: Body) => this.normalizeAiTaskDraftEntry(entry, snapshot?.targets)));
+    // Work Package A Slice 1 keeps its typed requirement/link entries in the same reviewed
+    // payload as the case drafts. They are surfaced separately so the existing case-draft
+    // renderer never mistakes them for testcase cards.
+    const bundleEntries = rawDrafts.filter((entry: Body) => REQUIREMENT_BUNDLE_OPERATION_KINDS.has(String(entry?.opType || "")));
+    const caseEntries = rawDrafts.filter((entry: Body) => !REQUIREMENT_BUNDLE_OPERATION_KINDS.has(String(entry?.opType || "")));
+    item.drafts = await Promise.all(caseEntries.map((entry: Body) => this.normalizeAiTaskDraftEntry(entry, snapshot?.targets)));
+    if (bundleEntries.length) {
+      item.requirementBundle = bundleEntries;
+      item.skillContext = bundleEntries.find((entry: Body) => entry.skillContext)?.skillContext || REQUIREMENT_SKILL_CONTEXT;
+    }
     if (snapshot) {
       item.proposalSnapshot = snapshot;
       item.proposalRevision = row.proposal_review_revision;
