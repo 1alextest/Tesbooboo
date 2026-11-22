@@ -550,3 +550,27 @@ decides `passing`.
 - CI: `database-integrity` runs the new resolver/apply/approval/coverage and negative controls in
   `testcase-proposal-review.db.spec.ts`; the existing smoke step runs `api/requirements.spec.ts`, including the
   positive governed-publication journey. Results are recorded on the implementation PR, not claimed here.
+
+## 15. Skills operator surface (Slice 3, project-scoped)
+
+**Scope:** the smallest native human surface for the resolver shipped in Slice 2. It extends the existing
+project Settings owner rather than adding a new top-level library.
+
+- `GET /api/projects/:projectId/skills` returns every KB-backed skill with its profile, candidate/approved
+  versions, current approved/submitted pointers and assignment history. `GET …/skill-assignments` returns the
+  full ledger, including revoked generations.
+- Project Settings gains a **Skills & Governance** tab linking to `/projects/:id/settings/skills`. The page shows
+  Work Package A readiness for the three required contexts, the Skills library with immutable version history,
+  candidate submission, exact-version approval, assignment and revocation.
+- Approval, assignment and revocation remain human-session-only; assignment/revocation now also require a
+  current project owner/manager. Agents may submit candidates and read resolution, but the UI/API expose no
+  machine path to approve, assign or revoke.
+- The page explains `unassigned`, `conflict` and revoked history explicitly; it never presents a candidate or an
+  unassigned context as effective. Replacing an assignment deactivates the prior generation instead of rewriting
+  it.
+- The operator test uses the native UI to create/submit/approve and assign the three skills, an agent token to
+  stage the typed bundle, and the owner's native task page to apply it. Readback distinguishes UI actions, agent
+  staging and human apply/approval receipts.
+
+**Still outside this slice:** cross-project packs, composition precedence UI, candidate evaluation, root-meta
+bootstrap, expanded MCP Skill tools, and any automatic publication.

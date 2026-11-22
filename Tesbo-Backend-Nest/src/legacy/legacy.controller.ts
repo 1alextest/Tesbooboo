@@ -1748,6 +1748,16 @@ export class LegacyController {
     return this.legacy.createSkillCandidate(projectId, req.userId, body);
   }
 
+  @Get("/api/projects/:projectId/skills")
+  listSkills(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
+    return this.legacy.listSkills(projectId, req.userId);
+  }
+
+  @Get("/api/projects/:projectId/skill-assignments")
+  listSkillAssignments(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
+    return this.legacy.listSkillAssignments(projectId, req.userId);
+  }
+
   @Get("/api/projects/:projectId/skills/effective")
   effectiveSkills(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Query() query: Record<string, any>) {
     return this.legacy.effectiveSkills(projectId, req.userId, query);

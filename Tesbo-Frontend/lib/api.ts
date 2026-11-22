@@ -1533,6 +1533,104 @@ export async function applyRequirementProposal(projectId: string, taskId: string
   });
 }
 
+// ─── Governed Skills (human-managed library and assignments) ───────────────────────────────
+
+export type SkillModule = "requirements" | "test_cases" | "user_manuals" | "policies" | "tasks_issues" | "files_evidence" | "skills";
+
+export interface SkillVersionRecord {
+  id: string;
+  versionNumber: number;
+  kind: "autosave" | "submitted" | "approved" | "rejected";
+  createdAt: string;
+  createdBy: string | null;
+  contentDigest: string | null;
+  authority: string | null;
+  sourceVersionId: string | null;
+}
+
+export interface SkillAssignmentRecord {
+  id: string;
+  module: string;
+  subtype: string;
+  operation: string;
+  status: "active" | "inactive";
+  skillDocumentId: string;
+  skillVersionId: string;
+  versionNumber?: number;
+  skillTitle?: string;
+  skillKey?: string;
+  contentDigest?: string;
+  assignedBy: string | null;
+  assignedAt: string;
+  deactivatedBy: string | null;
+  deactivatedAt: string | null;
+}
+
+export interface SkillRecord {
+  id: string;
+  title: string;
+  skillKey: string | null;
+  module: SkillModule | null;
+  subtype: string | null;
+  state: "draft" | "active" | "retired";
+  status: string;
+  editRevision: string;
+  approvedVersionId: string | null;
+  submittedVersionId: string | null;
+  versions: SkillVersionRecord[];
+  assignments: SkillAssignmentRecord[];
+}
+
+export interface SkillResolutionRecord {
+  status: "resolved" | "unassigned" | "conflict";
+  assignments: Array<{ assignmentId: string; skillDocumentId: string; skillKey: string; skillTitle: string; skillVersionId: string; versionNumber: number; contentDigest: string; target: { module: string; subtype: string; operation: string } }>;
+  missing: Array<{ module: string; subtype: string; operation: string }>;
+  conflicts: Array<{ module: string; subtype: string; operation: string; matches: number }>;
+  digest: string | null;
+  resolvedAt: string;
+}
+
+export async function listSkills(projectId: string): Promise<{ skills: SkillRecord[] }> {
+  return api(`/api/projects/${projectId}/skills`);
+}
+
+export async function listSkillAssignments(projectId: string): Promise<{ list: SkillAssignmentRecord[] }> {
+  return api(`/api/projects/${projectId}/skill-assignments`);
+}
+
+export async function createSkillCandidate(projectId: string, data: {
+  title: string; module: SkillModule; subtype?: string; skillKey?: string; instructions: string;
+}): Promise<SkillRecord & { skillKey: string; module: SkillModule; subtype: string; state: string }> {
+  return api(`/api/projects/${projectId}/skills`, { method: "POST", body: data });
+}
+
+/** Submit the current skill draft as an immutable candidate version. */
+export async function submitSkillVersion(projectId: string, documentId: string, expectedRevision: string): Promise<SkillVersionRecord> {
+  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/submissions`, {
+    method: "POST",
+    body: { expectedRevision, submissionKey: crypto.randomUUID() },
+  });
+}
+
+export async function approveSkillVersion(projectId: string, documentId: string, versionId: string): Promise<SkillRecord> {
+  return api(`/api/projects/${projectId}/skills/${documentId}/approve`, { method: "PATCH", body: { versionId } });
+}
+
+export async function assignSkill(projectId: string, data: {
+  skillDocumentId: string; versionId: string; module: string; subtype: string; operation: string; precedence?: number;
+}): Promise<{ assignment: SkillAssignmentRecord; resolution: SkillResolutionRecord }> {
+  return api(`/api/projects/${projectId}/skill-assignments`, { method: "POST", body: data });
+}
+
+export async function deactivateSkillAssignment(projectId: string, assignmentId: string): Promise<{ assignment: SkillAssignmentRecord; replayed: boolean }> {
+  return api(`/api/projects/${projectId}/skill-assignments/${assignmentId}/deactivate`, { method: "PATCH", body: {} });
+}
+
+export async function getEffectiveSkills(projectId: string, context: { module: string; subtype: string; operation: string }): Promise<SkillResolutionRecord> {
+  const query = new URLSearchParams(context).toString();
+  return api(`/api/projects/${projectId}/skills/effective?${query}`);
+}
+
 /** One ticket comment a Zyra save produced (integration_ticket_comments). */
 export interface ZyraTicketComment {
   id: string;
