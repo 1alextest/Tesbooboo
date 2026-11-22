@@ -839,8 +839,8 @@ type Body=Record<string,any>;
 
     it("guards ancestor Trash and restore cascades by active assignment history regardless of document type",async()=>{
       const skill=await skillFor("requirements","functional","requirement_revision");
-      const ancestor=await service().createKnowledgeFolder(project,user,{name:`Skill ancestor ${randomUUID()}`});
-      const descendant=await service().createKnowledgeFolder(project,user,{name:`Skill descendant ${randomUUID()}`,parentFolderId:ancestor.id});
+      const ancestor=await service().createKnowledgeFolder(project,user,{name:`Skill ancestor ${randomUUID().slice(0,8)}`});
+      const descendant=await service().createKnowledgeFolder(project,user,{name:`Skill descendant ${randomUUID().slice(0,8)}`,parentFolderId:ancestor.id});
       const tree=async()=>({
         folders:(await admin.query("SELECT * FROM knowledge_folders WHERE id=ANY($1::uuid[]) ORDER BY id",[[ancestor.id,descendant.id]])).rows,
         document:(await admin.query("SELECT * FROM knowledge_documents WHERE id=$1",[skill.doc.id])).rows,

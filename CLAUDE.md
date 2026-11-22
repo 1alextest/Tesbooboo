@@ -24,6 +24,11 @@ competing requirements leave a consequential product decision unresolved. Invest
 state the interpretations and consequences, and surface the decision to the user or the authorized
 owner before implementing it; record the blocked decision rather than assuming an answer.
 
+Use the [evidence-grounded decision procedure](docs/agent-skills/evidence-grounded-decisions/SKILL.md)
+to apply AGENTS.md principles 17 and 13 across coding, UX/UI and assurance work. It provides
+independent-agent discovery, coordination handoffs and proportionate decision briefs; AGENTS.md
+remains the owner of the binding principles.
+
 The detailed scope classification (coupled / defect on path / adjacent / new initiative), the
 no-unsanctioned-pivot rule and the red-run rules are in
 [docs/agent-scope-discipline.md](docs/agent-scope-discipline.md).
