@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {REPO,CHECKS,exact,check,patch,run} from './branch-rulesets.mjs';
+import {REPO,CHECKS,WORKFLOW_SOURCES,exact,check,patch,run} from './branch-rulesets.mjs';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 function f(b='development'){return {id:42,name:'Protect '+b,source:REPO,target:'branch',enforcement:'active',bypass_actors:[],conditions:{ref_name:{include:['refs/heads/'+b],exclude:[]}},rules:[{type:'deletion'},{type:'non_fast_forward'},{type:'pull_request',parameters:{required_approving_review_count:0,dismiss_stale_reviews_on_push:false,require_last_push_approval:false,required_review_thread_resolution:true}},{type:'required_status_checks',parameters:{strict_required_status_checks_policy:false,required_status_checks:[]}}]};}
@@ -24,6 +24,20 @@ const publisherFiles = [
 const blobHash = text => createHash('sha1')
   .update('blob ' + Buffer.byteLength(text) + '\0').update(text).digest('hex');
 const fileText = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8');
+test('reviewed smoke pin includes BOTH tracing parity and WPA-01 KB denial selection', () => {
+  const smoke = fileText('.github/workflows/smoke-security-quality.yml');
+  const pin = WORKFLOW_SOURCES.find(source => source.path === '.github/workflows/smoke-security-quality.yml');
+  assert.ok(pin, 'Keep smoke in the required CI sources');
+  assert.equal(blobHash(smoke), pin.sha, 'A changed source requires explicit reviewed pin reconciliation');
+  assert.ok(smoke.includes('selection="WPA-01|KB-A-05|'), 'Keep WPA denial selected alongside original KB cases');
+  assert.match(smoke, /Verify explicit tracing opt-in and installed SDK export boundaries/);
+  assert.match(smoke, /Verify Zyra product behavior with tracing disabled, unset and enabled/);
+  assert.match(smoke, /Verify requirement change bundle staging and review/);
+  assert.match(smoke, /Verify requirement preview authorization with billing enabled and preview off\/on/);
+  assert.match(smoke, /selection='WPA-0\[123\]'/);
+  assert.match(smoke, /for mode in disabled enabled; do/);
+});
+
 function installedFiles() {
   return [...workflowFiles, ...publisherFiles].map(path => ({
     path, mode: '100644', type: 'blob', sha: blobHash(fileText(path)),

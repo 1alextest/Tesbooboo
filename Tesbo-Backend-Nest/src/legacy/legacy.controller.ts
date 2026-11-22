@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   Body,
+  ForbiddenException,
+  ServiceUnavailableException,
   Controller,
   Delete,
   Get,
@@ -23,6 +25,7 @@ import ExcelJS from "exceljs";
 import { filter, interval, map, merge, Observable, of } from "rxjs";
 import { AuthenticatedRequest } from "../common/request.types";
 import { LegacyService } from "./legacy.service";
+import { NativeRequirementPreviewError, previewNativeRequirement } from "./native-requirement-preview";
 import { PlanRunWrite } from "./plan-run-write-lock.guard";
 import { CustomFieldsService } from "../custom-fields/custom-fields.service";
 import { CustomFieldDefinitionDto, normalizeTestcaseHeader, RESERVED_TESTCASE_HEADERS } from "../custom-fields/custom-fields.types";
@@ -1865,6 +1868,31 @@ export class LegacyController {
   @Get("/api/projects/:projectId/knowledge-base/search")
   searchKnowledgeBase(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Query() query: Record<string, any>) {
     return this.legacy.searchKnowledgeBase(projectId, req.userId, query);
+  }
+
+  /**
+   * Native requirement candidate inspection only. Authorized KB project access
+   * is checked before preview feature availability or request validation.
+   * No document/version/case/link/evidence writer or Skill publication is called.
+   */
+  @Post("/api/projects/:projectId/knowledge-base/requirements/preview")
+  @HttpCode(200)
+  async previewNativeRequirementCandidate(
+    @Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: unknown
+  ) {
+    if (!req.userId) throw new ForbiddenException({ error: "Project membership required" });
+    await this.legacy.requireProjectAccess(req.userId, projectId);
+    if (process.env.TESBO_REQUIREMENT_PREVIEW_ENABLED !== "1") {
+      throw new ServiceUnavailableException({ error: "REQUIREMENT_PREVIEW_DISABLED" });
+    }
+    try {
+      return previewNativeRequirement(body);
+    } catch (error) {
+      if (error instanceof NativeRequirementPreviewError) {
+        throw new BadRequestException({ error: error.code });
+      }
+      throw error;
+    }
   }
 
   @Get("/api/projects/:projectId/knowledge-base/documents")
