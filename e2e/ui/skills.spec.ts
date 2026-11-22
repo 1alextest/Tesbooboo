@@ -1,4 +1,4 @@
-import { expect, request as newRequest, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
+import { expect, request as newRequest, test, type APIRequestContext, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { env } from "../utils/env";
 import { exec, literal, scalar } from "../utils/psql";
@@ -18,6 +18,7 @@ test.describe("governed skills operator journey (UI)", () => {
   let ownerApi: APIRequestContext;
   let qaApi: APIRequestContext;
   const states = new Map<string, string>();
+  const openedContexts = new Set<BrowserContext>();
 
   test.beforeAll(async () => {
     tenant = await provisionRbacTenant("skills-ui");
@@ -33,6 +34,11 @@ test.describe("governed skills operator journey (UI)", () => {
     if (qaApi) await qaApi.dispose();
   });
 
+  test.afterEach(async () => {
+    // Each attempt owns its pages; old QA/owner pages must not pollute later failure artifacts.
+    for (const context of openedContexts) await context.close();
+  });
+
   test.beforeEach(() => {
     const reason = rbacSuiteSkipReason(tenant);
     test.skip(reason !== null, reason ?? "");
@@ -40,6 +46,8 @@ test.describe("governed skills operator journey (UI)", () => {
 
   async function open(browser: Browser, path: string, as: "owner" | "qa" = "owner"): Promise<Page> {
     const context = await browser.newContext({ storageState: states.get(as) });
+    openedContexts.add(context);
+    context.on("close", () => openedContexts.delete(context));
     const page = await context.newPage();
     await page.goto(`/projects/${tenant!.mainProjectId}${path}`);
     return page;
@@ -444,10 +452,21 @@ test.describe("governed skills operator journey (UI)", () => {
 
       const v2Doc = await updateDoc(doc, "RULE-V2: a newer submission replaced the reviewed content.");
       const v2 = await submitDoc(v2Doc);
+      // The typed refusal still identifies the exact replacement if library refresh fails.
+      await page.route(`**${base()}/skills`, (route) => route.fulfill({
+        status: 503, contentType: "application/json", body: JSON.stringify({ error: "Injected library refresh failure" })
+      }));
       await page.getByTestId("skill-review-approve").click();
       await expect(page.getByTestId("skill-review-superseded")).toBeVisible();
+      await expect(page.getByTestId("skill-library-unavailable")).toBeVisible();
+      await expect(page.getByTestId("skill-history-unavailable")).toBeVisible();
+      await expect(page.getByTestId("skill-readiness-requirement_revision")).toContainText("Unavailable");
       await page.getByTestId("skill-review-current").click();
       await expect(page.getByTestId("skill-review-content")).toContainText("RULE-V2");
+      await expect(page.getByTestId("skill-review-approve")).toBeDisabled();
+      await page.unroute(`**${base()}/skills`);
+      await page.getByTestId("skill-readiness").getByRole("button", { name: "Refresh" }).click();
+      await expect(page.getByTestId("skill-review-approve")).toBeEnabled();
       await page.getByTestId("skill-review-approve").click();
       await expect(page.getByText(new RegExp(`Approved .* version ${v2.versionNumber}`))).toBeVisible();
       const library = await (await ownerApi.get(`${base()}/skills`)).json();
@@ -488,6 +507,15 @@ test.describe("governed skills operator journey (UI)", () => {
       await context.selectOption({ label: labels.find((label) => label.includes("requirement_revision"))! });
       await page.getByTestId("skill-compare-target-run").click();
       await expect(page.locator('[data-testid="skill-diff"]')).toContainText(`v${a1.versionNumber}`);
+      await expect(page.getByTestId("skill-diff")).toContainText("Active version for requirements / functional / requirement_revision");
+      await assignDoc(doc.id, a2.id, "requirement_revision");
+      const refresh = page.getByTestId("skill-readiness").getByRole("button", { name: "Refresh" });
+      await refresh.click();
+      await expect(refresh).toBeEnabled();
+      await expect(page.getByTestId("skill-diff")).toHaveCount(0);
+      await expect(page.getByTestId("skill-review-assignments")).not.toContainText(`v${a1.versionNumber} active`);
+      await page.getByTestId("skill-compare-target-run").click();
+      await expect(page.getByTestId("skill-diff")).toContainText(`v${a2.versionNumber}`);
     } finally {
       await cleanupSkill(doc.id);
     }
@@ -583,6 +611,15 @@ test.describe("governed skills operator journey (UI)", () => {
       await expect(page.getByTestId("skill-review-action-error")).toContainText(/changed|submit/i);
       expect(scalar(`SELECT COUNT(*)::int FROM knowledge_document_versions WHERE document_id=${literal(doc.id)} AND snapshot_kind='approved';`)).toBe("0");
       expect(scalar(`SELECT COALESCE(reviewed_version_id::text,'') FROM knowledge_documents WHERE id=${literal(doc.id)};`)).toBe("");
+      const removed = await ownerApi.delete(`${base()}/knowledge-base/documents/${doc.id}`);
+      expect(removed.ok(), await removed.text()).toBe(true);
+      const missing = page.waitForResponse((result) => result.url().endsWith(`/skills/${doc.id}/approve`));
+      await page.getByTestId("skill-review-approve").click();
+      expect((await missing).status()).toBe(404);
+      await expect(page.getByTestId(`skill-${doc.id}`)).toHaveCount(0);
+      await expect(page.getByTestId("skill-review-action-error")).toContainText(/not found/i);
+      await page.getByRole("button", { name: "Dismiss review message" }).click();
+      await expect(page.getByTestId("skill-review-action-error")).toHaveCount(0);
     } finally {
       await page?.context().close();
       await cleanupSkill(doc.id);
@@ -594,6 +631,10 @@ test.describe("governed skills operator journey (UI)", () => {
     const doc = await createSkillDoc(`Unknown approval ${suffix}`, `UNKNOWN-${suffix}`, "RULE-UNKNOWN: reconcile the server receipt before retrying.");
     let page: Page | undefined;
     let requests = 0;
+    let release!: () => void;
+    let committed!: () => void;
+    const delivery = new Promise<void>((resolve) => { release = resolve; });
+    const receiptWritten = new Promise<void>((resolve) => { committed = resolve; });
     try {
       const submitted = await submitDoc(doc);
       page = await open(browser, "/settings/skills");
@@ -603,15 +644,22 @@ test.describe("governed skills operator journey (UI)", () => {
         requests++;
         const actual = await route.fetch();
         expect(actual.ok(), await actual.text()).toBe(true);
+        committed();
+        await delivery;
         await route.abort("failed");
       });
       await page.getByTestId("skill-review-approve").click();
+      await receiptWritten;
+      await expect(page.getByRole("button", { name: "Close review" })).toBeDisabled();
+      await expect(page.getByTestId(`skill-review-open-${doc.id}`)).toBeDisabled();
+      release();
       await expect(page.getByTestId("skill-review-action-error")).toContainText("Request outcome unconfirmed");
       await expect(page.getByTestId("skill-review-panel")).toContainText("Approved as v");
       await expect(page.getByTestId("skill-review-approve")).toHaveCount(0);
       expect(requests).toBe(1);
       expect(scalar(`SELECT COUNT(*)::int FROM knowledge_document_versions WHERE document_id=${literal(doc.id)} AND snapshot_kind='approved' AND snapshot_metadata->>'sourceVersionId'=${literal(submitted.id)};`)).toBe("1");
     } finally {
+      release();
       await page?.context().close();
       await cleanupSkill(doc.id);
     }
@@ -634,9 +682,25 @@ test.describe("governed skills operator journey (UI)", () => {
       await expect(page.getByTestId("skill-review-content")).toContainText("RULE-TEXT");
       await expect(page.getByTestId("skill-review-content")).toContainText("RULE-JSON-ONLY");
       await expect(page.getByTestId("skill-review-content")).toContainText("RULE-HTML-ONLY");
+      await expect(page.getByTestId("skill-review-content")).toContainText('<p>RULE-HTML-ONLY: inspect source safely.</p><script>window.skillReviewExecuted = true</script>');
+      await expect(page.getByTestId("skill-review-content").locator("p, script")).toHaveCount(0);
       await expect(page.getByTestId("skill-diff").locator('[data-diff="add"]').filter({ hasText: "RULE-JSON-ONLY" }).first()).toBeVisible();
       await expect(page.getByTestId("skill-diff").locator('[data-diff="add"]').filter({ hasText: "RULE-HTML-ONLY" }).first()).toBeVisible();
       expect(await page.evaluate(() => (window as unknown as Record<string, unknown>).skillReviewExecuted)).toBeUndefined();
+
+      // A stored marker-like string must remain distinguishable from an absent field.
+      const marker = await ownerApi.patch(`${base()}/knowledge-base/documents/${doc.id}`, { data: { contentText: "(not stored)" } });
+      expect(marker.ok(), await marker.text()).toBe(true);
+      await submitDoc(await marker.json());
+      const absent = await ownerApi.patch(`${base()}/knowledge-base/documents/${doc.id}`, { data: { contentText: null } });
+      expect(absent.ok(), await absent.text()).toBe(true);
+      await submitDoc(await absent.json());
+      const refresh = page.getByTestId("skill-readiness").getByRole("button", { name: "Refresh" });
+      await refresh.click();
+      await expect(refresh).toBeEnabled();
+      await page.getByTestId(`skill-review-open-${doc.id}`).click();
+      await expect(page.getByTestId("skill-diff").locator('[data-diff="remove"]').filter({ hasText: "Plain text (stored)" })).toBeVisible();
+      await expect(page.getByTestId("skill-diff").locator('[data-diff="add"]').filter({ hasText: "Plain text (not stored)" })).toBeVisible();
     } finally {
       await page?.context().close();
       await cleanupSkill(doc.id);

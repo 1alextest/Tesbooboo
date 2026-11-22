@@ -599,5 +599,36 @@ must settle before approving:
 - **Who may decide?** Owners/managers see approval; a QA reader can open and compare every authorized
   version but has no approval control.
 
-Acceptance (`ui/skills.spec.ts`) uses v1 assigned, v2 approved/unassigned and v3 submitted with a v2-only
-rule removed, plus first-submission, failed-load, newer-submission, multi-context and QA-read-only cases.
+Each submission and its approved receipt have different immutable IDs. The approved receipt links back
+through `sourceVersionId`; only that approved snapshot may be assigned. The page derives recorded approval
+from this lineage and keeps the historical submission readable without presenting it as still awaiting
+approval. A newer submission supersedes the older ID even when their content digests are equal; a retry of
+an older approval after that newer submission receives the same superseded refusal.
+
+The review, full-version view and comparison expose the saved title, plain text, JSON, inert HTML source
+and semantic/source metadata covered by the native content digest. Stored empty or marker-like strings
+remain distinguishable from absent fields. HTML is displayed as text and never executed. The snapshot
+digest is shown in full; it is not a claim that a client recomputed or cryptographically authenticated it.
+
+Review/history/comparison responses belong to the selected project, Skill and immutable version or pair.
+Replacing or closing a review invalidates older responses, including errors and loading completion.
+Comparison results retain their requested context label. Refreshing the library invalidates comparisons
+that could otherwise misleadingly remain labelled latest approved or active after their context changes.
+Detailed line comparison is bounded to 250,000 matrix cells, 2,000 total lines and 100,000 total characters;
+larger inputs use two complete, untruncated saved versions instead of an incomplete or unbounded diff.
+
+Approval outcomes survive library refresh and removal of the reviewed item from the current library.
+Changing or closing the review waits while an approval is pending, so its outcome cannot lose its subject.
+A lost write response remains explicitly unconfirmed; the UI reads the native receipt and does not retry
+the mutation automatically. Superseded recovery opens the exact current version ID returned by the server,
+even if the library refresh fails. Failed library/readiness/history reads are unavailable, not an empty or
+unassigned result; approval and assignment wait for a successful current read.
+
+Acceptance (`ui/skills.spec.ts`) retains the existing owner → agent stage → owner publish journey and uses
+three submissions with separate approved snapshots: the first approval assigned, the second unassigned,
+and the third submission removing a prior rule. It also covers first submission/QA access, content retry,
+superseded recovery after failed refresh, same-content newer submission, active-context changes, delayed
+review/comparison/history responses, known and uncertain approval outcomes, representation-only changes,
+and bounded long comparisons. Actual before/after outcomes and reached assertions belong to the native
+PR evidence; test source alone does not establish a pass. This does not implement the separate Skills
+redesign or ratify root/S0/quorum governance.
