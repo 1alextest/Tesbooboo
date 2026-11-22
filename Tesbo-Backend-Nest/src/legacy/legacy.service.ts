@@ -16340,7 +16340,8 @@ export class LegacyService implements OnModuleInit {
     if (!Number.isInteger(precedence) || precedence < -1000 || precedence > 1000) throw new BadRequestException({ error: "precedence must be an integer between -1000 and 1000" });
     const assignment = await this.db.transaction(async client => {
       await this.lockSkillAssignments(client, projectId);
-      await this.requireCurrentProjectAuthority(client, projectId, uid);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
       const doc = (await client.query("SELECT id,document_type,project_id,is_deleted FROM knowledge_documents WHERE id=$1 AND project_id=$2", [skillDocumentId, projectId])).rows[0];
       if (!doc || doc.is_deleted || doc.document_type !== "skill") throw new NotFoundException({ error: "Skill not found" });
       const version = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [versionId, skillDocumentId])).rows[0];
@@ -16378,7 +16379,8 @@ export class LegacyService implements OnModuleInit {
       await this.lockSkillAssignments(client, projectId);
       const current = (await client.query("SELECT * FROM skill_assignments WHERE id=$1 AND project_id=$2 FOR UPDATE", [assignmentId, projectId])).rows[0];
       if (!current) throw new NotFoundException({ error: "Skill assignment not found" });
-      await this.requireCurrentProjectAuthority(client, projectId, uid);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
       if (current.status === "inactive") return { assignment: toCamel(current), replayed: true };
       const updated = (await client.query(
         `UPDATE skill_assignments SET status='inactive', deactivated_by=$3, deactivated_at=now()
@@ -16387,6 +16389,76 @@ export class LegacyService implements OnModuleInit {
       await this.logProjectActivity(projectId, uid, "skill_assignment_deactivated", "skill_assignment", assignmentId, current.skill_version_id, {}, client);
       return { assignment: toCamel(updated), replayed: false };
     });
+  }
+
+  /** Human-readable Skills library: candidates, exact versions and assignment history. */
+  async listSkills(projectId: string, userId: string | null | undefined) {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    const docs = (await this.db.query(
+      `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
+        WHERE project_id=$1 AND document_type='skill' AND is_deleted=false ORDER BY title,id`, [projectId]
+    )).rows;
+    const documentIds = docs.map((doc: Body) => String(doc.id));
+    const profiles = documentIds.length ? (await this.db.query("SELECT * FROM skill_profiles WHERE project_id=$1 AND document_id=ANY($2::uuid[])", [projectId, documentIds])).rows : [];
+    const versions = documentIds.length ? (await this.db.query(
+      `SELECT id,document_id,version_number,snapshot_kind,snapshot_metadata,created_by,created_at
+         FROM knowledge_document_versions WHERE document_id=ANY($1::uuid[]) ORDER BY version_number DESC`, [documentIds]
+    )).rows : [];
+    const assignments = documentIds.length ? (await this.db.query(
+      `SELECT * FROM skill_assignments WHERE project_id=$1 AND skill_document_id=ANY($2::uuid[])
+        ORDER BY assigned_at DESC,id`, [projectId, documentIds]
+    )).rows : [];
+    const profileByDoc = new Map(profiles.map((profile: Body) => [String(profile.document_id), profile]));
+    const versionsByDoc = new Map<string, Body[]>();
+    for (const row of versions) {
+      const list = versionsByDoc.get(String(row.document_id)) || [];
+      list.push({
+        id: String(row.id), versionNumber: Number(row.version_number), kind: String(row.snapshot_kind),
+        createdAt: row.created_at, createdBy: row.created_by,
+        contentDigest: row.snapshot_metadata?.contentDigest ?? null,
+        authority: row.snapshot_metadata?.authority ?? null,
+        sourceVersionId: row.snapshot_metadata?.sourceVersionId ?? null
+      });
+      versionsByDoc.set(String(row.document_id), list);
+    }
+    const assignmentsByDoc = new Map<string, Body[]>();
+    for (const row of assignments) {
+      const list = assignmentsByDoc.get(String(row.skill_document_id)) || [];
+      list.push(toCamel(row));
+      assignmentsByDoc.set(String(row.skill_document_id), list);
+    }
+    return {
+      skills: docs.map((doc: Body) => {
+        const profile = profileByDoc.get(String(doc.id));
+        const history = versionsByDoc.get(String(doc.id)) || [];
+        return {
+          ...toCamel(doc),
+          skillKey: profile?.skill_key ?? null,
+          module: profile?.module ?? null,
+          subtype: profile?.subtype ?? null,
+          state: profile?.state ?? "draft",
+          approvedVersionId: doc.reviewed_version_id ? String(doc.reviewed_version_id) : null,
+          submittedVersionId: history.find((version: Body) => version.kind === "submitted")?.id ?? null,
+          versions: history,
+          assignments: assignmentsByDoc.get(String(doc.id)) || []
+        };
+      })
+    };
+  }
+
+  /** Full assignment ledger, including revoked/inactive generations. */
+  async listSkillAssignments(projectId: string, userId: string | null | undefined) {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    const rows = (await this.db.query(
+      `SELECT a.*, d.title AS skill_title, sp.skill_key, v.version_number,
+              v.snapshot_metadata->>'contentDigest' AS content_digest
+         FROM skill_assignments a
+         JOIN knowledge_documents d ON d.id=a.skill_document_id AND d.project_id=a.project_id
+         JOIN skill_profiles sp ON sp.document_id=a.skill_document_id
+         JOIN knowledge_document_versions v ON v.id=a.skill_version_id AND v.document_id=a.skill_document_id
+        WHERE a.project_id=$1 ORDER BY a.assigned_at DESC,a.id`, [projectId]
+    )).rows;
+    return { list: rows.map((row: Body) => toCamel(row)) };
   }
 
   /** Read-only effective resolution for the caller's existing project/context. */
