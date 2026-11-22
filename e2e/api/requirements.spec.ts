@@ -164,7 +164,8 @@ test("a bundle is unreachable from another project and mismatched link criteria 
     expect(stagedResponse.status()).toBe(201);
     const staged = await stagedResponse.json();
     tasks.push(staged.id);
-    const created = await request.post(`/api/projects`, { data: { name: `E2E requirement scope ${Date.now()}`, key: `ERS${String(Date.now()).slice(-6)}` } });
+    // Project names are capped at 30 characters; the isolation check needs only a distinct project.
+    const created = await request.post(`/api/projects`, { data: { name: `E2E scope ${Date.now()}`, key: `ERS${String(Date.now()).slice(-6)}` } });
     expect(created.ok(), await created.text()).toBe(true);
     otherProjectId = (await created.json()).id;
     const foreign = await request.get(`/api/projects/${otherProjectId}/requirements/proposals/${staged.id}`);
