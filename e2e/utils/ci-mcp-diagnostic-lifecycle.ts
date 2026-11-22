@@ -47,7 +47,7 @@ export async function verifyMcpDiagnosticLifecycle(source: Page, api: string, we
     expect(discovery.ok(), await discovery.text()).toBe(true);
     const catalog = await discovery.json();
     expect(catalog.error).toBeUndefined();
-    expect(catalog.result.tools).toHaveLength(24);
+    expect(catalog.result.tools).toHaveLength(26);
     expect(catalog.result.tools.map((tool: { name: string }) => tool.name)).toContain("list_projects");
     expect(catalog.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("create_testcase");
     await page.clock.install();

@@ -411,7 +411,9 @@ export async function verifyRepositoryPartialEdits(page: Page, api: string, web:
           const before = await projectState();
           for (const token of [read, write]) {
             requests.length = 0;
-            const advertisedCount = token.id === read.id ? 24 : 49;
+            // Proposal preview adds two read tools and one write tool to the advertised catalog:
+            // a read-scoped token sees 26 of 52, a write-scoped token sees all 52.
+            const advertisedCount = token.id === read.id ? 26 : 52;
             await checkConnection(token.secret, new RegExp(`Read permission and project identity verified; ${advertisedCount} MCP tools advertised`));
             expect(await Promise.all(requests)).toEqual([
               { method: "tools/list", params: undefined, cookie: undefined },
