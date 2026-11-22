@@ -8340,7 +8340,7 @@ test.describe("zyra — product behavior and real tracing export in disposable C
   test("ZYR-OBS-07 provider failure stays private in replies, progress, persistence and error observations", async () => {
     await allocate(tenantA, ownerA, aiA);
     const sessionId = await newSession(tenantA, ownerA);
-    const privateMarkers = ["sk-e2e-observation-provider-error-12345", "synthetic-private-request-context", "synthetic-private-url-token", "synthetic-private-embedding-context", "synthetic-private-transcription-context"];
+    const privateMarkers = ["sk-e2e-observation-provider-error-12345", "synthetic-private-request-context", "synthetic-private-url-token", "synthetic-private-embedding-context", "synthetic-private-transcription-context", "synthetic-private-malformed-vector-context"];
     const safeReason = "AI provider is temporarily unavailable (HTTP 500). Try again shortly.";
     // The chat-only allocation deliberately cannot embed. Add a native workspace
     // OpenAI key so the real RAG resolver must execute its workspace fallback tier.
@@ -8390,7 +8390,7 @@ test.describe("zyra — product behavior and real tracing export in disposable C
         data: { projectId: tenantA.mainProjectId, workspaceAiKeyId: embeddingKeyId }, failOnStatusCode: false,
       });
       expect(allocated.status(), await allocated.text()).toBe(201);
-      const folder = await ownerA.post(`${kbEndpoint}/folders`, { data: { name: `E2E observation audio ${randomUUID()}` }, failOnStatusCode: false });
+      const folder = await ownerA.post(`${kbEndpoint}/folders`, { data: { name: `E2E audio ${randomUUID()}` }, failOnStatusCode: false });
       expect(folder.status(), await folder.text()).toBe(201);
       folderId = (await folder.json()).id as string;
       aiA.failNextWith(500, privateMarkers[4], "transcription");
@@ -8442,6 +8442,55 @@ test.describe("zyra — product behavior and real tracing export in disposable C
         const removed = await ownerA.delete(`${kbEndpoint}/folders/${folderId}`, { failOnStatusCode: false });
         expect(removed.status(), await removed.text()).toBe(200);
       }
+    }
+
+    // A second isolated turn keeps the HTTP-error proof above and also exercises a
+    // valid JSON response whose vector cells violate the provider's numeric contract.
+    const malformedSessionId = await newSession(tenantA, ownerA);
+    const malformedPrompt = "Explain the malformed embedding observation fixture.";
+    const malformedReason = "AI provider returned invalid embedding data. Try again or check the embedding model.";
+    const malformedChatReason = "OpenAI is temporarily unavailable (HTTP 500). Try again shortly.";
+    aiA.queueEmbeddingReply({ data: [{ index: 0, embedding: [privateMarkers[5]] }] });
+    aiA.failNextWith(500, privateMarkers[0]);
+    aiA.delayNextReplyMs(1_500);
+    const malformedTurnId = randomUUID();
+    const malformedPending = send(tenantA, ownerA, malformedSessionId, malformedPrompt, malformedTurnId);
+    await expect.poll(() => aiA.requests.length).toBe(2);
+    const malformedStream = await ownerA.get(endpoint(tenantA, `/chat/sessions/${malformedSessionId}/turns/${malformedTurnId}/events`), { failOnStatusCode: false });
+    expect(malformedStream.status(), await malformedStream.text()).toBe(200);
+    const malformedProgress = parseSseEvents(await malformedStream.text()) as Array<Record<string, unknown>>;
+    const malformedAnswer = await malformedPending;
+    expect(aiA.embeddingRequests).toHaveLength(2);
+    expect(aiA.embeddingRequests.filter((request) => request.input.includes(malformedPrompt)), "the malformed vector must reach the actual second query embedding").toHaveLength(1);
+    expect(aiA.requests.filter((request) => JSON.stringify(request.messages).includes(malformedPrompt))).toHaveLength(1);
+    expect(malformedAnswer.assistant.content).toContain(malformedChatReason);
+    expect(malformedAnswer.assistant.content).toContain("no test cases were generated or changed");
+    expect(malformedAnswer.user).toMatchObject({ trace: { steps: expect.arrayContaining([
+      expect.objectContaining({ stage: "routing", status: "failed", meta: expect.objectContaining({ reason: malformedChatReason }) }),
+    ]) } });
+    const malformedFailureIndex = malformedProgress.findIndex((event) => event.kind === "update" && event.stage === "*");
+    expect(malformedFailureIndex).toBeGreaterThan(-1);
+    expect(malformedProgress[malformedFailureIndex]).toMatchObject({ kind: "update", stage: "*", meta: { status: "failed", reason: malformedChatReason } });
+    expect(malformedProgress.slice(0, malformedFailureIndex).filter((event) => event.kind === "stage").at(-1)).toMatchObject({ stage: "routing" });
+    const malformedCompletionIndex = malformedProgress.findIndex((event) => event.kind === "complete");
+    expect(malformedCompletionIndex).toBeGreaterThan(malformedFailureIndex);
+    expect(malformedCompletionIndex).toBe(malformedProgress.length - 1);
+    const malformedActivity = JSON.parse(scalar(`SELECT COALESCE(json_agg(row_to_json(entry)), '[]'::json)::text FROM
+      (SELECT action, diff FROM audit_logs WHERE project_id = ${literal(tenantA.mainProjectId)} AND entity_id = ${literal(malformedSessionId)}) entry;`) || "[]");
+    expect(malformedActivity).toContainEqual({ action: "zyra_chat_ai_failed", diff: { message: malformedChatReason, stage: "routing" } });
+    const malformedSurfaces = JSON.stringify({ response: malformedAnswer.responseBody, messages: await messages(tenantA, ownerA, malformedSessionId), activity: malformedActivity, progress: malformedProgress });
+    for (const marker of privateMarkers) expect(malformedSurfaces).not.toContain(marker);
+    productOutcomes.push({ malformedEmbeddingRequestCount: 1 });
+    const malformedSpans = await assertObserved(malformedAnswer, tenantA, true);
+    if (expectedMode === "enabled") {
+      const embeddings = malformedSpans.filter((span) => span.name === "kb-query-embedding");
+      expect(embeddings, "the malformed vector must be an error in its own turn's embedding observation").toHaveLength(1);
+      const attributes = spanAttributes(embeddings[0]);
+      expect(attributes["langfuse.observation.level"]).toBe("ERROR");
+      expect(JSON.parse(String(attributes["langfuse.observation.output"]))).toEqual({ error: malformedReason });
+      expect(JSON.parse(String(attributes["langfuse.observation.input"]))).toMatchObject({ inputCount: 1, sample: malformedPrompt });
+      const wire = capture.exports.map((item) => item.raw).join("\n");
+      for (const marker of privateMarkers) expect(wire.includes(marker), `private provider marker reached OTLP: ${marker}`).toBe(false);
     }
   });
 

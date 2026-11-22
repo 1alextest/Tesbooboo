@@ -64,6 +64,8 @@ export interface FakeAiServer {
    * for a test that wants to exercise the "model returned prose instead of JSON" fallback.
    */
   queueReply(content: Record<string, unknown> | string): void;
+  /** Queue one HTTP 200 JSON embedding response, separate from chat replies and endpoint failures. */
+  queueEmbeddingReply(content: Record<string, unknown>): void;
   /** Set to a status code to make the NEXT call fail (consumed once), exercising the error path. */
   failNextWith(status: number, message?: string, endpoint?: "chat" | "embedding" | "transcription"): void;
   /**
@@ -105,6 +107,7 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
   const queue: string[] = [];
   const requests: FakeAiRequest[] = [];
   const embeddingRequests: FakeAiEmbeddingRequest[] = [];
+  const embeddingReplies: string[] = [];
   const transcriptionRequests: Array<{ contentType: string; body: string }> = [];
   const endpointFailures = new Map<string, { status: number; message: string }>();
   let failStatus: number | null = null;
@@ -139,8 +142,15 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
         }
         const input = Array.isArray(parsed.input) ? parsed.input.map(String) : parsed.input === undefined ? [] : [String(parsed.input)];
         embeddingRequests.push({ model: String(parsed.model || ""), input });
-        const failure = endpointFailures.get("embedding") ?? { status: 503, message: "fake-ai-server does not serve embeddings" };
+        const scriptedFailure = endpointFailures.get("embedding");
         endpointFailures.delete("embedding");
+        // Like chat, a one-shot failure takes precedence without consuming a queued reply.
+        if (!scriptedFailure && embeddingReplies.length) {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(embeddingReplies.shift());
+          return;
+        }
+        const failure = scriptedFailure ?? { status: 503, message: "fake-ai-server does not serve embeddings" };
         res.writeHead(failure.status, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { message: failure.message } }));
         return;
@@ -231,6 +241,9 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
     queueReply(content) {
       queue.push(typeof content === "string" ? content : JSON.stringify(content));
     },
+    queueEmbeddingReply(content) {
+      embeddingReplies.push(JSON.stringify(content));
+    },
     failNextWith(status, message, endpoint = "chat") {
       if (endpoint !== "chat") {
         endpointFailures.set(endpoint, { status, message: message || "stubbed provider failure" });
@@ -252,6 +265,7 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
       queue.length = 0;
       requests.length = 0;
       embeddingRequests.length = 0;
+      embeddingReplies.length = 0;
       transcriptionRequests.length = 0;
       endpointFailures.clear();
       failStatus = null;

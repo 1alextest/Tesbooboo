@@ -170,6 +170,19 @@ export async function embedTexts(allocation: EmbeddingKeyAllocation, inputs: str
     const rawMessage = typeof errBody.error === "string" ? errBody.error : errBody.error?.message || String(res.status);
     throw new Error(describeAiProviderFailure(res.status, rawMessage));
   }
-  const data = await readAiProviderJson<{ data: Array<{ embedding: number[]; index: number }> }>(res);
-  return data.data.sort((a, b) => a.index - b.index).map((row) => row.embedding);
+  const data = await readAiProviderJson<{ data?: unknown }>(res);
+  const rows = data?.data;
+  // Parsed JSON is still untrusted. Validate before a caller records success or
+  // serializes a vector into a database parameter; never coerce provider cells.
+  // Width checks remain with the existing storage owners and their skip policy.
+  if (!Array.isArray(rows) || rows.length !== inputs.length || !rows.every((row: unknown): row is { index: number; embedding: number[] } => {
+    if (!row || typeof row !== "object") return false;
+    const value = row as Record<string, unknown>;
+    return typeof value.index === "number" && Number.isInteger(value.index) && value.index >= 0 && value.index < inputs.length &&
+      Array.isArray(value.embedding) && value.embedding.length > 0 &&
+      value.embedding.every((cell: unknown) => typeof cell === "number" && Number.isFinite(cell));
+  }) || new Set(rows.map((row) => row.index)).size !== rows.length) {
+    throw new Error("AI provider returned invalid embedding data. Try again or check the embedding model.");
+  }
+  return rows.sort((a, b) => a.index - b.index).map((row) => row.embedding);
 }

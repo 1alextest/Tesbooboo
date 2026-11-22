@@ -102,6 +102,29 @@ describe("RagRetrievalService.retrieveWithDiagnostics", () => {
     expect(tracedEmbeddingCallMock).toHaveBeenCalledWith(expect.objectContaining({ name: "kb-query-embedding", traceSeed: "turn-1" }), expect.any(Function));
   });
 
+  it("rejects malformed provider vectors before either ANN consumer issues a vector query", async () => {
+    const privateDetail = "private-vector-context-review-198";
+    const actual = jest.requireActual<typeof import("./rag-ai-allocation")>("./rag-ai-allocation");
+    embedTextsMock.mockImplementation(actual.embedTexts);
+    jest.spyOn(global, "fetch").mockImplementation(async () => new Response(JSON.stringify({ data: [{ index: 0, embedding: [privateDetail] }] })));
+    const warning = jest.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
+    const db = makeDb([]);
+    const svc = new RagRetrievalService(db);
+    const knowledge = await svc.retrieveWithDiagnostics("project-1", "synthetic login request", { traceSeed: "turn-1" });
+    const testcases = await svc.findSimilarTestcases("project-1", "synthetic login request", { traceSeed: "turn-2" });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(knowledge).toMatchObject({ items: [], semanticSearchRan: false, topScore: null, confidence: "none" });
+    expect(testcases).toMatchObject({ matches: [], semanticSearchRan: false });
+    expect(knowledge.reason).toBe("Using the project's openai key for embeddings.");
+    expect(testcases.reason).toBe(knowledge.reason);
+    expect((db.query as jest.Mock).mock.calls.some(([sql]) => String(sql).includes("$2::vector"))).toBe(false);
+    expect(JSON.stringify({ knowledge, testcases, queries: (db.query as jest.Mock).mock.calls, warnings: warning.mock.calls })).not.toContain(privateDetail);
+    expect(warning).toHaveBeenCalledTimes(2);
+    for (const [message] of warning.mock.calls) expect(message).toContain("AI provider returned invalid embedding data.");
+    expect(tracedEmbeddingCallMock).toHaveBeenCalledWith(expect.objectContaining({ name: "kb-query-embedding", traceSeed: "turn-1" }), expect.any(Function));
+    expect(tracedEmbeddingCallMock).toHaveBeenCalledWith(expect.objectContaining({ name: "testcase-query-embedding", traceSeed: "turn-2" }), expect.any(Function));
+  });
+
   function annRow(id: string, score: number): AnnRow {
     return { source_type: "document", source_id: id, heading_path: null, content: `content for ${id}`, title: `Doc ${id}`, cosine_similarity: score };
   }

@@ -54,7 +54,11 @@ export async function withAiProviderIo<T>(operation: () => Promise<T>, label = "
 
 export async function readAiProviderJson<T extends object>(response: Response, label = "AI provider"): Promise<T> {
   try {
-    return await withAiProviderIo(() => response.json() as Promise<T>, label);
+    const body = await withAiProviderIo(() => response.json() as Promise<T>, label);
+    // An error body may be valid JSON without an error envelope. Keep the HTTP
+    // status authoritative; successful response shapes remain the caller's job.
+    if (!response.ok && (body === null || typeof body !== "object")) return {} as T;
+    return body;
   } catch (error) {
     // Failed endpoints may return HTML/empty bodies; retain their HTTP status.
     // A successful but unreadable response must fail, and timeouts stay resumable.

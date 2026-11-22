@@ -77,6 +77,33 @@ function makeJob<T>(name: string, data: T): Job<T> {
   return { name, data } as Job<T>;
 }
 
+describe("RagEmbeddingProcessor malformed provider vectors", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it.each(["knowledge", "testcase"] as const)("rejects a malformed %s embedding before vector writes and leaves retry policy to the job owner", async (kind) => {
+    resolveEmbeddingAllocationMock.mockReset();
+    resolveEmbeddingAllocationMock.mockResolvedValue({ allocation: FAKE_ALLOCATION, reason: "ok" });
+    embedTextsMock.mockReset();
+    embedTextsMock.mockImplementation(jest.requireActual<typeof import("./rag-ai-allocation")>("./rag-ai-allocation").embedTexts);
+    tracedEmbeddingCallMock.mockReset();
+    tracedEmbeddingCallMock.mockImplementation((_ctx, fn) => fn());
+    const cells: unknown[] = vector();
+    cells[0] = "private-vector-context-review-198";
+    jest.spyOn(global, "fetch").mockResolvedValue(new Response(JSON.stringify({ data: [{ index: 0, embedding: cells }] })));
+    const db = makeDb({ source: kind === "knowledge"
+      ? { id: "doc-1", organization_id: "org-1", content: "Enough content for one knowledge chunk to be embedded.", embedding_content_hash: null }
+      : { id: "tc-1", title: "Login works", description: "desc", steps: [], embedding_content_hash: null } });
+    const processor = new RagEmbeddingProcessor(db, new RagChunkingService());
+    const job = kind === "knowledge"
+      ? makeJob<EmbeddingJobPayload>("embed-source", { organizationId: "org-1", projectId: "project-1", sourceType: "document", sourceId: "doc-1", reason: "created" })
+      : makeJob<TestcaseEmbeddingJobPayload>(RAG_TESTCASE_EMBEDDING_JOB_NAME, { projectId: "project-1", testcaseId: "tc-1", reason: "created" });
+    await expect(processor.process(job)).rejects.toThrow("AI provider returned invalid embedding data.");
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect((db.query as jest.Mock).mock.calls.some(([sql]) => /INSERT INTO|embedding_status = 'ready'/.test(String(sql)))).toBe(false);
+  });
+});
+
 describe("RagEmbeddingProcessor.process — knowledge source (document/file)", () => {
   let chunking: RagChunkingService;
 
