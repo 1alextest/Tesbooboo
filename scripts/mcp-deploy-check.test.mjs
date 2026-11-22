@@ -45,7 +45,9 @@ function validTools(preview = false) {
         { type: "object", required: ["opType", "draft"], properties: { opType: { const: "create" }, draft: candidate() } },
         { type: "object", required: ["opType", "testcaseId", "expectedRevision", "fields"], properties: { opType: { enum: ["update", "archive"] }, testcaseId: text, expectedRevision: text, fields: candidate() } },
       ] } }
-    } } }, tool("list_testcase_proposals"), tool("get_testcase_proposal_task", { taskId: text }));
+    } } }, tool("list_testcase_proposals"), tool("get_testcase_proposal_task", { taskId: text }),
+      tool("stage_requirement_change_bundle", { requestKey: text, operations: { type: "array" } }),
+      tool("get_requirement_proposal_task", { taskId: text }), tool("list_requirement_proposals"));
   }
   return tools;
 }

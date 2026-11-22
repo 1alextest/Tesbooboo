@@ -8,13 +8,14 @@ import { ProjectLookupService } from "../request-cache/project-lookup.service";
 import { RequestCacheService } from "../request-cache/request-cache.service";
 import type { AppConfigService } from "../config/app-config.service";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
+import { KNOWLEDGE_DOCUMENT_REVISION_SQL } from "./knowledge-document-revision";
 
 const url=process.env.DATABASE_URL || "";
 const human={kind:"human_session" as const};
 type Body=Record<string,any>;
 
 (/\/tesbo_ci(?:\?|$)/.test(url) ? describe : describe.skip)("native testcase proposal review — migrated PostgreSQL",()=>{
-  let admin:Client,pool:Pool,project:string,user:string,token:string,foreignProject:string;
+  let admin:Client,pool:Pool,project:string,user:string,token:string,foreignProject:string,org:string;
   const stamp=randomUUID(),applicationName=`proposal-review-${stamp}`;
   const previousPreview=process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
   beforeAll(async()=>{
@@ -22,7 +23,7 @@ type Body=Record<string,any>;
     admin=new Client({connectionString:url});await admin.connect();
     pool=new Pool({connectionString:url,max:6,application_name:applicationName});
     user=(await admin.query("INSERT INTO users(email,name) VALUES ($1,'Proposal review QA') RETURNING id",[`proposal-${stamp}@tesbo.invalid`])).rows[0].id;
-    const org=(await admin.query("INSERT INTO organizations(name,slug) VALUES ('Proposal review QA',$1) RETURNING id",[`proposal-${stamp}`])).rows[0].id;
+    org=(await admin.query("INSERT INTO organizations(name,slug) VALUES ('Proposal review QA',$1) RETURNING id",[`proposal-${stamp}`])).rows[0].id;
     project=(await admin.query("INSERT INTO projects(organization_id,key,name) VALUES ($1,'PVR','Proposal review QA') RETURNING id",[org])).rows[0].id;
     foreignProject=(await admin.query("INSERT INTO projects(organization_id,key,name) VALUES ($1,'PVF','Unrelated proposal project') RETURNING id",[org])).rows[0].id;
     await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'owner')",[org,user]);
@@ -218,4 +219,137 @@ type Body=Record<string,any>;
       expect(await attempt).toMatchObject({status:409});expect((await nativeCases()).rows).toEqual(before);
     }finally{await blocker.query("ROLLBACK");await attempt;await blocker.end();}
   },15000);
+
+  /*
+   * Work Package A Slice 1 — requirement change bundles are staging-only. These tests prove the
+   * reviewed payload is the single authoritative JSON, that retries cannot change it, that the
+   * Skills gate refuses publication with zero native writes, and that rejection/withdrawal and
+   * project/lineage checks work without inventing official records.
+   */
+  describe("requirement change bundle staging",()=>{
+    const requirementDoc=async(title="Base requirement",extra:Body={})=>{
+      const folder=(await admin.query("SELECT id FROM knowledge_folders WHERE project_id=$1 LIMIT 1",[project])).rows[0]?.id
+        || (await admin.query("INSERT INTO knowledge_folders(organization_id,project_id,name,is_root) SELECT organization_id,id,'Knowledge base',true FROM projects WHERE id=$1 RETURNING id",[project])).rows[0].id;
+      const cols=Object.keys(extra), vals=Object.values(extra).map((value)=>JSON.stringify(value));
+      const base=(await admin.query(
+        `INSERT INTO knowledge_documents(organization_id,project_id,folder_id,title,content_json,content_html,content_text,document_type,status,created_by,updated_by)
+         SELECT organization_id,id,$4,$2,'{}'::jsonb,'<p>body</p>','body','requirement_note','draft',$3,$3 FROM projects WHERE id=$1 RETURNING id`,
+        [project,`${title} ${randomUUID()}`,user,folder])).rows[0].id;
+      if(cols.length) await admin.query(`UPDATE knowledge_documents SET ${cols.map((col,i)=>`${col}=$${i+2}`).join(",")} WHERE id=$1`,[base,...vals]);
+      return base as string;
+    };
+    const revision=async(id:string)=>String((await admin.query(`SELECT ${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS edit_revision FROM knowledge_documents WHERE id=$1`,[id])).rows[0].edit_revision);
+    const ops=(overrides:Body={})=>{
+      const requirementOperationId=randomUUID(),testcaseOperationId=randomUUID();
+      const criteria=overrides.criteria||[{key:"AC-1",text:"The first obligation"},{key:"AC-2",text:"The second obligation"}];
+      return [
+        {opType:"requirement_revision",operationId:requirementOperationId,
+          ...(overrides.documentId?{documentId:overrides.documentId}:{}),...(overrides.expectedRevision?{expectedRevision:overrides.expectedRevision}:{}),
+          title:overrides.title||`Native requirement ${randomUUID()}`,description:"Requirement description",criteria},
+        {opType:"testcase_create",operationId:testcaseOperationId,draft:{title:`Bundle case ${randomUUID()}`,description:"Candidate case"}},
+        {opType:"requirement_case_link",operationId:randomUUID(),requirementOperationId,testcaseOperationId,
+          criterionKeys:overrides.criterionKeys||[criteria[0].key]}
+      ];
+    };
+    const stageBundle=(operations:Body[],key=randomUUID(),principal:Body={kind:"api_token",tokenId:token,transport:"rest"})=>
+      service().stageRequirementChangeBundle(project,user,{requestKey:key,operations},principal as never);
+    const docCounts=async()=>({
+      documents:(await admin.query("SELECT id FROM knowledge_documents WHERE project_id=$1 ORDER BY id",[project])).rows,
+      versions:(await admin.query("SELECT v.id FROM knowledge_document_versions v JOIN knowledge_documents d ON d.id=v.document_id WHERE d.project_id=$1 ORDER BY v.id",[project])).rows,
+      cases:(await admin.query("SELECT id FROM testcases WHERE project_id=$1 ORDER BY id",[project])).rows,
+      approvals:(await admin.query("SELECT r.id FROM testcase_approval_receipts r JOIN testcases t ON t.id=r.testcase_id WHERE t.project_id=$1 ORDER BY r.id",[project])).rows
+    });
+
+    it("stages one inert, idempotent bundle whose reviewed revision cannot drift",async()=>{
+      const before=await docCounts();
+      const key=randomUUID(),operations=ops();
+      const first=await stageBundle(operations,key);
+      expect(first.requirementBundle).toHaveLength(3);
+      expect(first.drafts).toEqual([]);
+      expect(first.skillContext).toMatchObject({status:"unavailable"});
+      expect(first.proposalRevision).toMatch(/^[a-f0-9]{64}$/);
+      expect(first.taskStatus).toBe("in_review");
+      expect((first.proposalSnapshot as Body).operations).toHaveLength(3);
+      expect(await docCounts()).toEqual(before);
+      const retried=await stageBundle(operations,key);
+      expect(retried.id).toBe(first.id);
+      expect(retried.proposalRevision).toBe(first.proposalRevision);
+      await expect(stageBundle(ops(),key)).rejects.toMatchObject({status:409});
+      expect((await read(first.id)).proposalRevision).toBe(first.proposalRevision);
+      expect(await docCounts()).toEqual(before);
+    });
+
+    it("binds an existing requirement document to its exact revision and preserves external ownership",async()=>{
+      const documentId=await requirementDoc("Revision base");
+      const editRevision=await revision(documentId);
+      const before=await docCounts();
+      await expect(stageBundle(ops({documentId,expectedRevision:"0".repeat(64)}))).rejects.toMatchObject({status:409});
+      expect(await docCounts()).toEqual(before);
+      const staged=await stageBundle(ops({documentId,expectedRevision:editRevision}));
+      expect(staged.requirementBundle?.find((entry:Body)=>entry.opType==="requirement_revision")).toMatchObject({documentId,expectedRevision:editRevision});
+      const mirror=await requirementDoc("Provider mirror",{source_provider:"jira",source_external_id:`mirror-${randomUUID()}`,source_role:"mirror",is_read_only:true});
+      await expect(stageBundle(ops({documentId:mirror,expectedRevision:await revision(mirror)}))).rejects.toMatchObject({status:409});
+      await expect(stageBundle(ops({documentId:randomUUID(),expectedRevision:"a".repeat(64)}))).rejects.toMatchObject({status:404});
+    });
+
+    it("refuses malformed bundles without writing a task",async()=>{
+      const before=(await tasks()).rows;
+      const operations=ops();
+      await expect(stageBundle([operations[0]] as Body[])).resolves.toMatchObject({taskStatus:"in_review"}); // revision-only is allowed
+      const linkOnly=operations[2] as Body;
+      await expect(stageBundle([operations[0],linkOnly])).rejects.toMatchObject({status:400});
+      await expect(stageBundle(ops({criterionKeys:["AC-9"]}))).rejects.toMatchObject({status:400});
+      const duplicated=[...ops(),{...operations[0]}];
+      await expect(stageBundle(duplicated)).rejects.toMatchObject({status:400});
+      expect((await tasks()).rows.filter((row:Body)=>!before.some((old:Body)=>old.id===row.id))).toHaveLength(1);
+    });
+
+    it("blocks publication before any write and freezes the bundle against draft edits",async()=>{
+      const staged=await stageBundle(ops());
+      const before=await docCounts(),taskBefore=(await tasks()).rows.length;
+      await expect(save(staged,[0])).rejects.toMatchObject({status:409,response:{code:"SKILL_CONTEXT_UNAVAILABLE"}});
+      await expect(service().zyraDeleteDraft(project,user,staged.id,0,human)).rejects.toMatchObject({status:409});
+      await expect(service().zyraEditDraft(project,user,staged.id,0,{title:"Tampered"},human)).rejects.toMatchObject({status:409});
+      expect(await docCounts()).toEqual(before);
+      expect((await tasks()).rows).toHaveLength(taskBefore);
+      const current=await read(staged.id);
+      expect(current.taskStatus).toBe("in_review");
+      expect(current.proposalRevision).toBe(staged.proposalRevision);
+      expect((await admin.query("SELECT save_events FROM ai_generation_requests WHERE id=$1",[staged.id])).rows[0].save_events).toEqual([]);
+      expect((await docCounts()).approvals).toEqual(before.approvals);
+    });
+
+    it("authorizes rejection and withdrawal without publishing",async()=>{
+      const reviewer=(await admin.query("INSERT INTO users(email,name) VALUES ($1,'Bundle reviewer') RETURNING id",[`bundle-reviewer-${randomUUID()}@tesbo.invalid`])).rows[0].id;
+      // Project access resolves through the caller's active workspace, so a reviewer who only has a
+      // project_members row would 404 before the role guard ran and prove the wrong refusal.
+      await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[org,reviewer]);
+      await admin.query("UPDATE users SET active_organization_id=$2 WHERE id=$1",[reviewer,org]);
+      await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[project,reviewer]);
+      const rejected=await stageBundle(ops());
+      await expect(service().rejectRequirementProposal(project,reviewer,rejected.id,{},human)).rejects.toMatchObject({status:403});
+      const closed=await service().rejectRequirementProposal(project,user,rejected.id,{reason:"Not acceptable yet"},human);
+      expect(closed.taskStatus).toBe("done");
+      expect(closed.activities.some((entry:Body)=>entry.title==="Rejected requirement change bundle")).toBe(true);
+      expect(await service().rejectRequirementProposal(project,user,rejected.id,{},human)).toMatchObject({taskStatus:"done"});
+      const withdrawn=await stageBundle(ops());
+      await expect(service().withdrawRequirementProposal(project,reviewer,withdrawn.id,{},human)).rejects.toMatchObject({status:403});
+      await expect(service().withdrawRequirementProposal(project,user,withdrawn.id,{}, {kind:"api_token"} as never)).rejects.toMatchObject({status:403});
+      const own=await service().withdrawRequirementProposal(project,user,withdrawn.id,{reason:"Superseded"},human);
+      expect(own.taskStatus).toBe("done");
+      await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,reviewer]);
+    });
+
+    it("isolates bundles by project and rejects mismatched link references",async()=>{
+      const foreignUser=(await admin.query("INSERT INTO users(email,name) VALUES ($1,'Foreign bundle user') RETURNING id",[`foreign-bundle-${randomUUID()}@tesbo.invalid`])).rows[0].id;
+      await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'owner')",[foreignProject,foreignUser]);
+      await expect(service().stageRequirementChangeBundle(foreignProject,user,{requestKey:randomUUID(),operations:ops()},{kind:"human_session"} as never)).rejects.toMatchObject({status:404});
+      const staged=await stageBundle(ops());
+      await expect(service().requirementProposalTask(foreignProject,foreignUser,staged.id)).rejects.toMatchObject({status:404});
+      const broken=ops();
+      (broken[2] as Body).testcaseOperationId=randomUUID();
+      await expect(stageBundle(broken)).rejects.toMatchObject({status:400});
+      await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[foreignProject,foreignUser]);
+    });
+  });
 });

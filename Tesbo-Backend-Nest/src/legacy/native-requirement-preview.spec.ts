@@ -1,9 +1,116 @@
-import { BadRequestException, ForbiddenException, ServiceUnavailableException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, ServiceUnavailableException, type INestApplication } from "@nestjs/common";
+import { APP_GUARD } from "@nestjs/core";
+import { Test } from "@nestjs/testing";
+import type { AddressInfo } from "node:net";
+import { ApiTokenRestGuard } from "../auth/api-token-rest.guard";
+import type { AuthenticatedRequest } from "../common/request.types";
+import { CustomFieldsService } from "../custom-fields/custom-fields.service";
+import { PlanLimitsService } from "../plan-limits/plan-limits.service";
+import { ProjectWriteLockGuard } from "../plan-limits/project-write-lock.guard";
+import { ProjectLookupService } from "../request-cache/project-lookup.service";
+import { WelcomeEmailService } from "../welcome-email/welcome-email.service";
+import { LegacyService } from "./legacy.service";
+import { ZyraProgressService } from "./zyra-progress.service";
 import { LegacyController } from "./legacy.controller";
 import { NativeRequirementPreviewError, previewNativeRequirement } from "./native-requirement-preview";
 
 const USER = "00000000-0000-4000-8000-000000000001";
 const PROJECT = "00000000-0000-4000-8000-000000000002";
+
+describe("native requirement preview through both global HTTP guards", () => {
+  let app: INestApplication;
+  let origin: string;
+  const oldFlag = process.env.TESBO_REQUIREMENT_PREVIEW_ENABLED;
+  const projectLookup = { getProjectBasics: jest.fn().mockResolvedValue({ organizationId: "org", archivedAt: null }) };
+  const billing = { assertProjectWritable: jest.fn().mockRejectedValue(new ForbiddenException({ error: "billing lock must not be reached by preview" })) };
+  const legacy = { requireProjectAccess: jest.fn(async (userId: string) => {
+    if (userId !== USER) throw new ForbiddenException({ error: "Project membership required" });
+    return { id: PROJECT };
+  }) };
+  const candidate = { documentType: "requirement_note", title: "Preview",
+    contentJson: { schemaVersion: "tesbo-requirement/1", description: "Read-only candidate",
+      criteria: [{ key: "AC-1", text: "Refuse unauthorized changes", normative: true }] } };
+
+  beforeAll(async () => {
+    const module = await Test.createTestingModule({
+      controllers: [LegacyController],
+      providers: [
+        { provide: LegacyService, useValue: legacy },
+        { provide: CustomFieldsService, useValue: {} },
+        { provide: ZyraProgressService, useValue: {} },
+        { provide: WelcomeEmailService, useValue: {} },
+        { provide: APP_GUARD, useValue: new ApiTokenRestGuard(legacy as unknown as LegacyService) },
+        { provide: APP_GUARD, useValue: new ProjectWriteLockGuard(
+          projectLookup as unknown as ProjectLookupService, billing as unknown as PlanLimitsService) }
+      ]
+    }).compile();
+    app = module.createNestApplication();
+    app.use((req: AuthenticatedRequest, _res: unknown, next: () => void) => {
+      req.userId = String(req.headers["x-test-user"] ?? "") || undefined;
+      const scope = req.headers["x-test-token"];
+      if (scope === "read" || scope === "write") {
+        req.apiToken = { tokenId: "test-token", userId: USER, projectId: PROJECT, scopes: [scope] };
+      }
+      next();
+    });
+    await app.listen(0, "127.0.0.1");
+    origin = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`;
+  });
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.TESBO_REQUIREMENT_PREVIEW_ENABLED = "1";
+  });
+  afterAll(async () => {
+    await app?.close();
+    if (oldFlag === undefined) delete process.env.TESBO_REQUIREMENT_PREVIEW_ENABLED;
+    else process.env.TESBO_REQUIREMENT_PREVIEW_ENABLED = oldFlag;
+  });
+  async function send(user = USER, body: unknown = candidate, suffix = "/knowledge-base/requirements/preview", method = "POST", token?: string) {
+    const response = await fetch(`${origin}/api/projects/${PROJECT}${suffix}`, {
+      method, headers: { "content-type": "application/json", "x-test-user": user, ...(token ? { "x-test-token": token } : {}) },
+      body: JSON.stringify(body)
+    });
+    return { status: response.status, body: await response.json() };
+  }
+  function expectNoBillingAccess() {
+    expect(projectLookup.getProjectBasics).not.toHaveBeenCalled();
+    expect(billing.assertProjectWritable).not.toHaveBeenCalled();
+  }
+
+  it.each(["/knowledge-base/requirements/preview", "/knowledge-base/requirements/preview/", "/KNOWLEDGE-BASE/REQUIREMENTS/PREVIEW"])(
+    "serves a member's read-only preview on a locked project through %s", async suffix => {
+      const response = await send(USER, candidate, suffix);
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ canPublish: false, authoritativeRequirementId: null, disposition: "preview_only" });
+      expectNoBillingAccess();
+    });
+  it.each(["", "foreign-user"])("refuses unauthorized caller %s before any billing access", async user => {
+    for (const flag of [undefined, "1"]) {
+      if (flag === undefined) delete process.env.TESBO_REQUIREMENT_PREVIEW_ENABLED;
+      else process.env.TESBO_REQUIREMENT_PREVIEW_ENABLED = flag;
+      expect(await send(user, { malformed: true })).toEqual({ status: 403, body: { error: "Project membership required" } });
+      expectNoBillingAccess();
+    }
+  });
+  it("keeps disabled and invalid-candidate outcomes behind membership on locked projects", async () => {
+    delete process.env.TESBO_REQUIREMENT_PREVIEW_ENABLED;
+    expect(await send()).toEqual({ status: 503, body: { error: "REQUIREMENT_PREVIEW_DISABLED" } });
+    process.env.TESBO_REQUIREMENT_PREVIEW_ENABLED = "1";
+    expect(await send(USER, { ...candidate, title: "" })).toEqual({ status: 400, body: { error: "TITLE_INVALID" } });
+    expectNoBillingAccess();
+  });
+  it("preserves token scope and project membership before reaching a read-only preview", async () => {
+    expect((await send(USER, candidate, undefined, "POST", "read")).status).toBe(403);
+    expect((await send(USER, candidate, undefined, "POST", "write")).status).toBe(200);
+    expectNoBillingAccess();
+  });
+  it("keeps neighboring KB writes subject to the existing billing lock", async () => {
+    const response = await send(USER, {}, "/knowledge-base/documents");
+    expect(response).toEqual({ status: 403, body: { error: "billing lock must not be reached by preview" } });
+    expect(billing.assertProjectWritable).toHaveBeenCalledWith("org", PROJECT);
+    expect(legacy.requireProjectAccess).not.toHaveBeenCalled();
+  });
+});
 
 function candidate() {
   return {

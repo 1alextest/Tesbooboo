@@ -32,6 +32,10 @@ test('reviewed smoke pin includes BOTH tracing parity and WPA-01 KB denial selec
   assert.ok(smoke.includes('selection="WPA-01|KB-A-05|'), 'Keep WPA denial selected alongside original KB cases');
   assert.match(smoke, /Verify explicit tracing opt-in and installed SDK export boundaries/);
   assert.match(smoke, /Verify Zyra product behavior with tracing disabled, unset and enabled/);
+  assert.match(smoke, /Verify requirement change bundle staging and review/);
+  assert.match(smoke, /Verify requirement preview authorization with billing enabled and preview off\/on/);
+  assert.match(smoke, /selection='WPA-0\[13\]'/);
+  assert.match(smoke, /selection='WPA-0\[23\]'/);
 });
 
 function installedFiles() {

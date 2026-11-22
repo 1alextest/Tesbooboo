@@ -1693,6 +1693,34 @@ export class LegacyController {
     return this.legacy.listTestcaseProposals(projectId, req.userId, query);
   }
 
+  // Work Package A Slice 1 — staging only, in the existing review task owner.
+  @Post("/api/projects/:projectId/requirements/proposals")
+  stageRequirementProposal(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.stageRequirementChangeBundle(projectId, req.userId, body, {
+      kind: req.apiToken ? "api_token" : "human_session", tokenId: req.apiToken?.tokenId, transport: "rest"
+    });
+  }
+
+  @Get("/api/projects/:projectId/requirements/proposals")
+  listRequirementProposals(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Query() query: Record<string, any>) {
+    return this.legacy.listRequirementProposals(projectId, req.userId, query);
+  }
+
+  @Get("/api/projects/:projectId/requirements/proposals/:taskId")
+  getRequirementProposal(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string) {
+    return this.legacy.requirementProposalTask(projectId, req.userId, taskId);
+  }
+
+  @Post("/api/projects/:projectId/requirements/proposals/:taskId/reject")
+  rejectRequirementProposal(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string, @Body() body: Record<string, any>) {
+    return this.legacy.rejectRequirementProposal(projectId, req.userId, taskId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Post("/api/projects/:projectId/requirements/proposals/:taskId/withdraw")
+  withdrawRequirementProposal(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string, @Body() body: Record<string, any>) {
+    return this.legacy.withdrawRequirementProposal(projectId, req.userId, taskId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
   @Get("/api/projects/:projectId/agents/zyra/tasks/:taskId")
   getZyraTask(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string) {
     return this.legacy.zyraTask(projectId, req.userId, taskId);

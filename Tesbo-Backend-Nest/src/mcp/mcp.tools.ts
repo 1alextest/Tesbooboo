@@ -1977,6 +1977,60 @@ export function buildMcpTools(): McpTool[] {
       description: "Read one native testcase review task, including its current proposalSnapshot and proposalRevision. Pending drafts are unpublished candidates. Reading or staging a task cannot approve it; only a human can save the exact selected revision.",
       inputSchema: { type: "object", additionalProperties: false, required: ["taskId"], properties: { taskId: { type: "string" } } },
       handler: async (args, ctx) => ctx.legacy.zyraTask(ctx.projectId, ctx.userId, requireString(args, "taskId"))
+    },
+    {
+      name: "stage_requirement_change_bundle", requiredScope: "write",
+      description: "Stage one unpublished Work Package A bundle — a native requirement revision candidate, a Draft testcase candidate and a link intent between them — in the existing proposal review task owner. Requires an explicit requestKey; retry it only with the identical content. Nothing is published: no requirement document/version, testcase, active link or approval is created. The bundle stays staging-only because approved effective requirement/testcase skills cannot yet be resolved; a human may review, reject or withdraw it. Returns a task and proposal revision, never official IDs.",
+      inputSchema: { type: "object", additionalProperties: false, required: ["requestKey", "operations"], properties: {
+        requestKey: { type: "string", minLength: 1, maxLength: 160 }, title: { type: "string", maxLength: 512 },
+        operations: { type: "array", minItems: 1, maxItems: 3, items: { oneOf: [
+          { type: "object", additionalProperties: false, required: ["opType", "operationId", "title", "criteria"], properties: {
+            opType: { const: "requirement_revision" }, operationId: { type: "string", format: "uuid" },
+            documentId: { type: "string", format: "uuid" }, expectedRevision: { type: "string", pattern: "^[a-f0-9]{64}$" },
+            title: { type: "string", minLength: 1, maxLength: 512 }, description: { type: "string", maxLength: 20000 },
+            criteria: { type: "array", minItems: 1, maxItems: 50, items: { type: "object", additionalProperties: false,
+              required: ["key", "text"], properties: { key: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$" },
+                text: { type: "string", minLength: 1, maxLength: 4000 }, normative: { type: "boolean" } } } },
+            reason: { type: "string", maxLength: 4000 }
+          } },
+          { type: "object", additionalProperties: false, required: ["opType", "operationId", "draft"], properties: {
+            opType: { const: "testcase_create" }, operationId: { type: "string", format: "uuid" },
+            draft: candidateFields, reason: { type: "string", maxLength: 4000 }
+          } },
+          { type: "object", additionalProperties: false, required: ["opType", "operationId", "requirementOperationId", "testcaseOperationId", "criterionKeys"], properties: {
+            opType: { const: "requirement_case_link" }, operationId: { type: "string", format: "uuid" },
+            requirementOperationId: { type: "string", format: "uuid" }, testcaseOperationId: { type: "string", format: "uuid" },
+            criterionKeys: { type: "array", minItems: 1, maxItems: 50, items: { type: "string" } },
+            reason: { type: "string", maxLength: 4000 }
+          } }
+        ] } }
+      } },
+      handler: async (args, ctx) => {
+        const requestKey = requireString(args, "requestKey");
+        if (Object.keys(args).some(key => !["requestKey", "operations", "title"].includes(key))) {
+          throw new McpError(RpcCode.InvalidParams, "Only requestKey, operations and title are accepted; principal and project come from the authenticated credential");
+        }
+        if (!ctx.tokenId) throw new McpError(RpcCode.ProjectScopeDenied, "An authenticated credential is required to stage a requirement change bundle");
+        try {
+          const task = await ctx.legacy.stageRequirementChangeBundle(ctx.projectId, ctx.userId,
+            { requestKey, operations: args.operations, ...(args.title === undefined ? {} : { title: args.title }) },
+            { kind: "api_token", transport: "mcp", tokenId: ctx.tokenId, ...(ctx.actorId ? { actorId: ctx.actorId } : {}) });
+          return { publication: "unpublished", taskId: task.id, task, skillContext: task.skillContext,
+            reviewPath: `/projects/${ctx.projectId}/agents/tasks/${task.id}` };
+        } catch (error) { rethrowModelError(error); }
+      }
+    },
+    {
+      name: "get_requirement_proposal_task", requiredScope: "read",
+      description: "Read one staged requirement change bundle in this project: the requirement revision candidate, the Draft testcase candidate, the link intent, and the skill context that blocks publication. Reading cannot approve, apply or activate anything.",
+      inputSchema: { type: "object", additionalProperties: false, required: ["taskId"], properties: { taskId: { type: "string" } } },
+      handler: async (args, ctx) => ctx.legacy.requirementProposalTask(ctx.projectId, ctx.userId, requireString(args, "taskId"))
+    },
+    {
+      name: "list_requirement_proposals", requiredScope: "read",
+      description: "List staged requirement change bundles awaiting review in this project. They are candidates only; none is an official requirement, case, link, approval or execution result.",
+      inputSchema: { type: "object", additionalProperties: false, properties: { limit: { type: "integer", minimum: 1, maximum: 100 }, offset: { type: "integer", minimum: 0 } } },
+      handler: async (args, ctx) => ctx.legacy.listRequirementProposals(ctx.projectId, ctx.userId, args)
     }
   ];
   return [...tools.map(tool => DIRECT_TESTCASE_PUBLISHERS.has(tool.name) ? {
