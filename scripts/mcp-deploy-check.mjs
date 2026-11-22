@@ -9,10 +9,10 @@
  * catalog fingerprint from the tools actually returned and compares it with the fingerprint the
  * same server reported at initialize, so a proxy or stale catalog cannot pass on version alone.
  *
- * Usage (token comes from the environment only, never argv):
+ * Usage (the bearer is read only from its approved private file, never argv):
  *
  *   TESBO_MCP_URL="https://host/api/projects/<id>/mcp" \
- *   TESBO_MCP_TOKEN="<project token>" \
+ *   TESBO_MCP_TOKEN_FILE="<private credential file>" \
  *   EXPECTED_GIT_SHA="<deployed commit>" \
  *   node scripts/mcp-deploy-check.mjs
  *
@@ -27,6 +27,7 @@
 import { createHash } from "node:crypto";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { readApprovedMcpCredential, requireApprovedMcpEndpoint } from "./mcp-approved-origin.mjs";
 
 export const REQUIRED_TOOLS = [
   "list_projects",
@@ -147,13 +148,14 @@ export function summarize({ tools, instructions, serverVersion, health, expected
     warnings.push("server reports an unidentified build (+local); set GIT_SHA or deploy from a GitHub trigger");
   }
 
-  // Cross-check the catalog against the version the same server just reported. Only when both
-  // halves are available: an older server may omit instructions, and a missing tools/list is
-  // already an error above. No extra warning when unavailable, to keep the existing warning set.
+  // Both halves are required to verify the catalog. An older or incomplete
+  // response is unverifiable and must not produce an OK deployment result.
   const reportedFingerprint = typeof serverVersion === "string"
     ? /\.([a-f0-9]{16})$/.exec(serverVersion)?.[1] ?? null
     : null;
   const computedFingerprint = typeof instructions === "string" ? catalogFingerprint(tools, instructions) : null;
+  if (!reportedFingerprint) errors.push("initialize did not report a valid catalog fingerprint");
+  if (typeof instructions !== "string") errors.push("initialize did not report instructions required to verify the catalog fingerprint");
   if (reportedFingerprint && computedFingerprint && reportedFingerprint !== computedFingerprint) {
     errors.push(
       `tools/list catalog fingerprint ${computedFingerprint} does not match serverInfo.version ${reportedFingerprint}`
@@ -201,7 +203,7 @@ async function rpc(endpoint, token, body, session) {
     Accept: "application/json"
   };
   if (session) headers["Mcp-Session-Id"] = session;
-  const response = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+  const response = await fetch(endpoint, { method: "POST", redirect: "manual", headers, body: JSON.stringify(body) });
   if (!response.ok) throw new Error(`MCP endpoint returned HTTP ${response.status}`);
   const text = await response.text();
   let json;
@@ -218,16 +220,51 @@ async function rpc(endpoint, token, body, session) {
 
 async function main() {
   const endpoint = String(process.env.TESBO_MCP_URL || "").trim();
-  const token = String(process.env.TESBO_MCP_TOKEN || "").trim();
+  const tokenFile = String(process.env.TESBO_MCP_TOKEN_FILE || "");
+  let token = "";
   const expectedGitSha = String(process.env.EXPECTED_GIT_SHA || "").trim();
   const expectedToolCount = String(process.env.EXPECTED_TOOL_COUNT || "").trim();
   const requireProposalPreview = process.env.REQUIRE_PROPOSAL_PREVIEW === "1";
-  if (!endpoint || !token) {
-    console.error("TESBO_MCP_URL and TESBO_MCP_TOKEN must be set (token is read from the environment only).");
+  if (!endpoint || !tokenFile) {
+    console.error("TESBO_MCP_URL and TESBO_MCP_TOKEN_FILE must be set; use verify-production-mcp.sh.");
+    process.exit(2);
+  }
+  if (!/^[0-9a-f]{40}$/i.test(expectedGitSha)) {
+    console.error("MCP deployment check requires the exact expected 40-character Git commit SHA.");
+    process.exit(2);
+  }
+  let parsedEndpoint;
+  try {
+    parsedEndpoint = requireApprovedMcpEndpoint(endpoint, tokenFile);
+  } catch (error) {
+    console.error(`MCP deploy check: ${error instanceof Error ? error.message : "unapproved MCP origin"}`);
     process.exit(2);
   }
 
   try {
+    // The first network request is UNAUTHENTICATED. Never transmit the bearer
+    // until a strictly same-origin health read verifies the intended build.
+    const healthUrl = String(process.env.TESBO_API_HEALTH_URL || "").trim() ||
+      `${parsedEndpoint.origin}/api/health`;
+    const parsedHealth = new URL(healthUrl);
+    if (parsedHealth.origin !== parsedEndpoint.origin ||
+        parsedHealth.pathname !== "/api/health" || parsedHealth.search ||
+        parsedHealth.username || parsedHealth.password || parsedHealth.hash) {
+      throw new Error("Health endpoint must be the same-origin credential-free /api/health resource");
+    }
+    const healthResponse = await fetch(healthUrl, {
+      redirect: "manual", headers: { Accept: "application/json" }
+    });
+    if (!healthResponse.ok) throw new Error("Verified deployment health is unavailable");
+    const health = await healthResponse.json();
+    if (typeof health?.gitSha !== "string" || health.gitSha !== expectedGitSha) {
+      throw new Error("Health gitSha does not match the explicitly expected deployment; token not sent");
+    }
+
+    // The validated file is the sole credential source. Recheck its origin
+    // after the health wait, then read it; an environment bearer cannot replace it.
+    token = readApprovedMcpCredential(endpoint, tokenFile).token;
+
     const initialized = await rpc(
       endpoint,
       token,
@@ -242,14 +279,7 @@ async function main() {
     const listed = await rpc(endpoint, token, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, initialized.session);
     const tools = Array.isArray(listed.json?.result?.tools) ? listed.json.result.tools : null;
 
-    const healthUrl = String(process.env.TESBO_API_HEALTH_URL || "").trim() || `${new URL(endpoint).origin}/api/health`;
-    let health = null;
-    try {
-      const response = await fetch(healthUrl, { headers: { Accept: "application/json" } });
-      if (response.ok) health = await response.json();
-    } catch {
-      health = null;
-    }
+
 
     const result = summarize({
       tools,
@@ -261,16 +291,19 @@ async function main() {
       requireProposalPreview
     });
 
-    console.log("MCP deploy check");
-    console.log(`  endpoint: ${new URL(endpoint).origin}${new URL(endpoint).pathname}`);
-    console.log(`  server:   ${result.serverVersion}`);
-    console.log(`  tools:    ${result.toolCount}`);
-    console.log(`  catalog:  ${result.catalogFingerprint || "unavailable"} (${result.fingerprintCheck})`);
-    console.log(`  health:   ${result.reportedSha || "unavailable"}`);
-    if (result.missingTools.length) console.log(`  missing:  ${result.missingTools.join(", ")}`);
-    for (const warning of result.warnings) console.log(`  warning:  ${warning}`);
-    for (const error of result.errors) console.log(`  FAIL:     ${error}`);
-    console.log(result.ok ? "OK" : "FAILED");
+    // Response fields, including versions and duplicate tool names, are
+    // untrusted and can echo the bearer just like a protocol error message.
+    const print = (line) => console.log(redact(line, token));
+    print("MCP deploy check");
+    print(`  endpoint: ${new URL(endpoint).origin}${new URL(endpoint).pathname}`);
+    print(`  server:   ${result.serverVersion}`);
+    print(`  tools:    ${result.toolCount}`);
+    print(`  catalog:  ${result.catalogFingerprint || "unavailable"} (${result.fingerprintCheck})`);
+    print(`  health:   ${result.reportedSha || "unavailable"}`);
+    if (result.missingTools.length) print(`  missing:  ${result.missingTools.join(", ")}`);
+    for (const warning of result.warnings) print(`  warning:  ${warning}`);
+    for (const error of result.errors) print(`  FAIL:     ${error}`);
+    print(result.ok ? "OK" : "FAILED");
     process.exit(result.ok ? 0 : 1);
   } catch (error) {
     console.error(`MCP deploy check failed: ${redact(error instanceof Error ? error.message : error, token)}`);
