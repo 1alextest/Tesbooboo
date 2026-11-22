@@ -335,6 +335,10 @@ test("governed skills allow protected publication, exact approval and separate c
       exec(`DELETE FROM knowledge_documents WHERE id=${literal(requirementId)} AND project_id=${literal(ctx.projectId)};`);
     }
     for (const id of skillDocs) { exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`); exec(`DELETE FROM knowledge_documents WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`); }
-    for (const id of cycleIds) exec(`DELETE FROM cycles WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+    for (const id of cycleIds) {
+      exec(`DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id=${literal(id)});`);
+      exec(`DELETE FROM cycle_items WHERE cycle_id=${literal(id)};`);
+      exec(`DELETE FROM cycles WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+    }
   }
 });
