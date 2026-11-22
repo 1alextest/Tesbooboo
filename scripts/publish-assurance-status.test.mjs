@@ -142,6 +142,31 @@ test('bounded schedule refuses overflow instead of silently ignoring the queue t
     assert.equal(checks.length, 0);
   });
 });
+test('queue refresh uses a fixed GitHub page request for every valid policy bound', async () => {
+  for (const maximum of [1, 50]) {
+    const policyRaw = JSON.stringify({ ...JSON.parse(fixturePolicyRaw), maxOpenPullRequests: maximum });
+    await withGitHub({ policyRaw }, async ({ requests, checks }) => {
+      const results = await refreshAssurance({ ...gateOptions(), policyRaw, prNumber: undefined });
+      assert.equal(requests[0].url, 'https://api.github.com/repos/owner/tesbo/pulls?state=open&per_page=100');
+      assert.equal(requests[0].method, 'GET');
+      assert.equal(results.length, 1);
+      assert.equal(results[0].conclusion, 'success');
+      assert.equal(checks.length, 1);
+      assert.equal(checks[0].head_sha, fixtureHead);
+    });
+  }
+});
+test('the fixed queue page still refuses the configured bound and a full page before any write', async () => {
+  for (const [maximum, count] of [[1, 2], [50, 51], [50, 100]]) {
+    const policyRaw = JSON.stringify({ ...JSON.parse(fixturePolicyRaw), maxOpenPullRequests: maximum });
+    const openPRs = Array.from({ length: count }, (_, i) => ({ number: i + 1 }));
+    await withGitHub({ policyRaw, openPRs }, async ({ requests, checks }) => {
+      await assert.rejects(refreshAssurance({ ...gateOptions(), policyRaw, prNumber: undefined }), /bound exceeded/);
+      assert.deepEqual(requests, [{ url: 'https://api.github.com/repos/owner/tesbo/pulls?state=open&per_page=100', method: 'GET' }]);
+      assert.equal(checks.length, 0);
+    });
+  }
+});
 test('workflow entrypoint refuses PR events, wrong repository ID and non-default refs', async () => {
   const baseEnv = { GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch',
     GITHUB_REPOSITORY: 'owner/tesbo', GITHUB_TOKEN: 'synthetic-test-token',
