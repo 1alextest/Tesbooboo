@@ -276,7 +276,13 @@ export function resolveGovernedSkills(
 /** Re-resolve at selected apply/approval; a previously valid pin never grants publication. */
 export function comparePinnedSkillResolution(
   priorDigest: string | null | undefined, current: SkillResolution
-): "current" | "SKILL_CONTEXT_STALE" | "SKILL_CONTEXT_UNAVAILABLE" {
-  if (current.status !== "resolved") return "SKILL_CONTEXT_UNAVAILABLE";
+): "current" | "SKILL_CONTEXT_STALE" | "SKILL_CONTEXT_UNAVAILABLE" | "SKILL_ASSIGNMENT_CONFLICT" {
+  if (current.status !== "resolved") {
+    // A revoked/retired assignment is drift from a formerly valid pin, not a
+    // source-reader outage. A composition conflict needs its own human triage.
+    if (current.code === "SKILL_CONTEXT_UNAVAILABLE") return "SKILL_CONTEXT_UNAVAILABLE";
+    if (current.code === "SKILL_ASSIGNMENT_CONFLICT") return "SKILL_ASSIGNMENT_CONFLICT";
+    return "SKILL_CONTEXT_STALE";
+  }
   return priorDigest === current.digest ? "current" : "SKILL_CONTEXT_STALE";
 }
