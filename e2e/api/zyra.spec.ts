@@ -8351,7 +8351,7 @@ test.describe("zyra — product behavior and real tracing export in disposable C
     expect(JSON.stringify({ answer, stored })).not.toContain(errorKey);
     const audit = scalar(`SELECT COALESCE(jsonb_agg(diff), '[]'::jsonb)::text
        FROM audit_logs WHERE project_id=${literal(tenantA.mainProjectId)}
-         AND entity_id=${literal(sessionId)}::uuid AND action='zyra_chat_ai_failed';`);
+         AND entity_id=${literal(sessionId)} AND action='zyra_chat_ai_failed';`);
     expect(audit).not.toContain(errorKey);
     expect(audit).toContain("AI provider is unavailable");
     const spans = await assertObserved(answer, tenantA, true);
