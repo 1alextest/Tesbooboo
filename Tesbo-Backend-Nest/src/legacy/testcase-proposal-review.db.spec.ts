@@ -42,6 +42,7 @@ type Body=Record<string,any>;
     const plans={assertCustomFieldsEnabled:jest.fn().mockResolvedValue(undefined)} as unknown as PlanLimitsService;
     internals.customFields=new CustomFieldsService(db,plans,new ProjectLookupService(db,new RequestCacheService({} as AppConfigService)),svc);
     internals.customTags=new CustomTagsService(db,svc,internals.testcasesListCache);
+    internals.ragIngestion={enqueueEmbedding:jest.fn().mockResolvedValue(undefined)};
     jest.spyOn(internals,"enqueueTestcaseEmbedding").mockReturnValue(undefined);
     jest.spyOn(internals,"notifyZyraTask").mockResolvedValue(undefined);
     jest.spyOn(internals,"queueZyraTicketComments").mockResolvedValue(undefined);

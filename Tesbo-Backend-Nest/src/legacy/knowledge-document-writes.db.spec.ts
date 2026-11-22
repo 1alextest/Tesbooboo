@@ -436,7 +436,11 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       const exactId = await newMemory("Exactly reviewed memory");
       const exact = await approve(exactId);
       const foreignBoundId = await newMemory("Wrong document binding");
-      await setup.query("UPDATE knowledge_documents SET status = 'approved', reviewed_by = $2, reviewed_at = now(), reviewed_version_id = $3 WHERE id = $1", [foreignBoundId, actor, exact.reviewedVersionId]);
+      // V159's lineage constraint now makes the historical corrupt pointer impossible; a document
+      // carrying an approval flag but no bound pointer is still readable-as-unverified and excluded.
+      await expect(setup.query("UPDATE knowledge_documents SET status = 'approved', reviewed_by = $2, reviewed_at = now(), reviewed_version_id = $3 WHERE id = $1", [foreignBoundId, actor, exact.reviewedVersionId]))
+        .rejects.toMatchObject({ code: "23503" });
+      await setup.query("UPDATE knowledge_documents SET status = 'approved', reviewed_by = $2, reviewed_at = now() WHERE id = $1", [foreignBoundId, actor]);
       const staleId = await newMemory("Stale review binding");
       const stale = await approve(staleId);
       await f.svc.updateKnowledgeDocument(projectId, actor, staleId, { contentText: `${marker} changed after review` });
