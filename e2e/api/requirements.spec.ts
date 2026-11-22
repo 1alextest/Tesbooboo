@@ -218,6 +218,7 @@ test("governed skills allow protected publication, exact approval and separate c
       } });
       expect(created.ok(), await created.text()).toBe(true);
       const doc = await created.json();
+      expect(doc, "created skill document").toMatchObject({ documentType: "skill" });
       skillDocs.push(doc.id);
       const submitted = await request.post(`${base}/knowledge-base/documents/${doc.id}/submissions`, {
         data: { expectedRevision: doc.editRevision, submissionKey: randomUUID() }
@@ -227,20 +228,31 @@ test("governed skills allow protected publication, exact approval and separate c
       const approved = await request.patch(`${base}/skills/${doc.id}/approve`, { data: { versionId: version.id } });
       expect(approved.ok(), await approved.text()).toBe(true);
       const approval = await approved.json();
+      expect(approval, "approved skill").toMatchObject({ status: "approved" });
       return { documentId: doc.id as string, versionId: approval.approvedVersionId as string };
     };
     const assign = async (skill: { documentId: string; versionId: string }, module: string, subtype: string, operation: string) => {
       const assigned = await request.post(`${base}/skill-assignments`, { data: { skillDocumentId: skill.documentId, versionId: skill.versionId, module, subtype, operation } });
       expect(assigned.ok(), await assigned.text()).toBe(true);
-      return assigned.json();
+      const body = await assigned.json();
+      expect(body.resolution?.status, `assignment resolution: ${JSON.stringify(body)}`).toBe("resolved");
+      return body;
     };
 
     const requirementSkill = await makeSkill("requirements", "functional", "requirement_revision");
     await assign(requirementSkill, "requirements", "functional", "requirement_case_link");
     await makeSkill("test_cases", "manual", "testcase_create");
+    const assignmentRows = JSON.parse(scalar(`SELECT COALESCE(json_agg(json_build_object(
+      'module',a.module,'subtype',a.subtype,'operation',a.operation,'status',a.status,
+      'type',d.document_type,'kind',v.snapshot_kind,'digest',v.snapshot_metadata->>'contentDigest')),'[]'::json)::text
+      FROM skill_assignments a
+      JOIN knowledge_documents d ON d.id=a.skill_document_id AND d.project_id=a.project_id
+      JOIN knowledge_document_versions v ON v.id=a.skill_version_id AND v.document_id=a.skill_document_id
+      WHERE a.project_id=${literal(ctx.projectId)} AND a.status='active';`) || "[]");
+    expect(assignmentRows, "active skill assignments").toHaveLength(3);
     const effectiveBeforeStaging = await request.get(`${base}/skills/effective?module=requirements&subtype=functional&operation=requirement_revision`);
     expect(effectiveBeforeStaging.ok(), await effectiveBeforeStaging.text()).toBe(true);
-    expect(await effectiveBeforeStaging.json(), "effective skill must resolve before staging").toMatchObject({ status: "resolved" });
+    expect(await effectiveBeforeStaging.json(), `effective skill must resolve before staging: ${JSON.stringify(assignmentRows)}`).toMatchObject({ status: "resolved" });
 
     const title = `E2E governed requirement ${suffix}`;
     const caseTitle = `E2E governed case ${suffix}`;

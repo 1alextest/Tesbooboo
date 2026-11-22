@@ -16250,9 +16250,9 @@ export class LegacyService implements OnModuleInit {
       }
       await this.logProjectActivity(projectId, uid, "skill_assigned", "skill_assignment", created.id, `${profile.skill_key} → ${module}/${subtype}/${operation}`,
         { skillDocumentId, versionId, precedence }, client);
-      return created;
+      return { created, resolved };
     });
-    return { assignment: toCamel(assignment) };
+    return { assignment: toCamel(assignment.created), resolution: assignment.resolved };
   }
 
   async deactivateSkillAssignment(projectId: string, userId: string | null | undefined, assignmentId: string, _body: Body = {}, principal?: ReviewPrincipal) {
