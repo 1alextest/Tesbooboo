@@ -16412,7 +16412,13 @@ export class LegacyService implements OnModuleInit {
       if (version.snapshot_metadata?.contentDigest !== knowledgeDocumentContentDigest(doc)) {
         throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "The requirement changed after this version was submitted; approve the exact submitted version or stage a refreshed revision" });
       }
-      const current = await resolveEffectiveSkills(client, projectId, requirementBundleTargets([{ opType: "requirement_revision" }]));
+      // Re-resolve the exact basis the reviewed version pinned (requirement, link and case targets),
+      // not only the requirement target, or every approval would compare against a smaller digest.
+      const pinnedTargets = normalizeJsonArray(version.snapshot_metadata?.skillContext?.assignments)
+        .map((assignment: Body) => assignment?.target)
+        .filter((target: Body) => target && typeof target.module === "string" && typeof target.subtype === "string" && typeof target.operation === "string");
+      const current = await resolveEffectiveSkills(client, projectId,
+        pinnedTargets.length ? pinnedTargets : requirementBundleTargets([{ opType: "requirement_revision" }]));
       if (current.status !== "resolved") {
         throw new ConflictException({ code: current.status === "conflict" ? "SKILL_ASSIGNMENT_CONFLICT" : "SKILL_CONTEXT_UNAVAILABLE", error: "A required approved effective skill is not currently resolved", missing: current.missing, conflicts: current.conflicts });
       }
