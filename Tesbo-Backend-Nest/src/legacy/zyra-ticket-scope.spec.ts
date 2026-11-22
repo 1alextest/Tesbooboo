@@ -536,10 +536,22 @@ describe("background batch observation classification", () => {
       reply: "Synthetic draft", operations: [{ type: "create", draft: { title: "Synthetic draft" } }],
       testcases: [{ title: "Synthetic draft", action: "proposed-create" }], draftScenarios: [1]
     };
-    const failure = new Error("synthetic provider failure");
+    let failure: unknown;
     const generate = jest.spyOn(methods, "generateZyraPlanPiece");
     if (outcome === "success") generate.mockResolvedValue(decision);
-    else generate.mockRejectedValue(failure);
+    else {
+      jest.spyOn(global, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: { message: "synthetic provider failure sk-synthetic-batch-private" } }), { status: 500 }));
+      const provider = svc as unknown as { zyraChatWithAnthropic: (key: Body, model: string, system: string, user: string) => Promise<Body> };
+      generate.mockImplementation(async () => {
+        try {
+          await provider.zyraChatWithAnthropic({ provider: "anthropic", api_key: "synthetic-only" }, "claude-haiku-4-5", "Generate", "User");
+        } catch (error) {
+          failure = error;
+          throw error;
+        }
+        throw new Error("The synthetic provider should have rejected the request.");
+      });
+    }
     const gate = jest.spyOn(methods, "applyStorageGateToGenerated").mockImplementation((value) => value);
     const apply = jest.spyOn(methods, "applyZyraChatOperations").mockResolvedValue({ testcases: decision.testcases, activity: [], reviewRequestId: "review-1" });
     const posted = jest.spyOn(methods, "postZyraPlanMessage").mockResolvedValue(undefined);
@@ -547,7 +559,7 @@ describe("background batch observation classification", () => {
     const notify = jest.spyOn(methods, "notifyUsers").mockResolvedValue(undefined);
     return {
       run: () => methods.continueZyraChatPlanInLanguage("p1", "u1", "s1", "plan-1"),
-      getActivePlan: () => activePlan, decision, failure, gate, apply, posted, extracted, notify
+      getActivePlan: () => activePlan, decision, get failure() { return failure; }, gate, apply, posted, extracted, notify
     };
   }
 
@@ -566,7 +578,9 @@ describe("background batch observation classification", () => {
       expect(batch.extracted).toHaveBeenCalledWith(batch.failure);
       expect(batch.apply).not.toHaveBeenCalled();
       expect(batch.getActivePlan()).toMatchObject({ status: "paused", doneCount: 0, remainingScenarios: ["Synthetic scenario"], traceSeed: "originating-turn-seed" });
-      expect(String(batch.posted.mock.calls[0][4])).toContain("synthetic provider failure");
+      // Provider-controlled errors must not enter persisted plan messages.
+      expect(String(batch.posted.mock.calls[0][4])).toContain("temporarily unavailable (HTTP 500)");
+      expect(String(batch.posted.mock.calls[0][4])).not.toContain("synthetic provider failure");
       expect(String(batch.posted.mock.calls[0][4])).toContain("Pausing here");
       expect(batch.notify).toHaveBeenCalledTimes(1);
     }
@@ -575,9 +589,11 @@ describe("background batch observation classification", () => {
     expect(tools.mock.calls[0][0]).toEqual({
       traceSeed: "originating-turn-seed", name: "zyra.plan.generate_batch",
       input: { planId: "plan-1", sessionId: "s1", scenarios: ["Synthetic scenario"], batchSize: 1, doneCount: 0, totalCount: 1 },
-      ...(outcome === "success" ? { output: { draftedCount: 1 } } : { errorMessage: "synthetic provider failure" }),
+      ...(outcome === "success" ? { output: { draftedCount: 1 } } : { errorMessage: expect.stringContaining("temporarily unavailable (HTTP 500)") }),
       metadata: { projectId: "p1", sessionId: "s1", planId: "plan-1" }
     });
+    expect(JSON.stringify(tools.mock.calls)).not.toContain("synthetic provider failure");
+    expect(JSON.stringify(tools.mock.calls)).not.toContain("sk-synthetic-batch-private");
     for (const key of ["model", "provider", "usage"]) expect(tools.mock.calls[0][0]).not.toHaveProperty(key);
   });
 

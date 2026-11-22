@@ -1063,8 +1063,13 @@ export interface ZyraTask {
   drafts: AiGeneratedDraft[];
   /** Work Package A Slice 1: typed requirement-revision/link-intent entries of the same reviewed proposal. */
   requirementBundle?: Array<Record<string, unknown>>;
-  /** Why a requirement bundle cannot be published yet (currently the missing effective-skill resolver). */
-  skillContext?: { status: string; authority?: string; reason?: string };
+  /** Pinned effective-skill basis: resolved assignments, or why publication is blocked. */
+  skillContext?: {
+    status: string; authority?: string; reason?: string; digest?: string | null;
+    assignments?: Array<{ assignmentId: string; skillDocumentId?: string; skillKey?: string; skillTitle?: string; skillVersionId: string; versionNumber?: number; contentDigest?: string; target?: { module: string; subtype: string; operation: string } }>;
+    missing?: Array<{ module: string; subtype: string; operation: string }>;
+    conflicts?: Array<{ module: string; subtype: string; operation: string; matches: number }>;
+  };
   /** The server's committed decision on the exact reviewed bundle, also returned on a safe retry. */
   requirementDecision?: { id: string; decision: "rejected" | "withdrawn"; proposalRevision: string;
     reviewerId: string; reason: string | null; createdAt: string } | null;
@@ -1514,6 +1519,17 @@ export async function withdrawRequirementProposal(projectId: string, taskId: str
   return api<ZyraTask>(`/api/projects/${projectId}/requirements/proposals/${taskId}/withdraw`, {
     method: "POST",
     body: { expectedProposalRevision, ...(reason ? { reason } : {}) },
+  });
+}
+
+/** Protected human apply of the exact reviewed bundle revision. */
+export async function applyRequirementProposal(projectId: string, taskId: string, expectedProposalRevision: string): Promise<{
+  taskId: string; taskStatus: string; replayed: boolean;
+  receipt?: { requirement?: { documentId: string; versionId: string }; testcase?: { id: string } | null; link?: { id: string } | null };
+}> {
+  return api(`/api/projects/${projectId}/requirements/proposals/${taskId}/apply`, {
+    method: "POST",
+    body: { expectedProposalRevision },
   });
 }
 

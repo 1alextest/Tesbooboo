@@ -468,3 +468,85 @@ The new actual Nest HTTP regression executes both global guards and the real con
 The read-only preview accepts `tesbo-requirement/1` candidate content. Slice 1 staging accepts its separately documented bundle operation payload; both use criterion `key`, but staging currently has different validation/defaulting rules (including optional normative values and broader criterion keys). The preview is not the staging admission authority and does not certify that a candidate can be staged or published. Convergence of the formats belongs to the protected publication/Skills dependency; this recovery does not silently change staged bundle semantics. No claim of zero authentication-metadata writes is made: the no-effect boundary is native requirement/case/run/proposal content, billing state/history and notifications.
 
 PR #196 was observed merged concurrently as `62b9c626`; its recorded smoke and database results apply to bounded staging at head `49ec9780`, not the future positive publication path. The combined preview workflow retains that staging lane and both tracing lanes. An independent post-merge review identified separate generic-task lifecycle and authorization gaps in staging; their repair is a separate increment. No native Tesbo connector is bound in this recovery session; native record synchronization remains pending.
+
+## 14. Slice 2 implementation map — minimum governed Skills and protected publication
+
+**Status:** implemented in source and covered by new DB/API acceptance; CI is the executing environment (this
+machine has no `DATABASE_URL`, Docker or auth context). This is the minimum resolver the Slice 1 gate named,
+not the full Skills Library contract.
+
+### 14.1 Schema and owners
+
+`V159_work_package_a_skills_publication.sql`:
+
+- A skill is a native `knowledge_documents` row with `document_type='skill'`; its immutable instruction revisions
+  are `knowledge_document_versions` rows written through the existing governed snapshot path. `skill_profiles`
+  carries the stable project-scoped skill key, module and subtype.
+- `skill_assignments` is the separate human-governed record: exact project/module/subtype/operation, pinned
+  approved `skill_version_id`, active/inactive generation, precedence, assignee and immutable identity. A trigger
+  refuses a non-approved version, a mismatched module, or rewriting a pinned version; an inactive assignment can
+  only be replaced by a new generation.
+- `requirement_profiles` adds the requirement key/state over the KB identity. `requirement_case_links` is the typed
+  relation with database-enforced requirement/version/project lineage, immutability and criterion-key membership.
+- `ai_generation_requests.skill_context` pins the resolved basis. `testcase_proposal_review_snapshot()` now returns
+  it, so a changed assignment set changes the revision a human reviewed. The requirement review-invalidation
+  trigger covers `requirement_note` exactly as it already covered `ai_memory`.
+- The composite unique indexes and the `(reviewed_version_id, id) → versions(id, document_id)` lineage constraint
+  prevent a current-approval pointer from naming another document's version.
+
+### 14.2 Resolver and pinning
+
+`src/skills/skills-governance.ts` resolves active assignments for the server-derived project and exact
+module/subtype/operation. A wildcard assignment participates; more than one match is `conflict`, never an
+arbitrary precedence winner. Zero matches is `unassigned`. A resolved result returns the assignment ids, stable
+skill/version ids and content digests plus a basis digest. Only an approved immutable version with a content
+digest is eligible.
+
+Staging pins that result on the review task. A stage remains possible while unassigned/conflicting (review,
+reject and withdraw stay available), but protected apply refuses it. Resolution is re-run **inside** the apply
+transaction after the task lock, and an assignment change between review and apply returns
+`SKILL_CONTEXT_STALE` with the refreshed proposal required. Revocation/unassignment returns
+`SKILL_CONTEXT_UNAVAILABLE`; ambiguity returns `SKILL_ASSIGNMENT_CONFLICT`.
+
+### 14.3 Protected apply, approval and links
+
+`LegacyService.applyRequirementProposal` is one transaction:
+
+1. lock the task and re-read the proposal revision and pinned skill basis;
+2. recheck the acting human's current owner/manager authority and the exact effective skills;
+3. write the requirement revision as an immutable `submitted` KB version (creating the KB identity and
+   `requirement_profiles` row when the bundle names no document), create the official Draft case through the
+   existing native case writer, and insert the active link against that exact requirement version and case edit
+   revision;
+4. append one human apply receipt and activity, then commit. Any failure rolls back every official write.
+
+Exact retry is keyed by proposal revision + reviewer and returns the committed receipt without a second write.
+
+`approveRequirementVersion` is separate, human-only and exact-version: it requires the current content to match the
+submitted version digest, revalidates the pinned skills, writes an `approved` snapshot, advances
+`reviewed_version_id`, and creates approved-version link rows while leaving the submitted history intact.
+`reapplyRequirementCaseLink` is the explicit human action that retires the old link and binds a currently approved
+case revision; links are never rewritten. `requirementCoverage` reports authored, approved, executed and passing
+per criterion and case, using only persisted attempts whose `cycle_items.snapshot_approval_revision` matches the
+link's approval revision. A later PASS/FAIL disagreement remains visible as `mixed`; the latest qualifying attempt
+decides `passing`.
+
+### 14.4 Explicit limits
+
+- Project-scoped only; no cross-project/global packs, composition precedence beyond deterministic single-match,
+  candidate evaluation, root meta-skill bootstrap, cache, MCP skill tools or Skills Library UI. Those remain
+  specified, not implemented.
+- Skill approval and assignment are separate human-session actions; API tokens may create/submit candidates and
+  read resolution, but cannot approve, assign or deactivate.
+- Manual/policy subtype breadth and a full assignment-management UI remain future work; the API surface is the
+  native owner today.
+- No migration backfills historical pins. Historical links/attempts remain readable; current readings require the
+  current approved versions and exact case basis.
+
+### 14.5 Evidence
+
+- Local: backend/frontend/e2e `tsc --noEmit` pass; ESLint on changed files passes; `mcp-publication` and
+  `mcp.service` suites pass (202 tests).
+- CI: `database-integrity` runs the new resolver/apply/approval/coverage and negative controls in
+  `testcase-proposal-review.db.spec.ts`; the existing smoke step runs `api/requirements.spec.ts`, including the
+  positive governed-publication journey. Results are recorded on the implementation PR, not claimed here.

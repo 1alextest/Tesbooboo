@@ -17,6 +17,7 @@ import {
   listNotionPages,
   listSuites,
   listZyraTaskTicketComments,
+  applyRequirementProposal,
   rejectRequirementProposal,
   retryZyraTicketComment,
   saveZyraTask,
@@ -381,6 +382,23 @@ export default function ZyraTaskDetailPage() {
     }
   }
 
+  async function handleRequirementBundleApply() {
+    if (!task || done || bundleWorking || !task.proposalRevision || task.skillContext?.status !== "resolved") return;
+    setBundleWorking(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const applied = await applyRequirementProposal(projectId, taskId, task.proposalRevision);
+      await loadData();
+      const requirementId = applied.receipt?.requirement?.documentId;
+      setMessage(`Requirement change bundle applied as an immutable submitted version${requirementId ? ` (${requirementId})` : ""}. Requirement approval remains a separate human decision.`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "The requirement change bundle could not be applied.");
+    } finally {
+      setBundleWorking(false);
+    }
+  }
+
   function toggleDraft(index: number) {
     setSelectedDrafts((prev) => prev.includes(index) ? prev.filter((item) => item !== index) : [...prev, index]);
   }
@@ -588,6 +606,8 @@ export default function ZyraTaskDetailPage() {
   const bundleCase = requirementOps.find((entry) => entry.opType === "testcase_create");
   const bundleLink = requirementOps.find((entry) => entry.opType === "requirement_case_link");
   const bundleCriteria = Array.isArray(bundleRequirement?.criteria) ? bundleRequirement.criteria : [];
+  const skillsResolved = task.skillContext?.status === "resolved";
+  const bundleSkillAssignments = Array.isArray(task.skillContext?.assignments) ? task.skillContext.assignments : [];
   const allDraftsSelected = task.drafts.length > 0 && selectedDrafts.length === task.drafts.length;
   const copyableDrafts = selectedDrafts.length > 0 ? selectedDrafts.map((i) => task.drafts[i]) : task.drafts;
   const draftsTsv = toTsv(
@@ -758,6 +778,20 @@ export default function ZyraTaskDetailPage() {
                   </p>
                 </div>
               )}
+              {bundleSkillAssignments.length > 0 && (
+                <div data-testid="requirement-bundle-skills">
+                  <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Pinned effective skills</p>
+                  <ul className="mt-1 space-y-1 text-sm text-[var(--foreground)]">
+                    {bundleSkillAssignments.map((assignment) => (
+                      <li key={assignment.assignmentId}>
+                        <span className="font-mono text-xs">{assignment.skillKey || assignment.skillDocumentId}</span>
+                        {assignment.versionNumber !== undefined ? ` · v${assignment.versionNumber}` : ""}
+                        {assignment.target ? ` · ${assignment.target.module}/${assignment.target.subtype}/${assignment.target.operation}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <details className="rounded-lg border border-[var(--border)] p-3 text-sm" data-testid="requirement-bundle-full-content">
                 <summary className="cursor-pointer font-medium">Complete staged content</summary>
                 <p className="mt-2 text-[var(--muted)]">These are all the requirement, test case and link fields in this reviewed revision, including their exact references and reasons.</p>
@@ -770,13 +804,20 @@ export default function ZyraTaskDetailPage() {
                 </p>
               )}
               <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-sm" data-testid="requirement-bundle-publication-gate">
-                {task.skillContext?.status === "unavailable"
-                  ? "Publication is blocked: required approved effective skills are unavailable. Reject or withdraw this bundle; applying it would publish nothing."
-                  : "Publication requires a resolved, pinned and conflict-free effective-skill assignment."}
+                {skillsResolved
+                  ? "Publication uses the pinned, conflict-free effective skills shown above. Apply creates an immutable submitted requirement version, a Draft case and an exact link in one transaction; requirement approval remains a separate human decision."
+                  : task.skillContext?.status === "conflict"
+                    ? "Publication is blocked: the effective-skill assignments conflict. Resolve the assignment conflict before applying."
+                    : "Publication is blocked: a required approved effective skill is unassigned. Reject or withdraw this bundle, or assign the required skills and stage a refreshed proposal."}
               </p>
             </div>
             {!done && (
               <div className="flex shrink-0 gap-2">
+                {skillsResolved && (
+                  <Button onClick={() => void handleRequirementBundleApply()} disabled={bundleWorking} data-testid="requirement-bundle-apply">
+                    Apply reviewed bundle
+                  </Button>
+                )}
                 <Button variant="secondary" onClick={() => void handleRequirementBundleDecision("withdrawn")} disabled={bundleWorking}>
                   Withdraw
                 </Button>

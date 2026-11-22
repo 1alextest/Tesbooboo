@@ -32,6 +32,8 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     pool = new Pool({ connectionString: url, max: 4, connectionTimeoutMillis: 3000 });
     await setup.query("INSERT INTO users (id, email, name) VALUES ($1,$2,'KB writer'),($3,$4,'Other KB author')", [actor, `kb-writer-${stamp}@tesbo.invalid`, other, `kb-other-${stamp}@tesbo.invalid`]);
     orgId = (await setup.query<{ id: string }>("INSERT INTO organizations (name, slug) VALUES ('KB writer CI',$1) RETURNING id", [`kb-writer-${stamp}`])).rows[0].id;
+    await setup.query("INSERT INTO organization_members (organization_id,user_id,role) VALUES ($1,$2,'owner')", [orgId, actor]);
+    await setup.query("UPDATE users SET active_organization_id=$2 WHERE id=$1", [actor, orgId]);
     projectId = (await setup.query<{ id: string }>("INSERT INTO projects (organization_id, key, name) VALUES ($1,'KBWRITE','KB writer CI') RETURNING id", [orgId])).rows[0].id;
     await setup.query("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'owner')", [projectId, actor]);
     folderId = (await setup.query<{ id: string }>("INSERT INTO knowledge_folders (organization_id,project_id,name,is_root) VALUES ($1,$2,'Knowledge base',true) RETURNING id", [orgId, projectId])).rows[0].id;
@@ -436,7 +438,11 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       const exactId = await newMemory("Exactly reviewed memory");
       const exact = await approve(exactId);
       const foreignBoundId = await newMemory("Wrong document binding");
-      await setup.query("UPDATE knowledge_documents SET status = 'approved', reviewed_by = $2, reviewed_at = now(), reviewed_version_id = $3 WHERE id = $1", [foreignBoundId, actor, exact.reviewedVersionId]);
+      // V159's lineage constraint now makes the historical corrupt pointer impossible; a document
+      // carrying an approval flag but no bound pointer is still readable-as-unverified and excluded.
+      await expect(setup.query("UPDATE knowledge_documents SET status = 'approved', reviewed_by = $2, reviewed_at = now(), reviewed_version_id = $3 WHERE id = $1", [foreignBoundId, actor, exact.reviewedVersionId]))
+        .rejects.toMatchObject({ code: "23503" });
+      await setup.query("UPDATE knowledge_documents SET status = 'approved', reviewed_by = $2, reviewed_at = now() WHERE id = $1", [foreignBoundId, actor]);
       const staleId = await newMemory("Stale review binding");
       const stale = await approve(staleId);
       await f.svc.updateKnowledgeDocument(projectId, actor, staleId, { contentText: `${marker} changed after review` });

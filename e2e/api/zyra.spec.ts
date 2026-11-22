@@ -13,6 +13,7 @@ import {
 import { startFakeAiServer, type FakeAiServer } from "../utils/fake-ai-server";
 import { env } from "../utils/env";
 import { parseSseEvents } from "../utils/sse";
+import { filesFormWith } from "../utils/uploads";
 import { issueMcpTestToken } from "../utils/mcp-access";
 import { readZyraProposal, saveReviewedZyraTask } from "../utils/zyra-proposals";
 import { messageTraceId, spanAttributes, startLangfuseCapture, type LangfuseCapture, type OtlpSpan } from "../utils/langfuse-capture";
@@ -8039,7 +8040,7 @@ test.describe("zyra — product behavior and real tracing export in disposable C
   let productOutcomes: unknown[] = [];
 
   type StoredMessage = { id: string; role: string; content: string; status: string; actionType?: string; testcases?: unknown[] };
-  type Answer = { sessionId: string; user: StoredMessage; assistant: StoredMessage; elapsedMs: number };
+  type Answer = { sessionId: string; user: StoredMessage; assistant: StoredMessage; elapsedMs: number; responseBody: unknown };
 
   test.beforeAll(async () => {
     const mode = process.env.E2E_LANGFUSE_EXPECTED_MODE;
@@ -8137,14 +8138,15 @@ test.describe("zyra — product behavior and real tracing export in disposable C
     return (await read.json()).messages;
   }
 
-  async function send(tenant: RbacTenant, owner: APIRequestContext, sessionId: string, prompt: string): Promise<Answer> {
+  async function send(tenant: RbacTenant, owner: APIRequestContext, sessionId: string, prompt: string, turnId?: string): Promise<Answer> {
     const started = performance.now();
     const response = await owner.post(endpoint(tenant, `/chat/sessions/${sessionId}/messages`), {
-      data: { message: prompt, background: false }, failOnStatusCode: false,
+      data: { message: prompt, background: false, ...(turnId ? { turnId } : {}) }, failOnStatusCode: false,
     });
     const elapsedMs = performance.now() - started;
     expect(response.status(), await response.text()).toBe(201);
-    const reply = (await response.json()).message as StoredMessage;
+    const responseBody = await response.json();
+    const reply = responseBody.message as StoredMessage;
     const stored = await messages(tenant, owner, sessionId);
     expect(stored, "one accepted message must persist exactly one user row and one assistant row").toHaveLength(2);
     const user = stored.find((row) => row.role === "user")!;
@@ -8160,7 +8162,7 @@ test.describe("zyra — product behavior and real tracing export in disposable C
       assistant: { role: assistant.role, content: assistant.content, status: assistant.status, actionType: assistant.actionType, testcases: assistant.testcases },
       messageCount: stored.length, testcaseCount: 0, generationRequestCount: 0,
     });
-    return { sessionId, user, assistant, elapsedMs };
+    return { sessionId, user, assistant, elapsedMs, responseBody };
   }
 
   function queueAnswer(ai: FakeAiServer, prompt: string, reply = SCRIPTED_REPLY): void {
@@ -8335,19 +8337,160 @@ test.describe("zyra — product behavior and real tracing export in disposable C
     expect(capture.exports.flatMap((item) => item.spans).filter((span) => spanAttributes(span)["session.id"] === sessionId)).toEqual([]);
   });
 
-  test("ZYR-OBS-07 provider failure settles one product reply and exports a masked, truthful error observation", async () => {
+  test("ZYR-OBS-07 provider failure stays private in replies, progress, persistence and error observations", async () => {
     await allocate(tenantA, ownerA, aiA);
     const sessionId = await newSession(tenantA, ownerA);
-    const errorKey = "sk-e2e-observation-provider-error-12345";
-    aiA.failNextWith(500, `Synthetic provider failure ${errorKey}`);
-    const answer = await send(tenantA, ownerA, sessionId, "Explain the failing observation fixture.");
-    expect(answer.assistant.content.length).toBeGreaterThan(0);
-    expect(aiA.requests).toHaveLength(1);
-    const spans = await assertObserved(answer, tenantA, true);
+    const privateMarkers = ["sk-e2e-observation-provider-error-12345", "synthetic-private-request-context", "synthetic-private-url-token", "synthetic-private-embedding-context", "synthetic-private-transcription-context", "synthetic-private-malformed-vector-context"];
+    const safeReason = "AI provider is temporarily unavailable (HTTP 500). Try again shortly.";
+    // The chat-only allocation deliberately cannot embed. Add a native workspace
+    // OpenAI key so the real RAG resolver must execute its workspace fallback tier.
+    const embeddingKeyResponse = await ownerA.post("/api/workspace/ai-keys", {
+      data: { name: `E2E observation embedding ${randomUUID()}`, provider: "openai", apiKey: SYNTHETIC_KEY, baseUrl: aiA.backendBaseUrl, defaultModel: MODEL },
+      failOnStatusCode: false,
+    });
+    expect(embeddingKeyResponse.status(), await embeddingKeyResponse.text()).toBe(201);
+    const embeddingKeyId = (await embeddingKeyResponse.json()).id as string;
+    aiA.failNextWith(500, privateMarkers[3], "embedding");
+    aiA.failNextWith(500, `Synthetic provider failure ${privateMarkers[0]} request=${privateMarkers[1]} https://gateway.invalid/?token=${privateMarkers[2]}`);
+    // Attach while the provider is still pending: the existing progress registry
+    // deliberately drops completed turns rather than retaining a second message store.
+    aiA.delayNextReplyMs(1_500);
+    const turnId = randomUUID();
+    const pending = send(tenantA, ownerA, sessionId, "Explain the failing observation fixture.", turnId);
+    await expect.poll(() => aiA.requests.length).toBe(1);
+    const stream = await ownerA.get(endpoint(tenantA, `/chat/sessions/${sessionId}/turns/${turnId}/events`), { failOnStatusCode: false });
+    expect(stream.status(), await stream.text()).toBe(200);
+    const progress = parseSseEvents(await stream.text()) as Array<Record<string, unknown>>;
+    const answer = await pending;
+    expect(aiA.embeddingRequests.filter((request) => request.input.includes("Explain the failing observation fixture.")), "the canary must reach the actual live RAG embedding endpoint").toHaveLength(1);
+    expect(answer.assistant.content).toContain(safeReason);
+    expect(answer.assistant.content).toContain("no test cases were generated or changed");
+    expect(answer.user).toMatchObject({ trace: { steps: expect.arrayContaining([
+      expect.objectContaining({ stage: "routing", status: "failed", meta: expect.objectContaining({ reason: safeReason }) }),
+    ]) } });
+    // Catch blocks update the current step with "*"; the recorder and frontend
+    // resolve it to the latest stage, which must still be routing for this failure.
+    const failureIndex = progress.findIndex((event) => event.kind === "update" && event.stage === "*");
+    expect(failureIndex).toBeGreaterThan(-1);
+    expect(progress[failureIndex]).toMatchObject({ kind: "update", stage: "*", meta: { status: "failed", reason: safeReason } });
+    expect(progress.slice(0, failureIndex).filter((event) => event.kind === "stage").at(-1)).toMatchObject({ stage: "routing" });
+    const completionIndex = progress.findIndex((event) => event.kind === "complete");
+    expect(completionIndex).toBeGreaterThan(failureIndex);
+    expect(completionIndex).toBe(progress.length - 1);
+    const activity = JSON.parse(scalar(`SELECT COALESCE(json_agg(row_to_json(entry)), '[]'::json)::text FROM
+      (SELECT action, diff FROM audit_logs WHERE project_id = ${literal(tenantA.mainProjectId)} AND entity_id = ${literal(sessionId)}) entry;`) || "[]");
+    expect(activity).toContainEqual({ action: "zyra_chat_ai_failed", diff: { message: safeReason, stage: "routing" } });
+    const kbEndpoint = `/api/projects/${tenantA.mainProjectId}/knowledge-base`;
+    let folderId: string | undefined;
+    let fileId: string | undefined;
+    try {
+      // The upload starts the real async transcription owner. CI uses disposable
+      // local storage; only the external transcription endpoint is synthetic.
+      const allocated = await ownerA.post("/api/workspace/ai-keys/allocations", {
+        data: { projectId: tenantA.mainProjectId, workspaceAiKeyId: embeddingKeyId }, failOnStatusCode: false,
+      });
+      expect(allocated.status(), await allocated.text()).toBe(201);
+      const folder = await ownerA.post(`${kbEndpoint}/folders`, { data: { name: `E2E audio ${randomUUID()}` }, failOnStatusCode: false });
+      expect(folder.status(), await folder.text()).toBe(201);
+      folderId = (await folder.json()).id as string;
+      aiA.failNextWith(500, privateMarkers[4], "transcription");
+      // One silent PCM sample in a valid mono WAV container.
+      const wav = Buffer.from("524946462600000057415645666d74201000000001000100401f0000803e00000200100064617461020000000000", "hex");
+      const uploaded = await ownerA.post(`${kbEndpoint}/files/upload`, {
+        multipart: filesFormWith({ folderId }, [{ name: "observation.wav", mimeType: "audio/wav", body: wav }]), failOnStatusCode: false,
+      });
+      expect(uploaded.status(), await uploaded.text()).toBe(201);
+      fileId = (await uploaded.json()).list[0].id as string;
+      let file: Record<string, unknown> = {};
+      await expect.poll(async () => {
+        const read = await ownerA.get(`${kbEndpoint}/files/${fileId}`, { failOnStatusCode: false });
+        expect(read.status(), await read.text()).toBe(200);
+        file = await read.json();
+        return file.extractionStatus;
+      }, { timeout: 10_000, message: "the real transcription must settle its failed extraction" }).toBe("failed");
+      expect(file.extractedText).toBeNull();
+      expect(aiA.transcriptionRequests).toHaveLength(1);
+      expect(aiA.transcriptionRequests[0].contentType).toMatch(/^multipart\/form-data;\s*boundary=/i);
+      expect(aiA.transcriptionRequests[0].body).toContain('name="file"');
+      expect(aiA.transcriptionRequests[0].body).toContain("whisper-1");
+      const productSurfaces = JSON.stringify({ response: answer.responseBody, messages: await messages(tenantA, ownerA, sessionId), activity, progress, transcription: file });
+      for (const marker of privateMarkers) expect(productSurfaces).not.toContain(marker);
+      expect(aiA.requests).toHaveLength(1);
+      productOutcomes.push({ embeddingRequestCount: 1, transcriptionRequestCount: 1, transcriptionStatus: file.extractionStatus, transcript: file.extractedText });
+      const spans = await assertObserved(answer, tenantA, true);
+      if (expectedMode === "enabled") {
+        const embedding = spans.find((span) => span.name === "kb-query-embedding");
+        expect(embedding, "the actual query embedding must produce its own error observation").toBeDefined();
+        expect(spanAttributes(embedding!)["langfuse.observation.level"]).toBe("ERROR");
+        expect(String(spanAttributes(embedding!)["langfuse.observation.output"])).toContain(safeReason);
+        const transcriptionSpans = () => capture.exports.flatMap((item) => item.spans).filter((span) => span.name === "knowledge.transcription" && spanAttributes(span)["langfuse.observation.metadata.fileId"] === fileId);
+        await expect.poll(() => transcriptionSpans().length, { timeout: 10_000 }).toBeGreaterThan(0);
+        expect(spanAttributes(transcriptionSpans()[0])["langfuse.observation.level"]).toBe("ERROR");
+        expect(String(spanAttributes(transcriptionSpans()[0])["langfuse.observation.output"])).toContain("OpenAI is temporarily unavailable (HTTP 500)");
+        const wire = capture.exports.map((item) => item.raw).join("\n");
+        // Keep the full OTLP wire in memory, including on an assertion failure.
+        for (const marker of privateMarkers) expect(wire.includes(marker), `private provider marker reached OTLP: ${marker}`).toBe(false);
+        const router = spans.find((span) => span.name === "router")!;
+        expect(String(spanAttributes(router)["langfuse.observation.output"])).toContain(safeReason);
+      }
+    } finally {
+      if (fileId) {
+        const removed = await ownerA.delete(`${kbEndpoint}/files/${fileId}`, { failOnStatusCode: false });
+        expect(removed.status(), await removed.text()).toBe(200);
+      }
+      if (folderId) {
+        const removed = await ownerA.delete(`${kbEndpoint}/folders/${folderId}`, { failOnStatusCode: false });
+        expect(removed.status(), await removed.text()).toBe(200);
+      }
+    }
+
+    // A second isolated turn keeps the HTTP-error proof above and also exercises a
+    // valid JSON response whose vector cells violate the provider's numeric contract.
+    const malformedSessionId = await newSession(tenantA, ownerA);
+    const malformedPrompt = "Explain the malformed embedding observation fixture.";
+    const malformedReason = "AI provider returned invalid embedding data. Try again or check the embedding model.";
+    const malformedChatReason = "OpenAI is temporarily unavailable (HTTP 500). Try again shortly.";
+    aiA.queueEmbeddingReply({ data: [{ index: 0, embedding: [privateMarkers[5]] }] });
+    aiA.failNextWith(500, privateMarkers[0]);
+    aiA.delayNextReplyMs(1_500);
+    const malformedTurnId = randomUUID();
+    const malformedPending = send(tenantA, ownerA, malformedSessionId, malformedPrompt, malformedTurnId);
+    await expect.poll(() => aiA.requests.length).toBe(2);
+    const malformedStream = await ownerA.get(endpoint(tenantA, `/chat/sessions/${malformedSessionId}/turns/${malformedTurnId}/events`), { failOnStatusCode: false });
+    expect(malformedStream.status(), await malformedStream.text()).toBe(200);
+    const malformedProgress = parseSseEvents(await malformedStream.text()) as Array<Record<string, unknown>>;
+    const malformedAnswer = await malformedPending;
+    expect(aiA.embeddingRequests).toHaveLength(2);
+    expect(aiA.embeddingRequests.filter((request) => request.input.includes(malformedPrompt)), "the malformed vector must reach the actual second query embedding").toHaveLength(1);
+    expect(aiA.requests.filter((request) => JSON.stringify(request.messages).includes(malformedPrompt))).toHaveLength(1);
+    expect(malformedAnswer.assistant.content).toContain(malformedChatReason);
+    expect(malformedAnswer.assistant.content).toContain("no test cases were generated or changed");
+    expect(malformedAnswer.user).toMatchObject({ trace: { steps: expect.arrayContaining([
+      expect.objectContaining({ stage: "routing", status: "failed", meta: expect.objectContaining({ reason: malformedChatReason }) }),
+    ]) } });
+    const malformedFailureIndex = malformedProgress.findIndex((event) => event.kind === "update" && event.stage === "*");
+    expect(malformedFailureIndex).toBeGreaterThan(-1);
+    expect(malformedProgress[malformedFailureIndex]).toMatchObject({ kind: "update", stage: "*", meta: { status: "failed", reason: malformedChatReason } });
+    expect(malformedProgress.slice(0, malformedFailureIndex).filter((event) => event.kind === "stage").at(-1)).toMatchObject({ stage: "routing" });
+    const malformedCompletionIndex = malformedProgress.findIndex((event) => event.kind === "complete");
+    expect(malformedCompletionIndex).toBeGreaterThan(malformedFailureIndex);
+    expect(malformedCompletionIndex).toBe(malformedProgress.length - 1);
+    const malformedActivity = JSON.parse(scalar(`SELECT COALESCE(json_agg(row_to_json(entry)), '[]'::json)::text FROM
+      (SELECT action, diff FROM audit_logs WHERE project_id = ${literal(tenantA.mainProjectId)} AND entity_id = ${literal(malformedSessionId)}) entry;`) || "[]");
+    expect(malformedActivity).toContainEqual({ action: "zyra_chat_ai_failed", diff: { message: malformedChatReason, stage: "routing" } });
+    const malformedSurfaces = JSON.stringify({ response: malformedAnswer.responseBody, messages: await messages(tenantA, ownerA, malformedSessionId), activity: malformedActivity, progress: malformedProgress });
+    for (const marker of privateMarkers) expect(malformedSurfaces).not.toContain(marker);
+    productOutcomes.push({ malformedEmbeddingRequestCount: 1 });
+    const malformedSpans = await assertObserved(malformedAnswer, tenantA, true);
     if (expectedMode === "enabled") {
-      expect(capture.exports.map((item) => item.raw).join("\n")).not.toContain(errorKey);
-      const router = spans.find((span) => span.name === "router")!;
-      expect(String(spanAttributes(router)["langfuse.observation.output"])).toContain("[REDACTED_KEY]");
+      const embeddings = malformedSpans.filter((span) => span.name === "kb-query-embedding");
+      expect(embeddings, "the malformed vector must be an error in its own turn's embedding observation").toHaveLength(1);
+      const attributes = spanAttributes(embeddings[0]);
+      expect(attributes["langfuse.observation.level"]).toBe("ERROR");
+      expect(JSON.parse(String(attributes["langfuse.observation.output"]))).toEqual({ error: malformedReason });
+      expect(JSON.parse(String(attributes["langfuse.observation.input"]))).toMatchObject({ inputCount: 1, sample: malformedPrompt });
+      const wire = capture.exports.map((item) => item.raw).join("\n");
+      for (const marker of privateMarkers) expect(wire.includes(marker), `private provider marker reached OTLP: ${marker}`).toBe(false);
     }
   });
 

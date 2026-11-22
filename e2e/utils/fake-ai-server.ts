@@ -51,10 +51,12 @@ export interface FakeAiServer {
    * With an embeddings-capable provider ("openai"), the backend embeds the user's message for
    * knowledge-base search and embeds newly written KB documents in the background; before this
    * split those calls were served from the same FIFO queue and could consume a reply scripted for
-   * the router. Always answered 503, so retrieval degrades to keyword search (it never throws) and
+   * the router. Answered 503 by default, so retrieval degrades to keyword search (it never throws) and
    * a test can assert whether a KB search was attempted at all by looking here.
    */
   embeddingRequests: FakeAiEmbeddingRequest[];
+  /** Multipart transcription requests, isolated from chat and embedding fixtures. */
+  transcriptionRequests: Array<{ contentType: string; body: string }>;
   /**
    * Queue one scripted chat-completion reply, consumed FIFO. `content` becomes
    * `choices[0].message.content` verbatim — pass the JSON envelope buildZyraChatDecision (or
@@ -62,8 +64,10 @@ export interface FakeAiServer {
    * for a test that wants to exercise the "model returned prose instead of JSON" fallback.
    */
   queueReply(content: Record<string, unknown> | string): void;
+  /** Queue one HTTP 200 JSON embedding response, separate from chat replies and endpoint failures. */
+  queueEmbeddingReply(content: Record<string, unknown>): void;
   /** Set to a status code to make the NEXT call fail (consumed once), exercising the error path. */
-  failNextWith(status: number, message?: string): void;
+  failNextWith(status: number, message?: string, endpoint?: "chat" | "embedding" | "transcription"): void;
   /**
    * Delays the NEXT call's response by `ms` (consumed once), so a test can deterministically observe
    * "this call is genuinely still in flight" — e.g. asserting that stopping a background batch plan
@@ -103,6 +107,9 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
   const queue: string[] = [];
   const requests: FakeAiRequest[] = [];
   const embeddingRequests: FakeAiEmbeddingRequest[] = [];
+  const embeddingReplies: string[] = [];
+  const transcriptionRequests: Array<{ contentType: string; body: string }> = [];
+  const endpointFailures = new Map<string, { status: number; message: string }>();
   let failStatus: number | null = null;
   let failMessage = "stubbed provider failure";
   let delayMs: number | null = null;
@@ -117,6 +124,14 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
     let raw = "";
     req.on("data", (chunk) => (raw += chunk));
     req.on("end", () => {
+      if ((req.url || "").split("?")[0].endsWith("/audio/transcriptions")) {
+        transcriptionRequests.push({ contentType: String(req.headers["content-type"] || ""), body: raw });
+        const failure = endpointFailures.get("transcription") ?? { status: 503, message: "fake-ai-server does not serve transcription" };
+        endpointFailures.delete("transcription");
+        res.writeHead(failure.status, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: failure.message } }));
+        return;
+      }
       if ((req.url || "").split("?")[0].endsWith("/embeddings")) {
         // Never consumes the chat reply queue, a pending failNextWith, or a pending delay.
         let parsed: { model?: unknown; input?: unknown } = {};
@@ -127,8 +142,17 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
         }
         const input = Array.isArray(parsed.input) ? parsed.input.map(String) : parsed.input === undefined ? [] : [String(parsed.input)];
         embeddingRequests.push({ model: String(parsed.model || ""), input });
-        res.writeHead(503, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: { message: "fake-ai-server does not serve embeddings" } }));
+        const scriptedFailure = endpointFailures.get("embedding");
+        endpointFailures.delete("embedding");
+        // Like chat, a one-shot failure takes precedence without consuming a queued reply.
+        if (!scriptedFailure && embeddingReplies.length) {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(embeddingReplies.shift());
+          return;
+        }
+        const failure = scriptedFailure ?? { status: 503, message: "fake-ai-server does not serve embeddings" };
+        res.writeHead(failure.status, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: failure.message } }));
         return;
       }
       const thisDelay = delayMs;
@@ -213,10 +237,18 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
     backendBaseUrl: env.ci ? `http://127.0.0.1:${port}/v1` : `http://host.docker.internal:${port}/v1`,
     requests,
     embeddingRequests,
+    transcriptionRequests,
     queueReply(content) {
       queue.push(typeof content === "string" ? content : JSON.stringify(content));
     },
-    failNextWith(status, message) {
+    queueEmbeddingReply(content) {
+      embeddingReplies.push(JSON.stringify(content));
+    },
+    failNextWith(status, message, endpoint = "chat") {
+      if (endpoint !== "chat") {
+        endpointFailures.set(endpoint, { status, message: message || "stubbed provider failure" });
+        return;
+      }
       failStatus = status;
       if (message) failMessage = message;
     },
@@ -233,6 +265,9 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
       queue.length = 0;
       requests.length = 0;
       embeddingRequests.length = 0;
+      embeddingReplies.length = 0;
+      transcriptionRequests.length = 0;
+      endpointFailures.clear();
       failStatus = null;
       failMessage = "stubbed provider failure";
       delayMs = null;
