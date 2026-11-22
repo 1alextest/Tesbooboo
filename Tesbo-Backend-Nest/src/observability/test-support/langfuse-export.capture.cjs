@@ -1,6 +1,7 @@
 /** Test-only native Node worker; loaded with the existing ts-node register hook. */
 const assert = require("node:assert/strict");
 const { recordStandaloneGeneration, recordStandaloneTool } = require("../ai-trace.ts");
+const { tracedEmbeddingCall } = require("../embedding-trace.ts");
 const { flushLangfuse, isTracingEnabled, startLangfuse, stopLangfuse } = require("../langfuse.ts");
 
 async function capture() {
@@ -57,8 +58,33 @@ async function capture() {
       output: { partial: "sk-synthetic_capture_output_12345" },
       metadata: { ...metadata, sessionId: "capture-other-session", userId: "capture-other-user" }
     });
+    const originalEmbeddingError = new Error("synthetic embedding failure sk-synthetic_capture_embedding_failure_12345 Bearer synthetic.capture.embedding.bearer.12345");
+    let embeddingProviderCalls = 0;
+    let embeddingRejectionPreserved = false;
+    await assert.rejects(tracedEmbeddingCall({
+      traceSeed: otherSeed,
+      name: "capture.embedding.failure",
+      projectId: "capture-project",
+      organizationId: "capture-organization",
+      provider: "synthetic-provider",
+      model: "synthetic-embedding-model",
+      inputCount: 1,
+      inputSample: "synthetic embedding input sk-ant-synthetic_capture_input_12345"
+    }, async () => {
+      embeddingProviderCalls += 1;
+      throw originalEmbeddingError;
+    }), (error) => {
+      embeddingRejectionPreserved = error === originalEmbeddingError;
+      return embeddingRejectionPreserved;
+    });
+    assert.equal(embeddingProviderCalls, 1, "tracing must call the embedding provider exactly once");
     await flushLangfuse();
-    process.send({ primaryTraceId: await createTraceId(primarySeed), otherTraceId: await createTraceId(otherSeed) });
+    process.send({
+      primaryTraceId: await createTraceId(primarySeed),
+      otherTraceId: await createTraceId(otherSeed),
+      embeddingProviderCalls,
+      embeddingRejectionPreserved
+    });
   } finally {
     await stopLangfuse();
     assert.equal(isTracingEnabled(), false);

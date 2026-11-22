@@ -23,6 +23,7 @@ type Internals = {
   zyraJsonCompletion: (provider: string, model: string, key: Record<string, unknown>, system: string, user: string) => Promise<Reply>;
   finalizeZyraToolDecisionWithAi: (params: Record<string, unknown>) => Promise<unknown>;
   planZyraChatScenarios: (params: Record<string, unknown>) => Promise<unknown>;
+  buildZyraChatDecision: (projectId: string, userId: string, sessionId: string, message: string) => Promise<Reply>;
   summarizeForZyraMemory: (provider: string, model: string, key: Record<string, unknown>, prompt: string, scope: { projectId: string }) => Promise<string>;
   zyraAiAllocation: (projectId: string) => Promise<{ key: unknown }>;
   transcribeKnowledgeFile: (projectId: string, fileId: string, buffer: Buffer, ext: string, mimeType: string, fileName: string) => Promise<void>;
@@ -40,6 +41,46 @@ function mockResponse(payload: unknown): void {
 
 const openAiKey = { provider: "openai", api_key: "test-key" };
 const anthropicKey = { provider: "anthropic", api_key: "test-key" };
+
+function completion(provider: string, usage: unknown, body: Record<string, unknown> = { reply: "ok", action: "answer", scenarios: ["valid scenario"] }) {
+  const text = JSON.stringify(body);
+  return provider === "anthropic"
+    ? { content: [{ type: "text", text }], usage }
+    : { choices: [{ message: { content: text } }], usage };
+}
+
+const wirePaths = [
+  { name: "OpenAI router", provider: "openai", planner: false },
+  { name: "Anthropic router", provider: "anthropic", planner: false },
+  { name: "OpenAI planner", provider: "openai", planner: true },
+  { name: "Anthropic planner", provider: "anthropic", planner: true }
+] as const;
+
+function callWire(svc: LegacyService, path: typeof wirePaths[number]): Promise<Reply> {
+  const internal = svc as unknown as Internals;
+  const key = path.provider === "anthropic" ? anthropicKey : openAiKey;
+  const model = path.provider === "anthropic" ? "claude-sonnet-4-6" : "gpt-4o";
+  if (path.planner) return internal.zyraJsonCompletion(path.provider, model, key, "system", "user");
+  return path.provider === "anthropic"
+    ? internal.zyraChatWithAnthropic(key, model, "context", "message")
+    : internal.zyraChatWithOpenAi(key, model, "context", "message");
+}
+
+function prepareRouter(svc: LegacyService, key: Record<string, unknown> = openAiKey): void {
+  const internal = svc as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+  const responses = {
+    resolveJiraIssueKeysDetailed: { keys: [], extracted: [], configuredProjectKeys: [] },
+    zyraAgentSettings: { capabilities: { generation: true, knowledgeBase: false, testcaseStorage: true, suiteOperations: true } },
+    existingTestcaseSnapshot: [],
+    zyraAiAllocation: { key, reason: "" },
+    zyraChatProjectSnapshot: { suites: [], testcaseCount: 0, unassignedTestCaseCount: 0 },
+    relevantJiraSnapshot: [],
+    zyraPendingCreateBatches: [],
+    zyraPriorTurnContextRefs: undefined,
+    zyraResolveContextRefs: { jira: [], jiraIssueKeys: [], knowledge: [], bugs: [], knowledgeConfidence: "none" }
+  };
+  for (const [method, value] of Object.entries(responses)) jest.spyOn(internal, method).mockResolvedValue(value);
+}
 
 describe("Zyra provider usage parsing (cached input tokens)", () => {
   let svc: LegacyService;
@@ -141,5 +182,169 @@ describe("Zyra provider usage parsing (cached input tokens)", () => {
     await internal.transcribeKnowledgeFile("project-one", "file-one", Buffer.from("audio"), "mp3", "audio/mpeg", "sample.mp3");
     expect(global.fetch).not.toHaveBeenCalled();
     expect(recorded).not.toHaveBeenCalled();
+  });
+
+  describe.each(wirePaths)("$name usage boundaries", (path) => {
+    it.each([
+      ["absent", undefined], ["null", null], ["empty object", {}], ["array", []], ["string", "unknown"]
+    ])("leaves %s usage unknown instead of inventing measured zero", async (_label, usage) => {
+      mockResponse(completion(path.provider, usage));
+      expect((await callWire(svc, path)).__zyraUsage).toBeUndefined();
+    });
+
+    it("rejects malformed token values without coercing them into measurements", async () => {
+      const usage = path.provider === "anthropic"
+        ? { input_tokens: -1, output_tokens: "5", cache_read_input_tokens: Number.NaN, cache_creation_input_tokens: Number.POSITIVE_INFINITY }
+        : { prompt_tokens: -1, completion_tokens: "5", total_tokens: Number.POSITIVE_INFINITY, prompt_tokens_details: { cached_tokens: false } };
+      mockResponse(completion(path.provider, usage));
+      expect((await callWire(svc, path)).__zyraUsage).toBeUndefined();
+    });
+
+    it("preserves measured zero including an explicitly reported zero cache count", async () => {
+      const usage = path.provider === "anthropic"
+        ? { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+        : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, prompt_tokens_details: { cached_tokens: 0 } };
+      mockResponse(completion(path.provider, usage));
+      expect((await callWire(svc, path)).__zyraUsage).toEqual({ input: 0, output: 0, total: 0, cached: 0 });
+    });
+
+    it("keeps a partial measurement without filling in the unreported output or total", async () => {
+      mockResponse(completion(path.provider, path.provider === "anthropic" ? { input_tokens: 12 } : { prompt_tokens: 12 }));
+      expect((await callWire(svc, path)).__zyraUsage).toEqual({ input: 12 });
+    });
+
+    it("does not accept a usage field invented inside the model completion", async () => {
+      mockResponse(completion(path.provider, undefined, { reply: "ok", scenarios: ["valid"], __zyraUsage: { input: 999, output: 999 } }));
+      expect((await callWire(svc, path)).__zyraUsage).toBeUndefined();
+    });
+  });
+
+  it("does not turn malformed Anthropic cache accounting into a known total input", async () => {
+    mockResponse(completion("anthropic", { input_tokens: 12, output_tokens: 3, cache_read_input_tokens: "4" }));
+    expect((await callWire(svc, wirePaths[1])).__zyraUsage).toEqual({ output: 3 });
+  });
+
+  it.each(["finalizer", "planner"])("%s preserves missing and partial usage at the observation boundary", async (path) => {
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    const internal = svc as unknown as Internals;
+    const params = { projectId: "project-one", provider: "openai", model: "gpt-4o", key: openAiKey, message: "request" };
+    for (const usage of [undefined, { prompt_tokens: 12 }, { prompt_tokens: 0, completion_tokens: 0 }]) {
+      mockResponse(completion("openai", usage));
+      const result = path === "finalizer"
+        ? await internal.finalizeZyraToolDecisionWithAi({ ...params, toolName: "test", toolDecision: { reply: "ok", testcases: [] } })
+        : await internal.planZyraChatScenarios({ ...params, knowledge: [], existingTestcases: [], maxScenarios: 1 });
+      expect(result).toBeDefined();
+      expect(recorded.mock.calls.at(-1)?.[0].usage).toEqual(usage === undefined ? undefined : usage.completion_tokens === undefined ? { input: 12 } : { input: 0, output: 0 });
+    }
+  });
+
+  it.each(["openai", "anthropic"])("%s memory summary preserves absent, invalid, partial and zero usage", async (provider) => {
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    const key = provider === "anthropic" ? anthropicKey : openAiKey;
+    const partial = provider === "anthropic" ? { input_tokens: 12 } : { prompt_tokens: 12 };
+    const zero = provider === "anthropic" ? { input_tokens: 0 } : { prompt_tokens: 0 };
+    const invalid = provider === "anthropic" ? { input_tokens: "12", output_tokens: -1 } : { prompt_tokens: "12", completion_tokens: -1 };
+    for (const [usage, expected] of [[undefined, undefined], [{}, undefined], [invalid, undefined], [partial, { input: 12 }], [zero, { input: 0 }]]) {
+      mockResponse(completion(provider, usage));
+      expect(await (svc as unknown as Internals).summarizeForZyraMemory(provider, "model", key, "prompt", { projectId: "project-one" })).not.toBe("");
+      expect(recorded.mock.calls.at(-1)?.[0].usage).toEqual(expected);
+    }
+  });
+
+  it("does not substitute an unlabelled router estimate for missing provider usage", async () => {
+    prepareRouter(svc);
+    const recorded = jest.spyOn(aiTrace, "recordGeneration").mockImplementation(() => undefined);
+    mockResponse(completion("openai", undefined));
+    const decision = await (svc as unknown as Internals).buildZyraChatDecision("project-one", "user-one", "session-one", "Explain the available coverage");
+    expect(decision.reply).toBe("ok");
+    const router = recorded.mock.calls.find(([, input]) => input.name === "router")?.[1];
+    expect(router).toBeDefined();
+    expect(router?.usage).toBeUndefined();
+  });
+
+  it("does not report a transcription generation when allocation rejects before fetch", async () => {
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    const internal = svc as unknown as Internals;
+    jest.spyOn(internal, "zyraAiAllocation").mockRejectedValue(new Error("synthetic allocation failure"));
+    mockResponse({});
+    await internal.transcribeKnowledgeFile("project-one", "file-one", Buffer.from("audio"), "mp3", "audio/mpeg", "sample.mp3");
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(recorded).not.toHaveBeenCalled();
+    expect((svc as unknown as { db: { query: jest.Mock } }).db.query).toHaveBeenCalledWith(expect.stringContaining("extraction_status = 'failed'"), ["file-one"]);
+  });
+
+  it.each(["success", "network failure"])("does record transcription after a real request attempt: %s", async (outcome) => {
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    const internal = svc as unknown as Internals;
+    jest.spyOn(internal, "zyraAiAllocation").mockResolvedValue({ key: openAiKey });
+    if (outcome === "success") mockResponse({ text: "" });
+    else global.fetch = jest.fn().mockRejectedValue(new Error("synthetic network failure"));
+    await internal.transcribeKnowledgeFile("project-one", "file-one", Buffer.from("audio"), "mp3", "audio/mpeg", "sample.mp3");
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(recorded).toHaveBeenCalledTimes(1);
+    expect(recorded.mock.calls[0][0].name).toBe("knowledge.transcription");
+    expect(recorded.mock.calls[0][0].errorMessage).toBe(outcome === "success" ? undefined : "synthetic network failure");
+  });
+
+  it.each(["wire", "finalizer", "router"])("%s uses the actual Anthropic fallback request model, never a completion-supplied identity", async (path) => {
+    const standalone = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    const router = jest.spyOn(aiTrace, "recordGeneration").mockImplementation(() => undefined);
+    const requestedModels: string[] = [];
+    const key = { ...anthropicKey, default_model: "claude-haiku-4-5" };
+    global.fetch = jest.fn(async (_url: unknown, init?: RequestInit) => {
+      requestedModels.push(JSON.parse(String(init?.body)).model);
+      return requestedModels.length === 1
+        ? { ok: false, status: 404, json: async () => ({ error: { message: "model not found" } }) }
+        : { ok: true, json: async () => completion("anthropic", { input_tokens: 10, output_tokens: 2 }, { reply: "ok", action: "answer", __zyraModel: "completion-forgery" }) };
+    }) as unknown as typeof fetch;
+    const internal = svc as unknown as Internals;
+    let raw: Reply | undefined;
+    if (path === "wire") raw = await internal.zyraChatWithAnthropic(key, key.default_model, "context", "message");
+    else if (path === "finalizer") await internal.finalizeZyraToolDecisionWithAi({ projectId: "project-one", provider: "anthropic", model: key.default_model, key, message: "request", toolName: "test", toolDecision: { reply: "prior", testcases: [] } });
+    else {
+      prepareRouter(svc, key);
+      await internal.buildZyraChatDecision("project-one", "user-one", "session-one", "Explain the available coverage");
+    }
+    expect(requestedModels).toHaveLength(2);
+    expect(requestedModels[1]).not.toBe(requestedModels[0]);
+    const observedModel = path === "wire" ? raw?.__zyraModel : path === "finalizer" ? standalone.mock.calls[0][0].model : router.mock.calls.find(([, input]) => input.name === "router")?.[1].model;
+    expect(observedModel).toBe(requestedModels[1]);
+  });
+
+  it("planner traces use the actual normalized Anthropic request model", async () => {
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    mockResponse(completion("anthropic", { input_tokens: 10, output_tokens: 2 }));
+    await (svc as unknown as Internals).planZyraChatScenarios({ projectId: "project-one", provider: "anthropic", model: "sonnet", key: anthropicKey, message: "request", knowledge: [], existingTestcases: [], maxScenarios: 1 });
+    const sent = JSON.parse(String((global.fetch as jest.Mock).mock.calls[0][1].body)).model;
+    expect(sent).not.toBe("sonnet");
+    expect(recorded.mock.calls[0][0].model).toBe(sent);
+  });
+
+  it.each(["finalizer", "planner", "memory"])("%s failure traces retain the actual last request model", async (path) => {
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    const requestedModels: string[] = [];
+    const model = path === "planner" ? "sonnet" : "claude-haiku-4-5";
+    const failure = new Error("synthetic transport failure");
+    global.fetch = jest.fn(async (_url: unknown, init?: RequestInit) => {
+      requestedModels.push(JSON.parse(String(init?.body)).model);
+      if (path !== "planner" && requestedModels.length === 1) {
+        return { ok: false, status: 404, json: async () => ({ error: { message: "model not found" } }) };
+      }
+      throw failure;
+    }) as unknown as typeof fetch;
+    const internal = svc as unknown as Internals;
+    const params = { projectId: "project-one", provider: "anthropic", model, key: anthropicKey, message: "request" };
+    if (path === "memory") {
+      await expect(internal.summarizeForZyraMemory("anthropic", model, anthropicKey, "prompt", { projectId: "project-one" })).resolves.toBe("");
+    } else {
+      const call = path === "finalizer"
+        ? internal.finalizeZyraToolDecisionWithAi({ ...params, toolName: "test", toolDecision: { reply: "prior", testcases: [] } })
+        : internal.planZyraChatScenarios({ ...params, knowledge: [], existingTestcases: [], maxScenarios: 1 });
+      await expect(call).rejects.toBe(failure);
+    }
+    expect(requestedModels).toHaveLength(path === "planner" ? 1 : 2);
+    expect(requestedModels.at(-1)).not.toBe(model);
+    expect(recorded).toHaveBeenCalledTimes(1);
+    expect(recorded.mock.calls[0][0]).toMatchObject({ model: requestedModels.at(-1), errorMessage: "synthetic transport failure" });
   });
 });

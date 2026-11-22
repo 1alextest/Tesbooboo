@@ -342,9 +342,11 @@ behaviour characterised, cost gap found. Findings are §0 and §7. No repo chang
 6. Product E2E coverage per §9: **the complete traced product journeys remain unimplemented and
    unverified by this recovery.** Existing `ai-trace.spec.ts` exercises helper behavior with SDK
    mocks. The new `langfuse-export.integration.spec.ts` also ran the installed Langfuse/OTel SDK
-   against an ephemeral loopback HTTP capture: **3 tests passed, four observations delivered**.
+   against an ephemeral loopback HTTP capture: **4 tests passed, five observations delivered**.
    It verifies native trace/session/user identity, generation/tool types, model/usage fields,
-   tested key/bearer masking, metadata allowlisting/truncation and actual flush/shutdown. Its
+   tested key/bearer masking, metadata allowlisting/truncation and actual flush/shutdown. The
+   embedding failure observation verifies fixed status text, masked error details and the
+   unchanged original provider rejection. Its
    child-Node fixture avoids Jest's native dynamic-import restriction without changing the test
    configuration. No SDK/exporter mock, database, provider call or live credential is involved.
    The synthetic capture response does not prove Langfuse ingestion/authentication/UI, deployment,
@@ -361,7 +363,13 @@ run; dry runs do not start the tracing SDK. Integration-sync decisions include o
 project, run and native ticket identities and use a distinct invocation seed so repeated or
 cross-project decisions do not collapse into one trace. Finalizer, scenario-plan, memory-summary
 and fallback batch attempts also use UUID invocation seeds instead of millisecond timestamps.
-Unsupported transcription without an allocated model key creates no generation observation.
+Missing or malformed provider token counts remain unknown; explicit measured zero and partial
+usage are preserved without substituting estimates. Fallback generations record the actual sent
+model on both success and failure. Transcription setup failures before a provider request and
+unsupported transcription without an allocated model key create no generation observation.
+Interactive and embedding status messages use fixed text; provider error details are confined to
+masked output. Non-suite operation failures also mark the apply tool observation as failed while
+preserving the existing suite-specific staging and reply behavior.
 
 ### Phase 3 — Scores and evals (~1–1.5 days)
 

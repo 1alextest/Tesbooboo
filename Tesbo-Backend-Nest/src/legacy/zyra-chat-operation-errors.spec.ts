@@ -198,6 +198,33 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
     expect(JSON.stringify(operationTrace.mock.calls)).not.toContain("private suite failure");
   });
 
+  it.each(["update", "archive"])("%s operation errors are failed telemetry without changing suite-only staging behavior", async (type) => {
+    const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
+    const operationTrace = jest.spyOn(aiTrace, "recordStandaloneTool").mockResolvedValue(undefined);
+    jest.spyOn(svc as unknown as { findProjectTestcase: (...a: unknown[]) => Promise<unknown> }, "findProjectTestcase")
+      .mockRejectedValue(new Error("private testcase lookup failure"));
+    const operations = [{ type, testcaseId: "case-1", fields: { title: "Revised title" } }];
+    jest.spyOn(svc as unknown as { buildZyraChatDecision: (...a: unknown[]) => Promise<unknown> }, "buildZyraChatDecision")
+      .mockResolvedValue({ reply: "Operation routing fixture", actionType: type, operations, testcases: [] });
+    const inserted = jest.spyOn(svc as unknown as { insertZyraAssistantMessage: (...a: unknown[]) => Promise<unknown> }, "insertZyraAssistantMessage")
+      .mockResolvedValue({ id: "assistant-1", status: "completed" });
+    jest.spyOn(svc, "zyraChatSession").mockResolvedValue({ messages: [] });
+    const recorder = new ZyraTurnTraceRecorder();
+    await (svc as unknown as { executeZyraChatTurn: (...a: unknown[]) => Promise<unknown> }).executeZyraChatTurn({
+      projectId: "project-1", userId: "user-1", uid: "user-1", sessionId: "session-1",
+      message: "Apply the requested testcase change", userMessageId: "turn-1", sessionRow: {}
+    }, recorder.onStage);
+    const applied = (inserted.mock.calls[0][0] as Body).applied as AppliedShape;
+    expect(applied.testcases).toEqual([]);
+    expect(applied.activity).toEqual([expect.objectContaining({ title: "An operation failed unexpectedly" })]);
+    expect(operationTrace).toHaveBeenCalledWith(expect.objectContaining({
+      name: "zyra.apply_operations", errorMessage: "One or more operations reported an error"
+    }));
+    expect(JSON.stringify(operationTrace.mock.calls)).not.toContain("private testcase lookup failure");
+    // This patch changes the standalone observation only; existing suite-only UI rules stay intact.
+    expect(recorder.finish().steps.find((step) => step.stage === "staging")?.status).toBe("ok");
+  });
+
   it("an answer turn does not report an operation span when no operations were requested", async () => {
     const svc = makeLegacy();
     const operationTrace = jest.spyOn(aiTrace, "recordStandaloneTool").mockResolvedValue(undefined);

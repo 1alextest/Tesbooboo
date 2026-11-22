@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, writeFileSync, chmodSync, rmSync, symlinkSync, unlinkSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { requireApprovedMcpEndpoint } from "./mcp-approved-origin.mjs";
 import { REQUIRED_TOOLS, PROPOSAL_TOOLS, catalogFingerprint, catalogGaps, schemaGaps, summarize } from "./mcp-deploy-check.mjs";
 
 const text = { type: "string" };
@@ -136,20 +142,24 @@ test("a catalog that does not match the reported fingerprint fails", () => {
   assert.equal(result.fingerprintCheck, "mismatch");
 });
 
-test("fingerprint comparison is skipped when the server omits instructions", () => {
+test("missing instructions fail verification instead of reporting an unavailable fingerprint as OK", () => {
   const result = summarize({
     tools: validTools(),
     serverVersion: "0.1.0+abc123.0123456789abcdef",
     health: { gitSha: "abc123" }
   });
-  assert.equal(result.ok, true);
+  assert.equal(result.ok, false);
   assert.equal(result.fingerprintCheck, "unavailable");
+  assert.match(result.errors.join("\n"), /instructions.*fingerprint/);
 });
 
 test("a matching build and catalog pass without warnings", () => {
+  const tools = validTools();
+  const instructions = "Tesbo server instructions";
   const result = summarize({
-    tools: validTools(),
-    serverVersion: "0.1.0+abc123.0123456789abcdef",
+    tools,
+    instructions,
+    serverVersion: `0.1.0+abc123.${catalogFingerprint(tools, instructions)}`,
     health: { gitSha: "abc123" },
     expectedGitSha: "abc123"
   });
@@ -159,9 +169,12 @@ test("a matching build and catalog pass without warnings", () => {
 });
 
 test("a build mismatch is a failure, not a warning", () => {
+  const tools = validTools();
+  const instructions = "Tesbo server instructions";
   const result = summarize({
-    tools: validTools(),
-    serverVersion: "0.1.0+abc123.0123456789abcdef",
+    tools,
+    instructions,
+    serverVersion: `0.1.0+abc123.${catalogFingerprint(tools, instructions)}`,
     health: { gitSha: "abc123" },
     expectedGitSha: "def456"
   });
@@ -170,9 +183,12 @@ test("a build mismatch is a failure, not a warning", () => {
 });
 
 test("an unidentified build is reported but does not fail the capability check", () => {
+  const tools = validTools();
+  const instructions = "Tesbo server instructions";
   const result = summarize({
-    tools: validTools(),
-    serverVersion: "0.1.0+local.0123456789abcdef",
+    tools,
+    instructions,
+    serverVersion: `0.1.0+local.${catalogFingerprint(tools, instructions)}`,
     health: { gitSha: "local" },
     expectedGitSha: ""
   });
@@ -181,9 +197,12 @@ test("an unidentified build is reported but does not fail the capability check",
 });
 
 test("tool count is informational; capability gaps fail", () => {
+  const tools = validTools();
+  const instructions = "Tesbo server instructions";
   const result = summarize({
-    tools: validTools(),
-    serverVersion: "0.1.0+abc123.0123456789abcdef",
+    tools,
+    instructions,
+    serverVersion: `0.1.0+abc123.${catalogFingerprint(tools, instructions)}`,
     health: { gitSha: "abc123" },
     expectedGitSha: "abc123",
     expectedToolCount: "58"
@@ -196,4 +215,279 @@ test("a session without a reported version fails", () => {
   const result = summarize({ tools: validTools(), serverVersion: "", health: { gitSha: "abc123" } });
   assert.equal(result.ok, false);
   assert.match(result.errors.join("\n"), /did not report serverInfo.version/);
+});
+
+test("missing and malformed reported catalog fingerprints fail verification", () => {
+  for (const serverVersion of ["0.1.0+abc123", "0.1.0+abc123.not-a-fingerprint", "0.1.0+abc123.0123456789abcde"]) {
+    const result = summarize({
+      tools: validTools(), instructions: "Tesbo server instructions", serverVersion,
+      health: { gitSha: "abc123" }, expectedGitSha: "abc123"
+    });
+    assert.equal(result.ok, false, serverVersion);
+    assert.match(result.errors.join("\n"), /valid catalog fingerprint/);
+  }
+});
+
+function privateMcpFixture() {
+  const dir = mkdtempSync(path.join(tmpdir(), "tesbo-approved-origin-"));
+  const token = path.join(dir, "tesbo.token");
+  const origin = path.join(dir, "tesbo-approved-origin");
+  writeFileSync(token, "synthetic-token-only", { mode: 0o600 });
+  writeFileSync(origin, "https://trusted.example.test\n", { mode: 0o600 });
+  return { token, origin, dir, dispose: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+test("MCP credential requires a separately approved exact HTTPS origin", () => {
+  const x = privateMcpFixture();
+  try {
+    const url = requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp", x.token);
+    assert.equal(url.origin, "https://trusted.example.test");
+    assert.throws(() => requireApprovedMcpEndpoint("https://attacker.example.test/api/projects/example/mcp", x.token), /origin differs/);
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test:4433/api/projects/example/mcp", x.token), /origin differs/);
+    assert.throws(() => requireApprovedMcpEndpoint("http://trusted.example.test/api/projects/example/mcp", x.token), /must be HTTPS/);
+    assert.throws(() => requireApprovedMcpEndpoint("https://user:password@trusted.example.test/api/projects/example/mcp", x.token), /embedded credentials/);
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp?redirect=1", x.token), /embedded credentials/);
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/other/api/mcp", x.token), /project-scoped/);
+  } finally { x.dispose(); }
+});
+
+test("an explicitly approved self-hosted HTTPS origin may use a custom port", () => {
+  const x = privateMcpFixture();
+  try {
+    writeFileSync(x.origin, "https://trusted.example.test:8443", { mode: 0o600 });
+    const endpoint = requireApprovedMcpEndpoint("https://trusted.example.test:8443/api/projects/example/mcp", x.token);
+    assert.equal(endpoint.origin, "https://trusted.example.test:8443");
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp", x.token), /origin differs/);
+  } finally { x.dispose(); }
+});
+
+test("missing or malformed approved-origin file fails closed", () => {
+  const x = privateMcpFixture();
+  try {
+    writeFileSync(x.origin, "https://trusted.example.test/path", { mode: 0o600 });
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp", x.token), /exact HTTPS origin/);
+    writeFileSync(x.origin, "https://trusted.example.test", { mode: 0o600 });
+    unlinkSync(x.origin);
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp", x.token), /unavailable/);
+  } finally { x.dispose(); }
+});
+
+test("POSIX file permission and symlink attacks cannot redirect a credential", () => {
+  if (process.platform === "win32") return; // Windows ACLs are an OS setup prerequisite.
+  const x = privateMcpFixture();
+  try {
+    chmodSync(x.origin, 0o644);
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp", x.token), /must be private/);
+    chmodSync(x.origin, 0o600);
+    chmodSync(x.token, 0o644);
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp", x.token), /must be private/);
+    chmodSync(x.token, 0o600);
+    const link = path.join(x.dir, "token.link");
+    symlinkSync(x.token, link);
+    assert.throws(() => requireApprovedMcpEndpoint("https://trusted.example.test/api/projects/example/mcp", link), /regular file/);
+  } finally { x.dispose(); }
+});
+
+test("post-deploy credential is never sent before verified same-origin health and exact build", () => {
+  const x = privateMcpFixture();
+  try {
+    const hook = path.join(x.dir, "mock-fetch.mjs");
+    const events = path.join(x.dir, "events.txt");
+    // Isolated child process intercepts fetch: not one real network connection.
+    writeFileSync(hook, `
+import { appendFileSync } from "node:fs";
+globalThis.fetch = async (url, init = {}) => {
+  const path = new URL(url).pathname;
+  appendFileSync(process.env.TESBO_MCP_TEST_EVENTS, path + ":" + (init.headers?.Authorization ? "AUTH" : "NONE") + "\\n");
+  const health = path === "/api/health";
+  return new Response(JSON.stringify(health ? { gitSha: process.env.TESBO_MCP_TEST_HEALTH } :
+    { jsonrpc: "2.0", result: { tools: [] } }), { status: health ? 200 : 201,
+    headers: { "content-type": "application/json" } });
+};
+`, { mode: 0o600 });
+    const checker = fileURLToPath(new URL("./mcp-deploy-check.mjs", import.meta.url));
+    function invoke(sha) {
+      writeFileSync(events, "");
+      return spawnSync(process.execPath, ["--import", pathToFileURL(hook).href, checker], {
+        env: { ...process.env,
+          TESBO_MCP_URL: "https://trusted.example.test/api/projects/example/mcp",
+          TESBO_MCP_TOKEN_FILE: x.token,
+          TESBO_MCP_TOKEN: "synthetic-token-only",
+          EXPECTED_GIT_SHA: "a".repeat(40),
+          TESBO_MCP_TEST_HEALTH: sha,
+          TESBO_MCP_TEST_EVENTS: events },
+        encoding: "utf8", timeout: 12000
+      });
+    }
+    const denied = invoke("b".repeat(40));
+    assert.equal(denied.status, 1, denied.stderr);
+    assert.match(denied.stderr, /token not sent/);
+    assert.equal(readFileSync(events, "utf8"), "/api/health:NONE\n");
+
+    const allowed = invoke("a".repeat(40));
+    // No required tools are present in this deliberately tiny mock catalog;
+    // an authenticated request may occur ONLY after build identity matched.
+    assert.equal(allowed.status, 1, allowed.stdout + allowed.stderr);
+    assert.match(readFileSync(events, "utf8"), /^\/api\/health:NONE\n\/api\/projects\/example\/mcp:AUTH\n/);
+  } finally { x.dispose(); }
+});
+
+function invokeSyntheticMcp({ script = "mcp-deploy-check.mjs", mode = "complete", fileToken = "synthetic-file-token", environmentToken = "synthetic-other-token", endpoint = "https://trusted.example.test/api/projects/example/mcp" } = {}) {
+  const x = privateMcpFixture();
+  try {
+    writeFileSync(x.token, fileToken, { mode: 0o600 });
+    const events = path.join(x.dir, "events.jsonl");
+    const hook = path.join(x.dir, "mock-fetch.mjs");
+    const tools = validTools();
+    if (mode === "duplicate-name-echo") tools.push(tool(fileToken), tool(fileToken));
+    const instructions = "Synthetic MCP instructions";
+    const build = mode === "version-echo" ? fileToken : "a".repeat(40);
+    const version = `0.1.0+${build}.${catalogFingerprint(tools, instructions)}`;
+    writeFileSync(events, "");
+    // Preload installs fetch before the entrypoint runs. No imported entrypoint and
+    // no real URL is contacted; every credential and response here is synthetic.
+    writeFileSync(hook, `
+import { appendFileSync } from "node:fs";
+const tools = ${JSON.stringify(tools)};
+globalThis.fetch = async (url, init = {}) => {
+  const pathname = new URL(url).pathname;
+  const authorization = init.headers?.Authorization ?? init.headers?.authorization ?? null;
+  appendFileSync(process.env.TESBO_MCP_TEST_EVENTS, JSON.stringify({ pathname, authorization, redirect: init.redirect, environmentBearerPresent: Boolean(process.env.TESBO_MCP_TOKEN) }) + "\\n");
+  const mode = process.env.TESBO_MCP_TEST_MODE;
+  if (mode === "native-header-validation") new Request(url, init);
+  if (mode === "transport-error") throw new Error("Synthetic transport rejected " + authorization);
+  if (pathname === "/api/health") {
+    return new Response(JSON.stringify({ gitSha: "a".repeat(40) }), {
+      status: mode === "health-redirect" ? 302 : 200,
+      headers: { location: "https://unapproved.example.test/api/health" }
+    });
+  }
+  if (mode === "rpc-redirect") return new Response("", { status: 302, headers: { location: "https://unapproved.example.test/mcp" } });
+  if (mode.startsWith("consent-")) {
+    const token = authorization?.slice(7);
+    const code = mode === "consent-string" ? token : mode === "consent-object" ? { echo: token } : mode === "consent-array" ? [token] : -32001;
+    return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code, message: token } }), { status: 201 });
+  }
+  const request = JSON.parse(init.body);
+  const result = request.method === "initialize"
+    ? { serverInfo: { version: ${JSON.stringify(version)} }, ...(mode === "missing-instructions" ? {} : { instructions: ${JSON.stringify(instructions)} }) }
+    : { tools };
+  return new Response(JSON.stringify({ jsonrpc: "2.0", result }), { status: 201 });
+};
+`, { mode: 0o600 });
+    const target = fileURLToPath(new URL(`./${script}`, import.meta.url));
+    const shell = script.endsWith(".sh");
+    const child = spawnSync(shell ? "bash" : process.execPath, shell ? [target] : ["--import", pathToFileURL(hook).href, target], {
+      env: { ...process.env, NODE_OPTIONS: shell ? `--import=${pathToFileURL(hook).href}` : "", TESBO_MCP_URL: endpoint,
+        TESBO_MCP_TOKEN_FILE: x.token, TESBO_MCP_TOKEN: environmentToken,
+        EXPECTED_GIT_SHA: "a".repeat(40), EXPECTED_TOOL_COUNT: "", REQUIRE_PROPOSAL_PREVIEW: "",
+        TESBO_API_HEALTH_URL: "", TESBO_MCP_TEST_EVENTS: events, TESBO_MCP_TEST_MODE: mode },
+      encoding: "utf8", timeout: 12000
+    });
+    assert.equal(child.error, undefined, child.error?.message);
+    return { ...child, requests: readFileSync(events, "utf8").trim().split("\n").filter(Boolean).map(row => JSON.parse(row)) };
+  } finally { x.dispose(); }
+}
+
+test("the validated credential file is the only bearer source, even when a different environment token is present", () => {
+  const result = invokeSyntheticMcp();
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const authenticated = result.requests.filter(row => row.authorization);
+  assert.equal(authenticated.length, 2);
+  assert.ok(authenticated.every(row => row.authorization === "Bearer synthetic-file-token"));
+  assert.ok(!result.stdout.includes("synthetic-file-token"));
+});
+
+test("the checker works with the approved credential file and no environment bearer", () => {
+  const result = invokeSyntheticMcp({ environmentToken: "" });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(result.requests[0].authorization, null);
+  assert.equal(result.requests.filter(row => row.authorization).length, 2);
+});
+
+test("checker result and failure diagnostics redact a bearer echoed in server-controlled fields", () => {
+  for (const mode of ["version-echo", "duplicate-name-echo"]) {
+    const result = invokeSyntheticMcp({ mode });
+    assert.equal(result.status, mode === "version-echo" ? 0 : 1, result.stdout + result.stderr);
+    assert.ok(!result.stdout.includes("synthetic-file-token"), "stdout must not echo the bearer");
+    assert.ok(!result.stderr.includes("synthetic-file-token"), "stderr must not echo the bearer");
+    assert.match(result.stdout, /\[redacted\]/);
+  }
+});
+
+test("the shell wrapper supplies the approved file path without exporting a bearer", () => {
+  const result = invokeSyntheticMcp({ script: "verify-production-mcp.sh" });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(result.requests.length, 3);
+  assert.equal(result.requests[0].authorization, null);
+  assert.ok(result.requests.every(row => !row.environmentBearerPresent));
+  assert.ok(result.requests.filter(row => row.authorization).every(row => row.authorization === "Bearer synthetic-file-token"));
+  assert.ok(!result.stdout.includes("synthetic-file-token"));
+  assert.ok(!result.stdout.includes("synthetic-other-token"));
+});
+
+test("an approved endpoint with an incomplete catalog fingerprint fails the real checker process", () => {
+  const result = invokeSyntheticMcp({ mode: "missing-instructions" });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout, /instructions.*fingerprint/);
+  assert.match(result.stdout, /FAILED/);
+});
+
+test("consent diagnostics never reflect a string, object or array supplied as an error code", () => {
+  for (const mode of ["consent-string", "consent-object", "consent-array"]) {
+    const result = invokeSyntheticMcp({ script: "mcp-consent-probe.mjs", mode });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.ok(!result.stdout.includes("synthetic-file-token"));
+    assert.ok(!result.stderr.includes("synthetic-file-token"));
+    const diagnostic = JSON.parse(result.stdout);
+    assert.equal(diagnostic.code, null);
+    assert.equal(diagnostic.message, "malformed protocol error (details withheld)");
+  }
+});
+
+test("the expected numeric consent denial remains usable without reflecting the server message", () => {
+  const result = invokeSyntheticMcp({ script: "mcp-consent-probe.mjs", mode: "consent-denied" });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { status: 201, code: -32001, message: "external MCP consent is not approved" });
+  assert.ok(!result.stdout.includes("synthetic-file-token"));
+});
+
+test("malformed file credentials fail before authenticated fetch can echo an invalid header", () => {
+  for (const script of ["mcp-consent-probe.mjs", "mcp-deploy-check.mjs"]) {
+    const result = invokeSyntheticMcp({ script, mode: "native-header-validation", fileToken: "synthetic-first-line\nsynthetic-second-line" });
+    assert.ok(!result.stdout.includes("synthetic-first-line"));
+    assert.ok(!result.stderr.includes("synthetic-first-line"));
+    assert.equal(result.status, script === "mcp-consent-probe.mjs" ? 2 : 1);
+    assert.equal(result.requests.filter(row => row.authorization).length, 0);
+    assert.match(result.stderr, /invalid bearer value/);
+  }
+});
+
+test("consent transport exceptions cannot print a reflected credential", () => {
+  const result = invokeSyntheticMcp({ script: "mcp-consent-probe.mjs", mode: "transport-error" });
+  assert.equal(result.status, 1);
+  assert.ok(!result.stdout.includes("synthetic-file-token"));
+  assert.ok(!result.stderr.includes("synthetic-file-token"));
+  assert.match(result.stderr, /request failed \(details withheld\)/);
+});
+
+test("an unapproved HTTPS origin refuses before any network request", () => {
+  for (const script of ["mcp-deploy-check.mjs", "mcp-consent-probe.mjs"]) {
+    const result = invokeSyntheticMcp({ script, endpoint: "https://unapproved.example.test/api/projects/example/mcp" });
+    assert.equal(result.status, 2, result.stdout + result.stderr);
+    assert.deepEqual(result.requests, []);
+    assert.match(result.stderr, /origin differs/);
+  }
+});
+
+test("health and authenticated MCP redirects are refused without following another origin", () => {
+  const health = invokeSyntheticMcp({ mode: "health-redirect" });
+  assert.equal(health.status, 1, health.stdout + health.stderr);
+  assert.equal(health.requests.length, 1);
+  assert.equal(health.requests[0].authorization, null);
+  assert.equal(health.requests[0].redirect, "manual");
+  const rpc = invokeSyntheticMcp({ mode: "rpc-redirect" });
+  assert.equal(rpc.status, 1, rpc.stdout + rpc.stderr);
+  assert.equal(rpc.requests.length, 2);
+  assert.ok(rpc.requests.every(row => row.redirect === "manual"));
 });

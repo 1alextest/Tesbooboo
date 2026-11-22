@@ -309,6 +309,17 @@ export function recordExistingCoverage(turn: TurnHandle, data: { searchTerms: st
  *  does not apply to an observation's input/output body. */
 const RAW_OUTPUT_MAX = 8000;
 
+function knownTokenCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+/** Missing or invalid usage is unknown. Preserve measured zero and partial counts. */
+function generationUsage(usage?: { input?: number; output?: number }): { usageDetails?: Record<string, number> } {
+  const measured = Object.fromEntries(Object.entries({ input: usage?.input, output: usage?.output })
+    .filter((entry): entry is [string, number] => knownTokenCount(entry[1])));
+  return Object.keys(measured).length ? { usageDetails: measured } : {};
+}
+
 /**
  * One model call, with usage so cost aggregates per workspace.
  *
@@ -353,13 +364,13 @@ export function recordGeneration(
         model: data.model,
         input: data.input,
         output,
-        ...(data.usage ? { usageDetails: { input: data.usage.input ?? 0, output: data.usage.output ?? 0 } } : {}),
+        ...generationUsage(data.usage),
         metadata: {
           provider: data.provider,
-          ...(data.usage?.cached ? { cachedInputTokens: String(data.usage.cached) } : {}),
+          ...(knownTokenCount(data.usage?.cached) && data.usage.cached > 0 ? { cachedInputTokens: String(data.usage.cached) } : {}),
           ...(data.salvaged !== undefined ? { salvaged: String(data.salvaged) } : {})
         },
-        ...(data.errorMessage ? { level: "ERROR", statusMessage: shorten(data.errorMessage) } : {})
+        ...(data.errorMessage ? { level: "ERROR", statusMessage: "Operation failed (details in masked output)" } : {})
       },
       { asType: "generation" }
     );
@@ -407,10 +418,10 @@ export async function recordStandaloneGeneration(ctx: {
         model: ctx.model,
         input: ctx.input,
         output: ctx.errorMessage ? { error: ctx.errorMessage, ...(ctx.output !== undefined ? { output: ctx.output } : {}) } : ctx.output,
-        ...(ctx.usage ? { usageDetails: { input: ctx.usage.input ?? 0, output: ctx.usage.output ?? 0 } } : {}),
+        ...generationUsage(ctx.usage),
         metadata: {
           provider: ctx.provider,
-          ...(ctx.usage?.cached ? { cachedInputTokens: String(ctx.usage.cached) } : {}),
+          ...(knownTokenCount(ctx.usage?.cached) && ctx.usage.cached > 0 ? { cachedInputTokens: String(ctx.usage.cached) } : {}),
           ...metadata
         },
         ...(ctx.errorMessage ? { level: "ERROR", statusMessage: "Operation failed (details in masked output)" } : {})

@@ -24,6 +24,8 @@ type CapturedRequest = { method?: string; path?: string; headers: IncomingHttpHe
 const INPUT_KEY = "sk-ant-synthetic_capture_input_12345";
 const OUTPUT_KEY = "sk-synthetic_capture_output_12345";
 const ERROR_TOKEN = "synthetic.capture.bearer.12345";
+const EMBEDDING_ERROR_KEY = "sk-synthetic_capture_embedding_failure_12345";
+const EMBEDDING_ERROR_TOKEN = "synthetic.capture.embedding.bearer.12345";
 const DROPPED_METADATA = "synthetic-unapproved-metadata-must-not-export";
 const PUBLIC_KEY = "capture-public-key-not-a-real-credential";
 const SECRET_KEY = "capture-secret-key-not-a-real-credential";
@@ -38,8 +40,11 @@ describe("standalone observability helpers through the installed Langfuse HTTP e
   let server: Server | undefined;
   let worker: ChildProcess | undefined;
   let spans: OtlpSpan[] = [];
+  let standaloneSpans: OtlpSpan[] = [];
   let expectedTraceId: string;
   let otherTraceId: string;
+  let embeddingProviderCalls: number | undefined;
+  let embeddingRejectionPreserved: boolean | undefined;
 
   function spanNamed(name: string): OtlpSpan {
     const found = spans.filter((span) => span.name === name);
@@ -117,11 +122,18 @@ describe("standalone observability helpers through the installed Langfuse HTTP e
       }, 12_000);
       worker.stdout?.on("data", (chunk: Buffer) => { output += chunk.toString(); });
       worker.stderr?.on("data", (chunk: Buffer) => { output += chunk.toString(); });
-      worker.on("message", (message: { primaryTraceId?: string; otherTraceId?: string }) => {
+      worker.on("message", (message: {
+        primaryTraceId?: string;
+        otherTraceId?: string;
+        embeddingProviderCalls?: number;
+        embeddingRejectionPreserved?: boolean;
+      }) => {
         if (message.primaryTraceId && message.otherTraceId) {
           expectedTraceId = message.primaryTraceId;
           otherTraceId = message.otherTraceId;
         }
+        embeddingProviderCalls = message.embeddingProviderCalls;
+        embeddingRejectionPreserved = message.embeddingRejectionPreserved;
       });
       worker.once("error", (error) => { clearTimeout(deadline); reject(error); });
       worker.once("close", (code, signal) => {
@@ -133,6 +145,7 @@ describe("standalone observability helpers through the installed Langfuse HTTP e
     expect(captureErrors).toEqual([]);
     expect(captured.length).toBeGreaterThan(0);
     spans = captured.flatMap(({ body }) => body.resourceSpans.flatMap(({ scopeSpans }) => scopeSpans.flatMap(({ spans: rows }) => rows)));
+    standaloneSpans = spans.filter(({ name }) => name !== "capture.embedding.failure");
   }, 15_000);
 
   afterAll(async () => {
@@ -143,8 +156,16 @@ describe("standalone observability helpers through the installed Langfuse HTTP e
     }
   }, 10_000);
 
-  it("flushes four real SDK observations as OTLP/HTTP to the loopback capture", () => {
-    expect(spans).toHaveLength(4);
+  it("flushes five real SDK observations as OTLP/HTTP to the loopback capture", () => {
+    expect(spans).toHaveLength(5);
+    expect(spans.map(({ name }) => name).sort()).toEqual([
+      "capture.embedding.failure",
+      "capture.generation.failure",
+      "capture.generation.success",
+      "capture.tool.failure",
+      "capture.tool.success"
+    ]);
+    expect(new Set(spans.map(({ spanId }) => spanId)).size).toBe(5);
     for (const request of captured) {
       expect(request.method).toBe("POST");
       expect(request.path).toBe("/api/public/otel/v1/traces");
@@ -158,8 +179,9 @@ describe("standalone observability helpers through the installed Langfuse HTTP e
   it("exports native deterministic trace, session and user identity on each standalone observation", () => {
     expect(expectedTraceId).toMatch(/^[0-9a-f]{32}$/);
     expect(otherTraceId).not.toBe(expectedTraceId);
-    expect(new Set(spans.map(({ spanId }) => spanId)).size).toBe(4);
-    for (const span of spans) {
+    expect(standaloneSpans).toHaveLength(4);
+    expect(new Set(standaloneSpans.map(({ spanId }) => spanId)).size).toBe(4);
+    for (const span of standaloneSpans) {
       const failure = span.name.endsWith("failure");
       expect(span.traceId).toBe(failure ? otherTraceId : expectedTraceId);
       expect(span.spanId).toMatch(/^[0-9a-f]{16}$/);
@@ -177,8 +199,10 @@ describe("standalone observability helpers through the installed Langfuse HTTP e
 
   it("masks serialized input/output/error content and excludes non-allowlisted metadata before export", () => {
     const wirePayload = captured.map(({ raw }) => raw).join("\n");
-    for (const secret of [INPUT_KEY, OUTPUT_KEY, ERROR_TOKEN, DROPPED_METADATA]) expect(wirePayload).not.toContain(secret);
-    for (const span of spans) {
+    for (const secret of [INPUT_KEY, OUTPUT_KEY, ERROR_TOKEN, DROPPED_METADATA, EMBEDDING_ERROR_KEY, EMBEDDING_ERROR_TOKEN]) {
+      expect(wirePayload).not.toContain(secret);
+    }
+    for (const span of standaloneSpans) {
       const attrs = attributes(span);
       expect(attrs["langfuse.observation.metadata.projectId"]).toBe("capture-project");
       expect(attrs["langfuse.observation.metadata.planId"]).toBe(`${"p".repeat(199)}…`);
@@ -194,5 +218,29 @@ describe("standalone observability helpers through the installed Langfuse HTTP e
     expect(String(attributes(spanNamed("capture.generation.success"))["langfuse.observation.input"])).toContain("[REDACTED_KEY]");
     expect(String(attributes(spanNamed("capture.tool.success"))["langfuse.observation.input"])).toContain("Bearer [REDACTED]");
     expect(String(attributes(spanNamed("capture.tool.failure"))["langfuse.observation.output"])).toContain("Bearer [REDACTED]");
+  });
+
+  it("exports an embedding failure with a fixed status and masked details while preserving the original rejection", () => {
+    expect(embeddingProviderCalls).toBe(1);
+    expect(embeddingRejectionPreserved).toBe(true);
+    const embedding = spanNamed("capture.embedding.failure");
+    expect(embedding.traceId).toBe(otherTraceId);
+    expect(embedding.spanId).toMatch(/^[0-9a-f]{16}$/);
+    expect(embedding.parentSpanId).toBe("0000000000000001");
+    const attrs = attributes(embedding);
+    expect(attrs["langfuse.observation.type"]).toBe("embedding");
+    expect(attrs["langfuse.observation.model.name"]).toBe("synthetic-embedding-model");
+    expect(attrs["langfuse.observation.metadata.projectId"]).toBe("capture-project");
+    expect(attrs["langfuse.observation.metadata.organizationId"]).toBe("capture-organization");
+    expect(attrs["langfuse.observation.metadata.provider"]).toBe("synthetic-provider");
+    expect(attrs["langfuse.observation.level"]).toBe("ERROR");
+    expect(attrs["langfuse.observation.status_message"]).toBe("Embedding failed (details in masked output)");
+    expect(JSON.parse(String(attrs["langfuse.observation.input"]))).toEqual({
+      inputCount: 1,
+      sample: "synthetic embedding input [REDACTED_KEY]"
+    });
+    expect(JSON.parse(String(attrs["langfuse.observation.output"]))).toEqual({
+      error: "synthetic embedding failure [REDACTED_KEY] Bearer [REDACTED]"
+    });
   });
 });

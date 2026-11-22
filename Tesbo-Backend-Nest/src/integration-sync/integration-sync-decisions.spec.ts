@@ -36,3 +36,94 @@ describe("integration decision trace identity", () => {
     }
   });
 });
+
+describe.each(["openai", "anthropic"])("integration decision %s usage boundary", (provider) => {
+  const realFetch = global.fetch;
+  const allocation: ChatAllocation = { provider, api_key: "synthetic-private-key", default_model: null,
+    base_url: null, auth_header_name: null, auth_scheme: null, is_active: true };
+  const ticket = { issueId: "remote-one", issueKey: "QA-1", summary: "Decision", description: "" } as RemoteTicket;
+  const comments = [{ body: "Keep the existing behavior.", author: "QA", createdAt: "2026-11-21T00:00:00Z" }] as unknown as RemoteComment[];
+  const scope = { organizationId: "org-one", projectId: "project-one", runId: "run-one", ticketId: "native-one" };
+
+  function response(usage: unknown, text = "- Keep the existing behavior."): void {
+    global.fetch = jest.fn(async () => ({
+      ok: true,
+      json: async () => provider === "anthropic"
+        ? { content: [{ type: "text", text }], usage }
+        : { choices: [{ message: { content: text } }], usage }
+    })) as unknown as typeof fetch;
+  }
+
+  async function summarize() {
+    return new IntegrationSyncDecisions({} as DatabaseService).summarize(allocation, ticket, comments, scope);
+  }
+
+  afterEach(() => {
+    global.fetch = realFetch;
+    jest.restoreAllMocks();
+  });
+
+  it.each([
+    ["missing", undefined], ["null", null], ["empty", {}], ["array", []], ["string", "unknown"]
+  ])("keeps %s provider usage unknown without changing the decisions text", async (_label, usage) => {
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    response(usage);
+    await expect(summarize()).resolves.toBe("- Keep the existing behavior.");
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(recorded).toHaveBeenCalledTimes(1);
+    expect(recorded.mock.calls[0][0].usage).toBeUndefined();
+  });
+
+  it("keeps a partial count without inventing output tokens", async () => {
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    response(provider === "anthropic" ? { input_tokens: 12 } : { prompt_tokens: 12 });
+    await expect(summarize()).resolves.toBe("- Keep the existing behavior.");
+    expect(recorded.mock.calls[0][0].usage).toEqual({ input: 12 });
+    expect(recorded.mock.calls[0][0].usage?.output).toBeUndefined();
+  });
+
+  it("does not coerce numeric strings or malformed counts into measurements", async () => {
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    response(provider === "anthropic"
+      ? { input_tokens: "12", output_tokens: -1, cache_read_input_tokens: false }
+      : { prompt_tokens: "12", completion_tokens: -1, total_tokens: Number.NaN, prompt_tokens_details: { cached_tokens: false } });
+    await expect(summarize()).resolves.toBe("- Keep the existing behavior.");
+    expect(recorded.mock.calls[0][0].usage).toBeUndefined();
+  });
+
+  it("retains explicit measured zero, including zero cache usage", async () => {
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    response(provider === "anthropic"
+      ? { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+      : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, prompt_tokens_details: { cached_tokens: 0 } });
+    await expect(summarize()).resolves.toBe("- Keep the existing behavior.");
+    expect(recorded.mock.calls[0][0].usage).toEqual({ input: 0, output: 0, total: 0, cached: 0 });
+  });
+
+  it("keeps the provider's cache accounting alongside known input/output counts", async () => {
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    response(provider === "anthropic"
+      ? { input_tokens: 40, output_tokens: 10, cache_read_input_tokens: 60, cache_creation_input_tokens: 10 }
+      : { prompt_tokens: 110, completion_tokens: 10, total_tokens: 120, prompt_tokens_details: { cached_tokens: 70 } });
+    await expect(summarize()).resolves.toBe("- Keep the existing behavior.");
+    expect(recorded.mock.calls[0][0].usage).toEqual({ input: 110, output: 10, total: 120, cached: 70 });
+  });
+
+  it("preserves the NONE product result while retaining valid partial usage", async () => {
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    response(provider === "anthropic" ? { output_tokens: 1 } : { completion_tokens: 1 }, " NONE. ");
+    await expect(summarize()).resolves.toBeNull();
+    expect(recorded.mock.calls[0][0]).toMatchObject({ output: "NONE.", usage: { output: 1 } });
+    expect(recorded.mock.calls[0][0].usage?.input).toBeUndefined();
+  });
+
+  it("preserves provider failure as a degraded summary and an error observation", async () => {
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    global.fetch = jest.fn().mockRejectedValue(new Error("synthetic provider failure"));
+    await expect(summarize()).resolves.toBeNull();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(recorded).toHaveBeenCalledTimes(1);
+    expect(recorded.mock.calls[0][0]).toMatchObject({ errorMessage: "synthetic provider failure" });
+    expect(recorded.mock.calls[0][0].usage).toBeUndefined();
+  });
+});

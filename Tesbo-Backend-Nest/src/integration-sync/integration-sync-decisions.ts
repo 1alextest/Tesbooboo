@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import { DatabaseService } from "../database/database.service";
 import { recordStandaloneGeneration } from "../observability/ai-trace";
+import { parseProviderUsage, type ProviderUsage } from "../observability/provider-usage";
 import { DECISION_PROMPT_CHAR_BUDGET } from "./integration-sync.constants";
 import { RemoteComment, RemoteTicket } from "./integration-sync.types";
 
@@ -15,7 +16,7 @@ export interface ChatAllocation {
   is_active: boolean;
 }
 
-type ChatCompletionResult = { text: string; usage?: { input?: number; output?: number; cached?: number } };
+type ChatCompletionResult = { text: string; usage?: ProviderUsage };
 
 function trimTrailingSlashes(value: string): string {
   let end = value.length;
@@ -177,17 +178,10 @@ export class IntegrationSyncDecisions {
     if (!res.ok) throw new Error(`openai chat failed (${res.status})`);
     const data = (await res.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
-      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
+      usage?: unknown;
     };
     const text = String(data.choices?.[0]?.message?.content || "");
-    const usage = data.usage
-      ? {
-          input: data.usage.prompt_tokens,
-          output: data.usage.completion_tokens,
-          cached: data.usage.prompt_tokens_details?.cached_tokens
-        }
-      : undefined;
-    return { text, usage };
+    return { text, usage: parseProviderUsage("openai", data.usage) };
   }
 
   private async callAnthropic(allocation: ChatAllocation, userPrompt: string): Promise<ChatCompletionResult> {
@@ -213,19 +207,11 @@ export class IntegrationSyncDecisions {
       })
     });
     if (!res.ok) throw new Error(`anthropic messages failed (${res.status})`);
-    const data = (await res.json()) as { content?: Array<{ type?: string; text?: string }>; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } };
+    const data = (await res.json()) as { content?: Array<{ type?: string; text?: string }>; usage?: unknown };
     const text = (data.content || [])
       .filter((block) => block.type === "text")
       .map((block) => String(block.text || ""))
       .join("\n");
-    const cached = Number(data.usage?.cache_read_input_tokens || 0) + Number(data.usage?.cache_creation_input_tokens || 0);
-    const usage = data.usage
-      ? {
-          input: Number(data.usage.input_tokens || 0) + cached,
-          output: Number(data.usage.output_tokens || 0),
-          cached: cached || undefined
-        }
-      : undefined;
-    return { text, usage };
+    return { text, usage: parseProviderUsage("anthropic", data.usage) };
   }
 }

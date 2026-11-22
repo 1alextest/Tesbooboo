@@ -60,6 +60,31 @@ describe("ai-trace.ts", () => {
     return { span: makeFakeSpan(observationCalls), traceId: "trace-fake", sessionId: "session-1", userId: "user-1" };
   }
 
+  const usageCases: Array<[string, { input?: number; output?: number; cached?: number }, Record<string, number> | undefined]> = [
+    ["missing measurements", {}, undefined],
+    ["partial measurements", { input: 11 }, { input: 11 }],
+    ["measured zeros", { input: 0, output: 0 }, { input: 0, output: 0 }],
+    ["invalid measurements", { input: Number.NaN, output: -1, cached: Number.POSITIVE_INFINITY }, undefined]
+  ];
+  it.each(usageCases)("keeps %s truthful for both generation entry points", async (_label, usage, expected) => {
+    isTracingEnabledMock.mockReturnValue(true);
+    recordGeneration(fakeTurn(), { name: "router", provider: "openai", model: "model", usage });
+    await recordStandaloneGeneration({ traceSeed: "seed", name: "standalone", provider: "openai", model: "model", usage });
+    for (const call of [observationCalls[0], topLevelCalls[0]]) {
+      expect(call.attrs.usageDetails).toEqual(expected);
+      expect(call.attrs.metadata).not.toHaveProperty("cachedInputTokens");
+    }
+  });
+
+  it("keeps interactive generation failure details out of unmasked status attributes", () => {
+    const secret = "sk-synthetic_interactive_error_12345";
+    recordGeneration(fakeTurn(), { name: "router", provider: "openai", model: "model", errorMessage: `provider failed ${secret}` });
+    const call = observationCalls[0];
+    expect(call.attrs.statusMessage).toBe("Operation failed (details in masked output)");
+    expect(call.attrs.output).toEqual({ error: `provider failed ${secret}` });
+    expect(JSON.stringify(call.attrs.metadata)).not.toContain(secret);
+  });
+
   describe("recordGeneration", () => {
     it("is a no-op when the turn has no span (tracing off)", () => {
       recordGeneration({ span: null, traceId: null }, { name: "router", provider: "openai", model: "gpt-4o", output: { ok: true } });

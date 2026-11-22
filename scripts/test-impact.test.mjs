@@ -201,7 +201,7 @@ test("docs/tools/test-only inputs yield explicit non-product evidence, not a zer
 
 test("shared E2E setup/utils/fixtures/config/dependency edits widen impact instead of masquerading as test-only", () => {
   for (const filename of [
-    "e2e/global-setup.ts", "e2e/utils/env.ts", "e2e/utils/reports-fixture.ts",
+    "e2e/global-setup.ts", "e2e/.env.example", "e2e/utils/env.ts", "e2e/utils/reports-fixture.ts",
     "e2e/regression/fixtures.ts", "e2e/fixtures/new-fixture.ts", "e2e/playwright.config.ts",
     "e2e/playwright.ci-smoke.config.ts", "e2e/playwright.headed.config.ts", "e2e/package.json", "e2e/package-lock.json"
   ]) {
