@@ -295,3 +295,8 @@ The baseline: **any change that alters what the product does**, anywhere in
   fix. A fix without a failing-first test does not satisfy this rule.
 
 Exempt: docs, comments, formatting, and changes wholly inside `e2e/` itself.
+
+
+## Evidence-grounded decision engineering — binding (2026-11-22)
+
+Claude, coding agents, UX/UI authors and the Blue/Red/Green/White/QA/Security/Grey/Purple/Graph/Elephant-Gold assurance lenses follow [the shared decision skill](docs/agent-skills/evidence-grounded-decisions/SKILL.md). Investigate authoritative requirements, Tesbo policies, manuals, task/issue history, linked graph obligations and actual code before escalating an unresolved consequential decision. Every question identifies the trigger, evidence versus uncertainty, choices, downstream consequences, recommended option, accountable decision owner and record location. Do not invent product policy or ask for approval when existing authoritative decisions already settle it. Record accepted decisions and downstream obligations in native Tesbo requirements, cases, policies, manuals, issues and evidence where those tools are available and authorized. The seller-visibility issue is a generalizable example, not a Tesbo feature rule.
