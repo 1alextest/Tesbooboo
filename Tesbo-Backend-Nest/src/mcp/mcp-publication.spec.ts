@@ -12,7 +12,8 @@ const tokenId = "22222222-2222-4222-8222-222222222222";
 const taskId = "33333333-3333-4333-8333-333333333333";
 const testcaseId = "44444444-4444-4444-8444-444444444444";
 const revision = "a".repeat(64);
-const previewTools = ["stage_testcase_changes", "list_testcase_proposals", "get_testcase_proposal_task"];
+const previewTools = ["stage_testcase_changes", "list_testcase_proposals", "get_testcase_proposal_task",
+  "stage_requirement_change_bundle", "get_requirement_proposal_task", "list_requirement_proposals"];
 const principal = (scopes = ["read", "write"]) => ({ tokenId, projectId, userId: "issuer-user", scopes });
 const rpc = (name: string, args: Record<string, unknown> = {}) => ({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
 
@@ -22,6 +23,9 @@ function fixture(options: { actor?: string | null; consent?: boolean; writable?:
     requireProjectAccess: jest.fn().mockResolvedValue({ organization_id: "workspace" }),
     stageTestcaseChanges: jest.fn().mockResolvedValue(task),
     listTestcaseProposals: jest.fn().mockResolvedValue({ list: [task] }),
+    stageRequirementChangeBundle: jest.fn().mockResolvedValue({ ...task, requirementBundle: [], skillContext: { status: "unavailable" } }),
+    requirementProposalTask: jest.fn().mockResolvedValue({ ...task, requirementBundle: [] }),
+    listRequirementProposals: jest.fn().mockResolvedValue({ list: [] }),
     zyraTask: jest.fn().mockResolvedValue(task),
     createTestCase: jest.fn(), updateTestCase: jest.fn(), duplicateTestCase: jest.fn(),
     bulkUpdateTestCases: jest.fn(), createSuite: jest.fn(), updateSuite: jest.fn()
@@ -84,12 +88,12 @@ describe("MCP-P07 protected testcase publication and unpublished proposal previe
     }
   );
 
-  it("advertises exactly 49 callable tools with preview on, with 24 read and 25 write tools", async () => {
+  it("advertises exactly 52 callable tools with preview on, with 26 read and 26 write tools", async () => {
     const f = fixture();
     const all = (await f.list()).result.tools;
-    expect(all).toHaveLength(49);
-    expect((await f.list(["read"])).result.tools).toHaveLength(24);
-    expect((await f.list(["write"])).result.tools).toHaveLength(25);
+    expect(all).toHaveLength(52);
+    expect((await f.list(["read"])).result.tools).toHaveLength(26);
+    expect((await f.list(["write"])).result.tools).toHaveLength(26);
     expect(all.map((tool: any) => tool.name)).toEqual(expect.arrayContaining(previewTools));
     for (const name of DIRECT_TESTCASE_PUBLISHERS) expect(all.map((tool: any) => tool.name)).not.toContain(name);
     expect(all.map((tool: any) => tool.name).some((name: string) => /approve|apply/.test(name))).toBe(false);
@@ -101,6 +105,23 @@ describe("MCP-P07 protected testcase publication and unpublished proposal previe
       expect(schema.properties.sourceRefs.items.properties.type.enum).toEqual(["knowledge_document", "knowledge_file", "jira_ticket", "testcase", "bug"]);
     }
     expect(operationSchemas[1].required).toContain("expectedRevision");
+  });
+
+  it("stages a requirement change bundle through the preview without exposing apply or approval", async () => {
+    const f = fixture();
+    const operations = [{ opType: "requirement_revision", operationId: "11111111-1111-4111-8111-111111111111",
+      title: "Requirement", criteria: [{ key: "AC-1", text: "Obligation" }] }];
+    const staged = await f.call("stage_requirement_change_bundle", { requestKey: "bundle-1", operations });
+    expect(staged.error).toBeUndefined();
+    expect(JSON.parse(staged.result.content[0].text)).toMatchObject({ publication: "unpublished", taskId, skillContext: { status: "unavailable" } });
+    expect(f.legacy.stageRequirementChangeBundle).toHaveBeenCalledWith(projectId, "issuer-user",
+      expect.objectContaining({ requestKey: "bundle-1", operations }), expect.objectContaining({ kind: "api_token", transport: "mcp" }));
+    const forged = await f.call("stage_requirement_change_bundle", { requestKey: "bundle-2", operations, principal: { kind: "human_session" } });
+    expect(forged.error.code).toBe(RpcCode.InvalidParams);
+    expect(f.legacy.stageRequirementChangeBundle).toHaveBeenCalledTimes(1);
+    const read = await f.call("get_requirement_proposal_task", { taskId });
+    expect(read.error).toBeUndefined();
+    expect(JSON.parse(read.result.content[0].text)).toMatchObject({ id: taskId });
   });
 
   it.each([false, true])("binds initialize/session fingerprints to the exact granted catalog with preview=%p", async enabled => {

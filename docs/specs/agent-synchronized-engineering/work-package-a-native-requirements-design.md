@@ -361,7 +361,7 @@ All rows are planned; statuses distinguish executable-now from blocked.
 | D6 | `sourceRefs` for requirements | Use the existing `knowledge_document` citation type for review context; the typed link remains the only relation (no new enum) |
 | D7 | Skills unavailable | **Resolved:** staging/review/reject allowed; apply/approval/activation and approved-or-better coverage blocked, in preview too |
 | D8 | Audit depth | Activity for accepted mutations; `audit_logs` for unauthorized/cross-tenant/stale refusals |
-| D9 | Slice sequencing | Either implement the minimal effective-skill resolver first (WP-A positive rows become runnable) or ship Slice 1 as staging/review-only with WP-A publication explicitly BLOCKED |
+| D9 | Slice sequencing | **Resolved:** Slice 1 is staging/review/reject-withdraw first; apply/approval remain blocked until effective Skills resolution exists |
 | D10 | Migration number | Provisional only; assign after acceptance and reconciliation with the then-latest migrations |
 
 ---
@@ -373,3 +373,63 @@ All rows are planned; statuses distinguish executable-now from blocked.
 - `scripts/mcp-deploy-check.mjs` against `…/projects/df072dfe-e4d0-406a-9350-e0d022c6323f/mcp` with `REQUIRE_PROPOSAL_PREVIEW=1` → 49 tools, fingerprint `6f1a2c05c69f8948` matches, `OK`. Catalog has `get_requirement_matrix`; no native requirement or skill tools; retired `link_requirement_to_testcase` absent.
 - Sources read: `docs/specs/agent-synchronized-engineering/{requirements.md,design.md,implementation-plan.md,README.md,skills-governance.md,AGENT_RULE_TEMPLATE.md}` at the pinned commit; `src/legacy/{legacy.service.ts,testcase-edit-revision.ts,testcase-proposal-review.ts,approved-run-cases.policy.ts}`; `src/behavior-graph/model-studio-repository.ts`; `src/behavior-graph/graph-review-run-links.ts`; `src/integration-sync/integration-sync.processor.ts`; `src/mcp/{mcp.tools.ts,mcp.types.ts}`; `src/common/testcase-publication.policy.ts`; migrations `V45, V101, V147, V148, V151, V155, V156, V157, V158`; `Tesbo-Frontend/app/(app)/projects/[id]/requirements/page.tsx`; document write/review services.
 - **No implementation, migration or acceptance run has been performed for this note. UI statements are source-only.**
+
+---
+
+## 12. Slice 1 contracts (D9: staging first)
+
+### 12.1 One authoritative staged payload
+
+For Slice 1 the **authoritative reviewed content is `ai_generation_requests.generated_payload` itself** — the same array `testcase_proposal_review_snapshot()` returns as `operations` and `proposalDigest()` covers into `proposalRevision`. Typed requirement-revision and link-intent entries live as additional elements of that array; **no parallel staged table and no compatibility mirror exist**, so there is nothing that can disagree.
+
+- Operation kinds for the slice: `requirement_revision`, `testcase_create`, `requirement_case_link`. Existing case kinds (`create/update/archive`) are unchanged.
+- The proposal revision is computed over the returned snapshot, which includes every operation and its digests. A human reviews that revision; `expectedProposalRevision` on apply/decision must equal it.
+- Idempotent retry is keyed by `(projectId, producerPrincipal, requestKey)`: the same key with a byte-identical normalized payload returns the same task; any difference returns `PROPOSAL_REQUEST_CONFLICT` and writes nothing.
+- A stale target/document base revision or changed dependency snapshot is refused before staging with a 409, and on a later re-read the proposal revision moves only when the reviewed payload moves — never on a read.
+- If a later slice introduces a normalized table for these operations, it must be **derived** from `generated_payload`, byte-compared on read/apply, and fail closed on disagreement. The reviewed representation still owns the decision.
+
+### 12.2 Exact revision handoff (future publication, outside Slice 1)
+
+A staged link intent names the staged requirement revision and case operation, not official IDs (neither exists yet). When publication is eventually enabled:
+
+1. Protected apply creates the submitted requirement version and the official Draft case, then inserts the link bound to that exact requirement version and case edit revision; a later approval binds the approved requirement version.
+2. A requirement revision that is awaiting approval remains readable as a **submitted/candidate** revision; readers see it labelled unapproved, and the last approved version remains the current normative one.
+3. When the approved version changes, a new link row is created against the approved version (or the existing link is re-applied by a human); the original link and audit history are preserved, never rewritten. Current coverage follows the current approved version; historical coverage follows the historical link.
+4. None of this is implemented in Slice 1: apply, approval, link activation and approved-or-better coverage stay blocked by the Skills gate.
+
+### 12.3 Coverage and outcomes
+
+- **Authored**: an active link exists for the current requirement version (submitted or approved), at any case state. It proves a relationship was authored, not coverage.
+- **Approved**: the link targets the current **approved** requirement version and the current exact approved case revision; the case’s approval receipt is current.
+- **Executed**: approved **and** at least one qualifying attempt exists — a persisted result with `executed_at`/`executed_by`, in a run whose `cycle_items.snapshot_approval_revision` equals the link’s approval revision, for the same case and project.
+- **Passing**: executed and the **latest qualifying attempt** is `Passed`; the latest result is reported separately from verified coverage.
+- **Build/environment/execution scope**: each attempt reports its run’s name/build metadata and environment where recorded; coverage is scoped to the exact requirement version, case revision and approved basis, never pooled across bases.
+- **Mixed outcomes**: when qualifying PASS and FAIL results coexist on the same exact basis, the outcome is reported as **mixed**; `passing` is false unless the latest attempt is Passed, the discrepancy remains open for native triage, and only an authorized disposition (a later recorded attempt or an explicit triage decision in the native record) can resolve it. Historical results are never deleted to make the summary agree.
+- A linked draft, an unstarted run item and a stale attempt can only affect the reading they qualify for; none may raise approved, executed or passing.
+
+### 12.4 Slice 1 boundary
+
+Slice 1 implements: staging of the typed bundle in `generated_payload`, the native task review read, authorized reject (owner/manager) and withdraw (producer), the server-side Skills gate that refuses apply/approval/link activation with `SKILL_CONTEXT_UNAVAILABLE`, idempotency and conflict handling, and project/lineage isolation checks for staged references. It does **not** create requirement documents/versions, cases, active links or approvals, and it does not add the publication tables (§3.2/§3.3) — those remain specified for the publication slice.
+
+## 13. Slice 1 implementation map and evidence (as built)
+
+**Source symbols**
+
+- `LegacyService.stageRequirementChangeBundle` — validates one `requirement_revision`, optional `testcase_create` and optional `requirement_case_link`; enforces criterion-key membership, bundle-local operation references, request-key idempotency and the exact revision of an existing `requirement_note` document; records `REQUIREMENT_SKILL_CONTEXT`; writes only the review task.
+- `LegacyService.requirementProposalTask` / `listRequirementProposals` — the native review reads; they return the bundle from the single `generated_payload` authority.
+- `LegacyService.rejectRequirementProposal` / `withdrawRequirementProposal` — owner/manager human rejection, producer-only human withdrawal; append-only activity and project activity; idempotent close; no publication.
+- `LegacyService.assertGuardedPublicationAvailable` — called before any save write and before draft edit/delete; refuses a bundle with `SKILL_CONTEXT_UNAVAILABLE`.
+- `LegacyService.formatAiTask` — partitions the typed bundle entries from case drafts so the existing case review renderer never sees them; exposes `requirementBundle` and `skillContext`.
+- REST: `POST/GET /api/projects/:projectId/requirements/proposals`, `GET …/:taskId`, `POST …/:taskId/reject`, `POST …/:taskId/withdraw` in `legacy.controller.ts`.
+- MCP: `stage_requirement_change_bundle` (write), `get_requirement_proposal_task` and `list_requirement_proposals` (read), all `proposalPreviewOnly`; preview off hides and refuses them.
+- UI: the native task page renders the bundle panel (`requirement-change-bundle`), requirement criteria, case candidate, link criteria, the publication gate, and reject/withdraw actions.
+
+**Evidence run at this note revision**
+
+- `npx tsc --noEmit` (backend, frontend, e2e) — pass.
+- `npx eslint` on the changed backend/frontend/MCP files — pass.
+- Backend unit suites `mcp-publication.spec.ts` (50 tests) and `mcp.service.spec.ts` (151 tests) — pass, including the new bundle staging/read tool and the 52/26/26 preview catalog.
+- `node --test scripts/mcp-deploy-check.test.mjs` — 31 pass.
+- DB spec `testcase-proposal-review.db.spec.ts` now carries the bundle staging/rejection/gate/isolation coverage; it is in the CI `database-integrity` path list but **was not run locally** (no `DATABASE_URL`/Docker on this machine). CI status: NOT RUN at note time.
+- E2E specs `api/requirements.spec.ts` and the `ui/zyra.spec.ts` bundle test were added and added to the smoke workflow; **not run locally** (no `.env`, auth context or Docker). CI status: NOT RUN at note time.
+- The stage → review → reject/withdraw journey on a disposable project is **BLOCKED locally** by the same missing environment; the CI smoke step is the intended executing path.

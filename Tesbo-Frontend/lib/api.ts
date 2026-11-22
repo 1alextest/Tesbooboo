@@ -1061,6 +1061,10 @@ export interface ZyraTask {
   /** Full Notion page ids (not the short display keys) queued as Zyra context. */
   notionPageIds?: string[];
   drafts: AiGeneratedDraft[];
+  /** Work Package A Slice 1: typed requirement-revision/link-intent entries of the same reviewed proposal. */
+  requirementBundle?: Array<Record<string, unknown>>;
+  /** Why a requirement bundle cannot be published yet (currently the missing effective-skill resolver). */
+  skillContext?: { status: string; authority?: string; reason?: string };
   /** Exact server revision of the reviewable operations and their target context. */
   proposalRevision?: string;
   proposalSnapshot?: Record<string, unknown>;
@@ -1486,6 +1490,27 @@ export async function editZyraTaskDraft(
 export async function closeZyraTask(projectId: string, taskId: string): Promise<ZyraTask> {
   return api<ZyraTask>(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}/close`, {
     method: "POST",
+  });
+}
+
+/** Work Package A Slice 1 — read one staged requirement change bundle. */
+export async function getRequirementProposal(projectId: string, taskId: string): Promise<ZyraTask> {
+  return api<ZyraTask>(`/api/projects/${projectId}/requirements/proposals/${taskId}`);
+}
+
+/** Authorized owner/manager rejection of a staged bundle; nothing is published. */
+export async function rejectRequirementProposal(projectId: string, taskId: string, reason?: string): Promise<ZyraTask> {
+  return api<ZyraTask>(`/api/projects/${projectId}/requirements/proposals/${taskId}/reject`, {
+    method: "POST",
+    body: reason ? { reason } : {},
+  });
+}
+
+/** The producer withdrawing their own staged bundle; nothing is published. */
+export async function withdrawRequirementProposal(projectId: string, taskId: string, reason?: string): Promise<ZyraTask> {
+  return api<ZyraTask>(`/api/projects/${projectId}/requirements/proposals/${taskId}/withdraw`, {
+    method: "POST",
+    body: reason ? { reason } : {},
   });
 }
 

@@ -17,8 +17,10 @@ import {
   listNotionPages,
   listSuites,
   listZyraTaskTicketComments,
+  rejectRequirementProposal,
   retryZyraTicketComment,
   saveZyraTask,
+  withdrawRequirementProposal,
   sendZyraFeedback,
   type JiraTicket,
   type LinearTicket,
@@ -227,6 +229,7 @@ export default function ZyraTaskDetailPage() {
   const [snapshotOpen, setSnapshotOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
+  const [bundleWorking, setBundleWorking] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // A save failure renders inside the Save modal: the page-level `error` banner sits under the
@@ -345,6 +348,26 @@ export default function ZyraTaskDetailPage() {
       await loadData();
     } finally {
       setRetryingCommentId(null);
+    }
+  }
+
+  async function handleRequirementBundleDecision(decision: "rejected" | "withdrawn") {
+    if (!task || done || bundleWorking) return;
+    setBundleWorking(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const updated = decision === "rejected"
+        ? await rejectRequirementProposal(projectId, taskId)
+        : await withdrawRequirementProposal(projectId, taskId);
+      setTask(updated);
+      setMessage(decision === "rejected"
+        ? "Requirement change bundle rejected. Nothing was published."
+        : "Requirement change bundle withdrawn. Nothing was published.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "The requirement change bundle could not be updated.");
+    } finally {
+      setBundleWorking(false);
     }
   }
 
@@ -542,6 +565,18 @@ export default function ZyraTaskDetailPage() {
   // to review, or to retry after a failure. Disabling it here for todo/in_progress avoids a
   // pointless round trip that the server would reject with a 409 anyway.
   const canGiveFeedback = taskStatusNow === "in_review" || taskStatusNow === "failed";
+  type RequirementBundleEntry = {
+    opType?: string; title?: string; description?: string;
+    criteria?: Array<{ key?: string; text?: string }>;
+    draft?: { title?: string };
+    criterionKeys?: string[];
+  };
+  const requirementOps: RequirementBundleEntry[] = Array.isArray(task.requirementBundle)
+    ? (task.requirementBundle as RequirementBundleEntry[]) : [];
+  const bundleRequirement = requirementOps.find((entry) => entry.opType === "requirement_revision");
+  const bundleCase = requirementOps.find((entry) => entry.opType === "testcase_create");
+  const bundleLink = requirementOps.find((entry) => entry.opType === "requirement_case_link");
+  const bundleCriteria = Array.isArray(bundleRequirement?.criteria) ? bundleRequirement.criteria : [];
   const allDraftsSelected = task.drafts.length > 0 && selectedDrafts.length === task.drafts.length;
   const copyableDrafts = selectedDrafts.length > 0 ? selectedDrafts.map((i) => task.drafts[i]) : task.drafts;
   const draftsTsv = toTsv(
@@ -665,6 +700,62 @@ export default function ZyraTaskDetailPage() {
               );
             })}
           </ul>
+        </Card>
+      )}
+
+      {requirementOps.length > 0 && (
+        <Card className="p-4" data-testid="requirement-change-bundle">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0 flex-1 space-y-3">
+              <div>
+                <h2 className="text-lg font-semibold text-[var(--foreground)]">Requirement change bundle</h2>
+                <p className="mt-1 text-sm text-[var(--muted)]">
+                  Staging only. No requirement version, test case, active link or approval exists until a human publishes it.
+                </p>
+              </div>
+              {bundleRequirement && (
+                <div data-testid="requirement-bundle-candidate">
+                  <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Requirement revision candidate</p>
+                  <p className="mt-1 font-medium text-[var(--foreground)]">{String(bundleRequirement.title || "Untitled requirement")}</p>
+                  {bundleRequirement.description && <p className="mt-1 text-sm text-[var(--muted)]">{String(bundleRequirement.description)}</p>}
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[var(--foreground)]">
+                    {bundleCriteria.map((criterion) => (
+                      <li key={String(criterion.key)}><span className="font-mono text-xs text-[var(--muted)]">{String(criterion.key)}</span> {String(criterion.text)}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {bundleCase && (
+                <div data-testid="requirement-bundle-case">
+                  <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Testcase candidate (Draft proposal)</p>
+                  <p className="mt-1 text-sm text-[var(--foreground)]">{String(bundleCase.draft?.title || "Untitled test case")}</p>
+                </div>
+              )}
+              {bundleLink && (
+                <div data-testid="requirement-bundle-link">
+                  <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Link intent</p>
+                  <p className="mt-1 text-sm text-[var(--foreground)]">
+                    Criteria: {Array.isArray(bundleLink.criterionKeys) ? bundleLink.criterionKeys.join(", ") : "—"}
+                  </p>
+                </div>
+              )}
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-sm" data-testid="requirement-bundle-publication-gate">
+                {task.skillContext?.status === "unavailable"
+                  ? "Publication is blocked: required approved effective skills are unavailable. Reject or withdraw this bundle; applying it would publish nothing."
+                  : "Publication requires a resolved, pinned and conflict-free effective-skill assignment."}
+              </p>
+            </div>
+            {!done && (
+              <div className="flex shrink-0 gap-2">
+                <Button variant="secondary" onClick={() => void handleRequirementBundleDecision("withdrawn")} disabled={bundleWorking}>
+                  Withdraw
+                </Button>
+                <Button variant="secondary" onClick={() => void handleRequirementBundleDecision("rejected")} disabled={bundleWorking}>
+                  Reject
+                </Button>
+              </div>
+            )}
+          </div>
         </Card>
       )}
 

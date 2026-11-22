@@ -249,6 +249,19 @@ jobs:
           # API/UI report above, losing its test inventory and successful visual attachments.
           PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report-testcase-issue-keys npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-tail -g "TAI-A-22" --list
           PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report-testcase-issue-keys npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-tail -g "TAI-A-22"
+      - name: Verify requirement change bundle staging and review
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-requirements
+        run: |
+          # Work Package A Slice 1: staging/review/reject-withdraw only. Publication is blocked by
+          # the effective-skills gate, and the API spec proves the refused apply writes no official
+          # requirement version, testcase, link or approval. Runs after global setup provisions
+          # .auth/context.json and with the disposable smoke tenant.
+          npx playwright test -c playwright.config.ts api/requirements.spec.ts --workers=10 --output=test-results-requirements --list
+          npx playwright test -c playwright.config.ts api/requirements.spec.ts --workers=10 --output=test-results-requirements
+          npx playwright test -c playwright.config.ts ui/zyra.spec.ts --workers=10 --output=test-results-requirements-ui -g "requirement change bundle" --list
+          npx playwright test -c playwright.config.ts ui/zyra.spec.ts --workers=10 --output=test-results-requirements-ui -g "requirement change bundle"
       - name: Verify notification paging and unread counts
         working-directory: e2e
         env:

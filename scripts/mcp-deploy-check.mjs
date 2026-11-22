@@ -43,7 +43,8 @@ export const REQUIRED_TOOLS = [
   "run_behavior_model"
 ];
 
-export const PROPOSAL_TOOLS = ["stage_testcase_changes", "list_testcase_proposals", "get_testcase_proposal_task"];
+export const PROPOSAL_TOOLS = ["stage_testcase_changes", "list_testcase_proposals", "get_testcase_proposal_task",
+  "stage_requirement_change_bundle", "get_requirement_proposal_task", "list_requirement_proposals"];
 const RETIRED_PUBLISHERS = ["create_testcase", "update_testcase", "archive_testcase", "restore_testcase", "duplicate_testcase",
   "bulk_create_testcases", "bulk_update_testcases", "bulk_archive_testcases", "link_requirement_to_testcase", "unlink_requirement_from_testcase", "clone_test_suite", "create_suite", "update_suite"];
 
