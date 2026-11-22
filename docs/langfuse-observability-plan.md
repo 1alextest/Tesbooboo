@@ -1,6 +1,9 @@
 # Langfuse integration plan — full traceability for Zyra and every other model call
 
-Status: **Partial source implementation; PR103 additions are not yet merged or verified in a deployment.**
+Status: **Partial source implementation. PR103 merged as `96c0e78c` on November 21, 2026
+(America/Bogota); deployment and the full acceptance scope remain unverified.**
+The continuation below adds an explicit tracing opt-in, closes the terminal-dot cloud-host guard
+gap, and implements a bounded API acceptance selection in the existing disposable CI harness (§9.1).
 The existing `src/observability/` module is wired into `buildZyraChatDecision` for session/user identity,
 Jira context, knowledge context, existing coverage, the router, the generator
 (`generateZyraChatTestcasesWithAi`) and the `reply-reconciliation` guardrail. This candidate adds
@@ -534,9 +537,9 @@ Per `CLAUDE.md`, this ships with real, run, passing e2e tests. Scenarios listed 
 required.
 
 **Current boundary:** the local real-SDK capture described in §4 has run and passed. The scenarios
-below are the planned full product E2E requirements; their presence here does not mean they have
-been implemented or executed. The existing general product CI is separate evidence and does not
-prove the positive tracing paths while tracing is disabled.
+below define the full product E2E requirements. The bounded implementation and execution status in
+§9.1 must be read separately; neither merging PR103 nor passing general product CI establishes
+that every requirement below has been implemented or executed.
 
 **Harness:** point `LANGFUSE_BASE_URL` at a local capture stub that records the outbound OTLP body.
 This was already prototyped during the spike and works. It makes emission assertable, keeps the suite
@@ -586,6 +589,62 @@ No migration in scope (§5), so the migration scenarios from the first draft are
 
 Selection announced with `--list` counts, run at `--workers=10` in its own Terminal window via
 `scripts/e2e-run.sh`, **after asking** — per the standing protocol.
+
+### 9.1 Bounded API acceptance continuation
+
+The existing `playwright-smoke` job now has a dedicated selection in `e2e/api/zyra.spec.ts`.
+It uses the same already migrated disposable application and database as the other CI journeys.
+The model responder and loopback OTLP receiver are synthetic; HTTP routing, authentication,
+project checks, chat persistence and the installed Langfuse SDK are real application components.
+No paid provider, live Langfuse server, customer workspace or production configuration is used.
+
+| Cases | Required observation |
+|---|---|
+| `ZYR-OBS-01` | Scripted reply and independently read message rows agree, with one user row and one completed assistant row and no official testcase/task writes. |
+| `ZYR-OBS-02` | The complete outbound export masks synthetic secrets, including checks on metadata, model and identity fields outside the SDK input/output mask. |
+| `ZYR-OBS-03`–`04` | Concurrent sessions and separate tenants retain their own persisted reply, trace, project, user and session; cross-tenant transcript access is refused. |
+| `ZYR-OBS-05`–`06` | Anonymous, cross-tenant and blank-message requests preserve their existing refusal responses with no provider call, stored message or additional export. |
+| `ZYR-OBS-07` | A synthetic provider failure settles one product reply and produces a truthful, masked error observation. |
+| `ZYR-OBS-08`–`09` | The receiver actually returns 401 or 500 before the next turn; answers remain usable, health stays available and writes are not duplicated within the declared synthetic-turn budget. |
+
+Every case runs with tracing **disabled**, with `LANGFUSE_ENABLED` **unset**, and with tracing
+explicitly **enabled**: nine cases per mode, 27 planned executions, with no retries. Expected mode
+is a separately supplied test oracle, not inferred from the flag under test. Enabled cases require
+actual exported observations, native persisted-message trace identity, observation kinds and parent
+links; disabled/unset cases require zero outbound requests. Reconciliation is a same-trace sibling
+of the ended turn root, not a child falsely attributed to that root.
+
+The job stops the old backend process and verifies that it no longer serves before each mode,
+then restores the normal disabled backend before the remaining CI journeys. Distinct Playwright
+reports retain every mode. `e2e/utils/compare-langfuse-outcomes.mjs` requires nine passing artifacts
+per mode and compares their actual response/persisted-state/refusal outcomes after excluding
+per-run identities and timings, which have their own within-run assertions.
+
+**Execution status at authoring: implemented; CI execution pending.** Playwright discovery selects
+nine cases in one file without needing credentials, a database or a mode. Execution deliberately
+fails its prerequisite check unless an explicit mode, loopback receiver port and the existing
+isolated `tesbo_ci` application are configured. This also applies to a manual unfiltered run of
+the whole Zyra API file; existing CI selections use explicit patterns. A missing fixture is not
+a skipped or passing acceptance test. This block's guard does not precede Playwright's existing
+global setup, which may provision its normal fixture tenant first. Use the dedicated disposable
+CI workflow for this selection; the guard is not a promise that a manually misdirected command
+cannot write to a shared stack.
+
+The shared bootstrap regressions use the installed SDK in isolated child processes. Six of the
+13 installed-SDK cases failed before the guard repair; all 13 pass after it, and all 87 tests in
+the four observability suites pass locally. Separate unchanged Independent probes reproduce and
+then verify both the missing/invalid opt-in defect and the terminal-dot cloud-host defect. Negative
+cloud probes deny all networking; no request is sent to Langfuse Cloud.
+
+**Unresolved requirements and source findings:** this slice does not prove generation-task
+identity, draft save/delete, resumed background plans, plan/downgrade gating, UI journeys,
+unreachable/slow collector behavior, graceful shutdown, pricing, or live Langfuse ingestion/UI.
+The current turn caller omits organization metadata even though project/user/session are present.
+With no allocated AI key, context observations are emitted before the degraded reply and the
+opened root is not ended; this does not satisfy item 9's proposed zero-emission requirement.
+Those findings remain open. Item 12's historical 401 expectation also differs from the existing
+chat route: `requireUser()` returns 400 with `Authentication required`. The new test preserves
+that observed authorization refusal; it does not change the authentication policy.
 
 ---
 

@@ -162,7 +162,8 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
           res.end(JSON.stringify({ error: { message: failMessage } }));
           return;
         }
-        const next = matchedReply ?? queue.shift();
+        // The error-reply branch returned above; narrow again inside this delayed callback.
+        const next = typeof matchedReply === "string" ? matchedReply : queue.shift();
         const content = next ?? JSON.stringify({
           reply: "fake-ai-server: no scripted response was queued for this call.",
           reasoningSummary: "fake-ai-server exhausted its queue.",

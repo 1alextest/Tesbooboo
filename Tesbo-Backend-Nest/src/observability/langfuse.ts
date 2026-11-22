@@ -35,8 +35,8 @@ function resolveConfig(): { publicKey: string; secretKey: string; baseUrl: strin
   const baseUrl = String(process.env.LANGFUSE_BASE_URL || process.env.LANGFUSE_BASEURL || "").trim();
   const environment = String(process.env.LANGFUSE_ENVIRONMENT || "development").trim();
 
-  if (String(process.env.LANGFUSE_ENABLED || "").toLowerCase() === "false") {
-    logger.log("Tracing disabled by LANGFUSE_ENABLED=false.");
+  if (String(process.env.LANGFUSE_ENABLED || "").trim().toLowerCase() !== "true") {
+    logger.log("Tracing disabled; LANGFUSE_ENABLED=true is required.");
     return null;
   }
   if (!publicKey || !secretKey) {
@@ -54,7 +54,9 @@ function resolveConfig(): { publicKey: string; secretKey: string; baseUrl: strin
   // off unless the operator explicitly allowed cloud delivery.
   let pointsAtCloud = true;
   try {
-    const host = new URL(baseUrl).hostname.toLowerCase();
+    // A terminal DNS dot denotes the same host, not a distinct destination. Normalize it before
+    // enforcing cloud opt-in so an absolute hostname cannot bypass the customer-data boundary.
+    const host = new URL(baseUrl).hostname.toLowerCase().replace(/\.+$/, "");
     pointsAtCloud = host === "cloud.langfuse.com" || host.endsWith(".cloud.langfuse.com");
   } catch {
     // Keep the conservative answer: refuse rather than guess.

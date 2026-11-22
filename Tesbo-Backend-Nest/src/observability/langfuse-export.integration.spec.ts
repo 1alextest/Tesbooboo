@@ -45,6 +45,7 @@ describe("standalone observability helpers through the installed Langfuse HTTP e
   let otherTraceId: string;
   let embeddingProviderCalls: number | undefined;
   let embeddingRejectionPreserved: boolean | undefined;
+  let captureEnvironment: NodeJS.ProcessEnv;
 
   function spanNamed(name: string): OtlpSpan {
     const found = spans.filter((span) => span.name === name);
@@ -94,6 +95,7 @@ describe("standalone observability helpers through the installed Langfuse HTTP e
     const environment: NodeJS.ProcessEnv = {
       NODE_ENV: "test",
       TS_NODE_PROJECT: path.join(backendRoot, "tsconfig.json"),
+      LANGFUSE_ENABLED: "true",
       LANGFUSE_PUBLIC_KEY: PUBLIC_KEY,
       LANGFUSE_SECRET_KEY: SECRET_KEY,
       LANGFUSE_BASE_URL: `http://127.0.0.1:${port}`,
@@ -108,6 +110,7 @@ describe("standalone observability helpers through the installed Langfuse HTTP e
       OTEL_LOGS_EXPORTER: "none",
       OTEL_NODE_RESOURCE_DETECTORS: "none"
     };
+    captureEnvironment = environment;
     await new Promise<void>((resolve, reject) => {
       let output = "";
       worker = fork(path.join(__dirname, "test-support/langfuse-export.capture.cjs"), [], {
@@ -243,4 +246,58 @@ describe("standalone observability helpers through the installed Langfuse HTTP e
       error: "synthetic embedding failure [REDACTED_KEY] Bearer [REDACTED]"
     });
   });
+
+  async function verifyDisabledBootstrap(enabled: string | undefined, blockedBaseUrl?: string): Promise<void> {
+      const requestsBefore = captured.length;
+      const environment: NodeJS.ProcessEnv = {
+        ...captureEnvironment,
+        CAPTURE_EXPECT_DISABLED: "true"
+      };
+      if (enabled === undefined) delete environment.LANGFUSE_ENABLED;
+      else environment.LANGFUSE_ENABLED = enabled;
+      if (blockedBaseUrl) {
+        environment.LANGFUSE_BASE_URL = blockedBaseUrl;
+        environment.CAPTURE_EXPECT_CLOUD_REFUSAL = "true";
+      }
+      const backendRoot = path.resolve(__dirname, "../..");
+      await new Promise<void>((resolve, reject) => {
+        let output = "";
+        let confirmedDisabled = false;
+        worker = fork(path.join(__dirname, "test-support/langfuse-export.capture.cjs"), [], {
+          cwd: backendRoot,
+          env: environment,
+          execArgv: ["--require", require.resolve("ts-node/register/transpile-only")],
+          stdio: ["ignore", "pipe", "pipe", "ipc"]
+        });
+        const deadline = setTimeout(() => {
+          worker?.kill();
+          reject(new Error(`Disabled SDK capture worker exceeded 12 seconds\n${output}`));
+        }, 12_000);
+        worker.stdout?.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+        worker.stderr?.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+        worker.on("message", (message: { disabled?: boolean }) => {
+          confirmedDisabled = message.disabled === true;
+        });
+        worker.once("error", (error) => { clearTimeout(deadline); reject(error); });
+        worker.once("close", (code, signal) => {
+          clearTimeout(deadline);
+          if (code === 0 && confirmedDisabled) resolve();
+          else reject(new Error(`Disabled SDK capture worker failed (${code ?? signal})\n${output}`));
+        });
+      });
+      expect(captured).toHaveLength(requestsBefore);
+      expect(captureErrors).toEqual([]);
+  }
+
+  it.each([undefined, "", "false", "0", "junk"])(
+    "does not initialize the real SDK or export with LANGFUSE_ENABLED=%p even when keys and an endpoint exist",
+    async (enabled) => verifyDisabledBootstrap(enabled),
+    15_000
+  );
+
+  it.each(["cloud.langfuse.com", "us.cloud.langfuse.com", "cloud.langfuse.com.", "us.cloud.langfuse.com."])(
+    "refuses cloud host %s without cloud opt-in, including its DNS absolute-name form",
+    async (host) => verifyDisabledBootstrap("true", `https://${host}`),
+    15_000
+  );
 });

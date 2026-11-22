@@ -137,6 +137,10 @@ export type RbacTenantKind =
   // (api/zyra.spec.ts). Its own tenant because it toggles capabilities, removes the AI key, seeds
   // stale claims and running plans — each of which would change what other Zyra suites' turns see.
   | "zyra-trace"
+  // Tracing acceptance uses two isolated workspaces to prove concurrent export identities and
+  // cross-tenant refusals; it never shares another suite's provider allocations or transcripts.
+  | "zyra-observability-a"
+  | "zyra-observability-b"
   // Zyra's exact-value KB grounding (api/zyra.spec.ts). Its own, genuinely-empty tenant: each test
   // asserts which document is "KB 1", which any other suite's leftover docs would change.
   | "zyra-exact-values"
