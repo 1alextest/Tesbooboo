@@ -240,8 +240,10 @@ test("governed skills allow protected publication, exact approval and separate c
     };
 
     const requirementSkill = await makeSkill("requirements", "functional", "requirement_revision");
+    await assign(requirementSkill, "requirements", "functional", "requirement_revision");
     await assign(requirementSkill, "requirements", "functional", "requirement_case_link");
-    await makeSkill("test_cases", "manual", "testcase_create");
+    const caseSkill = await makeSkill("test_cases", "manual", "testcase_create");
+    await assign(caseSkill, "test_cases", "manual", "testcase_create");
     const assignmentRows = JSON.parse(scalar(`SELECT COALESCE(json_agg(json_build_object(
       'module',a.module,'subtype',a.subtype,'operation',a.operation,'status',a.status,
       'type',d.document_type,'kind',v.snapshot_kind,'digest',v.snapshot_metadata->>'contentDigest')),'[]'::json)::text
