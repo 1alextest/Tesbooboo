@@ -1,5 +1,80 @@
 # Native retest runtime findings and corrections
 
+## 2026-11-21 follow-up: UUID prefetch duplication
+
+This follow-up addresses the previously recorded duplicate-read finding under the owner's continuing failed-job recovery authority. The older runtime records below remain historical; their then-open title and billing findings must not be read as the current implementation state.
+
+The remote-title correction was merged with [PR173](https://github.com/1alextest/Tesbooboo/pull/173). [PR179](https://github.com/1alextest/Tesbooboo/pull/179) subsequently corrected the isolated billing fixture's entitlement-cache invalidation and the annual/monthly copy expectation. Its final smoke recorded 219 native/related passes and 40 billing passes with two existing Stripe-write skips. PR173's own merge had a red final billing run; the later recovery does not rewrite that result.
+
+### Fresh failure and exact source
+
+Development `a0bc3c65276e6bcd4eda2742a857883acba55a2b`, tree `90ebe0f31100a8950ae9d2db3ba729d43c5595ce`, failed [push run 44957310956, job 137008164422](https://github.com/1alextest/Tesbooboo/actions/runs/44957310956/job/137008164422): **219 selected, 218 passed, one failed, zero skipped and zero not run**. All 32 native retest cases passed. The failed ordinary UUID URL case expected one project GET and received two; its trace independently records two member GETs too. All four returned 200 with identical corresponding response-content hashes. Billing did not execute after this failure.
+
+Artifact 14728383948 was downloaded once and verified: 43,200,284 bytes, SHA256 `85c8af12bcbb3143159da8f5a0509dbad0f355eee1fc97ee857a28a1f8fee258`. The failure trace is 352,163 bytes, SHA256 `155144bb63fe0acb81b17c9da9d1123001638f4959dde43db028f9cb2a7dd64b`. Network ordering proves duplicate successful reads; callback ordering is established separately by the controlled-source probe and guarded browser regression.
+
+### Reused owner and preservation boundary
+
+| Required capability | Existing owner and current behavior | Decision |
+|---|---|---|
+| Overlap project reads with authentication | `AppDataProvider` starts `prefetchProjectForPath` before the session result; protected rendering still waits for authenticated state | Reuse unchanged |
+| Distinguish started reads from unconsumed promises | `lib/projectPrefetch.ts` starts UUID reads immediately, but its resolver previously used the consumable map as a started-state check | Extend this owner with an invocation-local UUID identity |
+| Consume and refresh project/member data | `ProjectDataProvider` takes each promise once and directly requests data for intentional refresh | Reuse unchanged; retain full project/member coverage |
+| Resolve readable project links | `routeParams.tsx` consumes the real resolver and updates the visible URL | Reuse unchanged |
+
+The resolver now avoids repeating the two reads when its resolved UUID matches the UUID this invocation already started, ignoring UUID letter case. A genuinely different resolved identity keeps the prior fallback. The take-once deletion, 15-second TTL, start timestamps, readable-key flow, server authorization, session gate, rejected-promise handling and explicit refetch methods are unchanged. There is no permanent fetched-project set.
+
+The new case in the existing `e2e/ui/readable-urls.spec.ts` holds only the real bare-project resolver GET. It waits until the authenticated project page has consumed both prefetches, checks the initial one/one counts and UUID URL, then releases the request. It requires the actual 200 response and identity, canonical readable URL and final one/one counts. The original exact-once case remains. No fabricated response, sleep, retry, broader timeout or weaker assertion was introduced.
+
+A controlled probe of the actual unfixed source reproduced two project and two member calls after consumption-before-resolution. The corrected source produced one each and preserved take-once behavior, a fresh second invocation, expiry and readable-key prefetch. This is module evidence, not application/database/browser execution. E2E TypeScript and whitespace checks passed at source publication; the subsequent first browser result is recorded below.
+
+### Coupled verification scope
+
+The CI impact lane retains all seven native Run/Execution/Plan/readable-URL files and adds complete `api/projects.spec.ts`, `ui/projects.spec.ts` and `ui/members.spec.ts` files to exercise intentional refresh after writes. It retains ten requested workers and zero retries. The separate full 42-case billing lane and its existing two requested workers remain unchanged; this does not claim ten-worker billing execution.
+
+Two newly selected successful-rename fixtures contradicted the existing 30-character maximum: the API rename was 40 characters and the UI rename 45. Only their unique renamed values changed, to 28 and 19 characters respectively. Exact persisted-name/description assertions, boundary/refusal tests and cleanup remain. Backend `validateProjectFields`, used by create and update, and frontend `PROJECT_NAME_MAX_LENGTH` establish the mismatch; no new runtime failure is claimed for these source-proven invalid inputs.
+
+### First fixed-source runtime: prefetch passed, expanded impact failed
+
+[PR187 run 44960038068 / job 137016598789](https://github.com/1alextest/Tesbooboo/actions/runs/44960038068/job/137016598789) executed checkout `074842b4e0caa3941c9ba39bc4fcc5e812edfc50`, tree `fcca5d7737ec7071a00b2ea2df7ab036837576d6`, with parents `a0bc3c65276e6bcd4eda2742a857883acba55a2b` and fixed head `8dac2273c034aeb05da6ffaebab4c940ee742b6b`. The complete detailed report contains **329 executions: 318 passed, nine failed and two timed out, with zero skips, flaky results, retries or not-run cases**.
+
+All seven original files plus the new held-resolver case passed **220/220**, including all 32 native retest cases and the mixed Tesbo/Jira/Linear title case. Both the ordinary exactly-once UUID case and the new forced late-resolver case passed. The expanded files contributed the eleven unexpected outcomes:
+
+| File | Selected | Passed | Unexpected |
+|---|---:|---:|---:|
+| `api/projects.spec.ts` | 76 | 70 | 6 |
+| `ui/projects.spec.ts` | 15 | 11 | 4 |
+| `ui/members.spec.ts` | 18 | 17 | 1 |
+
+Billing and the billing-cache fixture steps were skipped after the failed impact stage; this run supplies no new billing result. The original artifact 14729307525 was downloaded once and its digest checked: 67,193,231 bytes, SHA256 `494343b2e3685df568fcd9202e9ea2242b0472bb4a01317b276ee8aca753f062`. The complete job log SHA256 is `019b756643b0c3e834ea2fda12b5e82d07702eca78ea5f152d0ccc197e6cd6b3`.
+
+The UI traces distinguish test defects from product behavior: the icon fixture was rejected for an overlong name before navigation to an undefined ID; the deletion refusal uses a different exact inline message; the QA-role fieldsets and controls are actually disabled; and the member locator selected the roster role dropdown instead of the add-member picker. Corrections retain real icon set/reload/clear persistence, wrong-name deletion refusal and exact-name success, QA refusal and authorized editing after role refresh, and member add/remove readbacks. Fieldset containers use their native disabled property while individual textbox/Save/Delete checks still exercise Playwright's disabled-control contract. The same matcher/locator corrections cover sibling authorized-role scenarios.
+
+API source inspection also distinguishes stale expectations from product defects:
+
+| Failed expectation | Existing authoritative contract | Corrected proof |
+|---|---|---|
+| An explicit key collision must be rejected | `insertProjectWithUniqueKey` deliberately allocates a numeric suffix; the existing `project-keys` cases establish that behavior | Two distinct persisted projects have the exact base/base2 keys; the original project remains unchanged and both are cleaned up |
+| Anonymous overview/settings must return 401/403 | `requireUser` returns 400 with `{error: 'Authentication required'}` | Require that exact refusal body/status and unchanged stored settings |
+| Archive through PATCH; read `listed.total` | The testcase writer is PUT; the list is an array with `X-Total-Count` | Assert successful PUT and Archived readback, successful DELETE, exact surviving ID and count 1 from the real header and overview |
+| The cached overview changes immediately after deleting a run | The existing Redis aggregate cache is intentionally TTL-only for 10 seconds; live SQL already excludes deleted cycles | Clear only the newly created fixture project's `project-overview:<project UUID>` key, then assert exact null rollup/pass rate and the strictly earlier activity time while the audit feed still remembers the deleted run |
+
+The existing loopback-only cache fixture command is extended with a closed selector for `project-overview`; its default `entitlement` behavior is retained. Arbitrary keys/namespaces, malformed UUIDs, remote or credentialed Redis targets and nonzero Redis databases remain refused. The two overview callers use their own freshly created project IDs and reject remote API targets. Production cache configuration, TTL and invalidation are unchanged. The helper's exact-key and refusal contract tests run before its E2E callers. This proves fresh API aggregates after a controlled fixture invalidation; it does not claim immediate browser-card refresh or change the independent browser overview cache.
+
+A passing prefetch subset does not waive these full-file failures. All ten selected native/project/member files and both billing files remain required on the corrected combined head, with no retry, skip, timeout expansion or relaxed persistence/refusal check.
+
+During that run, PR181 advanced development to `ea7b19d1902da053a37dc0d34b687ad9a18129cc`. The integration commit `9044f9107236c87395df8ad8101d84f4b7e10a16` preserves both histories, and its tree `122e6f1fa52f268a5bffeb1d84482bf2a2bdd7b5` differs from the new development by exactly the same six reviewed blobs. Independent review confirmed no overlapping paths or change to project/member request owners; integrated TypeScript and collection passed. The original runtime above certifies only its recorded source tree. Corrective combined-head CI remains required.
+
+The [intermediate integration run 44960924619 / job 137019323851](https://github.com/1alextest/Tesbooboo/actions/runs/44960924619/job/137019323851), checkout `8f0c9067be54f7710803405da14bc4357f95a1eb`, again recorded 318 passes and 11 failures, but the failed identities were not identical. Ten earlier failures repeated; the owner member-picker case passed in this occurrence, and the standalone team-route case instead failed an obsolete UUID-only URL assertion. The recorded destination was the correct readable project-key settings path with `tab=members`. The redirect owner routes to settings and the existing route-parameter owner canonicalizes the project segment while retaining the query string. That case now reads the fixture's actual key through its signed-in owner context and requires the exact readable destination, preserving the members-page assertion. Both prefetch cases, all 32 native cases and the full original 220-case set passed again. This differing failure set is retained; an occasional pass does not repair either timing-sensitive test.
+
+Read-only collection is 3,045 tests across 91 files. An initial local 3,011 count omitted 34 theme registrations because screens metadata was absent (17 routes times two themes); temporary synthetic screens metadata restored exactly those 34 identities without a DB-success substitution or runtime claim.
+
+### Findings not fixed and delivery limits
+
+- A pending readable-key resolver can repopulate the prefetch map after `clearProjectPrefetch()`. The source review found this separate lifecycle race; this correction does not claim to fix it or demonstrate a cross-user disclosure.
+- The API's in-flight GET map and the route resolver's identity cache have separate session-scope questions. They are adjacent owners, not part of this bounded UUID repair. A same-document session-transition regression should precede any separate lifecycle correction.
+- Requirements, Cases, Manuals, Policies, Tasks, Evidence and Bugs reconciliation cannot be written/read back through Tesbo MCP because that connector is not exposed in this session. The GitHub work record is preserved; native synchronization is blocked, not complete.
+- Production deployment, the external own-driver QA loop and a new cache or agent platform are outside this increment. Merge to development remains conditional on the complete corrected-head gates; this source record is not a green-run claim.
+
 ## Evidence boundary
 
 This is a later correction record. The earlier source-review receipts and their hashes remain unchanged. Source review did not catch the recovery-trigger focus defect subsequently demonstrated by the real browser.
