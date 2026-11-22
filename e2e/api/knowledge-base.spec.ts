@@ -83,6 +83,35 @@ test.describe("knowledge base v2 — folders and documents", () => {
     if (tenant) purgeKb(tenant);
   });
 
+  test("WPA-01 preview-only requirement refuses disabled/anonymous requests without native writes", async () => {
+    const projectId = tenant!.mainProjectId;
+    const path = `/api/projects/${projectId}/knowledge-base/requirements/preview`;
+    const input = {
+      documentType: "requirement_note",
+      title: "QA preview only",
+      contentJson: {
+        schemaVersion: "tesbo-requirement/1",
+        description: "Example acceptance obligations for a preview-only test",
+        criteria: [{ key: "AC-1", text: "An unauthorized change is denied", normative: true }]
+      }
+    };
+    // The default-off rollout must not create native KB, case or run history.
+    const counts = () => scalar(`SELECT json_build_object(
+      'documents', (SELECT COUNT(*) FROM knowledge_documents WHERE project_id=${literal(projectId)}),
+      'versions', (SELECT COUNT(*) FROM knowledge_document_versions v JOIN knowledge_documents d ON d.id=v.document_id
+        WHERE d.project_id=${literal(projectId)}),
+      'cases', (SELECT COUNT(*) FROM testcases WHERE project_id=${literal(projectId)}),
+      'runs', (SELECT COUNT(*) FROM cycles WHERE project_id=${literal(projectId)})
+    )::text;`);
+    const before = counts();
+    const unauthenticated = await anon.post(path, { data: { notARequirement: true } });
+    expect(unauthenticated.status()).toBe(401);
+    const disabled = await asOwner.post(path, { data: input });
+    expect(disabled.status(), await disabled.text()).toBe(503);
+    expect((await disabled.json()).error).toBe("REQUIREMENT_PREVIEW_DISABLED");
+    expect(counts()).toBe(before);
+  });
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
   function kbUrl(suffix: string, projectId?: string): string {
