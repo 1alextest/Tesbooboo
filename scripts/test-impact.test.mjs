@@ -143,6 +143,29 @@ test("Review Board selections require its runtime checks without a standing evid
   hasSpec(result, "e2e/ci-smoke.spec.ts");
 });
 
+test("native requirement preview files receive explicit KB, authorization and testcase impact, not an unmapped product verdict", () => {
+  for (const filename of [
+    "Tesbo-Backend-Nest/src/legacy/native-requirement-preview.ts",
+    "Tesbo-Backend-Nest/src/legacy/native-requirement-preview.spec.ts"
+  ]) {
+    const result = plan([filename]);
+    assert.equal(result.status, "selection-only");
+    assert.deepEqual(result.unmappedPaths, []);
+    for (const domain of ["knowledge", "integrations", "testcases", "membership", "identity", "rest"]) hasDomain(result, domain);
+    for (const spec of ["e2e/api/knowledge-base.spec.ts", "e2e/api/authorization.spec.ts",
+      "e2e/api/testcases.spec.ts", "e2e/ui/requirements.spec.ts"]) hasSpec(result, spec);
+    for (const id of ["backend-quality", "playwright-smoke"]) {
+      assert.ok(result.requiredChecks.some(check => check.id === id), `Missing ${id} for ${filename}`);
+    }
+    assert.ok(!result.diagnostics.some(item => item.code === "UNMAPPED_PRODUCT_PATH"));
+    assert.equal(result.verification.status, "not-run", "Static selection never proves execution");
+  }
+  const unrelated = "Tesbo-Backend-Nest/src/legacy/native-requirement-publisher.ts";
+  const unknown = plan([unrelated]);
+  assert.equal(unknown.status, "review-required", "A future publisher must not inherit preview-only ownership");
+  assert.deepEqual(unknown.unmappedPaths, [unrelated]);
+});
+
 test("unknown product paths fail review even if a shared-risk pattern adds many tests", () => {
   for (const filename of ["Tesbo-Backend-Nest/src/unowned/feature.ts", "Tesbo-Frontend/lib/unowned.ts",
     "Tesbo-Backend-Nest/src/new-area/new-session.guard.ts", "unexpected-root-product.ts"]) {
