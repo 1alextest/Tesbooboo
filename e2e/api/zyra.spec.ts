@@ -8022,7 +8022,8 @@ test.describe("zyra — writes in the language the user writes in (fake provider
  */
 test.describe("zyra — product behavior and real tracing export in disposable CI", () => {
   const SCRIPTED_REPLY = "The observation fixture allows exactly ten seats.";
-  const SYNTHETIC_KEY = "sk-e2e-observability-allocated-key-12345";
+  // Repetitive dummy: exercises the real key mask without resembling a stored credential.
+  const SYNTHETIC_KEY = "sk-test-test-test-test-test";
   const MODEL = "gpt-4o-mini";
   const QUIET_WINDOW_MS = 1_250; // More than six explicitly configured 200 ms export intervals.
   const TURN_BUDGET_MS = 15_000;
