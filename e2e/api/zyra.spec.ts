@@ -296,7 +296,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       }
       const [read, write] = keys;
       const readCatalog = await rpc(read.token, "tools/list");
-      expect(readCatalog.result.tools).toHaveLength(24);
+      expect(readCatalog.result.tools).toHaveLength(26);
       expect(readCatalog.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("preview_behavior_model_draft");
       // Credential-visible write tools; retired native publishers (including the suite creators)
       // are hidden and refuse, so the catalog stays at the non-publisher count.
