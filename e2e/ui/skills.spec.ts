@@ -234,4 +234,33 @@ test.describe("governed skills operator journey (UI)", () => {
       exec(`DELETE FROM knowledge_documents WHERE id=${literal(skill.documentId)} AND project_id=${literal(tenant!.mainProjectId)};`);
     }
   });
+
+  test("a duplicate skill key is refused without creating a second candidate", async () => {
+    const suffix = Date.now();
+    const skillKey = `PILOT-DUP-${String(suffix).slice(-8)}`;
+    const firstTitle = `Pilot key owner ${suffix}`;
+    const secondTitle = `Pilot duplicate ${suffix}`;
+    let documentId = "";
+    try {
+      const first = await ownerApi.post(`${base()}/skills`, { data: {
+        title: firstTitle, module: "requirements", subtype: "functional", skillKey,
+        instructions: "Require observable criteria and an unchanged-state result for rejected transitions."
+      } });
+      expect(first.ok(), await first.text()).toBe(true);
+      documentId = (await first.json()).id;
+      const duplicate = await ownerApi.post(`${base()}/skills`, { data: {
+        title: secondTitle, module: "requirements", subtype: "functional", skillKey,
+        instructions: "This second candidate must never exist."
+      } });
+      expect(duplicate.status()).toBe(409);
+      expect(await duplicate.json()).toMatchObject({ code: "SKILL_KEY_CONFLICT" });
+      expect(scalar(`SELECT COUNT(*)::int FROM skill_profiles WHERE project_id=${literal(tenant!.mainProjectId)} AND skill_key=${literal(skillKey)};`)).toBe("1");
+      expect(scalar(`SELECT COUNT(*)::int FROM knowledge_documents WHERE project_id=${literal(tenant!.mainProjectId)} AND title IN (${literal(firstTitle)},${literal(secondTitle)});`)).toBe("1");
+    } finally {
+      if (documentId) {
+        exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(documentId)};`);
+        exec(`DELETE FROM knowledge_documents WHERE id=${literal(documentId)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      }
+    }
+  });
 });
