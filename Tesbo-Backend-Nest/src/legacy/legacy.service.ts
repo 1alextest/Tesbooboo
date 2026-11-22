@@ -11,7 +11,8 @@ import { EmailService } from "../auth/email.service";
 import { PasswordService } from "../auth/password.service";
 import { AppConfigService } from "../config/app-config.service";
 import { DatabaseService } from "../database/database.service";
-import { endZyraTurn, recordExistingCoverage, recordGeneration, recordJiraContext, recordKnowledgeContext, recordReconciliation, startZyraTurn, type TurnHandle } from "../observability/ai-trace";
+import { endZyraTurn, recordExistingCoverage, recordGeneration, recordJiraContext, recordKnowledgeContext, recordReconciliation, recordStandaloneGeneration, recordStandaloneTool, startZyraTurn, type TurnHandle } from "../observability/ai-trace";
+import { parseProviderUsage, type ProviderUsage } from "../observability/provider-usage";
 import { storageKeyExtension } from "../storage/storage-key";
 import { StorageService } from "../storage/storage.service";
 import { encryptSecret, decryptSecret } from "../common/crypto.util";
@@ -53,8 +54,7 @@ import {
   markdownToNotionRichText,
   notionPageTitle,
   notionPropertiesMarkdown,
-  notionTicketFields,
-  renderNotionProperties
+  notionTicketFields
 } from "../integration-sync/notion-render";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import { RequestCacheService } from "../request-cache/request-cache.service";
@@ -370,6 +370,8 @@ type ZyraAiUsage = {
   total: number;
   cached: number;
 };
+
+type ZyraProviderAttempt = { model?: string };
 
 type ZyraAiResult = {
   drafts: Body[];
@@ -4965,7 +4967,7 @@ export class LegacyService implements OnModuleInit {
       total = Number(counted.rows[0]?.n || 0);
     }
     // total_count is transport for the header, not part of a test case.
-    return { rows: res.rows.map(({ total_count, ...row }) => toCamel(row)), total };
+    return { rows: res.rows.map(({ total_count: _totalCount, ...row }) => toCamel(row)), total };
   }
 
   /**
@@ -9712,7 +9714,6 @@ export class LegacyService implements OnModuleInit {
   static displayFileName(originalName: string, max = 255): string {
     const base = path
       .basename(String(originalName ?? "").replace(/\\/g, "/"))
-      // eslint-disable-next-line no-control-regex
       .replace(/[\u0000-\u001f\u007f]/g, "")
       .trim();
     if (!base || base === "." || base === "..") return "upload";
@@ -13166,12 +13167,17 @@ export class LegacyService implements OnModuleInit {
   // when the project has an OpenAI key allocated — no other provider offers a compatible
   // transcription endpoint we can safely assume the shape of.
   private async transcribeKnowledgeFile(projectId: string, fileId: string, buffer: Buffer, ext: string, mimeType: string, fileName: string): Promise<void> {
+    const traceSeed = `knowledge:transcription:${fileId}`;
+    // File names belong in masked input, never in unmasked observation metadata.
+    const traceMeta = { projectId, fileId, ext };
+    let requestAttempted = false;
     try {
       const project = await this.db.query<{ organization_id: string }>("SELECT organization_id FROM projects WHERE id = $1", [projectId]);
       const allocation = await this.zyraAiAllocation(projectId);
       const key = allocation.key;
       if (!key || String(key.provider || "").toLowerCase() !== "openai") {
         await this.db.query("UPDATE knowledge_files SET extraction_status = 'unsupported' WHERE id = $1", [fileId]);
+        // No model request occurred; do not invent a generation observation.
         return;
       }
       const form = new FormData();
@@ -13181,7 +13187,9 @@ export class LegacyService implements OnModuleInit {
       const scheme = String(key.auth_scheme || "Bearer").trim();
       const headers: Record<string, string> = {};
       headers[authHeader] = scheme ? `${scheme} ${key.api_key}` : String(key.api_key);
-      const res = await fetch(normalizeAudioTranscriptionsUrl(key.base_url), { method: "POST", headers, body: form });
+      const url = normalizeAudioTranscriptionsUrl(key.base_url);
+      requestAttempted = true;
+      const res = await fetch(url, { method: "POST", headers, body: form });
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({} as Body)) as Body;
         const rawMessage = String(errBody.error?.message || errBody.error || res.status);
@@ -13194,9 +13202,28 @@ export class LegacyService implements OnModuleInit {
         [fileId, text || null]
       );
       if (text) this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "file", fileId, "transcribed");
+      void recordStandaloneGeneration({
+        traceSeed,
+        name: "knowledge.transcription",
+        provider: "openai",
+        model: "whisper-1",
+        input: { fileName, ext, mimeType, sizeBytes: buffer.length },
+        output: { status: "ready", transcriptChars: text.length },
+        metadata: traceMeta
+      });
     } catch (err) {
-      this.logger.warn(`Knowledge-base transcription failed for file ${fileId}: ${err instanceof Error ? err.message : err}`);
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Knowledge-base transcription failed for file ${fileId}: ${message}`);
       await this.db.query("UPDATE knowledge_files SET extraction_status = 'failed', updated_at = now() WHERE id = $1", [fileId]).catch(() => undefined);
+      if (requestAttempted) void recordStandaloneGeneration({
+        traceSeed,
+        name: "knowledge.transcription",
+        provider: "openai",
+        model: "whisper-1",
+        input: { fileName, ext, mimeType, sizeBytes: buffer.length },
+        errorMessage: message,
+        metadata: traceMeta
+      });
     }
   }
 
@@ -16676,10 +16703,29 @@ export class LegacyService implements OnModuleInit {
       // Suite creation/assignment can return normally after a recorded operation error. Report that on
       // the existing step so the recorder does not label the turn completed without errors. This
       // neither infers rollback/suite counts nor changes how any operation is applied.
-      if (decision.operations.length && decision.operations.every((op) => op.type === "create_suite" || op.type === "move_to_suite") &&
-          applied.activity.some((entry) => entry.title === "An operation failed unexpectedly" || entry.title === "Could not move testcases" || entry.title === "Could not create suite")) {
+      const operationFailed = decision.operations.length > 0 &&
+        applied.activity.some((entry) => entry.title === "An operation failed unexpectedly" || entry.title === "Could not move testcases" || entry.title === "Could not create suite");
+      const suiteOperationFailed = operationFailed &&
+        decision.operations.every((op) => op.type === "create_suite" || op.type === "move_to_suite");
+      if (suiteOperationFailed) {
         onStage?.("staging", { status: "failed" }, "update");
       }
+      if (decision.operations.length) void recordStandaloneTool({
+        traceSeed: traceMessageId,
+        name: "zyra.apply_operations",
+        input: {
+          operationsRequested: decision.operations.length,
+          operationTypes: LegacyService.tallyZyraOperationTypes(decision.operations)
+        },
+        output: {
+          testcases: applied.testcases.length,
+          reviewRequestId: applied.reviewRequestId || null
+        },
+        metadata: { projectId, sessionId, userId: uid },
+        errorMessage: operationFailed
+          ? (suiteOperationFailed ? "One or more suite operations reported an error" : "One or more operations reported an error")
+          : undefined
+      });
       const activity = [
         { actor: "user", title: "Asked Zyra", detail: message.slice(0, 320), createdAt: new Date().toISOString() },
         ...applied.activity
@@ -16985,7 +17031,7 @@ export class LegacyService implements OnModuleInit {
       // cleared now the new reply carries it, so the original message reads as its first attempt again.
       await this.db.query("UPDATE zyra_chat_messages SET status = 'resumed', trace = NULL WHERE id = $1 AND status = 'resuming'", [messageId]);
       onSettled?.({ ok: true, payload: { message: item, session: await this.zyraChatSession(projectId, userId, sessionId) } });
-    } catch (err) {
+    } catch {
       // Anything that throws here (not a timeout — those are caught inside buildZyraChatDecision and
       // returned as another timed-out decision, not thrown) leaves this checkpoint resumable again
       // rather than stranding it in 'resuming' forever. Still counts toward the cap: the user's
@@ -17570,9 +17616,8 @@ export class LegacyService implements OnModuleInit {
           ? this.zyraChatWithAnthropic(key, model, context, message)
           : this.zyraChatWithOpenAi(key, model, context, message);
       let raw = await callRouter();
-      // Real provider usage (raw.__zyraUsage) rather than the estimateTokens() guess the Langfuse
-      // trace below still uses for its own, separate purpose.
-      await this.recordZyraTokenUsage(projectId, "chat_router", provider, model, raw.__zyraUsage || {});
+      // Only provider-reported usage is a measurement; missing usage stays unknown.
+      await this.recordZyraTokenUsage(projectId, "chat_router", provider, raw.__zyraModel || model, raw.__zyraUsage || {});
       /*
        * raw.__salvaged means the router's JSON was unparseable and parseModelJson fell back to
        * pulling only `reply`/`reasoningSummary` out as plain text — action/operations/testcases were
@@ -17586,27 +17631,29 @@ export class LegacyService implements OnModuleInit {
         recordGeneration(trace, {
           name: "router",
           provider,
-          model,
+          model: raw.__zyraModel || model,
           input: { message, context },
           output: raw,
           rawOutput: raw.__rawCompletion,
           salvaged: true,
+          usage: raw.__zyraUsage,
           errorMessage: "Router JSON unparseable; only reply/reasoningSummary salvaged. Retrying once."
         });
         onStage?.("routing", { attempts: 2 }, "update");
         const retried = await callRouter();
-        await this.recordZyraTokenUsage(projectId, "chat_router", provider, model, retried.__zyraUsage || {});
+        await this.recordZyraTokenUsage(projectId, "chat_router", provider, retried.__zyraModel || model, retried.__zyraUsage || {});
         raw = retried;
       }
       if (raw.__salvaged) {
         recordGeneration(trace, {
           name: "router",
           provider,
-          model,
+          model: raw.__zyraModel || model,
           input: { message, context },
           output: raw,
           rawOutput: raw.__rawCompletion,
           salvaged: true,
+          usage: raw.__zyraUsage,
           errorMessage: "Router JSON unparseable on retry too; returning an honest failure instead of the salvaged narrative."
         });
         await this.logProjectActivity(projectId, userId, "zyra_chat_ai_failed", "zyra_chat", sessionId, "Zyra chat", { stage: "routing_salvaged" });
@@ -17623,11 +17670,11 @@ export class LegacyService implements OnModuleInit {
       recordGeneration(trace, {
         name: "router",
         provider,
-        model,
+        model: raw.__zyraModel || model,
         input: { message, context },
         output: raw,
         salvaged: false,
-        usage: { input: estimateTokens(context) + estimateTokens(message), output: estimateTokens(JSON.stringify(raw ?? "")) }
+        usage: raw.__zyraUsage
       });
       endZyraTurn(trace, {
         reply: String(raw.reply || ""),
@@ -19018,7 +19065,8 @@ export class LegacyService implements OnModuleInit {
         // A chunk numbers its scenarios 1..size; renumber against the whole batch. A number outside
         // the chunk is dropped, so the batch outcome counts it as unmapped rather than misattributing it.
         const scenario = typeof draft.scenario === "number" && draft.scenario >= 1 && draft.scenario <= size ? draft.scenario + offset : undefined;
-        const { scenario: _drop, ...rest } = draft;
+        const rest = { ...(draft as Record<string, unknown>) };
+        delete rest.scenario;
         drafts.push(scenario === undefined ? rest : { ...rest, scenario });
       }
       // Kept aligned with this chunk's drafts, so a later chunk's matches stay at its own drafts' indexes.
@@ -19705,6 +19753,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         status: "running",
         originalMessage: params.message,
         jiraIssueKeys: params.jiraIssueKeys,
+        // The turn that started this plan. Background batches outlive its span; seeding their
+        // standalone generations from this same value rejoins the originating chat trace.
+        traceSeed: params.trace?.traceSeed || null,
         // The starting turn's sources: originalMessage is often the follow-up that confirmed the plan
         // ("yes"), which names none of them, so re-gathering on it alone would lose them by batch 2.
         contextRefs: params.contextRefs || null,
@@ -19860,6 +19911,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         status: "running",
         originalMessage: params.message,
         jiraIssueKeys: params.jiraIssueKeys,
+        // See the regular plan's identical field: keeps background batches on the originating trace.
+        traceSeed: params.trace?.traceSeed || null,
         // Not carried: the starting turn's sources are the first tickets the message named, and each
         // batch reads its own tickets instead (generateZyraScopedBatch).
         contextRefs: null,
@@ -20184,7 +20237,29 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         });
         live.total = batch.length;
         const batchLive = live;
-        const decision = await runWithZyraLiveBatch(batchLive, () => this.generateZyraPlanPiece({ ...pieceContext, scenarios: batch, onContext: emitContext }));
+        // A plan started before this field existed (or by a path with no turn handle) falls back to
+        // its old standalone per-batch seed.
+        const batchTraceSeed = plan.traceSeed ? String(plan.traceSeed) : `zyra:plan-batch:${planId}:${doneCount}:${randomUUID()}`;
+        let decision: ZyraChatDecision;
+        try {
+          decision = await runWithZyraLiveBatch(batchLive, () => this.generateZyraPlanPiece({ ...pieceContext, scenarios: batch, onContext: emitContext }));
+          void recordStandaloneTool({
+            traceSeed: batchTraceSeed,
+            name: "zyra.plan.generate_batch",
+            input: { planId, sessionId, scenarios: batch.slice(0, 20), batchSize: batch.length, doneCount, totalCount },
+            output: { draftedCount: LegacyService.zyraDraftedCount(decision) },
+            metadata: { projectId, sessionId, planId }
+          });
+        } catch (err) {
+          void recordStandaloneTool({
+            traceSeed: batchTraceSeed,
+            name: "zyra.plan.generate_batch",
+            input: { planId, sessionId, scenarios: batch.slice(0, 20), batchSize: batch.length, doneCount, totalCount },
+            errorMessage: err instanceof Error ? err.message : String(err),
+            metadata: { projectId, sessionId, planId }
+          });
+          throw err;
+        }
         stage("generating", { draftedCount: LegacyService.zyraDraftedCount(decision) }, "update");
         const gated = this.applyStorageGateToGenerated(decision, capabilities);
         if (gated.operations.length) stage("staging", { operationCounts: LegacyService.tallyZyraOperationTypes(gated.operations) });
@@ -20384,10 +20459,36 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       `Tool name: ${params.toolName}`,
       `Tool result JSON: ${JSON.stringify(params.toolDecision)}`
     ].join("\n");
-    const raw = providerWire(params.provider) === "anthropic"
-      ? await this.zyraChatWithAnthropic(params.key, params.model, finalizePrompt, params.message)
-      : await this.zyraChatWithOpenAi(params.key, params.model, finalizePrompt, params.message);
-    await this.recordZyraTokenUsage(params.projectId, "chat_tool_finalize", params.provider, params.model, raw.__zyraUsage || {});
+    const traceSeed = `zyra:tool-finalize:${params.projectId}:${randomUUID()}`;
+    const attempt: ZyraProviderAttempt = {};
+    let raw: Body;
+    try {
+      raw = providerWire(params.provider) === "anthropic"
+        ? await this.zyraChatWithAnthropic(params.key, params.model, finalizePrompt, params.message, attempt)
+        : await this.zyraChatWithOpenAi(params.key, params.model, finalizePrompt, params.message, attempt);
+    } catch (err) {
+      void recordStandaloneGeneration({
+        traceSeed,
+        name: "zyra.tool_decision.finalize",
+        provider: params.provider,
+        model: attempt.model || params.model,
+        input: { system: finalizePrompt, user: params.message, toolName: params.toolName },
+        errorMessage: err instanceof Error ? err.message : String(err),
+        metadata: { projectId: params.projectId, toolName: params.toolName }
+      });
+      throw err;
+    }
+    await this.recordZyraTokenUsage(params.projectId, "chat_tool_finalize", params.provider, raw.__zyraModel || params.model, raw.__zyraUsage || {});
+    void recordStandaloneGeneration({
+      traceSeed,
+      name: "zyra.tool_decision.finalize",
+      provider: params.provider,
+      model: raw.__zyraModel || params.model,
+      input: { system: finalizePrompt, user: params.message, toolName: params.toolName },
+      output: { reply: String(raw.reply || "").slice(0, 500), reasoningSummary: String(raw.reasoningSummary || "").slice(0, 300) },
+      usage: raw.__zyraUsage,
+      metadata: { projectId: params.projectId, toolName: params.toolName }
+    });
     return {
       reply: this.sanitizeZyraReply(raw.reply, String(params.toolDecision.reply || "")),
       reasoningSummary: String(raw.reasoningSummary || params.toolDecision.reasoningSummary || "").slice(0, 1500),
@@ -21725,12 +21826,21 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // Plain-text completion for internal note-taking (memory summarization) — unlike
   // zyraChatWithOpenAi/zyraChatWithAnthropic this does not force a JSON response shape,
   // since the caller wants a short prose/bullet answer, not a structured chat decision.
-  private async summarizeForZyraMemory(provider: string, model: string, key: Body, prompt: string): Promise<string> {
+  private async summarizeForZyraMemory(
+    provider: string,
+    model: string,
+    key: Body,
+    prompt: string,
+    traceCtx?: { projectId?: string; userId?: string | null }
+  ): Promise<string> {
+    const traceSeedBase = `zyra:memory-summary:${traceCtx?.projectId || "unknown"}:${randomUUID()}`;
+    let requestModel = model;
     try {
       if (providerWire(provider) === "anthropic") {
         const chatUrl = normalizeAnthropicMessagesUrlFor(provider, key.base_url);
         const chatHeaders = this.providerAuthHeaders(provider, key.api_key, key.auth_header_name, key.auth_scheme);
         for (const candidate of providerModelCandidates(provider, model)) {
+          requestModel = candidate;
           const res = await fetch(chatUrl, {
             method: "POST",
             headers: chatHeaders,
@@ -21739,7 +21849,19 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           if (!res.ok) continue;
           const data = await res.json() as Body;
           const text = normalizeJsonArray(data.content).map((item) => item?.text || "").join("\n").trim();
-          if (text) return text;
+          if (text) {
+            void recordStandaloneGeneration({
+              traceSeed: `${traceSeedBase}:${candidate}`,
+              name: "zyra.memory.summarize",
+              provider,
+              model: candidate,
+              input: { prompt },
+              output: text,
+              usage: parseProviderUsage("anthropic", data.usage),
+              metadata: { projectId: String(traceCtx?.projectId || ""), userId: String(traceCtx?.userId || "") }
+            });
+            return text;
+          }
         }
         return "";
       }
@@ -21751,8 +21873,30 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       });
       if (!res.ok) return "";
       const data = await res.json() as Body;
-      return String(data.choices?.[0]?.message?.content || "").trim();
-    } catch {
+      const text = String(data.choices?.[0]?.message?.content || "").trim();
+      if (text) {
+        void recordStandaloneGeneration({
+          traceSeed: `${traceSeedBase}:${model}`,
+          name: "zyra.memory.summarize",
+          provider,
+          model,
+          input: { prompt },
+          output: text,
+          usage: parseProviderUsage("openai", data.usage),
+          metadata: { projectId: String(traceCtx?.projectId || ""), userId: String(traceCtx?.userId || "") }
+        });
+      }
+      return text;
+    } catch (err) {
+      void recordStandaloneGeneration({
+        traceSeed: traceSeedBase,
+        name: "zyra.memory.summarize",
+        provider,
+        model: requestModel,
+        input: { prompt },
+        errorMessage: err instanceof Error ? err.message : String(err),
+        metadata: { projectId: String(traceCtx?.projectId || ""), userId: String(traceCtx?.userId || "") }
+      });
       return "";
     }
   }
@@ -21784,7 +21928,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       `User: ${params.userMessage}`,
       `Result: ${params.outcome}`
     ].join("\n");
-    const summary = (await this.summarizeForZyraMemory(params.provider, params.model, params.key, prompt))
+    const summary = (await this.summarizeForZyraMemory(params.provider, params.model, params.key, prompt, { projectId: params.projectId, userId: params.userId }))
       .split("\n").map((line) => line.trim()).filter(Boolean).slice(0, 6).join("\n");
     const entry = summary || `- ${params.userMessage.slice(0, 200)}\n- ${params.outcome.slice(0, 200)}`;
     await this.rememberZyraMemory(params.projectId, params.userId, entry);
@@ -23815,13 +23959,15 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // Plain JSON-mode completion for internal tool calls that need a small, arbitrary JSON
   // shape (not the fixed Zyra chat decision schema) — used to plan the scenario todo list
   // for "all possible cases" generation without pulling in the full chat-decision prompt.
-  private async zyraJsonCompletion(provider: string, model: string, key: Body, systemPrompt: string, userPrompt: string): Promise<Body> {
+  private async zyraJsonCompletion(provider: string, model: string, key: Body, systemPrompt: string, userPrompt: string, attempt?: ZyraProviderAttempt): Promise<Body> {
     if (providerWire(provider) === "anthropic") {
-      const res = await fetch(normalizeAnthropicMessagesUrlFor(provider, key.base_url), {
+      const requestModel = providerModelCandidates(provider, model)[0];
+      const url = normalizeAnthropicMessagesUrlFor(provider, key.base_url);
+      const request = {
         method: "POST",
         headers: this.providerAuthHeaders(provider, key.api_key, key.auth_header_name, key.auth_scheme),
         body: JSON.stringify({
-          model: providerModelCandidates(provider, model)[0],
+          model: requestModel,
           // Sized for ZYRA_PLAN_MAX_SCENARIOS (100) short labels. At 2000, a full 100-label plan could
           // truncate mid-array, fail to parse, and silently fall back to a single batch of 10.
           max_tokens: 4000,
@@ -23829,7 +23975,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           messages: [{ role: "user", content: userPrompt }]
         }),
         signal: LegacyService.zyraProviderSignal(LegacyService.ZYRA_ROUTER_TIMEOUT_MS)
-      });
+      };
+      if (attempt) attempt.model = requestModel;
+      const res = await fetch(url, request);
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({} as Body)) as Body;
         const rawMessage = String(errBody.error?.message || errBody.error || res.status);
@@ -23839,14 +23987,11 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       const text = normalizeJsonArray(data.content).map((item: Body) => item?.text || "").join("\n");
       const parsed = this.parseModelJson(text, []);
       if (!parsed) throw new Error("Anthropic returned no parseable JSON.");
-      const usage = data.usage || {};
-      const cached = Number(usage.cache_read_input_tokens || 0) + Number(usage.cache_creation_input_tokens || 0);
-      const input = Number(usage.input_tokens || 0) + cached;
-      const output = Number(usage.output_tokens || 0);
-      return { ...parsed, __zyraUsage: { input, output, total: input + output } };
+      return { ...parsed, __zyraUsage: parseProviderUsage("anthropic", data.usage), __zyraModel: requestModel };
     }
     const headers = this.providerAuthHeaders(provider, String(key.api_key || ""), key.auth_header_name, key.auth_scheme);
-    const res = await fetch(providerChatUrl(provider, key.base_url, model), {
+    const url = providerChatUrl(provider, key.base_url, model);
+    const request = {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -23859,7 +24004,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         ]
       }),
       signal: LegacyService.zyraProviderSignal(LegacyService.ZYRA_ROUTER_TIMEOUT_MS)
-    });
+    };
+    if (attempt) attempt.model = model;
+    const res = await fetch(url, request);
     if (!res.ok) {
       const errBody = await res.json().catch(() => ({} as Body)) as Body;
       const rawMessage = String(errBody.error?.message || errBody.error || res.status);
@@ -23869,8 +24016,11 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const content = String(data.choices?.[0]?.message?.content || "{}");
     const parsed = this.parseModelJson(content, []);
     if (!parsed) throw new Error("OpenAI returned no parseable JSON.");
-    const usage = data.usage || {};
-    return { ...parsed, __zyraUsage: { input: Number(usage.prompt_tokens || 0), output: Number(usage.completion_tokens || 0), total: Number(usage.total_tokens || 0) } };
+    return {
+      ...parsed,
+      __zyraUsage: parseProviderUsage("openai", data.usage),
+      __zyraModel: model
+    };
   }
 
   // Plans a todo list of distinct scenarios to cover for an exhaustive ("all possible cases")
@@ -23901,8 +24051,34 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // "All – Exhaustive" run planned 49 — so the tier meant as "everything" fell well short of it.
       `Return ONLY JSON: {"scenarios": ["short scenario label", ...]}. List ${params.maxScenarios} scenarios, ordered from most to least important. This is exhaustive coverage: keep working through ${LegacyService.ZYRA_PLAN_COVERAGE_AREAS} until you reach ${params.maxScenarios}. Stop short only if the feature genuinely has no more distinct scenarios that the existing testcases do not already cover. No markdown, no commentary.`
     ].join("\n");
-    const parsed = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, userPrompt);
-    await this.recordZyraTokenUsage(params.projectId, "chat_plan", params.provider, params.model, parsed.__zyraUsage || {});
+    const traceSeedBase = `zyra:scenario-plan:${params.projectId}:${randomUUID()}`;
+    const attempt: ZyraProviderAttempt = {};
+    let parsed: Body;
+    try {
+      parsed = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, userPrompt, attempt);
+    } catch (err) {
+      void recordStandaloneGeneration({
+        traceSeed: traceSeedBase,
+        name: "zyra.scenario_plan",
+        provider: params.provider,
+        model: attempt.model || params.model,
+        input: { system: systemPrompt, user: userPrompt, maxScenarios: params.maxScenarios },
+        errorMessage: err instanceof Error ? err.message : String(err),
+        metadata: { projectId: params.projectId }
+      });
+      throw err;
+    }
+    await this.recordZyraTokenUsage(params.projectId, "chat_plan", params.provider, parsed.__zyraModel || params.model, parsed.__zyraUsage || {});
+    void recordStandaloneGeneration({
+      traceSeed: traceSeedBase,
+      name: "zyra.scenario_plan",
+      provider: params.provider,
+      model: parsed.__zyraModel || params.model,
+      input: { system: systemPrompt, user: userPrompt, maxScenarios: params.maxScenarios },
+      output: { scenarios: normalizeJsonArray(parsed.scenarios).slice(0, 20) },
+      usage: parsed.__zyraUsage,
+      metadata: { projectId: params.projectId }
+    });
     const scenarios = LegacyService.mergeZyraScenarios([], parsed.scenarios, params.maxScenarios);
 
     // One top-up round when the first answer still stops well short of the target — models tend to
@@ -23918,8 +24094,34 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           "",
           `Return ONLY JSON: {"scenarios": [...]} with up to ${params.maxScenarios - scenarios.length} MORE distinct scenarios that neither the list above nor the existing testcases cover, ordered from most to least important. Return {"scenarios": []} if there are genuinely none left.`
         ].join("\n");
-        const more = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, topUpPrompt);
-        await this.recordZyraTokenUsage(params.projectId, "chat_plan", params.provider, params.model, more.__zyraUsage || {});
+        const topUpSeed = `${traceSeedBase}:topup`;
+        const topUpAttempt: ZyraProviderAttempt = {};
+        let more: Body;
+        try {
+          more = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, topUpPrompt, topUpAttempt);
+        } catch (topUpErr) {
+          void recordStandaloneGeneration({
+            traceSeed: topUpSeed,
+            name: "zyra.scenario_plan.topup",
+            provider: params.provider,
+            model: topUpAttempt.model || params.model,
+            input: { system: systemPrompt, user: topUpPrompt, existingCount: scenarios.length, maxScenarios: params.maxScenarios },
+            errorMessage: topUpErr instanceof Error ? topUpErr.message : String(topUpErr),
+            metadata: { projectId: params.projectId }
+          });
+          throw topUpErr;
+        }
+        await this.recordZyraTokenUsage(params.projectId, "chat_plan", params.provider, more.__zyraModel || params.model, more.__zyraUsage || {});
+        void recordStandaloneGeneration({
+          traceSeed: topUpSeed,
+          name: "zyra.scenario_plan.topup",
+          provider: params.provider,
+          model: more.__zyraModel || params.model,
+          input: { system: systemPrompt, user: topUpPrompt, existingCount: scenarios.length, maxScenarios: params.maxScenarios },
+          output: { scenarios: normalizeJsonArray(more.scenarios).slice(0, 20) },
+          usage: more.__zyraUsage,
+          metadata: { projectId: params.projectId }
+        });
         return LegacyService.mergeZyraScenarios(scenarios, more.scenarios, params.maxScenarios);
       } catch (err) {
         this.logger.warn(`Scenario top-up failed for project ${params.projectId}, keeping the ${scenarios.length}-scenario plan: ${err instanceof Error ? err.message : err}`);
@@ -24181,7 +24383,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     return `I checked ${signals || "the submitted story"} and planned coverage across happy path, negative, boundary, permission, data-state, and traceability risks before drafting the testcases.`;
   }
 
-  private async zyraChatWithOpenAi(key: Body, model: string, context: string, message: string): Promise<Body> {
+  private async zyraChatWithOpenAi(key: Body, model: string, context: string, message: string, attempt?: ZyraProviderAttempt): Promise<Body> {
     const body = {
       model,
       response_format: { type: "json_object" },
@@ -24192,12 +24394,15 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     };
     const provider = String(key.provider || "openai").toLowerCase();
     const headers = this.providerAuthHeaders(provider, String(key.api_key || ""), key.auth_header_name, key.auth_scheme);
-    const res = await fetch(providerChatUrl(provider, key.base_url, model), {
+    const url = providerChatUrl(provider, key.base_url, model);
+    const request = {
       method: "POST",
       headers,
       body: JSON.stringify(body),
       signal: LegacyService.zyraProviderSignal(LegacyService.ZYRA_ROUTER_TIMEOUT_MS)
-    });
+    };
+    if (attempt) attempt.model = model;
+    const res = await fetch(url, request);
     if (!res.ok) {
       const errBody = await res.json().catch(() => ({} as Body)) as Body;
       const rawMessage = String(errBody.error?.message || errBody.error || res.status);
@@ -24205,21 +24410,18 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     }
     const data = await res.json() as Body;
     const content = String(data.choices?.[0]?.message?.content || "{}");
-    // Real provider usage, not the estimateTokens() guess callers used to fall back to — this was
-    // sitting right here in the response and being thrown away.
-    const usage = data.usage || {};
-    const zyraUsage = { input: Number(usage.prompt_tokens || 0), output: Number(usage.completion_tokens || 0), total: Number(usage.total_tokens || 0) };
+    const zyraUsage = parseProviderUsage("openai", data.usage);
     const parsed = this.parseModelJson(content);
     // __rawCompletion: the literal, unparsed provider text — never derived from `parsed`/`content`
     // downstream, so a trace can show exactly what the provider sent even when parsing recovered
     // (or salvaged) something usable from it. See recordGeneration's rawOutput field.
-    if (parsed) return { ...parsed, __zyraUsage: zyraUsage, __rawCompletion: content };
+    if (parsed) return { ...parsed, __zyraUsage: zyraUsage, __zyraModel: model, __rawCompletion: content };
     // AI returned prose instead of JSON — surface it as a plain answer so the
     // user sees the actual message rather than a SyntaxError string.
-    return { reply: content.trim().slice(0, 5000), action: "answer", actionType: "answer", operations: [], testcases: [], __zyraUsage: zyraUsage, __rawCompletion: content };
+    return { reply: content.trim().slice(0, 5000), action: "answer", actionType: "answer", operations: [], testcases: [], __zyraUsage: zyraUsage, __zyraModel: model, __rawCompletion: content };
   }
 
-  private async zyraChatWithAnthropic(key: Body, model: string, context: string, message: string): Promise<Body> {
+  private async zyraChatWithAnthropic(key: Body, model: string, context: string, message: string, attempt?: ZyraProviderAttempt): Promise<Body> {
     let lastStatus = "";
     const chatUrl = normalizeAnthropicMessagesUrl(key.base_url);
     const chatHeaders = this.buildAnthropicAuthHeaders(key.api_key, key.auth_header_name, key.auth_scheme);
@@ -24248,12 +24450,14 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           { role: "user", content: message }
         ]
       };
-      const res = await fetch(chatUrl, {
+      const request = {
         method: "POST",
         headers: chatHeaders,
         body: JSON.stringify(body),
         signal: LegacyService.zyraProviderSignal(LegacyService.ZYRA_ROUTER_TIMEOUT_MS)
-      });
+      };
+      if (attempt) attempt.model = candidate;
+      const res = await fetch(chatUrl, request);
       if (!res.ok) {
         const data = await res.json().catch(() => ({} as Body)) as Body;
         const rawStatus = String(data.error?.message || data.error || res.status);
@@ -24268,18 +24472,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       }
       const data = await res.json() as Body;
       const rawText = normalizeJsonArray(data.content).map((item) => item?.text || "").join("\n").trim();
-      // Real provider usage, not the estimateTokens() guess callers used to fall back to — this was
-      // sitting right here in the response and being thrown away.
-      const usage = data.usage || {};
-      const cached = Number(usage.cache_read_input_tokens || 0) + Number(usage.cache_creation_input_tokens || 0);
-      const zyraUsage = { input: Number(usage.input_tokens || 0) + cached, output: Number(usage.output_tokens || 0), total: 0 };
-      zyraUsage.total = zyraUsage.input + zyraUsage.output;
+      const zyraUsage = parseProviderUsage("anthropic", data.usage);
       const parsed = this.parseModelJson(rawText || "{}");
       // __rawCompletion — see the identical comment in zyraChatWithOpenAi above.
-      if (parsed) return { ...parsed, __zyraUsage: zyraUsage, __rawCompletion: rawText };
+      if (parsed) return { ...parsed, __zyraUsage: zyraUsage, __zyraModel: candidate, __rawCompletion: rawText };
       // AI returned prose instead of JSON — surface it as a plain answer so the
       // user sees the actual message rather than a SyntaxError string.
-      return { reply: rawText.slice(0, 5000), action: "answer", actionType: "answer", operations: [], testcases: [], __zyraUsage: zyraUsage, __rawCompletion: rawText };
+      return { reply: rawText.slice(0, 5000), action: "answer", actionType: "answer", operations: [], testcases: [], __zyraUsage: zyraUsage, __zyraModel: candidate, __rawCompletion: rawText };
     }
     throw new Error(`Claude chat failed: ${lastStatus || "No compatible model was accepted."}`);
   }
@@ -24442,10 +24641,11 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         "",
         this.zyraStaticSourcePrompt({ ...sources, linear: [] } as unknown as ZyraGenerationInput)
       ].join("\n");
+      const attempt: ZyraProviderAttempt = {};
       try {
-        const { parsed, usage, rawText } = await this.zyraAuthorJson(params.key, params.provider, params.model, system, user, Math.min(16000, 2000 + batch.length * 2000));
-        await this.recordZyraTokenUsage(params.projectId, "chat_generate", params.provider, params.model, usage);
-        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: params.model, input: { cases: cases.length, sourcesShown }, output: parsed, rawOutput: parsed ? undefined : rawText, usage });
+        const { parsed, usage, rawText } = await this.zyraAuthorJson(params.key, params.provider, params.model, system, user, Math.min(16000, 2000 + batch.length * 2000), attempt);
+        await this.recordZyraTokenUsage(params.projectId, "chat_generate", params.provider, attempt.model || params.model, usage || {});
+        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: attempt.model || params.model, input: { cases: cases.length, sourcesShown }, output: parsed, rawOutput: parsed ? undefined : rawText, usage });
         const byId = new Map<string, Body>();
         for (const entry of normalizeJsonArray(parsed?.updates)) {
           if (entry && typeof entry === "object" && entry.externalId) byId.set(String(entry.externalId).toUpperCase(), entry);
@@ -24470,7 +24670,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         }
       } catch (err) {
         const reason = this.isZyraTimeoutError(err) ? "drafting it timed out" : `drafting it failed (${this.extractAiErrorMessage(err)})`;
-        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: params.model, input: { cases: cases.length, sourcesShown }, errorMessage: reason });
+        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: attempt.model || params.model, input: { cases: cases.length, sourcesShown }, errorMessage: reason });
         for (const { op, row } of batch) op.__authoringError = `${row.externalId}: ${reason}, so nothing was staged for it — ask again to retry.`;
       }
     };
@@ -24494,12 +24694,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
    * One JSON completion with the generation budget (ZYRA_GENERATE_TIMEOUT_MS, caller-chosen
    * max_tokens) — the router helpers above are pinned to the router's 60s/4096-token budget.
    */
-  private async zyraAuthorJson(key: Body, provider: string, model: string, system: string, user: string, maxTokens: number): Promise<{ parsed: Body | null; usage: { input: number; output: number; total: number }; rawText: string }> {
+  private async zyraAuthorJson(key: Body, provider: string, model: string, system: string, user: string, maxTokens: number, attempt?: ZyraProviderAttempt): Promise<{ parsed: Body | null; usage: ProviderUsage | undefined; rawText: string }> {
     const signal = () => LegacyService.zyraProviderSignal(LegacyService.ZYRA_GENERATE_TIMEOUT_MS);
     if (providerWire(provider) === "anthropic") {
       let lastStatus = "";
       for (const candidate of providerModelCandidates(String(key.provider || "anthropic"), model)) {
-        const res = await fetch(normalizeAnthropicMessagesUrl(key.base_url), {
+        const url = normalizeAnthropicMessagesUrl(key.base_url);
+        const request = {
           method: "POST",
           headers: this.buildAnthropicAuthHeaders(key.api_key, key.auth_header_name, key.auth_scheme),
           body: JSON.stringify({
@@ -24509,7 +24710,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
             messages: [{ role: "user", content: user }]
           }),
           signal: signal()
-        });
+        };
+        if (attempt) attempt.model = candidate;
+        const res = await fetch(url, request);
         if (!res.ok) {
           const data = await res.json().catch(() => ({} as Body)) as Body;
           const rawStatus = String(data.error?.message || data.error || res.status);
@@ -24520,19 +24723,19 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         }
         const data = await res.json() as Body;
         const rawText = normalizeJsonArray(data.content).map((item) => item?.text || "").join("\n").trim();
-        const usage = data.usage || {};
-        const input = Number(usage.input_tokens || 0) + Number(usage.cache_read_input_tokens || 0) + Number(usage.cache_creation_input_tokens || 0);
-        const output = Number(usage.output_tokens || 0);
-        return { parsed: this.parseModelJson(rawText || "{}"), usage: { input, output, total: input + output }, rawText };
+        return { parsed: this.parseModelJson(rawText || "{}"), usage: parseProviderUsage("anthropic", data.usage), rawText };
       }
       throw new Error(`Claude update drafting failed: ${lastStatus || "No compatible model was accepted."}`);
     }
-    const res = await fetch(providerChatUrl(provider, key.base_url, model), {
+    const url = providerChatUrl(provider, key.base_url, model);
+    const request = {
       method: "POST",
       headers: this.providerAuthHeaders(provider, String(key.api_key || ""), key.auth_header_name, key.auth_scheme),
       body: JSON.stringify({ model, response_format: { type: "json_object" }, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
       signal: signal()
-    });
+    };
+    if (attempt) attempt.model = model;
+    const res = await fetch(url, request);
     if (!res.ok) {
       const errBody = await res.json().catch(() => ({} as Body)) as Body;
       const rawMessage = String(errBody.error?.message || errBody.error || res.status);
@@ -24540,10 +24743,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     }
     const data = await res.json() as Body;
     const rawText = String(data.choices?.[0]?.message?.content || "{}");
-    const usage = data.usage || {};
     return {
       parsed: this.parseModelJson(rawText),
-      usage: { input: Number(usage.prompt_tokens || 0), output: Number(usage.completion_tokens || 0), total: Number(usage.total_tokens || 0) },
+      usage: parseProviderUsage("openai", data.usage),
       rawText
     };
   }
@@ -24674,7 +24876,6 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // matter less here, but they are kept correct anyway.
   private detectZyraChatIntent(message: string): ZyraChatIntent {
     const lower = message.toLowerCase();
-    const jiraWords = /\b(jira|ticket|tickets|story|stories|issue|issues)\b/.test(lower);
     const testcaseWords = /\b(testcase|test case|testcases|test cases|case|cases|coverage)\b/.test(lower);
     const createWords = /\b(creat|generat|draft|prepar|author)\w*\b|\b(add|adds|added|adding|write|writes|writing|wrote|make|makes|making|new)\b/.test(lower);
     const updateWords = /\b(updat|chang|revis|edit|modif|improv)\w*\b|\b(mark|marks|marked)\b/.test(lower);

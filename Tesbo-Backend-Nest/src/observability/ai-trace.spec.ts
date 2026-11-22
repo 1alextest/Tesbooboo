@@ -45,7 +45,7 @@ jest.mock("@langfuse/tracing", () => ({
   LangfuseOtelSpanAttributes
 }));
 
-import { recordGeneration, recordReconciliation, startZyraTurn, type TurnHandle } from "./ai-trace";
+import { recordGeneration, recordReconciliation, recordStandaloneGeneration, recordStandaloneTool, startZyraTurn, type TurnHandle } from "./ai-trace";
 
 describe("ai-trace.ts", () => {
   beforeEach(() => {
@@ -59,6 +59,31 @@ describe("ai-trace.ts", () => {
   function fakeTurn(): TurnHandle {
     return { span: makeFakeSpan(observationCalls), traceId: "trace-fake", sessionId: "session-1", userId: "user-1" };
   }
+
+  const usageCases: Array<[string, { input?: number; output?: number; cached?: number }, Record<string, number> | undefined]> = [
+    ["missing measurements", {}, undefined],
+    ["partial measurements", { input: 11 }, { input: 11 }],
+    ["measured zeros", { input: 0, output: 0 }, { input: 0, output: 0 }],
+    ["invalid measurements", { input: Number.NaN, output: -1, cached: Number.POSITIVE_INFINITY }, undefined]
+  ];
+  it.each(usageCases)("keeps %s truthful for both generation entry points", async (_label, usage, expected) => {
+    isTracingEnabledMock.mockReturnValue(true);
+    recordGeneration(fakeTurn(), { name: "router", provider: "openai", model: "model", usage });
+    await recordStandaloneGeneration({ traceSeed: "seed", name: "standalone", provider: "openai", model: "model", usage });
+    for (const call of [observationCalls[0], topLevelCalls[0]]) {
+      expect(call.attrs.usageDetails).toEqual(expected);
+      expect(call.attrs.metadata).not.toHaveProperty("cachedInputTokens");
+    }
+  });
+
+  it("keeps interactive generation failure details out of unmasked status attributes", () => {
+    const secret = "sk-synthetic_interactive_error_12345";
+    recordGeneration(fakeTurn(), { name: "router", provider: "openai", model: "model", errorMessage: `provider failed ${secret}` });
+    const call = observationCalls[0];
+    expect(call.attrs.statusMessage).toBe("Operation failed (details in masked output)");
+    expect(call.attrs.output).toEqual({ error: `provider failed ${secret}` });
+    expect(JSON.stringify(call.attrs.metadata)).not.toContain(secret);
+  });
 
   describe("recordGeneration", () => {
     it("is a no-op when the turn has no span (tracing off)", () => {
@@ -133,6 +158,82 @@ describe("ai-trace.ts", () => {
     });
   });
 
+  describe("recordStandaloneTool", () => {
+    it("is a no-op when tracing is off", async () => {
+      isTracingEnabledMock.mockReturnValue(false);
+      await recordStandaloneTool({ traceSeed: "seed-1", name: "zyra.apply_operations", input: {}, output: {} });
+      expect(topLevelCalls).toHaveLength(0);
+      expect(createTraceIdMock).not.toHaveBeenCalled();
+    });
+
+    it("records a tool observation under the deterministic trace id with the given metadata", async () => {
+      isTracingEnabledMock.mockReturnValue(true);
+      await recordStandaloneTool({
+        traceSeed: "seed-1",
+        name: "zyra.apply_operations",
+        input: { operationsRequested: 2 },
+        output: { testcases: 2 },
+        metadata: { projectId: "project-1", sessionId: "session-1" }
+      });
+      expect(createTraceIdMock).toHaveBeenCalledWith("seed-1");
+      expect(topLevelCalls).toHaveLength(1);
+      const call = topLevelCalls[0];
+      expect(call.name).toBe("zyra.apply_operations");
+      expect(call.opts.asType).toBe("tool");
+      expect(call.attrs.metadata).toEqual({ projectId: "project-1", sessionId: "session-1" });
+      expect(call.attrs.output).toEqual({ testcases: 2 });
+    });
+
+    it("marks failures as error observations and never throws", async () => {
+      isTracingEnabledMock.mockReturnValue(true);
+      await expect(
+        recordStandaloneTool({ traceSeed: "seed-1", name: "zyra.apply_operations", errorMessage: "db down" })
+      ).resolves.toBeUndefined();
+      const call = topLevelCalls[0];
+      expect(call.attrs.level).toBe("ERROR");
+      expect(call.attrs.statusMessage).toBe("Operation failed (details in masked output)");
+      expect(call.attrs.output).toEqual({ error: "db down" });
+
+      startObservationMock.mockImplementationOnce(() => {
+        throw new Error("SDK exploded");
+      });
+      await expect(recordStandaloneTool({ traceSeed: "seed-2", name: "zyra.apply_operations" })).resolves.toBeUndefined();
+    });
+  });
+
+  it("keeps standalone error details and file names out of unmasked attributes", async () => {
+    isTracingEnabledMock.mockReturnValue(true);
+    const secret = "sk-synthetic-private-value";
+    const common = { traceSeed: "seed-private", name: "private-diagnostic",
+      errorMessage: secret, metadata: { projectId: "project-1", fileName: secret, apiKey: secret, provider: secret } };
+    await recordStandaloneGeneration({ ...common, provider: "openai", model: "gpt-4.1" });
+    await recordStandaloneTool(common);
+    expect(topLevelCalls).toHaveLength(2);
+    for (const { attrs } of topLevelCalls) {
+      const { input: maskedInput, output: maskedOutput, ...unmasked } = attrs;
+      void maskedInput;
+      expect(maskedOutput).toEqual({ error: secret });
+      expect(JSON.stringify(unmasked)).not.toContain(secret);
+      expect(attrs.metadata).toMatchObject({ projectId: "project-1" });
+      expect(attrs.metadata).not.toHaveProperty("fileName");
+      expect(attrs.statusMessage).toBe("Operation failed (details in masked output)");
+    }
+  });
+
+  it("groups standalone observations by canonical native session and user attributes", async () => {
+    isTracingEnabledMock.mockReturnValue(true);
+    const common = { traceSeed: "seed-session", name: "scoped-operation",
+      metadata: { sessionId: "session-1", userId: "user-1" } };
+    await recordStandaloneGeneration({ ...common, provider: "openai", model: "gpt-4.1" });
+    await recordStandaloneTool(common);
+    for (const result of startObservationMock.mock.results) {
+      const span = result.value as { otelSpan: { setAttribute: jest.Mock } };
+      expect(span.otelSpan.setAttribute).toHaveBeenCalledWith("session.id", "session-1");
+      expect(span.otelSpan.setAttribute).toHaveBeenCalledWith("user.id", "user-1");
+    }
+    expect(startObservationMock).toHaveBeenCalledTimes(2);
+  });
+
   describe("recordReconciliation", () => {
     const ctx = { messageId: "msg-1", sessionId: "session-1", projectId: "project-1", userId: "user-1" };
     const data = { bannerFired: "false-completion-claim", reason: "0 of 3 applied", requested: 3, appliedCount: 0, proposedCount: 0, reply: "final reply text" };
@@ -185,6 +286,7 @@ describe("ai-trace.ts", () => {
     isTracingEnabledMock.mockReturnValue(true);
     const turn = await startZyraTurn({ messageId: "msg-1", sessionId: "session-1", projectId: "project-1", message: "hi" });
     await recordReconciliation({ messageId: "msg-1", sessionId: "session-1", projectId: "project-1" }, { bannerFired: null, reason: "", requested: 0, appliedCount: 0, proposedCount: 0, reply: "" });
+    expect(turn.traceSeed).toBe("msg-1");
     expect(turn.traceId).toBe(topLevelCalls[topLevelCalls.length - 1].opts.parentSpanContext ? (topLevelCalls[topLevelCalls.length - 1].opts.parentSpanContext as Record<string, unknown>).traceId : null);
   });
 });

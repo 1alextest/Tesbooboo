@@ -144,15 +144,21 @@ test("a file holding a token is written 600, not world-readable", () => {
   const dir = tmp();
   const written = writeConfigFile({ baseUrl: "https://api.example.com", token: "tsbo_abc" }, { cwd: dir });
   assert.equal(written.hasToken, true);
-  assert.equal(fs.statSync(written.path).mode & 0o777, 0o600);
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(written.path).mode & 0o777, 0o600);
+  }
 });
 
 test("a file gaining a token is chmodded, not left at its old permissions", () => {
   const dir = tmp();
   const written = writeConfigFile({ baseUrl: "https://api.example.com" }, { cwd: dir });
-  assert.equal(fs.statSync(written.path).mode & 0o777, 0o644);
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(written.path).mode & 0o777, 0o644);
+  }
   writeConfigFile({ token: "tsbo_abc" }, { cwd: dir });
-  assert.equal(fs.statSync(written.path).mode & 0o777, 0o600);
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(written.path).mode & 0o777, 0o600);
+  }
 });
 
 test("a malformed file is replaced rather than merged into", () => {

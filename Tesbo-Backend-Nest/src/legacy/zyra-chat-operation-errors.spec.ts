@@ -165,6 +165,7 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
 
   it.each(["failed", "partial", "created", "reused"] as const)("suite trace: %s reflects actual operation errors, not zero testcase counts", async (mode) => {
     const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
+    const operationTrace = jest.spyOn(aiTrace, "recordStandaloneTool").mockResolvedValue(undefined);
     const operations = [{ type: "create_suite", suiteName: "First Suite" }];
     if (mode === "partial") operations.push({ type: "create_suite", suiteName: "Second Suite" });
     const resolve = jest.spyOn(svc as unknown as { resolveOrCreateSuiteByName: (...a: unknown[]) => Promise<unknown> }, "resolveOrCreateSuiteByName");
@@ -190,6 +191,55 @@ describe("applyZyraChatOperations — one operation's failure does not lose the 
     expect(JSON.stringify(trace)).not.toContain("private suite failure");
     expect({ stagingStatus: trace.steps.find((step) => step.stage === "staging")?.status, outcome: trace.outcome })
       .toEqual({ stagingStatus: failed ? "failed" : "ok", outcome: failed ? "completed_with_errors" : "completed" });
+    expect(operationTrace).toHaveBeenCalledWith(expect.objectContaining({
+      traceSeed: "turn-1", name: "zyra.apply_operations"
+    }));
+    expect(operationTrace.mock.calls[0][0].errorMessage).toBe(failed ? "One or more suite operations reported an error" : undefined);
+    expect(JSON.stringify(operationTrace.mock.calls)).not.toContain("private suite failure");
+  });
+
+  it.each(["update", "archive"])("%s operation errors are failed telemetry without changing suite-only staging behavior", async (type) => {
+    const svc = makeLegacy(); mockCapabilitiesAndActor(svc);
+    const operationTrace = jest.spyOn(aiTrace, "recordStandaloneTool").mockResolvedValue(undefined);
+    jest.spyOn(svc as unknown as { findProjectTestcase: (...a: unknown[]) => Promise<unknown> }, "findProjectTestcase")
+      .mockRejectedValue(new Error("private testcase lookup failure"));
+    const operations = [{ type, testcaseId: "case-1", fields: { title: "Revised title" } }];
+    jest.spyOn(svc as unknown as { buildZyraChatDecision: (...a: unknown[]) => Promise<unknown> }, "buildZyraChatDecision")
+      .mockResolvedValue({ reply: "Operation routing fixture", actionType: type, operations, testcases: [] });
+    const inserted = jest.spyOn(svc as unknown as { insertZyraAssistantMessage: (...a: unknown[]) => Promise<unknown> }, "insertZyraAssistantMessage")
+      .mockResolvedValue({ id: "assistant-1", status: "completed" });
+    jest.spyOn(svc, "zyraChatSession").mockResolvedValue({ messages: [] });
+    const recorder = new ZyraTurnTraceRecorder();
+    await (svc as unknown as { executeZyraChatTurn: (...a: unknown[]) => Promise<unknown> }).executeZyraChatTurn({
+      projectId: "project-1", userId: "user-1", uid: "user-1", sessionId: "session-1",
+      message: "Apply the requested testcase change", userMessageId: "turn-1", sessionRow: {}
+    }, recorder.onStage);
+    const applied = (inserted.mock.calls[0][0] as Body).applied as AppliedShape;
+    expect(applied.testcases).toEqual([]);
+    expect(applied.activity).toEqual([expect.objectContaining({ title: "An operation failed unexpectedly" })]);
+    expect(operationTrace).toHaveBeenCalledWith(expect.objectContaining({
+      name: "zyra.apply_operations", errorMessage: "One or more operations reported an error"
+    }));
+    expect(JSON.stringify(operationTrace.mock.calls)).not.toContain("private testcase lookup failure");
+    // This patch changes the standalone observation only; existing suite-only UI rules stay intact.
+    expect(recorder.finish().steps.find((step) => step.stage === "staging")?.status).toBe("ok");
+  });
+
+  it("an answer turn does not report an operation span when no operations were requested", async () => {
+    const svc = makeLegacy();
+    const operationTrace = jest.spyOn(aiTrace, "recordStandaloneTool").mockResolvedValue(undefined);
+    jest.spyOn(svc as unknown as { buildZyraChatDecision: (...a: unknown[]) => Promise<unknown> }, "buildZyraChatDecision")
+      .mockResolvedValue({ reply: "Answer fixture", actionType: "answer", operations: [], testcases: [] });
+    jest.spyOn(svc as unknown as { applyZyraChatOperations: (...a: unknown[]) => Promise<unknown> }, "applyZyraChatOperations")
+      .mockResolvedValue({ testcases: [], activity: [], reviewRequestId: null });
+    jest.spyOn(svc as unknown as { insertZyraAssistantMessage: (...a: unknown[]) => Promise<unknown> }, "insertZyraAssistantMessage")
+      .mockResolvedValue({ id: "assistant-1", status: "completed" });
+    jest.spyOn(svc, "zyraChatSession").mockResolvedValue({ messages: [] });
+    await (svc as unknown as { executeZyraChatTurn: (...a: unknown[]) => Promise<unknown> }).executeZyraChatTurn({
+      projectId: "project-1", userId: "user-1", uid: "user-1", sessionId: "session-1",
+      message: "Explain the suite", userMessageId: "turn-1", sessionRow: {}
+    });
+    expect(operationTrace).not.toHaveBeenCalled();
   });
 
   for (const language of ["en", "ru"] as const) {

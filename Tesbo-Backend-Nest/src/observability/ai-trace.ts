@@ -42,12 +42,18 @@ export interface TurnHandle {
   /** Null when tracing is off, or when the SDK failed to produce a span. */
   readonly span: unknown | null;
   readonly traceId: string | null;
+  /**
+   * The deterministic seed this turn's trace id was derived from (the chat message id).
+   * Kept so work that outlives the turn's span — e.g. background plan batches — can rejoin the
+   * same trace through createTraceId(seed) instead of starting a standalone one.
+   */
+  readonly traceSeed?: string | null;
   /** Restamped onto every child span, the way propagateAttributes would. See stampTraceIdentity. */
   readonly sessionId?: string | null;
   readonly userId?: string | null;
 }
 
-const NO_TURN: TurnHandle = { span: null, traceId: null };
+const NO_TURN: TurnHandle = { span: null, traceId: null, traceSeed: null };
 
 function shorten(value: unknown, max = META_MAX): string {
   const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
@@ -140,7 +146,7 @@ export async function startZyraTurn(ctx: {
       if (fromSdk !== local) logger.warn(`Langfuse renamed a trace attribute: expected "${local}", SDK says "${fromSdk}".`);
     }
 
-    const turn: TurnHandle = { span, traceId, sessionId: ctx.sessionId, userId: ctx.userId ?? null };
+    const turn: TurnHandle = { span, traceId, traceSeed: ctx.messageId, sessionId: ctx.sessionId, userId: ctx.userId ?? null };
     stampTraceIdentity(span, turn);
     span.otelSpan?.setAttribute(TRACE_NAME, "zyra.chat.turn");
 
@@ -303,6 +309,17 @@ export function recordExistingCoverage(turn: TurnHandle, data: { searchTerms: st
  *  does not apply to an observation's input/output body. */
 const RAW_OUTPUT_MAX = 8000;
 
+function knownTokenCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+/** Missing or invalid usage is unknown. Preserve measured zero and partial counts. */
+function generationUsage(usage?: { input?: number; output?: number }): { usageDetails?: Record<string, number> } {
+  const measured = Object.fromEntries(Object.entries({ input: usage?.input, output: usage?.output })
+    .filter((entry): entry is [string, number] => knownTokenCount(entry[1])));
+  return Object.keys(measured).length ? { usageDetails: measured } : {};
+}
+
 /**
  * One model call, with usage so cost aggregates per workspace.
  *
@@ -347,13 +364,13 @@ export function recordGeneration(
         model: data.model,
         input: data.input,
         output,
-        ...(data.usage ? { usageDetails: { input: data.usage.input ?? 0, output: data.usage.output ?? 0 } } : {}),
+        ...generationUsage(data.usage),
         metadata: {
           provider: data.provider,
-          ...(data.usage?.cached ? { cachedInputTokens: String(data.usage.cached) } : {}),
+          ...(knownTokenCount(data.usage?.cached) && data.usage.cached > 0 ? { cachedInputTokens: String(data.usage.cached) } : {}),
           ...(data.salvaged !== undefined ? { salvaged: String(data.salvaged) } : {})
         },
-        ...(data.errorMessage ? { level: "ERROR", statusMessage: shorten(data.errorMessage) } : {})
+        ...(data.errorMessage ? { level: "ERROR", statusMessage: "Operation failed (details in masked output)" } : {})
       },
       { asType: "generation" }
     );
@@ -361,6 +378,96 @@ export function recordGeneration(
     child.end();
   } catch (err) {
     logger.warn(`recordGeneration failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+const STANDALONE_METADATA_KEYS = new Set([
+  "organizationId", "projectId", "sessionId", "userId", "planId", "fileId", "ticketId", "nativeTicketId", "runId", "ticketKey", "commentCount", "ext", "toolName"
+]);
+
+/** Metadata bypasses the SDK mask. Keep only the existing callers' bounded identity/count fields. */
+function standaloneMetadata(metadata?: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(metadata || {})
+    .filter(([key, value]) => STANDALONE_METADATA_KEYS.has(key) && typeof value === "string")
+    .map(([key, value]) => [key, shorten(value)]));
+}
+
+/**
+ * Record a generation that is not part of an interactive Zyra turn (e.g. integration sync decision
+ * summaries, background jobs). Creates/joins a trace by deterministic seed, never throws.
+ */
+export async function recordStandaloneGeneration(ctx: {
+  traceSeed: string;
+  name: string;
+  provider: string;
+  model: string;
+  input?: unknown;
+  output?: unknown;
+  usage?: { input?: number; output?: number; cached?: number };
+  errorMessage?: string;
+  metadata?: Record<string, string>;
+}): Promise<void> {
+  if (!isTracingEnabled()) return;
+  try {
+    const { startObservation, createTraceId } = await import("@langfuse/tracing");
+    const traceId = await createTraceId(ctx.traceSeed);
+    const metadata = standaloneMetadata(ctx.metadata);
+    const span = startObservation(
+      ctx.name,
+      {
+        model: ctx.model,
+        input: ctx.input,
+        output: ctx.errorMessage ? { error: ctx.errorMessage, ...(ctx.output !== undefined ? { output: ctx.output } : {}) } : ctx.output,
+        ...generationUsage(ctx.usage),
+        metadata: {
+          provider: ctx.provider,
+          ...(knownTokenCount(ctx.usage?.cached) && ctx.usage.cached > 0 ? { cachedInputTokens: String(ctx.usage.cached) } : {}),
+          ...metadata
+        },
+        ...(ctx.errorMessage ? { level: "ERROR", statusMessage: "Operation failed (details in masked output)" } : {})
+      },
+      { asType: "generation", parentSpanContext: { traceId, spanId: "0000000000000001", traceFlags: 1 } }
+    ) as unknown as Observation;
+    stampTraceIdentity(span, { span, traceId, sessionId: metadata.sessionId, userId: metadata.userId });
+    span.end();
+  } catch (err) {
+    logger.warn(`recordStandaloneGeneration failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/**
+ * Record a non-LLM tool/operation span under a trace derived from a deterministic seed.
+ *
+ * Used for work that happens after the root turn span closed (e.g. applyZyraChatOperations), where
+ * the caller still knows the turn's trace seed but no longer holds a TurnHandle. Never throws.
+ */
+export async function recordStandaloneTool(ctx: {
+  traceSeed: string;
+  name: string;
+  input?: unknown;
+  output?: unknown;
+  errorMessage?: string;
+  metadata?: Record<string, string>;
+}): Promise<void> {
+  if (!isTracingEnabled()) return;
+  try {
+    const { startObservation, createTraceId } = await import("@langfuse/tracing");
+    const traceId = await createTraceId(ctx.traceSeed);
+    const metadata = standaloneMetadata(ctx.metadata);
+    const span = startObservation(
+      ctx.name,
+      {
+        input: ctx.input,
+        output: ctx.errorMessage ? { error: ctx.errorMessage, ...(ctx.output !== undefined ? { output: ctx.output } : {}) } : ctx.output,
+        metadata,
+        ...(ctx.errorMessage ? { level: "ERROR", statusMessage: "Operation failed (details in masked output)" } : {})
+      },
+      { asType: "tool", parentSpanContext: { traceId, spanId: "0000000000000001", traceFlags: 1 } }
+    ) as unknown as Observation;
+    stampTraceIdentity(span, { span, traceId, sessionId: metadata.sessionId, userId: metadata.userId });
+    span.end();
+  } catch (err) {
+    logger.warn(`recordStandaloneTool failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 

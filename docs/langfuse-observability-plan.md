@@ -1,14 +1,30 @@
 # Langfuse integration plan — full traceability for Zyra and every other model call
 
-Status: **Phase 1 shipped, partially.** `src/observability/` (`langfuse.ts`, `ai-trace.ts`) exists and
-is wired into `buildZyraChatDecision`: session/user identity, Jira context, knowledge context,
-existing-coverage, the router call, the generator call (`generateZyraChatTestcasesWithAi`), and a
-`reply-reconciliation` guardrail span are all traced today. **Not yet done**, still matching this
-doc's original Phase 1–4 scope below: model-price seeding (§3.5), the remaining call sites in §1.1
-(#2, #3, #6–9), scores/evals (Phase 3), and dashboards/alerts (Phase 4). This header was stale for a
-while — it read "no product code has been changed" after Phase 1's module had already shipped; keep
-it in sync with reality going forward rather than treating this doc as a proposal once code exists.
-Target instance: **self-hosted Langfuse OSS v4.17.0**, project `Tesbo Test Manager` (org `Tesbo`).
+Status: **Partial source implementation; PR103 additions are not yet merged or verified in a deployment.**
+The existing `src/observability/` module is wired into `buildZyraChatDecision` for session/user identity,
+Jira context, knowledge context, existing coverage, the router, the generator
+(`generateZyraChatTestcasesWithAi`) and the `reply-reconciliation` guardrail. This candidate adds
+optional model-price seeding for four exact model IDs, disabled by default and conditioned on a
+complete readable inventory (§3.5). **Additional source coverage in this candidate:** tool-decision
+finalizer (`finalizeZyraToolDecisionWithAi`), scenario planner/top-up (`planZyraChatScenarios`),
+Zyra memory summarization (`summarizeForZyraMemory`), knowledge-base transcription
+(`transcribeKnowledgeFile`), and integration-sync decision summaries
+(`IntegrationSyncDecisions.summarize`) emit standalone Langfuse generations with usage/error
+metadata where available. Provider usage parsing now carries cached input tokens (OpenAI
+`prompt_tokens_details.cached_tokens`, Anthropic cache read/create counts) through the router,
+scenario planner/top-up, tool finalizer, memory-summary and update-authoring generations. RAG
+ingestion/testcase embedding jobs and the one-off testcase backfill are traced via
+`embedding-trace.ts`. Background `continueZyraChatPlan` batch orchestration tool observations
+rejoin the originating turn's trace (seeded from the chat message id stored in `active_plan`), and
+the interactive `applyZyraChatOperations` call records a `zyra.apply_operations` tool span.
+The aggregate batch observation does not assert a single executed provider/model or token count.
+**Still open:** plans created before that plan field existed fall back to standalone per-batch
+traces; per-provider background trace correlation is incomplete; broader usage parsing/trace
+attachment gaps may remain in other AI paths; scores/evals (Phase 3), dashboards/alerts (Phase 4),
+and §9 e2e coverage remain open.
+Keep this header in sync with reality.
+The August 25 spike used **self-hosted Langfuse OSS v4.17.0**, project `Tesbo Test Manager` (org
+`Tesbo`). That historical version and deployment state have not been reverified by this PR recovery.
 
 Scope: end-to-end observability (traces, token/cost accounting, quality scores) over every LLM and
 embedding call the product makes, without changing what Zyra does.
@@ -47,14 +63,16 @@ environment `spike-local`; they are filterable and harmless, but that is where t
 
 ## 1. Why — the concrete gaps in what we have today
 
-Each item is something we currently **cannot answer** about our own production behaviour.
+This section records the gaps identified by the August 25 spike. Its call-site table is the
+historical baseline, not a fresh production readback. Current candidate coverage is summarized
+above and in §4; deployment behavior still needs the verification in §9.
 
-### 1.1 Nine model call sites, none correlated
+### 1.1 Original baseline: nine model call sites with incomplete correlation
 
 Line numbers below are as of the 2026-08-25 spike and have drifted since (the file has grown past
 15,000 lines) — the call sites and their names are still current, the exact `:N` addresses are not.
 
-| # | Call site | File / line | Traced today |
+| # | Call site | File / line | Traced at the original spike |
 |---|-----------|-------------|--------------|
 | 1 | Zyra chat router (`zyraChatWithOpenAi`/`zyraChatWithAnthropic`) | `legacy.service.ts` | **yes** — router span, raw pre-parse completion text + `__salvaged` flag, `reply-reconciliation` guardrail span |
 | 2 | Tool-decision finalizer | `legacy.service.ts` | no |
@@ -249,26 +267,50 @@ Two consequences that matter to us:
   from the list response" and call it a leak test; it proves nothing. Assert on the **outbound
   payload** instead (§9).
 
-### 3.5 Cost is currently computed as zero for the models we actually use
+### 3.5 Model-price coverage and optional seeding
 
-Langfuse derives cost from a model-price definition matched against the model name. The instance has
-**87 definitions, none newer than the 3.5 / 4o era**. Checked against the models our provider catalog
-can select:
+The August 25 spike found eight catalog models without matching definitions among 87 instance
+definitions; the sampled generation had null price and model fields. This is historical evidence,
+not a fresh inventory or proof that a deployment now has correct costs. Token counts remain useful
+when cost is unknown.
 
-| Model | Priced on instance |
-|---|---|
-| `claude-sonnet-4-6` | **no** |
-| `claude-haiku-4-5` | **no** |
-| `claude-sonnet-4`, `claude-sonnet-4-20250514` | **no** |
-| `claude-3-7-sonnet` | **no** |
-| `gpt-4.1`, `gpt-4.1-mini` | **no** |
-| `gemini-2.0-flash` | **no** |
-| `claude-3-5-sonnet-20241022`, `gpt-4o`, `text-embedding-3-small` | yes |
+Langfuse computes inferred costs at ingestion and gives custom definitions priority over maintained
+ones ([Langfuse cost tracking](https://langfuse.com/docs/observability/features/token-and-cost-tracking)).
+Creating a project model blindly can therefore override a maintained price. The optional initializer
+is **off by default**, including in the example environments. Only the explicit value
+`LANGFUSE_SEED_MODEL_PRICES=true` opts in; this change does not enable it on any deployment.
 
-**8 of 11 unpriced.** The spike's generation came back with `inputPrice`, `outputPrice`, `totalPrice`
-and `modelId` all null, confirming it end to end. Since cost accounting is one of the two headline
-reasons for this work (§1.3), seeding model definitions via `POST /api/public/models` is a
-**required Phase 1 task**, not a nice-to-have. Token counts are captured regardless.
+When opted in, `seedLangfuseModelPrices` first reads every inventory page, bounded to 10 pages of
+100 definitions, 1 MB per response and a five-second budget for the entire attempt. Both reads and
+creates use the configured origin and refuse redirects. Any existing matching model name or match
+pattern, maintained or custom, is preserved even if its prices are absent or different. Unsupported
+PostgreSQL regex syntax, unreadable or inconsistent pages, duplicate IDs, or exceeded limits stop
+the attempt before any creation. Regex matching accepts a limited shared PostgreSQL/JavaScript
+syntax and conservatively broadens character classes because PostgreSQL ranges depend on
+collation. This can preserve more definitions, never justify replacing uncertain coverage.
+Lookarounds and backreferences are refused. A separate 100 ms evaluation limit bounds matching;
+ambiguous coverage remains unknown.
+
+Only these exact model IDs are eligible for missing-definition creation. Standard input/output
+rates were checked against primary provider documentation on **2026-11-21**:
+
+| Exact model ID | Input USD / 1M tokens | Output USD / 1M tokens | Primary source |
+|---|---:|---:|---|
+| `claude-sonnet-4-6` | 3.00 | 15.00 | [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing) |
+| `claude-haiku-4-5` | 1.00 | 5.00 | [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing) |
+| `gpt-4.1` | 2.00 | 8.00 | [OpenAI model](https://developers.openai.com/api/docs/models/gpt-4.1) |
+| `gpt-4.1-mini` | 0.40 | 1.60 | [OpenAI GPT-4.1 pricing table](https://openai.com/index/gpt-4-1/) |
+
+The API receives USD per token. These fallback definitions do not claim cached-token, batch,
+modality, or special service-tier pricing. Dated aliases and other models, including Claude 3.7
+and Gemini 2.0 variants, are not guessed or covered by broad family regexes. Leave their costs
+unknown until a maintained or separately verified definition covers them.
+
+There is no pricing replacement or upsert. A failed create, including HTTP 400/409, stops the
+attempt and is never reported as an existing definition based on response text. A later attempt
+reads the inventory again. Diagnostics contain fixed messages and counts, not response bodies or
+credentials. Unit tests use synthetic credentials and mock requests; they do not prove installed
+server compatibility, live activation, or a successful cost round-trip.
 
 ---
 
@@ -279,41 +321,64 @@ reasons for this work (§1.3), seeding model definitions via `POST /api/public/m
 Completed while writing this plan: version pinned, ingestion proven, trace hierarchy proven, masking
 behaviour characterised, cost gap found. Findings are §0 and §7. No repo changes.
 
-### Phase 1 — Module + Zyra chat path (~2–3 days) — 🟡 partially shipped
+### Phase 1 — Module + Zyra chat path — source partly implemented, runtime verification open
 
 1. `src/observability/` per §3.2, registered globally, with the `NodeSDK` exporter guard. **Done.**
 2. `AppConfigService` additions (§6), inert when `LANGFUSE_ENABLED=false`. **Done.**
-3. Seed model-price definitions for the 8 unpriced models (§3.5). **Not done** — cost still computes
-   to zero for the models this catalog actually serves; still a required task, not optional.
+3. Optional price fallback (§3.5). **Implemented in this candidate, not activated or verified live.**
+   `seedLangfuseModelPrices` requires `LANGFUSE_SEED_MODEL_PRICES=true`, reads the complete bounded
+   inventory first, preserves existing definitions and considers only four exact model IDs.
+   Unknown or ambiguous coverage stops creation. Cost accuracy and installed-server compatibility
+   remain unverified; the fallback does not model every provider pricing dimension.
 4. Instrument, in order: `sendZyraChatMessage` → `buildZyraChatDecision` →
    `finalizeZyraToolDecisionWithAi` → `startZyraChatPlan` / `continueZyraChatPlan` →
    `generateZyraWithProvider` → `applyZyraChatOperations`.
-   **Done**: `buildZyraChatDecision` (router span, raw completion + `__salvaged`, reconciliation
-   guardrail span), `generateZyraWithProvider` for the interactive path (including a plan's first
-   batch). **Not done**: `finalizeZyraToolDecisionWithAi` (the `jira_pending_testcases` tool path),
-   `continueZyraChatPlan`'s own background batches (no open trace to attach to — each batch would
-   need its own trace, not a child of one that already ended), `applyZyraChatOperations` as its own
-   `[tool]` span (its outcome is currently only visible via the reconciliation guardrail span's
-   `appliedCount`/`proposedCount`, not as a distinct observation).
-5. Shutdown flush in `main.ts` (§8). Not verified as part of this pass — check before relying on it.
-6. e2e coverage per §9 (local capture stub against the real HTTP stack, fail-closed base URL,
-   Langfuse-unreachable failure isolation, etc.): **still not written, not run.** What this pass did
-   add is `src/observability/ai-trace.spec.ts` — previously nonexistent (§3.2 named
-   `ai-trace.service.spec.ts` as a Phase 1 deliverable that never got written) — unit-testing
-   `ai-trace.ts`'s own contract directly with `@langfuse/tracing` and `isTracingEnabled` mocked: the
-   raw completion lands in `output.rawCompletion` (never `metadata`, matching the §7.2 masking
-   constraint) alongside the parsed decision, `salvaged`/`bannerFired` land in metadata as plain
-   booleans/strings, `recordReconciliation` derives the identical trace id `startZyraTurn` would for
-   the same messageId (asserted directly, not assumed), and every function stays a no-op that never
-   throws when tracing is off or the SDK itself throws. This proves ai-trace.ts's own behavior
-   correctly; it does not prove the real SDK/network path, which is what §9's e2e list is for.
+   **Existing source**: the router, reconciliation guardrail and interactive generation path.
+   **Added in this candidate**: the tool finalizer, scenario planning/top-up, background batch
+   orchestration tool observations attached by the stored originating message ID, and an `applyZyraChatOperations`
+   tool observation that reports actual partial/failure outcomes. Empty operation lists create no
+   apply observation. Older plans without a stored message ID retain standalone per-batch traces.
+   The aggregate batch can include multiple provider calls; its observation has no provider/model
+   or usage assertion. Per-provider background trace correlation remains incomplete. Source tests
+   do not establish that these observations reached a deployed Langfuse instance.
+5. Shutdown flush in `main.ts` (§8). **Implemented** — `main.ts` registers `SIGTERM`/`SIGINT` handlers
+   that call `stopLangfuse()` (which force-flushes then shuts down the SDK). Not yet validated in a
+   live traced runtime session.
+6. Product E2E coverage per §9: **the complete traced product journeys remain unimplemented and
+   unverified by this recovery.** Existing `ai-trace.spec.ts` exercises helper behavior with SDK
+   mocks. The new `langfuse-export.integration.spec.ts` also ran the installed Langfuse/OTel SDK
+   against an ephemeral loopback HTTP capture: **4 tests passed, five observations delivered**.
+   It verifies native trace/session/user identity, generation/tool types, model/usage fields,
+   tested key/bearer masking, metadata allowlisting/truncation and actual flush/shutdown. The
+   embedding failure observation verifies fixed status text, masked error details and the
+   unchanged original provider rejection. Its
+   child-Node fixture avoids Jest's native dynamic-import restriction without changing the test
+   configuration. No SDK/exporter mock, database, provider call or live credential is involved.
+   The synthetic capture response does not prove Langfuse ingestion/authentication/UI, deployment,
+   cost calculation, product authorization, outage isolation or the full §9 scenario set.
 
-### Phase 2 — Remaining call sites (~1 day)
+### Phase 2 — Remaining call sites — source present in this candidate; deployment unverified
 
-`summarizeForZyraMemory`, `transcribeKnowledgeFile`, `embedTexts` (inside `RagEmbeddingProcessor`),
-`integration-sync-decisions`. Extend usage parsing to the sites that lack it (`zyraJsonCompletion`,
-`zyraChatWith*`, `summarizeForZyraMemory`) so cost is complete rather than partial. BullMQ processors
-flush per job.
+`summarizeForZyraMemory`, `transcribeKnowledgeFile`, `embedTexts` (inside `RagEmbeddingProcessor`
+and the one-off testcase backfill) and `integration-sync-decisions` are traced. Usage parsing now
+keeps real provider usage, including cached input tokens, for `zyraJsonCompletion`, `zyraChatWith*`,
+`summarizeForZyraMemory`, the scenario planner/top-up, the tool-decision finalizer and
+`zyraAuthorJson` update authoring. Each update-authoring batch carries its own trusted attempted
+model into its success and failure observations. On success, that model also supplies the existing
+token-ledger call; the ledger schema and its existing partial-count accounting are unchanged. BullMQ
+processors flush per job. The standalone backfill starts and stops tracing only for an execution
+run; dry runs do not start the tracing SDK. Integration-sync decisions include organization,
+project, run and native ticket identities and use a distinct invocation seed so repeated or
+cross-project decisions do not collapse into one trace. Finalizer, scenario-plan, memory-summary
+and fallback batch attempts also use UUID invocation seeds instead of millisecond timestamps.
+Missing or malformed provider token counts remain unknown; explicit measured zero and partial
+usage are preserved without substituting estimates. Fallback generations record the actual sent
+model on both success and failure. Transcription setup failures before a provider request and
+unsupported transcription without an allocated model key create no generation observation.
+Interactive and embedding status messages use fixed text; provider error details are confined to
+masked output. Non-suite operation failures also mark the apply tool observation as failed while
+preserving the existing suite-specific staging and reply behavior. These repaired call sites do
+not establish complete coverage of every AI path or per-provider background trace correlation.
 
 ### Phase 3 — Scores and evals (~1–1.5 days)
 
@@ -361,7 +426,10 @@ traceIdFor(generationTask) = await createTraceId(taskId)          // ai_generati
 
 Same id every time, from data we already store. A support report maps to its trace by computing the
 id — no column, no backfill, and it works for rows written before the feature shipped. Background
-plan resumption reattaches the same way, seeding from the originating message id.
+plan resumption stores the originating message id in `active_plan` and seeds its outer batch tool
+observations from it, so they land on the originating turn's trace; a plan created before that
+field existed falls back to a standalone per-batch seed. This correlation does not establish
+attachment of every provider generation performed inside the batch.
 
 This also removes the migration from scope, which shrinks the e2e surface (§9) and the review risk.
 
@@ -465,6 +533,11 @@ mask would not stop it.
 Per `CLAUDE.md`, this ships with real, run, passing e2e tests. Scenarios listed before writing, as
 required.
 
+**Current boundary:** the local real-SDK capture described in §4 has run and passed. The scenarios
+below are the planned full product E2E requirements; their presence here does not mean they have
+been implemented or executed. The existing general product CI is separate evidence and does not
+prove the positive tracing paths while tracing is disabled.
+
 **Harness:** point `LANGFUSE_BASE_URL` at a local capture stub that records the outbound OTLP body.
 This was already prototyped during the spike and works. It makes emission assertable, keeps the suite
 hermetic, and lets outages and bad credentials be simulated deterministically. It is also the *only*
@@ -536,7 +609,7 @@ Selection announced with `--list` counts, run at `--workers=10` in its own Termi
 |---|---|
 | 0 — spike | ✅ done |
 | 1 — module + Zyra chat path + model prices + e2e | 2–3 d |
-| 2 — remaining call sites + complete usage parsing | 1 d |
+| 2 — remaining call sites + usage parsing | Source coverage present in this candidate; deployment and broader completeness unverified |
 | 3 — scores and evals | 1–1.5 d |
 | 4 — dashboards and alerts | 0.5 d |
 | 5 — prompt management | deferred |

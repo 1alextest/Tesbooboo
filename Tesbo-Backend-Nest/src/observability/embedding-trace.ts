@@ -102,7 +102,8 @@ function closeSpanError(span: EmbeddingObservation | null, message: string, dura
     span.update({
       output: { error: message },
       level: "ERROR",
-      statusMessage: shorten(message, 500),
+      // Status messages bypass the SDK mask; provider details belong only in masked output.
+      statusMessage: "Embedding failed (details in masked output)",
       metadata: { durationMs: String(durationMs) }
     });
     span.end();
