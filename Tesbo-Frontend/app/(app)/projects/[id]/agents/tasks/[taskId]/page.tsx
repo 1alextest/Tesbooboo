@@ -353,19 +353,29 @@ export default function ZyraTaskDetailPage() {
 
   async function handleRequirementBundleDecision(decision: "rejected" | "withdrawn") {
     if (!task || done || bundleWorking) return;
+    if (!task.proposalRevision) {
+      setError("Reload this bundle to verify the exact content before deciding.");
+      return;
+    }
+    const reviewedRevision = task.proposalRevision;
     setBundleWorking(true);
     setMessage(null);
     setError(null);
     try {
       const updated = decision === "rejected"
-        ? await rejectRequirementProposal(projectId, taskId)
-        : await withdrawRequirementProposal(projectId, taskId);
+        ? await rejectRequirementProposal(projectId, taskId, reviewedRevision)
+        : await withdrawRequirementProposal(projectId, taskId, reviewedRevision);
       setTask(updated);
-      setMessage(decision === "rejected"
+      if (!updated.requirementDecision) {
+        setError("The recorded decision could not be verified. Reload this task before continuing.");
+        return;
+      }
+      setMessage(updated.requirementDecision.decision === "rejected"
         ? "Requirement change bundle rejected. Nothing was published."
         : "Requirement change bundle withdrawn. Nothing was published.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "The requirement change bundle could not be updated.");
+      if (err instanceof ApiError && err.status === 409) await refreshTask();
     } finally {
       setBundleWorking(false);
     }
@@ -564,11 +574,12 @@ export default function ZyraTaskDetailPage() {
   // Mirrors the backend guard in zyraFeedback: feedback only makes sense once there's something
   // to review, or to retry after a failure. Disabling it here for todo/in_progress avoids a
   // pointless round trip that the server would reject with a 409 anyway.
-  const canGiveFeedback = taskStatusNow === "in_review" || taskStatusNow === "failed";
+  const isRequirementBundle = task.provider === "external_requirement_proposal" || Boolean(task.requirementBundle?.length);
+  const canGiveFeedback = !isRequirementBundle && (taskStatusNow === "in_review" || taskStatusNow === "failed");
   type RequirementBundleEntry = {
-    opType?: string; title?: string; description?: string;
-    criteria?: Array<{ key?: string; text?: string }>;
-    draft?: { title?: string };
+    opType?: string; title?: string; description?: string; reason?: string;
+    criteria?: Array<{ key?: string; text?: string; normative?: boolean }>;
+    draft?: Record<string, unknown> & { title?: string };
     criterionKeys?: string[];
   };
   const requirementOps: RequirementBundleEntry[] = Array.isArray(task.requirementBundle)
@@ -661,7 +672,7 @@ export default function ZyraTaskDetailPage() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            {!done && (
+            {!done && !isRequirementBundle && (
               <Button variant="secondary" onClick={() => void handleCloseTask()} disabled={working}>{t("task.closeTask")}</Button>
             )}
           </div>
@@ -720,7 +731,7 @@ export default function ZyraTaskDetailPage() {
                   {bundleRequirement.description && <p className="mt-1 text-sm text-[var(--muted)]">{String(bundleRequirement.description)}</p>}
                   <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[var(--foreground)]">
                     {bundleCriteria.map((criterion) => (
-                      <li key={String(criterion.key)}><span className="font-mono text-xs text-[var(--muted)]">{String(criterion.key)}</span> {String(criterion.text)}</li>
+                      <li key={String(criterion.key)}><span className="font-mono text-xs text-[var(--muted)]">{String(criterion.key)}</span> {String(criterion.text)}{criterion.normative === false && <span className="ml-2 text-xs text-[var(--muted)]">Context only</span>}</li>
                     ))}
                   </ul>
                 </div>
@@ -729,6 +740,14 @@ export default function ZyraTaskDetailPage() {
                 <div data-testid="requirement-bundle-case">
                   <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Testcase candidate (Draft proposal)</p>
                   <p className="mt-1 text-sm text-[var(--foreground)]">{String(bundleCase.draft?.title || "Untitled test case")}</p>
+                  <dl className="mt-2 space-y-2 text-sm" data-testid="requirement-bundle-case-fields">
+                    {Object.entries(bundleCase.draft || {}).filter(([field]) => field !== "title").map(([field, value]) => (
+                      <div key={field}>
+                        <dt className="font-medium text-[var(--foreground)]">{field.replace(/([a-z])([A-Z])/g, "$1 $2")}</dt>
+                        <dd className="whitespace-pre-wrap break-words text-[var(--muted)]">{typeof value === "string" ? value : JSON.stringify(value, null, 2)}</dd>
+                      </div>
+                    ))}
+                  </dl>
                 </div>
               )}
               {bundleLink && (
@@ -738,6 +757,17 @@ export default function ZyraTaskDetailPage() {
                     Criteria: {Array.isArray(bundleLink.criterionKeys) ? bundleLink.criterionKeys.join(", ") : "—"}
                   </p>
                 </div>
+              )}
+              <details className="rounded-lg border border-[var(--border)] p-3 text-sm" data-testid="requirement-bundle-full-content">
+                <summary className="cursor-pointer font-medium">Complete staged content</summary>
+                <p className="mt-2 text-[var(--muted)]">These are all the requirement, test case and link fields in this reviewed revision, including their exact references and reasons.</p>
+                <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs">{JSON.stringify(requirementOps, null, 2)}</pre>
+              </details>
+              {task.requirementDecision && (
+                <p data-testid="requirement-bundle-recorded-decision" className="text-sm">
+                  Recorded outcome: {task.requirementDecision.decision}. Nothing was published.
+                  {task.requirementDecision.reason && ` Reason: ${task.requirementDecision.reason}`}
+                </p>
               )}
               <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-sm" data-testid="requirement-bundle-publication-gate">
                 {task.skillContext?.status === "unavailable"
@@ -1007,7 +1037,8 @@ export default function ZyraTaskDetailPage() {
             )}
             {!canGiveFeedback && (
               <p className="text-xs text-[var(--muted)]">
-                {taskStatusNow === "in_progress" || taskStatusNow === "todo"
+                {isRequirementBundle ? "Requirement bundles are immutable. Use their exact review, Reject or Withdraw actions above."
+                  : taskStatusNow === "in_progress" || taskStatusNow === "todo"
                   ? t("task.feedbackLocked")
                   : t("task.feedbackClosed")}
               </p>

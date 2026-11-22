@@ -310,6 +310,10 @@ type Body=Record<string,any>;
       await expect(save(staged,[0])).rejects.toMatchObject({status:409,response:{code:"SKILL_CONTEXT_UNAVAILABLE"}});
       await expect(service().zyraDeleteDraft(project,user,staged.id,0,human)).rejects.toMatchObject({status:409});
       await expect(service().zyraEditDraft(project,user,staged.id,0,{title:"Tampered"},human)).rejects.toMatchObject({status:409});
+      const taskRowBefore=(await admin.query("SELECT * FROM ai_generation_requests WHERE id=$1",[staged.id])).rows;
+      await expect(service().zyraCloseTask(project,user,staged.id,human)).rejects.toMatchObject({status:409,response:{code:"REQUIREMENT_BUNDLE_IMMUTABLE"}});
+      await expect(service().zyraFeedback(project,user,staged.id,{feedback:"Regenerate the bundle"},human)).rejects.toMatchObject({status:409,response:{code:"REQUIREMENT_BUNDLE_IMMUTABLE"}});
+      expect((await admin.query("SELECT * FROM ai_generation_requests WHERE id=$1",[staged.id])).rows).toEqual(taskRowBefore);
       expect(await docCounts()).toEqual(before);
       expect((await tasks()).rows).toHaveLength(taskBefore);
       const current=await read(staged.id);
@@ -327,18 +331,143 @@ type Body=Record<string,any>;
       await admin.query("UPDATE users SET active_organization_id=$2 WHERE id=$1",[reviewer,org]);
       await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[project,reviewer]);
       const rejected=await stageBundle(ops());
-      await expect(service().rejectRequirementProposal(project,reviewer,rejected.id,{},human)).rejects.toMatchObject({status:403});
-      const closed=await service().rejectRequirementProposal(project,user,rejected.id,{reason:"Not acceptable yet"},human);
+      await expect(service().zyraCloseTask(project,reviewer,rejected.id,human)).rejects.toMatchObject({status:409,response:{code:"REQUIREMENT_BUNDLE_IMMUTABLE"}});
+      await expect(service().zyraFeedback(project,reviewer,rejected.id,{feedback:"Bypass the review"},human)).rejects.toMatchObject({status:409,response:{code:"REQUIREMENT_BUNDLE_IMMUTABLE"}});
+      await expect(service().rejectRequirementProposal(project,reviewer,rejected.id,{expectedProposalRevision:rejected.proposalRevision},human)).rejects.toMatchObject({status:403});
+      const closed=await service().rejectRequirementProposal(project,user,rejected.id,{expectedProposalRevision:rejected.proposalRevision,reason:"Not acceptable yet"},human);
       expect(closed.taskStatus).toBe("done");
       expect(closed.activities.some((entry:Body)=>entry.title==="Rejected requirement change bundle")).toBe(true);
-      expect(await service().rejectRequirementProposal(project,user,rejected.id,{},human)).toMatchObject({taskStatus:"done"});
+      expect(await service().rejectRequirementProposal(project,user,rejected.id,{expectedProposalRevision:rejected.proposalRevision,reason:"Not acceptable yet"},human)).toMatchObject({taskStatus:"done",replayed:true});
       const withdrawn=await stageBundle(ops());
-      await expect(service().withdrawRequirementProposal(project,reviewer,withdrawn.id,{},human)).rejects.toMatchObject({status:403});
-      await expect(service().withdrawRequirementProposal(project,user,withdrawn.id,{}, {kind:"api_token"} as never)).rejects.toMatchObject({status:403});
-      const own=await service().withdrawRequirementProposal(project,user,withdrawn.id,{reason:"Superseded"},human);
+      await expect(service().withdrawRequirementProposal(project,reviewer,withdrawn.id,{expectedProposalRevision:withdrawn.proposalRevision},human)).rejects.toMatchObject({status:403});
+      await expect(service().withdrawRequirementProposal(project,user,withdrawn.id,{expectedProposalRevision:withdrawn.proposalRevision}, {kind:"api_token"} as never)).rejects.toMatchObject({status:403});
+      const own=await service().withdrawRequirementProposal(project,user,withdrawn.id,{expectedProposalRevision:withdrawn.proposalRevision,reason:"Superseded"},human);
       expect(own.taskStatus).toBe("done");
       await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,reviewer]);
     });
+
+    it("recovers the same request after its document or suite changed without restaging",async()=>{
+      const documentId=await requirementDoc("Retry base"),suiteId=await suite("Retry suite"),key=randomUUID();
+      const operations=ops({documentId,expectedRevision:await revision(documentId)});
+      (operations[1] as Body).draft.suiteId=suiteId;
+      const staged=await stageBundle(operations,key),before=(await tasks()).rows.length;
+      await admin.query("UPDATE knowledge_documents SET title='Newer native revision' WHERE id=$1",[documentId]);
+      await admin.query("UPDATE suites SET deleted_at=now() WHERE id=$1",[suiteId]);
+      const recovered=await stageBundle(operations,key);
+      expect(recovered.id).toBe(staged.id);
+      expect(recovered.requirementBundle).toEqual(staged.requirementBundle);
+      expect((await tasks()).rows).toHaveLength(before);
+      await expect(stageBundle(operations,randomUUID())).rejects.toMatchObject({status:409});
+    });
+
+    it("requires exact decision context and commits only one of competing reject/withdraw requests",async()=>{
+      const staged=await stageBundle(ops()),before=await docCounts();
+      await expect(service().rejectRequirementProposal(project,user,staged.id,{},human)).rejects.toMatchObject({status:400});
+      await expect(service().withdrawRequirementProposal(project,user,staged.id,{expectedProposalRevision:"0".repeat(64)},human)).rejects.toMatchObject({status:409});
+      const decision={expectedProposalRevision:staged.proposalRevision,reason:"Exact review"};
+      const blocker=new Client({connectionString:url});
+      await blocker.connect();await blocker.query("BEGIN");
+      await blocker.query("SELECT pg_advisory_xact_lock(hashtext($1))",[`suite-tree:${project}`]);
+      const attempts=Promise.allSettled([
+        service().rejectRequirementProposal(project,user,staged.id,decision,human),
+        service().withdrawRequirementProposal(project,user,staged.id,decision,human)
+      ]);
+      let results:Awaited<typeof attempts>;
+      try{
+        const deadline=Date.now()+5000;let waiting=0;
+        while(Date.now()<deadline){
+          waiting=Number((await admin.query("SELECT COUNT(*)::int AS waiting FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%pg_advisory_xact_lock%'",[applicationName])).rows[0].waiting);
+          if(waiting===2)break;await new Promise(resolve=>setTimeout(resolve,20));
+        }
+        expect(waiting).toBe(2);
+        await blocker.query("COMMIT");
+        results=await attempts;
+      }finally{
+        await blocker.query("ROLLBACK");await attempts;await blocker.end();
+      }
+      expect(results.filter(result=>result.status==="fulfilled")).toHaveLength(1);
+      expect(results.filter(result=>result.status==="rejected")).toEqual([expect.objectContaining({reason:expect.objectContaining({status:409})})]);
+      const closed=await read(staged.id),receipt=closed.requirementDecision;
+      expect(receipt).toMatchObject({proposalRevision:staged.proposalRevision,reviewedSnapshot:staged.proposalSnapshot});
+      const retry=receipt.decision==="rejected"
+        ? await service().rejectRequirementProposal(project,user,staged.id,decision,human)
+        : await service().withdrawRequirementProposal(project,user,staged.id,decision,human);
+      expect(retry).toMatchObject({replayed:true,requirementDecision:receipt});
+      expect(closed.activities.filter((entry:Body)=>entry.kind==="requirement_bundle_decision")).toHaveLength(1);
+      expect((await admin.query("SELECT id FROM audit_logs WHERE entity_id=$1 AND action IN ('requirement_proposal_rejected','requirement_proposal_withdrawn')",[staged.id])).rows).toHaveLength(1);
+      expect(await docCounts()).toEqual(before);
+    },15000);
+
+    it("rejects a changed review dependency and rolls back the decision when its audit fails",async()=>{
+      const staged=await stageBundle(ops());
+      const changedSuite=await suite("Changed after review");
+      await expect(service().rejectRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human)).rejects.toMatchObject({status:409});
+      const current=await read(staged.id),before=(await admin.query("SELECT * FROM ai_generation_requests WHERE id=$1",[staged.id])).rows;
+      const svc=service();
+      jest.spyOn(svc,"logProjectActivity").mockRejectedValue(new Error("Decision audit failed"));
+      await expect(svc.rejectRequirementProposal(project,user,staged.id,{expectedProposalRevision:current.proposalRevision},human)).rejects.toThrow("Decision audit failed");
+      expect((await admin.query("SELECT * FROM ai_generation_requests WHERE id=$1",[staged.id])).rows).toEqual(before);
+      await admin.query("DELETE FROM suites WHERE id=$1",[changedSuite]);
+    });
+
+    it.each(["role", "payload"])("rechecks current %s after waiting for the project mutation boundary",async change=>{
+      const staged=await stageBundle(ops()),blocker=new Client({connectionString:url});
+      await blocker.connect();await blocker.query("BEGIN");
+      await blocker.query("SELECT pg_advisory_xact_lock(hashtext($1))",[`suite-tree:${project}`]);
+      const attempt=service().rejectRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human).then(()=>null,(error:unknown)=>error);
+      try{
+        const deadline=Date.now()+5000;let waiting=false;
+        while(Date.now()<deadline){
+          waiting=!!(await admin.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%pg_advisory_xact_lock%'",[applicationName])).rowCount;
+          if(waiting)break;await new Promise(resolve=>setTimeout(resolve,20));
+        }
+        expect(waiting).toBe(true);
+        if(change==="role")await admin.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2",[project,user]);
+        else await admin.query("UPDATE ai_generation_requests SET generated_payload=jsonb_set(generated_payload,'{0,title}','\"A different reviewed candidate\"'::jsonb) WHERE id=$1",[staged.id]);
+        await blocker.query("COMMIT");
+        expect(await attempt).toMatchObject({status:change==="role"?403:409});
+        const current=await read(staged.id);
+        expect(current).toMatchObject({taskStatus:"in_review",requirementDecision:null});
+        if(change==="role")expect(current.proposalRevision).toBe(staged.proposalRevision);
+        else expect(current.proposalRevision).not.toBe(staged.proposalRevision);
+      }finally{
+        await blocker.query("ROLLBACK");await attempt;await blocker.end();
+        await admin.query("UPDATE project_members SET role='owner' WHERE project_id=$1 AND user_id=$2",[project,user]);
+      }
+    },15000);
+
+    it("rechecks MCP consent after waiting and refuses even a committed request retry after revocation",async()=>{
+      const originalSettings=(await admin.query("SELECT settings FROM projects WHERE id=$1",[project])).rows[0].settings;
+      const access={enabled:true,revision:1,clients:[{tokenId:token,clientName:"Disposable bundle client",scopes:["read","write"],
+        expiresAt:null,allowedTools:["stage_requirement_change_bundle"]}]};
+      const principal={kind:"api_token",tokenId:token,transport:"mcp"},key=randomUUID(),operations=ops();
+      const blocker=new Client({connectionString:url});
+      let attempt:Promise<unknown>|undefined;
+      await blocker.connect();
+      try{
+        await admin.query("UPDATE projects SET settings=jsonb_set(COALESCE(settings,'{}'::jsonb),'{externalMcpAccess}',$2::jsonb) WHERE id=$1",[project,JSON.stringify(access)]);
+        const staged=await stageBundle(operations,key,principal);
+        expect(staged).toMatchObject({taskStatus:"in_review",proposalProvenance:{kind:"api_token",tokenId:token}});
+        const before=(await tasks()).rows;
+        await blocker.query("BEGIN");
+        await blocker.query("SELECT pg_advisory_xact_lock(hashtext($1))",[`suite-tree:${project}`]);
+        attempt=stageBundle(ops(),randomUUID(),principal).then(()=>null,(error:unknown)=>error);
+        const deadline=Date.now()+5000;let waiting=false;
+        while(Date.now()<deadline){
+          waiting=!!(await admin.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%pg_advisory_xact_lock%'",[applicationName])).rowCount;
+          if(waiting)break;await new Promise(resolve=>setTimeout(resolve,20));
+        }
+        expect(waiting).toBe(true);
+        await admin.query("UPDATE projects SET settings=jsonb_set(settings,'{externalMcpAccess}',$2::jsonb) WHERE id=$1",[project,JSON.stringify({...access,enabled:false,revision:2})]);
+        await blocker.query("COMMIT");
+        expect(await attempt).toMatchObject({status:403});
+        await expect(stageBundle(operations,key,principal)).rejects.toMatchObject({status:403});
+        expect((await tasks()).rows).toEqual(before);
+      }finally{
+        await blocker.query("ROLLBACK");if(attempt)await attempt;await blocker.end();
+        await admin.query("UPDATE projects SET settings=$2::jsonb WHERE id=$1",[project,JSON.stringify(originalSettings)]);
+      }
+    },15000);
 
     it("isolates bundles by project and rejects mismatched link references",async()=>{
       const foreignUser=(await admin.query("INSERT INTO users(email,name) VALUES ($1,'Foreign bundle user') RETURNING id",[`foreign-bundle-${randomUUID()}@tesbo.invalid`])).rows[0].id;

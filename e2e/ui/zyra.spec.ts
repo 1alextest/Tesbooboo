@@ -1300,7 +1300,10 @@ test.describe("zyra / agents (UI)", () => {
     const operations = [
       { opType: "requirement_revision", operationId: requirementOperationId, title,
         description: "A staged requirement revision.", criteria: [{ key: "AC-1", text: "The obligation is observable" }] },
-      { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle } },
+      { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle,
+        description: "The full candidate must be reviewable", preconditions: "A prepared review account",
+        steps: [{ action: "Open the native bundle", expectedResult: "Every staged field is readable" }],
+        postconditions: "No official case has been created", testData: "The reviewed candidate remains inert" } },
       { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] },
     ];
     const staged = await api.post(`/api/projects/${tenant!.mainProjectId}/requirements/proposals`, {
@@ -1314,14 +1317,58 @@ test.describe("zyra / agents (UI)", () => {
       await expect(panel).toBeVisible();
       await expect(page.getByTestId("requirement-bundle-candidate")).toContainText(title);
       await expect(page.getByTestId("requirement-bundle-case")).toContainText(caseTitle);
+      const caseFields = page.getByTestId("requirement-bundle-case-fields");
+      for (const text of ["The full candidate must be reviewable", "A prepared review account", "Open the native bundle",
+        "Every staged field is readable", "No official case has been created", "The reviewed candidate remains inert"]) {
+        await expect(caseFields).toContainText(text);
+      }
+      const complete = page.getByTestId("requirement-bundle-full-content");
+      await complete.locator("summary").click();
+      await expect(complete.locator("pre")).toContainText(requirementOperationId);
+      await expect(complete.locator("pre")).toContainText(testcaseOperationId);
+      await expect(complete.locator("pre")).toContainText("A prepared review account");
       await expect(page.getByTestId("requirement-bundle-link")).toContainText("AC-1");
       await expect(page.getByTestId("requirement-bundle-publication-gate")).toContainText("Publication is blocked");
+      await expect(page.getByRole("button", { name: "Close task", exact: true })).toHaveCount(0);
+      await page.getByRole("button", { name: /^Feedback(?: \(\d+\))?$/ }).click();
+      await page.locator("textarea").first().fill("Regenerate this exact requirement bundle with different content");
+      await expect(page.getByRole("button", { name: "Send feedback", exact: true })).toBeDisabled();
+      const decisionRequest = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith(`/requirements/proposals/${task.id}/reject`));
       await panel.getByRole("button", { name: "Reject", exact: true }).click();
+      expect((await decisionRequest).postDataJSON()).toEqual({ expectedProposalRevision: task.proposalRevision });
       await expect(panel.getByRole("button", { name: "Reject", exact: true })).toHaveCount(0);
+      await expect(page.getByTestId("requirement-bundle-recorded-decision")).toContainText("Recorded outcome: rejected");
       const after = await api.get(`/api/projects/${tenant!.mainProjectId}/requirements/proposals/${task.id}`);
       expect(after.ok(), await after.text()).toBe(true);
-      expect(await after.json()).toMatchObject({ taskStatus: "done" });
+      expect(await after.json()).toMatchObject({ taskStatus: "done", requirementDecision: { decision: "rejected", proposalRevision: task.proposalRevision } });
       expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(caseTitle)};`)).toBe("0");
+    } finally {
+      exec(`DELETE FROM ai_generation_requests WHERE id=${literal(task.id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+    }
+  });
+
+  test("requirement change bundle reconciles a stale opposite decision with its recorded outcome", async ({ browser }) => {
+    const staged = await api.post(`/api/projects/${tenant!.mainProjectId}/requirements/proposals`, {
+      data: { requestKey: randomUUID(), operations: [{ opType: "requirement_revision", operationId: randomUUID(),
+        title: `E2E competing bundle ${Date.now()}`, criteria: [{ key: "AC-1", text: "Only one exact decision is recorded" }] }] },
+    });
+    expect(staged.status(), await staged.text()).toBe(201);
+    const task = await staged.json();
+    try {
+      const page = await open(browser, `/agents/tasks/${task.id}`);
+      const panel = page.getByTestId("requirement-change-bundle");
+      await expect(panel.getByRole("button", { name: "Withdraw", exact: true })).toBeVisible();
+      const rejected = await api.post(`/api/projects/${tenant!.mainProjectId}/requirements/proposals/${task.id}/reject`, {
+        data: { expectedProposalRevision: task.proposalRevision, reason: "Another reviewer recorded this outcome" },
+      });
+      expect(rejected.ok(), await rejected.text()).toBe(true);
+      const staleResponse = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith(`/requirements/proposals/${task.id}/withdraw`));
+      await panel.getByRole("button", { name: "Withdraw", exact: true }).click();
+      expect((await staleResponse).status()).toBe(409);
+      await expect(page.getByTestId("requirement-bundle-recorded-decision")).toContainText("Recorded outcome: rejected");
+      await expect(page.getByText("Requirement change bundle withdrawn. Nothing was published.", { exact: true })).toHaveCount(0);
+      await expect(panel.getByRole("button", { name: "Withdraw", exact: true })).toHaveCount(0);
+      expect(scalar(`SELECT COUNT(*)::int FROM audit_logs WHERE entity_id=${literal(task.id)} AND action IN ('requirement_proposal_rejected','requirement_proposal_withdrawn');`)).toBe("1");
     } finally {
       exec(`DELETE FROM ai_generation_requests WHERE id=${literal(task.id)} AND project_id=${literal(tenant!.mainProjectId)};`);
     }
