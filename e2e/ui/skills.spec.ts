@@ -707,6 +707,53 @@ test.describe("governed skills operator journey (UI)", () => {
     }
   });
 
+  test("stored field headings cannot hide a change between plain text and HTML", async ({ browser }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const doc = await createSkillDoc(`Field boundaries ${suffix}`, `BOUNDARY-${suffix}`, "RULE-BOUNDARY: inspect each stored field.");
+    let page: Page | undefined;
+    try {
+      // JSONB can reorder keys. Construct the collision from native stored JSON, not input order.
+      const stored = await ownerApi.get(`${base()}/knowledge-base/documents/${doc.id}`);
+      expect(stored.ok(), await stored.text()).toBe(true);
+      const instructions = (await stored.json()).contentJson;
+      const storedJson = JSON.stringify(instructions, null, 2);
+      const boundary = `\n\nStructured instructions (JSON)\n${storedJson}\n\nHTML source (stored; displayed as text)\n`;
+      const beforeText = `RULE-TEXT-START${boundary}RULE-MOVED`;
+      const afterText = "RULE-TEXT-START";
+      const beforeHtml = "RULE-HTML-END";
+      const afterHtml = `RULE-MOVED${boundary}RULE-HTML-END`;
+      const before = await ownerApi.patch(`${base()}/knowledge-base/documents/${doc.id}`, { data: {
+        contentText: beforeText, contentJson: instructions, contentHtml: beforeHtml
+      } });
+      expect(before.ok(), await before.text()).toBe(true);
+      const first = await submitDoc(await before.json());
+      const after = await ownerApi.patch(`${base()}/knowledge-base/documents/${doc.id}`, { data: {
+        contentText: afterText, contentJson: instructions, contentHtml: afterHtml
+      } });
+      expect(after.ok(), await after.text()).toBe(true);
+      const second = await submitDoc(await after.json());
+      for (const version of [first, second]) {
+        const saved = await ownerApi.get(`${base()}/knowledge-base/documents/${doc.id}/versions/${version.id}`);
+        expect(saved.ok(), await saved.text()).toBe(true);
+        expect(JSON.stringify((await saved.json()).contentJson, null, 2)).toBe(storedJson);
+      }
+      page = await open(browser, "/settings/skills");
+      await page.getByTestId(`skill-review-open-${doc.id}`).click();
+      const content = page.getByTestId("skill-review-content");
+      await expect(content).toContainText("RULE-TEXT-START");
+      await expect(page.getByTestId("skill-diff").locator('[data-diff="remove"]').first()).toBeVisible();
+      await expect(page.getByTestId("skill-diff").locator('[data-diff="add"]').first()).toBeVisible();
+      await expect(content.locator('[data-skill-field="text"] pre')).toHaveText(afterText);
+      await expect(content.locator('[data-skill-field="html"] pre')).toHaveText(afterHtml);
+      expect(await content.locator('[data-skill-field="text"] pre').textContent()).toBe(afterText);
+      expect(await content.locator('[data-skill-field="html"] pre').textContent()).toBe(afterHtml);
+      await expect(content.locator("h4")).toHaveCount(5);
+    } finally {
+      await page?.context().close();
+      await cleanupSkill(doc.id);
+    }
+  });
+
   test("long multiline versions use a bounded comparison and retain both complete contents", async ({ browser }) => {
     const suffix = randomUUID().slice(0, 8);
     const instructions = Array.from({ length: 900 }, (_, i) => `Rule ${i}`).join("\n");

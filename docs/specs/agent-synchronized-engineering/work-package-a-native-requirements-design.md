@@ -609,6 +609,10 @@ The review, full-version view and comparison expose the saved title, plain text,
 and semantic/source metadata covered by the native content digest. Stored empty or marker-like strings
 remain distinguishable from absent fields. HTML is displayed as text and never executed. The snapshot
 digest is shown in full; it is not a claim that a client recomputed or cryptographically authenticated it.
+Trusted field headings sit outside the raw stored bodies in review/history and complete comparison views.
+The inline diff prefixes every body line, including empty lines, so stored heading-like content cannot
+cross a field boundary and make a text/HTML redistribution appear unchanged. Raw field values are neither
+trimmed nor normalized, and remain complete in their own labelled sections.
 
 Review/history/comparison responses belong to the selected project, Skill and immutable version or pair.
 Replacing or closing a review invalidates older responses, including errors and loading completion.
@@ -629,6 +633,6 @@ three submissions with separate approved snapshots: the first approval assigned,
 and the third submission removing a prior rule. It also covers first submission/QA access, content retry,
 superseded recovery after failed refresh, same-content newer submission, active-context changes, delayed
 review/comparison/history responses, known and uncertain approval outcomes, representation-only changes,
-and bounded long comparisons. Actual before/after outcomes and reached assertions belong to the native
+cross-field heading collisions, and bounded long comparisons. Actual before/after outcomes and reached assertions belong to the native
 PR evidence; test source alone does not establish a pass. This does not implement the separate Skills
 redesign or ratify root/S0/quorum governance.

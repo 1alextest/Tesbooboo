@@ -39,6 +39,7 @@ type DiffLine = { type: "same" | "add" | "remove"; text: string };
 type Comparison = { left: KnowledgeDocumentVersionDetail; right: KnowledgeDocumentVersionDetail; label: string; lines: DiffLine[] | null };
 type ReviewSelection = { projectId: string; skillId: string; versionId: string };
 type ContextRow = { key: string; module: string; subtype: string; operation: string; assignment?: SkillAssignmentRecord };
+type VersionField = { key: string; label: string; value: string | null };
 
 function normalizeRole(role: string): "owner" | "manager" | "qa_engineer" {
   const value = (role ?? "").trim().toLowerCase().replace(/-/g, "_").replace(/ /g, "_");
@@ -55,20 +56,34 @@ function contextKey(target: { module: string; subtype: string; operation: string
 function shortDigest(digest: string | null | undefined) {
   return digest ? `${digest.slice(0, 12)}…` : "—";
 }
-function versionText(detail: KnowledgeDocumentVersionDetail | null): string {
-  if (!detail) return "";
+function versionFields(detail: KnowledgeDocumentVersionDetail | null): VersionField[] {
+  if (!detail) return [];
   const metadata = detail.snapshotMetadata || {};
   // The native content digest binds every stored representation and these source fields.
   // Display HTML as inert source; never choose plain text as authority over the JSON/HTML.
   const source = Object.fromEntries(["projectId", "folderId", "documentType", "sourceProvider", "sourceExternalId", "sourceUrl", "sourceRole", "isReadOnly"]
     .map((key) => [key, metadata[key] ?? null]));
   return [
-    `Title\n${detail.title}`,
-    detail.contentText == null ? "Plain text (not stored)" : `Plain text (stored)\n${detail.contentText}`,
-    `Structured instructions (JSON)\n${JSON.stringify(detail.contentJson ?? null, null, 2)}`,
-    detail.contentHtml == null ? "HTML source (not stored)" : `HTML source (stored; displayed as text)\n${detail.contentHtml}`,
-    `Saved source details\n${JSON.stringify(source, null, 2)}`
-  ].join("\n\n");
+    { key: "title", label: "Title", value: detail.title },
+    { key: "text", label: detail.contentText == null ? "Plain text (not stored)" : "Plain text (stored)", value: detail.contentText ?? null },
+    { key: "json", label: "Structured instructions (JSON)", value: JSON.stringify(detail.contentJson ?? null, null, 2) },
+    { key: "html", label: detail.contentHtml == null ? "HTML source (not stored)" : "HTML source (stored; displayed as text)", value: detail.contentHtml ?? null },
+    { key: "source", label: "Saved source details", value: JSON.stringify(source, null, 2) }
+  ];
+}
+function versionText(detail: KnowledgeDocumentVersionDetail | null): string {
+  // Every body line is indented, including empty lines. Stored content cannot emit an
+  // unindented field boundary and make different text/HTML fields compare as equal.
+  return versionFields(detail).map(({ label, value }) => value === null ? label
+    : `${label}\n${value.split("\n").map((line) => `  ${line}`).join("\n")}`).join("\n\n");
+}
+function VersionContent({ detail }: { detail: KnowledgeDocumentVersionDetail }) {
+  return <div className="space-y-3">
+    {versionFields(detail).map((field) => <section key={field.key} data-skill-field={field.key}>
+      <h4 className="mb-1 text-xs font-semibold">{field.label}</h4>
+      {field.value !== null && <pre className="whitespace-pre-wrap break-words">{field.value}</pre>}
+    </section>)}
+  </div>;
 }
 function versionLabel(version: { versionNumber: number; kind?: string; snapshotKind?: string } | null | undefined) {
   return version ? `v${version.versionNumber} (${version.kind || version.snapshotKind || "version"})` : "no version";
@@ -256,7 +271,6 @@ export default function SkillsSettingsPage() {
   const selectedContext = activeContexts.find((context) => context.key === compareContext) || activeContexts[0] || null;
   const reviewMeta = reviewSkill?.versions.find((version) => version.id === reviewVersion?.id) || null;
   const reviewApproval = governedVersions.find((version) => version.kind === "approved" && version.sourceVersionId === reviewVersion?.id);
-  const reviewText = versionText(reviewVersion);
 
   async function run(action: (isCurrent: () => boolean) => Promise<void>) {
     if (busy) return;
@@ -566,7 +580,7 @@ export default function SkillsSettingsPage() {
                   <p className="break-all">Snapshot digest: <span className="font-mono">{String(reviewVersion.snapshotMetadata?.contentDigest || reviewMeta?.contentDigest || "Not recorded")}</span></p>
                   <p className="md:col-span-2">Rationale: {String(reviewVersion.snapshotMetadata?.reason || "No rationale was recorded with this submission.")}</p>
                 </div>
-                <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 text-sm" data-testid="skill-review-content">{reviewText || "(empty instructions)"}</pre>
+                <div className="max-h-80 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 text-sm" data-testid="skill-review-content"><VersionContent detail={reviewVersion} /></div>
                 {!previousVersion && <p className="text-xs text-[var(--muted)]" data-testid="skill-review-first">This is the first saved version; there is no earlier version to compare.</p>}
                 {superseded && (
                   <div className="rounded-lg border border-[var(--warning-border)] p-3" data-testid="skill-review-superseded">
@@ -600,7 +614,7 @@ export default function SkillsSettingsPage() {
               {openedVersion && (
                 <div className="mt-3" data-testid="skill-version-full">
                   <p className="text-xs text-[var(--muted)]">Full v{openedVersion.versionNumber} · {openedVersion.snapshotKind || "version"}</p>
-                  <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 text-sm">{versionText(openedVersion) || "(empty)"}</pre>
+                  <div className="mt-1 max-h-64 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 text-sm"><VersionContent detail={openedVersion} /></div>
                 </div>
               )}
             </div>
@@ -654,8 +668,8 @@ export default function SkillsSettingsPage() {
                     <div className="mt-2 space-y-2" data-testid="skill-diff-fallback">
                       <p className="text-sm text-[var(--muted)]">These versions are too large for an inline line comparison. Full versions are shown below without truncation.</p>
                       <div className="grid gap-3 md:grid-cols-2">
-                        <div><p className="text-xs font-medium">First: {versionLabel(comparison.left)}</p><pre data-testid="skill-diff-before" className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-[var(--border)] p-3 text-xs">{versionText(comparison.left)}</pre></div>
-                        <div><p className="text-xs font-medium">Second: {versionLabel(comparison.right)}</p><pre data-testid="skill-diff-after" className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-[var(--border)] p-3 text-xs">{versionText(comparison.right)}</pre></div>
+                        <div><p className="text-xs font-medium">First: {versionLabel(comparison.left)}</p><div data-testid="skill-diff-before" className="mt-1 max-h-80 overflow-auto rounded-lg border border-[var(--border)] p-3 text-xs"><VersionContent detail={comparison.left} /></div></div>
+                        <div><p className="text-xs font-medium">Second: {versionLabel(comparison.right)}</p><div data-testid="skill-diff-after" className="mt-1 max-h-80 overflow-auto rounded-lg border border-[var(--border)] p-3 text-xs"><VersionContent detail={comparison.right} /></div></div>
                       </div>
                     </div>
                   ) : <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-[var(--border)] p-3 text-xs">
