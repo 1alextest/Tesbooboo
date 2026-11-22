@@ -8343,11 +8343,24 @@ test.describe("zyra — product behavior and real tracing export in disposable C
     const answer = await send(tenantA, ownerA, sessionId, "Explain the failing observation fixture.");
     expect(answer.assistant.content.length).toBeGreaterThan(0);
     expect(aiA.requests).toHaveLength(1);
+    // OBS07: a provider-controlled error is not a safe product reply, trace
+    // status, activity payload or debugging detail. Synthetic key-shaped text
+    // must be absent regardless of observability feature configuration.
+    expect(answer.assistant.content).toContain("AI provider is unavailable");
+    const stored = await messages(tenantA, ownerA, sessionId);
+    expect(JSON.stringify({ answer, stored })).not.toContain(errorKey);
+    const audit = scalar(`SELECT COALESCE(jsonb_agg(diff), '[]'::jsonb)::text
+       FROM audit_logs WHERE project_id=${literal(tenantA.mainProjectId)}
+         AND entity_id=${literal(sessionId)}::uuid AND action='zyra_chat_ai_failed';`);
+    expect(audit).not.toContain(errorKey);
+    expect(audit).toContain("AI provider is unavailable");
     const spans = await assertObserved(answer, tenantA, true);
     if (expectedMode === "enabled") {
-      expect(capture.exports.map((item) => item.raw).join("\n")).not.toContain(errorKey);
+      const raw = capture.exports.map((item) => item.raw).join("\n");
+      expect(raw).not.toContain(errorKey);
       const router = spans.find((span) => span.name === "router")!;
-      expect(String(spanAttributes(router)["langfuse.observation.output"])).toContain("[REDACTED_KEY]");
+      expect(String(spanAttributes(router)["langfuse.observation.output"])).not.toContain(errorKey);
+      expect(String(spanAttributes(router)["langfuse.observation.output"])).toContain("AI provider is unavailable");
     }
   });
 
