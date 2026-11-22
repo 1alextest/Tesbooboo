@@ -599,7 +599,7 @@ Selection announced with `--list` counts, run at `--workers=10` in its own Termi
 |---|---|
 | 0 — spike | ✅ done |
 | 1 — module + Zyra chat path + model prices + e2e | 2–3 d |
-| 2 — remaining call sites + complete usage parsing | ✅ done |
+| 2 — remaining call sites + usage parsing | Source coverage present in this candidate; deployment and broader completeness unverified |
 | 3 — scores and evals | 1–1.5 d |
 | 4 — dashboards and alerts | 0.5 d |
 | 5 — prompt management | deferred |
