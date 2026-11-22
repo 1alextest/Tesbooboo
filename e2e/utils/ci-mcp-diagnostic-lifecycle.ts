@@ -71,9 +71,9 @@ export async function verifyMcpDiagnosticLifecycle(source: Page, api: string, we
         await capture("mcp-browser-project-read-timeout-with-cleared-input");
       } finally { held.release(); await page.unroute(endpoint, held.handler); }
       await start();
-      // Project grants now filter the credential-visible catalog: a read-scoped token sees 24 of the
-      // 59 registered tools, and the card reports what this token can actually use.
-      await expect(card().getByRole("status")).toContainText("Read permission and project identity verified; 24 MCP tools advertised");
+      // Project grants now filter the credential-visible catalog: with the proposal preview enabled a
+      // read-scoped token sees 26 of the 52 advertised tools, and the card reports what it can use.
+      await expect(card().getByRole("status")).toContainText("Read permission and project identity verified; 26 MCP tools advertised");
       await expect(input()).toHaveValue("");
       await expect(card()).toContainText("Write permissions and reporting were not tested");
       // Capture the whole actual success card, not an unrelated viewport above its status.
