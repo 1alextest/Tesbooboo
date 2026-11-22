@@ -169,6 +169,7 @@ export default function TaskQuickViewPanel({ task, projectId, onClose, onTaskUpd
 
   const normalizedStatus = normalizeTaskStatus(task.taskStatus);
   const done = normalizedStatus === "done";
+  const isRequirementBundle = task.provider === "external_requirement_proposal" || Boolean(task.requirementBundle?.length);
   const failed = normalizedStatus === "failed";
   // Defensive: activity_log is a jsonb array server-side and should always arrive as one, but a
   // malformed or missing value here must render an empty list rather than throw.
@@ -195,6 +196,7 @@ export default function TaskQuickViewPanel({ task, projectId, onClose, onTaskUpd
   );
 
   async function handleCloseTask() {
+    if (isRequirementBundle) return;
     setWorking(true);
     setError(null);
     try {
@@ -417,7 +419,7 @@ export default function TaskQuickViewPanel({ task, projectId, onClose, onTaskUpd
           >
             {t("task.viewFull")}
           </Link>
-          {!done && (
+          {!done && !isRequirementBundle && (
             <Button variant="secondary" style={{ height: 34 }} onClick={() => void handleCloseTask()} disabled={working}>
               {working ? t("task.closing") : t("task.closeTask")}
             </Button>
