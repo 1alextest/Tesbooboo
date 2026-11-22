@@ -105,6 +105,9 @@ jobs:
           node -e 'const {Client}=require("pg");(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});await c.connect();await c.query("CREATE DATABASE rb_test");await c.end();})().catch(e=>{console.error(e);process.exit(1)})'
           RB_URL=$(node -e 'const u=new URL(process.env.DATABASE_URL);u.pathname="/rb_test";process.stdout.write(u.toString())')
           DATABASE_URL="$RB_URL" npm run migrate
+      - name: Verify explicit tracing opt-in and installed SDK export boundaries
+        working-directory: Tesbo-Backend-Nest
+        run: npx jest --runInBand src/observability
       - name: Verify Review Board runtime evidence in the disposable stack
         working-directory: Tesbo-Backend-Nest
         env:
@@ -140,6 +143,84 @@ jobs:
           curl -fsS http://127.0.0.1:7000/health
           curl -fsS http://127.0.0.1:3000/login >/dev/null
           npx playwright test -c playwright.ci-smoke.config.ts --output=test-results-smoke
+      - name: Verify Zyra product behavior with tracing disabled, unset and enabled
+        working-directory: e2e
+        run: |
+          # Reuse this job's already migrated disposable backend/database. Only the external
+          # model and OTLP receiver are synthetic; every scenario uses the real API and storage.
+          # A fresh process per mode prevents OTel globals or late exporter retries from leaking
+          # into the next mode's no-emission evidence. No shared or production stack is restarted.
+          set -euo pipefail
+          stop_backend() {
+            backend_pid=$(cat /tmp/tesbo-backend.pid)
+            kill "$backend_pid"
+            for _ in $(seq 1 30); do
+              if ! kill -0 "$backend_pid" 2>/dev/null; then break; fi
+              # A reparented exited child can remain a zombie until the runner reaps it.
+              if [ "$(ps -o stat= -p "$backend_pid" | tr -d ' ')" = Z ]; then break; fi
+              sleep 1
+            done
+            backend_state=$(ps -o stat= -p "$backend_pid" 2>/dev/null | tr -d ' ' || true)
+            if [ -n "$backend_state" ] && [ "$backend_state" != Z ]; then
+              echo "Previous disposable backend has not exited; refusing mixed-mode evidence" >&2
+              exit 1
+            fi
+            if curl -fsS --max-time 2 http://127.0.0.1:7000/health >/dev/null 2>&1; then
+              echo "Previous backend is still serving; refusing mixed-mode evidence" >&2
+              exit 1
+            fi
+          }
+          wait_for_backend() {
+            for _ in $(seq 1 60); do
+              if curl -fsS --max-time 2 http://127.0.0.1:7000/health >/dev/null; then return; fi
+              sleep 1
+            done
+            echo "Disposable backend did not become ready" >&2
+            exit 1
+          }
+          trap 'if [ -f /tmp/tesbo-backend.pid ]; then kill "$(cat /tmp/tesbo-backend.pid)" 2>/dev/null || true; fi' EXIT
+          # --list is inventory only. Each subsequent invocation executes all nine cases with
+          # no retries; the final comparator rejects missing, failed or differing outcomes.
+          npx playwright test -c playwright.config.ts api/zyra.spec.ts --project=api --list | tail -n 1
+          for mode in disabled unset enabled; do
+            stop_backend
+            tracing_flag=()
+            if [ "$mode" = disabled ]; then tracing_flag=(LANGFUSE_ENABLED=false); fi
+            if [ "$mode" = enabled ]; then tracing_flag=(LANGFUSE_ENABLED=true); fi
+            (
+              cd ../Tesbo-Backend-Nest
+              nohup env -u LANGFUSE_ENABLED "${tracing_flag[@]}" \
+                LANGFUSE_PUBLIC_KEY=synthetic-ci-public-key \
+                LANGFUSE_SECRET_KEY=synthetic-ci-secret-key \
+                LANGFUSE_BASE_URL=http://127.0.0.1:9988 \
+                LANGFUSE_ALLOW_CLOUD=false LANGFUSE_SEED_MODEL_PRICES=false \
+                LANGFUSE_MEDIA_UPLOAD_ENABLED=false LANGFUSE_ENVIRONMENT=ci-observability \
+                LANGFUSE_FLUSH_INTERVAL=0.2 LANGFUSE_TIMEOUT=1 \
+                OTEL_TRACES_EXPORTER=none OTEL_METRICS_EXPORTER=none OTEL_LOGS_EXPORTER=none \
+                OTEL_NODE_RESOURCE_DETECTORS=none \
+                node dist/main.js >"/tmp/tesbo-backend-observability-$mode.log" 2>&1 &
+              echo $! >/tmp/tesbo-backend.pid
+            )
+            wait_for_backend
+            E2E_LANGFUSE_EXPECTED_MODE="$mode" E2E_LANGFUSE_CAPTURE_PORT=9988 \
+              npx playwright test -c playwright.config.ts api/zyra.spec.ts --project=api \
+                --workers=10 --retries=0 -g 'ZYR-OBS-' --list
+            PLAYWRIGHT_HTML_OUTPUT_DIR="playwright-report-observability-$mode" \
+              E2E_LANGFUSE_EXPECTED_MODE="$mode" E2E_LANGFUSE_CAPTURE_PORT=9988 \
+              npx playwright test -c playwright.config.ts api/zyra.spec.ts --project=api \
+                --workers=10 --retries=0 -g 'ZYR-OBS-' --output="test-results-observability-$mode"
+          done
+          node utils/compare-langfuse-outcomes.mjs \
+            enabled=test-results-observability-enabled \
+            disabled=test-results-observability-disabled unset=test-results-observability-unset
+          stop_backend
+          (
+            cd ../Tesbo-Backend-Nest
+            nohup env LANGFUSE_ENABLED=false node dist/main.js >/tmp/tesbo-backend.log 2>&1 &
+            echo $! >/tmp/tesbo-backend.pid
+          )
+          wait_for_backend
+          trap - EXIT
       - name: Verify model draft preview and existing graph/source/QA handoff E2E
         working-directory: e2e
         env:
@@ -378,6 +459,7 @@ jobs:
             e2e/playwright-report*/
             e2e/test-results*/
             /tmp/tesbo-backend.log
+            /tmp/tesbo-backend-observability-*.log
             /tmp/tesbo-backend-billing.log
             /tmp/tesbo-stripe-ci.log
             /tmp/tesbo-web.log
