@@ -72,6 +72,69 @@ test.describe("governed skills operator journey (UI)", () => {
     return { documentId: doc.id as string, submittedVersionId: version.id as string, approvedVersionId: approval.approvedVersionId as string, assignmentId: String((await assignment.json()).assignment.id) };
   }
 
+  async function createSkillDoc(title: string, key: string, instructions: string) {
+    const created = await ownerApi.post(`${base()}/skills`, { data: {
+      title, module: "requirements", subtype: "functional", skillKey: key, instructions
+    } });
+    expect(created.ok(), await created.text()).toBe(true);
+    return created.json();
+  }
+
+  async function submitDoc(doc: { id: string; editRevision: string }) {
+    const submitted = await ownerApi.post(`${base()}/knowledge-base/documents/${doc.id}/submissions`, {
+      data: { expectedRevision: doc.editRevision, submissionKey: randomUUID() }
+    });
+    expect(submitted.ok(), await submitted.text()).toBe(true);
+    return submitted.json();
+  }
+
+  async function updateDoc(doc: { id: string; title: string }, instructions: string) {
+    const updated = await ownerApi.patch(`${base()}/knowledge-base/documents/${doc.id}`, { data: {
+      contentJson: { schemaVersion: "tesbo-skill/1", module: "requirements", subtype: "functional", instructions },
+      contentText: `${doc.title}\n\n${instructions}`,
+      contentHtml: `<h1>${doc.title}</h1><pre>${instructions}</pre>`
+    } });
+    expect(updated.ok(), await updated.text()).toBe(true);
+    return updated.json() as Promise<{ id: string; title: string; editRevision: string }>;
+  }
+
+  async function approveDoc(documentId: string, versionId: string) {
+    const approved = await ownerApi.patch(`${base()}/skills/${documentId}/approve`, { data: { versionId } });
+    expect(approved.ok(), await approved.text()).toBe(true);
+    return approved.json();
+  }
+
+  async function assignDoc(documentId: string, versionId: string, operation: string) {
+    const assigned = await ownerApi.post(`${base()}/skill-assignments`, { data: {
+      skillDocumentId: documentId, versionId, module: "requirements", subtype: "functional", operation
+    } });
+    expect(assigned.ok(), await assigned.text()).toBe(true);
+    return assigned.json();
+  }
+
+  /** v1 assigned, v2 approved but unassigned, v3 submitted with the v2-only rule removed. */
+  async function reviewFixture() {
+    const suffix = randomUUID();
+    const title = `Review fixture ${suffix}`;
+    const key = `REV-${suffix.replaceAll("-", "").slice(0, 10).toUpperCase()}`;
+    const baseRule = "RULE-BASE: state the role, test data and observable result.";
+    const doc = await createSkillDoc(title, key, baseRule);
+    const v1 = await submitDoc(doc);
+    await approveDoc(doc.id, v1.id);
+    const assignment = await assignDoc(doc.id, v1.id, "requirement_revision");
+    const v2Doc = await updateDoc(doc, `${baseRule}\nRULE-V2-ONLY: require the reviewer to inspect the previous version.`);
+    const v2 = await submitDoc(v2Doc);
+    await approveDoc(doc.id, v2.id);
+    const v3Doc = await updateDoc(doc, `${baseRule}\nRULE-V3: reject stale approvals and name the unchanged assignment.`);
+    const v3 = await submitDoc(v3Doc);
+    return { documentId: doc.id as string, title, key, v1, v2, v3, assignmentId: String(assignment.assignment.id) };
+  }
+
+  async function cleanupSkill(documentId: string) {
+    exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(documentId)};`);
+    exec(`DELETE FROM knowledge_documents WHERE id=${literal(documentId)} AND project_id=${literal(tenant!.mainProjectId)};`);
+  }
+
   async function uiSkill(page: Page, title: string, key: string, module: string, subtype: string) {
     await page.getByTestId("skill-title").fill(title);
     await page.getByTestId("skill-key").fill(key);
@@ -261,6 +324,124 @@ test.describe("governed skills operator journey (UI)", () => {
         exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(documentId)};`);
         exec(`DELETE FROM knowledge_documents WHERE id=${literal(documentId)} AND project_id=${literal(tenant!.mainProjectId)};`);
       }
+    }
+  });
+
+  test("owner reviews v3 against v2 and active v1, then approves without changing the assignment", async ({ browser }) => {
+    const fixture = await reviewFixture();
+    try {
+      const page = await open(browser, "/settings/skills");
+      await page.getByTestId(`skill-review-open-${fixture.documentId}`).click();
+      const panel = page.getByTestId("skill-review-panel");
+      await expect(panel).toBeVisible();
+      await expect(page.getByTestId("skill-review-content")).toContainText("RULE-V3");
+      await expect(page.getByTestId("skill-review-content")).not.toContainText("RULE-V2-ONLY");
+      await expect(page.getByTestId("skill-review-version")).toContainText(`v${fixture.v3.versionNumber}`);
+      await expect(page.getByTestId("skill-timeline")).toContainText(`v${fixture.v2.versionNumber}`);
+      await expect(page.getByTestId("skill-review-assignments")).toContainText(`v${fixture.v1.versionNumber} active`);
+
+      await page.getByTestId("skill-review-compare-previous").click();
+      const diff = page.locator('[data-testid="skill-diff"]');
+      await expect(diff.locator('[data-diff="remove"]').filter({ hasText: "RULE-V2-ONLY" })).toBeVisible();
+      await expect(diff.locator('[data-diff="add"]').filter({ hasText: "RULE-V3" })).toBeVisible();
+
+      await page.getByTestId("skill-compare-target").selectOption("active");
+      await expect(page.getByTestId("skill-compare-context")).toBeVisible();
+      await page.getByTestId("skill-compare-target-run").click();
+      await expect(page.locator('[data-testid="skill-diff"]')).toContainText(`v${fixture.v1.versionNumber}`);
+
+      await page.getByTestId("skill-review-approve").click();
+      await expect(page.getByText(new RegExp(`Approved .* version ${fixture.v3.versionNumber}`))).toBeVisible();
+      const library = await (await ownerApi.get(`${base()}/skills`)).json();
+      const skill = library.skills.find((entry: { id: string }) => entry.id === fixture.documentId);
+      expect(skill.approvedVersionId).toBe(fixture.v3.id);
+      const ledger = await (await ownerApi.get(`${base()}/skill-assignments`)).json();
+      const active = ledger.list.filter((entry: { skillDocumentId: string; status: string }) => entry.skillDocumentId === fixture.documentId && entry.status === "active");
+      expect(active).toHaveLength(1);
+      expect(active[0].skillVersionId).toBe(fixture.v1.id);
+    } finally {
+      await cleanupSkill(fixture.documentId);
+    }
+  });
+
+  test("a first submission explains there is no earlier version and a QA reader cannot approve", async ({ browser }) => {
+    const suffix = randomUUID();
+    const doc = await createSkillDoc(`First submission ${suffix}`, `FIRST-${suffix.replaceAll("-", "").slice(0, 8).toUpperCase()}`,
+      "RULE-FIRST: state the required role and one observable result.");
+    const version = await submitDoc(doc);
+    try {
+      const page = await open(browser, "/settings/skills", "qa");
+      await page.getByTestId(`skill-review-open-${doc.id}`).click();
+      await expect(page.getByTestId("skill-review-content")).toContainText("RULE-FIRST");
+      await expect(page.getByTestId("skill-review-first")).toContainText("no earlier version");
+      await expect(page.getByTestId("skill-review-approve")).toHaveCount(0);
+      await expect(page.getByTestId("skill-timeline")).toContainText(`v${version.versionNumber}`);
+    } finally {
+      await cleanupSkill(doc.id);
+    }
+  });
+
+  test("a failed content load has a retry, and a newer submission refuses the stale approval", async ({ browser }) => {
+    const suffix = randomUUID();
+    const doc = await createSkillDoc(`Stale review ${suffix}`, `STALE-${suffix.replaceAll("-", "").slice(0, 8).toUpperCase()}`,
+      "RULE-V1: the first submitted rule.");
+    const v1 = await submitDoc(doc);
+    try {
+      const page = await open(browser, "/settings/skills");
+      await page.route(`**/knowledge-base/documents/${doc.id}/versions/${v1.id}`, (route) => route.fulfill({
+        status: 500, contentType: "application/json", body: JSON.stringify({ error: "Injected content load failure" })
+      }));
+      await page.getByTestId(`skill-review-open-${doc.id}`).click();
+      await expect(page.getByTestId("skill-review-error")).toContainText("Injected content load failure");
+      await page.unroute(`**/knowledge-base/documents/${doc.id}/versions/${v1.id}`);
+      await page.getByTestId("skill-review-retry").click();
+      await expect(page.getByTestId("skill-review-content")).toContainText("RULE-V1");
+
+      const v2Doc = await updateDoc(doc, "RULE-V2: a newer submission replaced the reviewed content.");
+      const v2 = await submitDoc(v2Doc);
+      await page.getByTestId("skill-review-approve").click();
+      await expect(page.getByTestId("skill-review-superseded")).toBeVisible();
+      await page.getByTestId("skill-review-current").click();
+      await expect(page.getByTestId("skill-review-content")).toContainText("RULE-V2");
+      await page.getByTestId("skill-review-approve").click();
+      await expect(page.getByText(new RegExp(`Approved .* version ${v2.versionNumber}`))).toBeVisible();
+      const library = await (await ownerApi.get(`${base()}/skills`)).json();
+      expect(library.skills.find((entry: { id: string }) => entry.id === doc.id).approvedVersionId).toBe(v2.id);
+    } finally {
+      await cleanupSkill(doc.id);
+    }
+  });
+
+  test("different active versions across contexts are selectable for comparison", async ({ browser }) => {
+    const suffix = randomUUID();
+    const doc = await createSkillDoc(`Context compare ${suffix}`, `CTX-${suffix.replaceAll("-", "").slice(0, 8).toUpperCase()}`,
+      "RULE-CTX-V1: base context rule.");
+    const v1 = await submitDoc(doc);
+    await approveDoc(doc.id, v1.id);
+    await assignDoc(doc.id, v1.id, "requirement_revision");
+    const v2Doc = await updateDoc(doc, "RULE-CTX-V2: linked-case context rule.");
+    const v2 = await submitDoc(v2Doc);
+    await approveDoc(doc.id, v2.id);
+    await assignDoc(doc.id, v2.id, "requirement_case_link");
+    const v3Doc = await updateDoc(doc, "RULE-CTX-V3: candidate rule.");
+    await submitDoc(v3Doc);
+    try {
+      const page = await open(browser, "/settings/skills");
+      await page.getByTestId(`skill-review-open-${doc.id}`).click();
+      await expect(page.getByTestId("skill-review-assignments")).toContainText(`v${v1.versionNumber} active`);
+      await expect(page.getByTestId("skill-review-assignments")).toContainText(`v${v2.versionNumber} active`);
+      await page.getByTestId("skill-compare-target").selectOption("active");
+      const context = page.getByTestId("skill-compare-context");
+      await expect(context.locator("option")).toHaveCount(2);
+      const labels = await context.locator("option").allTextContents();
+      await context.selectOption({ label: labels.find((label) => label.includes("requirement_case_link"))! });
+      await page.getByTestId("skill-compare-target-run").click();
+      await expect(page.locator('[data-testid="skill-diff"]')).toContainText(`v${v2.versionNumber}`);
+      await context.selectOption({ label: labels.find((label) => label.includes("requirement_revision"))! });
+      await page.getByTestId("skill-compare-target-run").click();
+      await expect(page.locator('[data-testid="skill-diff"]')).toContainText(`v${v1.versionNumber}`);
+    } finally {
+      await cleanupSkill(doc.id);
     }
   });
 });

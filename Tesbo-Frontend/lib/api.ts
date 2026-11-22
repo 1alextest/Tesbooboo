@@ -6,11 +6,11 @@ export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:700
 
 type RequestInitWithBody = Omit<RequestInit, "body"> & { body?: unknown };
 
-type ApiErrorBody = { error?: string; detail?: string; message?: string; errors?: { field?: string; message?: string }[] };
+type ApiErrorBody = { error?: string; detail?: string; message?: string; code?: string; currentVersionId?: string; currentVersionNumber?: number; errors?: { field?: string; message?: string }[] };
 
 /** Preserve HTTP disposition so callers can distinguish denied reads from unavailable data. */
 export class ApiError extends Error {
-  constructor(public readonly status: number, message: string) {
+  constructor(public readonly status: number, message: string, public readonly code?: string, public readonly body?: ApiErrorBody) {
     super(message);
     this.name = "ApiError";
   }
@@ -159,7 +159,7 @@ async function apiRequest<T = unknown>(path: string, options: RequestInitWithBod
   });
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as ApiErrorBody;
-    throw new ApiError(res.status, formatApiError(res.status, err));
+    throw new ApiError(res.status, formatApiError(res.status, err), err.code, err);
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();
@@ -1543,6 +1543,7 @@ export interface SkillVersionRecord {
   kind: "autosave" | "submitted" | "approved" | "rejected";
   createdAt: string;
   createdBy: string | null;
+  createdByName?: string | null;
   contentDigest: string | null;
   authority: string | null;
   sourceVersionId: string | null;
@@ -4332,6 +4333,13 @@ export interface KnowledgeDocumentVersion {
   snapshotMetadata?: Record<string, unknown>;
 }
 
+export interface KnowledgeDocumentVersionDetail extends KnowledgeDocumentVersion {
+  contentJson: unknown;
+  contentHtml: string | null;
+  contentText: string | null;
+  changedSummary?: string | null;
+}
+
 // Folders
 
 export function getKnowledgeFolderTree(projectId: string): Promise<KnowledgeFolderTreeNode> {
@@ -4528,6 +4536,14 @@ export function listKnowledgeDocumentVersions(
   documentId: string
 ): Promise<{ list: KnowledgeDocumentVersion[]; total: number }> {
   return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/versions`);
+}
+
+export function getKnowledgeDocumentVersion(
+  projectId: string,
+  documentId: string,
+  versionId: string
+): Promise<KnowledgeDocumentVersionDetail> {
+  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/versions/${versionId}`);
 }
 
 export function restoreKnowledgeDocumentVersion(projectId: string, documentId: string, versionId: string, expectedRevision?: string): Promise<KnowledgeDocument> {

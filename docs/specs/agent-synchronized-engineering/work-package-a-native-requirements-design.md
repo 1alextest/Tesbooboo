@@ -574,3 +574,30 @@ project Settings owner rather than adding a new top-level library.
 
 **Still outside this slice:** cross-project packs, composition precedence UI, candidate evaluation, root-meta
 bootstrap, expanded MCP Skill tools, and any automatic publication.
+
+### 15.1 Human review journey for a submitted Skill
+
+The Settings card now exposes **Review submitted vN**. The review view answers the questions an approver
+must settle before approving:
+
+- **What exactly am I approving?** The complete saved instructions, exact version number, submission status,
+  recorded author/date/digest and any recorded rationale. The content is loaded from the existing KB version
+  endpoint, behind the same project-membership check.
+- **How does it differ?** A chronological governed-version timeline (submitted/approved/rejected; autosave
+  noise excluded), full-text opening for each version, immediate-predecessor comparison, and arbitrary
+  two-version comparison. Additions, removals and edits are shown line by line; a first submission states
+  that there is no earlier version.
+- **What do agents use today?** Every active assignment context is listed with its pinned version. The
+  reviewer chooses a context and compares the candidate against that active version, the previous saved
+  version, or the latest approved version; both sides and the context are labelled. No assignment shows an
+  explicit unassigned state.
+- **What changes?** Approval lives inside the review view and is available only after the exact content
+  loads. Approval writes the approved snapshot and current pointer; it leaves active assignments untouched
+  and states that assignment is separate. If content loading fails the reviewer can retry. If a newer
+  submission arrives, the server refuses the stale decision with `SKILL_VERSION_SUPERSEDED` and the UI opens
+  the current submission.
+- **Who may decide?** Owners/managers see approval; a QA reader can open and compare every authorized
+  version but has no approval control.
+
+Acceptance (`ui/skills.spec.ts`) uses v1 assigned, v2 approved/unassigned and v3 submitted with a v2-only
+rule removed, plus first-submission, failed-load, newer-submission, multi-context and QA-read-only cases.
