@@ -101,7 +101,13 @@ test.describe("governed skills operator journey (UI)", () => {
   async function approveDoc(documentId: string, versionId: string) {
     const approved = await ownerApi.patch(`${base()}/skills/${documentId}/approve`, { data: { versionId } });
     expect(approved.ok(), await approved.text()).toBe(true);
-    return approved.json();
+    const receipt = await approved.json();
+    const snapshot = await ownerApi.get(`${base()}/knowledge-base/documents/${documentId}/versions/${receipt.approvedVersionId}`);
+    expect(snapshot.ok(), await snapshot.text()).toBe(true);
+    const version = await snapshot.json();
+    expect(version.id).not.toBe(versionId);
+    expect(version).toMatchObject({ snapshotKind: "approved", snapshotMetadata: { sourceVersionId: versionId } });
+    return version;
   }
 
   async function assignDoc(documentId: string, versionId: string, operation: string) {
@@ -112,27 +118,59 @@ test.describe("governed skills operator journey (UI)", () => {
     return assigned.json();
   }
 
-  /** v1 assigned, v2 approved but unassigned, v3 submitted with the v2-only rule removed. */
+  /** Three submissions, with separate approved snapshots: a1 assigned, a2 unassigned. */
   async function reviewFixture() {
     const suffix = randomUUID();
     const title = `Review fixture ${suffix}`;
     const key = `REV-${suffix.replaceAll("-", "").slice(0, 10).toUpperCase()}`;
     const baseRule = "RULE-BASE: state the role, test data and observable result.";
     const doc = await createSkillDoc(title, key, baseRule);
-    const v1 = await submitDoc(doc);
-    await approveDoc(doc.id, v1.id);
-    const assignment = await assignDoc(doc.id, v1.id, "requirement_revision");
-    const v2Doc = await updateDoc(doc, `${baseRule}\nRULE-V2-ONLY: require the reviewer to inspect the previous version.`);
-    const v2 = await submitDoc(v2Doc);
-    await approveDoc(doc.id, v2.id);
-    const v3Doc = await updateDoc(doc, `${baseRule}\nRULE-V3: reject stale approvals and name the unchanged assignment.`);
-    const v3 = await submitDoc(v3Doc);
-    return { documentId: doc.id as string, title, key, v1, v2, v3, assignmentId: String(assignment.assignment.id) };
+    try {
+      const v1 = await submitDoc(doc);
+      const a1 = await approveDoc(doc.id, v1.id);
+      const assignment = await assignDoc(doc.id, a1.id, "requirement_revision");
+      const v2Doc = await updateDoc(doc, `${baseRule}\nRULE-V2-ONLY: require the reviewer to inspect the previous version.`);
+      const v2 = await submitDoc(v2Doc);
+      const a2 = await approveDoc(doc.id, v2.id);
+      const v3Doc = await updateDoc(doc, `${baseRule}\nRULE-V3: reject stale approvals and name the unchanged assignment.`);
+      const v3 = await submitDoc(v3Doc);
+      return { documentId: doc.id as string, title, key, v1, v2, v3, a1, a2, assignmentId: String(assignment.assignment.id) };
+    } catch (error) {
+      await cleanupSkill(doc.id);
+      throw error;
+    }
   }
 
   async function cleanupSkill(documentId: string) {
     exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(documentId)};`);
     exec(`DELETE FROM knowledge_documents WHERE id=${literal(documentId)} AND project_id=${literal(tenant!.mainProjectId)};`);
+  }
+
+  /** Delay one real immutable-version response; subsequent requests remain independent. */
+  async function holdVersion(page: Page, documentId: string, versionId: string) {
+    const url = `/knowledge-base/documents/${documentId}/versions/${versionId}`;
+    let release!: () => void;
+    let reached!: () => void;
+    let held = false;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const seen = new Promise<void>((resolve) => { reached = resolve; });
+    await page.route(`**${url}`, async (route) => {
+      if (!held) {
+        held = true;
+        reached();
+        await barrier;
+      }
+      await route.continue();
+    });
+    return { url, seen, release };
+  }
+
+  async function releaseVersion(page: Page, gate: Awaited<ReturnType<typeof holdVersion>>) {
+    const received = page.waitForResponse((response) => response.url().endsWith(gate.url));
+    gate.release();
+    await (await received).finished();
+    // Allow the response callback and React commit to finish; no arbitrary timing sleep.
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   }
 
   async function uiSkill(page: Page, title: string, key: string, module: string, subtype: string) {
@@ -145,7 +183,9 @@ test.describe("governed skills operator journey (UI)", () => {
     await expect(page.getByText(/Skill candidate submitted as version/)).toBeVisible();
     const card = page.locator('[data-testid^="skill-"]').filter({ hasText: title }).first();
     await expect(card).toBeVisible();
-    await card.getByRole("button", { name: /Approve submitted v/ }).click();
+    await card.getByRole("button", { name: /Review submitted v/ }).click();
+    await expect(page.getByTestId("skill-review-content")).toContainText("Author requirements with observable criteria and exact citations.");
+    await page.getByTestId("skill-review-panel").getByTestId("skill-review-approve").click();
     await expect(page.getByText(new RegExp(`Approved ${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))).toBeVisible();
   }
 
@@ -327,7 +367,7 @@ test.describe("governed skills operator journey (UI)", () => {
     }
   });
 
-  test("owner reviews v3 against v2 and active v1, then approves without changing the assignment", async ({ browser }) => {
+  test("owner reviews submitted content against prior and active approved snapshots without changing assignments", async ({ browser }) => {
     const fixture = await reviewFixture();
     try {
       const page = await open(browser, "/settings/skills");
@@ -338,27 +378,32 @@ test.describe("governed skills operator journey (UI)", () => {
       await expect(page.getByTestId("skill-review-content")).not.toContainText("RULE-V2-ONLY");
       await expect(page.getByTestId("skill-review-version")).toContainText(`v${fixture.v3.versionNumber}`);
       await expect(page.getByTestId("skill-timeline")).toContainText(`v${fixture.v2.versionNumber}`);
-      await expect(page.getByTestId("skill-review-assignments")).toContainText(`v${fixture.v1.versionNumber} active`);
+      await expect(page.getByTestId("skill-review-assignments")).toContainText(`v${fixture.a1.versionNumber} active`);
 
       await page.getByTestId("skill-review-compare-previous").click();
       const diff = page.locator('[data-testid="skill-diff"]');
-      await expect(diff.locator('[data-diff="remove"]').filter({ hasText: "RULE-V2-ONLY" })).toBeVisible();
-      await expect(diff.locator('[data-diff="add"]').filter({ hasText: "RULE-V3" })).toBeVisible();
+      await expect(diff.locator('[data-diff="remove"]').filter({ hasText: "RULE-V2-ONLY" }).first()).toBeVisible();
+      await expect(diff.locator('[data-diff="add"]').filter({ hasText: "RULE-V3" }).first()).toBeVisible();
 
       await page.getByTestId("skill-compare-target").selectOption("active");
       await expect(page.getByTestId("skill-compare-context")).toBeVisible();
       await page.getByTestId("skill-compare-target-run").click();
-      await expect(page.locator('[data-testid="skill-diff"]')).toContainText(`v${fixture.v1.versionNumber}`);
+      await expect(page.locator('[data-testid="skill-diff"]')).toContainText(`v${fixture.a1.versionNumber}`);
 
       await page.getByTestId("skill-review-approve").click();
       await expect(page.getByText(new RegExp(`Approved .* version ${fixture.v3.versionNumber}`))).toBeVisible();
       const library = await (await ownerApi.get(`${base()}/skills`)).json();
       const skill = library.skills.find((entry: { id: string }) => entry.id === fixture.documentId);
-      expect(skill.approvedVersionId).toBe(fixture.v3.id);
+      expect(skill.approvedVersionId).not.toBe(fixture.v3.id);
+      expect(skill.versions.find((entry: { id: string }) => entry.id === skill.approvedVersionId))
+        .toMatchObject({ kind: "approved", sourceVersionId: fixture.v3.id });
       const ledger = await (await ownerApi.get(`${base()}/skill-assignments`)).json();
       const active = ledger.list.filter((entry: { skillDocumentId: string; status: string }) => entry.skillDocumentId === fixture.documentId && entry.status === "active");
       expect(active).toHaveLength(1);
-      expect(active[0].skillVersionId).toBe(fixture.v1.id);
+      expect(active[0].skillVersionId).toBe(fixture.a1.id);
+      await expect(page.getByTestId(`skill-${fixture.documentId}`)).not.toContainText("awaiting review");
+      await expect(page.getByTestId("skill-review-approve")).toHaveCount(0);
+      await expect(page.getByTestId("skill-review-panel")).toContainText(`Approved as v${skill.versions.find((entry: { id: string }) => entry.id === skill.approvedVersionId).versionNumber}`);
     } finally {
       await cleanupSkill(fixture.documentId);
     }
@@ -406,7 +451,10 @@ test.describe("governed skills operator journey (UI)", () => {
       await page.getByTestId("skill-review-approve").click();
       await expect(page.getByText(new RegExp(`Approved .* version ${v2.versionNumber}`))).toBeVisible();
       const library = await (await ownerApi.get(`${base()}/skills`)).json();
-      expect(library.skills.find((entry: { id: string }) => entry.id === doc.id).approvedVersionId).toBe(v2.id);
+      const skill = library.skills.find((entry: { id: string }) => entry.id === doc.id);
+      expect(skill.approvedVersionId).not.toBe(v2.id);
+      expect(skill.versions.find((entry: { id: string }) => entry.id === skill.approvedVersionId))
+        .toMatchObject({ kind: "approved", sourceVersionId: v2.id });
     } finally {
       await cleanupSkill(doc.id);
     }
@@ -416,30 +464,221 @@ test.describe("governed skills operator journey (UI)", () => {
     const suffix = randomUUID();
     const doc = await createSkillDoc(`Context compare ${suffix}`, `CTX-${suffix.replaceAll("-", "").slice(0, 8).toUpperCase()}`,
       "RULE-CTX-V1: base context rule.");
-    const v1 = await submitDoc(doc);
-    await approveDoc(doc.id, v1.id);
-    await assignDoc(doc.id, v1.id, "requirement_revision");
-    const v2Doc = await updateDoc(doc, "RULE-CTX-V2: linked-case context rule.");
-    const v2 = await submitDoc(v2Doc);
-    await approveDoc(doc.id, v2.id);
-    await assignDoc(doc.id, v2.id, "requirement_case_link");
-    const v3Doc = await updateDoc(doc, "RULE-CTX-V3: candidate rule.");
-    await submitDoc(v3Doc);
     try {
+      const v1 = await submitDoc(doc);
+      const a1 = await approveDoc(doc.id, v1.id);
+      await assignDoc(doc.id, a1.id, "requirement_revision");
+      const v2Doc = await updateDoc(doc, "RULE-CTX-V2: linked-case context rule.");
+      const v2 = await submitDoc(v2Doc);
+      const a2 = await approveDoc(doc.id, v2.id);
+      await assignDoc(doc.id, a2.id, "requirement_case_link");
+      const v3Doc = await updateDoc(doc, "RULE-CTX-V3: candidate rule.");
+      await submitDoc(v3Doc);
       const page = await open(browser, "/settings/skills");
       await page.getByTestId(`skill-review-open-${doc.id}`).click();
-      await expect(page.getByTestId("skill-review-assignments")).toContainText(`v${v1.versionNumber} active`);
-      await expect(page.getByTestId("skill-review-assignments")).toContainText(`v${v2.versionNumber} active`);
+      await expect(page.getByTestId("skill-review-assignments")).toContainText(`v${a1.versionNumber} active`);
+      await expect(page.getByTestId("skill-review-assignments")).toContainText(`v${a2.versionNumber} active`);
       await page.getByTestId("skill-compare-target").selectOption("active");
       const context = page.getByTestId("skill-compare-context");
       await expect(context.locator("option")).toHaveCount(2);
       const labels = await context.locator("option").allTextContents();
       await context.selectOption({ label: labels.find((label) => label.includes("requirement_case_link"))! });
       await page.getByTestId("skill-compare-target-run").click();
-      await expect(page.locator('[data-testid="skill-diff"]')).toContainText(`v${v2.versionNumber}`);
+      await expect(page.locator('[data-testid="skill-diff"]')).toContainText(`v${a2.versionNumber}`);
       await context.selectOption({ label: labels.find((label) => label.includes("requirement_revision"))! });
       await page.getByTestId("skill-compare-target-run").click();
-      await expect(page.locator('[data-testid="skill-diff"]')).toContainText(`v${v1.versionNumber}`);
+      await expect(page.locator('[data-testid="skill-diff"]')).toContainText(`v${a1.versionNumber}`);
+    } finally {
+      await cleanupSkill(doc.id);
+    }
+  });
+  test("late review responses cannot replace a different Skill or a reopened review", async ({ browser }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const a = await createSkillDoc(`Held review A ${suffix}`, `HOLD-A-${suffix}`, "RULE-HELD-A: belongs only to Skill A.");
+    let b: { id: string } | undefined;
+    let page: Page | undefined;
+    let gate: Awaited<ReturnType<typeof holdVersion>> | undefined;
+    try {
+      const av = await submitDoc(a);
+      b = await createSkillDoc(`Current review B ${suffix}`, `HOLD-B-${suffix}`, "RULE-CURRENT-B: belongs only to Skill B.");
+      await submitDoc(b as { id: string; editRevision: string });
+      page = await open(browser, "/settings/skills");
+      for (const closeFirst of [false, true]) {
+        await test.step(closeFirst ? "Close held A, reopen B, then deliver A" : "Switch from held A to B, then deliver A", async () => {
+          gate = await holdVersion(page!, a.id, av.id);
+          await page!.getByTestId(`skill-review-open-${a.id}`).click();
+          await gate.seen;
+          if (closeFirst) await page!.getByRole("button", { name: "Close review" }).click();
+          await page!.getByTestId(`skill-review-open-${b!.id}`).click();
+          await expect(page!.getByTestId("skill-review-content")).toContainText("RULE-CURRENT-B");
+          await releaseVersion(page!, gate);
+          await expect(page!.getByTestId("skill-review-panel").getByRole("heading", { level: 2 })).toContainText(`Current review B ${suffix}`);
+          await expect(page!.getByTestId("skill-review-content")).toContainText("RULE-CURRENT-B");
+          await expect(page!.getByTestId("skill-review-content")).not.toContainText("RULE-HELD-A");
+          await page!.unroute(`**${gate.url}`);
+        });
+      }
+    } finally {
+      gate?.release();
+      await page?.context().close();
+      await cleanupSkill(a.id);
+      if (b) await cleanupSkill(b.id);
+    }
+  });
+
+  test("late comparison and full-version reads cannot overwrite the selected versions", async ({ browser }) => {
+    const fixture = await reviewFixture();
+    let page: Page | undefined;
+    let gate: Awaited<ReturnType<typeof holdVersion>> | undefined;
+    try {
+      page = await open(browser, "/settings/skills");
+      await page.getByTestId(`skill-review-open-${fixture.documentId}`).click();
+      await expect(page.getByTestId("skill-diff")).toBeVisible();
+      gate = await holdVersion(page, fixture.documentId, fixture.a1.id);
+      await page.getByTestId("skill-compare-target").selectOption("active");
+      await page.getByTestId("skill-compare-target-run").click();
+      await gate.seen;
+      await page.getByTestId("skill-compare-target").selectOption("latestApproved");
+      await page.getByTestId("skill-compare-target-run").click();
+      await expect(page.getByTestId("skill-diff")).toContainText(`v${fixture.a2.versionNumber}`);
+      await releaseVersion(page, gate);
+      await expect(page.getByTestId("skill-diff")).toContainText(`v${fixture.a2.versionNumber}`);
+      await expect(page.getByTestId("skill-diff")).toContainText("Latest approved version");
+      await page.unroute(`**${gate.url}`);
+
+      gate = await holdVersion(page, fixture.documentId, fixture.v1.id);
+      await page.getByTestId(`skill-version-open-${fixture.v1.id}`).click();
+      await gate.seen;
+      await page.getByTestId(`skill-version-open-${fixture.v2.id}`).click();
+      await expect(page.getByTestId("skill-version-full")).toContainText("RULE-V2-ONLY");
+      await releaseVersion(page, gate);
+      await expect(page.getByTestId("skill-version-full")).toContainText(`Full v${fixture.v2.versionNumber}`);
+      await expect(page.getByTestId("skill-version-full")).toContainText("RULE-V2-ONLY");
+    } finally {
+      gate?.release();
+      await page?.context().close();
+      await cleanupSkill(fixture.documentId);
+    }
+  });
+
+  test("a document-edit refusal remains visible after refresh without creating approval", async ({ browser }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const doc = await createSkillDoc(`Changed review ${suffix}`, `EDIT-${suffix}`, "RULE-SUBMITTED: inspect this exact text.");
+    let page: Page | undefined;
+    try {
+      await submitDoc(doc);
+      page = await open(browser, "/settings/skills");
+      await page.getByTestId(`skill-review-open-${doc.id}`).click();
+      await expect(page.getByTestId("skill-review-content")).toContainText("RULE-SUBMITTED");
+      await updateDoc(doc, "RULE-EDITED: this change has not been submitted.");
+      const refused = page.waitForResponse((response) => response.url().endsWith(`/skills/${doc.id}/approve`));
+      await page.getByTestId("skill-review-approve").click();
+      const response = await refused;
+      expect(response.status()).toBe(409);
+      expect(await response.json()).toMatchObject({ code: "DOCUMENT_REVISION_CONFLICT" });
+      const refresh = page.getByTestId("skill-readiness").getByRole("button", { name: "Refresh" });
+      await expect(refresh).toBeEnabled();
+      await refresh.click();
+      await expect(refresh).toBeEnabled();
+      await expect(page.getByTestId("skill-review-action-error")).toContainText(/changed|submit/i);
+      expect(scalar(`SELECT COUNT(*)::int FROM knowledge_document_versions WHERE document_id=${literal(doc.id)} AND snapshot_kind='approved';`)).toBe("0");
+      expect(scalar(`SELECT COALESCE(reviewed_version_id::text,'') FROM knowledge_documents WHERE id=${literal(doc.id)};`)).toBe("");
+    } finally {
+      await page?.context().close();
+      await cleanupSkill(doc.id);
+    }
+  });
+
+  test("a lost approval response stays unconfirmed and reconciles one actual approved snapshot", async ({ browser }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const doc = await createSkillDoc(`Unknown approval ${suffix}`, `UNKNOWN-${suffix}`, "RULE-UNKNOWN: reconcile the server receipt before retrying.");
+    let page: Page | undefined;
+    let requests = 0;
+    try {
+      const submitted = await submitDoc(doc);
+      page = await open(browser, "/settings/skills");
+      await page.getByTestId(`skill-review-open-${doc.id}`).click();
+      await expect(page.getByTestId("skill-review-content")).toContainText("RULE-UNKNOWN");
+      await page.route(`**/skills/${doc.id}/approve`, async (route) => {
+        requests++;
+        const actual = await route.fetch();
+        expect(actual.ok(), await actual.text()).toBe(true);
+        await route.abort("failed");
+      });
+      await page.getByTestId("skill-review-approve").click();
+      await expect(page.getByTestId("skill-review-action-error")).toContainText("Request outcome unconfirmed");
+      await expect(page.getByTestId("skill-review-panel")).toContainText("Approved as v");
+      await expect(page.getByTestId("skill-review-approve")).toHaveCount(0);
+      expect(requests).toBe(1);
+      expect(scalar(`SELECT COUNT(*)::int FROM knowledge_document_versions WHERE document_id=${literal(doc.id)} AND snapshot_kind='approved' AND snapshot_metadata->>'sourceVersionId'=${literal(submitted.id)};`)).toBe("1");
+    } finally {
+      await page?.context().close();
+      await cleanupSkill(doc.id);
+    }
+  });
+
+  test("stored JSON and HTML changes are reviewable and diffed even when plain text is unchanged", async ({ browser }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const doc = await createSkillDoc(`Stored fields ${suffix}`, `FIELDS-${suffix}`, "RULE-TEXT: unchanged plain instructions.");
+    let page: Page | undefined;
+    try {
+      await submitDoc(doc);
+      const updated = await ownerApi.patch(`${base()}/knowledge-base/documents/${doc.id}`, { data: {
+        contentJson: { schemaVersion: "tesbo-skill/1", module: "requirements", subtype: "functional", instructions: "RULE-JSON-ONLY: inspect this stored change." },
+        contentHtml: '<p>RULE-HTML-ONLY: inspect source safely.</p><script>window.skillReviewExecuted = true</script>'
+      } });
+      expect(updated.ok(), await updated.text()).toBe(true);
+      await submitDoc(await updated.json());
+      page = await open(browser, "/settings/skills");
+      await page.getByTestId(`skill-review-open-${doc.id}`).click();
+      await expect(page.getByTestId("skill-review-content")).toContainText("RULE-TEXT");
+      await expect(page.getByTestId("skill-review-content")).toContainText("RULE-JSON-ONLY");
+      await expect(page.getByTestId("skill-review-content")).toContainText("RULE-HTML-ONLY");
+      await expect(page.getByTestId("skill-diff").locator('[data-diff="add"]').filter({ hasText: "RULE-JSON-ONLY" }).first()).toBeVisible();
+      await expect(page.getByTestId("skill-diff").locator('[data-diff="add"]').filter({ hasText: "RULE-HTML-ONLY" }).first()).toBeVisible();
+      expect(await page.evaluate(() => (window as unknown as Record<string, unknown>).skillReviewExecuted)).toBeUndefined();
+    } finally {
+      await page?.context().close();
+      await cleanupSkill(doc.id);
+    }
+  });
+
+  test("long multiline versions use a bounded comparison and retain both complete contents", async ({ browser }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const instructions = Array.from({ length: 900 }, (_, i) => `Rule ${i}`).join("\n");
+    const doc = await createSkillDoc(`Long review ${suffix}`, `LONG-${suffix}`, `${instructions}\nRULE-LONG-OLD-END`);
+    let page: Page | undefined;
+    try {
+      await submitDoc(doc);
+      await submitDoc(await updateDoc(doc, `${instructions.replaceAll("Rule", "Check")}\nRULE-LONG-NEW-END`));
+      page = await open(browser, "/settings/skills");
+      await page.getByTestId(`skill-review-open-${doc.id}`).click();
+      await expect(page.getByTestId("skill-diff-fallback")).toContainText("Full versions are shown");
+      await expect(page.getByTestId("skill-diff-before")).toContainText("RULE-LONG-OLD-END");
+      await expect(page.getByTestId("skill-diff-after")).toContainText("RULE-LONG-NEW-END");
+      await expect(page.getByTestId("skill-review-content")).toContainText("RULE-LONG-NEW-END");
+      await expect(page.getByTestId("skill-review-approve")).toBeEnabled();
+    } finally {
+      await page?.context().close();
+      await cleanupSkill(doc.id);
+    }
+  });
+
+  test("a newer submission with identical content supersedes the older ID without approval or assignment writes", async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const doc = await createSkillDoc(`Same-content submission ${suffix}`, `SAME-${suffix}`, "RULE-SAME: content equality does not select the reviewed version.");
+    try {
+      const first = await submitDoc(doc);
+      const currentResponse = await ownerApi.get(`${base()}/knowledge-base/documents/${doc.id}`);
+      expect(currentResponse.ok(), await currentResponse.text()).toBe(true);
+      const second = await submitDoc(await currentResponse.json());
+      expect(first.snapshotMetadata.contentDigest).toBe(second.snapshotMetadata.contentDigest);
+      const stale = await ownerApi.patch(`${base()}/skills/${doc.id}/approve`, { data: { versionId: first.id } });
+      expect(stale.status()).toBe(409);
+      expect(await stale.json()).toMatchObject({ code: "SKILL_VERSION_SUPERSEDED", currentVersionId: second.id, currentVersionNumber: second.versionNumber });
+      expect(scalar(`SELECT COUNT(*)::int FROM knowledge_document_versions WHERE document_id=${literal(doc.id)} AND snapshot_kind='approved';`)).toBe("0");
+      expect(scalar(`SELECT COALESCE(reviewed_version_id::text,'') FROM knowledge_documents WHERE id=${literal(doc.id)};`)).toBe("");
+      expect(scalar(`SELECT COUNT(*)::int FROM skill_assignments WHERE skill_document_id=${literal(doc.id)};`)).toBe("0");
     } finally {
       await cleanupSkill(doc.id);
     }
