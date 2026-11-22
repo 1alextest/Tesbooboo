@@ -403,7 +403,8 @@ describe("zyraRefillPlan — a paged plan plans its next tickets when the queue 
     expect(await internals(svc).zyraRefillPlan("p1", "u1", "s1", base(), 50)).toBe(false);
     expect(plan()).toMatchObject({ status: "paused", ticketCursor: "c1", ticketsHasMore: true, remainingScenarios: ["q1", "q2"] });
     expect(String(messages[0][4])).toMatch(/Pausing here/);
-    expect(String(messages[0][4])).toMatch(/provider down/);
+    expect(String(messages[0][4])).toMatch(/AI provider request failed/);
+    expect(String(messages[0][4])).not.toMatch(/provider down/);
   });
 
   it("pauses when the project has no AI key any more", async () => {
