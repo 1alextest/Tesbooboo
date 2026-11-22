@@ -1065,6 +1065,9 @@ export interface ZyraTask {
   requirementBundle?: Array<Record<string, unknown>>;
   /** Why a requirement bundle cannot be published yet (currently the missing effective-skill resolver). */
   skillContext?: { status: string; authority?: string; reason?: string };
+  /** The server's committed decision on the exact reviewed bundle, also returned on a safe retry. */
+  requirementDecision?: { id: string; decision: "rejected" | "withdrawn"; proposalRevision: string;
+    reviewerId: string; reason: string | null; createdAt: string } | null;
   /** Exact server revision of the reviewable operations and their target context. */
   proposalRevision?: string;
   proposalSnapshot?: Record<string, unknown>;
@@ -1499,18 +1502,18 @@ export async function getRequirementProposal(projectId: string, taskId: string):
 }
 
 /** Authorized owner/manager rejection of a staged bundle; nothing is published. */
-export async function rejectRequirementProposal(projectId: string, taskId: string, reason?: string): Promise<ZyraTask> {
+export async function rejectRequirementProposal(projectId: string, taskId: string, expectedProposalRevision: string, reason?: string): Promise<ZyraTask> {
   return api<ZyraTask>(`/api/projects/${projectId}/requirements/proposals/${taskId}/reject`, {
     method: "POST",
-    body: reason ? { reason } : {},
+    body: { expectedProposalRevision, ...(reason ? { reason } : {}) },
   });
 }
 
 /** The producer withdrawing their own staged bundle; nothing is published. */
-export async function withdrawRequirementProposal(projectId: string, taskId: string, reason?: string): Promise<ZyraTask> {
+export async function withdrawRequirementProposal(projectId: string, taskId: string, expectedProposalRevision: string, reason?: string): Promise<ZyraTask> {
   return api<ZyraTask>(`/api/projects/${projectId}/requirements/proposals/${taskId}/withdraw`, {
     method: "POST",
-    body: reason ? { reason } : {},
+    body: { expectedProposalRevision, ...(reason ? { reason } : {}) },
   });
 }
 

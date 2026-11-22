@@ -417,12 +417,13 @@ Slice 1 implements: staging of the typed bundle in `generated_payload`, the nati
 
 - `LegacyService.stageRequirementChangeBundle` — validates one `requirement_revision`, optional `testcase_create` and optional `requirement_case_link`; enforces criterion-key membership, bundle-local operation references, request-key idempotency and the exact revision of an existing `requirement_note` document; records `REQUIREMENT_SKILL_CONTEXT`; writes only the review task.
 - `LegacyService.requirementProposalTask` / `listRequirementProposals` — the native review reads; they return the bundle from the single `generated_payload` authority.
-- `LegacyService.rejectRequirementProposal` / `withdrawRequirementProposal` — owner/manager human rejection, producer-only human withdrawal; append-only activity and project activity; idempotent close; no publication.
-- `LegacyService.assertGuardedPublicationAvailable` — called before any save write and before draft edit/delete; refuses a bundle with `SKILL_CONTEXT_UNAVAILABLE`.
+- `LegacyService.rejectRequirementProposal` / `withdrawRequirementProposal` — owner/manager human rejection and producer-only human withdrawal through one transaction. The current role, exact `expectedProposalRevision`, task state and producer are checked under the existing suite/project/task locks. The recorded decision receipt includes the reviewed snapshot; an identical actor/revision/decision/reason replay returns it, while a stale or opposite decision conflicts. Activity and the mandatory audit record commit together; no publication occurs.
+- `LegacyService.isRequirementBundleTask` — the shared ownership boundary uses both typed operations and the immutable external-requirement provider identity. Generic feedback, close, live append, suite changes and queued generation cannot rewrite or close a bundle. `assertGuardedPublicationAvailable` uses that same boundary before save/edit/delete and continues to refuse with `SKILL_CONTEXT_UNAVAILABLE`.
+- `LegacyService.requireCurrentProposalProducer` — reused by both staging inlets; rechecks project/workspace membership, token write authority and current MCP enablement, grant scope, expiry and tool consent in the writing transaction. Current authority is required even for recovery of an earlier request. A matching request receipt is recovered before new-write validation of mutable document, suite, field or tag references.
 - `LegacyService.formatAiTask` — partitions the typed bundle entries from case drafts so the existing case review renderer never sees them; exposes `requirementBundle` and `skillContext`.
 - REST: `POST/GET /api/projects/:projectId/requirements/proposals`, `GET …/:taskId`, `POST …/:taskId/reject`, `POST …/:taskId/withdraw` in `legacy.controller.ts`.
 - MCP: `stage_requirement_change_bundle` (write), `get_requirement_proposal_task` and `list_requirement_proposals` (read), all `proposalPreviewOnly`; preview off hides and refuses them.
-- UI: the native task page renders the bundle panel (`requirement-change-bundle`), requirement criteria, case candidate, link criteria, the publication gate, and reject/withdraw actions.
+- UI: the native task page renders the bundle panel (`requirement-change-bundle`), requirement criteria, every case candidate field, the complete staged operation content, link criteria and the publication gate. Reject/withdraw sends the displayed revision and renders the recorded outcome; a conflict refreshes it. Generic Close is hidden in the full and quick views, and Feedback is disabled for bundles.
 
 **Evidence run at this note revision**
 
@@ -433,6 +434,18 @@ Slice 1 implements: staging of the typed bundle in `generated_payload`, the nati
 - DB spec `testcase-proposal-review.db.spec.ts` now carries the bundle staging/rejection/gate/isolation coverage; it is in the CI `database-integrity` path list but **was not run locally** (no `DATABASE_URL`/Docker on this machine). CI status: NOT RUN at note time.
 - E2E specs `api/requirements.spec.ts` and the `ui/zyra.spec.ts` bundle test were added and added to the smoke workflow; **not run locally** (no `.env`, auth context or Docker). CI status: NOT RUN at note time.
 - The stage → review → reject/withdraw journey on a disposable project is **BLOCKED locally** by the same missing environment; the CI smoke step is the intended executing path.
+
+### 13.1 Lifecycle repair verification (2026-11-22)
+
+The independent review of Slice 1 identified five coupled gaps: generic feedback could replace a bundle's payload; generic Close bypassed the authorized terminal decisions; reject/withdraw did not require the exact review revision and could misreport an opposite retry; staging revalidated mutable references before recovering an already committed request; and the new MCP staging inlet omitted the existing transaction-time consent check. The repair above closes these paths without enabling publication or changing the staged schema.
+
+- Red-before regression run: 11 failed and 1 passed in the initial lifecycle boundary selection. The ordinary Close case passed; bundle writer refusal, missing-revision refusal, current MCP consent and prior receipt recovery failed. A separate four-case consent run confirmed that disabled, expired, tool-removed and write-removed grants incorrectly resolved to staged tasks before the repair.
+- Green-after local regression run: **362 passed in 7 suites** (`testcase-proposal-review`, `zyra-similarity-feedback`, `zyra-chat-operation-errors`, `zyra-live-drafts`, `zyra-save-integration-sync`, `mcp-publication`, `mcp.service`). This includes ordinary-task close/feedback and queued provider-job refusal for bundles.
+- Backend and E2E TypeScript checks pass. ESLint passes for the three changed backend files. The three changed frontend files pass TypeScript syntax/transpilation checks; a complete frontend typecheck/lint/build was **not run locally**, because frontend dependencies are unavailable in this checkout.
+- Migrated PostgreSQL regressions now cover competing exact decisions, audit rollback, role and payload changes while waiting for the mutation lock, valid and revoked MCP consent, receipt recovery after reference drift, and zero official writes. They are **not run locally**; the existing `database-integrity` lane is the runtime gate.
+- Existing API/UI smoke selections include the updated full API file and both UI tests matching `requirement change bundle`: full candidate inspection, unavailable generic actions, exact revision submission, recorded decision and stale opposite-decision reconciliation. They are **not run locally**; the isolated smoke stack is the runtime gate. No workflow selection or source pin changed in this repair.
+
+Decision receipts use the existing task activity and immutable audit record; this repair adds no receipt table or new database trigger. Historical bundles already closed without an exact receipt fail closed on a new decision request. The original record remains readable; the repair does not invent a historical human review or rewrite old outcomes.
 
 ## Implementation continuation: read-only typed requirement preview (proposed; not yet accepted)
 

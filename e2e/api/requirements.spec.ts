@@ -109,6 +109,7 @@ test("requirement change bundles cannot be applied or edited while approved effe
     tasks.push(staged.id);
     const caseCount = scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(ctx.projectId)};`);
     const receiptCount = scalar(`SELECT COUNT(*)::int FROM testcase_approval_receipts r JOIN testcases t ON t.id=r.testcase_id WHERE t.project_id=${literal(ctx.projectId)};`);
+    const taskBefore = scalar(`SELECT row_to_json(r)::text FROM ai_generation_requests r WHERE id=${literal(staged.id)};`);
 
     const save = await request.post(`${base}/agents/zyra/tasks/${staged.id}/save`, {
       data: { expectedProposalRevision: staged.proposalRevision, selectedDraftIndexes: [0] }, failOnStatusCode: false,
@@ -119,6 +120,14 @@ test("requirement change bundles cannot be applied or edited while approved effe
     expect(remove.status()).toBe(409);
     const edit = await request.patch(`${base}/agents/zyra/tasks/${staged.id}/drafts/0`, { data: { title: "Tampered" }, failOnStatusCode: false });
     expect(edit.status()).toBe(409);
+    for (const action of ["feedback", "close"]) {
+      const response = await request.post(`${base}/agents/zyra/tasks/${staged.id}/${action}`, {
+        data: action === "feedback" ? { feedback: "Replace the reviewed bundle" } : {}, failOnStatusCode: false,
+      });
+      expect(response.status(), await response.text()).toBe(409);
+      expect(await response.json()).toMatchObject({ code: "REQUIREMENT_BUNDLE_IMMUTABLE" });
+    }
+    expect(scalar(`SELECT row_to_json(r)::text FROM ai_generation_requests r WHERE id=${literal(staged.id)};`)).toBe(taskBefore);
 
     const current = await request.get(`${base}/requirements/proposals/${staged.id}`);
     expect(current.ok(), await current.text()).toBe(true);
@@ -137,19 +146,33 @@ test("authorized rejection and producer withdrawal close the bundle without publ
     expect(rejectedResponse.status()).toBe(201);
     const rejected = await rejectedResponse.json();
     tasks.push(rejected.id);
-    const reject = await request.post(`${base}/requirements/proposals/${rejected.id}/reject`, { data: { reason: "E2E refusal" } });
+    const decisionBody = { expectedProposalRevision: rejected.proposalRevision, reason: "E2E refusal" };
+    const missingRevision = await request.post(`${base}/requirements/proposals/${rejected.id}/reject`, { data: { reason: "E2E refusal" }, failOnStatusCode: false });
+    expect(missingRevision.status()).toBe(400);
+    expect(await missingRevision.json()).toMatchObject({ code: "PROPOSAL_REVIEW_REQUIRED" });
+    const stale = await request.post(`${base}/requirements/proposals/${rejected.id}/reject`, { data: { ...decisionBody, expectedProposalRevision: "0".repeat(64) }, failOnStatusCode: false });
+    expect(stale.status()).toBe(409);
+    const reject = await request.post(`${base}/requirements/proposals/${rejected.id}/reject`, { data: decisionBody });
     expect(reject.ok(), await reject.text()).toBe(true);
-    expect(await reject.json()).toMatchObject({ taskStatus: "done" });
-    const repeated = await request.post(`${base}/requirements/proposals/${rejected.id}/reject`, { data: {}, failOnStatusCode: false });
+    const closed = await reject.json();
+    expect(closed).toMatchObject({ taskStatus: "done", replayed: false, requirementDecision: {
+      decision: "rejected", proposalRevision: rejected.proposalRevision, reason: "E2E refusal", reviewedSnapshot: rejected.proposalSnapshot,
+    } });
+    const repeated = await request.post(`${base}/requirements/proposals/${rejected.id}/reject`, { data: decisionBody, failOnStatusCode: false });
     expect(repeated.ok(), await repeated.text()).toBe(true);
+    expect(await repeated.json()).toMatchObject({ replayed: true, requirementDecision: closed.requirementDecision });
+    const opposite = await request.post(`${base}/requirements/proposals/${rejected.id}/withdraw`, { data: decisionBody, failOnStatusCode: false });
+    expect(opposite.status()).toBe(409);
+    expect(await opposite.json()).toMatchObject({ code: "PROPOSAL_REVIEW_CONFLICT" });
+    expect(scalar(`SELECT COUNT(*)::int FROM audit_logs WHERE entity_id=${literal(rejected.id)} AND action IN ('requirement_proposal_rejected','requirement_proposal_withdrawn');`)).toBe("1");
 
     const withdrawnResponse = await stageRest(request, bundleOperations({ title: `E2E withdrawn requirement ${Date.now()}` }).operations);
     expect(withdrawnResponse.status()).toBe(201);
     const withdrawn = await withdrawnResponse.json();
     tasks.push(withdrawn.id);
-    const withdraw = await request.post(`${base}/requirements/proposals/${withdrawn.id}/withdraw`, { data: { reason: "E2E withdrawal" } });
+    const withdraw = await request.post(`${base}/requirements/proposals/${withdrawn.id}/withdraw`, { data: { expectedProposalRevision: withdrawn.proposalRevision, reason: "E2E withdrawal" } });
     expect(withdraw.ok(), await withdraw.text()).toBe(true);
-    expect(await withdraw.json()).toMatchObject({ taskStatus: "done" });
+    expect(await withdraw.json()).toMatchObject({ taskStatus: "done", requirementDecision: { decision: "withdrawn", proposalRevision: withdrawn.proposalRevision } });
     expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(ctx.projectId)} AND title LIKE 'E2E bundle case%';`)).toBe("0");
   } finally {
     for (const id of tasks) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);

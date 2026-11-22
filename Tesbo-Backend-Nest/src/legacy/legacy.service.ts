@@ -1598,9 +1598,10 @@ export class LegacyService implements OnModuleInit {
    */
   private async appendZyraReviewProposals(projectId: string, sessionId: string, reviewRequestId: string, proposals: Body[]): Promise<{ closed: boolean; base: number }> {
     const result = await this.db.transaction(async (client) => {
-      const res = await client.query("SELECT task_status, generated_payload, activity_log FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [reviewRequestId, projectId]);
+      const res = await client.query("SELECT task_status, generated_payload, activity_log, provider FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [reviewRequestId, projectId]);
       const row = res.rows[0];
       if (!row) return { closed: true, base: 0, reopened: false };
+      this.assertOrdinaryProposalMutation(row);
       const log = normalizeJsonArray(row.activity_log) as Body[];
       if (row.task_status === "done" && log[log.length - 1]?.title === "Closed task") return { closed: true, base: 0, reopened: false };
       const existing = normalizeJsonArray(row.generated_payload);
@@ -15959,17 +15960,7 @@ export class LegacyService implements OnModuleInit {
     const taskId = await this.db.transaction(async client => {
       await this.lockTestcaseSuiteWrites(client, projectId);
       const authority = await this.requireProposalAuthority(client, projectId, uid);
-      if (principal.kind === "api_token") {
-        const token = await client.query("SELECT scopes FROM api_tokens WHERE id=$1 AND project_id=$2 AND user_id=$3 FOR SHARE", [principal.tokenId,projectId,uid]);
-        if (!token.rows[0] || !normalizeApiTokenScopes(token.rows[0].scopes).includes("write")) throw new ForbiddenException({ error: "A current write-scoped project token is required" });
-        if (principal.transport === "mcp") {
-          let access;
-          try { access = readMcpAccess(authority.settings); } catch { access = null; }
-          const grant = access?.clients.find(client => client.tokenId === principal.tokenId!.toLowerCase());
-          if (!access?.enabled || !grant?.scopes.includes("write") || grant.expiresAt && Date.parse(grant.expiresAt) <= Date.now() ||
-              grant.allowedTools && !grant.allowedTools.includes("stage_testcase_changes")) throw new ForbiddenException({error:"Current project consent for this MCP proposal client is required"});
-        }
-      }
+      await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority, "stage_testcase_changes");
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`testcase-proposal:${projectId}:${principalKey}:${requestKey}`]);
       const prior = await client.query("SELECT id,proposal_request_digest FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
       if (prior.rows[0]) {
@@ -16029,18 +16020,11 @@ export class LegacyService implements OnModuleInit {
     const producerActorId = principal.kind === "human_session" ? uid : principal.actorId ?? null;
     const provenance = { kind: principal.kind, principalKey, issuerId: uid, tokenId: principal.tokenId ?? null, actorId: producerActorId };
     const taskId = await this.db.transaction(async client => {
-      await this.requireCurrentProjectAuthority(client, projectId, uid);
-      if (principal.kind === "api_token") {
-        const token = await client.query("SELECT scopes FROM api_tokens WHERE id=$1 AND project_id=$2 AND user_id=$3 FOR SHARE", [principal.tokenId, projectId, uid]);
-        if (!token.rows[0] || !normalizeApiTokenScopes(token.rows[0].scopes).includes("write")) {
-          throw new ForbiddenException({ error: "A current write-scoped project token is required" });
-        }
-      }
-      if (bundle.requirement.documentId) {
-        await this.assertRequirementDocumentBase(client, projectId, String(bundle.requirement.documentId), String(bundle.requirement.expectedRevision));
-      }
-      if (bundle.testcase) await this.assertProposalReferences(client, projectId, bundle.testcase.draft);
-      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`requirement-proposal:${projectId}:${principalKey}:${requestKey}`]);
+      await this.lockTestcaseSuiteWrites(client, projectId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority, "stage_requirement_change_bundle");
+      // Both proposal inlets share the same unique request identity and serialization owner.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`testcase-proposal:${projectId}:${principalKey}:${requestKey}`]);
       const prior = await client.query("SELECT id,proposal_request_digest FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
       if (prior.rows[0]) {
         if (prior.rows[0].proposal_request_digest !== requestDigest) {
@@ -16048,6 +16032,12 @@ export class LegacyService implements OnModuleInit {
         }
         return String(prior.rows[0].id);
       }
+      // A lost response recovers the committed task above even if a reference has since changed.
+      // Mutable references are validated only for a new staging write, after current authority.
+      if (bundle.requirement.documentId) {
+        await this.assertRequirementDocumentBase(client, projectId, String(bundle.requirement.documentId), String(bundle.requirement.expectedRevision));
+      }
+      if (bundle.testcase) await this.assertProposalReferences(client, projectId, bundle.testcase.draft);
       const result = await client.query(
         `INSERT INTO ai_generation_requests
           (project_id,requested_by,provider,model,user_story,requested_count,generated_count,generated_payload,agent_name,task_status,proposal_request_key,proposal_request_digest,proposal_provenance,activity_log)
@@ -16091,53 +16081,71 @@ export class LegacyService implements OnModuleInit {
 
   /** Authorized rejection by a project owner/manager. Inert bundle; no native artifact is written. */
   async rejectRequirementProposal(projectId: string, userId: string | null | undefined, taskId: string, body: Body = {}, principal?: ReviewPrincipal) {
-    requireHumanReviewPrincipal(principal);
-    const uid = this.requireUser(userId);
-    await this.requireProjectAccess(uid, projectId);
-    if (!isUuid(taskId)) throw new NotFoundException({ error: "Requirement proposal not found" });
-    this.kbRequireOwnerOrManager(await this.kbProjectRole(uid, projectId));
-    const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 2000) : "";
-    return this.closeRequirementProposal(projectId, uid, taskId, "rejected", reason);
+    return this.closeRequirementProposal(projectId, userId, taskId, "rejected", body, principal);
   }
 
   /** The producer may withdraw their own bundle. */
   async withdrawRequirementProposal(projectId: string, userId: string | null | undefined, taskId: string, body: Body = {}, principal?: ReviewPrincipal) {
-    requireHumanReviewPrincipal(principal);
-    const uid = this.requireUser(userId);
-    await this.requireProjectAccess(uid, projectId);
-    if (!isUuid(taskId)) throw new NotFoundException({ error: "Requirement proposal not found" });
-    const task = await this.db.query("SELECT requested_by, proposal_provenance FROM ai_generation_requests WHERE id=$1 AND project_id=$2", [taskId, projectId]);
-    const row = task.rows[0];
-    if (!row) throw new NotFoundException({ error: "Requirement proposal not found" });
-    if (row.requested_by !== uid && row.proposal_provenance?.issuerId !== uid) {
-      throw new ForbiddenException({ error: "Only the proposal producer or a project owner/manager can withdraw it" });
-    }
-    const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 2000) : "";
-    return this.closeRequirementProposal(projectId, uid, taskId, "withdrawn", reason);
+    return this.closeRequirementProposal(projectId, userId, taskId, "withdrawn", body, principal);
   }
 
-  private async closeRequirementProposal(projectId: string, uid: string, taskId: string, decision: "rejected" | "withdrawn", reason: string) {
+  private async closeRequirementProposal(projectId: string, userId: string | null | undefined, taskId: string,
+    decision: "rejected" | "withdrawn", body: Body, principal?: ReviewPrincipal): Promise<Body> {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    const revision = expectedProposalRevision(body.expectedProposalRevision);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(taskId)) throw new NotFoundException({ error: "Requirement proposal not found" });
+    const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 2000) : "";
+    const decisionKey = proposalDigest({ kind: "requirement_bundle_decision", decision, revision, reviewerId: uid, reason });
     return this.db.transaction(async client => {
+      // Preserve the established suite/project/task lock order. Authority and review dependencies
+      // remain locked through commit; a stale request-cache result never authorizes this decision.
+      await this.lockTestcaseSuiteWrites(client, projectId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      if (!this.parseRole(authority.caller_role) || !this.parseRole(authority.workspace_role)) {
+        throw new ForbiddenException({ error: "A current project and workspace role is required" });
+      }
+      if (decision === "rejected") this.kbRequireOwnerOrManager(authority.caller_role);
       const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
       const existing = locked.rows[0];
       if (!existing) throw new NotFoundException({ error: "Requirement proposal not found" });
-      if (!this.taskHasRequirementBundle(existing.generated_payload)) throw new BadRequestException({ error: "This task is not a requirement change bundle" });
-      if (existing.task_status === "done") return this.formatAiTask(existing);
+      if (!this.isRequirementBundleTask(existing)) throw new BadRequestException({ error: "This task is not a requirement change bundle" });
+      if (decision === "withdrawn" && existing.requested_by !== uid && existing.proposal_provenance?.issuerId !== uid) {
+        throw new ForbiddenException({ error: "Only the proposal producer can withdraw it" });
+      }
+      const payloadDigest = proposalDigest(existing.generated_payload);
+      const prior = this.requirementDecisionReceipt(existing);
+      if (prior || existing.task_status === "done") {
+        if (existing.task_status === "done" && prior?.decisionKey === decisionKey && prior.payloadDigest === payloadDigest) {
+          return { ...await this.formatAiTask(await this.readTestcaseProposal(client, projectId, taskId)), replayed: true };
+        }
+        throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "This bundle already has a different decision; reload its recorded outcome before continuing" });
+      }
+      if (!["in_review", "failed"].includes(String(existing.task_status))) {
+        throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "This bundle is not awaiting review" });
+      }
+      const reviewed = await this.readTestcaseProposal(client, projectId, taskId);
+      if (reviewed.proposal_review_revision !== revision) {
+        throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "The bundle or its review context changed; reload and review it again" });
+      }
       const now = new Date().toISOString();
+      const receipt = { id: randomUUID(), decisionKey, decision, reviewerId: uid, principalKind: "human_session",
+        proposalRevision: revision, payloadDigest, reason: reason || null, createdAt: now, reviewedSnapshot: reviewed.proposal_snapshot };
       const activity = [{
-        actor: "user", stage: "done",
+        actor: "user", stage: "done", kind: "requirement_bundle_decision", decisionReceipt: receipt,
         title: decision === "rejected" ? "Rejected requirement change bundle" : "Withdrew requirement change bundle",
         detail: reason || (decision === "rejected" ? "Rejected during human review; nothing was published." : "Withdrawn by its producer; nothing was published."),
         createdAt: now, reviewerId: uid, decision
       }];
-      const updated = await client.query(
+      await client.query(
         `UPDATE ai_generation_requests SET task_status='done', activity_log=activity_log||$3::jsonb, updated_at=now()
          WHERE id=$1 AND project_id=$2 AND task_status<>'done' RETURNING *`,
         [taskId, projectId, JSON.stringify(activity)]
       );
       await this.logProjectActivity(projectId, uid, `requirement_proposal_${decision}`, "ai_generation_request", taskId, existing.user_story,
-        { decision, reason: reason || null, operationCount: normalizeJsonArray(existing.generated_payload).length }, client);
-      return this.formatAiTask(updated.rows[0] || existing);
+        { decision, reason: reason || null, operationCount: normalizeJsonArray(existing.generated_payload).length, decisionReceipt: receipt }, client);
+      return { ...await this.formatAiTask(await this.readTestcaseProposal(client, projectId, taskId)), replayed: false };
     });
   }
 
@@ -16145,8 +16153,22 @@ export class LegacyService implements OnModuleInit {
     return normalizeJsonArray(payload).some(entry => REQUIREMENT_BUNDLE_OPERATION_KINDS.has(String(entry?.opType || "")));
   }
 
-  private assertGuardedPublicationAvailable(payload: unknown): void {
-    if (!this.taskHasRequirementBundle(payload)) return;
+  private isRequirementBundleTask(row: Body): boolean {
+    // The immutable producer kind remains a boundary even if old code damaged a bundle's payload.
+    return row.provider === "external_requirement_proposal" || this.taskHasRequirementBundle(row.generated_payload);
+  }
+
+  private requirementDecisionReceipt(row: Body): Body | null {
+    return normalizeJsonArray(row.activity_log).find((entry: Body) => entry.kind === "requirement_bundle_decision")?.decisionReceipt || null;
+  }
+
+  private assertOrdinaryProposalMutation(row: Body): void {
+    if (this.isRequirementBundleTask(row)) throw new ConflictException({ code: "REQUIREMENT_BUNDLE_IMMUTABLE",
+      error: "Requirement bundles are immutable. Review the exact bundle and use its authorized Reject or Withdraw action." });
+  }
+
+  private assertGuardedPublicationAvailable(row: Body): void {
+    if (!this.isRequirementBundleTask(row)) return;
     throw new ConflictException({
       code: "SKILL_CONTEXT_UNAVAILABLE",
       error: "Requirement change bundles cannot be applied while the required approved effective skills are unavailable. Review, reject or withdraw the exact staged revision; nothing was published."
@@ -16158,7 +16180,7 @@ export class LegacyService implements OnModuleInit {
     if (!/^[a-f0-9]{64}$/.test(expectedRevision)) throw new BadRequestException({ error: "A revision of an existing requirement requires expectedRevision" });
     const row = (await client.query(
       `SELECT id, ${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS edit_revision, document_type, source_provider, is_deleted
-         FROM knowledge_documents WHERE id=$1 AND project_id=$2`, [documentId, projectId]
+         FROM knowledge_documents WHERE id=$1 AND project_id=$2 FOR SHARE`, [documentId, projectId]
     )).rows[0];
     if (!row || row.is_deleted) throw new NotFoundException({ error: "Requirement document not found in this project" });
     if (row.document_type !== "requirement_note") throw new BadRequestException({ code: "REQUIREMENT_DOCUMENT_TYPE", error: "The target document is not a requirement note" });
@@ -16259,6 +16281,27 @@ export class LegacyService implements OnModuleInit {
       throw new ForbiddenException({ error: "Testcase proposal storage is disabled for this project" });
     }
     return access;
+  }
+
+  /** Both native proposal inlets recheck the same current producer and MCP consent authority. */
+  private async requireCurrentProposalProducer(client: PoolClient, projectId: string, uid: string,
+    principal: TestcaseProposalPrincipal, authority: Body, toolName: string) {
+    if (!this.parseRole(authority.caller_role) || !this.parseRole(authority.workspace_role)) {
+      throw new ForbiddenException({ error: "A current authoring role is required" });
+    }
+    if (principal.kind !== "api_token") return;
+    const token = await client.query("SELECT scopes FROM api_tokens WHERE id=$1 AND project_id=$2 AND user_id=$3 FOR SHARE", [principal.tokenId, projectId, uid]);
+    if (!token.rows[0] || !normalizeApiTokenScopes(token.rows[0].scopes).includes("write")) {
+      throw new ForbiddenException({ error: "A current write-scoped project token is required" });
+    }
+    if (principal.transport !== "mcp") return;
+    let access;
+    try { access = readMcpAccess(authority.settings); } catch { access = null; }
+    const grant = access?.clients.find(client => client.tokenId === principal.tokenId!.toLowerCase());
+    if (!access?.enabled || !grant?.scopes.includes("write") || grant.expiresAt && Date.parse(grant.expiresAt) <= Date.now() ||
+        grant.allowedTools && !grant.allowedTools.includes(toolName)) {
+      throw new ForbiddenException({ error: "Current project consent for this MCP proposal client is required" });
+    }
   }
 
   private normalizeProposalCaseFields(input: Body): Body {
@@ -18800,10 +18843,11 @@ export class LegacyService implements OnModuleInit {
   private async patchZyraPendingBatchSuite(projectId: string, reviewRequestId: string, suiteId: string | null, suiteName?: string): Promise<{ updatedDrafts: Body[]; patchedCount: number } | null> {
     return this.db.transaction(async (client) => {
       const res = await client.query(
-        "SELECT generated_payload FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_status = 'in_review' FOR UPDATE",
+        "SELECT generated_payload, provider FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_status = 'in_review' FOR UPDATE",
         [reviewRequestId, projectId]
       );
       if (!res.rows[0]) return null;
+      this.assertOrdinaryProposalMutation(res.rows[0]);
       let patchedCount = 0;
       const updatedDrafts = normalizeJsonArray(res.rows[0].generated_payload).map((entry) => {
         const row = entry as Body;
@@ -20911,28 +20955,30 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   private async markZyraTaskFailed(projectId: string, taskId: string, detail: string) {
     const failedAt = new Date().toISOString();
     const activity = [{ actor: "agent", stage: "failed", title: "Generation failed", detail, createdAt: failedAt }];
-    const res = await this.db.query(
-      `UPDATE ai_generation_requests SET task_status = 'failed', activity_log = activity_log || $3::jsonb, updated_at = now()
-       WHERE id = $1 AND project_id = $2 AND task_status IN ('todo', 'in_progress') RETURNING id`,
-      [taskId, projectId, JSON.stringify(activity)]
-    );
-    if (res.rowCount === 0) {
+    const failed = await this.db.transaction(async client => {
+      // The worker's initial task lookup may itself have failed. Re-establish ownership here,
+      // under the mutation lock, before either a status change or the late-failure activity.
+      const current = await client.query("SELECT provider, generated_payload FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
+      if (!current.rows[0] || this.isRequirementBundleTask(current.rows[0])) return false;
+      const res = await client.query(
+        `UPDATE ai_generation_requests SET task_status = 'failed', activity_log = activity_log || $3::jsonb, updated_at = now()
+         WHERE id = $1 AND project_id = $2 AND task_status IN ('todo', 'in_progress') RETURNING id`,
+        [taskId, projectId, JSON.stringify(activity)]
+      );
+      if (res.rowCount) return true;
       const note = [{
-        actor: "agent",
-        stage: "failed",
-        title: "Generation failed after task was already updated",
+        actor: "agent", stage: "failed", title: "Generation failed after task was already updated",
         detail: `${detail} (the task had already moved on by the time this was recorded, so its status was left as-is)`,
         createdAt: failedAt
       }];
-      await this.db.query(
+      await client.query(
         "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2",
         [taskId, projectId, JSON.stringify(note)]
       );
-    } else {
-      // Only when this call is what moved the task to 'failed'. A task the user already closed or
-      // saved (the rowCount === 0 branch above) did not fail from their point of view.
-      await this.notifyZyraTask(projectId, taskId, "failed");
-    }
+      return false;
+    });
+    // Notify only after this transaction committed an ordinary task's transition to failed.
+    if (failed) await this.notifyZyraTask(projectId, taskId, "failed");
   }
 
   private async processZyraTask(projectId: string, taskId: string, options: { userId: string; knowledgeItemIds?: string[] }) {
@@ -20945,6 +20991,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       const taskRes = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
       const task = taskRes.rows[0];
       if (!task) return;
+      if (this.isRequirementBundleTask(task)) return;
       const allocation = await this.db.query(
         `SELECT k.provider, k.default_model, k.api_key, k.base_url, k.auth_header_name, k.auth_scheme
          FROM project_ai_key_allocations a
@@ -21126,6 +21173,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Zyra task not found" });
     const existing = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
     if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
+    this.assertOrdinaryProposalMutation(existing.rows[0]);
     const statusBeforeFeedback = String(existing.rows[0].task_status || "");
     // Feedback only makes sense once there is something to review, or to retry after a failure.
     // Without this guard, feedback could be sent while processZyraTask was still mid-flight for
@@ -21281,6 +21329,10 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       requestedCount, testcaseRange, provider, model, allocation, previousSourceSummary
     } = options;
     try {
+      // A queued continuation may outlive the request that admitted it. Keep the same immutable
+      // task-owner boundary before collecting context or making any billable provider call.
+      const current = await this.db.query("SELECT provider, generated_payload FROM ai_generation_requests WHERE id=$1 AND project_id=$2", [taskId, projectId]);
+      if (!current.rows[0] || this.isRequirementBundleTask(current.rows[0])) return;
       // These four snapshots are independent reads (knowledge base, Jira, Linear, existing
       // testcases) — gathering them concurrently instead of one after another cuts this stage's
       // wall time down to the slowest of the four instead of their sum, without changing what any
@@ -21414,7 +21466,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // array, and whichever writes last silently discards the other's change.
       const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [taskId, projectId]);
       if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
-      this.assertGuardedPublicationAvailable(existing.rows[0].generated_payload);
+      this.assertGuardedPublicationAvailable(existing.rows[0]);
       const drafts = normalizeJsonArray(existing.rows[0].generated_payload);
       if (!Number.isInteger(draftIndex) || draftIndex < 0 || draftIndex >= drafts.length) {
         throw new BadRequestException({ error: "Invalid testcase draft index" });
@@ -21453,7 +21505,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     await this.db.transaction(async (client) => {
       const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [taskId, projectId]);
       if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
-      this.assertGuardedPublicationAvailable(existing.rows[0].generated_payload);
+      this.assertGuardedPublicationAvailable(existing.rows[0]);
       if (existing.rows[0].task_status !== "in_review") {
         throw new ConflictException({ error: `This batch is currently "${existing.rows[0].task_status}" and can no longer be edited — it may have already been saved or closed elsewhere. Reload and try again.` });
       }
@@ -21502,6 +21554,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Zyra task not found" });
     const existing = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
     if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
+    this.assertOrdinaryProposalMutation(existing.rows[0]);
     if (existing.rows[0].task_status === "done") {
       // Already closed — a double-click or a second tab landing here after the first request
       // already won should be a harmless no-op, not a duplicate "Closed task" activity entry.
@@ -21565,7 +21618,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // Work Package A Slice 1: a requirement change bundle is staging-only until the required
       // approved effective skills can be resolved and pinned. Refuse before any write so the
       // blocked apply creates no requirement version, case, link or approval.
-      this.assertGuardedPublicationAvailable(existing.generated_payload);
+      this.assertGuardedPublicationAvailable(existing);
       // A lost response is recovered from the committed native receipt, without another write.
       const prior = normalizeJsonArray(existing.save_events).find((event: Body) => event.decisionKey === decisionKey);
       if (prior) return { savedCount: prior.testcases.length, suiteId: prior.suiteId, testcases: prior.testcases, remaining: prior.remaining, saveReceipt: prior, replayed: true, touchedActions: [] };
@@ -27038,6 +27091,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       item.requirementBundle = bundleEntries;
       item.skillContext = bundleEntries.find((entry: Body) => entry.skillContext)?.skillContext || REQUIREMENT_SKILL_CONTEXT;
     }
+    if (this.isRequirementBundleTask(row)) item.requirementDecision = this.requirementDecisionReceipt(row);
     if (snapshot) {
       item.proposalSnapshot = snapshot;
       item.proposalRevision = row.proposal_review_revision;

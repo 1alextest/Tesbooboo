@@ -107,3 +107,228 @@ describe("native testcase proposal review boundary", () => {
     expect(clientQuery.mock.calls.filter(([sql])=>sql.includes("INSERT INTO ai_generation_requests"))).toHaveLength(1);
   });
 });
+
+describe("requirement bundle lifecycle boundary", () => {
+  const previousPreview = process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+  const operation = "00000000-0000-4000-8000-000000000005";
+  const operations = [{ opType: "requirement_revision", operationId: operation, title: "Reviewed requirement",
+    criteria: [{ key: "AC-1", text: "The observed obligation" }] }];
+  afterEach(() => {
+    if (previousPreview === undefined) delete process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+    else process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = previousPreview;
+    jest.restoreAllMocks();
+  });
+
+  function fixture() {
+    const row: Record<string,any> = { id: task, project_id: project, requested_by: user,
+      provider: "external_requirement_proposal", task_status: "in_review", generated_payload: operations,
+      activity_log: [], save_events: [], proposal_provenance: { issuerId: user } };
+    const query = jest.fn(async (sql: string, _values: unknown[] = []) => {
+      if (sql.includes("FROM ai_generation_requests")) return { rows: [row], rowCount: 1 };
+      if (sql.includes("SELECT role FROM project_members")) return { rows: [{role:"owner"}], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    });
+    const transaction = jest.fn((work: (client: unknown) => Promise<unknown>) => work({query}));
+    const svc = makeLegacy({query, transaction} as unknown as DatabaseService);
+    jest.spyOn(svc,"requireProjectAccess").mockResolvedValue({id:project,caller_role:"owner"} as never);
+    return { svc, internals: svc as unknown as Record<string,any>, row, query, transaction };
+  }
+
+  it.each(["feedback", "close", "append", "suite"])("refuses the generic %s writer before mutation or a provider call", async writer => {
+    const f = fixture();
+    const before = JSON.stringify(f.row);
+    const provider = jest.spyOn(f.internals,"generateZyraWithProvider").mockResolvedValue({drafts:[]});
+    const attempt = writer === "feedback" ? f.svc.zyraFeedback(project,user,task,{feedback:"Regenerate"},human)
+      : writer === "close" ? f.svc.zyraCloseTask(project,user,task,human)
+        : writer === "append" ? f.internals.appendZyraReviewProposals(project,"session",task,[{opType:"create",draft:{title:"Replace"}}])
+          : f.internals.patchZyraPendingBatchSuite(project,task,null);
+    await expect(attempt).rejects.toMatchObject({status:409,response:{code:"REQUIREMENT_BUNDLE_IMMUTABLE"}});
+    expect(JSON.stringify(f.row)).toBe(before);
+    expect(provider).not.toHaveBeenCalled();
+    expect(f.query.mock.calls.some(([sql])=>/UPDATE |INSERT |workspace_ai_keys/.test(sql))).toBe(false);
+  });
+
+  it("retains the ordinary task close action", async () => {
+    const f=fixture(); f.row.provider="openai"; f.row.generated_payload=[{title:"Ordinary draft"}];
+    f.query.mockImplementation(async sql => {
+      if(sql.startsWith("UPDATE ai_generation_requests")) f.row.task_status="done";
+      return {rows:[f.row],rowCount:1};
+    });
+    jest.spyOn(f.internals,"notifyZyraTask").mockResolvedValue(undefined);
+    await expect(f.svc.zyraCloseTask(project,user,task,human)).resolves.toMatchObject({taskStatus:"done"});
+    expect(f.query.mock.calls.filter(([sql])=>sql.startsWith("UPDATE ai_generation_requests"))).toHaveLength(1);
+  });
+
+  it.each(["generation", "feedback"])("does not resume a queued %s provider job for a bundle", async kind => {
+    const f=fixture();
+    const provider=jest.spyOn(f.internals,"generateZyraWithProvider").mockResolvedValue({drafts:[]});
+    if(kind==="generation")await f.internals.processZyraTask(project,task,{userId:user});
+    else await f.internals.processZyraFeedback(project,task,{});
+    expect(provider).not.toHaveBeenCalled();
+    expect(f.query.mock.calls.some(([sql])=>/UPDATE |INSERT |workspace_ai_keys/.test(sql))).toBe(false);
+  });
+
+  function failureFixture(status: string, failFirstRead=false) {
+    const f=fixture();f.row.task_status=status;
+    let initialLookup=failFirstRead;
+    f.query.mockImplementation(async(sql,values=[])=>{
+      if(sql.includes("FROM ai_generation_requests")){
+        if(initialLookup){initialLookup=false;throw new Error("Transient task lookup failure");}
+        return {rows:[f.row],rowCount:1};
+      }
+      if(sql.startsWith("UPDATE ai_generation_requests")){
+        if(sql.includes("SET task_status = 'failed'")){
+          if(!["todo","in_progress"].includes(f.row.task_status))return {rows:[],rowCount:0};
+          f.row.task_status="failed";
+        }
+        f.row.activity_log.push(...JSON.parse(String(values[2])));
+        return {rows:[f.row],rowCount:1};
+      }
+      return {rows:[],rowCount:0};
+    });
+    const notify=jest.spyOn(f.internals,"notifyZyraTask").mockResolvedValue(undefined);
+    const provider=jest.spyOn(f.internals,"generateZyraWithProvider").mockResolvedValue({drafts:[]});
+    jest.spyOn(f.internals.logger,"error").mockImplementation(()=>undefined);
+    return {...f,notify,provider};
+  }
+
+  it.each(["generation", "feedback"].flatMap(kind=>["todo", "in_review", "done"].map(status=>({kind,status}))))(
+    "keeps a $status bundle unchanged after the queued $kind worker's first lookup fails", async({kind,status})=>{
+      const f=failureFixture(status,true),before=JSON.stringify(f.row);
+      if(kind==="generation")await f.internals.processZyraTask(project,task,{userId:user});
+      else await f.internals.processZyraFeedback(project,task,{});
+      expect(JSON.stringify(f.row)).toBe(before);
+      expect(f.query.mock.calls.some(([sql])=>/UPDATE |INSERT |workspace_ai_keys/.test(sql))).toBe(false);
+      expect(f.provider).not.toHaveBeenCalled();expect(f.notify).not.toHaveBeenCalled();
+    }
+  );
+
+  it("the shared failure writer preserves an external bundle even after its typed payload was damaged",async()=>{
+    const f=failureFixture("in_progress");f.row.generated_payload=[];
+    const before=JSON.stringify(f.row);
+    await f.internals.markZyraTaskFailed(project,task,"Obsolete worker failure");
+    expect(JSON.stringify(f.row)).toBe(before);
+    expect(f.query.mock.calls.some(([sql])=>/UPDATE |INSERT /.test(sql))).toBe(false);
+    expect(f.notify).not.toHaveBeenCalled();
+  });
+
+  it.each(["todo", "in_progress", "done"])("preserves ordinary %s failure handling and notification semantics",async status=>{
+    const f=failureFixture(status);f.row.provider="openai";f.row.generated_payload=[{title:"Ordinary draft"}];
+    await f.internals.markZyraTaskFailed(project,task,"Provider refused this ordinary task");
+    expect(f.row.task_status).toBe(status==="done"?"done":"failed");
+    expect(f.row.activity_log).toHaveLength(1);
+    expect(f.row.activity_log[0].title).toBe(status==="done"?"Generation failed after task was already updated":"Generation failed");
+    expect(f.notify).toHaveBeenCalledTimes(status==="done"?0:1);
+  });
+
+  it("retains ordinary task feedback and never regenerates a damaged external bundle", async () => {
+    const f=fixture();
+    f.row.generated_payload=[];
+    await expect(f.svc.zyraFeedback(project,user,task,{feedback:"Retry"},human)).rejects.toMatchObject({status:409});
+    f.row.provider="openai";f.row.generated_payload=[{title:"Existing testcase draft"}];
+    f.query.mockImplementation(async sql=>{
+      if(sql.includes("FROM project_ai_key_allocations"))return {rows:[{provider:"openai",default_model:"gpt-4o",api_key:"synthetic-unused"}],rowCount:1};
+      if(sql.startsWith("UPDATE ai_generation_requests"))f.row.task_status="todo";
+      return {rows:[f.row],rowCount:1};
+    });
+    jest.spyOn(f.internals,"zyraAgentSettings").mockResolvedValue({testcaseRange:"1-10"});
+    const regeneration=jest.spyOn(f.internals,"processZyraFeedback").mockResolvedValue(undefined);
+    await expect(f.svc.zyraFeedback(project,user,task,{feedback:"More boundary cases"},human)).resolves.toMatchObject({task:{taskStatus:"todo"}});
+    expect(regeneration).toHaveBeenCalledTimes(1);
+  });
+
+  function decisionFixture() {
+    const f=fixture();
+    f.row.proposal_revision=0;
+    const authority:Record<string,any>={id:project,caller_role:"owner",workspace_role:"owner",settings:{}};
+    f.query.mockImplementation(async(sql,values=[])=>{
+      if(sql.startsWith("SELECT p.*"))return {rows:authority.revoked?[]:[authority],rowCount:authority.revoked?0:1};
+      if(sql.startsWith("SELECT r.*"))return {rows:[{...f.row,proposal_snapshot:{taskId:task,projectId:project,
+        version:f.row.proposal_revision,taskStatus:f.row.task_status,operations:JSON.parse(JSON.stringify(f.row.generated_payload)),targets:[],dependencies:{}}}],rowCount:1};
+      if(sql.includes("SELECT * FROM ai_generation_requests"))return {rows:[f.row],rowCount:1};
+      if(sql.startsWith("UPDATE ai_generation_requests")){
+        f.row.task_status="done";f.row.activity_log.push(...JSON.parse(String(values[2])));f.row.proposal_revision++;
+        return {rows:[f.row],rowCount:1};
+      }
+      return {rows:[],rowCount:0};
+    });
+    return {...f,authority};
+  }
+
+  it("records an exact decision, replays it truthfully and refuses an opposite or altered decision", async()=>{
+    const f=decisionFixture(),review=await f.svc.zyraTask(project,user,task);
+    const body={expectedProposalRevision:review.proposalRevision,reason:"Needs revision"};
+    const closed=await f.svc.rejectRequirementProposal(project,user,task,body,human);
+    expect(closed).toMatchObject({taskStatus:"done",replayed:false,requirementDecision:{decision:"rejected",proposalRevision:review.proposalRevision,reason:"Needs revision"}});
+    expect(closed.proposalRevision).not.toBe(review.proposalRevision);
+    expect(closed.requirementDecision.reviewedSnapshot).toEqual(review.proposalSnapshot);
+    expect(await f.svc.rejectRequirementProposal(project,user,task,body,human)).toMatchObject({replayed:true,requirementDecision:closed.requirementDecision});
+    await expect(f.svc.withdrawRequirementProposal(project,user,task,body,human)).rejects.toMatchObject({status:409});
+    await expect(f.svc.rejectRequirementProposal(project,user,task,{...body,reason:"Different decision text"},human)).rejects.toMatchObject({status:409});
+    expect(f.row.activity_log).toHaveLength(1);
+    expect(f.query.mock.calls.filter(([sql])=>sql.startsWith("UPDATE ai_generation_requests"))).toHaveLength(1);
+  });
+
+  it("refuses stale payloads and current role loss before appending a decision", async()=>{
+    const f=decisionFixture(),review=await f.svc.zyraTask(project,user,task);
+    const body={expectedProposalRevision:review.proposalRevision};
+    f.row.generated_payload=operations.map(entry=>({...entry,title:"Changed after review"}));
+    f.row.proposal_revision++;
+    await expect(f.svc.rejectRequirementProposal(project,user,task,body,human)).rejects.toMatchObject({status:409});
+    const current=await f.svc.zyraTask(project,user,task);
+    f.authority.caller_role="qa_engineer";
+    await expect(f.svc.rejectRequirementProposal(project,user,task,{expectedProposalRevision:current.proposalRevision},human)).rejects.toMatchObject({status:403});
+    f.authority.revoked=true;
+    await expect(f.svc.withdrawRequirementProposal(project,user,task,{expectedProposalRevision:current.proposalRevision},human)).rejects.toMatchObject({status:403});
+    expect(f.query.mock.calls.some(([sql])=>/UPDATE |INSERT /.test(sql))).toBe(false);
+    expect(f.row.activity_log).toEqual([]);
+  });
+
+  it.each(["reject", "withdraw"])("requires the exact reviewed revision before a %s decision", async decision => {
+    const f=fixture();
+    const attempt=decision==="reject" ? f.svc.rejectRequirementProposal(project,user,task,{},human)
+      : f.svc.withdrawRequirementProposal(project,user,task,{},human);
+    await expect(attempt).rejects.toMatchObject({status:400,response:{code:"PROPOSAL_REVIEW_REQUIRED"}});
+    expect(f.transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(["disabled", "expired", "tool_removed", "write_removed"])("rechecks current MCP bundle consent: %s", async reason => {
+    process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED="1";
+    const f=fixture();
+    f.query.mockImplementation(async sql => {
+      if(sql.startsWith("SELECT p.*"))return {rows:[{id:project,caller_role:"owner",workspace_role:"owner",settings:{externalMcpAccess:{
+        enabled:reason!=="disabled",revision:1,clients:[{tokenId:token,clientName:"Bundle producer",
+          scopes:reason==="write_removed"?["read"]:["read","write"],
+          expiresAt:reason==="expired"?"2000-01-01T00:00:00Z":null,
+          allowedTools:reason==="tool_removed"?["list_testcases"]:null}]
+      }}}],rowCount:1};
+      if(sql.startsWith("SELECT scopes FROM api_tokens"))return {rows:[{scopes:"read,write"}],rowCount:1};
+      if(sql.includes("INSERT INTO ai_generation_requests"))return {rows:[{id:task}],rowCount:1};
+      return {rows:[],rowCount:0};
+    });
+    jest.spyOn(f.svc,"zyraTask").mockResolvedValue({id:task} as never);
+    await expect(f.svc.stageRequirementChangeBundle(project,user,{requestKey:"revoked",operations},
+      {kind:"api_token",tokenId:token,transport:"mcp"})).rejects.toBeInstanceOf(ForbiddenException);
+    expect(f.query.mock.calls.some(([sql])=>/INSERT |UPDATE /.test(sql))).toBe(false);
+  });
+
+  it("recovers the committed staging receipt before revalidating mutable document references", async () => {
+    process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED="1";
+    const f=fixture();
+    const principal={kind:"api_token" as const,tokenId:token,transport:"rest" as const};
+    const withBase=[{...operations[0],documentId:"00000000-0000-4000-8000-000000000006",expectedRevision:"a".repeat(64)}];
+    // Use the product normalizer to represent a prior successful request; this does not approve its contents.
+    const normalized=f.internals.normalizeRequirementBundle(withBase).operations;
+    f.query.mockImplementation(async sql => {
+      if(sql.startsWith("SELECT p.*"))return {rows:[{id:project,caller_role:"owner",workspace_role:"owner",settings:{}}],rowCount:1};
+      if(sql.startsWith("SELECT scopes FROM api_tokens"))return {rows:[{scopes:"read,write"}],rowCount:1};
+      if(sql.startsWith("SELECT id,proposal_request_digest"))return {rows:[{id:task,proposal_request_digest:proposalDigest({title:"Prior staged request",operations:normalized})}],rowCount:1};
+      return {rows:[],rowCount:0};
+    });
+    const validate=jest.spyOn(f.internals,"assertRequirementDocumentBase").mockRejectedValue(new Error("The live document has changed"));
+    jest.spyOn(f.svc,"zyraTask").mockResolvedValue({id:task} as never);
+    await expect(f.svc.stageRequirementChangeBundle(project,user,{requestKey:"lost-response",title:"Prior staged request",operations:withBase},principal)).resolves.toMatchObject({id:task});
+    expect(validate).not.toHaveBeenCalled();
+    expect(f.query.mock.calls.some(([sql])=>/INSERT |UPDATE /.test(sql))).toBe(false);
+  });
+});
