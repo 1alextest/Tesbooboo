@@ -38,5 +38,6 @@ jobs:
           856d664b0f6165ae6ffbfc75394866bd9c2379cf scripts/publish-assurance-status.mjs
           670c01c986dafa933fe431b36603064933f238e5 scripts/publish-assurance-status.test.mjs
           9b396e0aa7160b68453e99273a9ef285ea02f125 .github/assurance-policy.json
+          1d2f19d80e78b0cb2464eb6ee4bda6c49f084720 scripts/assurance-test-fixtures.mjs
           3910a61102a8765876f5134475be1a2e1506da63 .github/workflows/assurance-pr-gate.yml
           BLOBS
