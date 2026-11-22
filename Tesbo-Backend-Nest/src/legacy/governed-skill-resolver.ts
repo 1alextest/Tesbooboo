@@ -195,7 +195,10 @@ export function resolveGovernedSkills(
     }
     seenAssignments.add(a.assignmentId);
   }
-  const now = isoTime(context.asOf)!;
+  // The fresh server clock selects effective assignments; it is observation
+  // metadata, not a revision of an otherwise unchanged governing context.
+  const { asOf, ...bindingContext } = context;
+  const now = isoTime(asOf)!;
   const applicable = inventory.assignments.filter(a => a.state === "active" &&
     matches(a, context) && now >= isoTime(a.effectiveFrom)! &&
     (a.effectiveUntil === null || now < isoTime(a.effectiveUntil)!));
@@ -264,7 +267,7 @@ export function resolveGovernedSkills(
     contentSha256: v.contentSha256, kind: a.kind, precedence: a.precedence
   })).sort((a, b) => a.precedence - b.precedence || a.assignmentId.localeCompare(b.assignmentId));
   const digest = createHash("sha256").update(sortedJson([
-    SKILL_RESOLUTION_CONTRACT, context, inventory.authorityRevision,
+    SKILL_RESOLUTION_CONTRACT, bindingContext, inventory.authorityRevision,
     resolved.map(s => [s.assignmentId, s.skillId, s.versionId, s.contentSha256, s.precedence]),
     applicable.map(a => [a.assignmentId, a.assignmentApprovalSha256, a.compositionId, a.compositionReceiptSha256]).sort()
   ])).digest("hex");

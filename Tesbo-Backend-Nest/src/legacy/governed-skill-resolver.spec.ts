@@ -54,6 +54,28 @@ describe("effective governed Skill resolution (pure, native-owner inputs only)",
   it.each(["partial", "unknown"] as const)("%s inventory is unavailable, never an empty safe assignment", status => {
     denied(context, inventory({ status }), "SKILL_CONTEXT_UNAVAILABLE");
   });
+  it("keeps a pin current when only the fresh server observation time advances", () => {
+    const first = resolveGovernedSkills(context, inventory());
+    const laterContext = { ...context, asOf: "2026-11-22T00:00:01Z" };
+    const later = resolveGovernedSkills(laterContext, inventory());
+    if (first.status !== "resolved" || later.status !== "resolved") {
+      throw new Error("positive fixture failed");
+    }
+    expect(later.context.asOf).toBe(laterContext.asOf);
+    expect(later.skills).toEqual(first.skills);
+    expect(later.authorityRevision).toBe(first.authorityRevision);
+    expect(later.digest).toBe(first.digest);
+    expect(comparePinnedSkillResolution(first.digest, later)).toBe("current");
+  });
+  it("uses the fresh clock to expire an assignment and invalidate an earlier pin", () => {
+    const effectiveUntil = "2026-11-22T00:00:01Z";
+    const data = inventory({ assignments: [{ ...coreAssignment, effectiveUntil }] });
+    const first = resolveGovernedSkills(context, data);
+    if (first.status !== "resolved") throw new Error("positive fixture failed");
+    const expired = resolveGovernedSkills({ ...context, asOf: effectiveUntil }, data);
+    expect(expired).toMatchObject({ status: "blocked", code: "UNASSIGNED", skills: [], publicationAuthority: "none" });
+    expect(comparePinnedSkillResolution(first.digest, expired)).toBe("SKILL_CONTEXT_STALE");
+  });
   it("cross-project/workspace and invalid server context are refused", () => {
     denied(context, inventory({ projectId: "other-project" }), "SKILL_CONTEXT_UNAVAILABLE");
     denied({ ...context, principalId: "" }, inventory(), "SKILL_CONTEXT_UNAVAILABLE");

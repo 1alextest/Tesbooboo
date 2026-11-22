@@ -11,6 +11,7 @@
 - Composition: multiple overlapping skills require the **same** declared composition identity and human-reviewed receipt with unique precedence. The resolver checks exact dependencies, cycles, duplicate effective ownership and simple mandatory-root violations. Unsupported semantic conflicts are not declared settled by this algorithm. Project adapters do not stand in for missing core governance.
 - Output: deterministic, status-scoped IDs and SHA-256 fingerprints, a context/authority-version-pinned digest, or explicit blocker. **No instructions are interpreted, no model is called, no official artifact/status is published.** Even a `resolved` result has `publicationAuthority: none`.
 - Drift: compare the original pinned digest with a fresh authorized resolution at submit/review/apply. Role/scope, source, assignment, approval or revocation changes yield stale/unavailable. Historical candidate evidence is preserved and remains bound to its original digest.
+- Observation time: a fresh server `asOf` selects currently effective assignments and remains in the returned evidence context. It is excluded from the stable digest, so rereading unchanged authority one second later keeps the pin current. Reaching an assignment's exclusive `effectiveUntil` still removes it and makes an earlier pin stale. All other context dimensions, including principal and phase, remain bound; this repair does not decide the future author/reviewer handoff contract.
 
 ## Tests and proof
 
@@ -19,6 +20,10 @@
 ### Drift versus outage — independent falsifier
 
 The in-flight pin checker now preserves **different** failure consequences: a revoked/unassigned Skill is `SKILL_CONTEXT_STALE` relative to a formerly approved pin; an ambiguous or contradictory composition is `SKILL_ASSIGNMENT_CONFLICT`; a partial/unreadable authority source is `SKILL_CONTEXT_UNAVAILABLE`. An ordinary digest or principal/context mismatch remains stale. This matters because reassessment of human-changed governing rules is not equivalent to retrying a transient reader outage. The pure regression exercises each cause; the actual authoritative reader and UI guidance remain unimplemented.
+
+### Timestamp-only drift — reproduced and repaired in this draft
+
+Native review `6010524623` recorded the separate defect at source `2039b73ef672bcabe55019253ed9a29c34f4ee48`; resolver blob `8086f2a554a432c1e08312e41e0af49409ab1097` remained unchanged at `06dc2b2c5e6e2b70acc5af77049728c4c91da394`. The root continuation added two regressions to the existing Jest suite before changing that source: time-only reread stability and actual expiry-boundary invalidation. The unchanged source produced **1 failed / 16 passed**; the failure was the unchanged-authority reread. After excluding only `asOf` from the digest, **17/17 passed**, including expiry, revocation, scope, principal, authority and assignment drift controls. Backend TypeScript and scoped resolver/test ESLint also passed. No database, provider, HTTP endpoint or native Skill operation was exercised. The source call-site sweep found only the helper and its tests; this is a bounded internal defect repair, not completed end-to-end governed authoring. Current-head CI and separate review remain required.
 
 ## Admission blockers
 
