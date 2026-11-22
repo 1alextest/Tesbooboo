@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
 import { randomUUID } from "node:crypto";
+import { writeFile } from "node:fs/promises";
 import { column, exec, literal, scalar } from "../utils/psql";
 import { purgeProject } from "../utils/seed";
 import {
@@ -14,6 +15,7 @@ import { env } from "../utils/env";
 import { parseSseEvents } from "../utils/sse";
 import { issueMcpTestToken } from "../utils/mcp-access";
 import { readZyraProposal, saveReviewedZyraTask } from "../utils/zyra-proposals";
+import { messageTraceId, spanAttributes, startLangfuseCapture, type LangfuseCapture, type OtlpSpan } from "../utils/langfuse-capture";
 
 /*
  * Zyra — the AI agent surface: agent state, connection test, settings, chat sessions and messages,
@@ -8004,4 +8006,374 @@ test.describe("zyra — writes in the language the user writes in (fake provider
     expect(res.status()).toBe(404);
     expect(sessionLanguage(sessionId), "a refused request writes nothing").toBe("en");
   });
+});
+
+/*
+ * The actual application routes, persistence and installed Langfuse exporter are exercised here;
+ * only the external model and Langfuse HTTP receiver are synthetic. The CI workflow runs this
+ * same selection after starting the disposable backend with tracing enabled, disabled and unset.
+ * Expected mode is an independent oracle: it does not read LANGFUSE_ENABLED to decide what passed.
+ * No test skips a missing receiver, empty trace or failed tenant setup. Running this selection
+ * outside its explicit isolated CI setup fails before this block allocates keys or fixture rows.
+ * Playwright's existing global setup runs earlier; this is not a whole-command no-write guard.
+ *
+ * This bounded slice does not prove real Langfuse ingestion/UI/costs, UI interactions, background
+ * plans or deployment behavior. Those remain separate §9 requirements in the observability plan.
+ */
+test.describe("zyra — product behavior and real tracing export in disposable CI", () => {
+  const SCRIPTED_REPLY = "The observation fixture allows exactly ten seats.";
+  const SYNTHETIC_KEY = "sk-e2e-observability-allocated-key-12345";
+  const MODEL = "gpt-4o-mini";
+  const QUIET_WINDOW_MS = 1_250; // More than six explicitly configured 200 ms export intervals.
+  const TURN_BUDGET_MS = 15_000;
+  let expectedMode: "enabled" | "disabled" | "unset";
+  let capture: LangfuseCapture;
+  let tenantA: RbacTenant;
+  let tenantB: RbacTenant;
+  let ownerA: APIRequestContext;
+  let ownerB: APIRequestContext;
+  let anonymous: APIRequestContext;
+  let aiA: FakeAiServer;
+  let aiB: FakeAiServer;
+  let productOutcomes: unknown[] = [];
+
+  type StoredMessage = { id: string; role: string; content: string; status: string; actionType?: string; testcases?: unknown[] };
+  type Answer = { sessionId: string; user: StoredMessage; assistant: StoredMessage; elapsedMs: number };
+
+  test.beforeAll(async () => {
+    const mode = process.env.E2E_LANGFUSE_EXPECTED_MODE;
+    if (mode !== "enabled" && mode !== "disabled" && mode !== "unset") {
+      throw new Error("ZYR-OBS requires E2E_LANGFUSE_EXPECTED_MODE=enabled|disabled|unset and the workflow's disposable backend startup");
+    }
+    expectedMode = mode;
+    const db = new URL(env.dbUrl || "missing://database");
+    const api = new URL(env.apiBaseUrl);
+    if (!env.ci || !["localhost", "127.0.0.1"].includes(db.hostname) || db.pathname !== "/tesbo_ci" ||
+        !["localhost", "127.0.0.1"].includes(api.hostname)) {
+      throw new Error("ZYR-OBS refuses any target except the existing isolated CI API and tesbo_ci database");
+    }
+    capture = await startLangfuseCapture(Number(process.env.E2E_LANGFUSE_CAPTURE_PORT));
+    const first = await provisionRbacTenant("zyra-observability-a");
+    const second = await provisionRbacTenant("zyra-observability-b");
+    if (!first || !second) throw new Error("ZYR-OBS tenant setup failed; no acceptance cases may be silently skipped");
+    tenantA = first;
+    tenantB = second;
+    [ownerA, ownerB, anonymous, aiA, aiB] = await Promise.all([
+      loginAs(tenantA.owner), loginAs(tenantB.owner), anonymousContext(), startFakeAiServer(), startFakeAiServer(),
+    ]);
+  });
+
+  function purge(tenant: RbacTenant): void {
+    const project = literal(tenant.mainProjectId);
+    exec(`DELETE FROM zyra_chat_messages WHERE project_id = ${project};`);
+    exec(`DELETE FROM zyra_chat_sessions WHERE project_id = ${project};`);
+    exec(`DELETE FROM project_ai_key_allocations WHERE project_id = ${project};`);
+    exec(`DELETE FROM workspace_ai_keys WHERE organization_id = ${literal(tenant.organizationId)};`);
+  }
+
+  test.beforeEach(() => {
+    purge(tenantA);
+    purge(tenantB);
+    aiA.reset();
+    aiB.reset();
+    capture.respondWith(200);
+    productOutcomes = [];
+  });
+
+  test.afterEach(async ({}, testInfo) => {
+    capture?.respondWith(200);
+    try {
+      if (tenantA) purge(tenantA);
+      if (tenantB) purge(tenantB);
+    } finally {
+      // Collector contract errors are failures even if a particular test's expected span arrived.
+      expect(capture?.errors ?? []).toEqual([]);
+    }
+    const outcomePath = testInfo.outputPath("observability-product-outcome.json");
+    const testId = testInfo.title.match(/^ZYR-OBS-\d{2}/)?.[0];
+    if (!testId) throw new Error("Missing observability acceptance ID");
+    // Exclude allocated identities and timings; those have explicit within-run assertions above.
+    // Sort outcomes because the concurrent scenarios deliberately have nondeterministic ordering.
+    const outcome = { testId, mode: expectedMode, status: testInfo.status, product: productOutcomes.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))) };
+    await writeFile(outcomePath, JSON.stringify(outcome, null, 2) + "\n");
+    await testInfo.attach("observability product outcome", { path: outcomePath, contentType: "application/json" });
+  });
+
+  test.afterAll(async () => {
+    await Promise.all([ownerA, ownerB, anonymous].filter(Boolean).map((context) => context.dispose()));
+    await Promise.all([aiA, aiB].filter(Boolean).map((server) => server.close()));
+    await capture?.close();
+  });
+
+  function endpoint(tenant: RbacTenant, suffix: string): string {
+    return `/api/projects/${tenant.mainProjectId}/agents/zyra${suffix}`;
+  }
+
+  async function allocate(tenant: RbacTenant, owner: APIRequestContext, ai: FakeAiServer): Promise<void> {
+    const created = await owner.post("/api/workspace/ai-keys", {
+      data: { name: `E2E observation ${randomUUID()}`, provider: "e2e-fake-gateway", apiKey: SYNTHETIC_KEY, baseUrl: ai.backendBaseUrl, defaultModel: MODEL },
+      failOnStatusCode: false,
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const allocated = await owner.post("/api/workspace/ai-keys/allocations", {
+      data: { projectId: tenant.mainProjectId, workspaceAiKeyId: (await created.json()).id },
+      failOnStatusCode: false,
+    });
+    expect(allocated.status(), await allocated.text()).toBe(201);
+  }
+
+  async function newSession(tenant: RbacTenant, owner: APIRequestContext): Promise<string> {
+    const response = await owner.post(endpoint(tenant, "/chat/sessions"), {
+      data: { title: `E2E observation ${randomUUID()}` }, failOnStatusCode: false,
+    });
+    expect(response.status(), await response.text()).toBe(201);
+    return (await response.json()).id;
+  }
+
+  async function messages(tenant: RbacTenant, owner: APIRequestContext, sessionId: string): Promise<StoredMessage[]> {
+    const read = await owner.get(endpoint(tenant, `/chat/sessions/${sessionId}`), { failOnStatusCode: false });
+    expect(read.status(), await read.text()).toBe(200);
+    return (await read.json()).messages;
+  }
+
+  async function send(tenant: RbacTenant, owner: APIRequestContext, sessionId: string, prompt: string): Promise<Answer> {
+    const started = performance.now();
+    const response = await owner.post(endpoint(tenant, `/chat/sessions/${sessionId}/messages`), {
+      data: { message: prompt, background: false }, failOnStatusCode: false,
+    });
+    const elapsedMs = performance.now() - started;
+    expect(response.status(), await response.text()).toBe(201);
+    const reply = (await response.json()).message as StoredMessage;
+    const stored = await messages(tenant, owner, sessionId);
+    expect(stored, "one accepted message must persist exactly one user row and one assistant row").toHaveLength(2);
+    const user = stored.find((row) => row.role === "user")!;
+    const assistant = stored.find((row) => row.role === "assistant")!;
+    expect(user).toMatchObject({ role: "user", content: prompt, status: "sent" });
+    expect(assistant).toMatchObject({ id: reply.id, role: "assistant", content: reply.content, status: "completed" });
+    // The canonical repository stays untouched by an answer, regardless of exporter behavior.
+    expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant.mainProjectId)};`)).toBe("0");
+    expect(scalar(`SELECT COUNT(*) FROM ai_generation_requests WHERE project_id = ${literal(tenant.mainProjectId)};`)).toBe("0");
+    productOutcomes.push({
+      tenant: tenant === tenantA ? "A" : "B", responseStatus: response.status(),
+      user: { role: user.role, content: user.content, status: user.status },
+      assistant: { role: assistant.role, content: assistant.content, status: assistant.status, actionType: assistant.actionType, testcases: assistant.testcases },
+      messageCount: stored.length, testcaseCount: 0, generationRequestCount: 0,
+    });
+    return { sessionId, user, assistant, elapsedMs };
+  }
+
+  function queueAnswer(ai: FakeAiServer, prompt: string, reply = SCRIPTED_REPLY): void {
+    ai.queueReplyMatching(prompt, { reply, reasoningSummary: "Answering the observation fixture.", action: "answer", actionType: "answer", operations: [], testcases: [] });
+  }
+
+  function spansFor(answer: Answer): OtlpSpan[] {
+    return capture.exports.flatMap((item) => item.spans).filter((span) => span.traceId === messageTraceId(answer.user.id));
+  }
+
+  async function assertObserved(answer: Answer, tenant: RbacTenant, routerError = false): Promise<OtlpSpan[]> {
+    if (expectedMode !== "enabled") {
+      await new Promise((resolve) => setTimeout(resolve, QUIET_WINDOW_MS));
+      expect(capture.exports, `${expectedMode} tracing must not publish any OTLP request`).toEqual([]);
+      return [];
+    }
+    await expect.poll(() => spansFor(answer).map((span) => span.name), {
+      message: "the real exporter did not deliver the persisted turn's root/router/reconciliation observations",
+      timeout: 10_000,
+      intervals: [100, 200, 500],
+    }).toEqual(expect.arrayContaining(["zyra.chat.turn", "jira-context", "knowledge-context", "existing-coverage", "router", "reply-reconciliation"]));
+    const spans = spansFor(answer);
+    // Retry responses may resend the same OTLP envelope, so identity is asserted per unique span.
+    const unique = [...new Map(spans.map((span) => [span.spanId, span])).values()];
+    const types: Record<string, string> = {
+      "zyra.chat.turn": "agent", "jira-context": "tool", "knowledge-context": "retriever",
+      "existing-coverage": "span", router: "generation", "reply-reconciliation": "guardrail",
+    };
+    for (const [name, type] of Object.entries(types)) {
+      const matches = unique.filter((span) => span.name === name);
+      expect(matches, `exactly one ${name} observation for one product turn`).toHaveLength(1);
+      const attrs = spanAttributes(matches[0]);
+      expect(attrs["langfuse.observation.type"]).toBe(type);
+      expect(attrs["session.id"]).toBe(answer.sessionId);
+      expect(attrs["user.id"]).toBe(tenant.owner.userId);
+    }
+    const root = unique.find((span) => span.name === "zyra.chat.turn")!;
+    expect(spanAttributes(root)["langfuse.observation.metadata.projectId"]).toBe(tenant.mainProjectId);
+    expect(root.parentSpanId).toBe("0000000000000001");
+    for (const childName of ["jira-context", "knowledge-context", "existing-coverage", "router"]) {
+      expect(unique.find((span) => span.name === childName)!.parentSpanId, `${childName} must attach to the actual root observation`).toBe(root.spanId);
+    }
+    // Reconciliation happens after the root ended; it is deliberately a same-trace sibling,
+    // attached to the synthetic parent rather than an invented child of an ended observation.
+    expect(unique.find((span) => span.name === "reply-reconciliation")!.parentSpanId).toBe("0000000000000001");
+    const router = unique.find((span) => span.name === "router")!;
+    const routerAttrs = spanAttributes(router);
+    expect(routerAttrs["langfuse.observation.model.name"]).toBe(MODEL);
+    if (routerError) {
+      expect(routerAttrs["langfuse.observation.level"]).toBe("ERROR");
+      expect(routerAttrs["langfuse.observation.status_message"]).toBe("Operation failed (details in masked output)");
+    } else {
+      expect(JSON.parse(String(routerAttrs["langfuse.observation.usage_details"]))).toEqual({ input: 1, output: 1 });
+    }
+    expect(unique.every((span) => /^[0-9a-f]{16}$/.test(span.spanId))).toBe(true);
+    return unique;
+  }
+
+  test("ZYR-OBS-01 scripted answer and persisted rows are identical with tracing enabled, disabled or unset", async () => {
+    await allocate(tenantA, ownerA, aiA);
+    const sessionId = await newSession(tenantA, ownerA);
+    const prompt = "Explain the observation fixture capacity.";
+    queueAnswer(aiA, prompt);
+    const answer = await send(tenantA, ownerA, sessionId, prompt);
+    expect(answer.assistant.content).toBe(SCRIPTED_REPLY);
+    expect(answer.assistant.testcases).toEqual([]);
+    expect(aiA.requests.filter((call) => JSON.stringify(call.messages).includes(prompt))).toHaveLength(1);
+    await assertObserved(answer, tenantA);
+  });
+
+  test("ZYR-OBS-02 real export masks synthetic prompt/reply secrets and excludes credentials from metadata/model/identity", async () => {
+    await allocate(tenantA, ownerA, aiA);
+    const sessionId = await newSession(tenantA, ownerA);
+    const inputSecret = "sk-ant-e2e-observation-input-12345";
+    const outputSecret = "sk-e2e-observation-output-12345";
+    const bearer = "e2e.synthetic.bearer.token.12345";
+    const prompt = `Explain the fixture marker ${inputSecret}.`;
+    const reply = `The fixture markers are ${outputSecret} and Bearer ${bearer}.`;
+    queueAnswer(aiA, prompt, reply);
+    const answer = await send(tenantA, ownerA, sessionId, prompt);
+    expect(answer.assistant.content, "instrumentation must not rewrite the product's reply").toBe(reply);
+    await assertObserved(answer, tenantA);
+    if (expectedMode === "enabled") {
+      // Check the complete outbound wire, including resource fields and orphan/wrong-trace spans.
+      // Filtering to the expected trace first could hide exactly the privacy defect being tested.
+      const raw = capture.exports.map((item) => item.raw).join("\n");
+      for (const secret of [inputSecret, outputSecret, bearer, SYNTHETIC_KEY]) expect(raw).not.toContain(secret);
+      expect(raw).toContain("[REDACTED_KEY]");
+      expect(raw).toContain("Bearer [REDACTED]");
+      for (const span of capture.exports.flatMap((item) => item.spans)) {
+        const unmaskedFields = Object.fromEntries(Object.entries(spanAttributes(span)).filter(([key]) =>
+          !key.endsWith(".input") && !key.endsWith(".output")));
+        const serialized = JSON.stringify(unmaskedFields);
+        for (const marker of ["sk-", "sk-ant-", "Bearer ", SYNTHETIC_KEY]) expect(serialized).not.toContain(marker);
+      }
+    }
+  });
+
+  test("ZYR-OBS-03 parallel sessions retain their own reply, trace and session identity", async () => {
+    await allocate(tenantA, ownerA, aiA);
+    const firstSession = await newSession(tenantA, ownerA);
+    const secondSession = await newSession(tenantA, ownerA);
+    const prompts = ["Explain first observation session.", "Explain second observation session."];
+    const replies = ["The first observation session has ten seats.", "The second observation session has eleven seats."];
+    prompts.forEach((prompt, index) => queueAnswer(aiA, prompt, replies[index]));
+    aiA.delayNextReplyMs(300);
+    const answers = await Promise.all([
+      send(tenantA, ownerA, firstSession, prompts[0]), send(tenantA, ownerA, secondSession, prompts[1]),
+    ]);
+    expect(answers.map((answer) => answer.assistant.content)).toEqual(replies);
+    expect(messageTraceId(answers[0].user.id)).not.toBe(messageTraceId(answers[1].user.id));
+    await Promise.all(answers.map((answer) => assertObserved(answer, tenantA)));
+  });
+
+  test("ZYR-OBS-04 parallel tenants retain separate project/user/session observations and transcript access", async () => {
+    await Promise.all([allocate(tenantA, ownerA, aiA), allocate(tenantB, ownerB, aiB)]);
+    const firstSession = await newSession(tenantA, ownerA);
+    const secondSession = await newSession(tenantB, ownerB);
+    const promptA = "Explain workspace A observation marker.";
+    const promptB = "Explain workspace B observation marker.";
+    queueAnswer(aiA, promptA, "Workspace A has ten seats.");
+    queueAnswer(aiB, promptB, "Workspace B has eleven seats.");
+    const [answerA, answerB] = await Promise.all([
+      send(tenantA, ownerA, firstSession, promptA), send(tenantB, ownerB, secondSession, promptB),
+    ]);
+    expect(answerA.assistant.content).toBe("Workspace A has ten seats.");
+    expect(answerB.assistant.content).toBe("Workspace B has eleven seats.");
+    const [spansA, spansB] = await Promise.all([assertObserved(answerA, tenantA), assertObserved(answerB, tenantB)]);
+    expect(JSON.stringify(spansA)).not.toContain(tenantB.mainProjectId);
+    expect(JSON.stringify(spansA)).not.toContain(promptB);
+    expect(JSON.stringify(spansB)).not.toContain(tenantA.mainProjectId);
+    expect(JSON.stringify(spansB)).not.toContain(promptA);
+    const forbidden = await ownerB.get(endpoint(tenantA, `/chat/sessions/${firstSession}`), { failOnStatusCode: false });
+    expect(forbidden.status(), await forbidden.text()).toBe(404);
+  });
+
+  test("ZYR-OBS-05 unauthenticated and cross-tenant sends are refused without provider calls, stored messages or observations", async () => {
+    await allocate(tenantA, ownerA, aiA);
+    const sessionId = await newSession(tenantA, ownerA);
+    const url = endpoint(tenantA, `/chat/sessions/${sessionId}/messages`);
+    await new Promise((resolve) => setTimeout(resolve, QUIET_WINDOW_MS));
+    const beforeExports = capture.exports.length;
+    const unauthenticated = await anonymous.post(url, { data: { message: "Explain the anonymous fixture." }, failOnStatusCode: false });
+    // The existing requireUser contract is 400; §9's old 401 wording did not match this route.
+    expect(unauthenticated.status(), await unauthenticated.text()).toBe(400);
+    expect(await unauthenticated.json()).toMatchObject({ error: "Authentication required" });
+    const crossTenant = await ownerB.post(url, { data: { message: "Explain the other tenant fixture." }, failOnStatusCode: false });
+    expect(crossTenant.status(), await crossTenant.text()).toBe(404);
+    expect(await messages(tenantA, ownerA, sessionId)).toEqual([]);
+    expect(aiA.requests).toEqual([]);
+    productOutcomes.push({ unauthenticatedStatus: unauthenticated.status(), unauthenticatedBody: await unauthenticated.json(), crossTenantStatus: crossTenant.status(), storedMessages: [], providerCalls: 0 });
+    await new Promise((resolve) => setTimeout(resolve, QUIET_WINDOW_MS));
+    expect(capture.exports.length, "a refusal must emit nothing, including orphan or wrongly attributed spans").toBe(beforeExports);
+    expect(capture.exports.flatMap((item) => item.spans).filter((span) => spanAttributes(span)["session.id"] === sessionId)).toEqual([]);
+  });
+
+  test("ZYR-OBS-06 blank messages retain the validation response without provider work or persisted messages", async () => {
+    await allocate(tenantA, ownerA, aiA);
+    const sessionId = await newSession(tenantA, ownerA);
+    await new Promise((resolve) => setTimeout(resolve, QUIET_WINDOW_MS));
+    const beforeExports = capture.exports.length;
+    for (const message of ["", "   ", "\n\t"]) {
+      const response = await ownerA.post(endpoint(tenantA, `/chat/sessions/${sessionId}/messages`), { data: { message }, failOnStatusCode: false });
+      expect(response.status(), await response.text()).toBe(400);
+      expect(await response.json()).toMatchObject({ error: "message is required" });
+      productOutcomes.push({ input: message, responseStatus: response.status(), body: await response.json() });
+    }
+    expect(await messages(tenantA, ownerA, sessionId)).toEqual([]);
+    expect(aiA.requests).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, QUIET_WINDOW_MS));
+    expect(capture.exports.length, "a validation refusal must emit nothing, including orphan or wrongly attributed spans").toBe(beforeExports);
+    expect(capture.exports.flatMap((item) => item.spans).filter((span) => spanAttributes(span)["session.id"] === sessionId)).toEqual([]);
+  });
+
+  test("ZYR-OBS-07 provider failure settles one product reply and exports a masked, truthful error observation", async () => {
+    await allocate(tenantA, ownerA, aiA);
+    const sessionId = await newSession(tenantA, ownerA);
+    const errorKey = "sk-e2e-observation-provider-error-12345";
+    aiA.failNextWith(500, `Synthetic provider failure ${errorKey}`);
+    const answer = await send(tenantA, ownerA, sessionId, "Explain the failing observation fixture.");
+    expect(answer.assistant.content.length).toBeGreaterThan(0);
+    expect(aiA.requests).toHaveLength(1);
+    const spans = await assertObserved(answer, tenantA, true);
+    if (expectedMode === "enabled") {
+      expect(capture.exports.map((item) => item.raw).join("\n")).not.toContain(errorKey);
+      const router = spans.find((span) => span.name === "router")!;
+      expect(String(spanAttributes(router)["langfuse.observation.output"])).toContain("[REDACTED_KEY]");
+    }
+  });
+
+  for (const status of [401, 500] as const) {
+    test(`ZYR-OBS-${status === 401 ? "08" : "09"} exporter ${status} leaves answers usable and does not duplicate product writes`, async () => {
+      await allocate(tenantA, ownerA, aiA);
+      capture.respondWith(status);
+      try {
+        for (let index = 0; index < 2; index += 1) {
+          const sessionId = await newSession(tenantA, ownerA);
+          const prompt = `Explain observation failure ${status}, request ${index}.`;
+          queueAnswer(aiA, prompt);
+          const answer = await send(tenantA, ownerA, sessionId, prompt);
+          expect(answer.assistant.content).toBe(SCRIPTED_REPLY);
+          expect(answer.elapsedMs, "observability failure must not consume the 15-second synthetic-turn budget").toBeLessThan(TURN_BUDGET_MS);
+          await assertObserved(answer, tenantA);
+          if (expectedMode === "enabled") {
+            expect(capture.exports.some((item) => item.responseStatus === status && item.spans.some((span) => span.traceId === messageTraceId(answer.user.id)))).toBe(true);
+          }
+          // The second request starts after the first real export failure was observed.
+        }
+        const health = await anonymous.get("/health", { failOnStatusCode: false });
+        expect(health.status(), await health.text()).toBe(200);
+        expect(aiA.requests).toHaveLength(2);
+      } finally {
+        capture.respondWith(200);
+      }
+    });
+  }
 });

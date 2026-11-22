@@ -6,12 +6,39 @@ const { flushLangfuse, isTracingEnabled, startLangfuse, stopLangfuse } = require
 
 async function capture() {
   const endpoint = new URL(process.env.LANGFUSE_BASE_URL);
-  assert.equal(endpoint.protocol, "http:");
-  assert.equal(endpoint.hostname, "127.0.0.1");
+  let networkAttempts = 0;
+  if (process.env.CAPTURE_EXPECT_CLOUD_REFUSAL === "true") {
+    assert.equal(endpoint.protocol, "https:");
+    assert.match(endpoint.hostname, /^(?:us\.)?cloud\.langfuse\.com\.?$/);
+    // A guard regression must never turn this negative fixture into an external request.
+    const denyNetwork = () => {
+      networkAttempts += 1;
+      throw new Error("Cloud-refusal fixture forbids every network attempt");
+    };
+    require("node:http").request = denyNetwork;
+    require("node:http").get = denyNetwork;
+    require("node:https").request = denyNetwork;
+    require("node:https").get = denyNetwork;
+    globalThis.fetch = denyNetwork;
+  } else {
+    assert.equal(endpoint.protocol, "http:");
+    assert.equal(endpoint.hostname, "127.0.0.1");
+  }
   assert.equal(process.env.LANGFUSE_SEED_MODEL_PRICES, "false");
 
   await startLangfuse();
   try {
+    if (process.env.CAPTURE_EXPECT_DISABLED === "true") {
+      assert.equal(isTracingEnabled(), false, "tracing requires an explicit opt-in even when credentials exist");
+      await recordStandaloneTool({
+        traceSeed: "capture-disabled-message",
+        name: "capture.disabled.tool",
+        output: { preserved: true }
+      });
+      await flushLangfuse();
+      process.send({ disabled: true });
+      return;
+    }
     assert.equal(isTracingEnabled(), true, "real SDK startup must succeed");
     const { createTraceId } = require("@langfuse/tracing");
     const primarySeed = "capture-native-message-one";
@@ -88,6 +115,7 @@ async function capture() {
   } finally {
     await stopLangfuse();
     assert.equal(isTracingEnabled(), false);
+    assert.equal(networkAttempts, 0, "cloud refusal must happen before any request");
   }
 }
 
