@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { emailDomain } from "../utils/env";
 import { zipEntryNames, zipEntryText } from "../utils/zip";
 import { exec, literal, scalar } from "../utils/psql";
+import { activeProjectIdsOldestFirst, readBillingState, setBillingState, setGraceWindow, setProPlan } from "../utils/billing-db";
 import {
   anonymousContext,
   detachUserByEmail,
@@ -81,6 +82,168 @@ test.describe("knowledge base v2 — folders and documents", () => {
    */
   test.afterEach(() => {
     if (tenant) purgeKb(tenant);
+  });
+
+  test("WPA-01 preview-only requirement respects rollout and anonymous denial without native writes", async () => {
+    const projectId = tenant!.mainProjectId;
+    const path = `/api/projects/${projectId}/knowledge-base/requirements/preview`;
+    const input = {
+      documentType: "requirement_note",
+      title: "QA preview only",
+      contentJson: {
+        schemaVersion: "tesbo-requirement/1",
+        description: "Example acceptance obligations for a preview-only test",
+        criteria: [{ key: "AC-1", text: "An unauthorized change is denied", normative: true }]
+      }
+    };
+    // The default-off rollout must not create native KB, case or run history.
+    const counts = () => scalar(`SELECT json_build_object(
+      'documents', (SELECT COUNT(*) FROM knowledge_documents WHERE project_id=${literal(projectId)}),
+      'versions', (SELECT COUNT(*) FROM knowledge_document_versions v JOIN knowledge_documents d ON d.id=v.document_id
+        WHERE d.project_id=${literal(projectId)}),
+      'cases', (SELECT COUNT(*) FROM testcases WHERE project_id=${literal(projectId)}),
+      'runs', (SELECT COUNT(*) FROM cycles WHERE project_id=${literal(projectId)})
+    )::text;`);
+    const before = counts();
+    const unauthenticated = await anon.post(path, { data: { notARequirement: true } });
+    // Existing KB authentication contract permits 400/401/403/404; 503 would
+    // reveal preview availability to an unauthenticated caller.
+    expect([400, 401, 403, 404]).toContain(unauthenticated.status());
+    const authorized = await asOwner.post(path, { data: input });
+    if (process.env.E2E_REQUIREMENT_PREVIEW_ENABLED === "1") {
+      expect(authorized.status(), await authorized.text()).toBe(200);
+      expect(await authorized.json()).toMatchObject({ canPublish: false, disposition: "preview_only" });
+    } else {
+      expect(authorized.status(), await authorized.text()).toBe(503);
+      expect((await authorized.json()).error).toBe("REQUIREMENT_PREVIEW_DISABLED");
+    }
+    expect(counts()).toBe(before);
+  });
+
+  function requirementCandidate() {
+    return { documentType: "requirement_note", title: "  Preview acceptance  ", contentJson: {
+      schemaVersion: "tesbo-requirement/1", description: "  Bounded read-only candidate  ",
+      criteria: [{ key: "AC-1", text: "  Deny unauthorized changes  ", normative: true }]
+    } };
+  }
+
+  // Observe product/history and billing effects, not authentication metadata such as session access.
+  function previewState(projectId: string): string {
+    return scalar(`SELECT json_build_object(
+      'documents', (SELECT COUNT(*) FROM knowledge_documents WHERE project_id=${literal(projectId)}),
+      'versions', (SELECT COUNT(*) FROM knowledge_document_versions v JOIN knowledge_documents d ON d.id=v.document_id WHERE d.project_id=${literal(projectId)}),
+      'cases', (SELECT COUNT(*) FROM testcases WHERE project_id=${literal(projectId)}),
+      'runs', (SELECT COUNT(*) FROM cycles WHERE project_id=${literal(projectId)}),
+      'proposals', (SELECT COUNT(*) FROM ai_generation_requests WHERE project_id=${literal(projectId)}),
+      'billingNotified', (SELECT grace_locked_notified_at FROM organizations WHERE id=${literal(tenant!.organizationId)}),
+      'organizationUpdated', (SELECT updated_at FROM organizations WHERE id=${literal(tenant!.organizationId)}),
+      'billingAudits', (SELECT COUNT(*) FROM audit_logs WHERE organization_id=${literal(tenant!.organizationId)} AND action='billing_limits_enforced')
+    )::text;`);
+  }
+
+  async function ownerOutboxCount(): Promise<number> {
+    const response = await anon.get(`/api/test/email-outbox?to=${encodeURIComponent(tenant!.owner.email)}`);
+    expect(response.status(), "The disposable preview acceptance stack must expose its test email outbox").toBe(200);
+    return (await response.json()).messages.length;
+  }
+
+  test("WPA-02 bounded HTTP candidates obey explicit rollout without publishing", async () => {
+    // The whole KB file remains runnable in either declared mode. Disabled requests must refuse
+    // before validation; the opted-in CI lane must prove each positive and negative schema case.
+    const enabled = process.env.E2E_REQUIREMENT_PREVIEW_ENABLED === "1";
+    const projectId = tenant!.mainProjectId;
+    const path = `/api/projects/${projectId}/knowledge-base/requirements/preview`;
+    const before = previewState(projectId);
+    const messagesBefore = await ownerOutboxCount();
+    const input = requirementCandidate();
+    const response = await asOwner.post(path, { data: input });
+    expect(response.status(), await response.text()).toBe(enabled ? 200 : 503);
+    const preview = await response.json();
+    if (enabled) {
+      expect(preview).toMatchObject({ title: "Preview acceptance", disposition: "preview_only", canPublish: false,
+        authoritativeRequirementId: null, publicationBlocker: "SKILL_CONTEXT_UNAVAILABLE", coverageAssertion: "none", executionAssertion: "none",
+        contentJson: { description: "Bounded read-only candidate", criteria: [{ key: "AC-1", text: "Deny unauthorized changes", normative: true }] } });
+      expect(preview.candidateDigest).toMatch(/^[a-f0-9]{64}$/);
+    } else expect(preview.error).toBe("REQUIREMENT_PREVIEW_DISABLED");
+    const replay = await asOwner.post(`${path}/`, { data: input });
+    expect(replay.status()).toBe(enabled ? 200 : 503);
+    const replayBody = await replay.json();
+    if (enabled) expect(replayBody.candidateDigest).toBe(preview.candidateDigest);
+    else expect(replayBody.error).toBe("REQUIREMENT_PREVIEW_DISABLED");
+    const maximum = await asOwner.post(path, { data: { ...input, contentJson: { ...input.contentJson,
+      criteria: Array.from({ length: 50 }, (_, index) => ({ key: `AC-${index + 1}`, text: "Bounded criterion", normative: false })) } } });
+    expect(maximum.status()).toBe(enabled ? 200 : 503);
+    const maximumBody = await maximum.json();
+    if (enabled) expect(maximumBody.contentJson.criteria).toHaveLength(50);
+    else expect(maximumBody.error).toBe("REQUIREMENT_PREVIEW_DISABLED");
+    // Strict JSON parsing rejects a scalar body before application guards in either rollout mode.
+    const malformedTransport = await asOwner.post(path, { data: null });
+    expect(malformedTransport.status()).toBe(400);
+    expect(await malformedTransport.text()).not.toContain("REQUIREMENT_PREVIEW_DISABLED");
+    for (const invalid of [{ ...input, contentJson: null }, { ...input, title: "" }, { ...input, projectId: tenant!.secondProjectId },
+      { ...input, contentJson: { ...input.contentJson, criteria: [input.contentJson.criteria[0], input.contentJson.criteria[0]] } },
+      { ...input, contentJson: { ...input.contentJson, criteria: [{ ...input.contentJson.criteria[0], normative: "true" }] } },
+      { ...input, contentJson: { ...input.contentJson, criteria: Array(51).fill(input.contentJson.criteria[0]) } },
+      { ...input, contentJson: { ...input.contentJson, description: "X".repeat(20001) } }]) {
+      const rejected = await asOwner.post(path, { data: invalid });
+      expect(rejected.status(), await rejected.text()).toBe(enabled ? 400 : 503);
+      if (!enabled) expect((await rejected.json()).error).toBe("REQUIREMENT_PREVIEW_DISABLED");
+    }
+    for (const caller of [anon, asGuest]) {
+      const denied = await caller.post(path, { data: { malformed: true } });
+      expect([400, 401, 403, 404]).toContain(denied.status());
+      expect(await denied.text()).not.toMatch(/Launch|REQUIREMENT_PREVIEW_DISABLED|UNRECOGNIZED_FIELD/);
+    }
+    expect(previewState(projectId)).toBe(before);
+    expect(await ownerOutboxCount()).toBe(messagesBefore);
+  });
+
+  test("WPA-03 locked project preview preserves authorization and causes no billing effects", async () => {
+    const orgId = tenant!.organizationId;
+    const originalBilling = readBillingState(orgId);
+    let projectId = "";
+    try {
+      setProPlan(orgId);
+      const suffix = Date.now().toString(36).toUpperCase();
+      const created = await asOwner.post("/api/projects", { data: { name: `E2E WPA ${suffix}`, key: `WPA${suffix}` } });
+      expect(created.status(), await created.text()).toBe(201);
+      projectId = (await created.json()).id;
+      expect(activeProjectIdsOldestFirst(orgId).indexOf(projectId)).toBeGreaterThanOrEqual(2);
+      setGraceWindow(orgId, -1, { grace_locked_notified_at: null });
+      const path = `/api/projects/${projectId}/knowledge-base/requirements/preview`;
+      const before = previewState(projectId);
+      const messagesBefore = await ownerOutboxCount();
+      for (const caller of [anon, asGuest]) {
+        const denied = await caller.post(path, { data: { malformed: true } });
+        expect([400, 401, 403, 404]).toContain(denied.status());
+        expect(await denied.text()).not.toMatch(/Launch|REQUIREMENT_PREVIEW_DISABLED|UNRECOGNIZED_FIELD/);
+      }
+      const response = await asOwner.post(path, { data: requirementCandidate() });
+      if (process.env.E2E_REQUIREMENT_PREVIEW_ENABLED === "1") {
+        expect(response.status(), await response.text()).toBe(200);
+        expect(await response.json()).toMatchObject({ canPublish: false, disposition: "preview_only", authoritativeRequirementId: null });
+        const malformed = await asOwner.post(path, { data: { ...requirementCandidate(), title: "" } });
+        expect(malformed.status()).toBe(400);
+      } else {
+        expect(response.status(), await response.text()).toBe(503);
+        expect((await response.json()).error).toBe("REQUIREMENT_PREVIEW_DISABLED");
+      }
+      expect(previewState(projectId)).toBe(before);
+      expect(readBillingState(orgId).grace_locked_notified_at).toBeNull();
+      expect(await ownerOutboxCount()).toBe(messagesBefore);
+      // A real adjacent mutation must still exercise billing enforcement. This also proves the
+      // preview assertions above ran with a genuinely locked workspace, not disabled billing.
+      const mutation = await asOwner.post(`/api/projects/${projectId}/knowledge-base/documents`, {
+        data: { title: "Must not publish", documentType: "general" }
+      });
+      expect(mutation.status()).toBe(403);
+      expect((await mutation.json()).error).toContain("read-only");
+      expect(scalar(`SELECT COUNT(*) FROM knowledge_documents WHERE project_id=${literal(projectId)};`)).toBe("0");
+    } finally {
+      setProPlan(orgId);
+      if (projectId) await asOwner.delete(`/api/projects/${projectId}`, { failOnStatusCode: false });
+      setBillingState(orgId, originalBilling);
+    }
   });
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
