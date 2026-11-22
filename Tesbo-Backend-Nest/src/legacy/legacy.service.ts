@@ -16497,9 +16497,13 @@ export class LegacyService implements OnModuleInit {
         throw new ConflictException({ code: "CASE_NOT_APPROVED", error: "The case is not currently approved at the reviewed revision" });
       }
       const requirementVersionId = doc.reviewed_version_id ? String(doc.reviewed_version_id) : String(link.requirement_version_id);
+      // One live relation per case/criteria. Retire every active/proposed generation that would
+      // collide with the current approved basis, not only the row the caller happened to read.
       await client.query(
-        "UPDATE requirement_case_links SET state='retired', retired_by=$3, retired_at=now() WHERE id=$1 AND project_id=$2",
-        [linkId, projectId, uid]
+        `UPDATE requirement_case_links SET state='retired', retired_by=$5, retired_at=now()
+          WHERE project_id=$1 AND requirement_id=$2 AND testcase_id=$3 AND criterion_keys=$4
+            AND state IN ('proposed','active')`,
+        [projectId, documentId, link.testcase_id, link.criterion_keys, uid]
       );
       const created = (await client.query(
         `INSERT INTO requirement_case_links
