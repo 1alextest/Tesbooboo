@@ -1,12 +1,13 @@
-# Work Package A — Native requirements and testcase links (design note)
+# Work Package A — Native requirements and testcase links (design note, revision 2)
 
 **Status:** Draft for review. Not approved, not implemented, no acceptance claimed.
-**Date:** 2026-11-21
+**Date:** 2026-11-21 (revision 2)
 **Source commit:** `8686e3cbce03a7c73f609140071f8e4d740215a1` (`origin/development`)
-**Spec basis:** R-ASE-04 (native requirements), R-ASE-05 (traceability semantics), R-ASE-06 (cases and verification), R-ASE-17/18 (deployed identity, security), R-ASE-25/26 (effective skills), `ASE-E2E-01`, `ASE-FLOW-01`, `ASE-FLOW-08`, and `GJ-19` in `implementation-plan.md`.
-**Runtime evidence (2026-11-21):** `/api/health` reports `8686e3cb…`; MCP deploy check against the TESBOPROJECT endpoint reports 49 tools, fingerprint `6f1a2c05c69f8948`, catalog fingerprint matches, `OK` with `REQUIRE_PROPOSAL_PREVIEW=1`. No human UI session was available, so every UI statement below is **source-only**.
+**Work package:** `implementation-plan.md` **lines 176–182** (“Work package A — Native requirements and testcase links (first authored-artifact integration)”).
+**Ownership map:** `design.md` **§3, lines 29–45** (“Native requirement content/version → existing KB document identity + typed requirement rules; approved DB mapping if necessary”).
+**Runtime evidence (2026-11-21):** `/api/health` reports `8686e3cb…`; MCP deploy check against the TESBOPROJECT endpoint reports 49 tools, fingerprint `6f1a2c05c69f8948` matching, `OK` with `REQUIRE_PROPOSAL_REVIEW_PREVIEW=1`. **No human UI session was available: every UI statement in this note is source-only.** The new workflow, UI and GJ-19 have **not** been run.
 
-**Note on the package name:** “Work Package A” does not appear anywhere in this repository (`docs/`, `AGENTS.md`, `CLAUDE.md`). See decision **D1**. This note treats Work Package A as the bounded slice defined in §1 and maps it to the existing requirement IDs above.
+**Changes from revision 1:** D1 resolved from Work Package A; ownership changed from a separate requirement store to the KB document/version owner; shared staging and protected apply made explicit; D7 resolved to “unavailable skills block guarded publication even in preview”; executed coverage requires a qualifying persisted attempt; link and current-version pointers are bound to their exact requirement lineage; migration number is provisional.
 
 ---
 
@@ -14,316 +15,361 @@
 
 **In scope**
 
-- Native requirement identity, state and immutable reviewable revisions carrying normative acceptance criteria.
-- Typed, append-only requirement-version-to-case-revision links at criterion granularity.
-- Four separate coverage readings: authored, approved, executed, passing — including stale and missing reasons.
-- UI, REST and MCP entry points, authorization, audit, idempotent retry and concurrent-update behaviour.
-- The `GJ-19` acceptance fixture and the mapping to `ASE-E2E-01` / `ASE-FLOW-01` / `ASE-FLOW-08`.
+- A stable native requirement whose **content and versions are owned by the existing KB document identity and `knowledge_document_versions`**, extended with typed requirement rules and acceptance criteria.
+- A typed, criterion-scoped relationship between an exact requirement version and an exact testcase revision, owned by a new link table because no existing owner can carry it.
+- Shared staging of agent-authored requirement revisions, case candidates and link proposals in the **existing staging owner**, with a protected selected apply transaction.
+- Four separate coverage readings — authored, approved, executed, passing — where **executed requires a qualifying persisted attempt on the exact reviewed basis**.
+- The Work Package A proof obligations: `ASE-E2E-01, -02, -05, -07, -08, -11, -12`.
 
-**Out of scope (this work package)**
+**Out of scope**
 
-- The governed Skills library (identity/version/approval/assignment/effective resolution) — specified but not implemented; see §3.10 and §9 D7.
-- Automatic case publication, changes to case review/approval, changes to run admission.
-- Replacing Jira/Linear/Notion mirrors or the ticket-key association on test cases.
-- Changing `sourceRefs` semantics or Model Studio links.
-- Plans, runs, executions, reporting surfaces beyond a coverage read.
+- The governed Skills library itself (identity/version/approval/assignment/resolution). Work Package A requires resolving and pinning effective requirement and test-case skills; while that capability is absent, guarded publication is blocked (§4.5, D7).
+- Changing case review/approval, run admission, `sourceRefs` semantics, Model Studio links, external provider ownership or the Requirements screen’s external-ticket behavior.
+- Any new content/version store for requirements, a second wiki, or repurposing the graph link layer.
 
 ---
 
-## 2. What exists today (source-verified)
+## 2. What exists today (source-verified at `8686e3cb`)
 
-| Capability | Existing owner and symbols | Maturity | Evidence |
+| Capability | Owner and symbols | What it does / does not do |
+| --- | --- | --- |
+| Requirement content and versions (specified owner) | `knowledge_documents` + `knowledge_document_versions`; `design.md` §3; WP-A line 178 | KB identity and version history exist; `requirement_note` is an allowed type (`V45`). Mirrored external requirements are inserted read-only by `integration-sync.processor.ts` (~572) with `source_provider`, `source_external_id`, `source_role='mirror'`, `is_read_only=true`. Authored requirement semantics (identity key, criteria, approval, typed links) do not exist. |
+| KB revision and review machinery | `createKnowledgeDocument` (~12173), `updateKnowledgeDocument` (~12465), `submitKnowledgeDocument` (~13470), `reviewAiMemory` (~13664→), `writeKnowledgeGovernedVersion`; `V156` snapshot kinds, immutability trigger, `reviewed_version_id` | Submitted/reviewed snapshots are immutable; exact-revision CAS and submission-key idempotency exist. Approval is hard-gated to `document_type='ai_memory'`; authority metadata is `ai_memory_review`. There is no requirement review path, and no typed criteria/identity. |
+| Requirements screen | `requirements/page.tsx`; `linkedJiraKeys`/`linkedLinearKeys`/`linkedNotionPages` (~6540+); `requirementMatrix` (~10303) | Provider-synced tickets only; subtitle points at the KB Requirements folder (~723); no native create/revise/approve. Coverage is ticket-key string matching plus case/run/bug joins. |
+| Case identity, approval, admission | `testcase-edit-revision.ts` (`TESTCASE_EDIT_REVISION_SQL`, `TESTCASE_APPROVAL_REVISION_SQL`, `TESTCASE_APPROVAL_CURRENT_SQL`); receipts `V151`/`V155`; `approved-run-cases.policy.ts`; `cycle_items.snapshot_approval_revision` (`V155`) | Exact edit revision and exact human review receipts exist; run admission requires both. Executions are auto-created `Untested` rows; only a recorded attempt sets `executed_at`/`executed_by`. |
+| Case proposal staging and apply | `ai_generation_requests` + `V157` (design.md line 722: “preserve the current staging owner; add exact candidate-iteration content/history and selected-operation convergence”); `stageTestcaseChanges` (~15852); `testcase-proposal-review.ts`; `zyraSave`/`zyraSaveAttempt` (~21648) | Agent case operations are staged unreviewed and published only through human selected apply; official IDs allocated at apply. The staging payload is mutable between iterations and is case-shaped. |
+| Typed relation owners | `testcases.source_refs` (`V101`) — citations; ticket-key columns — external provider association; `graph_review_run_case_links` (`V147`) — graph receipt→run→case handoff, comment: “no asserted test execution, coverage, defect, evidence or approval”; `mbt_model_case_links` (`V148`) — model revision→case revision | **None can represent requirement version + criterion → case revision.** `sourceRefs` is a citation (R-ASE-05); ticket keys are provider facts; the graph link PK is `(project_id, history_id, cycle_id, testcase_id)` with no requirement or criterion identity. |
+| Exact-revision link precedent | `mbt_model_case_links` (`V148`), `linkCaseForUser` (`model-studio-repository.ts` ~470) | Composite project FKs, exact `testcase_revision`, unique key, `ON CONFLICT` + `MAPPING_CHANGED`, `FOR SHARE` on the case. No activity/audit entry — a gap to close, not a pattern to copy wholesale. |
+| Skills | `skills-governance.md` (proposed); `AGENT_RULE_TEMPLATE.md:67` (no skill tool connected) | Not implemented. The deployed catalog contains no skill tools; `stageTestcaseChanges` refuses partly because governed effective-skill authority is absent. |
+
+**Work Package A blocker (implementation-plan line 182):** “demonstrate how the existing graph canonical link layer represents the native case relation without misusing `sourceRefs` or external ticket keys.” **Result:** it cannot. `graph_review_run_case_links` is a human-selected QA handoff between a graph receipt, a run and a case; it has no requirement identity, version, criterion or coverage semantics and its own comment disclaims coverage. Reusing it would mislabel a graph handoff as requirement traceability. `sourceRefs` and ticket keys are citations/provider facts. A dedicated typed link owner is required; this is the blocker’s evidence, not a new initiative.
+
+---
+
+## 3. Ownership decision: extend the KB owner
+
+### 3.1 Options compared
+
+| Option | What it reuses | What it adds | Verdict |
 | --- | --- | --- | --- |
-| Requirements screen | `Tesbo-Frontend/app/(app)/projects/[id]/requirements/page.tsx`; provider tabs, `requirement-link-warning`, coverage states | Shipped, provider-only | Subtitle says requirements are “synced from …” with full documents in the KB (line ~723); “View in Knowledge base” (line ~848); no create/revise requirement affordance |
-| External requirement association | `legacy.service.ts` `linkedJiraKeys`/`linkedLinearKeys`/`linkedNotionPages` (~6540+): counts cases by `testcases.jira_issue_key` / `linear_issue_key` / `notion_page_id` | Shipped | MCP tool description `mcp.tools.ts:937`: “There is no separate 'requirements' table in this product: the ticket key on the test case IS the link” |
-| Traceability matrix | `legacy.service.ts` `requirementMatrix` (~10303): cases joined to runs, executions and bugs | Shipped | MCP `get_requirement_matrix` (`mcp.tools.ts:1660`) is a case/run/bug matrix, not requirement-keyed |
-| KB `requirement_note` documents | Type allowed in `V45_knowledge_base_v2.sql`; mirrored tickets inserted read-only by `integration-sync.processor.ts` (~572) with `source_provider`, `source_external_id`, `source_role='mirror'`, `is_read_only=true` | Shipped as mirror + general documents | Requirement notes created by authors are ordinary KB documents; no stable requirement identity, no criteria keys, no typed case relation |
-| KB document revisions | `knowledge_document_versions` (`V45`, `V102`, `V156`): versions, `snapshot_kind` (`autosave/submitted/approved/rejected`), `submission_key`, `reviewed_version_id`, immutable reviewed snapshots | Shipped for documents | `createKnowledgeDocument`/`updateKnowledgeDocument` (~12173/12465), `submitKnowledgeDocument` (~13470); approval service is `approveAiMemory` (~13664) and applies to *ai_memory* only |
-| Typed relations | None for requirements. `testcases.source_refs` JSONB is a citation list (`V101_testcase_citations.sql`); `mbt_model_case_links` (`V148`) and `graph_review_run_case_links` (`V147`) are other domains | Absent | R-ASE-05: sourceRefs, ticket keys, drafts and execution results are **not** a typed requirement relation or coverage |
-| Exact-revision link precedent | `mbt_model_case_links` (`V148`) + `ModelStudioRepository.linkCaseForUser` (`model-studio-repository.ts` ~470): composite project FKs, `testcase_revision`, unique key, `ON CONFLICT DO NOTHING` + `MAPPING_CHANGED`, `FOR SHARE` on the case | Shipped | No project-activity/audit entry on link; a gap to close, not a pattern to copy wholesale |
-| Case revision and approval | `testcase-edit-revision.ts`: `TESTCASE_EDIT_REVISION_SQL`, `TESTCASE_APPROVAL_REVISION_SQL`, `TESTCASE_APPROVAL_CURRENT_SQL`; receipts in `V151`/`V155`; `testcase_approval_snapshot()` includes content + custom fields/tags | Shipped | Approval requires principal `human_session`, current semantic revision |
-| Run admission | `legacy/approved-run-cases.policy.ts` `assertApprovedNewRunCases`: current exact human receipt required for new run items | Shipped | `cycle_items.snapshot_approval_revision` / `snapshot_reviewed_content` (`V155`) record the accepted basis |
-| Agent case proposals | `legacy.service.ts` `stageTestcaseChanges` (~15852), `testcase-proposal-review.ts` (`proposalDigest`, `expectedProposalRevision`, `requestKey`), apply through `zyraSave`/`zyraSaveAttempt` (~21648) | Shipped behind `TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED` | Official case IDs are allocated at protected apply; the refusal text names the missing governed effective-skill authority |
-| Skills | `skills-governance.md` states the contract is proposed; `AGENT_RULE_TEMPLATE.md:67` says no skill tool is connected | Not implemented | Deployed catalog (49 tools) contains no skill tools |
-| Requirement authoring via MCP/REST | Absent | Absent | Catalog listed above; `link_requirement_to_testcase` is retired in `common/testcase-publication.policy.ts` |
+| A. Separate requirement identity/version/content store + link table | Nothing from KB except maybe attachments | `requirements`, `requirement_versions`, editor, history, review, search, folder UI | **Rejected.** Duplicates the specified KB owner (design §3, WP-A line 178), creates a second wiki, and would have to re-prove version immutability, review, search and editor behavior already owned by KB. |
+| B. KB-backed identity/versions + typed requirement rules + link table | `knowledge_documents` identity, `knowledge_document_versions` history/immutability, `reviewed_version_id`, review/CAS/idempotency patterns, editor/search/folders | Typed criteria schema, requirement key/state profile, requirement review authority, lineage constraints, typed link table, staging operations | **Recommended.** Satisfies every R-ASE-04 field by extension: stable identity (document id + requirement key), title/description (document + typed content), criteria (typed content/version metadata), state (profile + review), owning project, immutable reviewable revisions (submitted/approved snapshots), rationale/actor/source (snapshot metadata), typed links (new table). No invariant is unmeetable; the cost is a narrow, type-specific extension of review and content validation. |
+| C. Reuse the graph link layer for the relation | Existing table and service | None | **Rejected.** No requirement/version/criterion identity; purpose is graph-receipt handoff; explicitly not coverage. |
 
-**Conclusion:** the existing relationship owner cannot represent an exact requirement revision + criterion → exact case revision. KB versions carry text but no stable requirement identity, criterion identity, approval or typed edge; ticket keys are external provider facts; `sourceRefs` is an authoring citation. A new, small relation owner is required.
+### 3.2 The KB extension (no separate content/version store)
 
----
+**Identity and content**
 
-## 3. Recommended relationship design
+- A native requirement is a `knowledge_documents` row with `document_type='requirement_note'` and `source_provider IS NULL` (mirror documents remain provider-owned and read-only).
+- `content_json` uses a typed schema, validated on write for this document type:
 
-### 3.1 Why not reuse the existing surfaces
+```json
+{ "schemaVersion": "tesbo-requirement/1",
+  "description": "…",
+  "criteria": [ {"key": "AC-1", "text": "…", "normative": true},
+                {"key": "AC-2", "text": "…", "normative": true} ] }
+```
 
-- **KB `requirement_note`:** suitable for content and version history, but `document_type` is taxonomy, not identity; mirrored notes are read-only external copies; there is no criterion-level identity, no requirement approval, and no typed case relation. Extending it into a requirement object would overload document semantics the spec explicitly says are insufficient (`design.md:22`).
-- **Ticket keys on cases:** provider-owned and string-matched; they cannot carry a requirement revision or criterion. R-ASE-05 forbids reporting them as a typed relation or coverage.
-- **`sourceRefs`:** an unordered citation JSON on a case, with no uniqueness, authorization or coverage semantics. It stays a citation.
-- **Graph links:** `graph_review_run_case_links` relates graph history to runs and cases; it is not a requirement owner and must not be repurposed.
+- `content_text`/`content_html` are rendered projections for search and display; they are not the authority for criteria.
+- `updateKnowledgeDocument` (and every writer for this type) rejects content that does not satisfy the schema; the generic free-form editor is replaced by a requirement editor for `requirement_note`, so the criteria cannot be corrupted through the ordinary KB path.
 
-### 3.2 Smallest compatible extension (new tables only)
+**Requirement profile (typed rules, 1:1 with the KB identity)**
 
-Migration **V159** (append-only; no backfill, no alteration of existing tables):
+```
+requirement_profiles (
+  document_id UUID PRIMARY KEY REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+  project_id  UUID NOT NULL,
+  requirement_key VARCHAR(32) NOT NULL,
+  state VARCHAR(16) NOT NULL DEFAULT 'draft' CHECK (state IN ('draft','active','retired')),
+  created_at, updated_at,
+  UNIQUE (project_id, requirement_key),
+  FOREIGN KEY (document_id, project_id) REFERENCES knowledge_documents(id, project_id)
+)
+```
 
-```sql
-CREATE TABLE requirements (
+- Justification: key allocation, lifecycle state and the “this document is a requirement” rule are requirement-specific; a side table keeps the general document table from widening with conditional columns while the **identity remains the KB document**. This is the “typed requirement rules” the ownership map allows.
+- A unique index `knowledge_documents(id, project_id)` backs the composite FK.
+
+**Versions**
+
+- Before publication, a requirement candidate exists only as a staged operation (§4); it is **not** written as a KB row.
+- At protected apply, the candidate becomes a `knowledge_document_versions` row with `snapshot_kind='submitted'` written through the existing governed-version path, with `criteria` copied into `snapshot_metadata.criteria` and the existing `content_digest`.
+- The approved revision is an `'approved'` snapshot; `knowledge_documents.reviewed_version_id` is the current approved pointer (existing column). No candidate is promoted into approval by apply.
+- Both kinds are immutable after submission/approval through the `V156` trigger; no new version store is created.
+
+**Requirement review (extension of the KB review path)**
+
+- Generalize `reviewAiMemory` into a type-dispatched review (`ai_memory` → existing `ai_memory_review` authority; `requirement_note` → new `requirement_review` authority) with the same locks, CAS, idempotent replay and activity logging.
+- Requirement review requires: owner/manager role, human session, the document still at the reviewed edit revision, valid criteria schema, and the submitted version being the one reviewed. It writes an approved snapshot and advances `reviewed_version_id`.
+- `invalidate_changed_knowledge_review` (V156) is extended so a requirement-note content/criteria change clears the approval binding, exactly as it does for AI memory. `writeKnowledgeGovernedVersion` takes the authority label instead of hardcoding it.
+- **Current-version pointer lineage:** `knowledge_documents.reviewed_version_id` is bound to its own document by a composite FK `(reviewed_version_id, id) → knowledge_document_versions(id, document_id)` (backed by a unique index on `(id, document_id)`; MATCH SIMPLE permits NULL for unreviewed documents). A pointer can never name another requirement’s version.
+
+### 3.3 Typed link owner (new table, justified independently)
+
+```
+requirement_case_links (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  key VARCHAR(32) NOT NULL,
-  title VARCHAR(512) NOT NULL,
-  description TEXT,
-  state VARCHAR(16) NOT NULL DEFAULT 'draft'
-    CHECK (state IN ('draft','active','retired')),
-  current_version_id UUID,
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  deleted_at TIMESTAMPTZ,
-  UNIQUE (project_id, key),
-  UNIQUE (id, project_id)
-);
-
-CREATE TABLE requirement_versions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  requirement_id UUID NOT NULL,
-  project_id UUID NOT NULL,
-  version_number INT NOT NULL,
-  title VARCHAR(512) NOT NULL,
-  description TEXT,
-  criteria JSONB NOT NULL DEFAULT '[]'::jsonb,   -- [{"key":"AC-1","text":"…","normative":true}]
-  rationale TEXT,
-  source JSONB NOT NULL DEFAULT '{}'::jsonb,
-  state VARCHAR(16) NOT NULL DEFAULT 'draft'
-    CHECK (state IN ('draft','approved','rejected','superseded')),
-  submission_key UUID,
-  content_digest CHAR(64) NOT NULL,
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  approved_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  approved_at TIMESTAMPTZ,
-  UNIQUE (requirement_id, version_number),
-  UNIQUE (id, project_id),
-  FOREIGN KEY (requirement_id, project_id)
-    REFERENCES requirements(id, project_id) ON DELETE CASCADE
-);
-CREATE UNIQUE INDEX idx_requirement_version_submission_key
-  ON requirement_versions(requirement_id, submission_key)
-  WHERE submission_key IS NOT NULL;
-
-CREATE TABLE requirement_case_links (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  requirement_id UUID NOT NULL,
-  requirement_version_id UUID NOT NULL,
+  requirement_id UUID NOT NULL,               -- knowledge_documents.id, requirement_note, non-mirror
+  requirement_version_id UUID NOT NULL,       -- knowledge_document_versions.id, snapshot_kind submitted|approved
   criterion_keys TEXT[] NOT NULL CHECK (cardinality(criterion_keys) > 0),
   testcase_id UUID NOT NULL,
   testcase_revision CHAR(64) NOT NULL,
-  testcase_approval_revision CHAR(64),
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  retired_at TIMESTAMPTZ,
+  testcase_approval_revision CHAR(64),        -- required for approved/executed readings
+  state VARCHAR(16) NOT NULL DEFAULT 'proposed'
+    CHECK (state IN ('proposed','active','retired','withdrawn')),
+  proposed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  proposed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  applied_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  applied_at TIMESTAMPTZ,
   retired_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  FOREIGN KEY (requirement_version_id, project_id)
-    REFERENCES requirement_versions(id, project_id) ON DELETE CASCADE,
+  retired_at TIMESTAMPTZ,
+  FOREIGN KEY (requirement_id, project_id)
+    REFERENCES knowledge_documents(id, project_id) ON DELETE CASCADE,
+  FOREIGN KEY (requirement_version_id, requirement_id)
+    REFERENCES knowledge_document_versions(id, document_id) ON DELETE CASCADE,
   FOREIGN KEY (testcase_id, project_id)
-    REFERENCES testcases(id, project_id) ON DELETE CASCADE
+    REFERENCES testcases(id, project_id) ON DELETE CASCADE,
+  CHECK (state <> 'active' OR (applied_at IS NOT NULL AND applied_by IS NOT NULL))
 );
-CREATE UNIQUE INDEX idx_requirement_case_link_active
+CREATE UNIQUE INDEX idx_requirement_case_link_live
   ON requirement_case_links(requirement_version_id, testcase_id, criterion_keys)
-  WHERE retired_at IS NULL;
-CREATE INDEX idx_requirement_case_link_case
-  ON requirement_case_links(testcase_id) WHERE retired_at IS NULL;
+  WHERE state IN ('proposed','active');
 ```
 
-`requirements.current_version_id` is maintained by the service inside the same transaction as a new version (and validated by a deferred FK or trigger). Existing `testcases(id, project_id)` already has a unique index (`V148`), so the composite FK is available.
+- A trigger validates that `criterion_keys` is a subset of the linked version’s `snapshot_metadata.criteria` keys, and that the requirement document is `requirement_note`, non-mirror, same project.
+- Proposed rows are immutable except for the `proposed → active | withdrawn` state transition; active rows are immutable except retirement. Identity is the row; a correction is a new link (retire, then propose), preserving history.
+- **Two requirements in the same project:** linking requirement A’s document id with requirement B’s version id violates `(requirement_version_id, requirement_id) → versions(id, document_id)`; the service returns `409 REQUIREMENT_LINEAGE_MISMATCH` before the insert and the database rejects a direct one. The same fixture also proves `reviewed_version_id` cannot be pointed at B’s version.
 
-**Immutability:** requirement versions are immutable from insert. A guard trigger permits only the `draft → approved | rejected` transition and fills `approved_by`/`approved_at`; a second trigger validates that `criteria` is a JSON array of objects with unique non-empty `key` strings, and that `content_digest` matches the canonical version JSON. Mirrors the `V156` `protect_governed_knowledge_version` pattern.
+### 3.4 Migration (provisional)
 
-**Criterion identity:** keys (`AC-1`, `AC-2`, …) are stable within a requirement’s lineage. A new version may reuse a key for an unchanged obligation, may add keys, and removes a key only by omission (which makes links naming it stale). A link names one or more keys that must exist in the linked version; the service validates, and a trigger re-validates at insert.
+No migration number is assigned in this design. The current latest is `V158`; the eventual migration (“provisional V159”) is created only after acceptance and after re-reconciling the then-latest migrations. It:
+- adds the composite unique indexes the lineage FKs require: `knowledge_documents(id, project_id)`, `knowledge_document_versions(id, document_id)`, and `ai_generation_requests(id, project_id)`;
+- creates `requirement_profiles`, `requirement_case_links`, and the staging-operations table (§4);
+- adds the document review-lineage constraint `(reviewed_version_id, id) → knowledge_document_versions(id, document_id)`;
+- alters no existing content/version table and performs no backfill (mirrored requirement notes are never promoted into native requirements).
 
-### 3.3 Identity and lifecycle
+---
 
-| Fact | Owner |
-| --- | --- |
-| Requirement identity and key | `requirements` row; key allocated per project under an advisory lock (same pattern as `testcase-external-id:<projectId>`), e.g. `REQ-1` |
-| Revision identity | `requirement_versions` row; monotonic `version_number`; `content_digest` = canonical JSON hash (title, description, criteria, rationale, source) |
-| Criterion identity | `criteria[].key` inside a version |
-| Typed link identity | `(requirement_version_id, testcase_id, criterion_keys)` among active links |
-| Case identity/revision | Existing `testcases.external_id`, `TESTCASE_EDIT_REVISION_SQL`, approval receipts |
+## 4. Shared staging and protected apply
 
-States: requirement `draft → active → retired` (retiring is soft; history remains); version `draft → approved | rejected`, and `approved → superseded` when a newer version becomes current. A version is never edited; a correction is a new version.
+### 4.1 Staging owner
 
-### 3.4 Authorization
+The existing staging owner is `ai_generation_requests` + `V157` (`design.md` line 722). We **extend it, not replace it**:
 
-| Operation | Rule |
-| --- | --- |
-| Read requirements/coverage | Any project member (`requireProjectAccess`) |
-| Create requirement / add revision | Project member with write access (same population allowed to author case drafts and KB documents); preview flag must be on |
-| Approve/reject a requirement version | Project **owner or manager** through a human session only; machine tokens refused (mirrors AI-memory review and case approval authority) |
-| Create/retire a link | Project member with write access; no approval implied |
-| Cross-project target | 404 on the requirement/case, never a cross-project write; no existence leak |
+```
+proposal_operations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL,
+  task_id UUID NOT NULL,                    -- ai_generation_requests.id, same project
+  logical_operation_id UUID NOT NULL,
+  operation_kind VARCHAR(32) NOT NULL CHECK (operation_kind IN (
+    'requirement_revision','testcase_create','testcase_update','testcase_archive',
+    'requirement_case_link','requirement_case_link_withdraw')),
+  base_revision JSONB NOT NULL,             -- exact document/case/version bases
+  payload JSONB NOT NULL,                  -- exact candidate content for this operation
+  content_digest CHAR(64) NOT NULL,
+  skill_context JSONB NOT NULL,            -- resolved assignments/versions/digests, or {status:'unavailable'}
+  created_by UUID, created_at,
+  UNIQUE (task_id, logical_operation_id),
+  FOREIGN KEY (task_id, project_id) REFERENCES ai_generation_requests(id, project_id) ON DELETE CASCADE
+)
+```
 
-### 3.5 Audit
+- Append-only; a revised candidate is a new task iteration/operation with a new digest. The task’s proposal revision (`proposalDigest` in `testcase-proposal-review.ts`) covers the existing case payload **and** these operations, so the human reviews one exact revision.
+- Existing `stage_testcase_changes` continues to write `generated_payload` for Zyra compatibility and additionally records typed case operations; new staging tools record requirement-revision and link operations on the same task. This is the “exact candidate-iteration content/history and selected-operation convergence” the design asks for.
+- **Requirement candidates** are staged operations, not KB rows yet. On apply they become an immutable `submitted` KB version. This keeps the KB revision history as the durable record while preserving the shared staging contract.
+- **Link candidates** are staged with `state='proposed'` only at apply time; the staging operation itself is inert and grants no coverage.
 
-Every accepted mutation writes one project-activity entry via `logProjectActivity`: `requirement_created`, `requirement_version_created`, `requirement_version_approved`, `requirement_version_rejected`, `requirement_case_linked`, `requirement_case_link_retired`, each with before/after identifiers, actor, requirement version digest and case revision. Denied cross-project attempts and stale-CAS refusals are additionally recorded in `audit_logs` with the rejecting reason (R-ASE-18 “rejected and audited”); accepted state is never written on refusal.
+### 4.2 Human review surface
 
-### 3.6 Retry and idempotency
+- The existing review task/board shows every operation in the batch: requirement title/description/criteria and version diff, case drafts, and link intents with requirement version, criterion keys, target case and both case revisions.
+- Any project member with read access to the task can review; only an **owner or manager human session** can apply, approve or reject guarded operations.
+- Every proposal records the pinned source commit, base revisions, and `skill_context`. Missing/stale/conflicting skill context is displayed as a blocking reason, not hidden.
 
-- **Requirement revision:** `submissionKey` unique per requirement. Replaying the same key with the same canonical payload returns the existing version; the same key with different content is `409 SUBMISSION_KEY_REUSED`.
-- **Link creation:** the active unique index plus `ON CONFLICT DO NOTHING` then an exact-row comparison; a replay with identical inputs returns the existing link. A replay naming a different case revision or criterion set is `409 REQUIREMENT_LINK_CHANGED` and must retire the old link first.
-- **Retire:** idempotent; retiring an already-retired link returns the existing row.
+### 4.3 Protected apply
 
-### 3.7 Concurrency and stale revisions
+A single human “Apply selected” action on the exact proposal revision runs one database transaction with one `PoolClient`:
 
-- **Requirement revision:** transaction locks the `requirements` row `FOR UPDATE`, re-reads the current head after the lock (the lesson from V155’s post-wait recheck), compares `expectedVersionId` **and** `expectedContentDigest` to the current head, then inserts the next version and advances `current_version_id`. A mismatch is `409 REQUIREMENT_STALE_REVISION` with no row written.
-- **Link creation:** `FOR SHARE` on the target testcase row, exact comparison of `testcaseRevision` to the current edit revision (and, when supplied, `testcaseApprovalRevision` to the current approval revision), then insert. A mismatch is `409 TESTCASE_REVISION_CHANGED` / `409 TESTCASE_APPROVAL_CHANGED`. Immutable requirement versions need no lock beyond the FK.
-- **Approval:** rechecks the approving principal’s role after any wait and requires the version still be the one whose digest was reviewed; a superseded version cannot be approved.
+1. Lock the task row (`FOR UPDATE`), re-read the proposal revision, and verify the selected logical operation IDs still exist with the reviewed digests.
+2. Recheck the acting human’s role after any wait; recheck the effective skill context (currently unavailable → block, §4.5).
+3. Apply in dependency order:
+   - `requirement_revision`: write the immutable `submitted` KB version with typed content/criteria (`writeKnowledgeGovernedVersion` authority `candidate`); no approval.
+   - `testcase_create/update/archive`: call the existing transaction-aware native case writer with the same client; official case IDs are allocated here.
+   - `requirement_case_link`: insert or activate a link row referencing the exact requirement version and the exact case edit revision created/verified in this transaction (approval revision included only if current and reviewed).
+4. Write one apply receipt (selected operation IDs, resulting native IDs/revisions, proposal digest, actor) and activity/audit rows; commit; run cache/index effects after commit.
+5. A failure anywhere rolls back the whole apply: no official IDs, versions or active links survive. The task keeps its reviewed operations and records a truthful failure receipt; a resume re-reads, re-verifies and does not replay committed operations.
 
-### 3.8 Coverage semantics (separate facts)
+### 4.4 When the official case ID and exact link exist
 
-For a requirement’s current version and a case, with `L` an active link:
+- **Official case ID and edit revision** exist only after a successful protected apply. Before that, the case is a staged operation, not a native Draft.
+- **The typed link** becomes `active` in that same apply, pinned to the new case revision and the requirement version that existed at review. It is a relation, not an approval.
+- **Requirement approval** is a separate owner/manager action on the exact version; approved coverage begins only then. Approval is not part of case apply and cannot be inferred from it.
+- **Run eligibility and execution** remain the existing case-approval and run-admission path; a link or an `Approved` label alone is never eligibility.
+
+### 4.5 Skills gate (D7 resolved)
+
+- Requirement and test-case skills are **required** for guarded publication under Work Package A (WP-A lines 178–180; R-ASE-25/26).
+- The resolver is not implemented and the deployed catalog exposes no skill tools. Therefore:
+  - Staging, reading, diff review and **rejection/withdrawal** are allowed in preview.
+  - **Protected apply, requirement approval, link activation and any claim of approved/executed/passing coverage are blocked** with `SKILL_CONTEXT_UNAVAILABLE`, even in preview. There is no “blocked once the resolver exists” loophole.
+  - `skill_context = {status:"unavailable"}` is recorded on every staged operation and displayed on the review surface.
+  - Once the resolver exists, the same gate requires a resolved, pinned, conflict-free assignment set; `UNASSIGNED`, stale, revoked or conflicting resolution blocks apply/approval unless an explicit, scoped project policy (which does not exist today) says otherwise. Raw observations and evidence intake remain independently permitted.
+- Consequence: **the positive half of Work Package A (apply → approve → coverage) is blocked on the minimal effective-skill capability.** The first slice can ship and prove staging, review, lineage, refusal and non-publication; its positive acceptance rows remain BLOCKED, not NOT RUN.
+
+---
+
+## 5. Coverage semantics
+
+Four readings per requirement version and criterion; a linked draft may raise only **authored**.
+
+### 5.1 Definitions
+
+- **Qualifying attempt** for a link `L` and case: an execution row that
+  1. belongs to a `cycle_item` for the same case and project, not deleted;
+  2. has a recorded result — `executed_at IS NOT NULL` and `executed_by IS NOT NULL`;
+  3. carries the **exact reviewed basis**: `cycle_items.snapshot_approval_revision = L.testcase_approval_revision` (both non-null), with the item’s reviewed content snapshot present.
+- **Unstarted run item:** `status='Untested'` or `executed_at IS NULL` — not an attempt, regardless of the item existing.
+- **Stale attempt:** `snapshot_approval_revision` differs from the link’s approval revision (or the case moved after the attempt). It remains historical and is excluded from current readings.
+- **Latest qualifying attempt:** ordered by `(executed_at, execution.id/created_at)`; retests create new native runs and therefore new attempts, never rewrite the source execution (`V158`).
+
+### 5.2 Readings
 
 | Reading | Predicate |
 | --- | --- |
-| **Authored** | `L` exists for the current requirement version (any case revision/approval state) |
-| **Current link** | `L.requirement_version_id = current_version_id` AND `L.testcase_revision = current editRevision` AND `L.testcase_approval_revision = current approvalRevision` AND the case is not deleted |
-| **Approved** | current link AND the requirement version is `approved` AND `TESTCASE_APPROVAL_CURRENT_SQL` is true for the case |
-| **Executed** | approved AND there is an execution whose `cycle_items.snapshot_approval_revision = L.testcase_approval_revision` for that case (the run accepted that exact reviewed basis) |
-| **Passing** | executed AND that execution’s status is `Passed` |
+| **Authored** | An `active` link exists for the requirement’s current **submitted or approved** version; any case revision/approval state. This is “a relationship was authored”, not coverage. |
+| **Approved** | Active link AND requirement version is the current **approved** version (`reviewed_version_id`) AND `L.testcase_revision` equals the current edit revision AND `L.testcase_approval_revision` equals the current approval revision AND `TESTCASE_APPROVAL_CURRENT_SQL` is true. |
+| **Executed** | Approved AND at least one **qualifying attempt** exists. |
+| **Passing** | Executed AND the **latest qualifying attempt** has status `Passed`. |
 
-A linked draft contributes **authored only**. An approved-but-unrun case contributes **approved**, not executed/passing. A historical execution never counts after the case or requirement moves; it remains readable as history. Stale/missing reasons returned separately per criterion: `REQUIREMENT_VERSION_SUPERSEDED`, `CASE_REVISION_CHANGED`, `CASE_APPROVAL_CHANGED`, `CASE_ARCHIVED`, `LINK_RETIRED`, `NOT_LINKED`.
+Additional reported facts (not part of the four readings): attempt count per status, latest attempt status/time, `open_unstarted_items`, `conflicting_attempts` (qualifying attempts disagree), and per-criterion stale/missing reasons.
 
-### 3.9 Entry points
+### 5.3 Edge controls
 
-**REST (human session; preview flag on):**
-`POST /api/projects/:projectId/requirements` (create), `GET …/requirements`, `GET …/requirements/:id`, `POST …/requirements/:id/revisions` (`expectedVersionId`, `expectedContentDigest`, `submissionKey`), `POST …/requirements/:id/revisions/:versionId/approve|reject`, `POST …/requirements/:id/links`, `POST …/requirements/:id/links/:linkId/retire`, `GET …/requirements/:id/coverage`.
-
-**MCP (read+write scopes; preview tools absent when the flag is off, like proposal tools):**
-`create_requirement`, `add_requirement_revision`, `get_requirement`, `list_requirements`, `link_requirement_case`, `retire_requirement_case_link`, `get_requirement_coverage`. Approval/rejection is **not** exposed to tokens.
-
-**UI:** the Requirements screen gains a **Native** source alongside provider tabs with create/revise; the requirement detail shows versions, criteria, links and the four coverage readings with reasons; the testcase detail panel shows typed requirement links (visually separate from `sourceRefs` citations and from Jira/Linear keys). Reuse existing panel/dialog and document-version patterns.
-
-### 3.10 Skills resolution and pinning (target semantics vs today)
-
-**Target (R-ASE-25/26/27):** before a governed requirement/case write, call `resolve_effective_skills` for the project/module/subtype/operation; pin the returned assignment/version IDs and digests onto the requirement version and the case proposal; an `UNASSIGNED`, ambiguous, expired, revoked or incompatible resolution blocks *approval* (not raw observation intake) per explicit project policy; conflicting composition is `BLOCKED`, never an arbitrary winner.
-
-**Today:** no skill resolver, no skill tools, no `skills-lock` runtime; the deployed catalog has none. The case proposal path already refuses when the preview flag is off partly because governed skill authority is absent (`legacy.service.ts` ~15854). Therefore this slice must:
-
-- keep native requirement authoring behind a **new default-off preview flag** (name in D3),
-- record `skillContext: { status: "unavailable", resolvedAt: null }` on every requirement version and link creation receipt,
-- present “no effective skill resolved — preview mode” in the human review view, and **never** claim governed skill provenance,
-- remain forward-compatible: when the resolver ships, the flag is not a substitute; approval requires a resolved, pinned skill set.
+| Situation | Effect on readings |
+| --- | --- |
+| Requirement document edited after approval | The KB review-invalidation trigger clears `reviewed_version_id`; approved/executed/passing drop for current coverage; links and history remain readable. |
+| Test case edited after linking | `L.testcase_revision` no longer matches the current edit revision; approved/executed/passing drop with `CASE_REVISION_CHANGED`; the link stays authored/historical until re-applied to the current revision. |
+| A newer requirement version is submitted | Current-version readings move to the newer version only when it is approved; old-version links remain readable and report `REQUIREMENT_VERSION_SUPERSEDED` in current coverage. |
+| Run item exists but is unstarted | Contributes nothing. It does not count as executed and does not override an earlier qualifying attempt; reported as `open_unstarted` / `NOT_STARTED` for that run. |
+| Attempt on an older approval basis | Excluded from current readings with `STALE_ATTEMPT`; retained as history. |
+| Pass then later Fail on the same exact basis | `executed` stays true; `passing` becomes false because the latest qualifying attempt is not Passed. The earlier Pass remains readable. |
+| Fail then later Pass on the same exact basis | `passing` true (latest attempt Passed); the earlier Fail remains in the attempt history and counts. |
+| Two attempts at effectively the same time | Deterministic tie-break by execution `id`/`created_at`; the report exposes both and `conflicting_attempts=true` if statuses differ. |
+| `Skipped`, `Blocked` or `Retest` as latest | `executed` true; `passing` false. |
+| Evidence metadata missing for an attempt | Does not change executed/passing (the attempt is persisted); evidence status is reported separately (R-ASE-11). |
 
 ---
 
-## 4. Dogfood workflow in TESBOPROJECT
+## 6. Dogfood workflow in TESBOPROJECT
 
-1. **Agent reads the owning spec and the change.** It records the source SHA and the specific requirement sections; no write yet.
-2. **Agent creates a native requirement draft** (`create_requirement`) with title, description, criteria (`AC-1…`) and rationale. The response carries the requirement key/version 1 and `skillContext: unavailable`. Nothing is approved.
-3. **Agent stages a case candidate** for the same change through `stage_testcase_changes` (existing review workflow). Because `sourceRefs` has no native-requirement type in this slice (D6), the draft’s Notes name the requirement key and spec section for the reviewer; the typed link is created later.
-4. **Human applies the selected case drafts** in the review task. Only now does an official case ID, edit revision and (if requested) approval appear. Proposal ≠ publication ≠ approval.
-5. **Agent or human creates the typed link** against the *official* case revision and approval revision (when approved) and the requirement version + criterion keys. The link is a relation, not an approval; duplicate retries are idempotent.
-6. **Human approves the requirement version** (owner/manager, session-only) if it is not already approved. Approval is distinct from case approval and from link creation.
-7. **Run creation** (if desired) uses the existing approved-case admission; the run’s `cycle_items` snapshot records the accepted approval basis. Executing the case is the only thing that creates executed/passing coverage.
-8. **Revision:** the agent adds requirement version 2 with `expectedVersionId`/`expectedContentDigest`. Historical version 1 and its links remain readable; current coverage reports stale until links target version 2. No silent re-pointing.
-9. **Reconcile:** the agent re-links the current case revision to version 2; the human sees the new coverage split. A missing or conflicting skill resolution would block approval once the resolver exists; today the preview marker is shown and the capability remains flagged.
-10. **Report:** the agent states authored/approved/executed/passing before and after, and every item that remains unverified.
+1. **Preflight.** The agent records the source SHA, project binding and the exact approved requirement/test-case skill assignment set. Today the resolver/tools are absent: it records `skillContext=unavailable` and knows that publication is blocked; it may still stage.
+2. **Requirement candidate.** The agent stages a `requirement_revision` operation (typed content, criteria, base document revision) in the shared staging task. Nothing is written to the KB yet.
+3. **Case candidate.** The agent stages `testcase_create/update` operations in the same task, citing the requirement **document** through the existing `sourceRefs` `knowledge_document` citation type (a citation, not the typed relation; no enum change needed) and naming the requirement key in the Notes for the reviewer.
+4. **Link proposal.** The agent stages `requirement_case_link` operations naming the requirement version/criteria and the intended case operation, so the relation is reviewed with the case.
+5. **Human review.** Owner/manager opens the task, sees requirement diff/criteria, case drafts and link intents with blocking reasons (skills unavailable). They may reject or withdraw; they cannot apply, approve or activate while the skills gate is closed.
+6. **When the skills resolver ships:** the same task is revalidated (proposal revision, bases, skill digests), then a protected apply creates the immutable `submitted` requirement version, the official Draft cases and the active exact-revision links in one transaction; requirement approval remains a separate exact-version human decision.
+7. **Coverage.** Until requirement approval, active links yield authored only. After approval, approved follows the exact current case and requirement revisions; executed requires a qualifying attempt; passing follows the latest attempt.
+8. **Revisions.** A new requirement revision is a new staged operation with `expectedVersionId`/digest; the old version and links remain readable; current coverage reports stale until links are re-applied to the new version. No silent re-pointing.
+
+**Fact separation:** staged operation ≠ native requirement version ≠ official case ≠ approval ≠ typed link ≠ run eligibility ≠ execution/passing.
 
 ---
 
-## 5. GJ-19 acceptance fixture (planned — NOT RUN)
+## 7. Work Package A acceptance mapping (statuses explicit)
 
-All rows are planned checks. None has been executed; no CI or browser run exists for them.
+Work Package A requires proving `ASE-E2E-01, -02, -05, -07, -08, -11, -12` (implementation-plan line 180). Definitions are in `requirements.md` (ASE-E2E rows 421–432).
 
-| ID | Starting point / action | Entry points | Persisted evidence that would prove it | Status |
+| ASE check | What it must prove | GJ-19 rows | Status |
+| --- | --- | --- | --- |
+| ASE-E2E-01 | New feature, no prior requirement: native requirement draft, linked draft cases, manual candidate, work item; reviewer owns publication | GJ19-01…04 | **BLOCKED** — staging can be built and reviewed; apply/publication is blocked by the skills gate |
+| ASE-E2E-02 | Fix existing regression: same requirement/case identities, history preserved, actual run scope | GJ19-07/08/14 | **BLOCKED** — requires guarded publication |
+| ASE-E2E-05 | Two agents edit the same record: optimistic conflict, no lost update, visible reconciliation | GJ19-10, GJ19-18 | **NOT RUN** — staging-level CAS can be proven before the skills gate |
+| ASE-E2E-07 | Wrong project token/role: denial, zero cross-project writes | GJ19-09 | **NOT RUN** — executable in the staging/lineage slice |
+| ASE-E2E-08 | Agent calls missing/stale MCP tool: explicit blocked/degraded state, no claims of update | GJ19-16 | **NOT RUN** — executable against the preview flag/catalog |
+| ASE-E2E-11 | KB synced external requirement stays read-only, correct attribution, no native overwrite | GJ19-13 | **NOT RUN** — executable without the skills resolver |
+| ASE-E2E-12 | Unapproved case added to run is prohibited regardless of writer surface | GJ19-17 | **NOT RUN** — executable with existing run admission |
+
+**Interpretation:** the slice can prove the negative/control half and the staging half now; the positive publication half of Work Package A is explicitly blocked on the minimal effective-skill capability. This note does not claim WP-A complete.
+
+---
+
+## 8. GJ-19 fixture (planned)
+
+All rows are planned; statuses distinguish executable-now from blocked.
+
+| ID | Action | Entry points | Persisted evidence | Status |
 | --- | --- | --- | --- | --- |
-| GJ19-01 | Owner creates a native requirement with two criteria | UI, REST, MCP | `requirements` row (key, project), `requirement_versions` v1 with two criteria and digest, activity `requirement_created` | NOT RUN |
-| GJ19-02 | Owner revises criterion AC-2 and adds AC-3 | REST/MCP | v2 row; v1 still readable; `current_version_id` = v2; both digests distinct | NOT RUN |
-| GJ19-03 | Link an exact approved case revision to v2 keys `[AC-2,AC-3]` | REST/MCP | active link row with exact `testcase_revision` and `testcase_approval_revision`, criterion keys, actor | NOT RUN |
-| GJ19-04 | Link a **draft** case (no approval) | REST/MCP | link row with null approval revision; coverage authored=1, approved=executed=passing=0 | NOT RUN |
-| GJ19-05 | Approve that case through the existing human review | UI/REST | receipt in `testcase_approval_receipts`; coverage after re-link to the approved revision: approved=1, executed=0 | NOT RUN |
-| GJ19-06 | Execute the approved case as Passed in a run admitted after approval | UI/REST/MCP | `cycle_items.snapshot_approval_revision` equals the link’s approval revision; execution Passed; coverage executed=1, passing=1 | NOT RUN |
-| GJ19-07 | Create requirement v3 after the run | REST/MCP | v1/v2/v3 readable; historical link intact; current coverage stale/missing with `REQUIREMENT_VERSION_SUPERSEDED` | NOT RUN |
-| GJ19-08 | Re-link the current case revision to v3 | REST/MCP | new active link; old link retired or historical; current coverage moves; history still readable | NOT RUN |
-| GJ19-09 | Unauthorized attempts: no session, guest/non-member, second tenant’s session, machine token approval | REST/MCP | 401/403/404, no rows written, audit entry for the rejection | NOT RUN |
-| GJ19-10 | Stale `expectedVersionId`/digest on revision | REST/MCP | 409 `REQUIREMENT_STALE_REVISION`, no new version, prior head unchanged | NOT RUN |
-| GJ19-11 | Duplicate retry: same `submissionKey`; same link payload twice; same key with different payload | REST/MCP | one version row / one active link; identical payload returns same ids; changed payload returns 409 and writes nothing | NOT RUN |
-| GJ19-12 | Archive the linked case | UI/REST | link history preserved; current coverage excludes the case with `CASE_ARCHIVED`; executions/history untouched | NOT RUN |
-| GJ19-13 | External ticket ownership: mirrored Jira/Linear/Notion document and the case’s ticket key | UI/REST | mirror document unchanged by native requirement ops; case ticket key unchanged; provider remains attributed | NOT RUN |
-| GJ19-14 | Case re-approved after a content edit; old execution remains | Existing review + run | old execution stays historical; it no longer counts as executed for the new approval revision; coverage shows `CASE_APPROVAL_CHANGED` until re-link | NOT RUN |
-
-Mapping to the rest of Work Package A: GJ19-01…03 prove R-ASE-04 acceptance (create, revise, both revisions readable, exact links); GJ19-04…06 prove R-ASE-05/06 separation of authored/approved/executed/passing and run admission; GJ19-07…08 prove historical links and stale/missing coverage; GJ19-09…11 prove authorization, audit, CAS and idempotency (ASE-E2E-05/06/07); GJ19-12…14 prove archive, provider ownership and exact-revision execution semantics (`ASE-FLOW-08`, `ASE-FLOW-25/26`).
-
----
-
-## 6. First implementation slice
-
-**Bounded deliverable**
-
-1. Migration **V159**: three tables, indexes, immutability/approval/criteria triggers. No existing table altered, no backfill.
-2. A `RequirementsService` as the single owner of identity, versions, links and coverage. REST controller and MCP tools call it; no table writes from adapters. MCP context gains the service (or a narrow facade) rather than a second implementation.
-3. REST endpoints and MCP tools listed in §3.9, behind a default-off preview flag; approval/reject is REST+UI session-only.
-4. Coverage read returning four counts plus per-criterion reasons; no derived number is stored.
-5. UI: Native requirement list/detail/revise/approve, link picker on the requirement and a typed-links section on the testcase panel.
-6. Tests, all **NOT RUN** at note time:
-   - real-Postgres DB spec: immutability, criteria validation, CAS/stale revision, idempotent retries, link uniqueness/retire, coverage predicates;
-   - API spec: authorization matrix, foreign-tenant 404s, approval authority, error codes and no-side-effect refusals;
-   - MCP spec: tools absent when flag off, scopes enforced, schemas closed, no approval tool;
-   - UI spec: native tab, version history, four coverage readings, typed-link display separate from citations;
-   - GJ-19 rows above.
-
-**Acceptance gates for the slice**
-
-- [ ] Migration applies forward and the DB constraints reject every invalid shape in the DB spec.
-- [ ] A draft-only link cannot raise approved/executed/passing coverage (GJ19-04).
-- [ ] A superseded requirement version leaves historical links readable and current coverage stale (GJ19-07).
-- [ ] Unauthorized and cross-tenant calls write nothing and are audited (GJ19-09).
-- [ ] Duplicate retries produce no duplicate rows; changed payloads are refused (GJ19-11).
-- [ ] External mirrors and ticket keys are untouched (GJ19-13).
-- [ ] With the preview flag off, no native requirement tool is discoverable and REST writes are refused.
-- [ ] Every accepted mutation has an activity entry; every refusal names its reason and writes no state.
-- [ ] No claim of governed skill provenance is made in preview mode; `skillContext` is recorded as unavailable.
+| GJ19-01 | Create a requirement candidate with two criteria | UI/REST/MCP staging; protected apply | `proposal_operations` row (typed payload, digest, skillContext); after apply: KB `submitted` version with criteria metadata | BLOCKED at apply (skills); staging executable |
+| GJ19-02 | Revise a criterion and add one | staging | new operation + digest; base document revision recorded; no KB version before apply | BLOCKED at apply |
+| GJ19-03 | Link an exact approved case revision to the requirement version/criteria | staging + apply | active link row with both case revisions and criterion keys | BLOCKED |
+| GJ19-04 | Link a draft case | apply | active link with null approval revision; authored=1, approved/executed/passing=0 | BLOCKED |
+| GJ19-05 | Approve the requirement version | UI/REST, owner/manager, skills resolved | approved KB snapshot + `reviewed_version_id`; activity | BLOCKED |
+| GJ19-06 | Approve case, execute Passed on exact basis | existing case review + run | approval receipt; qualifying attempt; approved=1, executed=1, passing=1 | BLOCKED |
+| GJ19-07 | Create a newer requirement version | staging/apply + approval | old/new versions readable; old links intact; current stale | BLOCKED |
+| GJ19-08 | Re-link current case revision to the new version | staging/apply | new active link; old link retired/historical | BLOCKED |
+| GJ19-09 | No session, guest, second tenant, machine-token approval | REST/MCP | 401/403/404; zero rows; audit entry | NOT RUN |
+| GJ19-10 | Stale `expectedVersionId`/digest or stale selected operation | REST/MCP staging | 409; no operation/version written; prior head unchanged | NOT RUN |
+| GJ19-11 | Duplicate retry: same submission key; same apply selection; changed payload | REST/MCP | one operation/version/link; identical replay returns same IDs; changed payload 409 | NOT RUN (staging/apply blocked where publication is required) |
+| GJ19-12 | Archive the linked case | UI/REST | link history preserved; current coverage excludes with `CASE_ARCHIVED` | BLOCKED |
+| GJ19-13 | Mirrored Jira/Linear/Notion requirement untouched; ticket key unchanged | UI/REST | mirror document byte-identical; native ops refused on mirror; provider attribution preserved | NOT RUN |
+| GJ19-14 | Case re-approved after edit; old execution remains | existing review/run | old attempt historical; not executed for new basis; `CASE_APPROVAL_CHANGED` until re-link | BLOCKED |
+| GJ19-15 | **Same-project wrong requirement:** link requirement A’s id with requirement B’s version/criteria | REST/MCP and direct SQL | service 409 `REQUIREMENT_LINEAGE_MISMATCH`; SQL FK/trigger rejects; zero rows | NOT RUN |
+| GJ19-16 | Preview flag off / stale or missing MCP catalog | MCP | native requirement tools absent/refused; explicit blocked state; no writes | NOT RUN |
+| GJ19-17 | Add a draft/unapproved linked case to a run via REST, MCP and automation | REST/MCP/automation | refused by `assertApprovedNewRunCases`; no cycle item/execution | NOT RUN |
+| GJ19-18 | Concurrent requirement revisions from two sessions | REST/MCP | one wins; loser 409; no lost update; visible reconciliation | NOT RUN |
+| GJ19-19 | Unstarted run item, then Pass, then a later Fail on the same basis | UI/REST | executed=true; passing false after the Fail; attempt history shows both; unstarted item not counted | BLOCKED (needs publication) |
 
 ---
 
-## 7. Compatibility and migration
+## 9. First implementation slice and acceptance proof
 
-- Append-only migration; existing requirements screen, ticket mirrors, sourceRefs, case review, run admission and Model Studio are unchanged.
-- No backfill: existing mirrored `requirement_note` documents are **not** promoted into native requirements (no invented identity or criteria). A future migration may offer an explicit, reviewed import; not part of this slice.
-- The native requirement key space is independent of `external_id` and of provider keys.
-- Rollback: stop writing and disable the preview flag; tables remain inert history. No destructive downgrade.
+**Slice 1 (buildable and testable now, skills-independent)**
+
+1. Provisional migration: profile and typed-link tables, lineage indexes/constraints, staging operations table, review-lineage constraint. No content/version-table replacement, no backfill.
+2. KB type extension: typed criteria validation for `requirement_note` writes; requirement key/state profile; generalized review path with `requirement_review` authority, but approval remains gated by skills at runtime.
+3. Staging tools and review surface: requirement revisions, case operations (typed mirror of the existing case payload), link proposals; one proposal revision; blockers shown.
+4. Skills gate: `SKILL_CONTEXT_UNAVAILABLE` blocks apply/approval/activation; staged items remain inert. Rejection/withdrawal allowed.
+5. Lineage enforcement: FKs and service checks; wrong-requirement fixture.
+6. Coverage read with the four readings and edge controls, exercised on seeded/non-guarded data; no product-path approval is claimed.
+
+**Acceptance proof for slice 1**
+
+- [ ] Typed requirement write rejects malformed/missing/duplicate criteria; submitted snapshots are immutable.
+- [ ] Staging records exact payloads/digests; proposal revision changes only with new content; replay is idempotent.
+- [ ] Apply/approval are refused with `SKILL_CONTEXT_UNAVAILABLE` while skills are unavailable; zero native versions/cases/active links/approval rows created.
+- [ ] Wrong requirement id/version and wrong project are refused by service and database; zero rows.
+- [ ] Stale base revision returns 409 with no lost update.
+- [ ] Preview flag off hides/refuses the new MCP tools and REST writes.
+- [ ] External mirror documents remain read-only and attributed; native operations leave them unchanged.
+- [ ] Unapproved/draft cases remain inadmissible to runs through every writer surface.
+- [ ] Coverage on controlled fixtures: draft link → authored only; unstarted item → not executed; stale attempt → excluded; Pass-then-Fail → executed but not passing; Fail-then-Pass → passing with history.
+
+**Slice 2 (blocked input):** the minimal effective-skill resolution and pinning required by WP-A/R-ASE-25. Only after it ships can apply/approval/link activation and the positive WP-A rows run. Sequence decision: **D9**.
 
 ---
 
-## 8. Risks and limitations
-
-- **Skill authority is unbuilt.** The slice cannot satisfy R-ASE-25 for governed authoring; it must stay a clearly labelled preview and must not be cited as compliance.
-- **Two-step linking (D4)** means the human applying a case cannot see the typed link at apply time; the case Notes carry the requirement key only as context.
-- **Coverage depends on approval-revision snapshots.** Cases older than `V155` have no `snapshot_approval_revision`; executions of pre-V155 runs cannot count as executed for the new approval basis (they remain historical).
-- **Criterion-key discipline** is a design convention; a poorly chosen key reuse across versions can make historical links appear current. Validation prevents missing keys, not semantic drift — reviewers must treat revision diffs as meaningful.
-- **UI is unverified in a running session**; all UI claims are source-only at this commit.
-
----
-
-## 9. Unresolved decisions
+## 10. Remaining decisions
 
 | ID | Decision | Recommendation |
 | --- | --- | --- |
-| D1 | “Work Package A” is not defined in this repository; is there a canonical package section to cite? | Treat this note’s §1 as the definition until the canonical text is added; do not claim the package name is authoritative |
-| D2 | Who may approve a requirement version? | Project owner/manager, human session only (mirror AI-memory review). Any member with write may author revisions |
-| D3 | Preview flag name/default for this capability | `TESBO_NATIVE_REQUIREMENTS_PREVIEW_ENABLED`, default off; MCP tools absent when off; REST writes refused with `capability_unavailable` |
-| D4 | Link timing: two-step after case apply vs carrying link intent through the protected apply | Two-step for the first slice (smallest, honest identity); record “intent carried through apply” as a follow-up |
-| D5 | Criterion identity | Stable per-lineage keys (`AC-n`) reused only for semantically unchanged obligations |
-| D6 | Add `requirement` as a `sourceRefs` citation type now? | No in this slice; the typed link is the relation, and Notes carry the key for review context. Revisit if reviewers need richer citations |
-| D7 | Behaviour when no effective skill resolves | Allowed only in preview with `skillContext: unavailable` and a visible review warning; approval blocked once the resolver exists unless policy explicitly allows `UNASSIGNED` |
-| D8 | Audit depth for denied attempts | Activity for accepted mutations; `audit_logs` for cross-tenant/stale/unauthorized refusals; confirm retention expectations with the security owner |
+| D1 | Work Package A definition | **Resolved** from `implementation-plan.md` 176–182 at `8686e3cb`; no further source needed |
+| D2 | Requirement approval authority | Owner/manager human session only; authors (any project write member) may propose |
+| D3 | Preview flag | Keep a default-off flag gating staging tools and exposing the skills blocker; do not treat it as permission to publish |
+| D4 | Link timing | Apply-batch link referencing the case revision created in the same transaction; standalone link allowed only against an existing exact revision |
+| D5 | Criterion identity | Stable keys (`AC-n`) in the typed content; reuse only for semantically unchanged obligations; omitted key = removed |
+| D6 | `sourceRefs` for requirements | Use the existing `knowledge_document` citation type for review context; the typed link remains the only relation (no new enum) |
+| D7 | Skills unavailable | **Resolved:** staging/review/reject allowed; apply/approval/activation and approved-or-better coverage blocked, in preview too |
+| D8 | Audit depth | Activity for accepted mutations; `audit_logs` for unauthorized/cross-tenant/stale refusals |
+| D9 | Slice sequencing | Either implement the minimal effective-skill resolver first (WP-A positive rows become runnable) or ship Slice 1 as staging/review-only with WP-A publication explicitly BLOCKED |
+| D10 | Migration number | Provisional only; assign after acceptance and reconciliation with the then-latest migrations |
 
 ---
 
-## 10. Evidence log
+## 11. Evidence log
 
 - `git fetch origin development`; `git rev-parse origin/development` → `8686e3cbce03a7c73f609140071f8e4d740215a1`.
 - `GET /api/health` (production, 2026-11-21) → `gitSha = 8686e3cb…`.
-- `scripts/mcp-deploy-check.mjs` against `…/projects/df072dfe-e4d0-406a-9350-e0d022c6323f/mcp` with `REQUIRE_PROPOSAL_PREVIEW=1` → 49 tools, fingerprint `6f1a2c05c69f8948` matches, `OK`. Catalog contains `get_requirement_matrix`; no native requirement authoring tools; retired `link_requirement_to_testcase` absent.
-- Sources read: `docs/specs/agent-synchronized-engineering/{requirements.md,design.md,implementation-plan.md,README.md,skills-governance.md,AGENT_RULE_TEMPLATE.md}`; `Tesbo-Backend-Nest/src/legacy/{legacy.service.ts,testcase-edit-revision.ts,testcase-proposal-review.ts,approved-run-cases.policy.ts}`; `src/behavior-graph/model-studio-repository.ts`; `src/integration-sync/integration-sync.processor.ts`; `src/mcp/{mcp.tools.ts,mcp.types.ts}`; `src/common/testcase-publication.policy.ts`; migrations `V45`, `V101`, `V147`, `V148`, `V151`, `V155`, `V156`; `Tesbo-Frontend/app/(app)/projects/[id]/requirements/page.tsx`; `utils/` MCP proposal fixtures.
-- No implementation, migration or acceptance run has been performed for this note.
+- `scripts/mcp-deploy-check.mjs` against `…/projects/df072dfe-e4d0-406a-9350-e0d022c6323f/mcp` with `REQUIRE_PROPOSAL_PREVIEW=1` → 49 tools, fingerprint `6f1a2c05c69f8948` matches, `OK`. Catalog has `get_requirement_matrix`; no native requirement or skill tools; retired `link_requirement_to_testcase` absent.
+- Sources read: `docs/specs/agent-synchronized-engineering/{requirements.md,design.md,implementation-plan.md,README.md,skills-governance.md,AGENT_RULE_TEMPLATE.md}` at the pinned commit; `src/legacy/{legacy.service.ts,testcase-edit-revision.ts,testcase-proposal-review.ts,approved-run-cases.policy.ts}`; `src/behavior-graph/model-studio-repository.ts`; `src/behavior-graph/graph-review-run-links.ts`; `src/integration-sync/integration-sync.processor.ts`; `src/mcp/{mcp.tools.ts,mcp.types.ts}`; `src/common/testcase-publication.policy.ts`; migrations `V45, V101, V147, V148, V151, V155, V156, V157, V158`; `Tesbo-Frontend/app/(app)/projects/[id]/requirements/page.tsx`; document write/review services.
+- **No implementation, migration or acceptance run has been performed for this note. UI statements are source-only.**
