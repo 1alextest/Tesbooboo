@@ -8360,7 +8360,7 @@ test.describe("zyra — product behavior and real tracing export in disposable C
     await expect.poll(() => aiA.requests.length).toBe(1);
     const stream = await ownerA.get(endpoint(tenantA, `/chat/sessions/${sessionId}/turns/${turnId}/events`), { failOnStatusCode: false });
     expect(stream.status(), await stream.text()).toBe(200);
-    const progress = parseSseEvents(await stream.text());
+    const progress = parseSseEvents(await stream.text()) as Array<Record<string, unknown>>;
     const answer = await pending;
     expect(aiA.embeddingRequests.filter((request) => request.input.includes("Explain the failing observation fixture.")), "the canary must reach the actual live RAG embedding endpoint").toHaveLength(1);
     expect(answer.assistant.content).toContain(safeReason);
@@ -8368,8 +8368,15 @@ test.describe("zyra — product behavior and real tracing export in disposable C
     expect(answer.user).toMatchObject({ trace: { steps: expect.arrayContaining([
       expect.objectContaining({ stage: "routing", status: "failed", meta: expect.objectContaining({ reason: safeReason }) }),
     ]) } });
-    expect(progress).toContainEqual(expect.objectContaining({ kind: "update", stage: "routing", meta: expect.objectContaining({ status: "failed", reason: safeReason }) }));
-    expect(progress).toContainEqual(expect.objectContaining({ kind: "complete" }));
+    // Catch blocks update the current step with "*"; the recorder and frontend
+    // resolve it to the latest stage, which must still be routing for this failure.
+    const failureIndex = progress.findIndex((event) => event.kind === "update" && event.stage === "*");
+    expect(failureIndex).toBeGreaterThan(-1);
+    expect(progress[failureIndex]).toMatchObject({ kind: "update", stage: "*", meta: { status: "failed", reason: safeReason } });
+    expect(progress.slice(0, failureIndex).filter((event) => event.kind === "stage").at(-1)).toMatchObject({ stage: "routing" });
+    const completionIndex = progress.findIndex((event) => event.kind === "complete");
+    expect(completionIndex).toBeGreaterThan(failureIndex);
+    expect(completionIndex).toBe(progress.length - 1);
     const activity = JSON.parse(scalar(`SELECT COALESCE(json_agg(row_to_json(entry)), '[]'::json)::text FROM
       (SELECT action, diff FROM audit_logs WHERE project_id = ${literal(tenantA.mainProjectId)} AND entity_id = ${literal(sessionId)}) entry;`) || "[]");
     expect(activity).toContainEqual({ action: "zyra_chat_ai_failed", diff: { message: safeReason, stage: "routing" } });
