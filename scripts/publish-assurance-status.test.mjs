@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { publishAssuranceStatus, refreshAssurance, main } from './publish-assurance-status.mjs';
 import { fixtureSnapshot, fixtureHead, fixtureSource, fixturePolicyRaw,
-  gateOptions, revoke, withGitHub } from './assurance-test-fixtures.mjs';
+  gateOptions, nativeReview, revoke, withGitHub } from './assurance-test-fixtures.mjs';
 
 const options = () => ({ ...gateOptions(), now: new Date('2026-11-22T00:01:00Z'), runId: '1234' });
 
@@ -66,6 +66,35 @@ test('withdrawal during Checks API publication invalidates that same check after
     assert.equal(checks[1].conclusion, 'failure');
   });
 });
+test('a marker-removed revocation is refused by the live publisher', async () => {
+  const snapshot = fixtureSnapshot();
+  revoke(snapshot);
+  snapshot.reviews.at(-1).body = 'Edited record without the protocol marker';
+  snapshot.reviews.at(-1).lastEditedAt = '2026-11-22T00:00:18Z';
+  await withGitHub({ snapshot }, async ({ checks }) => {
+    const result = await publishAssuranceStatus(options());
+    assert.equal(result.conclusion, 'failure');
+    assert.equal(checks.length, 1);
+    assert.equal(checks[0].conclusion, 'failure');
+  });
+});
+test('an authorized ordinary-body edit during publication invalidates the same check', async () => {
+  const snapshot = fixtureSnapshot();
+  snapshot.reviews.push(nativeReview(10, 'Ordinary body before publication'));
+  await withGitHub({ snapshot, afterCreate: current => {
+    const record = current.reviews.find(review => review.id === 10);
+    record.body = 'Ordinary body after an ambiguous edit';
+    record.lastEditedAt = '2026-11-22T00:00:18Z';
+  } }, async ({ checks }) => {
+    const result = await publishAssuranceStatus(options());
+    assert.equal(result.conclusion, 'failure');
+    assert.equal(checks.length, 2);
+    assert.equal(checks[0].conclusion, 'success');
+    assert.equal(checks[1].id, checks[0].id);
+    assert.equal(checks[1].method, 'PATCH');
+    assert.equal(checks[1].conclusion, 'failure');
+  });
+});
 test('unavailable final evidence cannot silently reuse the initial pass', async () => {
   await withGitHub({ deny: ({ url, captures }) => captures >= 2 && url.pathname.endsWith('/reviews') }, async ({ checks }) => {
     assert.equal((await publishAssuranceStatus(options())).conclusion, 'failure');
@@ -97,6 +126,14 @@ test('a missing import is a truthful failed PR check, not a refresh infrastructu
     assert.equal(results.length, 1);
     assert.equal(results[0].conclusion, 'failure');
     assert.equal(checks[0].conclusion, 'failure');
+  });
+});
+test('missing evidence does not claim that the coordinator observed actual worker outputs', async () => {
+  const snapshot = fixtureSnapshot(); snapshot.reviews = [];
+  await withGitHub({ snapshot }, async ({ checks }) => {
+    assert.equal((await publishAssuranceStatus(options())).conclusion, 'failure');
+    assert.doesNotMatch(checks[0].output.summary, /coordinator observed .*worker outputs|importer attests that it observed/i);
+    assert.match(checks[0].output.summary, /not established|not accepted|no accepted/i);
   });
 });
 test('bounded schedule refuses overflow instead of silently ignoring the queue tail', async () => {

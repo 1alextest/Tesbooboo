@@ -98,6 +98,80 @@ test('latest authenticated revocation or malformed/stale control never falls bac
   untrusted.reviews.push(nativeReview(14, 'TESBO-AI-REVOKE: 1\n{}', { user: { id: 900, type: 'User' } }));
   assert.equal(evaluateAssurance(untrusted).status, 'analytical_evidence_accepted');
 });
+test('removing or relabelling a revocation marker cannot revive an earlier import', async () => {
+  for (const replacement of ['Ordinary-looking replacement', 'receipt']) {
+    const snapshot = fixtureSnapshot();
+    revoke(snapshot);
+    snapshot.reviews.at(-1).body = replacement === 'receipt' ? snapshot.reviews[0].body : replacement;
+    snapshot.reviews.at(-1).lastEditedAt = '2026-11-22T00:00:18Z';
+    await withGitHub({ snapshot }, async () => {
+      const report = await run(gateOptions());
+      assert.equal(report.status, 'blocked');
+      assert.match(report.errors.join('\n'), /authorized review.*edited.*explicit import/i);
+    });
+  }
+});
+test('an ambiguous authorized edit requires a strictly later explicit valid import', async () => {
+  const snapshot = fixtureSnapshot();
+  const ordinary = nativeReview(10, 'The original marker is no longer knowable', {
+    lastEditedAt: '2026-11-22T00:00:18Z',
+  });
+  snapshot.reviews.push(ordinary);
+  await withGitHub({ snapshot }, async () => {
+    assert.equal((await run(gateOptions())).status, 'blocked');
+    snapshot.reviews.push(nativeReview(20, snapshot.reviews[2].body));
+    assert.equal((await run(gateOptions())).status, 'analytical_evidence_accepted');
+    ordinary.lastEditedAt = '2026-11-22T00:00:20Z';
+    assert.equal((await run(gateOptions())).status, 'blocked', 'same timestamp cannot prove the import followed the edit');
+    snapshot.reviews.push(nativeReview(21, snapshot.reviews[2].body));
+    assert.equal((await run(gateOptions())).status, 'analytical_evidence_accepted');
+  });
+});
+test('ordinary comments stay usable unless a current importer edited one after the import', async () => {
+  const snapshot = fixtureSnapshot();
+  snapshot.reviews.push(nativeReview(10, 'Ordinary older edit', { lastEditedAt: '2026-11-22T00:00:12Z' }));
+  snapshot.reviews.push(nativeReview(15, 'Ordinary unedited later comment'));
+  snapshot.reviews.push(nativeReview(16, 'Untrusted ordinary edit', {
+    user: { id: 900, type: 'User' }, lastEditedAt: '2026-11-22T00:00:18Z',
+  }));
+  await withGitHub({ snapshot }, async () => {
+    assert.equal((await run(gateOptions())).status, 'analytical_evidence_accepted');
+    snapshot.policy.delegatedImporterIds = [900];
+    // The live policy is fixed; exercise the delegated-authority predicate on
+    // the same native facts without pretending a candidate can change it.
+    assert.equal(evaluateAssurance(snapshot).status, 'blocked');
+  });
+});
+test('ordinary authorized reviews also require available native edit metadata', async () => {
+  for (const metadata of [{ node_id: null }, { lastEditedAt: undefined }]) {
+    const snapshot = fixtureSnapshot();
+    snapshot.reviews.push(nativeReview(10, 'Current body has no protocol marker', metadata));
+    await withGitHub({ snapshot }, async () => {
+      await assert.rejects(run(gateOptions()), /edit identity unavailable|edit metadata is missing/);
+    });
+  }
+});
+test('the evidence digest retains authorized reviews whose current body has no marker', () => {
+  const snapshot = fixtureSnapshot();
+  const ordinary = nativeReview(10, 'Ordinary current body');
+  snapshot.reviews.push(ordinary);
+  const before = snapshotDigest(snapshot);
+  ordinary.body = 'Changed ordinary current body';
+  ordinary.lastEditedAt = '2026-11-22T00:00:12Z';
+  assert.notEqual(snapshotDigest(snapshot), before);
+});
+test('tied control submission times cannot use review IDs as proof of a later import', async () => {
+  const snapshot = fixtureSnapshot();
+  revoke(snapshot, 10);
+  snapshot.reviews.at(-1).submitted_at = snapshot.reviews[2].submitted_at;
+  await withGitHub({ snapshot }, async () => {
+    const report = await run(gateOptions());
+    assert.equal(report.status, 'blocked');
+    assert.match(report.errors.join('\n'), /submission order.*tied|uniquely later/i);
+    snapshot.reviews.push(nativeReview(20, snapshot.reviews[2].body));
+    assert.equal((await run(gateOptions())).status, 'analytical_evidence_accepted');
+  });
+});
 test('native approvals and role names are not substitutes for analytical import records', () => {
   const snapshot = fixtureSnapshot(); snapshot.reviews[2].state = 'APPROVED'; blocked(snapshot);
 });

@@ -18,6 +18,7 @@ const ROLES = ['INDEPENDENT', 'WHITE'];
 const positiveInteger = value => Number.isSafeInteger(value) && value > 0;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = value => typeof value === 'string' && value.trim().length > 0;
+const timestamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
 
 export function canonicalJson(value) {
   function order(item) {
@@ -94,10 +95,16 @@ function isImporter(review, snapshot) {
     (review.user.id === snapshot.repository.owner.id ||
       snapshot.policy.delegatedImporterIds.includes(review.user.id));
 }
+function relevantReview(review, snapshot) {
+  // A current body cannot reveal whether an authorized edit removed an earlier
+  // control marker. Keep native edit metadata for every potential importer.
+  return isImporter(review, snapshot) ||
+    (typeof review.body === 'string' && review.body.startsWith('TESBO-AI-'));
+}
 function nativeRecordValid(review, snapshot) {
   return positiveInteger(review?.id) && review.state === 'COMMENTED' &&
     review.commit_id === snapshot.pr.head.sha && review.editVerified === true &&
-    review.lastEditedAt === null && text(review.submitted_at);
+    review.lastEditedAt === null && timestamp(review.submitted_at) !== null;
 }
 function receiptErrors(receipt, role, snapshot, protectedPaths) {
   const errors = [];
@@ -137,13 +144,27 @@ export function evaluateAssurance(snapshot) {
   const errors = [];
   if (pr.draft) errors.push('Draft PR cannot satisfy final integration assurance');
   if (![policy.integrationBranch, policy.releaseBranch].includes(pr.base.ref)) errors.push('Target branch is outside the installed assurance policy');
-  const controls = reviews.filter(review => isImporter(review, snapshot) &&
+  const authorizedReviews = reviews.filter(review => isImporter(review, snapshot));
+  const controls = authorizedReviews.filter(review =>
     typeof review.body === 'string' &&
-    (review.body.startsWith('TESBO-AI-IMPORT:') || review.body.startsWith('TESBO-AI-REVOKE:')))
-    .sort((a, b) => String(a.submitted_at ?? '').localeCompare(String(b.submitted_at ?? '')) || a.id - b.id);
-  // The latest authorized control is decisive. Never fall back to an earlier positive import.
-  const control = controls.at(-1);
-  if (!control) errors.push('Missing owner or delegated-coordinator import of actual AI worker receipts');
+    (review.body.startsWith('TESBO-AI-IMPORT:') || review.body.startsWith('TESBO-AI-REVOKE:')));
+  const times = controls.map(review => timestamp(review.submitted_at));
+  const latestTime = times.length && times.every(value => value !== null) ? Math.max(...times) : null;
+  const latest = latestTime === null ? [] : controls.filter(review => timestamp(review.submitted_at) === latestTime);
+  // Review IDs are allocated before submission and cannot order tied timestamps.
+  // A valid import must be uniquely later than conflicting controls and edits.
+  const control = latest.length === 1 ? latest[0] : null;
+  for (const review of authorizedReviews) {
+    if (review.editVerified !== true || !Object.hasOwn(review, 'lastEditedAt') ||
+        (review.lastEditedAt !== null && timestamp(review.lastEditedAt) === null)) {
+      errors.push('Authorized review edit metadata is unavailable or invalid');
+    } else if (review.lastEditedAt !== null &&
+        (latestTime === null || timestamp(review.lastEditedAt) >= latestTime)) {
+      errors.push('An authorized review was edited at or after the latest control; a uniquely later explicit import is required');
+    }
+  }
+  if (!controls.length) errors.push('Missing owner or delegated-coordinator import of actual AI worker receipts');
+  else if (!control) errors.push('Latest authorized control submission order is unavailable or tied; a uniquely later explicit import is required');
   else if (!nativeRecordValid(control, snapshot)) errors.push('Latest import/revocation is edited, stale, unavailable or not a submitted COMMENTED record');
   else if (control.body.startsWith('TESBO-AI-REVOKE:')) {
     errors.push('Latest authorized assurance control is a revocation; a new explicit import is required');
@@ -216,9 +237,8 @@ async function githubPages(repository, suffix, token, maxPages) {
   throw new Error('GitHub evidence pagination bound exceeded');
 }
 
-async function verifyUneditedReviews(reviews, repository, prNumber, token) {
-  const selected = reviews.filter(review => typeof review.body === 'string' &&
-    review.body.startsWith('TESBO-AI-'));
+async function verifyReviewEditMetadata(reviews, repository, prNumber, token, authority) {
+  const selected = reviews.filter(review => relevantReview(review, authority));
   if (!selected.length) return reviews;
   if (selected.some(review => !text(review.node_id))) throw new Error('Native review edit identity unavailable');
   const metadata = new Map();
@@ -245,7 +265,7 @@ async function verifyUneditedReviews(reviews, repository, prNumber, token) {
     if (!selected.includes(review)) return review;
     const node = metadata.get(review.node_id);
     if (!node || node.body !== review.body || node.state !== review.state ||
-        node.commit?.oid !== review.commit_id || node.pullRequest?.number !== prNumber ||
+        (node.commit?.oid ?? null) !== (review.commit_id ?? null) || node.pullRequest?.number !== prNumber ||
         node.pullRequest?.repository?.nameWithOwner !== repository) throw new Error('Review changed during native metadata verification');
     return { ...review, editVerified: true, lastEditedAt: node.lastEditedAt };
   });
@@ -276,7 +296,7 @@ export async function captureSnapshot({ repository, prNumber, token, sourceSha, 
       (file.previous_filename !== undefined && !text(file.previous_filename)) ||
       (file.status === 'renamed' && !text(file.previous_filename)))) throw new Error('Incomplete changed-file identities');
   let reviews = await githubPages(repository, `/pulls/${prNumber}/reviews`, token, policy.maxPages);
-  reviews = await verifyUneditedReviews(reviews, repository, prNumber, token);
+  reviews = await verifyReviewEditMetadata(reviews, repository, prNumber, token, { repository: repo, policy });
   return { repository: repo, pr, files, reviews, policy, policySha: sourceSha, policyDigest: sha256(policyRaw) };
 }
 
@@ -286,7 +306,7 @@ export function snapshotDigest(snapshot) {
       head: snapshot.pr.head.sha, base: snapshot.pr.base.sha, baseRef: snapshot.pr.base.ref },
     policySha: snapshot.policySha, policyDigest: snapshot.policyDigest,
     inputManifestSha256: inputManifestDigest(snapshot),
-    records: snapshot.reviews.filter(review => typeof review.body === 'string' && review.body.startsWith('TESBO-AI-'))
+    records: snapshot.reviews.filter(review => relevantReview(review, snapshot))
       .map(review => ({ id: review.id, userId: review.user?.id, userType: review.user?.type,
         state: review.state, head: review.commit_id, body: review.body, submittedAt: review.submitted_at,
         editVerified: review.editVerified === true, lastEditedAt: review.lastEditedAt ?? null }))

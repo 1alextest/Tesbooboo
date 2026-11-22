@@ -12,19 +12,25 @@ const accepted = report => ['analytical_evidence_accepted', 'not_applicable'].in
 function checkPayload(report, head, sourceSha, errors, now, policy, runId) {
   const passed = errors.length === 0 && accepted(report);
   const outcome = passed ? report.status : 'blocked';
+  const attestationAccepted = passed && report.status === 'analytical_evidence_accepted';
   const observedAt = now.toISOString();
   const expiresAt = new Date(now.getTime() + policy.maxCheckAgeMinutes * 60000).toISOString();
   const observation = { contract: CONTRACT, outcome, head, base: report?.base ?? null,
     policySha: sourceSha, policyDigest: report?.policyDigest ?? null,
     stateDigest: report?.stateDigest ?? null, observedAt, expiresAt,
-    importReviewId: report?.importReviewId ?? null, provenance: PROVENANCE };
+    importReviewId: report?.importReviewId ?? null,
+    provenance: attestationAccepted ? PROVENANCE : null, requiredProvenance: PROVENANCE };
   const summary = [
     `Outcome: ${outcome}`,
     `PR head: ${head}`,
     `Trusted policy source: ${sourceSha}`,
     `Evidence state digest: ${observation.stateDigest ?? 'UNAVAILABLE'}`,
     `Observed: ${observedAt}; fresh-merge deadline: ${expiresAt}`,
-    'Provenance: owner-authorized coordinator observed distinct AI worker outputs.',
+    attestationAccepted
+      ? 'Provenance: the authenticated importer attests that it observed distinct AI worker outputs.'
+      : outcome === 'not_applicable'
+        ? 'Provenance: not applicable; this complete source delta does not require analytical evidence.'
+        : 'Provenance: not established; no accepted current coordinator attestation.',
     'This is not cryptographic worker authentication, human review, canonical FROZEN, product acceptance or merge authorization.',
     'Existing owner integration policy and separate main/release rules remain in force.',
     ...(errors.length ? errors.map(error => `- ${error}`) : []),

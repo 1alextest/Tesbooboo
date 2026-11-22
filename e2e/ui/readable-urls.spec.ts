@@ -156,6 +156,50 @@ test.describe("project prefetch on a hard load", () => {
     expect(seen.members).toHaveLength(1);
   });
 
+  test("a late uuid resolver does not repeat project requests after their prefetched results are consumed", async ({ page }) => {
+    const seen = trackProjectRequests(page);
+    const isProjectResolver = (url: URL) =>
+      url.origin === new URL(apiBase()).origin &&
+      url.pathname === "/api/route-resolve" &&
+      url.search === `?project=${ctx.projectId}`;
+    let releaseResolver!: () => void;
+    const resolverGate = new Promise<void>((resolve) => { releaseResolver = resolve; });
+    let intercepted = 0;
+
+    await page.route(isProjectResolver, async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      intercepted += 1;
+      await resolverGate;
+      // Only control the ordering: the real resolver still authorizes and returns the project.
+      await route.continue();
+    });
+
+    try {
+      await page.goto(`/projects/${ctx.projectId}/bugs`);
+      // The authenticated project page renders only after ProjectDataProvider has consumed and
+      // completed both prefetches. Keep the resolver pending until that observable boundary.
+      await expect(page.getByRole("button", { name: "Report Bug" }).first()).toBeVisible();
+      expect(intercepted).toBe(1);
+      expect(new URL(page.url()).pathname).toBe(`/projects/${ctx.projectId}/bugs`);
+      expect(seen.project).toHaveLength(1);
+      expect(seen.members).toHaveLength(1);
+
+      const responsePromise = page.waitForResponse((response) =>
+        response.request().method() === "GET" && isProjectResolver(new URL(response.url()))
+      );
+      releaseResolver();
+      const response = await responsePromise;
+      expect(response.status()).toBe(200);
+      expect(await response.json()).toMatchObject({ projectId: ctx.projectId, projectKey });
+      await expectPath(page, `/projects/${projectKey}/bugs`);
+      await page.waitForLoadState("networkidle");
+      expect(seen.project).toHaveLength(1);
+      expect(seen.members).toHaveLength(1);
+    } finally {
+      releaseResolver();
+    }
+  });
+
   for (const [label, ref] of [
     ["project-key", () => projectKey],
     ["uuid", () => ctx.projectId],
