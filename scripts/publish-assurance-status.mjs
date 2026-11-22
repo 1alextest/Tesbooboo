@@ -102,7 +102,9 @@ export async function refreshAssurance({ repository, token, sourceSha, policyRaw
     if (!Number.isSafeInteger(prNumber) || prNumber < 1) throw new Error('Invalid PR selection');
     numbers = [prNumber];
   } else {
-    const rows = await githubJson(repository, `/pulls?state=open&per_page=${policy.maxOpenPullRequests + 1}`, token);
+    // Keep policy-file data out of the request URI. The policy caps the queue below
+    // this fixed API page size, so an over-limit or full page still refuses below.
+    const rows = await githubJson(repository, '/pulls?state=open&per_page=100', token);
     if (!Array.isArray(rows) || rows.length > policy.maxOpenPullRequests ||
         rows.some(pr => !Number.isSafeInteger(pr.number) || pr.number < 1)) {
       throw new Error('Open-PR refresh bound exceeded or list unavailable; no partial refresh is represented as complete');
