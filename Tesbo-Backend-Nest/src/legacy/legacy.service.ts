@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, forwardRef, HttpException, Inject, Injectable, Logger, NotFoundException, NotImplementedException, OnModuleInit } from "@nestjs/common";
 import { assertApprovedNewRunCases } from "./approved-run-cases.policy";
+import { publicAiProviderFailure } from "../common/public-ai-provider-failure";
 import { retestCreateInput, retestDigest, retestExecutionIds, retestRequestKey } from "./native-retest";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import * as fs from "fs";
@@ -2714,18 +2715,10 @@ export class LegacyService implements OnModuleInit {
     return "";
   }
 
-  // Pull a clean, user-facing message out of any thrown error (incl. Nest HttpException payloads).
+  // Untrusted provider messages must never be persisted as Zyra reply, progress,
+  // trace, activity or task status. Only status-classified public messages escape.
   private extractAiErrorMessage(err: unknown): string {
-    const anyErr = err as { getResponse?: () => unknown; message?: string };
-    if (anyErr && typeof anyErr.getResponse === "function") {
-      const resp = anyErr.getResponse();
-      if (resp && typeof resp === "object") {
-        const obj = resp as Record<string, unknown>;
-        return String(obj.error || obj.message || anyErr.message || "AI request failed.");
-      }
-      if (typeof resp === "string") return resp;
-    }
-    return err instanceof Error ? err.message : String(err);
+    return publicAiProviderFailure(err);
   }
 
   async createWorkspace(userId: string | null | undefined, body: Body) {
@@ -18612,7 +18605,7 @@ export class LegacyService implements OnModuleInit {
             createdAt: new Date().toISOString() });
           continue;
         }
-        this.logger.error(`Zyra chat operation (${op.type}) failed for project ${projectId}: ${err instanceof Error ? err.message : err}`);
+        this.logger.error(`Zyra chat operation (${op.type}) failed for project ${projectId}: ${this.extractAiErrorMessage(err)}`);
         activity.push({
           actor: "agent",
           title: "An operation failed unexpectedly",
@@ -19061,7 +19054,7 @@ export class LegacyService implements OnModuleInit {
         );
         for (const row of existingRows.rows) updateTargetFieldsById.set(row.id, { severity: row.severity, component: row.component });
       } catch (err) {
-        this.logger.warn(`Existing severity/component lookup failed for update-redirect targets in project ${params.projectId}, leaving both fields untouched: ${err instanceof Error ? err.message : err}`);
+        this.logger.warn(`Existing severity/component lookup failed for update-redirect targets in project ${params.projectId}, leaving both fields untouched: ${this.extractAiErrorMessage(err)}`);
       }
     }
     // Resolve each draft's model-reported sourceRefs against the exact labels offered in THIS
@@ -19266,7 +19259,7 @@ export class LegacyService implements OnModuleInit {
       } catch (err) {
         // Never blocks the turn — the original, unrevised drafts still ship. Same fail-open
         // contract as RagRetrievalService itself.
-        this.logger.warn(`Similarity-revision generation call failed for project ${args.projectId}, keeping original drafts: ${err instanceof Error ? err.message : err}`);
+        this.logger.warn(`Similarity-revision generation call failed for project ${args.projectId}, keeping original drafts: ${this.extractAiErrorMessage(err)}`);
       }
     }
     return { result: finalResult, matchesByIndex, revised: finalResult !== aiResult };
@@ -19437,7 +19430,7 @@ export class LegacyService implements OnModuleInit {
         : null;
       return { feedback, matchesByIndex };
     } catch (err) {
-      this.logger.warn(`zyraSimilarityFeedbackForDrafts failed for project ${projectId}: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(`zyraSimilarityFeedbackForDrafts failed for project ${projectId}: ${this.extractAiErrorMessage(err)}`);
       return { feedback: null, matchesByIndex: noMatches };
     }
   }
@@ -21060,22 +21053,11 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         outcome: `Generated ${drafts.length} testcase draft(s) using ${knowledge.length} knowledge-base item(s), ${jira.length} Jira ticket(s), and ${linear.length} Linear ticket(s). Coverage plan: ${this.zyraThinking({ story, context, acceptanceCriteria, feedback, knowledgeCount: knowledge.length, jiraCount: jira.length, linearCount: linear.length })}`
       });
     } catch (error) {
-      // Nest builds HttpExceptions from an object payload, so `error.message` is the generic
-      // status text ("Bad Request Exception") and the real cause — provider status, invalid
-      // JSON, revoked key — is only in getResponse(). Reading `.message` here made every
-      // failure indistinguishable in the activity log. extractAiErrorMessage unwraps it, the
-      // same way the Zyra chat paths already do.
+      // Reflect only status-classified failure categories, never response detail.
       const summary = this.extractAiErrorMessage(error) || "Zyra failed to generate testcase drafts.";
-      // `error` alone is often still generic ("Claude testcase generation failed"); the provider's
-      // own text lives in `detail`. Keep both so the activity log names the actual cause.
-      const payload = typeof (error as { getResponse?: () => unknown })?.getResponse === "function"
-        ? (error as { getResponse: () => unknown }).getResponse()
-        : null;
-      const providerDetail = payload && typeof payload === "object"
-        ? String((payload as Record<string, unknown>).detail || "")
-        : "";
-      const detail = providerDetail && providerDetail !== summary ? `${summary} (${providerDetail})` : summary;
-      this.logger.error(`Zyra task ${taskId} (project ${projectId}) failed: ${detail}`, error instanceof Error ? error.stack : undefined);
+      // A provider's nested detail is untrusted and may contain credentials.
+      const detail = summary;
+      this.logger.error(`Zyra task ${taskId} (project ${projectId}) failed: ${detail}`);
       // A provider response that arrived (and was billed) but failed to parse into usable drafts
       // carries its usage on the thrown error (see generateZyraWithOpenAi/Anthropic) — without
       // this, those tokens would silently vanish, which is exactly how 4 of the task-board's
@@ -21381,14 +21363,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       });
     } catch (error) {
       const summary = this.extractAiErrorMessage(error) || "Zyra failed to regenerate testcase drafts.";
-      const payload = typeof (error as { getResponse?: () => unknown })?.getResponse === "function"
-        ? (error as { getResponse: () => unknown }).getResponse()
-        : null;
-      const providerDetail = payload && typeof payload === "object"
-        ? String((payload as Record<string, unknown>).detail || "")
-        : "";
-      const detail = providerDetail && providerDetail !== summary ? `${summary} (${providerDetail})` : summary;
-      this.logger.error(`Zyra task ${taskId} (project ${projectId}) feedback regeneration failed: ${detail}`, error instanceof Error ? error.stack : undefined);
+      const detail = summary;
+      this.logger.error(`Zyra task ${taskId} (project ${projectId}) feedback regeneration failed: ${detail}`);
       // See processZyraTask's identical check: a response that arrived and was billed but failed
       // to parse still carries its usage on the thrown error.
       const zyraUsage = (error as { zyraUsage?: { input?: number; output?: number; total?: number } } | null)?.zyraUsage;
@@ -24390,7 +24366,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         });
         return LegacyService.mergeZyraScenarios(scenarios, more.scenarios, params.maxScenarios);
       } catch (err) {
-        this.logger.warn(`Scenario top-up failed for project ${params.projectId}, keeping the ${scenarios.length}-scenario plan: ${err instanceof Error ? err.message : err}`);
+        this.logger.warn(`Scenario top-up failed for project ${params.projectId}, keeping the ${scenarios.length}-scenario plan: ${this.extractAiErrorMessage(err)}`);
       }
     }
     return scenarios;
@@ -24846,7 +24822,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           byKey.set(row.key, { title: row.title, content: focused[i] ?? "", citation: { sourceType: "document", sourceId: row.id } });
         });
       } catch (err) {
-        this.logger.warn(`Update drafting: requirement lookup failed for project ${params.projectId}: ${err instanceof Error ? err.message : err}`);
+        this.logger.warn(`Update drafting: requirement lookup failed for project ${params.projectId}: ${this.extractAiErrorMessage(err)}`);
       }
       return byKey;
     };
@@ -24857,7 +24833,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       try {
         retrieved = (await this.zyraTaskKnowledge(params.projectId, [], [query])).knowledge;
       } catch (err) {
-        this.logger.warn(`Update drafting: knowledge retrieval failed for project ${params.projectId}, using the turn's sources only: ${err instanceof Error ? err.message : err}`);
+        this.logger.warn(`Update drafting: knowledge retrieval failed for project ${params.projectId}, using the turn's sources only: ${this.extractAiErrorMessage(err)}`);
       }
       const requirements = await requirementDocs(batch);
       const seen = new Set<string>();
