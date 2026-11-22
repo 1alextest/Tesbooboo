@@ -1,0 +1,90 @@
+{
+  "run": "GEX-ASER-2026-11-19",
+  "scope": "Documentation delivery identity/preservation only; not product/runtime/semantic or independent final gate",
+  "delivery_parent": "1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea",
+  "frozen_input_manifest_sha256": "9dba403c3bb129ce5a5fcab4064a6afccdc669e588ba983e124680bbcf4e7062",
+  "primary_members": [
+    {
+      "path": "canonical/00_README.md",
+      "sha256": "4cd678749336b2d737528204ea6fa2ee304c30922563b581b9a9f44ea0802844",
+      "matched": true
+    },
+    {
+      "path": "canonical/01_PRODUCT_REQUIREMENTS.md",
+      "sha256": "a1c1b80dc18c42b6b293a13fb47fdf6941cd96f1d92439b423433bad58f86d49",
+      "matched": true
+    },
+    {
+      "path": "canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "sha256": "e5217299f269dabc65eb6f3ac321502e9bccaaf24e023ace85691b8615af36a3",
+      "matched": true
+    },
+    {
+      "path": "canonical/03_TECHNICAL_DESIGN.md",
+      "sha256": "7742fce2c1c5fdc7261da512b439d1dfeb588f21bcf7a2de6fbdb8a0d2cf2afc",
+      "matched": true
+    },
+    {
+      "path": "canonical/04_MCP_API_CONTRACTS.md",
+      "sha256": "97e31e99b094b3b0e0016f64265ef46be22840528e295f09b2ac17ea82c87e69",
+      "matched": true
+    },
+    {
+      "path": "canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "sha256": "96cc95771e5de762e324248d4612ec70cea4739190ed89c274a18e469be61efc",
+      "matched": true
+    },
+    {
+      "path": "canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "sha256": "664bb9cebcc1b9323c05b9bb1d90d1e8b2ef17170edc4d7d823c99fc4cd07365",
+      "matched": true
+    },
+    {
+      "path": "canonical/07_UI_DESIGN_TASKS.md",
+      "sha256": "29d3c612783e2a42ed833f039c170a0e0cc0e788ca22a2775e58fa4f8304a9f7",
+      "matched": true
+    },
+    {
+      "path": "views/AGENT_RULE_TEMPLATE.md",
+      "sha256": "e390098484f613c309f6e3f4631ead066c98eac53975748422fd034f720c097d",
+      "matched": true
+    },
+    {
+      "path": "views/README.md",
+      "sha256": "00d40fe2e58f90b15f97836876bb382c25cc1e8435a73c14dbcf3461c06df6b0",
+      "matched": true
+    },
+    {
+      "path": "views/design.md",
+      "sha256": "c5212f3afa7e82d3624873cf81d683a13c11123230ec7c71012d0517ffa666c1",
+      "matched": true
+    },
+    {
+      "path": "views/implementation-plan.md",
+      "sha256": "141ab2283f0c45f53af9f7ce77478222887e218dea28a37aecc586a9bf9635ed",
+      "matched": true
+    },
+    {
+      "path": "views/requirements.md",
+      "sha256": "7fa9c65f57c856cf824b64715ee02c84781eb7f3c17077f22fdfc3198a8e0eb3",
+      "matched": true
+    },
+    {
+      "path": "views/skills-governance.md",
+      "sha256": "0b50a33864d0433a9887bed01d9dba2d135a4b612178593215537dedfd537714",
+      "matched": true
+    }
+  ],
+  "historical_review_body": {
+    "git_blob_sha": "8536f639e6225566ce533b85827073dc4cfe330c",
+    "sha256": "c3d5f00dbce0ce2c97914708b1c32a854d3035da35c19845959b38c4c87a6721",
+    "preserved_exactly": true
+  },
+  "new_review_record": {
+    "git_blob_sha": "c23ca1c92d89403c07baa0d713238b0ae2ae5838",
+    "sha256": "59a2708f7df262af49c95f0426838d21510f168ce5864b1195a1b02ccc5f494e"
+  },
+  "current_canonical_observed": "1.4.37",
+  "current_canonical_is_this_run_target": false,
+  "final_ci": "Subsequent follow-up commit checks must be observed separately"
+}

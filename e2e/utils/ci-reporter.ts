@@ -1,8 +1,11 @@
+import { createTestcaseFixtureResponse } from "./testcase-approval";
+import { approveMcpTestClient } from "./mcp-access";
 import { expect, request as newRequest, type Page, type TestInfo } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Client } from "pg";
+import { REPORTER_CALLBACKS_READY, withReporterStartupGate } from "./ci-reporter-startup";
 
 /** Extends ci-smoke's safety-checked, disposable bootstrap; never targets a shared tenant. */
 export async function verifyProductionReporter(page: Page, api: string, web: string, projectId: string, ownerId: string, testInfo: TestInfo) {
@@ -22,7 +25,7 @@ export async function verifyProductionReporter(page: Page, api: string, web: str
   await db.connect();
   try {
     for (const title of ["reporter pass", "reporter failure", "reporter skip"]) {
-      const response = await request.post(`${base}/testcases`, { data: { title } });
+      const response = await createTestcaseFixtureResponse(request, `${base}/testcases`, { data: { title, status: "Approved" } });
       expect(response.ok(), await response.text()).toBeTruthy();
       cases.push(await response.json());
     }
@@ -38,7 +41,10 @@ export async function verifyProductionReporter(page: Page, api: string, web: str
     const dir = testInfo.outputPath("reporter-fixture");
     await mkdir(dir, { recursive: true });
     const config = path.join(dir, "playwright.config.cjs");
-    await writeFile(config, `module.exports = { testDir: __dirname, testMatch: 'reporter.spec.cjs', workers: 1, retries: 0, outputDir: ${JSON.stringify(path.join(dir, "results"))}, reporter: [['list'], [${JSON.stringify(artifact)}, { runName: ${JSON.stringify(name)}, requireConfig: true, strict: true, retries: 0, timeoutMs: 10000 }]] };`);
+    const observer = path.join(dir, "startup-observer.cjs");
+    // An independent observer runs AFTER the unmodified production reporter's onTestEnd callbacks.
+    await writeFile(observer, `module.exports = class { count = 0; onTestEnd() { if (++this.count === 3) console.log(${JSON.stringify(REPORTER_CALLBACKS_READY)}); } };`);
+    await writeFile(config, `module.exports = { testDir: __dirname, testMatch: 'reporter.spec.cjs', workers: 1, retries: 0, outputDir: ${JSON.stringify(path.join(dir, "results"))}, reporter: [['list'], [${JSON.stringify(artifact)}, { runName: ${JSON.stringify(name)}, requireConfig: true, strict: true, retries: 0, timeoutMs: 10000 }], [${JSON.stringify(observer)}]] };`);
     await writeFile(path.join(dir, "reporter.spec.cjs"), `
 const { test, expect } = require(${JSON.stringify(require.resolve("@playwright/test"))});
 const fs = require('node:fs/promises');
@@ -52,16 +58,34 @@ test('intentional reporter failure', { tag: '@tesbo.testId("${cases[1].externalI
 test.skip('skipped reporter control', { tag: '@tesbo.testId("${cases[2].externalId}")' }, () => {});
 `);
     // One invocation uses the real CI identity. Do not invent a provider/run id or touch global env.
-    const child = await new Promise<{ code: number; output: string }>((resolve, reject) => {
-      execFile(process.execPath, [require.resolve("@playwright/test/cli"), "test", "--config", config], {
-        cwd: dir, timeout: 60_000, maxBuffer: 1_048_576,
-        env: { ...process.env, FORCE_COLOR: "0", TESBO_BASE_URL: api, TESBO_PROJECT_ID: projectId, TESBO_API_TOKEN: tokens[0].token }
-      }, (error, stdout, stderr) => {
-        if (error && (error.killed || typeof error.code !== "number")) { reject(new Error("Reporter child failed to execute or timed out")); return; }
-        resolve({ code: error?.code as number ?? 0, output: `${stdout}\n${stderr}`.split(tokens[0].token).join("[redacted]") });
+    let callbacksObserved = false;
+    const child = await withReporterStartupGate(db, projectId, name, async (release) => {
+      let releaseOnCallbacks: Promise<void> | undefined, releaseError: unknown;
+      const result = await new Promise<{ code: number; output: string }>((resolve, reject) => {
+        const childProcess = execFile(process.execPath, [require.resolve("@playwright/test/cli"), "test", "--config", config], {
+          cwd: dir, timeout: 60_000, maxBuffer: 1_048_576,
+          env: { ...process.env, FORCE_COLOR: "0", TESBO_BASE_URL: api, TESBO_PROJECT_ID: projectId, TESBO_API_TOKEN: tokens[0].token }
+        }, (error, stdout, stderr) => {
+          if (error && (error.killed || typeof error.code !== "number")) { reject(new Error("Reporter child failed to execute or timed out")); return; }
+          resolve({ code: error?.code as number ?? 0, output: `${stdout}\n${stderr}`.split(tokens[0].token).join("[redacted]") });
+        });
+        let output = "";
+        childProcess.stdout?.on("data", (chunk: Buffer) => {
+          output += chunk.toString();
+          if (!callbacksObserved && output.includes(REPORTER_CALLBACKS_READY)) {
+            callbacksObserved = true;
+            releaseOnCallbacks = release().catch((error) => { releaseError = error; childProcess.kill(); });
+          }
+        });
       });
+      await releaseOnCallbacks;
+      if (releaseError) throw releaseError;
+      return result;
     });
     await testInfo.attach("production-reporter-child", { body: child.output, contentType: "text/plain" });
+    await testInfo.attach("production-reporter-startup-gate", { body: JSON.stringify({ callbacksObserved, projectId,
+      boundary: "run INSERT gated until all three real result callbacks reached the production reporter", gateRemoved: true }, null, 2), contentType: "application/json" });
+    expect(callbacksObserved).toBe(true);
     expect(child.code, child.output).toBe(1); // The deliberate test failure, never an ingest/config failure.
     expect(child.output).toContain("Intentional CI reporter failure");
     expect(child.output).toMatch(/closed \(completed\): 1 passed, 1 failed, 1 skipped/);
@@ -107,11 +131,17 @@ test.skip('skipped reporter control', { tag: '@tesbo.testId("${cases[2].external
       expect(response.ok(), await response.text()).toBeTruthy();
       return response.json();
     };
+    // A REST reporter credential does not implicitly opt this client into external MCP.
+    const unapprovedClient = await mcp(0, "get_execution", { executionId: failed.id });
+    expect(unapprovedClient.error).toMatchObject({ code: -32001 });
+    expect(await sealed()).toEqual(before);
+    await approveMcpTestClient(request, projectId, { ...tokens[0], scopes: ["read", "write"] }, api);
+    await approveMcpTestClient(request, projectId, { ...tokens[1], scopes: ["read"] }, api);
     const read = await mcp(0, "get_execution", { executionId: failed.id });
     expect(read.error).toBeUndefined();
     expect(JSON.parse(read.result.content[0].text)).toMatchObject({ id: failed.id, status: "Failed" });
     const readonly = await mcp(1, "record_execution_result", { executionId: failed.id, status: "Passed" });
-    expect(readonly.error).toBeDefined();
+    expect(readonly.error).toMatchObject({ code: -32002 });
     const denied = await anonymous.post(`${base}/automation/runs/${runId}/results`, {
       headers: { Authorization: `Bearer ${tokens[1].token}` }, data: { caseId: cases[1].externalId, status: "pass", retryCount: 1 }
     });
@@ -220,6 +250,128 @@ test.skip('skipped reporter control', { tag: '@tesbo.testId("${cases[2].external
     await page.reload();
     await expect(page.getByLabel("Bug Title", { exact: true })).toHaveValue("CI reporter linked finding");
     await testInfo.attach("production-reporter-browser-readback", { body: await page.screenshot(), contentType: "image/png" });
+    expect(await sealed()).toEqual(before);
+
+    // Owner-approved D2/F8a contract: reuse the manual control after the sealed-state checks.
+    const metadata = await request.patch(`${api}/api/cycles/${manualId}`, { data: {
+      description: "CI published Run description", environment: "CI staging", buildVersion: "CI public build",
+      releaseName: "CI internal release", status: "Completed"
+    } });
+    expect(metadata.ok(), await metadata.text()).toBeTruthy();
+    // Declared history fixture in this disposable DB, never an edit of a real customer's results.
+    const history = [{ status: "Blocked", comment: "CI private historical result" }];
+    await db.query("UPDATE executions SET history = $2::jsonb WHERE id = $1", [manualExecution, JSON.stringify(history)]);
+    const shared = await request.post(`${api}/api/cycles/${manualId}/share`, { data: { enabled: true } });
+    expect(shared.ok(), await shared.text()).toBeTruthy();
+    const share = await shared.json();
+    expect(share.shareEnabled).toBe(true);
+    expect(share.shareToken).toMatch(/^[a-f0-9]{48}$/);
+    const publicUrl = `${api}/api/public/shared-runs/${share.shareToken}`;
+    const publicStored = async () => ({
+      run: (await db.query("SELECT * FROM cycles WHERE id = $1", [manualId])).rows,
+      items: (await db.query("SELECT * FROM cycle_items WHERE cycle_id = $1 ORDER BY id", [manualId])).rows,
+      results: await manualRows(),
+      audit: (await db.query("SELECT * FROM audit_logs WHERE project_id = $1 ORDER BY id", [projectId])).rows
+    });
+    const publicBefore = await publicStored();
+    const row = JSON.parse(JSON.stringify(publicBefore.run[0])); // Same timestamp serialization as HTTP.
+    const expectedPublicRun = {
+      name: row.name, status: row.status, description: row.description, environment: row.environment,
+      buildVersion: row.build_version, createdAt: row.created_at, startedAt: row.started_at, endedAt: row.ended_at
+    };
+    const publicRun = await anonymous.get(publicUrl);
+    expect(publicRun.status(), await publicRun.text()).toBe(200);
+    expect(Object.keys(await publicRun.json()).sort()).toEqual([
+      "name", "status", "description", "environment", "buildVersion", "createdAt", "startedAt", "endedAt"
+    ].sort());
+    expect(await publicRun.json()).toEqual(expectedPublicRun);
+    const ownerRun = await request.get(`${api}/api/cycles/${manualId}`);
+    expect(ownerRun.ok(), await ownerRun.text()).toBeTruthy();
+    const ownerBody = await ownerRun.json();
+    expect(ownerBody).toMatchObject({ ...expectedPublicRun, id: manualId, projectId,
+      shareEnabled: true, shareToken: share.shareToken, releaseName: "CI internal release" });
+    const ownerExecutions = await request.get(`${api}/api/cycles/${manualId}/executions`);
+    expect(ownerExecutions.ok(), await ownerExecutions.text()).toBeTruthy();
+    const expectedExecutions = (await ownerExecutions.json()).map((item: Record<string, unknown>) => ({
+      id: item.id, status: item.status, title: item.title, externalId: item.externalId, priority: item.priority, type: item.type
+    }));
+    expect(expectedExecutions).toHaveLength(3);
+    const publicExecutions = await anonymous.get(`${publicUrl}/executions`);
+    expect(publicExecutions.status(), await publicExecutions.text()).toBe(200);
+    expect(await publicExecutions.json()).toEqual(expectedExecutions); // Exactly the existing six fields.
+    expect(await publicStored()).toEqual(publicBefore);
+
+    const publicContext = await page.context().browser()!.newContext({ storageState: { cookies: [], origins: [] } });
+    try {
+      const publicPage = await publicContext.newPage();
+      const pageErrors: string[] = [], consoleErrors: string[] = [], failedRequests: string[] = [];
+      publicPage.on("pageerror", (error) => pageErrors.push(error.message));
+      publicPage.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
+      publicPage.on("requestfailed", (failedRequest) => failedRequests.push(failedRequest.url()));
+      const browserRun = publicPage.waitForResponse(publicUrl);
+      await publicPage.goto(`${web}/share/${share.shareToken}`);
+      const browserResponse = await browserRun;
+      expect(browserResponse.status()).toBe(200);
+      expect(await browserResponse.json()).toEqual(expectedPublicRun);
+      const headers = await browserResponse.request().allHeaders();
+      expect(headers.authorization).toBeUndefined();
+      expect(headers.cookie).toBeUndefined();
+      await expect(publicPage.getByRole("heading", { name: row.name, exact: true })).toBeVisible();
+      for (const text of [row.description, `Env: ${row.environment}`, `Build: ${row.build_version}`, "Test Cases (3)"]) {
+        await expect(publicPage.getByText(text, { exact: true })).toBeVisible();
+      }
+      await expect(publicPage.getByText("Completed", { exact: true })).toBeVisible();
+      for (const label of ["Created", "Started", "Ended"]) {
+        await expect(publicPage.getByText(new RegExp(`^${label} \\d{2} \\w+ \\d{4}$`))).toBeVisible();
+      }
+      await expect(publicPage.getByRole("row")).toHaveCount(4);
+      for (const item of expectedExecutions) {
+        const tableRow = publicPage.getByRole("row").filter({ hasText: String(item.externalId) });
+        await expect(tableRow.getByText(String(item.title), { exact: true })).toBeVisible();
+        await expect(tableRow.getByText(String(item.status), { exact: true })).toBeVisible();
+      }
+      await expect(publicPage.getByText("CI internal release", { exact: true })).toHaveCount(0);
+      await expect(publicPage.getByText(history[0].comment, { exact: true })).toHaveCount(0);
+      expect(consoleErrors).toEqual([]);
+      await testInfo.attach("public-run-approved-projection", { body: await publicPage.screenshot({ fullPage: true }), contentType: "image/png" });
+      expect(await publicStored()).toEqual(publicBefore);
+
+      const unavailable = async (url: string, token: string) => {
+        const beforeReads = await publicStored();
+        for (const suffix of ["", "/executions"]) expect((await anonymous.get(`${url}${suffix}`)).status()).toBe(404);
+        await publicPage.goto(`${web}/share/${token}`);
+        await expect(publicPage.getByRole("heading", { name: "Link Not Available", exact: true })).toBeVisible();
+        await expect(publicPage.getByRole("table")).toHaveCount(0);
+        expect(await publicStored()).toEqual(beforeReads);
+      };
+      const disabled = await request.post(`${api}/api/cycles/${manualId}/share`, { data: { enabled: false } });
+      expect(disabled.ok(), await disabled.text()).toBeTruthy();
+      expect(await disabled.json()).toEqual({ shareEnabled: false, shareToken: share.shareToken });
+      await unavailable(publicUrl, share.shareToken);
+      const enabled = await request.post(`${api}/api/cycles/${manualId}/share`, { data: { enabled: true } });
+      expect(enabled.ok(), await enabled.text()).toBeTruthy();
+      expect(await enabled.json()).toEqual(share);
+      const reenabledBefore = await publicStored();
+      expect(await (await anonymous.get(publicUrl)).json()).toEqual(expectedPublicRun);
+      expect(await (await anonymous.get(`${publicUrl}/executions`)).json()).toEqual(expectedExecutions);
+      await publicPage.goto(`${web}/share/${share.shareToken}`);
+      await expect(publicPage.getByRole("heading", { name: row.name, exact: true })).toBeVisible();
+      expect(await publicStored()).toEqual(reenabledBefore);
+      expect(await manualRows()).toEqual(publicBefore.results);
+      expect(reenabledBefore.items).toEqual(publicBefore.items);
+      expect(reenabledBefore.audit).toEqual(publicBefore.audit);
+      await unavailable(`${api}/api/public/shared-runs/not-a-real-token`, "not-a-real-token");
+      const deleted = await request.delete(`${api}/api/cycles/${manualId}`);
+      expect(deleted.ok(), await deleted.text()).toBeTruthy();
+      const deletedState = await publicStored();
+      expect(deletedState.run[0]).toMatchObject({ share_token: share.shareToken, share_enabled: true });
+      expect(deletedState.run[0].deleted_at).not.toBeNull();
+      expect(deletedState.results.find((result) => result.id === manualExecution)?.history).toEqual(history);
+      await unavailable(publicUrl, share.shareToken);
+      await testInfo.attach("public-run-deleted-link-unavailable", { body: await publicPage.screenshot(), contentType: "image/png" });
+      expect(pageErrors).toEqual([]);
+      expect(failedRequests).toEqual([]); // Expected HTTP 404 responses are not network failures.
+    } finally { await publicContext.close(); }
     expect(await sealed()).toEqual(before);
   } finally {
     // Only soft-delete our synthetic resources. Preserve their audit/provenance until service teardown.

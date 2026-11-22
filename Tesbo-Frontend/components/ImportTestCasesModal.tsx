@@ -588,7 +588,7 @@ export default function ImportTestCasesModal({ projectId, open, onClose, onImpor
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-backdrop)] backdrop-blur-sm">
-      <div className="mx-4 flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface-overlay)] shadow-[var(--shadow-elevated)]">
+      <div role="dialog" aria-label="Import Test Cases" className="mx-4 flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface-overlay)] shadow-[var(--shadow-elevated)]">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[var(--border)] px-6 py-4">
           <div>

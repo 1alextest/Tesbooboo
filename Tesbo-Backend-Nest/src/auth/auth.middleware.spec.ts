@@ -7,7 +7,10 @@ import type { AuthenticatedRequest } from "../common/request.types";
 
 function fixture(principal: object | null = { tokenId: "t", userId: "machine", projectId: "p", scopes: ["read"] }) {
   const otp = { resolveSession: jest.fn().mockResolvedValue("browser") };
-  const api = { authenticate: jest.fn().mockResolvedValue(principal) };
+  // Mirrors ApiTokenService.authenticate: an absent/empty token has no principal. A mock that
+  // answered a bare "Bearer" with one would make the middleware look like it accepted an empty
+  // credential, which is the opposite of what it does.
+  const api = { authenticate: jest.fn(async (token: string | null) => (token ? principal : null)) };
   const mw = new AuthMiddleware(
     { sessionCookieName: "session" } as unknown as AppConfigService,
     otp as unknown as OtpService,

@@ -45,7 +45,7 @@ jest.mock("@langfuse/tracing", () => ({
   LangfuseOtelSpanAttributes
 }));
 
-import { recordGeneration, recordReconciliation, recordStandaloneTool, startZyraTurn, type TurnHandle } from "./ai-trace";
+import { recordGeneration, recordReconciliation, recordStandaloneGeneration, recordStandaloneTool, startZyraTurn, type TurnHandle } from "./ai-trace";
 
 describe("ai-trace.ts", () => {
   beforeEach(() => {
@@ -166,13 +166,47 @@ describe("ai-trace.ts", () => {
       ).resolves.toBeUndefined();
       const call = topLevelCalls[0];
       expect(call.attrs.level).toBe("ERROR");
-      expect(call.attrs.statusMessage).toBe("db down");
+      expect(call.attrs.statusMessage).toBe("Operation failed (details in masked output)");
+      expect(call.attrs.output).toEqual({ error: "db down" });
 
       startObservationMock.mockImplementationOnce(() => {
         throw new Error("SDK exploded");
       });
       await expect(recordStandaloneTool({ traceSeed: "seed-2", name: "zyra.apply_operations" })).resolves.toBeUndefined();
     });
+  });
+
+  it("keeps standalone error details and file names out of unmasked attributes", async () => {
+    isTracingEnabledMock.mockReturnValue(true);
+    const secret = "sk-synthetic-private-value";
+    const common = { traceSeed: "seed-private", name: "private-diagnostic",
+      errorMessage: secret, metadata: { projectId: "project-1", fileName: secret, apiKey: secret, provider: secret } };
+    await recordStandaloneGeneration({ ...common, provider: "openai", model: "gpt-4.1" });
+    await recordStandaloneTool(common);
+    expect(topLevelCalls).toHaveLength(2);
+    for (const { attrs } of topLevelCalls) {
+      const { input: maskedInput, output: maskedOutput, ...unmasked } = attrs;
+      void maskedInput;
+      expect(maskedOutput).toEqual({ error: secret });
+      expect(JSON.stringify(unmasked)).not.toContain(secret);
+      expect(attrs.metadata).toMatchObject({ projectId: "project-1" });
+      expect(attrs.metadata).not.toHaveProperty("fileName");
+      expect(attrs.statusMessage).toBe("Operation failed (details in masked output)");
+    }
+  });
+
+  it("groups standalone observations by canonical native session and user attributes", async () => {
+    isTracingEnabledMock.mockReturnValue(true);
+    const common = { traceSeed: "seed-session", name: "scoped-operation",
+      metadata: { sessionId: "session-1", userId: "user-1" } };
+    await recordStandaloneGeneration({ ...common, provider: "openai", model: "gpt-4.1" });
+    await recordStandaloneTool(common);
+    for (const result of startObservationMock.mock.results) {
+      const span = result.value as { otelSpan: { setAttribute: jest.Mock } };
+      expect(span.otelSpan.setAttribute).toHaveBeenCalledWith("session.id", "session-1");
+      expect(span.otelSpan.setAttribute).toHaveBeenCalledWith("user.id", "user-1");
+    }
+    expect(startObservationMock).toHaveBeenCalledTimes(2);
   });
 
   describe("recordReconciliation", () => {

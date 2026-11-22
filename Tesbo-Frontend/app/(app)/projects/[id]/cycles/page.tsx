@@ -248,9 +248,9 @@ export default function TestRunsPage() {
   function openEdit(r: TestRunListItem) {
     setEditRun(r);
     setName(r.name);
-    setDescription(r.description);
-    setEnvironment(r.environment);
-    setBuildVersion(r.buildVersion);
+    setDescription(r.description ?? "");
+    setEnvironment(r.environment ?? "");
+    setBuildVersion(r.buildVersion ?? "");
   }
 
   async function handleEdit(e: React.FormEvent) {

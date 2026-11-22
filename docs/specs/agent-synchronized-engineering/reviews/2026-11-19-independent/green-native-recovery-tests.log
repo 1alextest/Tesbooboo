@@ -1,0 +1,68 @@
+node:internal/modules/cjs/loader:1564
+  const err = new Error(message);
+              ^
+
+Error: Cannot find module 'typescript'
+Require stack:
+- /workspace/scratch/fb086055b433/tesbo-review-native-final/Tesbo-Frontend/package.json
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1564:15)
+    at wrapResolveFilename (node:internal/modules/cjs/loader:1118:27)
+    at defaultResolveImplForCJSLoading (node:internal/modules/cjs/loader:1142:10)
+    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1169:12)
+    at Module._load (node:internal/modules/cjs/loader:1341:5)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at Module.require (node:internal/modules/cjs/loader:1674:12)
+    at require (node:internal/modules/helpers:157:16)
+    at file:///workspace/scratch/fb086055b433/tesbo-review-native-final/scripts/document-write-queue.test.mjs:7:12
+    at ModuleJob.run (node:internal/modules/esm/module_job:561:25) {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [
+    '/workspace/scratch/fb086055b433/tesbo-review-native-final/Tesbo-Frontend/package.json'
+  ]
+}
+
+Node.js v24.22.3
+✖ scripts/document-write-queue.test.mjs (130.584791ms)
+node:internal/modules/cjs/loader:1564
+  const err = new Error(message);
+              ^
+
+Error: Cannot find module 'typescript'
+Require stack:
+- /workspace/scratch/fb086055b433/tesbo-review-native-final/Tesbo-Frontend/package.json
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1564:15)
+    at wrapResolveFilename (node:internal/modules/cjs/loader:1118:27)
+    at defaultResolveImplForCJSLoading (node:internal/modules/cjs/loader:1142:10)
+    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1169:12)
+    at Module._load (node:internal/modules/cjs/loader:1341:5)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at Module.require (node:internal/modules/cjs/loader:1674:12)
+    at require (node:internal/modules/helpers:157:16)
+    at file:///workspace/scratch/fb086055b433/tesbo-review-native-final/scripts/model-run-recovery.test.mjs:10:12
+    at ModuleJob.run (node:internal/modules/esm/module_job:561:25) {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [
+    '/workspace/scratch/fb086055b433/tesbo-review-native-final/Tesbo-Frontend/package.json'
+  ]
+}
+
+Node.js v24.22.3
+✖ scripts/model-run-recovery.test.mjs (130.617596ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 149.610355
+
+✖ failing tests:
+
+test at scripts/document-write-queue.test.mjs:1:1
+✖ scripts/document-write-queue.test.mjs (130.584791ms)
+  'test failed'
+
+test at scripts/model-run-recovery.test.mjs:1:1
+✖ scripts/model-run-recovery.test.mjs (130.617596ms)
+  'test failed'

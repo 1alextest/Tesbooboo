@@ -94,7 +94,7 @@ export async function buildReportsFixture(
       title: "Search fails once in six runs",
       suiteId: alphaSuiteId,
       priority: "P2",
-      status: "Draft",
+      status: "Approved",
     }),
     untestedP1: await seedTestCase(api, projectId, {
       title: "Payment refund has never been run",
@@ -112,7 +112,7 @@ export async function buildReportsFixture(
       title: "Legacy case authored six weeks ago",
       suiteId: alphaSuiteId,
       priority: "P2",
-      status: "Deprecated",
+      status: "Approved",
       createdDaysAgo: 40,
     }),
   };
@@ -157,6 +157,13 @@ export async function buildReportsFixture(
     }
   }
   setExecutionResults(results);
+
+  // Both cases were approved before entering their historical runs. Their present repository
+  // states can differ from those reviewed run snapshots.
+  for (const [caseId, status] of [[cases.lowFlake.id, "Draft"], [cases.old.id, "Deprecated"]] as const) {
+    const restored = await api.put(`/api/projects/${projectId}/testcases/${caseId}`, { data: { status } });
+    if (!restored.ok()) throw new Error(`Could not restore fixture status: ${await restored.text()}`);
+  }
 
   const failedFlakyRun = runs[5];
   const failedFlakyExecutions = await listRunExecutions(api, failedFlakyRun.id);

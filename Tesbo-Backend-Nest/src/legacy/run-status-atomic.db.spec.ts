@@ -91,4 +91,55 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
     const state = await setup.query<{ status: string }>("SELECT status FROM cycles WHERE id = $1", [cycleId]);
     expect(state.rows[0].status).not.toBe("Completed");
   });
+
+  // Reuse this migrated Run fixture and the shared service constructor, not a mocked SQL result.
+  const publicReader = () => makeLegacy({
+    query: (sql: string, args?: unknown[]) => setup.query(sql, args)
+  } as unknown as DatabaseService);
+  const stored = async () => ({
+    run: (await setup.query("SELECT * FROM cycles WHERE id = $1", [cycleId])).rows,
+    items: (await setup.query("SELECT * FROM cycle_items WHERE cycle_id = $1 ORDER BY id", [cycleId])).rows,
+    results: (await setup.query("SELECT e.* FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id WHERE ci.cycle_id = $1 ORDER BY e.id", [cycleId])).rows,
+    audit: (await setup.query("SELECT * FROM audit_logs WHERE project_id = $1 ORDER BY id", [projectId])).rows
+  });
+
+  it.each(["populated", "null"])("publishes only the approved eight Run fields, preserving %s values and stored rows", async (values) => {
+    await setup.query("BEGIN");
+    try {
+      const populated = values === "populated";
+      await setup.query(
+        `UPDATE cycles SET share_token = $2, share_enabled = true,
+           description = $3, environment = $4, build_version = $5, started_at = $6, ended_at = $7,
+           release_name = 'internal release', branch_name = 'private/branch', commit_sha = 'internal-commit',
+           build_url = 'https://ci.invalid/private', tags = ARRAY['internal-tag'] WHERE id = $1`,
+        [cycleId, cycleId, populated ? "Published description" : null, populated ? "Staging" : null,
+          populated ? "1.2.3" : null, populated ? "2026-11-01T10:00:00Z" : null, populated ? "2026-11-01T11:00:00Z" : null]
+      );
+      const before = await stored();
+      const row = before.run[0];
+      const result = await publicReader().publicCycle(cycleId);
+      expect(await stored()).toEqual(before);
+      expect(result).toEqual({
+        name: row.name, status: row.status, description: row.description, environment: row.environment,
+        buildVersion: row.build_version, createdAt: row.created_at, startedAt: row.started_at, endedAt: row.ended_at
+      });
+    } finally { await setup.query("ROLLBACK"); }
+  });
+
+  it.each(["disabled", "deleted", "unknown"])("refuses both public readers for a %s token without changing stored rows", async (state) => {
+    await setup.query("BEGIN");
+    try {
+      await setup.query(
+        "UPDATE cycles SET share_token = $2, share_enabled = $3, deleted_at = $4 WHERE id = $1",
+        [cycleId, cycleId, state !== "disabled", state === "deleted" ? new Date() : null]
+      );
+      const before = await stored();
+      const svc = publicReader();
+      const token = state === "unknown" ? `unknown-${cycleId}` : cycleId;
+      for (const read of [() => svc.publicCycle(token), () => svc.publicCycleExecutions(token)]) {
+        await expect(read()).rejects.toMatchObject({ status: 404, response: { error: "Shared run not found" } });
+      }
+      expect(await stored()).toEqual(before);
+    } finally { await setup.query("ROLLBACK"); }
+  });
 });

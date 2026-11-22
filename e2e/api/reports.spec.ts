@@ -1,3 +1,4 @@
+import { approveTestcase } from "../utils/testcase-approval";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, test, type APIRequestContext } from "@playwright/test";
@@ -148,7 +149,9 @@ async function buildFixture(api: APIRequestContext, projectId: string): Promise<
       title: "Search fails once in six runs",
       suiteId: alphaSuiteId,
       priority: "P2",
-      status: "Draft",
+      // Temporarily Approved so the run-add boundary accepts it; restored to Draft after the
+      // runs are built (repository-summary asserts the final status distribution).
+      status: "Approved",
     }),
     untestedP1: await seedTestCase(api, projectId, {
       title: "Payment refund has never been run",
@@ -166,7 +169,8 @@ async function buildFixture(api: APIRequestContext, projectId: string): Promise<
       title: "Legacy case authored six weeks ago",
       suiteId: alphaSuiteId,
       priority: "P2",
-      status: "Deprecated",
+      // Temporarily Approved for the run-add boundary; restored to Deprecated below.
+      status: "Approved",
       createdDaysAgo: 40,
     }),
   };
@@ -219,6 +223,13 @@ async function buildFixture(api: APIRequestContext, projectId: string): Promise<
   }
   setExecutionResults(results);
 
+  // Native runs only accept Approved cases, so the two cases that must be executed were created
+  // Approved above. Restore the statuses the repository-summary assertions describe.
+  for (const [caseId, status] of [[cases.lowFlake.id, "Draft"], [cases.old.id, "Deprecated"]] as const) {
+    const restored = await api.put(`/api/projects/${projectId}/testcases/${caseId}`, { data: { status } });
+    if (!restored.ok()) throw new Error(`Could not restore fixture status: ${await restored.text()}`);
+  }
+
   const failedFlakyRun = runs[5];
   const failedFlakyExecutions = await listRunExecutions(api, failedFlakyRun.id);
   const failedFlakyExecution = failedFlakyExecutions.find((e) => e.testcaseId === cases.flaky.id)!;
@@ -255,7 +266,7 @@ test.beforeAll(async () => {
   asQa = await loginAs(tenant.qa);
   anon = await anonymousContext();
 
-  const projectId = await seedProject(asOwner, `E2E ${Date.now()} Reports Fixture`);
+  const projectId = await seedProject(asOwner, `E2E Rpt Fixture ${Date.now()}`);
   // The QA engineer is a legitimate member of the fixture project, so the role axis can assert both
   // directions: a project member may read reports, a workspace member without access may not.
   setProjectRole(projectId, tenant.qa.userId, "qa_engineer");
@@ -273,7 +284,7 @@ test.beforeEach(() => {
 
 /** An empty project, for the "no history at all" branch of every endpoint. Purged by the caller. */
 async function withEmptyProject(fn: (projectId: string) => Promise<void>): Promise<void> {
-  const projectId = await seedProject(asOwner, `E2E ${Date.now()} Reports Empty`);
+  const projectId = await seedProject(asOwner, `E2E Rpt Empty ${Date.now()}`);
   try {
     await fn(projectId);
   } finally {
@@ -306,7 +317,7 @@ test.describe("project analytics counters", () => {
   test("RPT-A-02 a soft-deleted test case leaves the counters, and a soft-deleted execution leaves the status map", { tag: '@tesbo.testId("TES-TC-462")' }, async () => {
     const before = await getJson(asOwner, `/api/projects/${fixture.projectId}/analytics`);
 
-    const throwaway = await seedTestCase(asOwner, fixture.projectId, { title: "E2E Reports soon-deleted case" });
+    const throwaway = await seedTestCase(asOwner, fixture.projectId, { title: "E2E Reports soon-deleted case", status: "Approved" });
     const run = await seedRun(asOwner, fixture.projectId, { name: `E2E Reports Delete Run ${Date.now()}` });
     await addRunCases(asOwner, run.id, [throwaway.id]);
     const [execution] = await listRunExecutions(asOwner, run.id);
@@ -367,7 +378,7 @@ async function seedRunWithStatuses(projectId: string, statuses: string[]): Promi
   const stamp = Date.now();
   const cases: SeededCase[] = [];
   for (let i = 0; i < statuses.length; i++) {
-    cases.push(await seedTestCase(asOwner, projectId, { title: `E2E Reports breakdown case ${stamp}-${i}` }));
+    cases.push(await seedTestCase(asOwner, projectId, { title: `E2E Reports breakdown case ${stamp}-${i}`, status: "Approved" }));
   }
   const run = await seedRun(asOwner, projectId, { name: `E2E Reports breakdown run ${stamp}` });
   await addRunCases(asOwner, run.id, cases.map((c) => c.id));
@@ -418,8 +429,8 @@ test.describe("execution status breakdown and percentages", () => {
     expect(Object.keys(before.executionStatus)).toEqual(EXECUTION_STATUS_ORDER);
     expect(sumOf(before.executionStatus)).toBe(before.executionTotal);
 
-    const projectA = await seedProject(asOwner, `E2E ${Date.now()} Reports Workspace A`);
-    const projectB = await seedProject(asOwner, `E2E ${Date.now()} Reports Workspace B`);
+    const projectA = await seedProject(asOwner, `E2E Rpt A ${Date.now()}`);
+    const projectB = await seedProject(asOwner, `E2E Rpt B ${Date.now()}`);
     try {
       const a = await seedRunWithStatuses(projectA, ["Passed", "Passed"]);
       const b = await seedRunWithStatuses(projectB, ["Failed", "Blocked", "Retest"]);
@@ -601,7 +612,7 @@ test.describe("execution report grouping", () => {
 
   test("RPT-A-17 a status outside the six reported buckets is counted as Untested", { tag: '@tesbo.testId("TES-TC-477")' }, async () => {
     const run = await seedRun(asOwner, fixture.projectId, { name: `E2E Reports Odd Status Run ${Date.now()}` });
-    const throwaway = await seedTestCase(asOwner, fixture.projectId, { title: "E2E Reports odd-status case" });
+    const throwaway = await seedTestCase(asOwner, fixture.projectId, { title: "E2E Reports odd-status case", status: "Approved" });
     try {
       await addRunCases(asOwner, run.id, [throwaway.id]);
       const [execution] = await listRunExecutions(asOwner, run.id);
@@ -668,6 +679,7 @@ test.describe("traceability matrix", () => {
   test("RPT-A-22 a soft-deleted case leaves the matrix, and a soft-deleted execution empties its result", { tag: '@tesbo.testId("TES-TC-482")' }, async () => {
     const throwaway = await seedTestCase(asOwner, fixture.projectId, {
       title: "E2E Reports matrix soft-delete case",
+      status: "Approved",
     });
     const run = await seedRun(asOwner, fixture.projectId, { name: `E2E Reports Matrix Run ${Date.now()}` });
     try {
@@ -925,6 +937,7 @@ test.describe("reports overview", () => {
      */
     const run = await seedRun(asOwner, fixture.projectId, { name: `E2E Reports Skip Retest Run ${Date.now()}` });
     try {
+      await approveTestcase(asOwner, fixture.projectId, fixture.cases.lowFlake.id);
       await addRunCases(asOwner, run.id, [
         fixture.cases.flaky.id,
         fixture.cases.stable.id,
@@ -950,6 +963,8 @@ test.describe("reports overview", () => {
       // Passed / (Passed + Failed + Blocked) = 1/1 = 100% — Skipped never reaches this ratio.
       expect(row.passRate).toBe(100);
     } finally {
+      const restored = await asOwner.put(`/api/projects/${fixture.projectId}/testcases/${fixture.cases.lowFlake.id}`, { data: { status: "Draft" } });
+      expect(restored.ok(), await restored.text()).toBe(true);
       await asOwner.delete(`/api/cycles/${run.id}`, { failOnStatusCode: false });
     }
   });
@@ -1040,6 +1055,7 @@ test.describe("AI insights", () => {
     // Four runs, one flip -> 1/3 = 0.33, which is Medium: between the 0.25 and 0.5 thresholds.
     const mediumCase = await seedTestCase(asOwner, fixture.projectId, {
       title: "E2E Reports medium flake",
+      status: "Approved",
       suiteId: fixture.betaSuiteId,
     });
     const runs: SeededRun[] = [];
@@ -1198,6 +1214,36 @@ test.describe("cross-endpoint consistency", () => {
   });
 });
 
+test.describe("requirement matrix bug provenance", () => {
+  test("RPT-A-72 the matrix reads bug_links, so a bug linked to another run stays visible", async () => {
+    await withEmptyProject(async (projectId) => {
+      const suiteId = await seedSuite(asOwner, projectId, "E2E BugLink Matrix Suite");
+      const testcase = await seedTestCase(asOwner, projectId, {
+        title: "E2E BugLink Matrix Case",
+        suiteId,
+        status: "Approved",
+      });
+      const runA = await seedRun(asOwner, projectId, { name: "E2E BugLink Matrix Run A" });
+      const runB = await seedRun(asOwner, projectId, { name: "E2E BugLink Matrix Run B" });
+      await addRunCases(asOwner, runA.id, [testcase.id]);
+      await addRunCases(asOwner, runB.id, [testcase.id]);
+      // Created without a link, so bugs.execution_id stays null; both links exist only in bug_links.
+      const bugId = await seedBug(asOwner, projectId, { title: "E2E BugLink Matrix Bug" });
+      for (const run of [runA, runB]) {
+        const linked = await asOwner.post(`/api/bugs/${bugId}/links`, {
+          data: { testcaseId: testcase.id, cycleId: run.id },
+        });
+        expect(linked.ok(), `linking the bug to ${run.id} — ${await linked.text()}`).toBeTruthy();
+      }
+
+      const matrix = await getJson(asOwner, `/api/projects/${projectId}/reports/requirement-matrix`);
+      const rows = matrix.rows.filter((row: { testcaseId: string }) => row.testcaseId === testcase.id);
+      expect(rows.map((row: { runId: string }) => row.runId).sort()).toEqual([runA.id, runB.id].sort());
+      for (const row of rows) expect(row.bugId).toBe(bugId);
+    });
+  });
+});
+
 /*
  * Hard-delete remediation Phase 2. V111 made `cycles`/`cycle_items` soft-deletable (Phase 1), but
  * five of the reports layer's own read sites — executionReport, requirementMatrix, coverageBySuite,
@@ -1310,28 +1356,79 @@ test.describe("reports exclude cases removed from a run (hard-delete remediation
   });
 });
 
+test.describe("reports exclude directly soft-deleted executions", () => {
+  test("RPT-A-73 a soft-deleted execution stops counting as settled for untested-P1 and flaky reads", async () => {
+    await withEmptyProject(async (projectId) => {
+      const p1 = await seedTestCase(asOwner, projectId, {
+        title: "E2E Soft-Deleted Execution P1",
+        priority: "P1",
+        status: "Approved",
+      });
+      const p2 = await seedTestCase(asOwner, projectId, {
+        title: "E2E Soft-Deleted Execution P2",
+        priority: "P2",
+        status: "Approved",
+      });
+      const runA = await seedRun(asOwner, projectId, { name: "E2E Soft-Deleted Run A" });
+      const runB = await seedRun(asOwner, projectId, { name: "E2E Soft-Deleted Run B" });
+      await addRunCases(asOwner, runA.id, [p1.id, p2.id]);
+      await addRunCases(asOwner, runB.id, [p2.id]);
+      const execution = async (runId: string, testcaseId: string) =>
+        (await listRunExecutions(asOwner, runId)).find((e) => e.testcaseId === testcaseId)!;
+      const p1Execution = await execution(runA.id, p1.id);
+      const p2Passed = await execution(runA.id, p2.id);
+      const p2Failed = await execution(runB.id, p2.id);
+      for (const [runId, exec, status] of [
+        [runA.id, p1Execution, "Passed"],
+        [runA.id, p2Passed, "Passed"],
+        [runB.id, p2Failed, "Failed"],
+      ] as const) {
+        const patched = await asOwner.patch(`/api/cycles/${runId}/executions/${exec.id}`, { data: { status } });
+        expect(patched.ok(), await patched.text()).toBeTruthy();
+      }
+
+      const before = await getJson(asOwner, `/api/projects/${projectId}/reports/insights`);
+      expect(before.untestedP1Count, "the P1 case has a settled result").toBe(0);
+      expect(
+        before.flakyTests.some((f: { testcaseId: string }) => f.testcaseId === p2.id),
+        "the P2 case has two different settled results",
+      ).toBe(true);
+
+      // Direct execution soft-delete: the cycle item and the run stay active, so only the missing
+      // `e.deleted_at IS NULL` predicate can keep these rows out of the reads.
+      softDeleteExecution(p1Execution.id);
+      softDeleteExecution(p2Failed.id);
+
+      const after = await getJson(asOwner, `/api/projects/${projectId}/reports/insights`);
+      expect(after.untestedP1Count, "the P1 case has no live settled result").toBe(1);
+      expect(
+        after.flakyTests.some((f: { testcaseId: string }) => f.testcaseId === p2.id),
+        "one live result cannot flip between statuses",
+      ).toBe(false);
+    });
+  });
+});
+
 test.describe("the per-run report summary endpoint", () => {
-  test("RPT-A-47 returns a hardcoded all-zero summary regardless of the run's real results", { tag: '@tesbo.testId("TES-TC-507")' }, async () => {
-    // KNOWN STUB (documented, not test.fail()): legacy.controller.ts's cycleSummary() takes no
-    // parameters at all and returns a fixed object. Run 6 below really does hold three results, so
-    // if this endpoint ever starts reporting them this assertion is the thing that notices. It has
-    // no frontend consumer today — recorded as a finding rather than a red test.
+  test("RPT-A-47 reports the run's real status buckets, matching the project overview", { tag: '@tesbo.testId("TES-TC-507")' }, async () => {
+    // Run 6 holds three executions: flaky (Failed), stable (Passed), low-flake (Failed).
     const run = fixture.runs[5];
     const res = await asOwner.get(`/api/cycles/${run.id}/report/summary`);
     expect(res.status()).toBe(200);
-    expect(await res.json()).toEqual({ total: 0, passed: 0, failed: 0, blocked: 0, skipped: 0, untested: 0 });
+    expect(await res.json()).toEqual({ total: 3, passed: 1, failed: 2, blocked: 0, skipped: 0, untested: 0 });
 
     const overview = await getJson(asOwner, `/api/projects/${fixture.projectId}/reports/overview`);
     const realRun = overview.passRateTrend.find((p: any) => p.name === run.name);
     expect(realRun.executed).toBe(3);
+    expect(realRun.passed).toBe(1);
+    expect(realRun.failed).toBe(2);
   });
 
-  test("RPT-A-48 answers the same zeros for a run id that doesn't exist", { tag: '@tesbo.testId("TES-TC-508")' }, async () => {
+  test("RPT-A-48 answers 404 for a run id that doesn't exist", { tag: '@tesbo.testId("TES-TC-508")' }, async () => {
     const res = await asOwner.get("/api/cycles/00000000-0000-0000-0000-000000000000/report/summary", {
       failOnStatusCode: false,
     });
-    expect(res.status()).toBe(200);
-    expect((await res.json()).total).toBe(0);
+    expect(res.status()).toBe(404);
   });
 });
 
@@ -1468,7 +1565,7 @@ test.describe("report export", () => {
     // exact aggregates over fixture.projectId, and an extra test case — even a deleted one — is
     // exactly the kind of contamination this file's header warns about.
     const nasty = `E2E Export "quoted", comma\nand newline ${Date.now()}`;
-    const projectId = await seedProject(asOwner, `E2E Export Quoting ${Date.now()}`);
+    const projectId = await seedProject(asOwner, `E2E Rpt Quote ${Date.now()}`);
     try {
       await seedTestCase(asOwner, projectId, { title: nasty, priority: "P3" });
       const res = await asOwner.get(`/api/projects/${projectId}/reports/export/csv?view=matrix`);
@@ -1679,7 +1776,7 @@ test.describe("report export", () => {
   }
 
   test("RPT-A-71 an empty project's Russian exports still carry Russian header rows", async () => {
-    const emptyId = await seedProject(asOwner, `E2E Export RU Empty ${Date.now()}`);
+    const emptyId = await seedProject(asOwner, `E2E Rpt RU ${Date.now()}`);
     try {
       const res = await asOwner.get(`/api/projects/${emptyId}/reports/export/csv?view=matrix`, { headers: RU });
       expect(res.status()).toBe(200);
@@ -1694,7 +1791,7 @@ test.describe("report export", () => {
   test("RPT-A-64 an empty project exports headers and no rows", { tag: '@tesbo.testId("TES-TC-1207")' }, async () => {
     // The empty-result edge: a brand new project has no runs, no cases and no bugs, and every view
     // still has to produce a file a spreadsheet can open.
-    const emptyId = await seedProject(asOwner, `E2E Export Empty ${Date.now()}`);
+    const emptyId = await seedProject(asOwner, `E2E Rpt Export ${Date.now()}`);
     try {
       for (const view of EXPORT_VIEWS) {
         const res = await asOwner.get(

@@ -124,9 +124,6 @@ const MAX_EVIDENCE_BYTES = 25 * 1024 * 1024;
 const ANSI_SGR = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
 
 interface Counters {
-  passed: number;
-  failed: number;
-  skipped: number;
   untagged: number;
   malformed: number;
   unknownCase: number;
@@ -139,11 +136,16 @@ export default class TesboReporter implements Reporter {
   private enabled: boolean;
   private readonly options: TesboReporterOptions;
   private readonly source = detectRunSource();
+  private initialization: Promise<void> | null = null;
+  private readonly pendingResults: Array<{ test: TestCase; result: TestResult }> = [];
   private readonly inFlight: Promise<unknown>[] = [];
+  /**
+   * Final outcome per Tesbo case, not per attempt. Playwright reports every retry through
+   * onTestEnd, while the ingest upserts one row per (run, case); the close summary must count
+   * cases so a fail-then-pass retry does not claim two results and a permanent mismatch.
+   */
+  private readonly finalOutcomes = new Map<string, TestResult["status"]>();
   private readonly counters: Counters = {
-    passed: 0,
-    failed: 0,
-    skipped: 0,
     untagged: 0,
     malformed: 0,
     unknownCase: 0,
@@ -169,9 +171,15 @@ export default class TesboReporter implements Reporter {
    * Collection-time validation is card §3: "the tag/decorator must be parsed at test-collection
    * time (before execution), so unlinked tests can be flagged upfront rather than discovered as a
    * missing result later", and "a typo in the ID fails fast locally instead of silently not
-   * reporting". Both are only possible here, before the first test runs.
+   * reporting". The scan belongs here, but Playwright does not await asynchronous initialization;
+   * result callbacks are held until startup finishes.
    */
-  async onBegin(config: FullConfig, suite: Suite): Promise<void> {
+  onBegin(config: FullConfig, suite: Suite): Promise<void> {
+    this.initialization = this.initialize(config, suite);
+    return this.initialization;
+  }
+
+  private async initialize(config: FullConfig, suite: Suite): Promise<void> {
     if (!this.enabled) return;
 
     /*
@@ -256,6 +264,9 @@ export default class TesboReporter implements Reporter {
     const shardNote = config.shard ? ` (shard ${config.shard.current}/${config.shard.total})` : "";
     const reusedNote = run.data.reused ? " (existing)" : "";
     console.log(`[tesbo] reporting ${caseIds.length} linked test(s) to run ${run.data.runId}${reusedNote}${shardNote}`);
+    // Playwright does not await onBegin: fast tests may have finished before the run was ready.
+    // Replay only those local callbacks into the existing submission queue, never HTTP requests.
+    for (const { test, result } of this.pendingResults.splice(0)) this.onTestEnd(test, result);
   }
 
   /**
@@ -289,7 +300,11 @@ export default class TesboReporter implements Reporter {
    * from inflating the count.
    */
   onTestEnd(test: TestCase, result: TestResult): void {
-    if (!this.enabled || !this.client || !this.runId) return;
+    if (!this.enabled) return;
+    if (!this.client || !this.runId) {
+      if (this.initialization) this.pendingResults.push({ test, result });
+      return;
+    }
 
     const { caseId, malformed } = extractCaseId(test.tags ?? [], test.annotations ?? []);
     if (!caseId) {
@@ -298,9 +313,9 @@ export default class TesboReporter implements Reporter {
       return;
     }
 
-    if (result.status === "passed") this.counters.passed += 1;
-    else if (result.status === "skipped") this.counters.skipped += 1;
-    else this.counters.failed += 1;
+    // Last attempt stands. The counters below are derived from this map at close, never from
+    // per-attempt increments.
+    this.finalOutcomes.set(caseId, result.status);
 
     const client = this.client;
     const runId = this.runId;
@@ -360,14 +375,21 @@ export default class TesboReporter implements Reporter {
       const kind = EVIDENCE_BY_EXTENSION[ext];
       if (!kind) continue;
       let body: Uint8Array;
+      // One handle for the size check and the read. Stat-then-read by path is a race: a trace may be
+      // replaced or finalised between the two calls, and the size that was checked would not be the
+      // size that gets uploaded (which is what the cap exists to prevent).
+      let handle: fs.promises.FileHandle | undefined;
       try {
-        const stat = await fs.promises.stat(attachment.path);
+        handle = await fs.promises.open(attachment.path, "r");
+        const stat = await handle.stat();
         // Size is checked before reading: a 500MB video would otherwise be pulled into memory only
         // to be rejected, and on a large matrix that is the difference between a slow run and an OOM.
         if (stat.size <= 0 || stat.size > MAX_EVIDENCE_BYTES) continue;
-        body = await fs.promises.readFile(attachment.path);
+        body = await handle.readFile();
       } catch {
         continue; // traces and videos are finalised asynchronously and may not exist yet
+      } finally {
+        await handle?.close().catch(() => undefined);
       }
       const entry: Payload = {
         name: path.basename(attachment.path),
@@ -392,6 +414,7 @@ export default class TesboReporter implements Reporter {
    * outright that results are missing instead of looking like a clean pass over fewer tests.
    */
   async onEnd(result: FullResult): Promise<void> {
+    await this.initialization;
     if (!this.enabled || !this.client || !this.runId) {
       if (this.disabledReason) console.warn(`[tesbo] ${this.disabledReason}`);
       this.printUnlinked();
@@ -402,14 +425,10 @@ export default class TesboReporter implements Reporter {
 
     const interrupted = result.status === "interrupted" || result.status === "timedout";
     const closeStatus = interrupted ? "incomplete" : "completed";
-    const closed = await this.client.closeRun(this.runId, closeStatus, {
-      total: this.counters.passed + this.counters.failed + this.counters.skipped,
-      passed: this.counters.passed,
-      failed: this.counters.failed,
-      skipped: this.counters.skipped
-    });
+    const summary = this.summaryCounts();
+    const closed = await this.client.closeRun(this.runId, closeStatus, summary);
 
-    const counts = `${this.counters.passed} passed, ${this.counters.failed} failed, ${this.counters.skipped} skipped`;
+    const counts = `${summary.passed} passed, ${summary.failed} failed, ${summary.skipped} skipped`;
     if (closed.ok) {
       const alreadyClosed = closed.data.alreadyClosed === true;
       // Older minimal acknowledgements confirm the requested close. An explicit null or an
@@ -445,6 +464,23 @@ export default class TesboReporter implements Reporter {
     }
   }
 
+  /**
+   * Case-level totals for the close summary. Playwright reports every attempt; the ingest stores
+   * one result per (run, case), so counting attempts invents extra failed rows and makes the
+   * server's reconciliation report a mismatch on every retried test.
+   */
+  private summaryCounts(): { total: number; passed: number; failed: number; skipped: number } {
+    let passed = 0;
+    let failed = 0;
+    let skipped = 0;
+    for (const status of this.finalOutcomes.values()) {
+      if (status === "passed") passed += 1;
+      else if (status === "skipped") skipped += 1;
+      else failed += 1; // failed / timedOut / interrupted are all non-passing results
+    }
+    return { total: passed + failed + skipped, passed, failed, skipped };
+  }
+
   /** Card §3: "surfaced in the run summary as 'N tests not linked to Tesbo'". */
   private printUnlinked(): void {
     const untagged = this.untaggedTitles.length || this.counters.untagged;
@@ -458,6 +494,7 @@ export default class TesboReporter implements Reporter {
 
   private disable(reason: string): void {
     this.enabled = false;
+    this.pendingResults.length = 0;
     this.disabledReason = reason;
   }
 

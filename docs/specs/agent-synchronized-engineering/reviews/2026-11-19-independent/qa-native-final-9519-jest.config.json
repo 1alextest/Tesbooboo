@@ -1,0 +1,34 @@
+{
+  "rootDir": "/workspace/scratch/fb086055b433/tesbo-review-9519b56d/Tesbo-Backend-Nest",
+  "testEnvironment": "node",
+  "roots": [
+    "<rootDir>/src",
+    "/workspace/scratch/fb086055b433/assurance-working"
+  ],
+  "testMatch": [
+    "**/*.spec.ts"
+  ],
+  "moduleFileExtensions": [
+    "ts",
+    "js",
+    "json"
+  ],
+  "moduleDirectories": [
+    "node_modules"
+  ],
+  "transform": {
+    "^.+\\.tsx?$": [
+      "/workspace/scratch/fb086055b433/Tesbooboo/Tesbo-Backend-Nest/node_modules/ts-jest",
+      {
+        "tsconfig": "<rootDir>/tsconfig.json",
+        "diagnostics": false,
+        "isolatedModules": true
+      }
+    ]
+  },
+  "clearMocks": true,
+  "cacheDirectory": "/workspace/scratch/fb086055b433/assurance-working/qa-native-final-jest-cache",
+  "modulePaths": [
+    "/workspace/scratch/fb086055b433/Tesbooboo/Tesbo-Backend-Nest/node_modules"
+  ]
+}

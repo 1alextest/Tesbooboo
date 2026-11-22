@@ -48,7 +48,18 @@ function resolveConfig(): { publicKey: string; secretKey: string; baseUrl: strin
     return null;
   }
   const allowCloud = String(process.env.LANGFUSE_ALLOW_CLOUD || "").toLowerCase() === "true";
-  if (/cloud\.langfuse\.com/i.test(baseUrl) && !allowCloud) {
+  // Host comparison, not a substring search. The guard exists to stop customer prompts reaching
+  // Langfuse Cloud by accident, so it answers "is this host cloud?" from the parsed hostname. An
+  // unparseable base URL cannot be used for tracing at all, so it is treated as cloud: tracing stays
+  // off unless the operator explicitly allowed cloud delivery.
+  let pointsAtCloud = true;
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    pointsAtCloud = host === "cloud.langfuse.com" || host.endsWith(".cloud.langfuse.com");
+  } catch {
+    // Keep the conservative answer: refuse rather than guess.
+  }
+  if (pointsAtCloud && !allowCloud) {
     logger.warn("Tracing off: LANGFUSE_BASE_URL points at Langfuse Cloud. Set LANGFUSE_ALLOW_CLOUD=true to send customer data there deliberately.");
     return null;
   }
@@ -111,8 +122,8 @@ export async function startLangfuse(): Promise<void> {
     started = true;
     logger.log(`Tracing on → ${config.baseUrl} (environment: ${config.environment}).`);
 
-    // Best-effort: seed model prices for common catalog models so cost aggregates are non-zero
-    // where the instance lacks definitions (docs/langfuse-observability-plan.md §3.5). Never throws.
+    // Optional, default-off fallback for verified exact models after a complete inventory.
+    // Existing definitions are preserved (docs/langfuse-observability-plan.md §3.5).
     void import("./langfuse-model-prices")
       .then(({ seedLangfuseModelPrices }) => seedLangfuseModelPrices(config))
       .catch((err) => logger.warn(`Model price seeding skipped: ${err instanceof Error ? err.message : err}`));

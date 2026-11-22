@@ -1,5 +1,9 @@
+import type { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
+import type { ModelStudioRepository } from "../behavior-graph/model-studio-repository";
 import type { DatabaseService } from "../database/database.service";
 import type { LegacyService } from "../legacy/legacy.service";
+import type { ProjectSourceGraphCoordinator } from "../behavior-graph/project-source-graph.coordinator";
+import type { GraphChangeReviewDelivery } from "../behavior-graph/graph-change-review.delivery";
 
 /**
  * Tesbo MCP — protocol types.
@@ -48,13 +52,19 @@ export const MCP_SERVER_INSTRUCTIONS = `Tesbo is a test management system. This 
 Typical shapes:
 - Test cases live in suites (list_suites, list_testcases with suiteId).
 - A cycle is a test run: create_cycle_from_testcases seeds it with test cases, each becoming one execution; record results with record_execution_result / bulk_record_execution_results.
-- A bug can link to a test case, a cycle, and/or a specific execution (create_bug/update_bug's links, link_testcase_to_bug/unlink_testcase_from_bug) — linking a failed execution to a bug sets that execution to Failed.
+- A bug can link to a test case, a cycle, and/or a specific execution (create_bug/update_bug's links, link_testcase_to_bug/unlink_testcase_from_bug). Associations preserve the execution result and its evidence; use the authorized result writer to record an observed failure explicitly.
 - The Knowledge Base is a separate document/folder tree, not part of the test-case hierarchy — start with search_knowledge_base or list_knowledge_folders.
+- Versioned QA impact review is shared with the existing Zyra Change Review page: list_qa_graph_changes reads committed revisions and explicit case candidates. Use get_testcase for an existing candidate's full canonical details rather than cloning test cases.
+- capture_qa_graph_change is an optional write-scoped, project-bound observation of an administrator-approved Git source. It accepts no source path, manifest, semantic claim, test outcome or approval from the caller; missing bindings fail closed. A code change or missing explicit reference prompts QA investigation, not a Failed execution or proven coverage.
+- Captured changes and notifications do not run tests or approve them. Only actually executed tests with attributable evidence may receive results through the existing execution tools, under human QA review.
 
 Rules worth knowing before calling a write tool:
-- To archive/restore a test case, use archive_testcase/restore_testcase rather than setting status directly — restoring always resets status to "Draft" (the prior status isn't retained).
-- update_testcase and update_suite only change the fields you pass; every other field keeps its current value.
-- bulk_update_testcases only accepts priority, suiteId, status, ownerId, automationStatus — not the full field set update_testcase supports.
+- Machine clients cannot directly create, update, archive, restore, duplicate, bulk-publish or change requirements on official test cases. Cached calls to those old tools return HUMAN_PUBLICATION_REQUIRED.
+- The unpublished proposal review preview is off by default. Only when stage_testcase_changes is advertised can this client prepare unpublished create/update/archive proposals without a model key. Otherwise use native human editing; do not assume a missing staging capability is available.
+- When the preview is available, supply an explicit requestKey; updates and archives bind the current get_testcase editRevision. Read the resulting task with get_testcase_proposal_task or list_testcase_proposals.
+- A task ID identifies a proposal workflow, never a newly published test case. A human must inspect the exact proposal revision and save selected changes in Tesbo. There is no MCP apply or approval tool.
+- Stage restore as an update with status Draft. A new case is published as Draft; human publication and subsequent test-case approval are separate decisions.
+- Suite creation and editing require the native human action. Machine clients can read suites; cached create_suite/update_suite calls are refused without changing the suite.
 - Every id-addressed tool is already scoped to this token's project; passing an id from another project fails with a clear "not found" / "belongs to a different project" error rather than acting on it.
 
 Example workflow: "file a bug for the test case that just failed" → get_testcase_executions or list_executions to find the failing execution, then create_bug with links: [{testcaseId, cycleId, executionId}].`;
@@ -130,11 +140,20 @@ export type TokenScope = "read" | "write";
  */
 export interface McpToolContext {
   projectId: string;
+  /** Actual authenticated credential, never an id or identity supplied in tool arguments. */
+  tokenId?: string;
   actorId: string | null;
   userId: string | null;
   scopes: TokenScope[];
   legacy: LegacyService;
   db: DatabaseService;
+  /** Existing project-bound capture and native notification services. */
+  graphCapture?: ProjectSourceGraphCoordinator;
+  graphNotificationDelivery?: GraphChangeReviewDelivery;
+  /** Same native opt-in, stateless validator as the REST preview. */
+  modelPreview?: ModelStudioPreview;
+  /** Persisted Model Studio drafts, revisions and case mappings (same owner as REST). */
+  modelStudio?: ModelStudioRepository;
 }
 
 export interface McpTool {
@@ -144,5 +163,9 @@ export interface McpTool {
   inputSchema: Record<string, unknown>;
   /** Minimum token scope required to call this tool. */
   requiredScope: TokenScope;
+  /** Retained only to give cached legacy calls an actionable refusal. */
+  hiddenFromDiscovery?: boolean;
+  /** Default-off unpublished proposal preview; only server configuration can enable it. */
+  proposalPreviewOnly?: boolean;
   handler: (args: Record<string, unknown>, ctx: McpToolContext) => Promise<unknown>;
 }

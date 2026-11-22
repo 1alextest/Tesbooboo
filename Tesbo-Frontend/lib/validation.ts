@@ -313,9 +313,9 @@ export function validateEnvironmentUrl(value: string, existing: { url: string }[
   return "";
 }
 
-// Mirrors LegacyController.validateScheduleRunAt (Tesbo-Backend-Nest) — a datetime-local value has
-// no timezone offset of its own, so both sides parse it as the browser's/server's local wall-clock
-// time and compare it to "now" as an instant, which is timezone-safe either way.
+// Mirrors SchedulesService.parseScheduleRunAt (Tesbo-Backend-Nest) — a datetime-local value has no
+// timezone offset of its own, so both sides parse it as the browser's/server's local wall-clock time
+// and compare it to "now" as an instant, which is timezone-safe either way.
 export function validateScheduleRunAt(value: string): string {
   if (!value) return "Run At is required";
   const ms = Date.parse(value);
@@ -323,3 +323,32 @@ export function validateScheduleRunAt(value: string): string {
   if (ms <= Date.now()) return "Date and time must be in future";
   return "";
 }
+
+/** HH:MM for a daily/weekly rule; the instant is resolved in the schedule's timezone by the server. */
+export function validateScheduleLocalTime(value: string): string {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? "" : "Choose a valid time";
+}
+
+export function validateScheduleDays(days: number[]): string {
+  return days.length > 0 ? "" : "Choose at least one day";
+}
+
+/**
+ * Returns a URL only when it is absolute http(s); anything else becomes undefined.
+ *
+ * Values like an issue link or a defect URL come from a server or a text field, and a `javascript:`
+ * or `data:` URL assigned to an anchor's href executes on click. Rendering the value without an
+ * href (undefined) keeps the text visible without making it a live URL.
+ */
+export function safeExternalUrl(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+

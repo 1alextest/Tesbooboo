@@ -2,9 +2,11 @@ import { expect, test, type APIRequestContext, type APIResponse } from "@playwri
 import { exec, literal, scalar } from "../utils/psql";
 import {
   anonymousContext,
+  detachUserByEmail,
   loginAs,
   provisionRbacTenant,
   rbacSuiteSkipReason,
+  seedFixtureUser,
   type RbacTenant,
 } from "../utils/rbac-tenant";
 
@@ -347,6 +349,91 @@ test.describe("the tail — api keys, activity, notifications, branding, admin",
     expect(await customers.text()).not.toContain(tenant!.organizationId);
   });
 
+  test("TAI-A-20 only a platform owner can grant or revoke platform admin access", async () => {
+    const stamp = Date.now();
+    const adminEmail = `e2e-platform-admin-${stamp}@tesbo.invalid`;
+    const ownerEmail = `e2e-platform-owner-${stamp}@tesbo.invalid`;
+    const targetEmail = `e2e-platform-target-${stamp}@tesbo.invalid`;
+    const adminUser = seedFixtureUser(adminEmail, "E2E Platform Admin");
+    const ownerUser = seedFixtureUser(ownerEmail, "E2E Platform Owner");
+    exec(
+      `INSERT INTO platform_admins (user_id, role) VALUES ` +
+        `(${literal(adminUser.userId)}, 'admin'), (${literal(ownerUser.userId)}, 'owner');`
+    );
+    const asAdmin = await loginAs(adminUser);
+    const asPlatformOwner = await loginAs(ownerUser);
+    try {
+      for (const [what, attempt] of [
+        ["add admin", () => asAdmin.post("/api/admin/admins", { data: { email: targetEmail }, failOnStatusCode: false })],
+        [
+          "remove admin",
+          () => asAdmin.delete("/api/admin/admins/11111111-1111-4111-8111-111111111111", { failOnStatusCode: false }),
+        ],
+      ] as Array<[string, () => Promise<APIResponse>]>) {
+        const res = await attempt();
+        expect(res.status(), `${what} by a non-owner admin — ${await res.text()}`).toBe(403);
+      }
+
+      const granted = await asPlatformOwner.post("/api/admin/admins", { data: { email: targetEmail } });
+      expect(granted.status(), await granted.text()).toBe(201);
+      const row = await granted.json();
+      expect(row).toMatchObject({ email: targetEmail, role: "admin" });
+      expect((await asPlatformOwner.delete(`/api/admin/admins/${row.id}`)).ok()).toBeTruthy();
+      expect(scalar(`SELECT COUNT(*)::int FROM platform_admins WHERE id = ${literal(row.id)};`)).toBe("0");
+
+      // Adding an existing owner is a no-op, and an owner can never be removed through this surface.
+      const demote = await asPlatformOwner.post("/api/admin/admins", { data: { email: ownerEmail } });
+      expect((await demote.json()).role).toBe("owner");
+      const ownerRowId = scalar(`SELECT id FROM platform_admins WHERE user_id = ${literal(ownerUser.userId)};`);
+      const removeOwner = await asPlatformOwner.delete(`/api/admin/admins/${ownerRowId}`, { failOnStatusCode: false });
+      expect(removeOwner.status(), await removeOwner.text()).toBe(403);
+      expect(scalar(`SELECT role FROM platform_admins WHERE user_id = ${literal(ownerUser.userId)};`)).toBe("owner");
+    } finally {
+      exec(
+        `DELETE FROM platform_admins WHERE user_id IN (${literal(adminUser.userId)}, ${literal(ownerUser.userId)});`
+      );
+      detachUserByEmail(adminEmail);
+      detachUserByEmail(ownerEmail);
+      detachUserByEmail(targetEmail);
+      await Promise.all([asAdmin.dispose(), asPlatformOwner.dispose()]);
+    }
+  });
+
+  test("TAI-A-23 the customers summary is the total of the rows it returns", async () => {
+    const stamp = Date.now();
+    const ownerEmail = `e2e-admin-summary-${stamp}@tesbo.invalid`;
+    const ownerUser = seedFixtureUser(ownerEmail, "E2E Admin Summary");
+    exec(`INSERT INTO platform_admins (user_id, role) VALUES (${literal(ownerUser.userId)}, 'owner');`);
+    const api = await loginAs(ownerUser);
+    try {
+      const res = await api.get("/api/admin/customers");
+      expect(res.ok(), await res.text()).toBeTruthy();
+      const body = await res.json();
+      expect(body.customers.length).toBeGreaterThan(0);
+      const sum = (key: string) =>
+        body.customers.reduce((total: number, row: Record<string, unknown>) => total + Number(row[key] || 0), 0);
+      // The summary must be the totals of the same rows, not a second aggregate that can drift or a
+      // hardcoded zero block an operator would read as "nobody uses this install".
+      expect(body.summary).toMatchObject({
+        totalOrganizations: body.customers.length,
+        totalMembers: sum("memberCount"),
+        totalProjects: sum("projectCount"),
+        totalTestCases: sum("testCaseCount"),
+        totalAutomated: sum("automatedCount"),
+      });
+      expect(body.summary.totalMembers).toBeGreaterThan(0);
+      expect(body.summary.overallAutomationCoverage).toBe(
+        body.summary.totalTestCases
+          ? Math.round((body.summary.totalAutomated / body.summary.totalTestCases) * 100)
+          : 0,
+      );
+    } finally {
+      exec(`DELETE FROM platform_admins WHERE user_id = ${literal(ownerUser.userId)};`);
+      detachUserByEmail(ownerEmail);
+      await api.dispose();
+    }
+  });
+
   test("TAI-A-16 the setup probe reports that the install already has an admin, and refuses a second", { tag: '@tesbo.testId("TES-TC-546")' }, async () => {
     const status = await anon.get("/api/setup/status", { failOnStatusCode: false });
     // Deliberately public: the first-run wizard has to be able to ask before anyone can sign in.
@@ -431,7 +518,7 @@ test.describe("the tail — api keys, activity, notifications, branding, admin",
 
   // ─── Linked issue keys ────────────────────────────────────────────────────
 
-  test("TAI-A-20 the linked-issue-key aggregates answer a member and refuse everyone else", { tag: '@tesbo.testId("TES-TC-550")' }, async () => {
+  test("TAI-A-22 the linked-issue-key aggregates answer a member and refuse everyone else", { tag: '@tesbo.testId("TES-TC-550")' }, async () => {
     for (const path of ["/testcases/linked-jira-keys", "/testcases/linked-linear-keys"]) {
       const res = await asOwner.get(url(path), { failOnStatusCode: false });
       expect(res.status(), `${path} — ${await res.text()}`).toBe(200);

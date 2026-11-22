@@ -34,9 +34,28 @@ jobs:
     name: migration-names
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    env:
+      QUALITY_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Validate SQL migration numbering
-        run: node scripts/check-migrations.mjs
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Prove migration-history checks without a database
+        run: node --test scripts/check-migrations.test.mjs
+      - name: Validate SQL numbering and append-only history
+        run: node scripts/check-migrations.mjs --base "$QUALITY_BASE_REF"
+
+  mbt-symbolic-pilot:
+    name: mbt-symbolic-pilot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify offline finite-model semantics
+        run: node --test docs/examples/mbt-finite-semantics-pilot.test.mjs

@@ -1,3 +1,4 @@
+import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { resetToLaunch, setProPlan } from "../utils/billing-db";
 import { testAddress } from "../utils/env";
@@ -64,8 +65,8 @@ test.describe("attachments", () => {
 
     const suffix = Date.now();
     const testcase = await (
-      await asOwner.post(`/api/projects/${tenant.mainProjectId}/testcases`, {
-        data: { title: `E2E Attachment Case ${suffix}` },
+      await createTestcaseFixtureResponse(asOwner, `/api/projects/${tenant.mainProjectId}/testcases`, {
+        data: { title: `E2E Attachment Case ${suffix}`, status: "Approved" },
       })
     ).json();
     const cycle = await (
@@ -675,8 +676,8 @@ test.describe("attachments", () => {
     // A second run in the same project, so the only thing separating the two is the scoping check.
     const suffix = Date.now();
     const testcase = await (
-      await asOwner.post(`/api/projects/${tenant!.mainProjectId}/testcases`, {
-        data: { title: `E2E Trace Scope Case ${suffix}` },
+      await createTestcaseFixtureResponse(asOwner, `/api/projects/${tenant!.mainProjectId}/testcases`, {
+        data: { title: `E2E Trace Scope Case ${suffix}`, status: "Approved" },
       })
     ).json();
     const otherCycle = await (

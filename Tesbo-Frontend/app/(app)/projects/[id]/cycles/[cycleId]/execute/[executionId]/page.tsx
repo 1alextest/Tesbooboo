@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useParams } from "@/lib/routeParams";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   listCycleExecutions,
@@ -12,11 +12,13 @@ import {
   removeBugLink,
   type ExecutionItem,
   type BugItem,
+  type TestRunDetail,
 } from "@/lib/api";
 import { IconBug } from "@tabler/icons-react";
 import { Button, StatusChip, Input, PageLoader, Textarea, Select, ConfirmModal } from "@/components/ui";
 import ExecutionEvidencePanel from "@/components/ExecutionEvidencePanel";
 import { AutomationResultMeta } from "@/components/AutomationResultMeta";
+import { RetestSourceObservation } from "@/components/testruns/RetestLineage";
 import { useLogBugDialog } from "@/components/LogBugDialog";
 import { Breadcrumbs } from "@/components/workflows";
 import { useAppData } from "@/components/app/AppDataProvider";
@@ -66,15 +68,24 @@ export default function ExecutionDetailPage() {
   const projectId = params.id as string;
   const cycleId = params.cycleId as string;
   const { currentUser } = useAppData();
+  const currentUserId = currentUser?.userId;
   const { projectMembers: members } = useProjectData();
   const executionId = params.executionId as string;
   const [execution, setExecution] = useState<ExecutionItem | null>(null);
+  const [run, setRun] = useState<TestRunDetail | null>(null);
+  const [loadedViewScope, setLoadedViewScope] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const viewScope = `${currentUserId || ""}:${projectId}:${cycleId}:${executionId}`;
+  const currentViewScope = useRef(viewScope);
+  currentViewScope.current = viewScope;
+  const loadSequence = useRef(0);
   const [status, setStatus] = useState("");
   const [actualResult, setActualResult] = useState("");
   const [assigneeId, setAssigneeId] = useState("");
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [bugRefreshError, setBugRefreshError] = useState<string | null>(null);
-  const [finalizedAutomation, setFinalizedAutomation] = useState(false);
   /* Bug Key / Bug Title shown for a linked execution — read from the real bug(s) filed via "Log
      bug" (bugs/bug_links), not the old free-text defectKey/defectUrl columns on the execution row.
      An execution can have more than one bug linked to it, so this is every bug linked to THIS
@@ -94,15 +105,15 @@ export default function ExecutionDetailPage() {
     onLogged: (exec) => {
       loadLinkedBugs(exec);
       setBugRefreshError(null);
-      Promise.all([getTestRun(cycleId), listCycleExecutions(cycleId)])
-        .then(([run, list]) => {
+      listCycleExecutions(cycleId)
+        .then((list) => {
+          if (currentViewScope.current !== viewScope) return;
           const current = list.find((item) => item.id === exec.id);
           if (!current) throw new Error("Execution no longer available");
           setExecution(current);
           setStatus(current.status || "Untested");
-          setFinalizedAutomation(run.source === "automation" && run.closedAt != null);
         })
-        .catch(() => setBugRefreshError("Bug saved, but the execution could not be refreshed. Reload to see its current result."));
+        .catch(() => { if (currentViewScope.current === viewScope) setBugRefreshError("Bug saved, but the execution could not be refreshed. Reload to see its current result."); });
     },
   });
 
@@ -111,7 +122,7 @@ export default function ExecutionDetailPage() {
   // otherwise overwrite the fresher result with a stale one.
   const linkedBugsRequestIdRef = useRef<string | null>(null);
 
-  function loadLinkedBugs(exec: ExecutionItem) {
+  const loadLinkedBugs = useCallback((exec: ExecutionItem) => {
     const requestId = `${exec.id}:${Date.now()}`;
     linkedBugsRequestIdRef.current = requestId;
     // listBugs is scoped to testcase+cycle, not to this one execution (the API has no executionId
@@ -119,13 +130,13 @@ export default function ExecutionDetailPage() {
     // the bugs actually linked to THIS execution via each bug's own links[].
     listBugs(projectId, { testcaseId: exec.testcaseId, cycleId })
       .then((bugs) => {
-        if (linkedBugsRequestIdRef.current !== requestId) return;
+        if (linkedBugsRequestIdRef.current !== requestId || currentViewScope.current !== viewScope) return;
         setLinkedBugs(bugs.filter((bug) => bug.links.some((l) => l.executionId === exec.id)));
       })
       .catch(() => {
-        if (linkedBugsRequestIdRef.current === requestId) setLinkedBugs([]);
+        if (linkedBugsRequestIdRef.current === requestId && currentViewScope.current === viewScope) setLinkedBugs([]);
       });
-  }
+  }, [projectId, cycleId, viewScope]);
 
   /* ───── Unlink one bug from this execution — removes only the bug_links row tying it to this
    * testcase/cycle/execution via the existing addBugLink/removeBugLink pair; never deletes the
@@ -152,45 +163,68 @@ export default function ExecutionDetailPage() {
     }
   }
 
-  useEffect(() => {
-    if (!currentUser) {
-      router.replace("/login");
-      return;
+  const load = useCallback(async () => {
+    const sequence = ++loadSequence.current;
+    setLoadError(null);
+    try {
+      const [currentRun, list] = await Promise.all([getTestRun(cycleId), listCycleExecutions(cycleId)]);
+      if (currentViewScope.current !== viewScope || sequence !== loadSequence.current) return;
+      const item = list.find(value => value.id === executionId);
+      if (!item || currentRun.id !== cycleId || currentRun.projectId !== projectId) throw new Error("This execution is unavailable in the selected Run.");
+      setRun(currentRun);
+      setLoadedViewScope(viewScope);
+      setExecution(item);
+      setStatus(item.status || "Untested");
+      setActualResult(item.actualResult || "");
+      setAssigneeId(item.assigneeId || "");
+      loadLinkedBugs(item);
+    } catch (error) {
+      if (currentViewScope.current === viewScope && sequence === loadSequence.current) setLoadError(error instanceof Error ? error.message : "The execution could not be loaded.");
+    } finally {
+      if (currentViewScope.current === viewScope && sequence === loadSequence.current) setLoading(false);
     }
-    Promise.all([getTestRun(cycleId), listCycleExecutions(cycleId)])
-      .then(([run, list]) => {
-        setFinalizedAutomation(run.source === "automation" && run.closedAt != null);
-        const e = list.find((x) => x.id === executionId);
-        if (e) {
-          setExecution(e);
-          setStatus(e.status || "Untested");
-          setActualResult(e.actualResult || "");
-          setAssigneeId(e.assigneeId || "");
-          loadLinkedBugs(e);
-        }
-      })
-      .catch(() => router.replace("/projects"));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cycleId, executionId, projectId, router, currentUser]);
+  }, [cycleId, executionId, projectId, viewScope, loadLinkedBugs]);
+
+  useEffect(() => {
+    if (!currentUserId) { router.replace("/login"); return; }
+    setLoading(true);
+    setExecution(null);
+    setRun(null);
+    setSaving(false);
+    setSaveError(null);
+    setLinkedBugs([]);
+    void load();
+    return () => { loadSequence.current += 1; linkedBugsRequestIdRef.current = null; };
+  }, [currentUserId, load, router]);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
+    setSaveError(null);
     try {
       await updateExecution(cycleId, executionId, {
         status,
         actualResult,
         assigneeId: assigneeId || null,
       });
+      if (currentViewScope.current !== viewScope) return;
       router.push(`/projects/${projectId}/cycles/${cycleId}`);
       router.refresh();
+    } catch (error) {
+      if (currentViewScope.current === viewScope) setSaveError(error instanceof Error ? error.message : "Failed to save execution.");
     } finally {
-      setSaving(false);
+      if (currentViewScope.current === viewScope) setSaving(false);
     }
   }
 
-  if (!execution) {
+  if (loading) {
     return <PageLoader variant="screen" />;
+  }
+  if (!execution || !run || loadedViewScope !== viewScope || run.id !== cycleId || run.projectId !== projectId) {
+    return <section className="p-6" aria-label="Execution unavailable"><p role="alert" className="mb-3 text-sm text-[var(--error-foreground)]">{loadError || "This execution is unavailable."}</p>
+      <Button variant="secondary" onClick={() => void load()}>Retry execution</Button>
+      <Link href={`/projects/${projectId}/cycles/${cycleId}`} className="ml-4 text-sm text-[var(--accent-light)] hover:underline">Back to Run</Link>
+    </section>;
   }
 
   const steps = normalizeSteps(execution.steps);
@@ -208,6 +242,7 @@ export default function ExecutionDetailPage() {
       </header>
 
       <main className="w-full px-6 py-8">
+        {loadError && <div className="mb-4 flex flex-wrap items-center gap-2"><p role="alert" className="text-sm text-[var(--error-foreground)]">The execution could not be refreshed. {loadError}</p><Button variant="secondary" onClick={() => void load()}>Retry execution</Button></div>}
         {bugRefreshError && <p role="alert" className="mb-4 text-sm text-[var(--error-foreground)]">{bugRefreshError}</p>}
         <div className="flex items-center gap-3 mb-6">
           <h1 className="text-xl font-bold text-[var(--foreground)]">
@@ -219,6 +254,7 @@ export default function ExecutionDetailPage() {
         {execution.externalId && (
           <p className="text-xs text-[var(--muted-soft)] font-mono mb-4">{execution.externalId}</p>
         )}
+        {run.retestManifest && <div className="mb-5"><RetestSourceObservation manifest={run.retestManifest} executionId={execution.id} /></div>}
 
         <section className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5">
           <h2 className="mb-3 text-sm font-semibold text-[var(--foreground)]">Test case details</h2>
@@ -261,6 +297,11 @@ export default function ExecutionDetailPage() {
         </section>
 
         <form onSubmit={handleSave} className="space-y-5">
+          {saveError && (
+            <p role="alert" className="rounded-lg border border-[var(--error)]/20 bg-[var(--error-soft)] p-3 text-sm text-[var(--error-foreground)]">
+              {saveError}
+            </p>
+          )}
           {/* Status buttons */}
           <div>
             <label className="block text-sm font-medium text-[var(--muted)] mb-2">
@@ -326,8 +367,7 @@ export default function ExecutionDetailPage() {
           </div>
 
           {/*
-            * Bug Key / Bug Title — keep the existing Failed-only presentation on writable runs.
-            * Sealed automation also shows its traceability links without implying failure.
+            * Bug Key / Bug Title — associations remain visible for every recorded result.
             * A status alone never fabricates a bug association. Read-only:
             * these reflect the real bug(s), not a free-text value typed here. One execution can
             * now have several bugs linked (multi-select existing-bug picker) — a single linked
@@ -335,7 +375,7 @@ export default function ExecutionDetailPage() {
             * ("Bug 1 Key", "Bug 2 Key", …) so none is silently dropped. Every row gets its own
             * Unlink action regardless of count.
             */}
-          <div className="space-y-3" hidden={linkedBugs.length === 0 || (status !== "Failed" && !finalizedAutomation)}>
+          <div className="space-y-3" hidden={linkedBugs.length === 0}>
             {linkedBugs.map((bug, i) => {
               const keyLabel = linkedBugs.length > 1 ? `Bug ${i + 1} Key` : "Bug Key";
               const titleLabel = linkedBugs.length > 1 ? `Bug ${i + 1} Title` : "Bug Title";

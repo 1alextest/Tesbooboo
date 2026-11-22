@@ -1,0 +1,83 @@
+ts-jest[config] (WARN)
+    The "ts-jest" config option "isolatedModules" is deprecated and will be removed in v30.0.0. Please use "isolatedModules: true" in /workspace/scratch/fb086055b433/tesbo-review-integration/Tesbo-Backend-Nest/tsconfig.json instead, see https://www.typescriptlang.org/tsconfig/#isolatedModules
+
+FAIL ../../assurance-working/qa-independent-contract-probes.spec.ts (6.149 s)
+  ✕ canonical Bug association preserves an open manual execution outcome (12 ms)
+  ✕ canonical Bug association preserves an open automation execution outcome (1 ms)
+  ✕ accepted model mapping cannot silently use a later case revision (2 ms)
+
+  ● canonical Bug association preserves an open manual execution outcome
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 3
+    + Received  + 3
+
+      Object {
+    -   "executedAt": "original time",
+    -   "executedBy": "original tester",
+    -   "status": "Passed",
+    +   "executedAt": "new time",
+    +   "executedBy": "00000000-0000-4000-8000-000000000001",
+    +   "status": "Failed",
+      }
+
+      29 |   expect(association).toHaveBeenCalledTimes(1);
+      30 |   // Canonical 00_README v1.4.28 lines 301, 303, 329: association is not a status correction.
+    > 31 |   expect(state).toEqual(before);
+         |                 ^
+      32 | });
+      33 |
+      34 | it('accepted model mapping cannot silently use a later case revision', async () => {
+
+      at ../../assurance-working/qa-independent-contract-probes.spec.ts:31:17
+
+  ● canonical Bug association preserves an open automation execution outcome
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 3
+    + Received  + 3
+
+      Object {
+    -   "executedAt": "original time",
+    -   "executedBy": "original tester",
+    -   "status": "Passed",
+    +   "executedAt": "new time",
+    +   "executedBy": "00000000-0000-4000-8000-000000000001",
+    +   "status": "Failed",
+      }
+
+      29 |   expect(association).toHaveBeenCalledTimes(1);
+      30 |   // Canonical 00_README v1.4.28 lines 301, 303, 329: association is not a status correction.
+    > 31 |   expect(state).toEqual(before);
+         |                 ^
+      32 | });
+      33 |
+      34 | it('accepted model mapping cannot silently use a later case revision', async () => {
+
+      at ../../assurance-working/qa-independent-contract-probes.spec.ts:31:17
+
+  ● accepted model mapping cannot silently use a later case revision
+
+    expect(received).rejects.toMatchObject()
+
+    Received promise resolved instead of rejected
+    Resolved to value: {"added": 1, "approvalId": "approval", "contentHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "coverageAssertion": "none", "createdAt": undefined, "cycleId": "00000000-0000-4000-8000-000000000006", "executionAssertion": "governed-run", "id": "manifest", "manifest": {"approvalId": "approval", "cases": [{"elementIds": ["submit"], "pathDigest": null, "sources": ["linked"], "testcaseId": "00000000-0000-4000-8000-000000000005", "title": "Reviewed Case B"}], "contentHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "revisionNumber": 1}, "modelId": "00000000-0000-4000-8000-000000000003", "modelRevisionId": "00000000-0000-4000-8000-000000000004", "note": "The run is native. Its results are case outcomes, not proof that the modeled behavior is correct.", "projectId": "00000000-0000-4000-8000-000000000002", "requested": 1, "run": {"environment": null, "id": "00000000-0000-4000-8000-000000000006", "name": "Native run", "status": undefined}, "skipped": 0}
+
+      47 |   const repository=new ModelStudioRepository({transaction:async(work:any)=>work({query})} as never,{requireProjectAccess:async()=>({id:project}),createCycleWithTestcasesForUser:nativeWrite} as never);
+      48 |   // Proposed MBT-C05 defines this exact reliance failure; binding native receipt for B is assumed valid.
+    > 49 |   await expect(repository.dispatchRunForUser(uid,project,model,revision,{caseIds:[caseId]})).rejects.toMatchObject({status:409});
+         |         ^
+      50 |   expect(nativeWrite).not.toHaveBeenCalled();
+      51 | });
+      52 |
+
+      at expect (../../Tesbooboo/Tesbo-Backend-Nest/node_modules/expect/build/index.js:113:15)
+      at Object.<anonymous> (../../assurance-working/qa-independent-contract-probes.spec.ts:49:9)
+
+Test Suites: 1 failed, 1 total
+Tests:       3 failed, 3 total
+Snapshots:   0 total
+Time:        6.656 s
+Ran all test suites within paths "/workspace/scratch/fb086055b433/assurance-working/qa-independent-contract-probes.spec.ts".

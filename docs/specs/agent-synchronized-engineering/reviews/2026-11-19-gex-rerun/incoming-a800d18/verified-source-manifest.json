@@ -1,0 +1,35 @@
+{
+  "commit": "a800d18a39595a160211c6c1a7b2366ecc8ae325",
+  "files": [
+    {
+      "path": "docs/specs/agent-synchronized-engineering/design.md",
+      "sha": "b651ab653baca068e8fbaed1271c7d65057449e1",
+      "bytes": 108704,
+      "sha256": "0afef381e4832cefee11cce85729a18a2299ded0bbdbd1f0062685548b83e404"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/implementation-plan.md",
+      "sha": "64c575c55d3dd8e55e72f5b2e2979ac9302b9939",
+      "bytes": 82512,
+      "sha256": "a88e81600803bdbe5fb45ec4cfe3d986d87854021a9c7d43a9f415c67524aeb1"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/requirements.md",
+      "sha": "e771128e3eb5cc1482b75dd95447578a9484f6bf",
+      "bytes": 82620,
+      "sha256": "1499030964b8e897c38d7258b01a3a8a40242f63123614015eedf248fc50b641"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/reviews/2026-11-20-full-lens-source-inspection.md",
+      "sha": "89b1c06e2cea2fde962ed2401cda9c4bf46eff03",
+      "bytes": 15428,
+      "sha256": "16d647810f1fb4cc0d3a11688ec90f5224807d67237436d098d9a6be91d8d19e"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/reviews/2026-11-20-semantic-skill-diagnostic.md",
+      "sha": "9b927937890e94a8708ed4c35c1d89d57140fd1c",
+      "bytes": 9805,
+      "sha256": "1768866c91c00d5683a4785b4a1fc27658531126ff9d507f2e92fb13637a3d66"
+    }
+  ]
+}

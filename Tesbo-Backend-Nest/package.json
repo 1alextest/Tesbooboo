@@ -75,6 +75,9 @@
   "overrides": {
     "multer": "$multer",
     "body-parser": "1.20.9",
-    "glob@10.4.5": "10.5.0"
+    "glob@10.4.5": "10.5.0",
+    "inquirer@8.2.6": "8.2.7",
+    "inquirer@9.2.15": "9.3.8",
+    "picomatch@4.0.1": "4.0.4"
   }
 }

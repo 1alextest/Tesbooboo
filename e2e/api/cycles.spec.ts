@@ -1,15 +1,18 @@
+import { approveTestcase, createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import fs from "node:fs";
 import path from "node:path";
-import { expect, request as newRequestContext, test } from "@playwright/test";
+import { randomUUID } from "node:crypto";
+import { expect, request as newRequestContext, test, type APIRequestContext } from "@playwright/test";
 import { env } from "../utils/env";
 import { column, exec, literal, scalar } from "../utils/psql";
+import { filesForm, textFile } from "../utils/uploads";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 
 /** Creates a test case in the shared project and adds it to the run; returns the case id. */
 async function addCase(request: any, runId: string): Promise<string> {
   const tc = await (
-    await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Run Case ${Date.now()}` } })
+    await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Run Case ${Date.now()}`, status: "Approved" } })
   ).json();
   const res = await request.post(`/api/cycles/${runId}/testcases`, { data: { testcaseIds: [tc.id] } });
   expect(res.ok()).toBeTruthy();
@@ -102,13 +105,13 @@ test.describe("test cycle / run CRUD", () => {
       })
     ).json();
     const testcaseA = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-        data: { title: `E2E Cycle Case A ${Date.now()}` },
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, {
+        data: { title: `E2E Cycle Case A ${Date.now()}`, status: "Approved" },
       })
     ).json();
     const testcaseB = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-        data: { title: `E2E Cycle Case B ${Date.now()}` },
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, {
+        data: { title: `E2E Cycle Case B ${Date.now()}`, status: "Approved" },
       })
     ).json();
 
@@ -139,22 +142,23 @@ test.describe("test cycle / run CRUD", () => {
     }
   });
 
-  test("from-plan and from-cases creation are aliases for plain create — neither seeds cycle_items", { tag: '@tesbo.testId("TES-TC-173")' }, async ({
+  test("from-cases seeds the run with its cases; from-plan still only links the plan", { tag: '@tesbo.testId("TES-TC-173")' }, async ({
     request,
   }) => {
-    // KNOWN GAP (documented, not test.fail() — a functional no-op, not a security issue):
-    // legacy.controller.ts:363-370 routes createCycleFromPlan/createCycleFromCases to the exact
-    // same legacy.createCycle(projectId, body) as the plain endpoint. Despite the names, neither
-    // actually copies items from the plan or the given case IDs into cycle_items — pinned here so
-    // a future "fix" is a deliberate, visible change rather than an accidental behavior shift.
+    // History: all three cycle-create routes were aliases of plain createCycle() and read neither
+    // `planId`'s items nor `testcaseIds` — docs/automation-integration-plan.md trap 3. The alias
+    // was pinned here so a fix would be a deliberate, visible change. `from-cases` now uses the
+    // same atomic Approved-only writer as the MCP create_cycle_from_testcases tool; `from-plan`
+    // deliberately still only records plan_id, because cloning a plan's items is a separate
+    // semantic change that no caller has asked for.
     const plan = await (
       await request.post(`/api/projects/${ctx.projectId}/plans`, {
         data: { name: `E2E From-Plan Source ${Date.now()}` },
       })
     ).json();
     const testcase = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-        data: { title: `E2E From-Cases Source ${Date.now()}` },
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, {
+        data: { title: `E2E From-Cases Source ${Date.now()}`, status: "Approved" },
       })
     ).json();
     await request.post(`/api/plans/${plan.id}/items`, { data: { testcaseId: testcase.id } });
@@ -164,13 +168,19 @@ test.describe("test cycle / run CRUD", () => {
         data: { name: `E2E From-Plan Cycle ${Date.now()}`, planId: plan.id },
       })
     ).json();
-    const fromCasesCycle = await (
-      await request.post(`/api/projects/${ctx.projectId}/cycles/from-cases`, {
-        data: { name: `E2E From-Cases Cycle ${Date.now()}`, testcaseIds: [testcase.id] },
-      })
-    ).json();
+    const fromCasesRes = await request.post(`/api/projects/${ctx.projectId}/cycles/from-cases`, {
+      data: { name: `E2E From-Cases Cycle ${Date.now()}`, testcaseIds: [testcase.id] },
+    });
+    expect(fromCasesRes.status(), await fromCasesRes.text()).toBe(201);
+    const fromCasesCycle = await fromCasesRes.json();
 
     try {
+      // The counts describe what happened to the request rather than leaving the caller to diff
+      // the execution list against what it asked for.
+      expect(fromCasesCycle.requested).toBe(1);
+      expect(fromCasesCycle.added).toBe(1);
+      expect(fromCasesCycle.skipped).toBe(0);
+
       const fromPlanExecutions = await (
         await request.get(`/api/cycles/${fromPlanCycle.id}/executions`)
       ).json();
@@ -178,12 +188,41 @@ test.describe("test cycle / run CRUD", () => {
         await request.get(`/api/cycles/${fromCasesCycle.id}/executions`)
       ).json();
       expect(fromPlanExecutions).toHaveLength(0);
-      expect(fromCasesExecutions).toHaveLength(0);
+      expect(fromCasesExecutions).toHaveLength(1);
+      expect(fromCasesExecutions[0].testcaseId).toBe(testcase.id);
     } finally {
       await request.delete(`/api/cycles/${fromPlanCycle.id}`, { failOnStatusCode: false });
       await request.delete(`/api/cycles/${fromCasesCycle.id}`, { failOnStatusCode: false });
       await request.delete(`/api/plans/${plan.id}`, { failOnStatusCode: false });
       await request.delete(`/api/projects/${ctx.projectId}/testcases/${testcase.id}`, {
+        failOnStatusCode: false,
+      });
+    }
+  });
+
+  test("from-cases refuses a Draft case without leaving a run behind", { tag: '@tesbo.testId("TES-TC-3042")' }, async ({ request }) => {
+    // The seed path applies the run-approval invariant at the transaction boundary: if the writer
+    // created the run before rejecting the cases, a caller would be left with an orphan run and no
+    // way to tell it from an intentional empty one.
+    const draft = await (
+      await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+        data: { title: `E2E From-Cases Draft ${Date.now()}`, status: "Draft" },
+      })
+    ).json();
+
+    try {
+      const res = await request.post(`/api/projects/${ctx.projectId}/cycles/from-cases`, {
+        data: { name: `E2E From-Cases Draft Cycle ${Date.now()}`, testcaseIds: [draft.id] },
+        failOnStatusCode: false,
+      });
+      expect(res.status()).toBe(409);
+      const body = await res.json();
+      expect(body.error).toContain("Only Approved test cases with a current exact human-review receipt can be added to a test run");
+
+      const runs = await (await request.get(`/api/projects/${ctx.projectId}/cycles`)).json();
+      expect(runs.some((run: { name: string }) => run.name.includes("Draft Cycle"))).toBe(false);
+    } finally {
+      await request.delete(`/api/projects/${ctx.projectId}/testcases/${draft.id}`, {
         failOnStatusCode: false,
       });
     }
@@ -211,7 +250,7 @@ test.describe("linking test cases to a run at scale", () => {
         data: {
           testcases: Array.from({ length: CASE_COUNT }, (_, i) => ({
             title: `E2E Bulk Link Case ${stamp}-${i}`,
-            status: "Approved",
+            status: "Draft",
           })),
         },
       })
@@ -220,6 +259,11 @@ test.describe("linking test cases to a run at scale", () => {
 
     try {
       expect(created.createdCount).toBe(CASE_COUNT);
+      // Review the fixture before measuring admission. Creating rows with a status label
+      // cannot substitute for current human approval of the exact saved content.
+      for (let offset = 0; offset < testcaseIds.length; offset += 8) {
+        await Promise.all(testcaseIds.slice(offset, offset + 8).map((id) => approveTestcase(request, ctx.projectId, id)));
+      }
 
       const addRes = await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds } });
       expect(addRes.ok()).toBeTruthy();
@@ -295,8 +339,8 @@ test.describe("adding test cases to a run", () => {
      */
     const testcaseIds: string[] = [];
     for (let i = 0; i < count; i++) {
-      const res = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-        data: { title: `E2E RunCase ${stamp} #${String(i + 1).padStart(3, "0")}` },
+      const res = await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, {
+        data: { title: `E2E RunCase ${stamp} #${String(i + 1).padStart(3, "0")}`, status: "Approved" },
       });
       testcaseIds.push((await res.json()).id as string);
     }
@@ -649,12 +693,13 @@ test.describe("list-cycles bucket counts", () => {
     const statuses = ["Passed", "Failed", "Blocked", "Skipped", "Retest", "Untested"];
     const created = await (
       await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-create`, {
-        data: { testcases: statuses.map((_, i) => ({ title: `E2E Bucket Sum Case ${stamp}-${i}`, status: "Approved" })) },
+        data: { testcases: statuses.map((_, i) => ({ title: `E2E Bucket Sum Case ${stamp}-${i}`, status: "Draft" })) },
       })
     ).json();
     const testcaseIds: string[] = created.created.map((c: { id: string }) => c.id);
 
     try {
+      for (const testcaseId of testcaseIds) await approveTestcase(request, ctx.projectId, testcaseId);
       await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds } });
       const executions = await (await request.get(`/api/cycles/${cycle.id}/executions`)).json();
       for (let i = 0; i < statuses.length; i++) {
@@ -715,7 +760,7 @@ test.describe("cycle / cycle_item soft-delete (hard-delete remediation Phase 1)"
       await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Soft-Delete Run ${Date.now()}` } })
     ).json();
     const testcase = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Soft-Delete Run Case ${Date.now()}` } })
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Soft-Delete Run Case ${Date.now()}`, status: "Approved" } })
     ).json();
     await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
     const cycleItemId = scalar(`SELECT id FROM cycle_items WHERE cycle_id = ${literal(cycle.id)} AND testcase_id = ${literal(testcase.id)};`);
@@ -751,7 +796,7 @@ test.describe("cycle / cycle_item soft-delete (hard-delete remediation Phase 1)"
       await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Soft-Delete Item ${Date.now()}` } })
     ).json();
     const testcase = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Soft-Delete Item Case ${Date.now()}` } })
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Soft-Delete Item Case ${Date.now()}`, status: "Approved" } })
     ).json();
     await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
     const cycleItemId = scalar(`SELECT id FROM cycle_items WHERE cycle_id = ${literal(cycle.id)} AND testcase_id = ${literal(testcase.id)};`);
@@ -789,6 +834,7 @@ test.describe("cycle / cycle_item soft-delete (hard-delete remediation Phase 1)"
     const testcaseIds: string[] = created.created.map((c: { id: string }) => c.id);
 
     try {
+      for (const testcaseId of testcaseIds) await approveTestcase(request, ctx.projectId, testcaseId);
       await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds } });
       const cycleItemIds = column(
         `SELECT id FROM cycle_items WHERE cycle_id = ${literal(cycle.id)} ORDER BY position;`,
@@ -842,7 +888,7 @@ test.describe("cycle / cycle_item soft-delete (hard-delete remediation Phase 1)"
       await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Soft-Delete ReAdd ${Date.now()}` } })
     ).json();
     const testcase = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Soft-Delete ReAdd Case ${Date.now()}` } })
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Soft-Delete ReAdd Case ${Date.now()}`, status: "Approved" } })
     ).json();
 
     try {
@@ -927,7 +973,7 @@ test.describe("cycles read-path gap sweep (hard-delete remediation Phase 2)", ()
       await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Export Gate ${Date.now()}` } })
     ).json();
     const testcase = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Export Gate Case ${Date.now()}` } })
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, { data: { title: `E2E Export Gate Case ${Date.now()}`, status: "Approved" } })
     ).json();
     await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
 
@@ -963,14 +1009,36 @@ test.describe("cycles read-path gap sweep (hard-delete remediation Phase 2)", ()
     const cycle = await (
       await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Export Gate Auth ${Date.now()}` } })
     ).json();
+    const asB = await newRequestContext.newContext({
+      baseURL: env.apiBaseUrl,
+      storageState: path.join(__dirname, "../.auth/state-b.json"),
+    });
+    const anon = await newRequestContext.newContext({
+      baseURL: env.apiBaseUrl,
+      storageState: { cookies: [], origins: [] },
+    });
+    const exportUrl = `/api/cycles/${cycle.id}/export/csv`;
     try {
-      const anon = await request.get(`/api/cycles/${cycle.id}/export/csv`, {
-        headers: { Cookie: "" },
-        failOnStatusCode: false,
-      });
-      expect([401, 403]).toContain(anon.status());
+      const authorized = await request.get(exportUrl);
+      expect(authorized.status(), await authorized.text()).toBe(200);
+      expect(authorized.headers()["content-type"]).toContain("text/csv");
+
+      for (const deleted of [false, true]) {
+        if (deleted) {
+          const removed = await request.delete(`/api/cycles/${cycle.id}`);
+          expect(removed.status(), await removed.text()).toBe(200);
+          expect((await request.get(exportUrl, { failOnStatusCode: false })).status()).toBe(404);
+        }
+        const anonymous = await anon.get(exportUrl, { failOnStatusCode: false });
+        expect(anonymous.status(), `anonymous export, deleted=${deleted}`).toBe(400);
+        expect(await anonymous.json()).toMatchObject({ error: "Authentication required" });
+        const foreign = await asB.get(exportUrl, { failOnStatusCode: false });
+        expect(foreign.status(), `foreign export, deleted=${deleted}`).toBe(404);
+      }
     } finally {
       await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
+      await asB.dispose();
+      await anon.dispose();
     }
   });
 
@@ -1374,5 +1442,317 @@ test.describe("run history import", () => {
       await asB.dispose();
       await anon.dispose();
     }
+  });
+});
+
+test.describe("native Run retest — distinct reviewed occurrences", () => {
+  async function seed(api: APIRequestContext) {
+    const caseResponse = await createTestcaseFixtureResponse(api, `/api/projects/${ctx.projectId}/testcases`, {
+      data: { title: `Manual retest ${randomUUID()}`, status: "Approved", preconditions: "A signed-in test operator has one draft order",
+        testData: "Disposable order, quantity 1", steps: [{ action: "Submit the draft order once", expected: "Exactly one order is accepted and its identifier is shown" }] }
+    });
+    expect(caseResponse.status(), await caseResponse.text()).toBe(201);
+    const testcase = await caseResponse.json();
+    const response = await api.post(`/api/projects/${ctx.projectId}/cycles/from-cases`, {
+      data: { name: `Original manual observation ${randomUUID()}`, environment: "synthetic", buildVersion: "build-before", testcaseIds: [testcase.id] }
+    });
+    expect(response.status(), await response.text()).toBe(201);
+    const cycle = await response.json();
+    const list = await (await api.get(`/api/cycles/${cycle.id}/executions`)).json();
+    expect(list).toHaveLength(1);
+    const executionId = list[0].id as string;
+    const result = await api.patch(`/api/cycles/${cycle.id}/executions/${executionId}`, {
+      data: { status: "Failed", actualResult: "The synthetic fixture returned two order identifiers" }
+    });
+    expect(result.ok(), await result.text()).toBeTruthy();
+    const created: string[] = [];
+    return { cycleId: cycle.id as string, testcaseId: testcase.id as string, executionId, created,
+      cleanup: async () => {
+        for (const id of created) await api.delete(`/api/cycles/${id}`, { failOnStatusCode: false });
+        await api.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
+        await api.delete(`/api/projects/${ctx.projectId}/testcases/${testcase.id}`, { failOnStatusCode: false });
+      }
+    };
+  }
+  async function preview(api: APIRequestContext, cycleId: string, ids: string[]) {
+    const response = await api.get(`/api/cycles/${cycleId}/retests/preview`, { params: { executionIds: ids.join(",") } });
+    expect(response.status(), await response.text()).toBe(200);
+    return response.json();
+  }
+  const intent = (executionId: string, digest: string) => ({ requestKey: randomUUID(), executionIds: [executionId],
+    expectedPreviewDigest: digest, name: `Independent retest ${randomUUID()}`, environment: "synthetic", buildVersion: "build-after" });
+
+  test("source-free manual observation, evidence and Bug remain original while a new retest records its own result", async ({ request }) => {
+    const f = await seed(request);
+    let bugId: string | undefined;
+    try {
+      const originalBytes = "Original synthetic observation\r\nUnicode: café\r\n";
+      const uploaded = await request.post(`/api/cycles/${f.cycleId}/executions/${f.executionId}/attachments`, {
+        multipart: filesForm([textFile("original.txt", originalBytes)])
+      });
+      expect(uploaded.status(), await uploaded.text()).toBe(201);
+      const evidence = (await uploaded.json()).list[0];
+      const bug = await request.post(`/api/projects/${ctx.projectId}/bugs`, {
+        data: { title: `Synthetic duplicate order ${randomUUID()}`, links: [{ testcaseId: f.testcaseId, cycleId: f.cycleId, executionId: f.executionId }] }
+      });
+      expect(bug.status(), await bug.text()).toBe(201); bugId = (await bug.json()).id;
+      const before = await (await request.get(`/api/cycles/${f.cycleId}/executions`)).json();
+      const reviewed = await preview(request, f.cycleId, [f.executionId]);
+      expect(reviewed.occurrences[0]).toMatchObject({ eligible: true, sourceExecutionId: f.executionId, definitionChanged: false });
+      const body = intent(f.executionId, reviewed.previewDigest);
+      const response = await request.post(`/api/cycles/${f.cycleId}/retests`, { data: body });
+      expect(response.status(), await response.text()).toBe(201);
+      const receipt = await response.json(); f.created.push(receipt.cycleId);
+      expect(receipt.cycleId).not.toBe(f.cycleId);
+      const occurrence = receipt.manifest.occurrences[0];
+      expect(occurrence).toMatchObject({ sourceExecutionId: f.executionId, testcaseId: f.testcaseId,
+        sourceResult: { status: "Failed", actual_result: "The synthetic fixture returned two order identifiers" } });
+      expect(occurrence.sourceEvidence).toEqual(expect.arrayContaining([expect.objectContaining({ id: evidence.id })]));
+      expect(occurrence.sourceBugLinks).toEqual(expect.arrayContaining([expect.objectContaining({ bugId })]));
+      const fresh = await (await request.get(`/api/cycles/${receipt.cycleId}/executions`)).json();
+      expect(fresh).toHaveLength(1);
+      expect(fresh[0]).toMatchObject({ status: "Untested", executedAt: null, evidenceCount: 0 });
+      expect(fresh[0].id).not.toBe(f.executionId);
+      expect(fresh[0].actualResult).toBeFalsy();
+      expect((await request.patch(`/api/cycles/${receipt.cycleId}/executions/${fresh[0].id}`, {
+        data: { status: "Passed", actualResult: "The fixed synthetic fixture returned exactly one order identifier" }
+      })).ok()).toBeTruthy();
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/executions`)).json()).toEqual(before);
+      const downloaded = await request.get(`/api/cycles/${f.cycleId}/executions/${f.executionId}/attachments/${evidence.id}/download`);
+      expect(downloaded.status(), await downloaded.text()).toBe(200);
+      expect(await downloaded.body()).toEqual(Buffer.from(originalBytes));
+      const targetRun = await (await request.get(`/api/cycles/${receipt.cycleId}`)).json();
+      expect(targetRun).toMatchObject({ source: "manual", retestSourceCycleId: f.cycleId, buildVersion: "build-after" });
+      expect(targetRun.retestManifest).toEqual(receipt.manifest);
+      expect((await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).map((row: { id: string }) => row.id)).toContain(receipt.cycleId);
+      const model = await request.get(`/api/projects/${ctx.projectId}/model-studio/runs/by-cycle/${receipt.cycleId}`);
+      expect(model.status(), await model.text()).toBe(200);
+      expect(await model.json()).toEqual({ provenance: null });
+    } finally {
+      if (bugId) await request.delete(`/api/bugs/${bugId}`, { failOnStatusCode: false });
+      await f.cleanup();
+    }
+  });
+
+  test("concurrent exact retries and readback resolve one committed retest; changed reuse conflicts", async ({ request }) => {
+    const f = await seed(request);
+    let secondCaseId: string | undefined;
+    try {
+      secondCaseId = await addCase(request,f.cycleId);
+      const original = await (await request.get(`/api/cycles/${f.cycleId}/executions`)).json();
+      expect(original).toHaveLength(2);
+      const selectedIds = original.map((row: { id: string }) => row.id);
+      const reviewed = await preview(request, f.cycleId, selectedIds);
+      const body = { ...intent(f.executionId,reviewed.previewDigest), executionIds:selectedIds };
+      const responses = await Promise.all([request.post(`/api/cycles/${f.cycleId}/retests`, { data: body }),request.post(`/api/cycles/${f.cycleId}/retests`, { data: { ...body,executionIds:[...selectedIds].reverse() } })]);
+      for (const response of responses) expect(response.status(), await response.text()).toBe(201);
+      const receipts = await Promise.all(responses.map((response) => response.json())); f.created.push(receipts[0].cycleId);
+      expect(receipts[0].cycleId).toBe(receipts[1].cycleId);
+      expect(receipts.map((receipt) => receipt.replayed).sort()).toEqual([false,true]);
+      const fresh = await (await request.get(`/api/cycles/${receipts[0].cycleId}/executions`)).json();
+      expect(fresh).toHaveLength(2);
+      expect(receipts[0].manifest.occurrences).toHaveLength(2);
+      for (const source of original) {
+        const entry = receipts[0].manifest.occurrences.find((row: { sourceExecutionId: string }) => row.sourceExecutionId === source.id);
+        expect(entry).toMatchObject({ testcaseId:source.testcaseId,sourceCycleItemId:source.cycleItemId });
+        expect(selectedIds).not.toContain(entry.executionId);
+        expect(fresh.find((row: { id: string }) => row.id === entry.executionId))
+          .toMatchObject({ testcaseId:source.testcaseId,status:"Untested",evidenceCount:0 });
+        expect(entry.targetApprovalRevision).toBe(reviewed.occurrences.find((row: { sourceExecutionId: string }) => row.sourceExecutionId === source.id).currentCase.approvalRevision);
+      }
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/executions`)).json()).toEqual(original);
+      const readback = await request.get(`/api/cycles/${f.cycleId}/retests/requests/${body.requestKey}`);
+      expect(readback.status()).toBe(200); expect((await readback.json()).manifest).toEqual(receipts[0].manifest);
+      const reconcile = await request.post(`/api/cycles/${f.cycleId}/retests/requests/${body.requestKey}/cancel`,{data:body});
+      expect(reconcile.status(),await reconcile.text()).toBe(201);
+      expect(await reconcile.json()).toEqual({...receipts[0],outcome:"created",replayed:true});
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`, { data: { ...body, buildVersion: "unreviewed replacement" }, failOnStatusCode: false })).status()).toBe(409);
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toHaveLength(1);
+      const current = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${secondCaseId}`)).json();
+      const edited = await request.put(`/api/projects/${ctx.projectId}/testcases/${secondCaseId}`,{data:{title:`Unreviewed selected definition ${randomUUID()}`,expectedRevision:current.editRevision}});
+      expect(edited.ok(),await edited.text()).toBeTruthy();
+      const invalidated = await preview(request,f.cycleId,selectedIds);
+      expect(invalidated.occurrences.map((row: { eligible: boolean }) => row.eligible).sort()).toEqual([false,true]);
+      const rejectedKey = randomUUID();
+      const rejected = await request.post(`/api/cycles/${f.cycleId}/retests`,{data:{...body,requestKey:rejectedKey,expectedPreviewDigest:invalidated.previewDigest},failOnStatusCode:false});
+      expect(rejected.status()).toBe(409);
+      expect(await rejected.json()).toMatchObject({code:"TESTCASE_APPROVAL_REQUIRED"});
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toHaveLength(1);
+      expect((await request.get(`/api/cycles/${f.cycleId}/retests/requests/${rejectedKey}`,{failOnStatusCode:false})).status()).toBe(404);
+    } finally {
+      await f.cleanup();
+      if (secondCaseId) await request.delete(`/api/projects/${ctx.projectId}/testcases/${secondCaseId}`,{failOnStatusCode:false});
+    }
+  });
+
+  test("stale source or definition refuses creation, and a fresh reviewed revision pins the new definition", async ({ request }) => {
+    const f = await seed(request);
+    try {
+      const reviewed = await preview(request, f.cycleId, [f.executionId]);
+      const body = intent(f.executionId, reviewed.previewDigest);
+      await request.patch(`/api/cycles/${f.cycleId}/executions/${f.executionId}`, { data: { actualResult: "Additional source detail" } });
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`, { data: body, failOnStatusCode: false })).status()).toBe(409);
+      const second = await preview(request, f.cycleId, [f.executionId]);
+      const current = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${f.testcaseId}`)).json();
+      const changedTitle = `Revised expected behavior ${randomUUID()}`;
+      const edit = await request.put(`/api/projects/${ctx.projectId}/testcases/${f.testcaseId}`, { data: { title: changedTitle, expectedRevision: current.editRevision } });
+      expect(edit.ok(), await edit.text()).toBeTruthy();
+      const pending = await preview(request, f.cycleId, [f.executionId]); expect(pending.occurrences[0].eligible).toBe(false);
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`, { data: { ...body,expectedPreviewDigest:pending.previewDigest },failOnStatusCode:false })).status()).toBe(409);
+      await approveTestcase(request,ctx.projectId,f.testcaseId);
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`, { data: { ...body,expectedPreviewDigest:second.previewDigest },failOnStatusCode:false })).status()).toBe(409);
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toEqual([]);
+      const finalReview = await preview(request,f.cycleId,[f.executionId]); expect(finalReview.occurrences[0].definitionChanged).toBe(true);
+      const created = await request.post(`/api/cycles/${f.cycleId}/retests`, { data: { ...body,expectedPreviewDigest:finalReview.previewDigest } });
+      expect(created.status(), await created.text()).toBe(201);
+      const receipt = await created.json(); f.created.push(receipt.cycleId);
+      expect(receipt.manifest.occurrences[0].targetDefinition.case.title).toBe(changedTitle);
+      expect(receipt.manifest.occurrences[0].sourceDefinition.case.title).toBe(current.title);
+      expect((await (await request.get(`/api/cycles/${f.cycleId}/executions`)).json())[0].title).toBe(current.title);
+    } finally { await f.cleanup(); }
+  });
+
+  test("a deleted destination remains an unavailable committed receipt and cannot be recreated by an exact retry", async ({ request }) => {
+    const f = await seed(request);
+    try {
+      const reviewed = await preview(request,f.cycleId,[f.executionId]), body = intent(f.executionId,reviewed.previewDigest);
+      const created = await request.post(`/api/cycles/${f.cycleId}/retests`,{data:body});
+      expect(created.status(),await created.text()).toBe(201);
+      const receipt = await created.json(); f.created.push(receipt.cycleId);
+      expect((await request.delete(`/api/cycles/${receipt.cycleId}`)).ok()).toBeTruthy();
+      const readback = await request.get(`/api/cycles/${f.cycleId}/retests/requests/${body.requestKey}`);
+      expect(readback.status()).toBe(200);
+      expect(await readback.json()).toEqual({...receipt,available:false,replayed:true});
+      const retried = await request.post(`/api/cycles/${f.cycleId}/retests`,{data:body});
+      expect(retried.status(),await retried.text()).toBe(201);
+      expect(await retried.json()).toEqual({...receipt,available:false,replayed:true});
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toEqual([]);
+    } finally { await f.cleanup(); }
+  });
+
+  test("readback and exact retry recover a committed retest after its source is deleted, with no fresh creation or foreign disclosure", async ({ request }) => {
+    const f = await seed(request);
+    const asB = await newRequestContext.newContext({baseURL:env.apiBaseUrl,storageState:path.join(__dirname,"../.auth/state-b.json")});
+    const anon = await newRequestContext.newContext({baseURL:env.apiBaseUrl,storageState:{cookies:[],origins:[]}});
+    try {
+      const reviewed = await preview(request,f.cycleId,[f.executionId]), body = intent(f.executionId,reviewed.previewDigest);
+      const committed = await request.post(`/api/cycles/${f.cycleId}/retests`,{data:body});
+      expect(committed.status()).toBe(201);
+      // Recover by the retained request key without consuming the original POST's receipt.
+      expect((await request.delete(`/api/cycles/${f.cycleId}`)).ok()).toBeTruthy();
+      expect((await request.get(`/api/cycles/${f.cycleId}`,{failOnStatusCode:false})).status()).toBe(404);
+      const recovered = await request.get(`/api/cycles/${f.cycleId}/retests/requests/${body.requestKey}`);
+      expect(recovered.status(),await recovered.text()).toBe(200);
+      const receipt = await recovered.json(); f.created.push(receipt.cycleId);
+      expect(receipt).toMatchObject({sourceCycleId:f.cycleId,requestKey:body.requestKey,available:true,replayed:true});
+      expect(receipt.manifest.occurrences[0].sourceResult.status).toBe("Failed");
+      const retry = await request.post(`/api/cycles/${f.cycleId}/retests`,{data:body});
+      expect(retry.status(),await retry.text()).toBe(201); expect(await retry.json()).toEqual(receipt);
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`,{data:{...body,name:"Different request"},failOnStatusCode:false})).status()).toBe(409);
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`,{data:{...body,requestKey:randomUUID()},failOnStatusCode:false})).status()).toBe(404);
+      for (const [denied,status] of [[asB,404],[anon,400]] as const) {
+        for (const response of await Promise.all([
+          denied.get(`/api/cycles/${f.cycleId}/retests/requests/${body.requestKey}`,{failOnStatusCode:false}),
+          denied.post(`/api/cycles/${f.cycleId}/retests`,{data:body,failOnStatusCode:false})
+        ])) {
+          expect(response.status()).toBe(status);
+          expect(await response.text()).not.toContain(receipt.cycleId);
+        }
+      }
+      const runs = await (await request.get(`/api/projects/${ctx.projectId}/cycles`)).json();
+      expect(runs.filter((row: { retestSourceCycleId?: string }) => row.retestSourceCycleId === f.cycleId)).toHaveLength(1);
+    } finally { await asB.dispose(); await anon.dispose(); await f.cleanup(); }
+  });
+
+  test("an unresolved stale request is terminally cancelled before a fresh reviewed request creates one Run", async ({ request }) => {
+    const f = await seed(request);
+    try {
+      const reviewed = await preview(request,f.cycleId,[f.executionId]), saved = intent(f.executionId,reviewed.previewDigest);
+      // Model a lost request before server receipt: the exact saved body remains, while the
+      // source changes. Readback 404 is an unknown outcome, never permission to discard the key.
+      const changed = await request.patch(`/api/cycles/${f.cycleId}/executions/${f.executionId}`,{data:{actualResult:"Additional observation before the delayed request arrived"}});
+      expect(changed.ok(),await changed.text()).toBeTruthy();
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`,{data:saved,failOnStatusCode:false})).status()).toBe(409);
+      expect((await request.get(`/api/cycles/${f.cycleId}/retests/requests/${saved.requestKey}`,{failOnStatusCode:false})).status()).toBe(404);
+      const cancelUrl = `/api/cycles/${f.cycleId}/retests/requests/${saved.requestKey}/cancel`;
+      const cancellation = await request.post(cancelUrl,{data:saved});
+      expect(cancellation.status(),await cancellation.text()).toBe(201);
+      // Ignore the cancellation body and recover the durable noncommit fact by its original key.
+      const recovered = await request.get(`/api/cycles/${f.cycleId}/retests/requests/${saved.requestKey}`);
+      expect(recovered.status(),await recovered.text()).toBe(200);
+      const terminal = await recovered.json();
+      expect(terminal).toMatchObject({outcome:"cancelled",projectId:ctx.projectId,sourceCycleId:f.cycleId,requestKey:saved.requestKey});
+      expect(terminal.requestDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(Number.isNaN(Date.parse(terminal.cancelledAt))).toBe(false);
+      expect(terminal.cycleId).toBeUndefined();
+      expect(await (await request.post(cancelUrl,{data:saved})).json()).toEqual(terminal);
+      const late = await request.post(`/api/cycles/${f.cycleId}/retests`,{data:saved,failOnStatusCode:false});
+      expect(late.status()).toBe(409);
+      expect(await late.json()).toMatchObject({code:"RETEST_REQUEST_CANCELLED",disposition:terminal});
+      expect((await request.post(cancelUrl,{data:{...saved,name:"Changed intent"},failOnStatusCode:false})).status()).toBe(409);
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toEqual([]);
+      const fresh = await preview(request,f.cycleId,[f.executionId]);
+      const created = await request.post(`/api/cycles/${f.cycleId}/retests`,{data:intent(f.executionId,fresh.previewDigest)});
+      expect(created.status(),await created.text()).toBe(201);
+      const receipt = await created.json(); f.created.push(receipt.cycleId);
+      expect(receipt.outcome).toBe("created");
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toHaveLength(1);
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests/requests/${saved.requestKey}`)).json()).toEqual(terminal);
+    } finally { await f.cleanup(); }
+  });
+
+  test("invalid and cross-run selections fail atomically instead of silently dropping requested occurrences", async ({ request }) => {
+    const f = await seed(request), sibling = await seed(request);
+    try {
+      const reviewed = await preview(request,f.cycleId,[f.executionId]), body = intent(f.executionId,reviewed.previewDigest);
+      for (const executionIds of [[],[f.executionId,f.executionId],[f.executionId,"bad-id"]]) {
+        expect((await request.post(`/api/cycles/${f.cycleId}/retests`,{data:{...body,executionIds},failOnStatusCode:false})).status()).toBe(400);
+      }
+      for (const executionIds of [[sibling.executionId],[f.executionId,sibling.executionId],[randomUUID()]]) {
+        expect((await request.post(`/api/cycles/${f.cycleId}/retests`,{data:{...body,executionIds},failOnStatusCode:false})).status()).toBe(404);
+      }
+      expect((await request.post(`/api/cycles/${f.cycleId}/retests`,{data:{...body,name:"   "},failOnStatusCode:false})).status()).toBe(400);
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toEqual([]);
+    } finally { await sibling.cleanup(); await f.cleanup(); }
+  });
+
+  test("anonymous and foreign accounts cannot preview, create or recover another project's retest", async ({ request }) => {
+    const f = await seed(request);
+    const asB = await newRequestContext.newContext({baseURL:env.apiBaseUrl,storageState:path.join(__dirname,"../.auth/state-b.json")});
+    const anon = await newRequestContext.newContext({baseURL:env.apiBaseUrl,storageState:{cookies:[],origins:[]}});
+    try {
+      const reviewed = await preview(request,f.cycleId,[f.executionId]), body = intent(f.executionId,reviewed.previewDigest);
+      for (const [denied,status] of [[asB,404],[anon,400]] as const) {
+        const responses = await Promise.all([
+          denied.get(`/api/cycles/${f.cycleId}/retests/preview`,{params:{executionIds:f.executionId},failOnStatusCode:false}),
+          denied.post(`/api/cycles/${f.cycleId}/retests`,{data:body,failOnStatusCode:false}),
+          denied.post(`/api/cycles/${f.cycleId}/retests/requests/${body.requestKey}/cancel`,{data:body,failOnStatusCode:false}),
+          denied.get(`/api/cycles/${f.cycleId}/retests/requests/${body.requestKey}`,{failOnStatusCode:false}),
+          denied.get(`/api/cycles/${f.cycleId}/retests`,{failOnStatusCode:false})
+        ]);
+        for (const response of responses) expect(response.status()).toBe(status);
+      }
+      expect(await (await request.get(`/api/cycles/${f.cycleId}/retests`)).json()).toEqual([]);
+    } finally { await asB.dispose(); await anon.dispose(); await f.cleanup(); }
+  });
+
+  test("sharing the new Run does not publish the source receipt, prior observations or private evidence", async ({ request }) => {
+    const f = await seed(request);
+    const anon = await newRequestContext.newContext({baseURL:env.apiBaseUrl,storageState:{cookies:[],origins:[]}});
+    try {
+      const reviewed=await preview(request,f.cycleId,[f.executionId]);
+      const created=await request.post(`/api/cycles/${f.cycleId}/retests`,{data:intent(f.executionId,reviewed.previewDigest)});
+      expect(created.status(),await created.text()).toBe(201);
+      const receipt=await created.json(); f.created.push(receipt.cycleId);
+      const share=await request.post(`/api/cycles/${receipt.cycleId}/share`,{data:{enabled:true}});
+      expect(share.ok(),await share.text()).toBeTruthy();
+      const {shareToken}=await share.json();
+      const published=await anon.get(`/api/public/shared-runs/${shareToken}`);
+      expect(published.status()).toBe(200);
+      const value=await published.json();
+      expect(value.retestManifest).toBeUndefined(); expect(value.retestSourceCycleId).toBeUndefined();
+      expect(JSON.stringify(value)).not.toContain(f.executionId);
+      expect(JSON.stringify(value)).not.toContain("two order identifiers");
+    } finally { await anon.dispose(); await f.cleanup(); }
   });
 });

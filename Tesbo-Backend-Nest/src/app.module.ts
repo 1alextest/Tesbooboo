@@ -22,7 +22,9 @@ import { CustomTagsModule } from "./custom-tags/custom-tags.module";
 import { AutomationModule } from "./automation/automation.module";
 import { AnalyticsReportModule } from "./analytics-report/analytics-report.module";
 import { ReviewBoardModule } from "./review-board/review-board.module";
+import { GraphChangeReviewModule } from "./behavior-graph/graph-change-review.module";
 import { ZyraArchiveSweepModule } from "./zyra-archive-sweep/zyra-archive-sweep.module";
+import { SchedulesModule } from "./schedules/schedules.module";
 
 @Module({
   imports: [
@@ -46,9 +48,11 @@ import { ZyraArchiveSweepModule } from "./zyra-archive-sweep/zyra-archive-sweep.
     CustomTagsModule,
     PlanLimitsModule,
     AutomationModule,
+    SchedulesModule,
     ZyraArchiveSweepModule,
     AnalyticsReportModule,
-    ReviewBoardModule
+    ReviewBoardModule,
+    GraphChangeReviewModule
   ],
   // Global so every current and future mutating /api/projects/:id route is covered; the guard
   // itself no-ops on reads and on workspaces that are within their limits.

@@ -1,0 +1,12 @@
+{
+  "record_kind": "Coordinator post-review publication checkpoint; not a replacement role receipt",
+  "observed_pr169": {"state": "closed", "merged": true, "merged_at": "2026-11-20T06:54:29Z", "head": "c07d4c2a16912ca71fbc319aec9a23e68a452edd", "merge_commit": "ed71aa544108760f711ed4cb1bb7b7ba008ef417"},
+  "new_delivery_parent": "ed71aa544108760f711ed4cb1bb7b7ba008ef417",
+  "equal_tree_sha": "cebc4464b80256900fddf1ce429a6b17bfef4227",
+  "comparison_changed_files": 0,
+  "new_branch": "docs/full-team-canonical-v1438-20261120",
+  "canonical_save": {"version": 18, "library_file_id": "libfile_fde3_f-ab7b146b72588191b8a51735ae46d0b4_4ee04b678f8481919580c594fcc15a5b", "sha256": "38d29265bf04e3707e6d814850316a40d354748f0e6bf639704b5b680b2ec114"},
+  "unchanged_review_target": "a5da721acc5c8ce39948c42ec8cc2345ea3778278642b63dc58430fa6575531a",
+  "parallel_historical_review": {"pr": 170, "head": "5b1e83461ccbb69f0fc8356301fdcb769c07db0e", "declared_projection_revision": "1.4.36", "scope": "Separate reviewed36 projection and receipts. Its declared scope excludes later37 approval. Its branch and receipts remain untouched; no pooled review credit."},
+  "disposition": "PR169 merge changes no source/view bytes relative to the inspected c07 tree. Preserve finalC2 receipts and publish38 on a new draft branch. Root performed no merge."
+}

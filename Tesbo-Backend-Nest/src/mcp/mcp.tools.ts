@@ -1,4 +1,10 @@
-import { BUG_SEVERITIES, LegacyService } from "../legacy/legacy.service";
+import { HttpException } from "@nestjs/common";
+import { DRAFT_MODEL_PREVIEW_INPUT_SCHEMA } from "../behavior-graph/model-studio-preview.core";
+import { BUG_SEVERITIES, LegacyService, TESTCASE_REVIEW_VIEWS, TESTCASE_TECHNIQUES } from "../legacy/legacy.service";
+import { expectedTestcaseRevision } from "../legacy/testcase-edit-revision";
+import { CurrentCacheGraphReader } from "../behavior-graph/current-cache-graph.reader";
+import { CurrentCacheGraphHistory } from "../behavior-graph/current-cache-graph.history";
+import { DIRECT_TESTCASE_PUBLISHERS, humanPublicationRequired, proposalReviewPreviewEnabled } from "../common/testcase-publication.policy";
 import { McpError, RpcCode, type McpTool, type McpToolContext } from "./mcp.types";
 
 /** Per-item cap for tools that loop over a single-record legacy call once per array entry — kept
@@ -46,6 +52,78 @@ const SEVERITY_SCHEMA = {
   description: `One of ${BUG_SEVERITIES.join(", ")} (matched case-insensitively). Omit to leave severity unset.`
 };
 
+/** The editor's free-text duration estimate (testcases.estimated_duration, capped at 64 chars). */
+const ESTIMATED_DURATION_SCHEMA = {
+  type: "string",
+  description: "Free-text estimate shown in the editor, up to 64 characters (e.g. \"30m\", \"2h 30m\")."
+};
+
+/**
+ * Citations that informed the case (testcases.source_refs). The legacy writer validates and caps
+ * the list at 20 and drops malformed entries; advertising the shape is what lets a model supply
+ * resolvable references instead of omitting them.
+ */
+const SOURCE_REF_TYPES = ["knowledge_document", "knowledge_file", "jira_ticket", "testcase", "bug"] as const;
+const SOURCE_REFS_SCHEMA = {
+  type: "array",
+  maxItems: 20,
+  description: "Citations that informed this case: knowledge documents/files, Jira tickets, test cases or bugs.",
+  items: {
+    type: "object",
+    properties: {
+      type: { type: "string", enum: [...SOURCE_REF_TYPES] },
+      id: { type: "string" },
+      title: { type: "string" }
+    },
+    required: ["type", "id"]
+  }
+};
+
+/** The existing testcases.attachments TEXT field is displayed as Notes in the editor, and
+ * testcases.postconditions is the existing expected-final-state field. MCP schemas are advisory,
+ * so a malformed supplied value must be rejected before the legacy writer; omission must pass
+ * through without stale reads or a fabricated default. null is not a clear: pass "" to clear.
+ */
+/**
+ * The legacy sanitizer silently drops malformed citation entries. MCP callers get no schema
+ * enforcement, so a model could believe a citation was stored when it was discarded. Refuse a
+ * malformed list outright; a valid list still goes through the writer's own trim/cap.
+ */
+function validateTestcaseSourceRefs(body: Record<string, unknown>): void {
+  if (!Object.prototype.hasOwnProperty.call(body, "sourceRefs")) return;
+  const raw = body.sourceRefs;
+  if (!Array.isArray(raw)) {
+    throw new McpError(RpcCode.ToolExecutionError, '"sourceRefs" must be an array of {type, id, title}');
+  }
+  if (raw.length > 20) {
+    throw new McpError(RpcCode.ToolExecutionError, '"sourceRefs" is limited to 20 citations');
+  }
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new McpError(RpcCode.ToolExecutionError, '"sourceRefs" entries must be objects with type and id');
+    }
+    const { type, id, title } = entry as Record<string, unknown>;
+    if (typeof type !== "string" || !(SOURCE_REF_TYPES as readonly string[]).includes(type)) {
+      throw new McpError(RpcCode.ToolExecutionError, `"sourceRefs" type must be one of ${SOURCE_REF_TYPES.join(", ")}`);
+    }
+    if (typeof id !== "string" || !id.trim()) {
+      throw new McpError(RpcCode.ToolExecutionError, '"sourceRefs" entries require a non-empty id');
+    }
+    if (title !== undefined && typeof title !== "string") {
+      throw new McpError(RpcCode.ToolExecutionError, '"sourceRefs" title must be a string when provided');
+    }
+  }
+}
+
+function validateTestcaseTextFields(body: Record<string, unknown>): void {
+  if (Object.prototype.hasOwnProperty.call(body, "attachments") && typeof body.attachments !== "string") {
+    throw new McpError(RpcCode.ToolExecutionError, '"attachments" (Notes) must be a string; omit to preserve Notes, or pass "" to clear');
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "postconditions") && typeof body.postconditions !== "string") {
+    throw new McpError(RpcCode.ToolExecutionError, '"postconditions" must be a string; omit to preserve the existing value, or pass "" to clear');
+  }
+}
+
 function canonicalizeSeverity(body: Record<string, unknown>): Record<string, unknown> {
   const raw = body.severity;
   if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) return body;
@@ -82,22 +160,6 @@ async function requireProjectOwnedRow(
   if (projectId !== ctx.projectId) {
     throw new McpError(RpcCode.ProjectScopeDenied, `${entityLabel} belongs to a different project than this token`);
   }
-}
-
-/**
- * updateTestCaseWithClient (legacy.service.ts) writes suite_id and owner_id verbatim — no
- * COALESCE, unlike every other field in that UPDATE. Any caller that omits them gets them
- * silently cleared to NULL. The frontend never notices because its edit form always re-sends the
- * currently-loaded suiteId/ownerId on every save, whether the user touched those fields or not;
- * an MCP caller has no such form state, so a plain {status: "Archived"} call was quietly
- * unassigning the test case's suite. Same reasoning update_suite already applies to parentId —
- * fetch the current values and re-supply whichever one the caller didn't mention.
- */
-async function preserveOmittedSuiteAndOwner(ctx: McpToolContext, testcaseId: string, body: Record<string, unknown>): Promise<void> {
-  if (body.suiteId !== undefined && body.ownerId !== undefined) return;
-  const current = await ctx.legacy.getTestCase(testcaseId);
-  if (body.suiteId === undefined) body.suiteId = current.suiteId ?? null;
-  if (body.ownerId === undefined) body.ownerId = current.ownerId ?? null;
 }
 
 /**
@@ -162,8 +224,287 @@ function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** The persisted Model Studio owner, or an explicit refusal when the module is not wired. */
+function modelStudio(ctx: McpToolContext) {
+  if (!ctx.modelStudio) {
+    throw new McpError(RpcCode.ToolExecutionError, "Model Studio is unavailable on this deployment");
+  }
+  return ctx.modelStudio;
+}
+
+/** Translate the native owner's refusal (400/404/409…) into an MCP tool error, not an engine crash. */
+function rethrowModelError(error: unknown): never {
+  if (error instanceof HttpException) {
+    const response = error.getResponse();
+    const details: Record<string, unknown> = { httpStatus: error.getStatus() };
+    if (response && typeof response === "object" && "code" in response) {
+      details.code = (response as { code?: unknown }).code;
+    }
+    throw new McpError(RpcCode.ToolExecutionError, describeError(error), details);
+  }
+  throw error;
+}
+
 export function buildMcpTools(): McpTool[] {
-  return [
+  const tools: McpTool[] = [
+    {
+      name: "preview_behavior_model_draft",
+      description: "Validate a bounded sequential FSM candidate through Tesbo's native Model Studio draft preview. Requires write scope, project write entitlement and TESBO_MODEL_PREVIEW_ENABLED=1 (default off). Returns unapproved structure and reachability diagnostics only; creates no model revision, test case, run, path, coverage, runtime evidence or approval. Supply only model; project and user come from the token. Unsupported semantics and invalid fields fail explicitly.",
+      requiredScope: "write",
+      inputSchema: { type: "object", additionalProperties: false, required: ["model"],
+        properties: { model: DRAFT_MODEL_PREVIEW_INPUT_SCHEMA } },
+      handler: async (args, ctx) => {
+        if (!Object.prototype.hasOwnProperty.call(args, "model") || Object.keys(args).some(key => key !== "model")) {
+          throw new McpError(RpcCode.ToolExecutionError, "Supply only the model candidate", { code: "INVALID_MODEL", httpStatus: 400 });
+        }
+        if (!ctx.modelPreview) {
+          throw new McpError(RpcCode.ToolExecutionError, "Native model preview service is unavailable", { code: "MODEL_PREVIEW_UNAVAILABLE", httpStatus: 503 });
+        }
+        try { return await ctx.modelPreview.previewForUser(ctx.userId, ctx.projectId, args.model); }
+        catch (error: unknown) {
+          if (error instanceof HttpException) {
+            const body = error.getResponse();
+            if (body && typeof body === "object" && "code" in body &&
+                ["INVALID_MODEL", "UNSUPPORTED_SEMANTICS", "MODEL_PREVIEW_DISABLED"].includes(String(body.code))) {
+              throw new McpError(RpcCode.ToolExecutionError, describeError(error), { code: body.code, httpStatus: error.getStatus() });
+            }
+          }
+          throw error;
+        }
+      }
+    },
+    {
+      name: "create_behavior_model",
+      description:
+        "Create a project-scoped expected-behavior model as draft revision 1. Supply the same bounded sequential FSM draft the preview tool validates. The model is NOT approved, is not coverage and creates no test case, run, evidence or execution. Requires write scope.",
+      requiredScope: "write",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "model"],
+        properties: {
+          name: { type: "string", minLength: 1, maxLength: 255, description: "Model name" },
+          model: DRAFT_MODEL_PREVIEW_INPUT_SCHEMA
+        }
+      },
+      handler: async (args, ctx) => {
+        try {
+          return await modelStudio(ctx).createModelForUser(ctx.userId, ctx.projectId, {
+            name: args.name,
+            model: args.model
+          });
+        } catch (error) {
+          rethrowModelError(error);
+        }
+      }
+    },
+    {
+      name: "save_behavior_model_revision",
+      description:
+        "Append an immutable revision to an existing model, starting from the current head. baseRevisionId must be that head: a stale base is refused with STALE_BASE and nothing is changed. Earlier revisions and their case mappings are retained. Returns the new draft revision. Requires write scope.",
+      requiredScope: "write",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["modelId", "baseRevisionId", "model"],
+        properties: {
+          modelId: { type: "string", format: "uuid", description: "Model id" },
+          baseRevisionId: { type: "string", format: "uuid", description: "Current head revision id" },
+          model: DRAFT_MODEL_PREVIEW_INPUT_SCHEMA
+        }
+      },
+      handler: async (args, ctx) => {
+        try {
+          return await modelStudio(ctx).saveRevisionForUser(ctx.userId, ctx.projectId, String(args.modelId), {
+            baseRevisionId: args.baseRevisionId,
+            model: args.model
+          });
+        } catch (error) {
+          rethrowModelError(error);
+        }
+      }
+    },
+    {
+      name: "link_behavior_model_case",
+      description:
+        "Link an existing project test case to one or more elements of a model revision. Records the case editRevision when supplied so a later edit is reported as changed-since-link. A mapping is an accepted relationship — never coverage, execution or approval. Requires write scope.",
+      requiredScope: "write",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["modelId", "revisionId", "testcaseId", "elementIds"],
+        properties: {
+          modelId: { type: "string", format: "uuid", description: "Model id" },
+          revisionId: { type: "string", format: "uuid", description: "Model revision id" },
+          testcaseId: { type: "string", format: "uuid", description: "Test case id in this project" },
+          elementIds: {
+            type: "array",
+            minItems: 1,
+            maxItems: 20,
+            items: { type: "string" },
+            description: "State and transition ids from that revision"
+          },
+          testcaseRevision: {
+            type: "string",
+            pattern: "^[a-f0-9]{64}$",
+            description: "The case editRevision the mapping was reviewed against"
+          }
+        }
+      },
+      handler: async (args, ctx) => {
+        try {
+          return await modelStudio(ctx).linkCaseForUser(
+            ctx.userId,
+            ctx.projectId,
+            String(args.modelId),
+            String(args.revisionId),
+            {
+              testcaseId: args.testcaseId,
+              elementIds: args.elementIds,
+              testcaseRevision: args.testcaseRevision
+            }
+          );
+        } catch (error) {
+          rethrowModelError(error);
+        }
+      }
+    },
+    {
+      name: "get_behavior_model_coverage",
+      description:
+        "Read the latest revision's per-element linked-case counts, its mappings, its staleness flags and any governed runs dispatched from it. coverageAssertion is always none: a mapping or a case outcome is not verified behavioral coverage. executionAssertion is governed-runs when this revision started a run, none otherwise. Requires read scope.",
+      requiredScope: "read",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["modelId"],
+        properties: { modelId: { type: "string", format: "uuid", description: "Model id" } }
+      },
+      handler: async (args, ctx) => {
+        try {
+          return await modelStudio(ctx).coverageForUser(ctx.userId, ctx.projectId, String(args.modelId));
+        } catch (error) {
+          rethrowModelError(error);
+        }
+      }
+    },
+    {
+      name: "archive_behavior_model",
+      description:
+        "Retire a model from the list, detail, coverage, link and generate surfaces. Revisions and case mappings remain stored as history; there is no cascade delete. Archiving an already-archived or unknown model is a 404. Requires write scope.",
+      requiredScope: "write",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["modelId"],
+        properties: { modelId: { type: "string", format: "uuid", description: "Model id" } }
+      },
+      handler: async (args, ctx) => {
+        try {
+          return await modelStudio(ctx).archiveModelForUser(ctx.userId, ctx.projectId, String(args.modelId));
+        } catch (error) {
+          rethrowModelError(error);
+        }
+      }
+    },
+    {
+      name: "run_behavior_model",
+      description:
+        "Start a native Test Run from a model's current, HUMAN-APPROVED revision. This tool cannot approve: the revision must already carry an approval receipt whose content hash matches, or the call is refused with MODEL_NOT_APPROVED; saving a newer revision moves the basis and refuses an earlier one with SUPERSEDED_REVISION. Only cases belonging to the revision (generated from its proposals or linked to it) and already Approved can enter the run — others are refused by id, never silently dropped. The run is an ordinary Tesbo Test Run, subject to plan write locks; its results are case outcomes, not proof that the modeled behavior is correct. Requires write scope.",
+      requiredScope: "write",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["modelId", "revisionId"],
+        properties: {
+          modelId: { type: "string", format: "uuid", description: "Model id" },
+          revisionId: { type: "string", format: "uuid", description: "Current head revision id" },
+          caseIds: {
+            type: "array",
+            items: { type: "string", format: "uuid" },
+            minItems: 1,
+            maxItems: 200,
+            description: "Cases to dispatch. Omit to include every eligible case of the revision."
+          },
+          name: { type: "string", minLength: 1, maxLength: 255, description: "Test run name" },
+          environment: { type: "string", maxLength: 128, description: "Test run environment" },
+          buildVersion: { type: "string", maxLength: 128, description: "Build or release identifier" }
+        }
+      },
+      handler: async (args, ctx) => {
+        try {
+          return await modelStudio(ctx).dispatchRunForUser(
+            ctx.userId,
+            ctx.projectId,
+            String(args.modelId),
+            String(args.revisionId),
+            {
+              caseIds: args.caseIds,
+              name: args.name,
+              environment: args.environment,
+              buildVersion: args.buildVersion
+            }
+          );
+        } catch (error) {
+          rethrowModelError(error);
+        }
+      }
+    },
+    {
+      name: "list_qa_graph_changes",
+      description:
+        "Read-only QA graph history for the token's existing project: committed changes, source-scope discontinuities, changed node/edge IDs and candidate native test case IDs. Cached links and source declarations do not establish coverage, execution, failure or approval. No code scan or test write is performed. Optional limit 1–100 and exclusive beforeId cursor.",
+      requiredScope: "read",
+      inputSchema: {
+        type: "object",
+        properties: {
+          limit: { type: "integer", minimum: 1, maximum: 100, description: "Maximum records (default 25)" },
+          beforeId: { type: "string", description: "Exclusive positive decimal history ID cursor" }
+        },
+        additionalProperties: false
+      },
+      handler: async (args, ctx) => {
+        if (args.limit !== undefined && (!Number.isInteger(args.limit) ||
+          (args.limit as number) < 1 || (args.limit as number) > 100)) {
+          throw new McpError(RpcCode.ToolExecutionError, "limit must be an integer between 1 and 100");
+        }
+        if (args.beforeId !== undefined &&
+            (typeof args.beforeId !== "string" || !/^[1-9][0-9]*$/.test(args.beforeId))) {
+          throw new McpError(RpcCode.ToolExecutionError, "beforeId must be a positive decimal history cursor");
+        }
+        const history = new CurrentCacheGraphHistory(
+          ctx.db, new CurrentCacheGraphReader(ctx.db, ctx.legacy)
+        );
+        const pageSize = (args.limit as number | undefined) ?? 25;
+        const entries = await history.listForUser(
+          ctx.userId, ctx.projectId, pageSize, args.beforeId as string | undefined
+        );
+        return { entries, nextBeforeId: entries.length === pageSize
+          ? entries[entries.length - 1].id : null };
+      }
+    },
+    {
+      name: "capture_qa_graph_change",
+      description:
+        "Capture the CURRENT server-approved project repository/ref and its configured source selection into the existing versioned QA graph history. Requires token write scope and the current project's write entitlement. No input parameters: clients cannot supply source paths, repository identity, manifests, fake behavior labels, test outcomes or approval. Returns committed history/receipt and actual QA notification delivery status. An implementation change does NOT fail a test or prove coverage. Projects without an approved source binding fail closed.",
+      requiredScope: "write",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      handler: async (args, ctx) => {
+        if (Object.keys(args).length) {
+          throw new McpError(RpcCode.ToolExecutionError,
+            "Source capture does not accept client-supplied paths, source manifests, or test assertions");
+        }
+        if (!ctx.graphCapture || !ctx.graphNotificationDelivery) {
+          throw new McpError(RpcCode.ToolExecutionError,
+            "Project source capture is not configured on this Tesbo server");
+        }
+        const result = await ctx.graphCapture.captureForUser(ctx.userId, ctx.projectId);
+        const delivery = result.reviewReceipt
+          ? await ctx.graphNotificationDelivery.deliverForUser(ctx.userId, ctx.projectId, result.id)
+          : null;
+        return { ...result, delivery };
+      }
+    },
     {
       name: "list_projects",
       description:
@@ -201,7 +542,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "get_testcase",
       description:
-        "Get one test case by id in the token's project, with its full detail: description, preconditions, postconditions, steps, test data, priority, severity, type, automation fields, component, status, estimated duration, and Jira/Linear links. Required: testcaseId.",
+        "Get one test case by id in the token's project, with its full detail: description, preconditions, postconditions, steps, test data, priority, severity, type, automation fields, component, status, estimated duration, Notes (attachments plain text), sourceRefs citations, Jira/Linear links, and editRevision. Pass editRevision as expectedRevision on update_testcase to refuse a stale row edit. Required: testcaseId.",
       requiredScope: "read",
       inputSchema: {
         type: "object",
@@ -218,7 +559,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "create_testcase",
       description:
-        "Create a test case in the token's project. Required: title. Optional: suiteId, description, preconditions, steps (array of {stepNumber, action, expectedResult} — expectedResult belongs on the step it applies to, not in the overall description), testData, priority, severity, type, automationStatus, component, status. The write is attributed to the Tesbo MCP agent actor.",
+        "Create a test case in the token's project. Required: title. Optional: suiteId, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult} — expectedResult belongs on the step it applies to, not in the overall description), testData, attachments (plain-text Notes in the editor; omit or pass an empty string to leave Notes empty), priority, severity, type, automationStatus, component, status, estimatedDuration, sourceRefs (citations: array of {type, id, title}). The write is attributed to the Tesbo MCP agent actor.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -227,6 +568,7 @@ export function buildMcpTools(): McpTool[] {
           suiteId: { type: "string" },
           description: { type: "string" },
           preconditions: { type: "string" },
+          postconditions: { type: "string", description: "Expected state after the test; omit or pass an empty string for none. Distinct from each step expectedResult; null is invalid." },
           steps: {
             type: "array",
             items: {
@@ -239,18 +581,25 @@ export function buildMcpTools(): McpTool[] {
             }
           },
           testData: { type: "string" },
+          attachments: { type: "string", description: "Plain-text Notes in the editor (not uploaded files or Context citations)." },
           priority: { type: "string" },
           severity: SEVERITY_SCHEMA,
           type: { type: "string" },
           automationStatus: { type: "string" },
           component: { type: "string" },
-          status: { type: "string" }
+          status: { type: "string" },
+          estimatedDuration: ESTIMATED_DURATION_SCHEMA,
+          sourceRefs: SOURCE_REFS_SCHEMA,
+          technique: { type: "string", enum: [...TESTCASE_TECHNIQUES], description: "Authoring technique used to design the case." },
+          reviewViews: { type: "array", items: { type: "string", enum: [...TESTCASE_REVIEW_VIEWS] }, description: "Cross-cutting review lenses; a view is not execution or coverage." }
         },
         required: ["title"],
         additionalProperties: true
       },
       handler: async (args, ctx) => {
         requireString(args, "title");
+        validateTestcaseTextFields(args);
+        validateTestcaseSourceRefs(args);
         // An MCP caller gets no schema enforcement (inputSchema is advisory only — see
         // mcp.service.ts), so its `steps` can drift onto synonym keys the editor doesn't read
         // (e.g. "expected" instead of "expectedResult") exactly the way Zyra's chat/task-board
@@ -270,18 +619,19 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "update_testcase",
       description:
-        "Update a test case in the token's project. Required: testcaseId. Optional: externalId (the case's ID such as NAP-TC-12; must stay unique in the project, no spaces, up to 32 characters; past runs show the new ID), suiteId, title, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult}), testData, priority, severity, type, automationStatus, component, status, estimatedDuration, customFieldValues. Only fields you pass are changed; omitted fields keep their current value. To archive or restore a test case, prefer archive_testcase/restore_testcase over setting status here directly. The write is attributed to the Tesbo MCP agent actor.",
+        "Update a test case in the token's project. Required: testcaseId. Optional: expectedRevision (editRevision from get_testcase; recommended to refuse stale row edits), externalId (the case's ID such as NAP-TC-12; must stay unique in the project, no spaces, up to 32 characters; past runs show the new ID), suiteId, title, description, preconditions, postconditions, steps (array of {stepNumber, action, expectedResult}), testData, attachments (plain-text Notes; omit to preserve, string to replace, empty string to clear; null is invalid), priority, severity, type, automationStatus, component, status, estimatedDuration, sourceRefs (citations: array of {type, id, title}; omit to preserve, an array to replace), customFieldValues. A revision conflict writes nothing; reread and review before trying again, never automatically overwrite. Omitting expectedRevision retains unconditional legacy edits. Only fields you pass are changed; omitted fields keep their current value. To archive or restore a test case, prefer archive_testcase/restore_testcase over setting status here directly. The write is attributed to the Tesbo MCP agent actor.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
         properties: {
           testcaseId: { type: "string" },
           externalId: { type: "string" },
+          expectedRevision: { type: "string", pattern: "^[a-f0-9]{64}$", description: "Opaque editRevision from get_testcase. Guards the stored case row, not independently stored custom fields/tags. Reread and review on conflict; do not silently omit it to overwrite newer content." },
           suiteId: { type: "string" },
           title: { type: "string" },
           description: { type: "string" },
           preconditions: { type: "string" },
-          postconditions: { type: "string" },
+          postconditions: { type: "string", description: "Expected state after the test. Omit to preserve, pass a string to replace, or pass an empty string to clear; null is invalid." },
           steps: {
             type: "array",
             items: {
@@ -294,6 +644,7 @@ export function buildMcpTools(): McpTool[] {
             }
           },
           testData: { type: "string" },
+          attachments: { type: "string", description: "Plain-text Notes. Omit to preserve, pass a string to replace, or pass an empty string to clear." },
           priority: { type: "string" },
           severity: SEVERITY_SCHEMA,
           type: { type: "string" },
@@ -301,23 +652,28 @@ export function buildMcpTools(): McpTool[] {
           component: { type: "string" },
           status: { type: "string" },
           estimatedDuration: { type: "string" },
-          customFieldValues: { type: "object" }
+          sourceRefs: SOURCE_REFS_SCHEMA,
+          customFieldValues: { type: "object" },
+          technique: { type: "string", enum: [...TESTCASE_TECHNIQUES], description: "Authoring technique used to design the case. Omit to preserve; null or an empty string clears." },
+          reviewViews: { type: "array", items: { type: "string", enum: [...TESTCASE_REVIEW_VIEWS] }, description: "Cross-cutting review lenses. Omit to preserve, [] to clear; a view is not execution or coverage." }
         },
         required: ["testcaseId"],
         additionalProperties: true
       },
       handler: async (args, ctx) => {
         const testcaseId = requireString(args, "testcaseId");
+        validateTestcaseTextFields(args);
+        validateTestcaseSourceRefs(args);
+        expectedTestcaseRevision(args.expectedRevision);
         // updateTestCase() takes no project argument of its own — it derives the project from the
         // row it finds by id — so the tool must check project ownership itself before calling it.
         await requireProjectOwnedRow(ctx, "testcases", testcaseId, "Test case");
-        const rest = { ...args } as Record<string, unknown>;
+        const rest = { ...args };
         delete rest.testcaseId;
         // Same step-synonym tolerance as create_testcase — see its handler comment.
         const body = canonicalizeSeverity(
           Array.isArray(rest.steps) ? { ...rest, steps: JSON.stringify(ctx.legacy.safeSteps(rest.steps)) } : rest
         );
-        await preserveOmittedSuiteAndOwner(ctx, testcaseId, body);
         await ctx.legacy.updateTestCase(testcaseId, ctx.actorId, body);
         return ctx.legacy.getTestCase(testcaseId);
       }
@@ -337,7 +693,6 @@ export function buildMcpTools(): McpTool[] {
         const testcaseId = requireString(args, "testcaseId");
         await requireProjectOwnedRow(ctx, "testcases", testcaseId, "Test case");
         const body: Record<string, unknown> = { status: "Archived" };
-        await preserveOmittedSuiteAndOwner(ctx, testcaseId, body);
         await ctx.legacy.updateTestCase(testcaseId, ctx.actorId, body);
         return ctx.legacy.getTestCase(testcaseId);
       }
@@ -357,7 +712,6 @@ export function buildMcpTools(): McpTool[] {
         const testcaseId = requireString(args, "testcaseId");
         await requireProjectOwnedRow(ctx, "testcases", testcaseId, "Test case");
         const body: Record<string, unknown> = { status: "Draft" };
-        await preserveOmittedSuiteAndOwner(ctx, testcaseId, body);
         await ctx.legacy.updateTestCase(testcaseId, ctx.actorId, body);
         return ctx.legacy.getTestCase(testcaseId);
       }
@@ -382,7 +736,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "bulk_create_testcases",
       description:
-        `Create up to ${LegacyService.MAX_BULK_TESTCASES} test cases in the token's project in one call. Required: testcases (array; each item accepts the same fields as create_testcase — title required per item, plus optional suiteId, description, preconditions, steps, testData, priority, severity, type, automationStatus, component, status). Each item is created independently through the same path create_testcase uses — one item failing (e.g. a missing title or a too-long field) does not stop the rest from being created. The response's results array reports every item's outcome by its index in the input array, so a partial batch never silently drops a failure. This deliberately does not use the app's own bulk-import path, which is all-or-nothing (one bad row rolls back the whole batch) — per-item isolation was required here instead.`,
+        `Create up to ${LegacyService.MAX_BULK_TESTCASES} test cases in the token's project in one call. Required: testcases (array; each item accepts the same fields as create_testcase — title required per item, plus optional suiteId, description, preconditions, postconditions, steps, testData, attachments (plain-text Notes), priority, severity, type, automationStatus, component, status, estimatedDuration, sourceRefs (citations: array of {type, id, title})). Each item is created independently through the same path create_testcase uses — one item failing (e.g. a missing title or a too-long field) does not stop the rest from being created. The response's results array reports every item's outcome by its index in the input array, so a partial batch never silently drops a failure. This deliberately does not use the app's own bulk-import path, which is all-or-nothing (one bad row rolls back the whole batch) — per-item isolation was required here instead.`,
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -396,6 +750,7 @@ export function buildMcpTools(): McpTool[] {
                 suiteId: { type: "string" },
                 description: { type: "string" },
                 preconditions: { type: "string" },
+                postconditions: { type: "string", description: "Expected state after the test; omit or pass an empty string for none. Not per-step expectedResult; null is invalid." },
                 steps: {
                   type: "array",
                   items: {
@@ -408,12 +763,17 @@ export function buildMcpTools(): McpTool[] {
                   }
                 },
                 testData: { type: "string" },
+                attachments: { type: "string", description: "Plain-text Notes in the editor." },
                 priority: { type: "string" },
                 severity: SEVERITY_SCHEMA,
                 type: { type: "string" },
                 automationStatus: { type: "string" },
                 component: { type: "string" },
-                status: { type: "string" }
+                status: { type: "string" },
+                estimatedDuration: ESTIMATED_DURATION_SCHEMA,
+                sourceRefs: SOURCE_REFS_SCHEMA,
+                technique: { type: "string", enum: [...TESTCASE_TECHNIQUES], description: "Authoring technique used to design the case." },
+                reviewViews: { type: "array", items: { type: "string", enum: [...TESTCASE_REVIEW_VIEWS] }, description: "Cross-cutting review lenses; a view is not execution or coverage." }
               },
               required: ["title"]
             }
@@ -435,6 +795,8 @@ export function buildMcpTools(): McpTool[] {
         for (let index = 0; index < items.length; index++) {
           const item = (items[index] || {}) as Record<string, unknown>;
           try {
+            validateTestcaseTextFields(item);
+            validateTestcaseSourceRefs(item);
             if (typeof item.title !== "string" || item.title.trim() === "") {
               throw new Error('"title" is required and must be a non-empty string');
             }
@@ -457,7 +819,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "bulk_update_testcases",
       description:
-        `Apply the same field changes to many test cases in the token's project in one call — the same underlying bulk-update path the app's own multi-select repository actions use. Required: testcaseIds (array, up to ${LegacyService.MAX_BULK_TESTCASES}). Optional: priority, suiteId (pass "none" to clear it), status, ownerId, automationStatus — unlike update_testcase, only these five fields are bulk-writable; title/description/steps/etc. are not. Every id is validated against the token's project first: ids that don't exist, belong to another project, or are already archived-deleted are reported as failed in the results array and are never touched, while every valid id receives the same update in a single statement. Duplicate ids in the input are deduplicated before applying.`,
+        `Apply the same field changes to many test cases in the token's project in one call — the same underlying bulk-update path the app's own multi-select repository actions use. Required: testcaseIds (array, up to ${LegacyService.MAX_BULK_TESTCASES}). Optional: priority, suiteId (pass "none" to clear it), status, ownerId, automationStatus, severity — unlike update_testcase, only these six fields are bulk-writable; title/description/steps/etc. are not. Every id is validated against the token's project first: ids that don't exist, belong to another project, or are already archived-deleted are reported as failed in the results array and are never touched, while every valid id receives the same update atomically in a single statement (a failure in that statement is a call-level error, not a per-item result). Duplicate ids in the input are deduplicated before applying.`,
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -467,7 +829,8 @@ export function buildMcpTools(): McpTool[] {
           suiteId: { type: "string" },
           status: { type: "string" },
           ownerId: { type: "string" },
-          automationStatus: { type: "string" }
+          automationStatus: { type: "string" },
+          severity: SEVERITY_SCHEMA
         },
         required: ["testcaseIds"],
         additionalProperties: false
@@ -485,13 +848,15 @@ export function buildMcpTools(): McpTool[] {
         if (validIds.length > 0) {
           // bulkUpdateTestCases requires a real, org-access-checkable user (it runs
           // requireProjectAccess internally) — same reasoning as update_suite/update_bug.
+          const severity = canonicalizeSeverity({ severity: args.severity }).severity;
           await ctx.legacy.bulkUpdateTestCases(ctx.projectId, ctx.userId, {
             testcaseIds: validIds,
             priority: args.priority,
             suiteId: args.suiteId,
             status: args.status,
             ownerId: args.ownerId,
-            automationStatus: args.automationStatus
+            automationStatus: args.automationStatus,
+            severity
           });
         }
         const results = [
@@ -603,7 +968,6 @@ export function buildMcpTools(): McpTool[] {
           : notionPageId
             ? { notionPageId, notionUrl: typeof args.notionUrl === "string" ? args.notionUrl : undefined }
             : { linearIssueKey, linearUrl: typeof args.linearUrl === "string" ? args.linearUrl : undefined };
-        await preserveOmittedSuiteAndOwner(ctx, testcaseId, body);
         await ctx.legacy.updateTestCase(testcaseId, ctx.actorId, body);
         return ctx.legacy.getTestCase(testcaseId);
       }
@@ -635,7 +999,6 @@ export function buildMcpTools(): McpTool[] {
             : provider === "notion"
               ? { notionPageId: null, notionUrl: null }
               : { linearIssueKey: null, linearUrl: null };
-        await preserveOmittedSuiteAndOwner(ctx, testcaseId, body);
         await ctx.legacy.updateTestCase(testcaseId, ctx.actorId, body);
         return ctx.legacy.getTestCase(testcaseId);
       }
@@ -686,13 +1049,13 @@ export function buildMcpTools(): McpTool[] {
       },
       handler: async (args, ctx) => {
         requireString(args, "name");
-        return ctx.legacy.createSuite(ctx.projectId, args);
+        return ctx.legacy.createSuite(ctx.projectId, args, ctx.userId, { kind: "api_token" });
       }
     },
     {
       name: "update_suite",
       description:
-        "Rename, move, reposition or describe a suite in the token's project. Required: suiteId. Optional: name, description, preconditions (omit to keep the current text, send an empty string to clear it), parentId, position. IMPORTANT: the app's own update always sets the parent from what you send — omitting parentId does NOT keep the current parent the way omitting a field does on update_testcase. This tool defaults parentId to the suite's current parent when you don't pass it, so a rename-only or position-only call won't silently move the suite to the project's root; pass parentId: null explicitly to move it to the root, or another suite's id to reparent it.",
+        "Rename, move, reposition or describe a suite in the token's project. Required: suiteId. Optional: name, description, preconditions (omit to keep the current text, send an empty string to clear it), parentId, position. Omitted fields keep their current values at the actual write; a rename-only or position-only call does not move the suite. Pass parentId: null explicitly to move it to the root, or another suite's id to reparent it.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -713,19 +1076,13 @@ export function buildMcpTools(): McpTool[] {
         // row it finds by id (requireSuiteAccess) — so the tool must check project ownership
         // itself before calling it, same as update_testcase.
         await requireProjectOwnedRow(ctx, "suites", suiteId, "Suite");
-        const suites = await ctx.legacy.listSuites(ctx.projectId);
-        const existing = suites.find((s) => s.id === suiteId);
-        if (!existing) throw new McpError(RpcCode.ToolExecutionError, "Suite not found");
-        // updateSuite writes parent_id verbatim (no COALESCE) — default to the current parent so an
-        // omitted parentId doesn't un-parent the suite. See this tool's description.
-        const parentId = args.parentId !== undefined ? (args.parentId as string | null) : existing.parentId;
         await ctx.legacy.updateSuite(ctx.userId, suiteId, {
           name: args.name,
           description: args.description,
           preconditions: args.preconditions,
-          parentId,
+          parentId: args.parentId,
           position: args.position
-        });
+        }, { kind: "api_token" });
         return (await ctx.legacy.listSuites(ctx.projectId)).find((s) => s.id === suiteId);
       }
     },
@@ -811,7 +1168,7 @@ export function buildMcpTools(): McpTool[] {
             preconditions: node.preconditions,
             parentId: newParentId,
             position: node.position
-          })) as Record<string, any>;
+          }, ctx.userId, { kind: "api_token" })) as Record<string, any>;
           idMap.set(node.id as string, created.id);
           clonedSuites.push(created);
         }
@@ -821,12 +1178,10 @@ export function buildMcpTools(): McpTool[] {
           const { rows } = await ctx.legacy.listTestCases(ctx.projectId, { suiteId: node.id, includeArchived: true, limit: 500 });
           for (const tc of rows as Array<{ id: string }>) {
             const duplicated = (await ctx.legacy.duplicateTestCase(tc.id, ctx.actorId)) as Record<string, any>;
-            // duplicateTestCase already copied ownerId from the source onto `duplicated` — this
-            // relocation call must re-supply it (updateTestCase writes owner_id verbatim, no
-            // COALESCE), or moving the copy into its new suite silently drops its owner.
+            // Change only the copy's suite. The shared writer preserves its current owner,
+            // including a legitimate reassignment that happened after duplication.
             await ctx.legacy.updateTestCase(duplicated.id, ctx.actorId, {
-              suiteId: idMap.get(node.id as string),
-              ownerId: duplicated.ownerId ?? null
+              suiteId: idMap.get(node.id as string)
             });
             clonedTestcases.push({ sourceId: tc.id, clonedId: duplicated.id });
           }
@@ -873,7 +1228,10 @@ export function buildMcpTools(): McpTool[] {
           // re-deriving plan shape by hand. "Where available" means this degrades to null on any
           // failure rather than failing the whole cycle lookup over an enrichment field.
           try {
-            plan = await ctx.legacy.getPlan(ctx.userId, cycle.planId);
+            const candidate = await ctx.legacy.getPlan(ctx.userId, cycle.planId);
+            // Legacy inconsistent references must not enrich a token-scoped Run with another
+            // project's Plan, even when its issuer happens to be a member of both projects.
+            if (candidate.projectId === ctx.projectId) plan = candidate;
           } catch {
             plan = null;
           }
@@ -907,7 +1265,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "create_cycle_from_testcases",
       description:
-        "Create a test cycle (test run) in the token's project and add the given test cases to it in one call — the same two-step workflow (create the run, then add test cases) the app's own UI performs; there is no single-statement backend path that does both. Required: name, testcaseIds (array). Optional: description, environment, buildVersion, releaseName, planId. Every testcaseId is validated against the token's project first — ids that don't exist or belong to another project are listed in invalidTestcaseIds and are never added, rather than silently vanishing into a bare skipped count. Duplicate ids in the input are deduplicated before adding.",
+        "Atomically create a test cycle (test run) and attach existing Approved project test cases. If a selected active case is Draft/In Review/Archived, the whole write is refused without creating an empty run. Required: name, testcaseIds (array). Optional: description, environment, buildVersion, releaseName, planId. Missing or foreign-project ids are listed separately as invalidTestcaseIds; duplicates are removed. Run and case addition reuse the native Tesbo writer, not a parallel system.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -931,24 +1289,24 @@ export function buildMcpTools(): McpTool[] {
           await requireProjectOwnedRow(ctx, "plans", args.planId, "Plan");
         }
         const { validIds, invalidIds } = await partitionOwnedIds(ctx, "testcases", requestedIds);
-        const cycle = await ctx.legacy.createCycle(ctx.projectId, {
-          name: args.name,
-          description: args.description,
-          environment: args.environment,
-          buildVersion: args.buildVersion,
-          releaseName: args.releaseName,
-          planId: args.planId
-        });
-        // addCycleTestCases requires a real, org-access-checkable user (requireCycleAccess), same
-        // reasoning as update_suite/update_bug/bulk_update_testcases.
-        const addResult =
-          validIds.length > 0
-            ? await ctx.legacy.addCycleTestCases(cycle.id, ctx.userId, { testcaseIds: validIds })
-            : { requested: 0, added: 0, skipped: 0 };
+        // One native transaction for run creation, approved-case validation
+        // and case attachment. A Draft case or concurrent demotion rolls the
+        // whole attempt back, including the newly inserted run.
+        const prepared = await ctx.legacy.createCycleWithTestcasesForUser(
+          ctx.userId, ctx.projectId, {
+            name: args.name,
+            description: args.description,
+            environment: args.environment,
+            buildVersion: args.buildVersion,
+            releaseName: args.releaseName,
+            planId: args.planId,
+            testcaseIds: validIds
+          }
+        );
         return {
-          cycle,
+          cycle: prepared.cycle,
           testcasesRequested: requestedIds.length,
-          testcasesAdded: addResult.added,
+          testcasesAdded: prepared.added,
           invalidTestcaseIds: invalidIds
         };
       }
@@ -1042,7 +1400,7 @@ export function buildMcpTools(): McpTool[] {
       handler: async (args, ctx) => {
         const executionId = requireString(args, "executionId");
         const { cycleId } = await requireExecutionOwner(ctx, executionId);
-        const body = { ...args } as Record<string, unknown>;
+        const body = { ...args };
         delete body.executionId;
         // Same reasoning as record_execution_result: updateExecution requires a real user id.
         await ctx.legacy.updateExecution(executionId, ctx.userId, body);
@@ -1092,7 +1450,7 @@ export function buildMcpTools(): McpTool[] {
           try {
             if (!executionId.trim()) throw new Error('"executionId" is required and must be a non-empty string');
             await requireExecutionOwner(ctx, executionId);
-            const body = { ...item } as Record<string, unknown>;
+            const body = { ...item };
             delete body.executionId;
             await ctx.legacy.updateExecution(executionId, ctx.userId, body);
             outcomes.push({ index, executionId, ok: true });
@@ -1201,18 +1559,21 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "update_bug",
       description:
-        "Update a bug in the token's project. Required: bugId. Optional: title, description, status, severity (Critical/High/Medium/Low — pass null or \"\" to clear it back to not selected), priority (P0/P1/P2/P3 — pass null or \"\" to clear it back to untriaged), externalUrl, assigneeId (must already be a member of this project; pass null or \"\" to unassign), links (array of {testcaseId, cycleId, executionId} — replaces the bug's existing links entirely when present, it does not merge with them). Invalid new/changed links reject the entire edit, including metadata. Exact valid unchanged historical links may retain deleted local targets; removing one does not permit adding it anew. Fields you omit keep their current value, except severity/priority/assigneeId which use the explicit-clear convention above.",
+        "Update a bug in the token's project. Required: bugId. Optional: title, description, status, severity (Critical/High/Medium/Low), priority (P0/P1/P2/P3), externalUrl, integrationProvider, integrationIssueKey, betterbugsUrl, assigneeId (must already be a member of this project), links (array of {testcaseId, cycleId, executionId} — replaces existing links entirely when present, not a merge). Omitted fields keep their live values. Send null or an empty string to clear description/external tracking/BetterBugs fields or severity/priority, or to unassign assigneeId. Clearing a complete external association requires sending externalUrl, integrationProvider and integrationIssueKey explicitly. Invalid new/changed links reject the entire edit including metadata. Exact valid unchanged historical links may retain deleted local targets; removing one does not permit adding it anew.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
         properties: {
           bugId: { type: "string" },
           title: { type: "string" },
-          description: { type: "string" },
+          description: { type: ["string", "null"] },
           status: { type: "string" },
           severity: { type: ["string", "null"] },
           priority: { type: ["string", "null"] },
-          externalUrl: { type: "string" },
+          externalUrl: { type: ["string", "null"] },
+          integrationProvider: { type: ["string", "null"] },
+          integrationIssueKey: { type: ["string", "null"] },
+          betterbugsUrl: { type: ["string", "null"] },
           assigneeId: { type: ["string", "null"] },
           links: { type: "array" }
         },
@@ -1225,7 +1586,7 @@ export function buildMcpTools(): McpTool[] {
         // it finds by id (requireBugAccess) — so the tool must check project ownership itself
         // before calling it, same as update_testcase/update_suite.
         await requireProjectOwnedRow(ctx, "bugs", bugId, "Bug");
-        const body = { ...args } as Record<string, unknown>;
+        const body = { ...args };
         delete body.bugId;
         return ctx.legacy.updateBug(ctx.userId, bugId, body);
       }
@@ -1233,7 +1594,7 @@ export function buildMcpTools(): McpTool[] {
     {
       name: "link_testcase_to_bug",
       description:
-        "Link a test case to an existing bug in the token's project (a bug_links row), optionally scoped to a specific cycle/execution. Required: bugId, testcaseId. Optional: cycleId, executionId. New/changed targets must be active in this project and form a consistent case/run/execution chain; an invalid target rejects the request. Valid manual/open-run links retain auto-failure behavior; finalized automation accepts the association without changing its sealed verdict. Calling this again with the same bugId+testcaseId (+cycleId) updates the link in place rather than duplicating it. This tool's ownership checks still refuse deleted targets; use update_bug to preserve an exact valid unchanged historical link.",
+        "Link a test case to an existing bug in the token's project (a bug_links row), optionally scoped to a specific cycle/execution. Required: bugId, testcaseId. Optional: cycleId, executionId. New/changed targets must be active in this project and form a consistent case/run/execution chain; an invalid target rejects the request. Associations preserve the execution verdict, performer and time for every run. Record an observed result separately through the authorized result writer. Calling this again with the same bugId+testcaseId (+cycleId) updates the link in place rather than duplicating it. This tool's ownership checks still refuse deleted targets; use update_bug to preserve an exact valid unchanged historical link.",
       requiredScope: "write",
       inputSchema: {
         type: "object",
@@ -1536,4 +1897,103 @@ export function buildMcpTools(): McpTool[] {
       }
     }
   ];
+
+  // Reuse the established case vocabulary while the native proposal owner remains responsible
+  // for normalization, revision checks and validation. These are candidate fields, never IDs
+  // or authority supplied by the caller.
+  const proposalFields = {
+    ...(tools.find(tool => tool.name === "create_testcase")!.inputSchema.properties as Record<string, unknown>),
+    ...(tools.find(tool => tool.name === "update_testcase")!.inputSchema.properties as Record<string, unknown>),
+    stepsJson: { type: "string" },
+    customFieldValues: { type: "object" },
+    customTagIds: { type: "array", items: { type: "string" } },
+    ownerId: { type: ["string", "null"] }, suiteId: { type: ["string", "null"] },
+    automationRepo: { type: "string" }, automationPath: { type: "string" },
+    automationTestName: { type: "string" }, automationFramework: { type: "string" },
+    automationTags: { type: "string" },
+    jiraIssueKey: { type: ["string", "null"] }, jiraUrl: { type: ["string", "null"] },
+    linearIssueKey: { type: ["string", "null"] }, linearUrl: { type: ["string", "null"] },
+    notionPageId: { type: ["string", "null"] }, notionUrl: { type: ["string", "null"] }
+  } as Record<string, unknown>;
+  delete proposalFields.testcaseId;
+  delete proposalFields.expectedRevision;
+  const candidateFields = { type: "object", additionalProperties: false, properties: proposalFields };
+  const operations = {
+    type: "array", minItems: 1, maxItems: 100,
+    items: { oneOf: [
+      { type: "object", additionalProperties: false, required: ["opType", "draft"], properties: {
+        opType: { const: "create" }, reason: { type: "string" },
+        draft: { ...candidateFields, required: ["title"], properties: { ...proposalFields, status: { const: "Draft" } } }
+      } },
+      { type: "object", additionalProperties: false, required: ["opType", "testcaseId", "expectedRevision", "fields"], properties: {
+        opType: { enum: ["update", "archive"] }, testcaseId: { type: "string" },
+        expectedRevision: { type: "string", pattern: "^[a-f0-9]{64}$", description: "Exact editRevision returned by get_testcase." },
+        fields: candidateFields, reason: { type: "string" }
+      } }
+    ] }
+  };
+  const proposalTools: McpTool[] = [
+    {
+      name: "stage_testcase_changes", requiredScope: "write",
+      description: "Stage up to 100 unpublished create/update/archive testcase proposals in Tesbo's existing task review workflow. Requires an explicit requestKey; retry that key only with the identical request. Updates and archives require the current get_testcase editRevision. No model key is needed. Returns a task/proposal revision, never a newly published testcase ID. A human must review the exact task and save selected proposals through Tesbo; this tool cannot apply or approve them. Restore uses an update proposal with status Draft; create proposals cannot request Approved.",
+      inputSchema: { type: "object", additionalProperties: false, required: ["requestKey", "operations"], properties: {
+        requestKey: { type: "string", minLength: 1, maxLength: 160 }, title: { type: "string" }, operations
+      } },
+      handler: async (args, ctx) => {
+        const requestKey = requireString(args, "requestKey");
+        if (Object.keys(args).some(key => !["requestKey", "operations", "title"].includes(key))) {
+          throw new McpError(RpcCode.InvalidParams, "Only requestKey, operations and title are accepted; principal and project come from the authenticated credential");
+        }
+        if (!ctx.tokenId) throw new McpError(RpcCode.ProjectScopeDenied, "An authenticated credential is required to stage testcase proposals");
+        if (!ctx.actorId) throw new McpError(RpcCode.ToolExecutionError, "The MCP agent identity is unavailable; no proposal was staged", { code: "AGENT_IDENTITY_UNAVAILABLE" });
+        const submittedOperations = Array.isArray(args.operations) ? args.operations.map(operation => {
+          if (!operation || typeof operation !== "object" || Array.isArray(operation)) return operation;
+          const key = operation.opType === "create" ? "draft" : "fields";
+          const fields = operation[key];
+          if (!fields || typeof fields !== "object" || Array.isArray(fields)) return operation;
+          validateTestcaseTextFields(fields);
+          validateTestcaseSourceRefs(fields);
+          return { ...operation, [key]: canonicalizeSeverity(fields) };
+        }) : args.operations;
+        try {
+          const task = await ctx.legacy.stageTestcaseChanges(ctx.projectId, ctx.userId,
+            { requestKey, operations: submittedOperations, ...(args.title === undefined ? {} : { title: args.title }) },
+            { kind: "api_token", transport: "mcp", tokenId: ctx.tokenId, ...(ctx.actorId ? { actorId: ctx.actorId } : {}) });
+          return { publication: "unpublished", taskId: task.id, task,
+            reviewPath: `/projects/${ctx.projectId}/agents/tasks/${task.id}` };
+        } catch (error) { rethrowModelError(error); }
+      }
+    },
+    {
+      name: "list_testcase_proposals", requiredScope: "read",
+      description: "List staged testcase proposal tasks in this project. These are review candidates, not official cases, approvals or execution evidence. Optional limit and offset paginate the native task owner.",
+      inputSchema: { type: "object", additionalProperties: false, properties: {
+        limit: { type: "integer", minimum: 1, maximum: 100 }, offset: { type: "integer", minimum: 0 }
+      } },
+      handler: async (args, ctx) => ctx.legacy.listTestcaseProposals(ctx.projectId, ctx.userId, args)
+    },
+    {
+      name: "get_testcase_proposal_task", requiredScope: "read",
+      description: "Read one native testcase review task, including its current proposalSnapshot and proposalRevision. Pending drafts are unpublished candidates. Reading or staging a task cannot approve it; only a human can save the exact selected revision.",
+      inputSchema: { type: "object", additionalProperties: false, required: ["taskId"], properties: { taskId: { type: "string" } } },
+      handler: async (args, ctx) => ctx.legacy.zyraTask(ctx.projectId, ctx.userId, requireString(args, "taskId"))
+    }
+  ];
+  return [...tools.map(tool => DIRECT_TESTCASE_PUBLISHERS.has(tool.name) ? {
+    ...tool, hiddenFromDiscovery: true,
+    description: "Direct testcase publication requires human review. Use stage_testcase_changes and inspect the native proposal task; only a human can apply selected proposals.",
+    handler: async (_args: Record<string, unknown>, ctx: McpToolContext) => {
+      const refusal = humanPublicationRequired(ctx.projectId);
+      throw new McpError(RpcCode.ToolExecutionError, refusal.error, refusal);
+    }
+  } : tool), ...proposalTools.map(tool => ({
+    ...tool, proposalPreviewOnly: true,
+    handler: async (args: Record<string, unknown>, ctx: McpToolContext) => {
+      if (!proposalReviewPreviewEnabled()) throw new McpError(RpcCode.ToolExecutionError,
+        "The unpublished proposal review preview is unavailable on this deployment", {
+          code: "PROPOSAL_REVIEW_PREVIEW_DISABLED", stagingAvailable: false
+        });
+      return tool.handler(args, ctx);
+    }
+  }))];
 }

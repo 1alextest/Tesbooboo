@@ -150,7 +150,10 @@ export class RagEmbeddingProcessor extends WorkerHost {
       }
     });
 
-    await this.db.query(`UPDATE ${table} SET embedding_status = 'ready', embedding_content_hash = $2, updated_at = now() WHERE id = $1`, [
+    // No `updated_at = now()`: indexing status is operational state, not an authored edit.
+    // Touching updated_at here reordered "recently updated" documents and made a background
+    // embedding attempt look like a user write (the document-writes smoke compares full rows).
+    await this.db.query(`UPDATE ${table} SET embedding_status = 'ready', embedding_content_hash = $2 WHERE id = $1`, [
       sourceId,
       contentHash
     ]);
@@ -270,7 +273,7 @@ export class RagEmbeddingProcessor extends WorkerHost {
       [projectId, testcaseId, contentHash, allocation.model, `[${vector.join(",")}]`]
     );
 
-    await this.db.query(`UPDATE testcases SET embedding_status = 'ready', embedding_content_hash = $2, updated_at = now() WHERE id = $1`, [
+    await this.db.query(`UPDATE testcases SET embedding_status = 'ready', embedding_content_hash = $2 WHERE id = $1`, [
       testcaseId,
       contentHash
     ]);
@@ -293,6 +296,6 @@ export class RagEmbeddingProcessor extends WorkerHost {
   }
 
   private async setStatus(table: string, sourceId: string, status: string): Promise<void> {
-    await this.db.query(`UPDATE ${table} SET embedding_status = $2, updated_at = now() WHERE id = $1`, [sourceId, status]);
+    await this.db.query(`UPDATE ${table} SET embedding_status = $2 WHERE id = $1`, [sourceId, status]);
   }
 }

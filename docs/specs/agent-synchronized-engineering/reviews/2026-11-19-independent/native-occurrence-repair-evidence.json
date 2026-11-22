@@ -1,0 +1,58 @@
+{
+  "baseCommit": "9519b56d3441dfec3a107db95ca602665454f407",
+  "fileSha256": {
+    "Tesbo-Backend-Nest/src/behavior-graph/model-studio-repository.ts": "6eea2fb02f143f669f78c4cd86fd720219054eb1352dd7902e8ae17af5ab313d",
+    "Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.spec.ts": "e33b55910e0eb27da5189f2cc6af9c68afd25bfec1c4574d6f956f7dd8e41eec",
+    "Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.db.spec.ts": "a60eeddd8f6b0b7f99d51f724a83fada572d9bcdce747957d22c8e640979fea8",
+    "Tesbo-Frontend/lib/api.ts": "b8f6f6fdf4ce97aca68824b9eae3b08d22cbdb6c0abf56989429f3f74b5a492d",
+    "Tesbo-Frontend/app/(app)/projects/[id]/model-studio/page.tsx": "6097f407a914d2b11852d618bb7c1337bb657867b5fc2bca7faa985839dcbe4d",
+    "Tesbo-Frontend/app/(app)/projects/[id]/cycles/[cycleId]/page.tsx": "ed3628e7313841bd3c36904033b1c21dcf0bb23b71472b8fa8c1f15e7e4ed021",
+    "e2e/api/model-studio.spec.ts": "4378bf72118f500789f6cea3b77d61f12fe6b4c777760161444346185e2e8479",
+    "e2e/ui/model-studio.spec.ts": "ed7adcb73f69f4005699d300c0421aabea859ecb2339a2ce9588c76658cd6666"
+  },
+  "unitBefore": {
+    "total": 29,
+    "passed": 14,
+    "failed": 15
+  },
+  "unitAfter": {
+    "total": 62,
+    "passed": 62,
+    "failed": 0,
+    "suites": 3
+  },
+  "playwrightDiscovery": {
+    "total": 19,
+    "api": 10,
+    "ui": 9,
+    "execution": "not run locally"
+  },
+  "databaseDeclarationDiscovery": {
+    "total": 21,
+    "new": 2,
+    "execution": "not run locally"
+  },
+  "typechecks": {
+    "backend": "passed",
+    "frontend": "passed",
+    "e2e": "passed"
+  },
+  "lint": {
+    "backend": {
+      "files": 3,
+      "errors": 0,
+      "warnings": 0
+    },
+    "frontend": {
+      "files": 3,
+      "errors": 0,
+      "warnings": 0
+    },
+    "e2e": {
+      "files": 2,
+      "errors": 0,
+      "warnings": 0
+    }
+  },
+  "diffCheck": "passed"
+}

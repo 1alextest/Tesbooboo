@@ -1,0 +1,26 @@
+{
+  "mode": "independent synthetic planning exercise, not live product evidence",
+  "case_selection": "Separate cold agent selected two task packets without reading the originating project, method additions, or author diagnosis; supplied facts are synthetic normative contracts.",
+  "files": [
+    {
+      "path": "/workspace/scratch/ce8c3109f396/method-transfer/input/interactive-fiction-scene-review.md",
+      "sha256": "dd21c0dfdec0d2a142032c08642c3401701601a83a0543ccf343e7656a37cde9",
+      "bytes": 3495
+    },
+    {
+      "path": "/workspace/scratch/ce8c3109f396/method-transfer/input/rehearsal-packet-covers.md",
+      "sha256": "57fa26001751879b8b9d210ad4768d453a6182e438ce77088c2ef3c57baf3500",
+      "bytes": 3370
+    },
+    {
+      "path": "/workspace/scratch/ce8c3109f396/method-transfer/method-baseline.md",
+      "sha256": "0b274bd6fedae053f08a691a72d3acf6c35b7cdabfc6302209abf71940a0a09f",
+      "bytes": 8921
+    },
+    {
+      "path": "/workspace/scratch/ce8c3109f396/method-transfer/method-candidate.md",
+      "sha256": "fbb811150a34b458b84633dcf7867ace04d4af6d41130c612c758ef1ed63dfe7",
+      "bytes": 16983
+    }
+  ]
+}

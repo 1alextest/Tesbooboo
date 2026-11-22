@@ -25,7 +25,7 @@ describe("automation finalized-run write barriers", () => {
       if (sql.includes("FROM cycles WHERE id = $1 AND project_id")) {
         return { rows: [{ id: run, name: "CI", closed_at: closed ? new Date() : null }] };
       }
-      if (sql.includes("FROM testcases")) return { rows: [{ id: caseId, external_id: "CI-TC-1", title: "Case", status: "Approved" }] };
+      if (sql.includes("FROM testcases")) return { rows: [{ id: caseId, external_id: "CI-TC-1", title: "Case", status: "Approved", approval_current: true }] };
       if (sql.includes("FROM cycle_items WHERE cycle_id")) return { rows: [{ testcase_id: caseId }] };
       if (sql.includes("SELECT e.id FROM executions e")) return { rows: [{ id: execution }] };
       if (sql.includes("INSERT INTO attachments")) return { rows: [{ id: "evidence-id" }] };

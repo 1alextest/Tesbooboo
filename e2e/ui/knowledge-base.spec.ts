@@ -23,9 +23,9 @@ import {
  *   2. Delete goes through window.confirm(), a native dialog Playwright must be told to handle.
  *      Cancelling it must leave the row alone — a bug that would look identical to a working delete
  *      in any API test.
- *   3. There is no trash UI at all. Delete moves items to trash and the restore endpoints exist and
- *      are owner-or-manager gated, but nothing in the app can reach them. KBU-24 pins that gap so it
- *      stays a deliberate product decision rather than something nobody noticed.
+ *   3. Deleted items land on a separate Trash screen, and its Restore path is the only way back.
+ *      KBU-24 pins that the screen is reachable from the knowledge base and that restoring a folder
+ *      is what actually makes it appear again.
  *
  * Runs against its own disposable workspace ("kb-ui"). Every test starts from an empty knowledge
  * base — the summary counters are absolute numbers, so one leftover folder turns a correct product
@@ -499,7 +499,7 @@ test.describe("knowledge base (UI)", () => {
     await expect(row(page, name)).toHaveCount(0);
 
     // Soft delete, not a hard one: the row survives with is_deleted set, which is what makes the
-    // (UI-less) restore endpoint in KBU-24 meaningful.
+    // Trash restore in KBU-24 possible.
     await expect
       .poll(
         () =>
@@ -732,39 +732,43 @@ test.describe("knowledge base (UI)", () => {
     await expect(page.locator("body")).not.toContainText("Application error");
   });
 
-  // ─── The gap this suite is here to pin ─────────────────────────────────────
+  // ─── Trash ─────────────────────────────────────────────────────────────────
 
-  test("KBU-24 deleted items are unreachable from the UI — restore is API-only", { tag: '@tesbo.testId("TES-TC-1018")' }, async ({ browser }) => {
+  test("KBU-24 a deleted folder is restored from the Trash screen", { tag: '@tesbo.testId("TES-TC-1018")' }, async ({ browser }) => {
     const name = stamp("Trashed");
     const created = await api.post(kbUrl("/folders"), { data: { name, parentFolderId: rootFolderId } });
     const folderId = (await created.json()).id;
     await api.delete(kbUrl(`/folders/${folderId}`));
 
     const page = await openKb(browser);
-
-    // The row is gone from the browser...
+    // The row is gone from the knowledge base itself...
     await expect(row(page, name)).toHaveCount(0);
-    // ...and nothing on the screen offers a way back to it.
-    for (const label of [/^trash$/i, /deleted items/i, /restore/i]) {
-      await expect(
-        page.getByText(label),
-        `the KB screen offers no way to reach deleted items (${label})`,
-      ).toHaveCount(0);
-    }
 
-    // But the endpoint exists and works, which is what makes this a gap rather than a design.
-    const restored = await api.patch(kbUrl(`/folders/${folderId}/restore`));
-    expect(restored.status(), "restore works over the API — only the UI cannot reach it").toBe(200);
+    // ...but the screen offers a way to the deleted item.
+    await page.getByRole("link", { name: "Trash" }).click();
+    await page.waitForURL(/\/knowledge-base\/trash$/);
+    const folders = page.getByRole("region", { name: "Deleted folders" });
+    await expect(folders).toContainText(name);
+
+    await page.getByRole("button", { name: `Restore ${name}` }).click();
+    await expect(page.getByRole("status")).toContainText("Restored");
+    // The only trashed item is gone, so the screen switches to its empty state; assert the absence
+    // of the restore affordance rather than text inside a region that no longer exists.
+    await expect(page.getByRole("button", { name: `Restore ${name}` })).toHaveCount(0);
+    await expect(page.getByText("Trash is empty")).toBeVisible();
+
+    // And the folder is really back for the knowledge base, not just gone from the list.
+    expect((await api.get(kbUrl(`/folders/${folderId}`))).status()).toBe(200);
   });
   // ─── Blank documents (BetterBugs 6a7da01c) ─────────────────────────────────
   //
   // "user should not be able to save blank documents add some validation".
   //
   // KBU-07 already covers the CREATE modal refusing an empty title. These two are about the editor,
-  // which is a different code path and currently unguarded: handleTitleChange feeds scheduleSave
-  // directly, and scheduleSave's only precondition is a payload size ceiling. So a title can be
-  // cleared to nothing and autosaved, and the document then shows as "Untitled" everywhere it is
-  // listed. Both tests are expected RED until the editor validates before saving.
+  // which was a different, unguarded code path: an emptied or whitespace-only title could be
+  // autosaved and the document then showed as "Untitled" everywhere it was listed. The editor now
+  // refuses to schedule or perform any save with a blank title and restores the last valid one on
+  // blur, so both tests are green.
 
   test("KBU-25 a document's title cannot be emptied and saved", { tag: '@tesbo.testId("TES-TC-1019")' }, async ({ browser }) => {
     const title = stamp("KeepsTitle");
@@ -2069,6 +2073,112 @@ test.describe("knowledge base (UI)", () => {
     } finally {
       exec(`DELETE FROM integration_connections WHERE organization_id = ${literal(tenant!.organizationId)} AND provider = 'jira';`);
     }
+  });
+
+  test("KBU-65 approving a dirty AI-memory document saves first and reviews exactly those persisted bytes", async ({ browser }) => {
+    const created = await api.post(kbUrl("/documents"), { data: { title: stamp("Review dirty memory"), folderId: rootFolderId, documentType: "ai_memory", contentText: "Original", contentHtml: "<p>Original</p>" } });
+    expect(created.status()).toBe(201);
+    const doc = await created.json();
+    const page = await openDocument(browser, doc.id);
+    const updatedText = stamp("Visible content being approved");
+    await page.locator(".ProseMirror").first().fill(updatedText);
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(page.getByText("Approved memory", { exact: true })).toBeVisible();
+    const persisted = await (await api.get(kbUrl(`/documents/${doc.id}`))).json();
+    expect(persisted.contentText).toBe(updatedText);
+    expect(persisted.reviewedVersionId).toBeTruthy();
+    const receipt = await (await api.get(kbUrl(`/documents/${doc.id}/versions/${persisted.reviewedVersionId}`))).json();
+    expect(receipt).toMatchObject({ snapshotKind: "approved", contentText: updatedText });
+    expect(receipt.contentJson).toEqual(persisted.contentJson);
+    // History lives in the header's "More actions" menu, like every other View history journey.
+    await page.getByRole("button", { name: "More actions" }).click();
+    await page.getByRole("button", { name: "View history" }).click();
+    await expect(page.getByText(/^Approved exact version /)).toBeVisible();
+  });
+
+  test("KBU-66 a concurrent document edit refuses the stale review and preserves the reviewer's visible content", async ({ browser }) => {
+    const created = await api.post(kbUrl("/documents"), { data: { title: stamp("Stale review"), folderId: rootFolderId, documentType: "ai_memory", contentText: "Content actually reviewed", contentHtml: "<p>Content actually reviewed</p>" } });
+    expect(created.status()).toBe(201);
+    const doc = await created.json();
+    const page = await openDocument(browser, doc.id);
+    await expect(page.locator(".ProseMirror").first()).toContainText("Content actually reviewed");
+    const otherEdit = await api.patch(kbUrl(`/documents/${doc.id}`), { data: { contentText: "Someone else's newer change", contentHtml: "<p>Someone else's newer change</p>" } });
+    expect(otherEdit.status()).toBe(200);
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(page.getByText(/This document changed\. Reload and review the current version/)).toBeVisible();
+    await expect(page.locator(".ProseMirror").first()).toContainText("Content actually reviewed");
+    const persisted = await (await api.get(kbUrl(`/documents/${doc.id}`))).json();
+    expect(persisted).toMatchObject({ status: "draft", reviewedVersionId: null, contentText: "Someone else's newer change" });
+    await page.reload();
+    await expect(page.locator(".ProseMirror").first()).toContainText("Someone else's newer change");
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(page.getByText("Approved memory", { exact: true })).toBeVisible();
+  });
+
+  test("KBU-67 a failed pending save prevents the queued approval from being sent", async ({ browser }) => {
+    const created = await api.post(kbUrl("/documents"), { data: { title: stamp("Failed save review"), folderId: rootFolderId, documentType: "ai_memory", contentText: "Persisted original", contentHtml: "<p>Persisted original</p>" } });
+    expect(created.status()).toBe(201);
+    const doc = await created.json();
+    const page = await openDocument(browser, doc.id);
+    let reviewsSent = 0;
+    page.on("request", (request) => { if (request.url().includes(`${doc.id}/approve-ai-memory`)) reviewsSent++; });
+    await page.route(`**/knowledge-base/documents/${doc.id}`, async (route) => {
+      if (route.request().method() === "PATCH") {
+        await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Document save is temporarily unavailable" }) });
+      } else await route.continue();
+    });
+    await page.locator(".ProseMirror").first().fill("Uncommitted local draft");
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(page.getByText("Document save is temporarily unavailable", { exact: true })).toBeVisible();
+    expect(reviewsSent).toBe(0);
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(page.getByText("Save your changes successfully before reviewing this document.", { exact: true })).toBeVisible();
+    expect(reviewsSent).toBe(0);
+    await expect(page.locator(".ProseMirror").first()).toContainText("Uncommitted local draft");
+    expect((await (await api.get(kbUrl(`/documents/${doc.id}`))).json())).toMatchObject({ status: "draft", contentText: "Persisted original", reviewedVersionId: null });
+  });
+
+  test("KBU-68 review exposes the exact AI-context text alongside the formatted document", async ({ browser }) => {
+    const created = await api.post(kbUrl("/documents"), { data: {
+      title: stamp("Review representations"), folderId: rootFolderId, documentType: "ai_memory",
+      contentText: "Context text supplied by the source", contentHtml: "<p>Formatted source representation</p>",
+    } });
+    expect(created.status()).toBe(201);
+    const doc = await created.json();
+    const page = await openDocument(browser, doc.id);
+    await expect(page.locator(".ProseMirror").first()).toContainText("Formatted source representation");
+    await expect(page.getByLabel("Text supplied as AI context", { exact: true })).toHaveText("Context text supplied by the source");
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(page.getByText("Approved memory", { exact: true })).toBeVisible();
+    const current = await (await api.get(kbUrl(`/documents/${doc.id}`))).json();
+    const exact = await (await api.get(kbUrl(`/documents/${doc.id}/versions/${current.reviewedVersionId}`))).json();
+    expect(exact).toMatchObject({ contentText: "Context text supplied by the source", contentHtml: "<p>Formatted source representation</p>" });
+  });
+
+  test("KBU-69 a legacy approved memory stays unverified until an exact human re-review", async ({ browser }) => {
+    const contentText = "Unchanged legacy memory content";
+    const created = await api.post(kbUrl("/documents"), { data: {
+      title: stamp("Legacy memory review"), folderId: rootFolderId, documentType: "ai_memory",
+      contentText, contentHtml: `<p>${contentText}</p>`,
+    } });
+    expect(created.status()).toBe(201);
+    const doc = await created.json();
+    // Explicit historical fixture: migrations preserve old approved flags but never invent receipts.
+    exec(`UPDATE knowledge_documents SET status = 'approved', reviewed_by = ${literal(tenant!.owner.userId)}, reviewed_at = now(), reviewed_version_id = NULL WHERE id = ${literal(doc.id)} AND project_id = ${literal(tenant!.mainProjectId)}`);
+    const legacy = await (await api.get(kbUrl(`/documents/${doc.id}`))).json();
+    expect(legacy).toMatchObject({ status: "approved", reviewBinding: "legacy_unverified", reviewedVersionId: null });
+    const page = await openDocument(browser, doc.id);
+    await expect(page.getByText("Review required", { exact: true })).toBeVisible();
+    await expect(page.getByText("Approved memory", { exact: true })).toHaveCount(0);
+    await expect(page.getByText(/excluded from AI context until an owner or manager reviews it again/)).toBeVisible();
+    await expect(page.getByLabel("Text supplied as AI context", { exact: true })).toHaveText(contentText);
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(page.getByText("Approved memory", { exact: true })).toBeVisible();
+    const current = await (await api.get(kbUrl(`/documents/${doc.id}`))).json();
+    expect(current).toMatchObject({ status: "approved", reviewBinding: "exact_snapshot", contentText });
+    expect(current.reviewedVersionId).toBeTruthy();
+    const exact = await (await api.get(kbUrl(`/documents/${doc.id}/versions/${current.reviewedVersionId}`))).json();
+    expect(exact).toMatchObject({ snapshotKind: "approved", contentText });
   });
 
   // ─── Regression: Markdown pasted into a document was stored as raw text ("# Title", "* item",

@@ -11,15 +11,27 @@ import type { DatabaseService } from "../database/database.service";
 import { CustomFieldsService } from "../custom-fields/custom-fields.service";
 import { ZyraProgressService } from "../legacy/zyra-progress.service";
 import { WelcomeEmailService } from "../welcome-email/welcome-email.service";
+import type { PlanLimitsService } from "../plan-limits/plan-limits.service";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
-@Controller("api/projects/:projectId/testcases")
+const nativeCaseWrite = jest.fn(() => ({ created: true }));
+const nativeCredentialWrite = jest.fn(() => ({ credentialCreated: true }));
+@Controller("api/projects/:projectId")
 class CasesController {
-  @Get()
+  @Get("testcases")
   getCases() { return { ok: true }; }
 
-  @Post()
-  createCase() { return { created: true }; }
+  @Post("testcases")
+  createCase() { return nativeCaseWrite(); }
+
+  @Post("apikeys")
+  createCredential() { return nativeCredentialWrite(); }
+
+  @Post("agents/zyra/tasks/proposals")
+  stageCandidate() { return { candidateRouteReached: true }; }
+
+  @Post("automation/runs/:runId/results/:caseId/evidence")
+  evidence() { return { evidenceRouteReached: true }; }
 }
 @Module({ controllers: [CasesController] })
 class CasesModule {}
@@ -28,8 +40,8 @@ describe("ApiTokenRestGuard at the Nest HTTP boundary", () => {
   let app: INestApplication;
   const member = jest.fn().mockResolvedValue({ id: PROJECT });
   let baseUrl: string;
-  async function send(method: "GET" | "POST", scope: "read" | "write" = "read") {
-    const response = await fetch(`${baseUrl}/api/projects/${PROJECT}/testcases`, {
+  async function send(method: "GET" | "POST", scope: "read" | "write" = "read", suffix = "testcases") {
+    const response = await fetch(`${baseUrl}/api/projects/${PROJECT}/${suffix}`, {
       method,
       headers: { "x-test-scope": scope, ...(method === "POST" ? { "content-type": "application/json" } : {}) },
       ...(method === "POST" ? { body: "{}" } : {})
@@ -59,7 +71,14 @@ describe("ApiTokenRestGuard at the Nest HTTP boundary", () => {
   });
 
   afterAll(async () => { await app?.close(); });
-  beforeEach(() => { member.mockClear(); });
+  beforeEach(() => { member.mockClear(); nativeCaseWrite.mockClear(); nativeCredentialWrite.mockClear(); });
+
+  it.each(["apikeys", "APIKEYS", "ApiKeys/"])("denies credential administration through the case-insensitive %s route before its handler", async suffix => {
+    const response = await send("POST", "write", suffix);
+    expect(response.status).toBe(403);
+    expect(nativeCredentialWrite).not.toHaveBeenCalled();
+    expect(member).not.toHaveBeenCalled();
+  });
 
   it("rejects read-token writes and allows reads", async () => {
     const rejected = await send("POST");
@@ -71,13 +90,24 @@ describe("ApiTokenRestGuard at the Nest HTTP boundary", () => {
     expect(member).toHaveBeenCalledWith("u", PROJECT);
   });
 
-  it("checks membership for writes and denies revoked issuers", async () => {
-    const allowed = await send("POST", "write");
-    expect(allowed).toEqual({ status: 201, body: { created: true } });
+  it("refuses write-token publication before entering the native handler", async () => {
+    const refused = await send("POST", "write");
+    expect(refused.status).toBe(403);
+    expect(refused.body.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+    expect(nativeCaseWrite).not.toHaveBeenCalled();
+    expect(member).not.toHaveBeenCalled();
+  });
+
+  it("preserves candidate/evidence routes while checking membership and refusing revoked issuers", async () => {
+    const allowed = await send("POST", "write", "agents/zyra/tasks/proposals");
+    expect(allowed).toEqual({ status: 201, body: { candidateRouteReached: true } });
+    expect(await send("POST", "write", "automation/runs/run/results/case/evidence"))
+      .toEqual({ status: 201, body: { evidenceRouteReached: true } });
+    expect(member).toHaveBeenCalledWith("u", PROJECT);
 
     const { ForbiddenException } = await import("@nestjs/common");
     member.mockRejectedValueOnce(new ForbiddenException("revoked"));
-    const rejected = await send("POST", "write");
+    const rejected = await send("POST", "write", "agents/zyra/tasks/proposals");
     expect(rejected.status).toBe(403);
   });
 });
@@ -193,8 +223,12 @@ describe("execution run context through the actual controller/service HTTP bound
   const runId = "55555555-5555-4555-8555-555555555555";
   const executionId = "66666666-6666-4666-8666-666666666666";
   const otherRun = "77777777-7777-4777-8777-777777777777";
+  const organizationId = "88888888-8888-4888-8888-888888888888";
+  const writable = jest.fn().mockResolvedValue(undefined);
   const query = jest.fn(async (sql: string, values?: unknown[]) => {
+    if (sql.includes("SELECT project_id FROM cycles")) return { rows: values?.[0] === runId || values?.[0] === otherRun ? [{ project_id: PROJECT }] : [] };
     if (sql.includes("FROM executions e") && sql.includes("WHERE e.id = $1")) {
+      if (sql.includes("c.id = $2") && values?.[1] !== runId) return { rows: [] };
       return { rows: [{ id: executionId, project_id: PROJECT, cycle_id: runId, status: "Passed", executed_by: memberId, assignee_id: null }] };
     }
     if (sql.includes("FROM cycles") && sql.includes("FOR UPDATE")) return { rows: [{ source: "manual", closed_at: null }] };
@@ -208,10 +242,14 @@ describe("execution run context through the actual controller/service HTTP bound
   let notify: jest.SpyInstance;
 
   beforeAll(async () => {
-    const service = makeLegacy({ query, transaction } as unknown as DatabaseService);
+    // This existing transport unit fixture models SQL and an unlocked entitlement explicitly;
+    // the selected native fixture owns real billing/authentication/PostgreSQL proof.
+    const service = makeLegacy({ query, transaction } as unknown as DatabaseService, {
+      planLimits: { assertProjectWritable: writable } as unknown as PlanLimitsService
+    });
     jest.spyOn(service, "requireProjectAccess").mockImplementation(async (actor) => {
       if (actor !== memberId) throw new NotFoundException({ error: "Project not found" });
-      return {} as never;
+      return { organization_id: organizationId } as never;
     });
     activity = jest.spyOn(service, "logProjectActivity").mockResolvedValue(undefined);
     notify = jest.spyOn(service as unknown as { notifyExecutionChange: () => Promise<void> }, "notifyExecutionChange").mockResolvedValue(undefined);
@@ -236,7 +274,7 @@ describe("execution run context through the actual controller/service HTTP bound
     baseUrl = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`;
   });
   afterAll(async () => { await app?.close(); });
-  beforeEach(() => { query.mockClear(); transaction.mockClear(); activity.mockClear(); notify.mockClear(); });
+  beforeEach(() => { query.mockClear(); transaction.mockClear(); activity.mockClear(); notify.mockClear(); writable.mockClear(); });
 
   async function patchRun(cycleId: string, actor: string | null = memberId, token = false) {
     return fetch(`${baseUrl}/api/cycles/${cycleId}/executions/${executionId}`, {
@@ -258,6 +296,7 @@ describe("execution run context through the actual controller/service HTTP bound
     expect((await patchRun(runId)).status).toBe(200);
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(query.mock.calls.some(([sql]) => sql.includes("UPDATE executions SET"))).toBe(true);
+    expect(writable).toHaveBeenCalledWith(organizationId, PROJECT);
   });
 
   it("retains anonymous, inaccessible-project and flat token-route refusals", async () => {
@@ -266,5 +305,94 @@ describe("execution run context through the actual controller/service HTTP bound
     expect((await patchRun(runId, memberId, true)).status).toBe(403);
     expect(transaction).not.toHaveBeenCalled();
     expect(activity).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
+  });
+});
+
+describe("testcase bulk-create through the actual controller/service HTTP boundary", () => {
+  const member = "22222222-2222-4222-8222-222222222222", outsider = "33333333-3333-4333-8333-333333333333";
+  const query = jest.fn(async (sql: string, values?: unknown[]) => ({
+    rows: /INSERT INTO testcases/.test(sql)
+      ? (JSON.parse(String(values?.[2])) as Array<Record<string, unknown>>).map((row, index) => ({ ...row, id: `44444444-4444-4444-8444-44444444444${index}`, project_id: PROJECT, created_by: member, updated_by: member }))
+      : [],
+  }));
+  const transaction = jest.fn(async (work: (client: { query: typeof query }) => Promise<unknown>) => work({ query }));
+  const access = jest.fn(async (actor: string | null | undefined, project: string) => {
+    if (actor !== member || project !== PROJECT) throw new NotFoundException({ error: "Project not found" });
+    return {} as never;
+  });
+  let app: INestApplication, baseUrl: string;
+  let activity: jest.SpyInstance, suites: jest.SpyInstance, cases: jest.SpyInstance;
+  beforeAll(async () => {
+    const svc = makeLegacy({ query, transaction } as unknown as DatabaseService);
+    jest.spyOn(svc, "requireProjectAccess").mockImplementation(access);
+    activity = jest.spyOn(svc, "logProjectActivity").mockResolvedValue(undefined);
+    const internals = svc as unknown as {
+      externalIdPrefix: () => Promise<string>; maxExternalIdSeq: () => Promise<number>;
+      suitesCache: { invalidate: (id: string) => Promise<void> }; testcasesListCache: { invalidate: (id: string) => Promise<void> };
+    };
+    jest.spyOn(internals, "externalIdPrefix").mockResolvedValue("BULK");
+    jest.spyOn(internals, "maxExternalIdSeq").mockResolvedValue(0);
+    suites = jest.spyOn(internals.suitesCache, "invalidate").mockResolvedValue(undefined);
+    cases = jest.spyOn(internals.testcasesListCache, "invalidate").mockResolvedValue(undefined);
+    const module = await Test.createTestingModule({
+      controllers: [LegacyController],
+      providers: [
+        { provide: LegacyService, useValue: svc }, { provide: CustomFieldsService, useValue: {} },
+        { provide: ZyraProgressService, useValue: {} }, { provide: WelcomeEmailService, useValue: {} },
+        { provide: APP_GUARD, useClass: ApiTokenRestGuard },
+      ],
+    }).compile();
+    app = module.createNestApplication();
+    // Actual controller, guard and writer with synthetic principals/SQL, not real cookie/DB proof.
+    app.use((req: AuthenticatedRequest, _res: unknown, next: () => void) => {
+      req.userId = typeof req.headers["x-test-user"] === "string" ? req.headers["x-test-user"] : null;
+      const scope = req.headers["x-test-scope"];
+      if (scope === "read" || scope === "write") req.apiToken = { tokenId: "fixture", userId: req.userId, projectId: PROJECT, scopes: [scope] };
+      next();
+    });
+    await app.listen(0, "127.0.0.1"); baseUrl = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`;
+  });
+  afterAll(async () => { await app?.close(); });
+  beforeEach(() => { query.mockClear(); transaction.mockClear(); access.mockClear(); activity.mockClear(); suites.mockClear(); cases.mockClear(); });
+  const valid = { testcases: [{ title: "First case" }, { title: "Second case" }] };
+  async function send(actor?: string, scope?: "read" | "write", body: unknown = valid) {
+    return fetch(`${baseUrl}/api/projects/${PROJECT}/testcases/bulk-create`, { method: "POST", headers: {
+      "content-type": "application/json", ...(actor ? { "x-test-user": actor } : {}), ...(scope ? { "x-test-scope": scope } : {}),
+    }, body: JSON.stringify(body) });
+  }
+  const noEffects = () => {
+    expect(query).not.toHaveBeenCalled(); expect(transaction).not.toHaveBeenCalled(); expect(activity).not.toHaveBeenCalled();
+    expect(suites).not.toHaveBeenCalled(); expect(cases).not.toHaveBeenCalled();
+  };
+  it("refuses anonymous bulk creation before any transaction", async () => { expect((await send()).status).toBe(400); noEffects(); });
+  it.each([
+    ["ordinary", valid], ["empty", { testcases: [] }], ["malformed field", { testcases: [{ title: "x".repeat(513) }] }],
+  ])("refuses a nonmember's %s batch before validation or side effects", async (_label, body) => {
+    expect((await send(outsider, undefined, body)).status).toBe(404); expect(access).toHaveBeenCalledWith(outsider, PROJECT); noEffects();
+  });
+  it("keeps read-token writes refused", async () => { expect((await send(member, "read")).status).toBe(403); noEffects(); });
+  it("allows a current human member with unchanged batch shape and attribution", async () => {
+    const response = await send(member, undefined); expect(response.status).toBe(201);
+    expect(access).toHaveBeenCalledWith(member, PROJECT); expect(transaction).toHaveBeenCalledTimes(1);
+    expect(await response.json()).toMatchObject({ createdCount: 2, created: [
+      expect.objectContaining({ title: "First case", projectId: PROJECT, createdBy: member }),
+      expect.objectContaining({ title: "Second case", projectId: PROJECT, createdBy: member }),
+    ] });
+  });
+  it.each([valid, { testcases: [] }, { testcases: [{ title: "x".repeat(513) }] }])("refuses write-token bulk publication without any native side effect", async body => {
+    const response = await send(member, "write", body);
+    expect(response.status).toBe(403);
+    expect((await response.json()).code).toBe("HUMAN_PUBLICATION_REQUIRED");
+    noEffects();
+  });
+  it("preserves the authorized empty-batch response without writes", async () => {
+    const response = await send(member, undefined, { testcases: [] }); expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ created: [], createdCount: 0 }); expect(access).toHaveBeenCalledWith(member, PROJECT); noEffects();
+  });
+  it.each([
+    ["field length", { testcases: [{ title: "x".repeat(513) }] }],
+    ["batch limit", { testcases: Array.from({ length: 501 }, () => ({ title: "Limit control" })) }],
+  ])("retains the authorized %s validation before SQL", async (_label, body) => {
+    expect((await send(member, undefined, body)).status).toBe(400); expect(access).toHaveBeenCalledWith(member, PROJECT); noEffects();
   });
 });

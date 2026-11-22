@@ -166,6 +166,7 @@ export default function PlanDetailPage() {
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [editRelease, setEditRelease] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const environmentOptions = useMemo(() => getTestRunEnvironments(project.settings), [project]);
   const ownerNames = useMemo(
@@ -210,11 +211,14 @@ export default function PlanDetailPage() {
     if (!selectedEnvironment.trim()) return;
     const name = newCycleName.trim() || planName || "Test Run";
     setCreatingCycle(true);
+    setActionError(null);
     try {
       await createCycleFromPlan(projectId, { planId, name, environment: selectedEnvironment });
       setShowCreateCycle(false);
       setNewCycleName("");
       await loadData();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to create test run.");
     } finally {
       setCreatingCycle(false);
     }
@@ -223,10 +227,13 @@ export default function PlanDetailPage() {
   async function handleOpenAssociate() {
     setShowAssociate(true);
     setLoadingRuns(true);
+    setActionError(null);
     try {
       const all = await listTestRuns(projectId);
       const associatedIds = new Set(runs.map((r) => r.id));
       setAllRuns(all.filter((r) => !associatedIds.has(r.id)));
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to load test runs.");
     } finally {
       setLoadingRuns(false);
     }
@@ -234,10 +241,13 @@ export default function PlanDetailPage() {
 
   async function handleAssociate(cycleId: string) {
     setAssociating(cycleId);
+    setActionError(null);
     try {
       await associateRunWithPlan(cycleId, planId);
       setShowAssociate(false);
       await loadData();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to link test run.");
     } finally {
       setAssociating(null);
     }
@@ -245,24 +255,39 @@ export default function PlanDetailPage() {
 
   async function handleDissociate(cycleId: string) {
     if (!confirm("Remove this run from the plan?")) return;
-    await dissociateRunFromPlan(cycleId);
-    await loadData();
+    setActionError(null);
+    try {
+      await dissociateRunFromPlan(cycleId);
+      await loadData();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to unlink test run.");
+    }
   }
 
   async function handleSaveEdit() {
-    await updatePlan(planId, {
-      name: editName || undefined,
-      description: editDesc,
-      targetRelease: editRelease,
-    });
-    setEditing(false);
-    await loadData();
+    setActionError(null);
+    try {
+      await updatePlan(planId, {
+        name: editName || undefined,
+        description: editDesc,
+        targetRelease: editRelease,
+      });
+      setEditing(false);
+      await loadData();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to save test plan.");
+    }
   }
 
   async function handleDelete() {
     if (!confirm("Delete this test plan? Associated runs will not be deleted but will be unlinked.")) return;
-    await deletePlan(planId);
-    router.push(`/projects/${projectId}/plans`);
+    setActionError(null);
+    try {
+      await deletePlan(planId);
+      router.push(`/projects/${projectId}/plans`);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to delete test plan.");
+    }
   }
 
   const derivedProgress = useMemo<PlanProgress | null>(() => {
@@ -456,6 +481,11 @@ export default function PlanDetailPage() {
         </div>
 
         {/* Test runs */}
+        {actionError && !showAssociate && (
+          <p role="alert" className="mb-3 shrink-0 rounded-lg border border-[var(--error)]/20 bg-[var(--error-soft)] p-3 text-sm text-[var(--error-foreground)]">
+            {actionError}
+          </p>
+        )}
         <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-[var(--border)] bg-[var(--surface)]">
           <div className="min-h-0 flex-1 overflow-y-auto p-6">
             {/* Overall progress */}
@@ -493,7 +523,16 @@ export default function PlanDetailPage() {
               {progress && total === 0 && (
                 <section className="mb-5 rounded-[10px] border border-dashed border-[var(--border)] p-8 text-center">
                   <IconClipboardList size={36} stroke={1.25} className="mx-auto text-[var(--muted-soft)]" />
-                  <p className="mt-3 text-[13px] text-[var(--muted-soft)]">No test runs associated with this plan yet. Create a new run or link an existing one to start tracking progress.</p>
+                  <p className="mt-3 text-[13px] text-[var(--muted-soft)]">
+                    {runs.length === 0
+                      ? "No test runs associated with this plan yet. Create a new run or link an existing one to start tracking progress."
+                      : "No execution data is available for the associated runs yet. Add test cases to a run to start tracking progress."}
+                  </p>
+                  {runs.length === 0 && (
+                    <p data-testid="plan-empty-run-next-step" className="mx-auto mt-2 max-w-[520px] text-[12px] text-[var(--muted-soft)]">
+                      New runs start empty: after creating or linking a run, add this plan&apos;s approved cases from the run page. Cases are never added automatically.
+                    </p>
+                  )}
                 </section>
               )}
 
@@ -544,6 +583,11 @@ export default function PlanDetailPage() {
                 )}
 
                 <Modal open={showAssociate} onClose={() => setShowAssociate(false)} title="Link Existing Test Run">
+                  {actionError && (
+                    <p role="alert" className="mb-3 rounded-lg border border-[var(--error)]/20 bg-[var(--error-soft)] p-3 text-sm text-[var(--error-foreground)]">
+                      {actionError}
+                    </p>
+                  )}
                   <div className="max-h-80 overflow-y-auto">
                     {loadingRuns ? (
                       <div className="flex items-center justify-center py-8">

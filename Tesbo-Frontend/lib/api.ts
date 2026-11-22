@@ -1,3 +1,4 @@
+import { requireModelDraftPreview, requireModelPreviewAvailability, type ModelDraftPreview } from "./model-draft-preview";
 import { readStoredValue } from "./storage";
 import { EVIDENCE_MAX_FILES_PER_REQUEST } from "./validation";
 
@@ -6,6 +7,14 @@ export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:700
 type RequestInitWithBody = Omit<RequestInit, "body"> & { body?: unknown };
 
 type ApiErrorBody = { error?: string; detail?: string; message?: string; errors?: { field?: string; message?: string }[] };
+
+/** Preserve HTTP disposition so callers can distinguish denied reads from unavailable data. */
+export class ApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 
 /**
  * A response with no `error`/`errors`/`message` body is never something the endpoint chose to say
@@ -63,6 +72,14 @@ function isAbortError(e: unknown): boolean {
 const MUTATION_OUTCOME_UNCONFIRMED =
   "Request outcome unconfirmed. This action may already have been applied. Refresh to check before trying again.";
 
+/** A caller must reconcile this write; delivery failure does not prove rollback. */
+export class MutationOutcomeUnknownError extends Error {
+  constructor() {
+    super(MUTATION_OUTCOME_UNCONFIRMED);
+    this.name = "MutationOutcomeUnknownError";
+  }
+}
+
 async function fetchWithNetworkErrorMessage(
   input: string,
   init: RequestInit
@@ -73,13 +90,14 @@ async function fetchWithNetworkErrorMessage(
     return await fetch(input, init);
   } catch (e) {
     if (isAbortError(e)) {
-      throw new Error(canRetry ? "The request took too long. Please check your connection and try again." : MUTATION_OUTCOME_UNCONFIRMED);
+      if (!canRetry) throw new MutationOutcomeUnknownError();
+      throw new Error("The request took too long. Please check your connection and try again.");
     }
     if (!isNetworkFetchError(e)) throw e instanceof Error ? e : new Error(String(e));
     // A lost response is indistinguishable from failed delivery: a mutation may already have
     // committed. Never replay it automatically, including multipart comment/KB writes. Preserve
     // the existing single retry only for reads; no assumption about replayable bodies is needed.
-    if (!canRetry) throw new Error(MUTATION_OUTCOME_UNCONFIRMED);
+    if (!canRetry) throw new MutationOutcomeUnknownError();
     try {
       return await fetch(input, init);
     } catch (e2) {
@@ -141,7 +159,7 @@ async function apiRequest<T = unknown>(path: string, options: RequestInitWithBod
   });
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as ApiErrorBody;
-    throw new Error(formatApiError(res.status, err));
+    throw new ApiError(res.status, formatApiError(res.status, err));
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();
@@ -787,8 +805,23 @@ export interface AppNotification {
   created_at: string;
 }
 
-export async function listNotifications(): Promise<AppNotification[]> {
-  return api<AppNotification[]>("/api/notifications");
+export type NotificationPageOptions = {
+  limit?: number;
+  /** The last row of the previous page; its timestamp is resolved server-side at storage precision. */
+  beforeId?: string;
+};
+
+export async function listNotifications(options?: NotificationPageOptions): Promise<AppNotification[]> {
+  const params = new URLSearchParams();
+  if (options?.limit !== undefined) params.set("limit", String(options.limit));
+  if (options?.beforeId) params.set("beforeId", options.beforeId);
+  const query = params.toString();
+  return api<AppNotification[]>(`/api/notifications${query ? `?${query}` : ""}`);
+}
+
+/** Every unread row, not only the first page; the bell's count does not depend on what is loaded. */
+export async function getUnreadNotificationCount(): Promise<{ unread: number }> {
+  return api<{ unread: number }>("/api/notifications/unread-count");
 }
 
 export async function markAllNotificationsRead(): Promise<void> {
@@ -999,7 +1032,7 @@ export async function listAiGenerationHistory(
 export async function trackAiGenerationSaved(
   projectId: string,
   requestId: string,
-  data: { suiteId?: string; testcaseIds: string[] }
+  data: { expectedProposalRevision: string; selectedDraftIndexes: number[]; suiteId?: string | null; suiteName?: string }
 ): Promise<void> {
   await api(`/api/projects/${projectId}/ai/generation-history/${requestId}/save`, {
     method: "POST",
@@ -1028,6 +1061,9 @@ export interface ZyraTask {
   /** Full Notion page ids (not the short display keys) queued as Zyra context. */
   notionPageIds?: string[];
   drafts: AiGeneratedDraft[];
+  /** Exact server revision of the reviewable operations and their target context. */
+  proposalRevision?: string;
+  proposalSnapshot?: Record<string, unknown>;
   sources: Array<{ type: string; title: string; detail: string }>;
   activities: Array<{ actor: "user" | "agent" | string; stage: string; title: string; detail: string; createdAt: string; kind?: string }>;
   tokenUsage: { input: number; output: number; total: number };
@@ -1481,13 +1517,15 @@ export async function retryZyraTicketComment(projectId: string, taskId: string, 
 export async function saveZyraTask(
   projectId: string,
   taskId: string,
-  data: { selectedDraftIndexes: number[]; suiteId?: string; suiteName?: string }
+  data: { expectedProposalRevision: string; selectedDraftIndexes: number[]; suiteId?: string | null; suiteName?: string }
 ): Promise<{
   savedCount: number;
   suiteId: string | null;
   testcases: { id: string; externalId: string; title: string; createdAt: string }[];
-  /** Chat-staged batches only: drafts left un-saved by a partial selection, still pending review. */
+  /** Unselected proposals remain pending review for every producer. */
   remaining?: number;
+  replayed?: boolean;
+  saveReceipt?: Record<string, unknown>;
 }> {
   return api(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}/save`, {
     method: "POST",
@@ -1505,6 +1543,21 @@ export async function addProjectMember(projectId: string, data: { userId: string
 
 export async function removeProjectMember(projectId: string, userId: string): Promise<void> {
   await api(`/api/projects/${projectId}/members/${userId}`, { method: "DELETE" });
+}
+
+export type McpClientGrant = {
+  tokenId: string;
+  clientName: string;
+  scopes: Array<"read" | "write">;
+  allowedTools: string[] | null;
+  expiresAt: string | null;
+};
+export type ProjectMcpAccess = { enabled: boolean; revision: number; clients: McpClientGrant[] };
+export async function getProjectMcpAccess(projectId: string): Promise<ProjectMcpAccess> {
+  return api(`/api/projects/${projectId}/mcp-access`);
+}
+export async function updateProjectMcpAccess(projectId: string, access: ProjectMcpAccess): Promise<ProjectMcpAccess> {
+  return api(`/api/projects/${projectId}/mcp-access`, { method: "PUT", body: access });
 }
 
 export interface ApiToken {
@@ -1570,7 +1623,7 @@ export async function createSuite(
   return api<SuiteNode>(`/api/projects/${projectId}/suites`, { method: "POST", body: data });
 }
 
-/** parentId: the backend writes it verbatim (no COALESCE), so always send the current parent (or null for root) with any edit that should not move the suite. */
+/** Omit parentId to preserve the live parent; send null for root or an ID to request a move. */
 export async function updateSuite(
   suiteId: string,
   data: { name?: string; description?: string; preconditions?: string; parentId?: string | null; position?: number },
@@ -1592,6 +1645,8 @@ export interface TestCaseListItem {
   automationStatus: string;
   automationTags?: string;
   status: string;
+  /** A current exact human receipt; a historical Approved label alone is insufficient. */
+  approvalCurrent?: boolean;
   suiteId: string | null;
   ownerId: string | null;
   updatedAt: string;
@@ -1625,6 +1680,8 @@ export async function listTestCases(
     priority?: string;
     type?: string;
     automationStatus?: string;
+    technique?: string;
+    view?: string;
     jiraIssueKey?: string;
     linearIssueKey?: string;
     notionPageId?: string;
@@ -1681,6 +1738,17 @@ export async function getTestCase(projectId: string, testcaseId: string): Promis
   return api(`/api/projects/${projectId}/testcases/${testcaseId}`);
 }
 
+export async function approveTestCase(
+  projectId: string,
+  testcaseId: string,
+  expectedRevision: string,
+  expectedApprovalRevision: string,
+): Promise<Record<string, unknown>> {
+  return api(`/api/projects/${projectId}/testcases/${testcaseId}/approve`, {
+    method: "POST", body: { expectedRevision, expectedApprovalRevision },
+  });
+}
+
 export async function createTestCase(projectId: string, data: Record<string, unknown>): Promise<{ id: string; externalId: string; title: string; createdAt: string }> {
   return api(`/api/projects/${projectId}/testcases`, { method: "POST", body: data });
 }
@@ -1714,6 +1782,34 @@ export async function bulkUpdateTestCases(projectId: string, data: { testcaseIds
 
 export async function bulkDeleteTestCases(projectId: string, data: { testcaseIds: string[] }): Promise<void> {
   await api(`/api/projects/${projectId}/testcases/bulk-delete`, { method: "POST", body: data });
+}
+
+// Saved test-case views -----------------------------------------------------------
+
+export interface SavedTestCaseView {
+  id: string;
+  projectId: string;
+  createdBy: string | null;
+  name: string;
+  filters: Record<string, unknown>;
+  isShared: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listSavedViews(projectId: string): Promise<SavedTestCaseView[]> {
+  return api(`/api/projects/${projectId}/testcase-views`);
+}
+
+export async function createSavedView(
+  projectId: string,
+  data: { name: string; filters: Record<string, unknown>; isShared?: boolean }
+): Promise<SavedTestCaseView> {
+  return api(`/api/projects/${projectId}/testcase-views`, { method: "POST", body: data });
+}
+
+export async function deleteSavedView(projectId: string, viewId: string): Promise<{ ok: boolean }> {
+  return api(`/api/projects/${projectId}/testcase-views/${viewId}`, { method: "DELETE" });
 }
 
 // Custom fields (Pro plan feature) ------------------------------------------------
@@ -2540,7 +2636,88 @@ export interface TestRunDetail {
   timeSpentMs?: number | null;
   elapsedMs?: number | null;
   tags?: string[];
+  /** Immutable creation lineage; current results still belong to native executions. */
+  retestSourceCycleId?: string | null;
+  retestManifest?: NativeRetestManifest | null;
 }
+
+export interface NativeRetestOccurrence {
+  sourceCycleItemId: string;
+  sourceExecutionId: string;
+  testcaseId: string;
+  sourceTitle: string;
+  sourceExternalId: string;
+  sourceApprovalRevision: string | null;
+  sourceDefinition: Record<string, unknown>;
+  sourceDefinitionBasis: "reviewed_snapshot" | "legacy_snapshot_unknown_approval";
+  sourceResult: Record<string, unknown>;
+  sourceEvidence: Array<{ id: string; fileName: string; contentType: string; fileSize: number; createdAt: string }>;
+  sourceBugLinks: Array<{ id: string; bugId: string; executionId: string }>;
+  currentCase: {
+    id: string; title: string; externalId: string; status: string;
+    approvalRevision: string; approvalCurrent: boolean; reviewedContent: Record<string, unknown>;
+  } | null;
+  eligible: boolean;
+  definitionChanged: boolean;
+}
+
+export interface NativeRetestPreview {
+  projectId: string;
+  sourceCycleId: string;
+  sourceRun: { id: string; name: string; source: string; environment: string; buildVersion: string; status: string };
+  occurrences: NativeRetestOccurrence[];
+  previewDigest: string;
+}
+
+export interface NativeRetestManifest {
+  schemaVersion: 1;
+  projectId: string;
+  sourceCycleId: string;
+  cycleId: string;
+  createdBy: string;
+  principalKind: "human_session";
+  createdAt: string;
+  sourceRun: NativeRetestPreview["sourceRun"];
+  sourcePreviewDigest: string;
+  targetRun: { name: string; environment: string | null; buildVersion: string | null };
+  occurrences: Array<NativeRetestOccurrence & {
+    cycleItemId: string; executionId: string; targetApprovalRevision: string; targetDefinition: Record<string, unknown>;
+  }>;
+}
+
+export interface NativeRetestRequest {
+  requestKey: string;
+  executionIds: string[];
+  expectedPreviewDigest: string;
+  name: string;
+  environment?: string;
+  buildVersion?: string;
+  description?: string;
+}
+
+export interface NativeRetestReceipt {
+  outcome: "created";
+  cycleId: string;
+  sourceCycleId: string;
+  requestKey: string;
+  requestDigest: string;
+  manifestDigest: string;
+  manifest: NativeRetestManifest;
+  available: boolean;
+  replayed: boolean;
+}
+
+export interface NativeRetestCancellation {
+  outcome: "cancelled";
+  projectId: string;
+  sourceCycleId: string;
+  requestKey: string;
+  requestDigest: string;
+  requestedBy: string;
+  cancelledAt: string;
+}
+
+export type NativeRetestDisposition = NativeRetestReceipt | NativeRetestCancellation;
 
 export interface ExecutionItem {
   id: string;
@@ -2660,17 +2837,24 @@ export interface TestRunSchedule {
   id: string;
   projectId: string;
   cycleId: string;
+  cycleName: string | null;
+  /** False when the scheduled Test Run has since been deleted; the schedule will not fire. */
+  cycleAvailable: boolean;
   name: string;
   enabled: boolean;
-  scheduleType: "one_time" | "recurring";
+  scheduleType: "one_time" | "recurring" | "daily" | "weekly";
   runAt: string | null;
   intervalMinutes: number | null;
   timezone: string;
+  /** HH:MM in `timezone`, for daily/weekly rules. */
+  localTime: string | null;
+  /** 0=Sunday .. 6=Saturday, for weekly rules. */
+  daysOfWeek: number[] | null;
   nextRunAt: string | null;
   lastRunAt: string | null;
   lastStatus: string | null;
   lastError: string | null;
-  createdBy: string | null;
+  isRunning: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -2681,6 +2865,27 @@ export async function listTestRuns(projectId: string): Promise<TestRunListItem[]
 
 export async function getTestRun(cycleId: string): Promise<TestRunDetail> {
   return api(`/api/cycles/${cycleId}`);
+}
+
+export async function previewNativeRetest(cycleId: string, executionIds: string[]): Promise<NativeRetestPreview> {
+  const query = new URLSearchParams({ executionIds: executionIds.join(",") });
+  return api(`/api/cycles/${cycleId}/retests/preview?${query}`);
+}
+
+export async function createNativeRetest(cycleId: string, request: NativeRetestRequest): Promise<NativeRetestReceipt> {
+  return api(`/api/cycles/${cycleId}/retests`, { method: "POST", body: request });
+}
+
+export async function readNativeRetestRequest(cycleId: string, requestKey: string): Promise<NativeRetestDisposition> {
+  return api(`/api/cycles/${cycleId}/retests/requests/${encodeURIComponent(requestKey)}`);
+}
+
+export async function cancelNativeRetestRequest(cycleId: string, request: NativeRetestRequest): Promise<NativeRetestDisposition> {
+  return api(`/api/cycles/${cycleId}/retests/requests/${encodeURIComponent(request.requestKey)}/cancel`, { method: "POST", body: request });
+}
+
+export async function listNativeRetests(cycleId: string): Promise<Array<{ id: string; name: string; status: string; createdAt: string }>> {
+  return api(`/api/cycles/${cycleId}/retests`);
 }
 
 export async function createTestRun(projectId: string, data: { name: string; description?: string; environment: string; buildVersion?: string }): Promise<{ id: string; name: string; status: string; createdAt: string }> {
@@ -2729,6 +2934,10 @@ export async function bulkAssignExecutions(cycleId: string, data: { executionIds
   return api(`/api/cycles/${cycleId}/executions/bulk-assign`, { method: "POST", body: data });
 }
 
+export async function bulkUpdateExecutionStatus(cycleId: string, data: { executionIds: string[]; status: string }): Promise<{ updated: number; status: string }> {
+  return api(`/api/cycles/${cycleId}/executions/bulk-status`, { method: "POST", body: data });
+}
+
 export async function getExecutionAutomationReport(cycleId: string, executionId: string): Promise<ExecutionAutomationReport> {
   return api<ExecutionAutomationReport>(`/api/cycles/${cycleId}/executions/${executionId}/automation-report`);
 }
@@ -2762,9 +2971,11 @@ export async function createTestRunSchedule(
   data: {
     cycleId: string;
     name: string;
-    scheduleType: "one_time" | "recurring";
+    scheduleType: "one_time" | "recurring" | "daily" | "weekly";
     runAt?: string;
     intervalMinutes?: number;
+    localTime?: string;
+    daysOfWeek?: number[];
     timezone?: string;
     enabled?: boolean;
   }
@@ -2778,20 +2989,28 @@ export async function createTestRunSchedule(
 export async function updateTestRunSchedule(
   scheduleId: string,
   data: {
-    cycleId?: string;
     name?: string;
-    scheduleType?: "one_time" | "recurring";
-    runAt?: string;
+    scheduleType?: "one_time" | "recurring" | "daily" | "weekly";
+    runAt?: string | null;
     intervalMinutes?: number;
+    localTime?: string;
+    daysOfWeek?: number[];
     timezone?: string;
     enabled?: boolean;
   }
-): Promise<void> {
-  await api(`/api/cycles/schedules/${scheduleId}`, { method: "PATCH", body: data });
+): Promise<TestRunSchedule> {
+  return api<TestRunSchedule>(`/api/cycles/schedules/${scheduleId}`, { method: "PATCH", body: data });
 }
 
-export async function deleteTestRunSchedule(scheduleId: string): Promise<void> {
-  await api(`/api/cycles/schedules/${scheduleId}`, { method: "DELETE" });
+export async function deleteTestRunSchedule(scheduleId: string): Promise<{ success: boolean }> {
+  return api(`/api/cycles/schedules/${scheduleId}`, { method: "DELETE" });
+}
+
+/** Run a schedule once, now, without changing its cadence. */
+export async function runTestRunSchedule(
+  scheduleId: string
+): Promise<{ ok: boolean; status: string; cycleId: string; cycleName: string }> {
+  return api(`/api/cycles/schedules/${scheduleId}/run`, { method: "POST" });
 }
 
 // Sharing
@@ -2804,7 +3023,19 @@ export async function toggleTestRunShare(cycleId: string, enabled: boolean): Pro
   return api<ShareState>(`/api/cycles/${cycleId}/share`, { method: "POST", body: { enabled } });
 }
 
-export async function getPublicSharedRun(token: string): Promise<TestRunDetail & { shareEnabled: boolean }> {
+/** Explicit anonymous projection, not the authenticated Run or its sharing settings. */
+export interface PublicSharedRun {
+  name: string;
+  status: string;
+  description: string | null;
+  environment: string | null;
+  buildVersion: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  endedAt: string | null;
+}
+
+export async function getPublicSharedRun(token: string): Promise<PublicSharedRun> {
   return api(`/api/public/shared-runs/${token}`);
 }
 
@@ -3003,8 +3234,9 @@ export async function createBug(projectId: string, data: {
 
 export async function updateBug(bugId: string, data: {
   title?: string;
-  description?: string;
-  externalUrl?: string;
+  // Omitted metadata stays unchanged; null/empty explicitly clears the named field.
+  description?: string | null;
+  externalUrl?: string | null;
   status?: string;
   // null clears it back to not selected; omitted leaves the stored value alone.
   severity?: BugSeverity | null;
@@ -3912,6 +4144,10 @@ export interface KnowledgeDocument {
   updatedBy: string | null;
   reviewedBy: string | null;
   reviewedAt: string | null;
+  /** Native exact-row precondition; absent only on an older server. */
+  editRevision?: string;
+  reviewedVersionId?: string | null;
+  reviewBinding?: "none" | "legacy_unverified" | "exact_snapshot";
   isDeleted: boolean;
   createdAt: string;
   updatedAt: string;
@@ -3950,6 +4186,8 @@ export interface KnowledgeDocumentVersion {
   title: string;
   createdBy: string | null;
   createdAt: string;
+  snapshotKind?: "autosave" | "submitted" | "approved" | "rejected";
+  snapshotMetadata?: Record<string, unknown>;
 }
 
 // Folders
@@ -4017,8 +4255,30 @@ export function deleteKnowledgeFolder(projectId: string, folderId: string): Prom
   return api(`/api/projects/${projectId}/knowledge-base/folders/${folderId}`, { method: "DELETE" });
 }
 
-export function restoreKnowledgeFolder(projectId: string, folderId: string): Promise<KnowledgeFolder> {
+export function restoreKnowledgeFolder(
+  projectId: string,
+  folderId: string
+): Promise<KnowledgeFolder & { restoredFolders?: number; restoredDocuments?: number }> {
   return api(`/api/projects/${projectId}/knowledge-base/folders/${folderId}/restore`, { method: "PATCH" });
+}
+
+interface KnowledgeTrashEntryBase {
+  id: string;
+  deletedAt: string;
+  /** False when the item cannot come back (parent still deleted, integration removal, file bytes gone). */
+  restorable: boolean;
+  unavailableReason: string | null;
+}
+
+export interface KnowledgeTrash {
+  folders: Array<KnowledgeTrashEntryBase & { name: string; parentFolderId: string | null; parentName: string | null }>;
+  documents: Array<KnowledgeTrashEntryBase & { title: string; folderId: string | null; folderName: string | null }>;
+  files: Array<KnowledgeTrashEntryBase & { name: string; folderId: string | null; folderName: string | null }>;
+  note: string;
+}
+
+export function getKnowledgeTrash(projectId: string): Promise<KnowledgeTrash> {
+  return api(`/api/projects/${projectId}/knowledge-base/trash`);
 }
 
 // Documents
@@ -4085,7 +4345,7 @@ export function getKnowledgeDocumentHistory(
 export function updateKnowledgeDocument(
   projectId: string,
   documentId: string,
-  data: Partial<{ title: string; contentJson: unknown; contentHtml: string; contentText: string; documentType: string; status: string }>
+  data: Partial<{ title: string; contentJson: unknown; contentHtml: string; contentText: string; documentType: string; status: string; expectedRevision: string }>
 ): Promise<KnowledgeDocument> {
   return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}`, { method: "PATCH", body: data });
 }
@@ -4128,19 +4388,19 @@ export function listKnowledgeDocumentVersions(
   return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/versions`);
 }
 
-export function restoreKnowledgeDocumentVersion(projectId: string, documentId: string, versionId: string): Promise<KnowledgeDocument> {
+export function restoreKnowledgeDocumentVersion(projectId: string, documentId: string, versionId: string, expectedRevision?: string): Promise<KnowledgeDocument> {
   return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/restore-version`, {
     method: "POST",
-    body: { versionId },
+    body: { versionId, expectedRevision },
   });
 }
 
-export function approveAiMemory(projectId: string, documentId: string): Promise<KnowledgeDocument> {
-  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/approve-ai-memory`, { method: "PATCH" });
+export function approveAiMemory(projectId: string, documentId: string, expectedRevision: string): Promise<KnowledgeDocument> {
+  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/approve-ai-memory`, { method: "PATCH", body: { expectedRevision } });
 }
 
-export function rejectAiMemory(projectId: string, documentId: string): Promise<KnowledgeDocument> {
-  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/reject-ai-memory`, { method: "PATCH" });
+export function rejectAiMemory(projectId: string, documentId: string, expectedRevision: string): Promise<KnowledgeDocument> {
+  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/reject-ai-memory`, { method: "PATCH", body: { expectedRevision } });
 }
 
 // Document comments
@@ -4524,4 +4784,539 @@ export async function uploadExecutionEvidence(
     throw new Error(message);
   }
   return res.json() as Promise<{ list: ExecutionEvidence[]; total: number }>;
+}
+
+
+export type GraphReviewReceipt = {
+  id: string;
+  projectId: string;
+  status: "needs_qa_triage";
+  candidates: Array<{ caseNodeId: string; reasons: string[]; requirementNodeIds: string[] }>;
+  changed: {
+    addedNodeIds: string[]; modifiedNodeIds: string[]; removedNodeIds: string[];
+    addedEdgeIds: string[]; modifiedEdgeIds: string[]; removedEdgeIds: string[];
+  };
+  evidence: { basis: string; coverageAssertion: "none"; executionAssertion: "none";
+    upstreamFreshness: "unverified"; verification: "not_performed" };
+};
+export type GraphReviewHistoryRow = {
+  id: string;
+  revision: string;
+  capturedAt: string;
+  changeState: "baseline" | "source_scope_changed" | "changed";
+  reviewReceipt: GraphReviewReceipt | null;
+};
+export type GraphReviewCaptureResult = {
+  id: string; revision: string; stored: boolean; reviewReceipt: GraphReviewReceipt | null;
+  delivery: GraphReviewDeliveryStatus | null;
+};
+/** Uses the existing graph history and Zyra's project scope, not a second review store. */
+export async function listZyraGraphChanges(
+  projectId: string, limit = 25, beforeId?: string, signal?: AbortSignal
+): Promise<{ entries: GraphReviewHistoryRow[] }> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (beforeId) params.set("beforeId", beforeId);
+  return api(`/api/projects/${projectId}/agents/zyra/changes?${params.toString()}`, { signal });
+}
+/** An evidence-scoped projection of one committed native graph review receipt. */
+export type GraphQaConsequencePreview = {
+  receiptId: string;
+  projectId: string;
+  source: { contractId: string; scopeFingerprint: string; fromRevision: string; toRevision: string };
+  status: "needs_qa_triage";
+  basis: "cached_source_reference_only" | "source_declaration_unattested" | "verified_source_bytes_unverified_semantics";
+  candidateEffects: Array<{
+    caseNodeId: string;
+    requirementNodeIds: string[];
+    observedReasons: string[];
+    consequence: "review_existing_case_expectations";
+    confidence: "candidate_only";
+    condition: "independent_expectation_and_applicability_review_required";
+  }>;
+  unlinkedCaseNodeIds: string[];
+  changedNodeIds: string[];
+  unlinkedOrUnprovenChange: boolean;
+  unsupportedClaims: string[];
+  coverageAssertion: "none";
+  executionAssertion: "none";
+  sourceFreshness: "unverified";
+  nextAction: "qa_review";
+};
+
+/** Does not submit AI claims, source data, cases, or execution results. */
+export async function getZyraQaConsequencePreview(
+  projectId: string, historyId: string, signal?: AbortSignal
+): Promise<GraphQaConsequencePreview> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/agents/zyra/changes/${encodeURIComponent(historyId)}/analysis`, { signal });
+}
+
+export async function captureZyraGraphChange(projectId: string): Promise<GraphReviewCaptureResult> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/capture`, {
+    method: "POST", body: {}
+  });
+}
+
+export type GraphReviewDeliveryStatus = {
+  status: "delivered" | "pending" | "no_recipients";
+  recipientCount: number;
+  pendingCount: number;
+};
+export async function retryZyraGraphReviewNotification(
+  projectId: string, historyId: string
+): Promise<GraphReviewDeliveryStatus> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/${historyId}/notify`, {
+    method: "POST", body: {}
+  });
+}
+
+/** Root-free source binding administration in the existing Zyra change review. */
+export type GraphSourceBinding = {
+  repositoryId: string;
+  checkoutKey: string;
+  refName: string;
+  selectionPrefixes: string[];
+  enabled: boolean;
+};
+export type GraphSourceBindingResponse = {
+  configured: boolean;
+  binding: GraphSourceBinding | null;
+};
+export async function getZyraGraphSourceBinding(projectId: string): Promise<GraphSourceBindingResponse> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/source-binding`);
+}
+export async function setZyraGraphSourceBinding(
+  projectId: string, binding: GraphSourceBinding
+): Promise<GraphSourceBindingResponse> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/source-binding`, {
+    method: "POST", body: binding
+  });
+}
+
+/** Persisted, human-selected graph review → native test-run/case handoff.
+ * These are references only, never execution/coverage/approval verdicts.
+ */
+export type GraphReviewRunExecutionObservation = {
+  id: string;
+  /** Native status only. No graph-generated verification or QA approval. */
+  status: string;
+  executedAt: string | null;
+  executedAfterHandoff: boolean;
+  actualResultRecorded: boolean;
+  defectKey: string | null;
+  /** Native active attachment metadata count, not verified stored bytes. */
+  evidenceFileCount: number;
+  evidenceAddedAfterHandoffCount: number;
+  /** Present only when byte verification was explicitly requested. */
+  evidenceBytes?: {
+    checked: number;
+    available: number;
+    unavailable: number;
+    byteMismatch: number;
+    truncated: boolean;
+    note: string;
+  };
+};
+export type GraphReviewRunCaseLink = {
+  /** Machine/human supplied CI commit compared with server-pinned Git. Not deployed-build proof. */
+  commitProvenance?: {
+    sourceCommitSha: string | null;
+    runReportedCommitSha: string | null;
+    comparison: "unknown" | "reported_equal_unverified" | "reported_different";
+  };
+  runId: string;
+  caseId: string;
+  linkedAt: string;
+  runName: string;
+  runStatus: string;
+  caseStillInRun: boolean;
+  execution: GraphReviewRunExecutionObservation | null;
+};
+/** Counts describe current workflow gaps, never coverage or QA approval. */
+export type QaVerificationGapSummary = {
+  nominatedCaseCount: number;
+  selectedCaseCount: number;
+  notSelectedCount: number;
+  historicalSelectionOnlyCount: number;
+  withoutSubsequentResultCount: number;
+  withSubsequentResultCount: number;
+  withLaterEvidenceMetadataCount: number;
+  historicalResultOnlyCount: number;
+  invalidOrRepeatedNominationCount: number;
+  unlinkedCaseNodeCount: number;
+  observedChangeCount: number;
+  sourceOnlyChangeNeedsTriage: boolean;
+  coverageAssertion: "none";
+  approvalAssertion: "none";
+};
+export async function listZyraGraphReviewRunLinks(
+  projectId: string, historyId: string, options?: { verifyEvidenceBytes?: boolean }
+): Promise<{ links: GraphReviewRunCaseLink[]; summary: QaVerificationGapSummary }> {
+  const query = options?.verifyEvidenceBytes ? "?verifyEvidenceBytes=true" : "";
+  return api(`/api/projects/${projectId}/agents/zyra/changes/${historyId}/runs${query}`);
+}
+export async function linkZyraGraphReviewRunCases(
+  projectId: string, historyId: string, runId: string, testcaseIds: string[]
+): Promise<{ historyId: string; runId: string; selected: number; newlyLinked: number }> {
+  return api(`/api/projects/${projectId}/agents/zyra/changes/${historyId}/runs/${runId}/link`, {
+    method: "POST", body: { testcaseIds }
+  });
+}
+
+
+/** Same native stateless validator used by the project REST/MCP preview. */
+export async function getModelPreviewAvailability(projectId: string, signal?: AbortSignal) {
+  return requireModelPreviewAvailability(await api<unknown>(`/api/projects/${projectId}/agents/zyra/changes/model-preview`, { signal }));
+}
+export async function previewModelDraft(projectId: string, model: unknown, signal?: AbortSignal) {
+  try {
+    return requireModelDraftPreview(await api<unknown>(`/api/projects/${projectId}/agents/zyra/changes/model-preview`, {
+      method: "POST", body: model, signal
+    }));
+  } catch (cause) {
+    if (cause instanceof Error && cause.message === MUTATION_OUTCOME_UNCONFIRMED) {
+      throw new Error("Preview response was not received. The draft remains unsaved; retry when ready.");
+    }
+    throw cause;
+  }
+}
+
+// Persisted Model Studio (Phase A) ------------------------------------------------
+
+export type ModelStudioApproval = {
+  status: "APPROVED" | "NOT_APPROVED";
+  contentHash: string | null;
+  approvedBy: string | null;
+  approvedAt: string | null;
+};
+
+export type ModelStudioRevision = {
+  id: string;
+  modelId: string;
+  revisionNumber: number;
+  parentRevisionId: string | null;
+  status: "draft" | "approved" | "retired";
+  contentHash: string;
+  createdAt: string;
+  approval: ModelStudioApproval;
+  content?: unknown;
+  preview?: (Omit<ModelDraftPreview, "modelId" | "modelRevisionId"> & { modelId: string; modelRevisionId: string }) | null;
+  authority: {
+    expectedBehavior: true;
+    observedSource: false;
+    executionEvidence: false;
+    approval: "NOT_APPROVED" | "APPROVED";
+    runtimeEvidence: "NONE";
+  };
+};
+
+export type ModelStudioModel = {
+  id: string;
+  projectId: string;
+  name: string;
+  createdAt: string;
+  latestRevision: ModelStudioRevision | null;
+};
+
+export type ModelStudioDetail = ModelStudioModel & { revisions: ModelStudioRevision[] };
+
+export type ModelStudioLink = {
+  id: string;
+  testcaseId: string;
+  testcaseTitle: string;
+  /** Current repository status; only Approved cases can be dispatched into a governed run. */
+  testcaseStatus: string | null;
+  elementIds: string[];
+  testcaseRevision: string | null;
+  caseChangedSinceLink: boolean;
+  caseDeleted: boolean;
+};
+
+export type ModelStudioCoverage = {
+  modelId: string;
+  revisionId: string;
+  elements: Array<{ id: string; linkedCases: number }>;
+  links: ModelStudioLink[];
+  unlinkedElements: string[];
+  mappingStaleness: {
+    supersededRevisions: Array<{
+      modelRevisionId: string;
+      revisionNumber: number;
+      linkedCases: number;
+      sameContentAsLatest: boolean;
+    }>;
+    testcasesChangedSinceLink: number;
+    testcasesWithoutRecordedRevision: number;
+    deletedTestcases: number;
+    note: string;
+  };
+  approval: ModelStudioApproval;
+  /** Draft cases this revision's proposals produced, with the path digest that generated each. */
+  generatedCases: Array<{
+    pathDigest: string;
+    testcaseId: string;
+    testcaseTitle: string;
+    testcaseStatus: string | null;
+    caseDeleted: boolean;
+    createdAt: string;
+  }>;
+  /** Linked-case history across native runs, separate from the original model dispatch occurrences. */
+  caseEvidence: Array<{
+    testcaseId: string;
+    testcaseTitle: string;
+    statusCounts: Record<string, number>;
+    latestStatus: string | null;
+    latestAt: string | null;
+  }>;
+  evidenceNote: string;
+  /** Native Test Runs dispatched from this revision under its approval receipt. */
+  governedRuns: Array<{
+    id: string;
+    cycleId: string;
+    name: string;
+    createdAt: string;
+    /** Original manifest membership, not today's editable native run membership. */
+    caseCount: number;
+    runDeleted: boolean;
+    statusCounts: Record<string, number>;
+    occurrenceBasis: "PINNED" | "UNKNOWN";
+    attributedCaseCount: number;
+    unavailableCaseCount: number;
+    unknownCaseCount: number;
+  }>;
+  /**
+   * Case outcomes per model element across the governed runs, taken from each run's immutable
+   * manifest. Case results are not proof of behavioral coverage.
+   */
+  observedByElement: Array<{
+    elementId: string;
+    runs: number;
+    results: number;
+    statusCounts: Record<string, number>;
+  }>;
+  coverageAssertion: "none";
+  executionAssertion: "none" | "governed-runs";
+  note: string;
+};
+
+export type ModelStudioModelRun = {
+  id: string;
+  projectId: string;
+  modelId: string;
+  modelRevisionId: string;
+  approvalId: string;
+  contentHash: string;
+  cycleId: string;
+  createdAt: string;
+  run: { id: string; name: string; status: string; environment: string | null };
+  manifest: {
+    revisionNumber: number;
+    contentHash: string;
+    approvalId: string;
+    cases: Array<{
+      testcaseId: string;
+      title: string;
+      pathDigest: string | null;
+      elementIds: string[];
+      sources: string[];
+      /** Absent in legacy manifests; readers must not infer it from current membership. */
+      nativeOccurrence?: { cycleItemId: string; executionId: string; snapshotApprovalRevision: string };
+    }>;
+  };
+  coverageAssertion: "none";
+  executionAssertion: "governed-run";
+};
+
+export async function listModelStudioModels(projectId: string): Promise<ModelStudioModel[]> {
+  return api(`/api/projects/${projectId}/model-studio/models`);
+}
+
+export async function getModelStudioModel(projectId: string, modelId: string): Promise<ModelStudioDetail> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}`);
+}
+
+export async function getModelStudioCoverage(projectId: string, modelId: string): Promise<ModelStudioCoverage> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/coverage`);
+}
+
+/** Retires a model from every surface; its revisions and mappings remain stored as history. */
+export async function archiveModelStudioModel(
+  projectId: string,
+  modelId: string
+): Promise<{ ok: boolean; id: string; archivedAt: string }> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}`, { method: "DELETE" });
+}
+
+export async function createModelStudioModel(
+  projectId: string,
+  data: { name: string; model: unknown }
+): Promise<ModelStudioModel> {
+  return api(`/api/projects/${projectId}/model-studio/models`, { method: "POST", body: data });
+}
+
+/** Saves the next immutable revision. `baseRevisionId` must be the current head or the server answers STALE_BASE. */
+export async function saveModelStudioRevision(
+  projectId: string,
+  modelId: string,
+  data: { baseRevisionId: string; model: unknown }
+): Promise<ModelStudioRevision> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions`, { method: "POST", body: data });
+}
+
+export async function linkModelStudioCase(
+  projectId: string,
+  modelId: string,
+  revisionId: string,
+  data: { testcaseId: string; elementIds: string[]; testcaseRevision?: string }
+): Promise<ModelStudioLink> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/links`, {
+    method: "POST",
+    body: data
+  });
+}
+
+export async function unlinkModelStudioCase(
+  projectId: string,
+  modelId: string,
+  revisionId: string,
+  linkId: string
+): Promise<{ ok: boolean }> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/links/${linkId}`, {
+    method: "DELETE"
+  });
+}
+
+export type ModelStudioGeneratedPath = {
+  id: string;
+  transitionIds: string[];
+  stateIds: string[];
+  digest: string;
+};
+
+/** Bounded, deterministic proposals. Read-only: nothing is written by this call. */
+export async function generateModelStudioPaths(
+  projectId: string,
+  modelId: string,
+  revisionId: string,
+  data?: { strategy?: "edge_coverage" | "shortest_paths"; maxPaths?: number; maxDepth?: number; seed?: string }
+): Promise<{
+  status: "PROPOSAL_ONLY";
+  strategy: "edge_coverage" | "shortest_paths";
+  seed: string;
+  paths: ModelStudioGeneratedPath[];
+  coverageAssertion: "none";
+  executionAssertion: "none";
+}> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/generate`, {
+    method: "POST",
+    body: data ?? {}
+  });
+}
+
+/** Approve the current revision, attesting the exact content hash the reviewer saw. */
+export async function approveModelStudioRevision(
+  projectId: string,
+  modelId: string,
+  revisionId: string,
+  expectedHash: string
+): Promise<ModelStudioRevision & { alreadyApproved: boolean }> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/approve`, {
+    method: "POST",
+    body: { expectedHash }
+  });
+}
+
+export type ModelStudioGeneratedCase = {
+  digest: string;
+  testcaseId: string;
+  created: boolean;
+  title?: string;
+};
+
+/**
+ * Create unapproved Draft cases from selected path proposals of an approved revision. The server
+ * regenerates the proposals, so the same generation inputs must be supplied with the digests.
+ */
+export async function createModelStudioCases(
+  projectId: string,
+  modelId: string,
+  revisionId: string,
+  data: {
+    digests: string[];
+    strategy?: "edge_coverage" | "shortest_paths";
+    maxPaths?: number;
+    maxDepth?: number;
+    seed?: string;
+  }
+): Promise<{
+  created: number;
+  skipped: number;
+  cases: ModelStudioGeneratedCase[];
+  coverageAssertion: "none";
+  executionAssertion: "none";
+  note: string;
+}> {
+  return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/candidates`, {
+    method: "POST",
+    body: data
+  });
+}
+
+/**
+ * Starts a native Test Run from the model's current, approved revision.
+ *
+ * The server refuses a superseded or unapproved revision, cases that do not belong to the revision,
+ * and any case that is not Approved. The returned run is an ordinary Test Run.
+ */
+export async function dispatchModelStudioRun(
+  projectId: string,
+  modelId: string,
+  revisionId: string,
+  data: { caseIds?: string[]; name?: string; environment?: string; buildVersion?: string }
+): Promise<ModelStudioModelRun & { requested: number; added: number; skipped: number; note: string }> {
+  try {
+    const result = await api<ModelStudioModelRun & { requested: number; added: number; skipped: number; note: string }>(
+      `/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/runs`, { method: "POST", body: data }
+    );
+    // An empty/truncated/unrelated success body cannot establish which native run was created.
+    if (!result?.cycleId || result.run?.id !== result.cycleId || typeof result.run.name !== "string" ||
+        result.projectId !== projectId || result.modelId !== modelId || result.modelRevisionId !== revisionId) {
+      throw new MutationOutcomeUnknownError();
+    }
+    return result;
+  } catch (cause) {
+    // These are the run owner's confirmed validation/access/conflict refusals. A server/proxy
+    // 5xx or an unreadable response may follow commit, so this non-idempotent create stays unknown.
+    if (cause instanceof ApiError && [400, 401, 403, 404, 409, 413, 415, 422, 429].includes(cause.status)) throw cause;
+    if (cause instanceof MutationOutcomeUnknownError) throw cause;
+    throw new MutationOutcomeUnknownError();
+  }
+}
+
+/** A governed run's model basis, read by the native run page; null for an ordinary run. */
+export type ModelStudioRunProvenance = {
+  id: string;
+  modelId: string;
+  modelName: string;
+  modelRevisionId: string;
+  revisionNumber: number;
+  contentHash: string;
+  approvalId: string;
+  approvedAt: string | null;
+  approvedBy: string | null;
+  dispatchedAt: string;
+  /** Original dispatch count, independent of later native membership changes. */
+  caseCount: number;
+  occurrenceBasis: "PINNED" | "UNKNOWN";
+  pinnedCaseCount: number;
+  unknownCaseCount: number;
+};
+
+export async function getModelStudioRunProvenance(
+  projectId: string,
+  cycleId: string
+): Promise<ModelStudioRunProvenance | null> {
+  const response = await api<{ provenance: ModelStudioRunProvenance | null }>(
+    `/api/projects/${projectId}/model-studio/runs/by-cycle/${cycleId}`
+  );
+  return response.provenance ?? null;
 }

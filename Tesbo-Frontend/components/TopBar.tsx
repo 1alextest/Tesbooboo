@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { IconBell, IconLogout, IconSearch, IconUserCircle, IconX } from "@tabler/icons-react";
 import type { AppNotification, ProjectSummary } from "@/lib/api";
-import { listNotifications, markAllNotificationsRead, markNotificationRead } from "@/lib/api";
+import { getUnreadNotificationCount, listNotifications, markAllNotificationsRead, markNotificationRead } from "@/lib/api";
 import { useTopBarSlots } from "@/components/TopBarSlots";
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useLogout } from "@/lib/useLogout";
@@ -13,6 +13,8 @@ import ThemeToggle from "@/components/ThemeToggle";
 import { ConfirmModal } from "@/components/ui";
 
 const MAX_RESULTS = 8;
+/** Rows per notifications page; older rows are reached with the backend's (created_at, id) cursor. */
+const NOTIFICATION_PAGE_SIZE = 50;
 
 import { avatarColor } from "@/lib/avatarColors";
 
@@ -65,6 +67,8 @@ function resolveNotificationHref(n: AppNotification): string | null {
       return `/projects/${id}/requirements`;
     case "zyra_chat":
       return `/projects/${id}/agents/zyra`;
+    case "zyra_change_review":
+      return `/projects/${id}/agents/zyra/changes`;
     case "zyra_task":
       return projectId && entityId ? `/projects/${projectId}/agents/tasks/${entityId}` : null;
     case "knowledge_document":
@@ -96,7 +100,11 @@ export default function TopBar() {
 
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifItems, setNotifItems] = useState<AppNotification[]>([]);
+  const [notifUnread, setNotifUnread] = useState(0);
+  const [notifCursor, setNotifCursor] = useState<string | null>(null);
+  const [notifHasMore, setNotifHasMore] = useState(false);
   const [notifLoading, setNotifLoading] = useState(false);
+  const [notifLoadingMore, setNotifLoadingMore] = useState(false);
   const [notifError, setNotifError] = useState<string | null>(null);
   const notifBoxRef = useRef<HTMLDivElement>(null);
 
@@ -177,8 +185,11 @@ export default function TopBar() {
     setNotifLoading(true);
     setNotifError(null);
     try {
-      const items = await listNotifications();
-      setNotifItems(items);
+      const page = await listNotifications({ limit: NOTIFICATION_PAGE_SIZE });
+      setNotifItems(page);
+      setNotifCursor(page[page.length - 1]?.id ?? null);
+      setNotifHasMore(page.length === NOTIFICATION_PAGE_SIZE);
+      void refreshNotifications();
     } catch (e) {
       setNotifError(e instanceof Error ? e.message : "Could not load notifications.");
     } finally {
@@ -186,11 +197,31 @@ export default function TopBar() {
     }
   }
 
-  // Quiet refresh for the unread badge: no "Loading…" flash and no error UI — the badge simply
-  // stays as it was if the request fails. The dropdown's own fetch (above) still reports errors.
+  async function loadMoreNotifications() {
+    if (!notifCursor || notifLoadingMore) return;
+    setNotifLoadingMore(true);
+    setNotifError(null);
+    try {
+      const page = await listNotifications({
+        limit: NOTIFICATION_PAGE_SIZE,
+        beforeId: notifCursor,
+      });
+      setNotifItems((prev) => [...prev, ...page]);
+      if (page.length) setNotifCursor(page[page.length - 1].id);
+      setNotifHasMore(page.length === NOTIFICATION_PAGE_SIZE);
+    } catch (e) {
+      setNotifError(e instanceof Error ? e.message : "Could not load more notifications.");
+    } finally {
+      setNotifLoadingMore(false);
+    }
+  }
+
+  // Quiet refresh for the unread badge: it asks for the count only, so an expanded list is never
+  // re-fetched or clobbered. No "Loading…" flash and no error UI — the badge simply stays as it
+  // was if the request fails. The dropdown's own fetch (above) still reports errors.
   async function refreshNotifications() {
     try {
-      setNotifItems(await listNotifications());
+      setNotifUnread((await getUnreadNotificationCount()).unread);
     } catch {
       /* badge is best-effort */
     }
@@ -203,7 +234,7 @@ export default function TopBar() {
     return () => window.removeEventListener("focus", onFocus);
   }, []);
 
-  const unreadCount = notifItems.filter((n) => !n.read_at).length;
+  const unreadCount = notifUnread;
 
   /**
    * Optimistic, like a single click: the badge clears at once. If the request fails the list is
@@ -213,6 +244,7 @@ export default function TopBar() {
   function handleMarkAllRead() {
     const now = new Date().toISOString();
     setNotifItems((prev) => prev.map((item) => (item.read_at ? item : { ...item, read_at: now })));
+    setNotifUnread(0);
     void markAllNotificationsRead().catch(() => void refreshNotifications());
   }
 
@@ -238,6 +270,7 @@ export default function TopBar() {
     setNotifOpen(false);
     if (!n.read_at) {
       setNotifItems((prev) => prev.map((item) => (item.id === n.id ? { ...item, read_at: new Date().toISOString() } : item)));
+      setNotifUnread((current) => Math.max(0, current - 1));
       void markNotificationRead(n.id).catch(() => {});
     }
     router.push(href);
@@ -395,7 +428,7 @@ export default function TopBar() {
             <div
               role="menu"
               aria-label="Notifications"
-              // max-h + overflow: up to 50 notifications can come back, far more than fit on screen. Without
+              // max-h + overflow: a page holds up to 50 notifications, far more than fit on screen. Without
               // a height limit the panel grew past the viewport with nothing to scroll.
               // No top padding (pb-1, not py-1): a sticky child sticks BELOW its scroller's padding, so a
               // top padding left a strip above the pinned header that scrolled text showed through.
@@ -472,6 +505,20 @@ export default function TopBar() {
                     </button>
                   );
                 })}
+                {/* Older rows are not silently lost: the backend returns a (created_at, id) cursor and
+                    this fetches the next page without replacing what is already shown. */}
+                {notifHasMore && (
+                  <div className="border-t border-[var(--border)] px-3 py-2 text-center">
+                    <button
+                      type="button"
+                      onClick={() => void loadMoreNotifications()}
+                      disabled={notifLoadingMore}
+                      className="text-[12px] font-medium text-[var(--brand-primary)] hover:underline disabled:cursor-default disabled:opacity-60"
+                    >
+                      {notifLoadingMore ? "Loading…" : "Load more"}
+                    </button>
+                  </div>
+                )}
                 </>
               )}
             </div>

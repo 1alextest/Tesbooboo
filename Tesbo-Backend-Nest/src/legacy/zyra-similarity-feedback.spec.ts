@@ -377,7 +377,7 @@ describe("generateZyraChatTestcasesWithAi — create-path wiring", () => {
       if (String(sql).includes("EXISTS") && String(sql).includes("testcase_embeddings")) return Promise.resolve({ rows: [{ exists: true }] });
       if (String(sql).includes("SELECT id, external_id, title FROM testcases")) return Promise.resolve({ rows: [{ id: "tc-1", external_id: "EAD-12", title: "Session expiry blocks login" }] });
       if (String(sql).includes("SELECT id FROM testcases")) return Promise.resolve({ rows: [{ id: "tc-1" }] }); // findProjectTestcase
-      if (String(sql).includes("SELECT * FROM testcases")) return Promise.resolve({ rows: [{ id: "tc-1", external_id: "EAD-12", title: "Session expiry blocks login", status: "Approved" }] }); // getTestCase
+      if (String(sql).includes("AS edit_revision") && String(sql).includes("FROM testcases WHERE id =")) return Promise.resolve({ rows: [{ id: "tc-1", external_id: "EAD-12", title: "Session expiry blocks login", status: "Approved", edit_revision: "a".repeat(64) }] }); // getTestCase's row + revision read
       if (String(sql).includes("INSERT INTO ai_generation_requests")) return Promise.resolve({ rows: [{ id: "review-1" }] });
       return Promise.resolve({ rows: [] });
     });

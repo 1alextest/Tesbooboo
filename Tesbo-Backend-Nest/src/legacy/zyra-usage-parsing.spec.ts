@@ -1,5 +1,6 @@
 import { LegacyService } from "./legacy.service";
 import type { DatabaseService } from "../database/database.service";
+import * as aiTrace from "../observability/ai-trace";
 
 process.env.SECRETS_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
 
@@ -20,6 +21,11 @@ type Internals = {
   zyraChatWithOpenAi: (key: Record<string, unknown>, model: string, context: string, message: string) => Promise<Reply>;
   zyraChatWithAnthropic: (key: Record<string, unknown>, model: string, context: string, message: string) => Promise<Reply>;
   zyraJsonCompletion: (provider: string, model: string, key: Record<string, unknown>, system: string, user: string) => Promise<Reply>;
+  finalizeZyraToolDecisionWithAi: (params: Record<string, unknown>) => Promise<unknown>;
+  planZyraChatScenarios: (params: Record<string, unknown>) => Promise<unknown>;
+  summarizeForZyraMemory: (provider: string, model: string, key: Record<string, unknown>, prompt: string, scope: { projectId: string }) => Promise<string>;
+  zyraAiAllocation: (projectId: string) => Promise<{ key: unknown }>;
+  transcribeKnowledgeFile: (projectId: string, fileId: string, buffer: Buffer, ext: string, mimeType: string, fileName: string) => Promise<void>;
 };
 
 function makeLegacy(): LegacyService {
@@ -107,5 +113,33 @@ describe("Zyra provider usage parsing (cached input tokens)", () => {
 
     expect(raw.__zyraUsage).toEqual({ input: 10, output: 5, total: 15 });
     expect(raw.__zyraUsage).not.toHaveProperty("cached");
+  });
+
+  it.each(["finalizer", "planner", "memory"])("keeps simultaneous %s attempts in distinct traces", async (path) => {
+    jest.spyOn(Date, "now").mockReturnValue(123456);
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    mockResponse({ choices: [{ message: { content: JSON.stringify({ reply: "ok", scenarios: ["valid scenario"] }) } }] });
+    const internal = svc as unknown as Internals;
+    const common = { projectId: "project-one", provider: "openai", model: "gpt-4o", key: openAiKey, message: "request" };
+    const call = path === "finalizer"
+      ? () => internal.finalizeZyraToolDecisionWithAi({ ...common, toolName: "test", toolDecision: { reply: "ok", testcases: [] } })
+      : path === "planner"
+        ? () => internal.planZyraChatScenarios({ ...common, knowledge: [], existingTestcases: [], maxScenarios: 1 })
+        : () => internal.summarizeForZyraMemory("openai", "gpt-4o", openAiKey, "request", { projectId: "project-one" });
+    await Promise.all([call(), call()]);
+    expect(recorded).toHaveBeenCalledTimes(2);
+    const seeds = recorded.mock.calls.map(([input]) => input.traceSeed);
+    expect(new Set(seeds).size).toBe(2);
+    expect(recorded.mock.calls.every(([input]) => input.metadata?.projectId === "project-one")).toBe(true);
+  });
+
+  it("does not report a transcription generation when no supported AI key was allocated", async () => {
+    const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    const internal = svc as unknown as Internals;
+    jest.spyOn(internal, "zyraAiAllocation").mockResolvedValue({ key: null });
+    mockResponse({});
+    await internal.transcribeKnowledgeFile("project-one", "file-one", Buffer.from("audio"), "mp3", "audio/mpeg", "sample.mp3");
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(recorded).not.toHaveBeenCalled();
   });
 });

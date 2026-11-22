@@ -114,7 +114,9 @@ export default function RichTextEditor({
   editorRef.current = editor;
 
   useEffect(() => {
-    editor?.setEditable(editable);
+    // Changing interaction mode is not a content edit. TipTap emits an update by default, which
+    // otherwise marks an unchanged document dirty and schedules an autosave on every mount.
+    editor?.setEditable(editable, false);
   }, [editable, editor]);
 
   // Only fires on a real `resetKey` change (the caller bumping it after e.g. a version restore),
@@ -124,7 +126,8 @@ export default function RichTextEditor({
   useEffect(() => {
     if (!editor || resetKey === undefined || resetKey === lastResetKey.current) return;
     lastResetKey.current = resetKey;
-    editor.commands.setContent(contentJson || contentHtml || "<p></p>");
+    // The server already applied the restore. Re-rendering it must not schedule another save.
+    editor.commands.setContent(contentJson || contentHtml || "<p></p>", { emitUpdate: false });
     // contentJson/contentHtml intentionally excluded: this effect keys off `resetKey` alone, so it
     // still fires the FIRST time resetKey changes even if content happens to look referentially
     // stable to React at that instant.

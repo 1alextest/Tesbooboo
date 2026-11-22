@@ -209,4 +209,20 @@ were skipped.
 npm install
 npm run build
 npm test        # compiles, then runs the unit tests
+npm run test:package-consumer
 ```
+
+The package-consumer smoke requires the production build above; missing `dist` entrypoints or bins
+fail rather than being rebuilt or skipped. It creates a real `npm pack` tarball and installs it in a
+fresh temporary consumer **outside the repository**, then checks package-name CommonJS/native ESM
+imports, strict TypeScript declarations, both CLI aliases (`--help`/`--version`), and a browser-free
+Playwright test that resolves a case, opens a run, submits a result and confirms closure against the
+same loopback ingestion fixture as the lifecycle unit tests.
+Three isolated negative fixtures also prove missing runtime, declaration and bin artifacts fail.
+
+Only the public npm registry is used, for exact test-tooling versions from this SDK's lockfile.
+Installation uses `--ignore-scripts --no-audit --no-fund`, empty npm auth/config files, no browser
+download, and bounded subprocess timeouts. It needs no Tesbo credentials, database or deployed stack.
+The smoke removes only its own temporary directory. Node 20/22 and Windows/Linux are supported;
+on Windows it validates each npm `.cmd` alias and runs its exact installed JS target with Node
+instead of enabling a shell.

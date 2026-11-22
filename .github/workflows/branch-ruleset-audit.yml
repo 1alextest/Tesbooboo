@@ -1,0 +1,35 @@
+name: Branch ruleset audit
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 8 * * 1'
+permissions:
+  contents: read
+jobs:
+  policy-tests:
+    name: branch-ruleset-contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - run: node --test scripts/branch-rulesets.test.mjs
+  live-audit:
+    name: branch-ruleset-readback
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Audit configured required checks and reviews (not a simulated merge)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/branch-rulesets.mjs

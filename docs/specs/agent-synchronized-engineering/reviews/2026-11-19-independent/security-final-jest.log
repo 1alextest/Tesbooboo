@@ -1,0 +1,18 @@
+ts-jest[config] (WARN)
+    The "ts-jest" config option "isolatedModules" is deprecated and will be removed in v30.0.0. Please use "isolatedModules: true" in /workspace/scratch/fb086055b433/tesbo-review-native-final/Tesbo-Backend-Nest/tsconfig.json instead, see https://www.typescriptlang.org/tsconfig/#isolatedModules
+
+PASS tesbo-review-native-final/Tesbo-Backend-Nest/src/mcp/mcp.service.spec.ts (5.901 s)
+PASS tesbo-review-native-final/Tesbo-Backend-Nest/src/mcp/mcp-publication.spec.ts
+PASS tesbo-review-native-final/Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.spec.ts
+PASS tesbo-review-native-final/Tesbo-Backend-Nest/src/legacy/testcase-proposal-review.spec.ts
+PASS tesbo-review-native-final/Tesbo-Backend-Nest/src/auth/api-token-rest.guard.spec.ts
+PASS assurance-working/security-final-contract-probes.spec.ts
+[Nest] 5  - 11/19/2026, 9:48:53 PM   ERROR [LegacyService] Zyra chat operation (create_suite) failed for project 11111111-1111-4111-8111-111111111111: Private database failure
+PASS tesbo-review-native-final/Tesbo-Backend-Nest/src/legacy/suite-publication.spec.ts
+
+Test Suites: 7 passed, 7 total
+Tests:       336 passed, 336 total
+Snapshots:   0 total
+Time:        10.928 s
+Ran all test suites.
+Test results written to: assurance-working/security-final-jest-results.json

@@ -28,17 +28,39 @@ jobs:
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s --health-timeout 5s --health-retries 15
+      review-board-redis:
+        # The Review Board HTTP suite deliberately refuses any Redis other than a disposable
+        # loopback instance on port 56379, so this job gives it its own throwaway container.
+        image: redis:7-alpine
+        ports: ["56379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 15
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tesbo_ci
       REDIS_URL: redis://localhost:6379
       SECRETS_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
       EMAIL_DELIVERY_MODE: log
+      # Disposable stack: let the e2e helpers read OTP codes and invite/reset links from the
+      # test-only email outbox rather than the backend log.
+      EMAIL_OUTBOX_ENABLED: "1"
       ANALYTICS_REPORT_ENABLED: "false"
       FRONTEND_URL: http://127.0.0.1:3000
       NEXT_PUBLIC_API_URL: http://127.0.0.1:7000
       CI_API_BASE_URL: http://127.0.0.1:7000
       CI_WEB_BASE_URL: http://127.0.0.1:3000
+      # The broader Playwright config uses these, unlike ci-smoke.config.ts.
+      # Never let it silently default to the unrelated 1010/1011 stack.
+      API_BASE_URL: http://127.0.0.1:7000
+      WEB_BASE_URL: http://127.0.0.1:3000
+      E2E_AUTO_PROVISION: "true"
+      E2E_DB_TRANSPORT: direct
       TESBO_REPORTER_ENABLED: "0"
+      # Only the isolated disposable CI stack opts in to ephemeral M1 preview.
+      TESBO_MODEL_PREVIEW_ENABLED: "1"
+      # Verify selected human-publication mechanics without exposing the new external
+      # proposal inlet in deployments awaiting the S0 Skills/authority gate.
+      TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED: "1"
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -53,6 +75,20 @@ jobs:
             Tesbo-Frontend/package-lock.json
             e2e/package-lock.json
             sdk/playwright-reporter/package-lock.json
+      - name: Start read-only Stripe price fixture and verify refused writes
+        env:
+          STRIPE_SECRET_KEY: sk_test_tesbo_ci
+        run: |
+          nohup node e2e/utils/stripe-readonly-fixture.mjs >/tmp/tesbo-stripe-ci.log 2>&1 &
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9977/health >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:9977/health
+          auth_header='Author''ization'
+          curl -fsS -H "$auth_header: Bearer $STRIPE_SECRET_KEY"             http://127.0.0.1:9977/v1/prices/price_tesbo_ci_monthly_usd >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST             -H "$auth_header: Bearer $STRIPE_SECRET_KEY"             http://127.0.0.1:9977/v1/customers)" = "405"
+          test "$(curl -s -o /dev/null -w '%{http_code}'             -H "$auth_header: Bearer $STRIPE_SECRET_KEY"             http://127.0.0.1:9977/v1/prices/unknown)" = "404"
       - name: Build isolated backend
         working-directory: Tesbo-Backend-Nest
         run: |
@@ -60,6 +96,24 @@ jobs:
           npm run build
           npm run migrate
           nohup node dist/main.js >/tmp/tesbo-backend.log 2>&1 &
+          echo $! >/tmp/tesbo-backend.pid
+      - name: Prepare the disposable Review Board database
+        working-directory: Tesbo-Backend-Nest
+        run: |
+          # The Review Board integration suites refuse to run unless the database is loopback and
+          # named rb_test*; create and migrate it on this job's throwaway Postgres service.
+          node -e 'const {Client}=require("pg");(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});await c.connect();await c.query("CREATE DATABASE rb_test");await c.end();})().catch(e=>{console.error(e);process.exit(1)})'
+          RB_URL=$(node -e 'const u=new URL(process.env.DATABASE_URL);u.pathname="/rb_test";process.stdout.write(u.toString())')
+          DATABASE_URL="$RB_URL" npm run migrate
+      - name: Verify Review Board runtime evidence in the disposable stack
+        working-directory: Tesbo-Backend-Nest
+        env:
+          REVIEW_BOARD_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rb_test
+          REVIEW_BOARD_TEST_REDIS_URL: redis://localhost:56379
+        run: |
+          # These suites are the evidence the architecture policy previously reported as missing.
+          # Running them here closes the shared-identity review gap without skipping either suite.
+          npx jest --runInBand src/review-board/review-board.integration.spec.ts src/review-board/review-board.http.integration.spec.ts
       - name: Build isolated web application
         working-directory: Tesbo-Frontend
         run: |
@@ -85,7 +139,234 @@ jobs:
           done
           curl -fsS http://127.0.0.1:7000/health
           curl -fsS http://127.0.0.1:3000/login >/dev/null
-          npx playwright test -c playwright.ci-smoke.config.ts
+          npx playwright test -c playwright.ci-smoke.config.ts --output=test-results-smoke
+      - name: Verify model draft preview and existing graph/source/QA handoff E2E
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-zyra
+        run: |
+          # Only impacted Zyra tests, with dedicated disposable RBAC tenants.
+          # A lost mutation response must never produce a duplicate run/case.
+          # No live customer tenant or paid external AI provider is involved.
+          selection='source binding pending save|graph change history is project scoped|source binding setup is owner-only|model draft preview|change history ignores late pagination replies|change review refuses duplicate source capture|change review discards late source-capture feedback|change review serializes native notification retries|Zyra opens native change review|owner can inspect root-free source setup|graph review links an explicitly nominated case'
+          npx playwright test -c playwright.config.ts api/zyra.spec.ts ui/zyra.spec.ts --workers=10 -g "$selection" --list
+          npx playwright test -c playwright.config.ts api/zyra.spec.ts ui/zyra.spec.ts --workers=10 --output=test-results-zyra -g "$selection"
+      - name: Verify native testcase API and repository editor impact set
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-testcases
+        run: |
+          # Runs AFTER the Zyra step: these spec files read .auth/context.json at module load, and
+          # only a real run's global setup provisions it — a --list before that fails with ENOENT.
+          # Phase 3/6 classification, saved views, exact-revision approval and the repository
+          # editor live in these two files; they were previously absent from every workflow, so
+          # their green runs proved nothing.
+          npx playwright test -c playwright.config.ts api/testcases.spec.ts ui/testcases.spec.ts --workers=10 --output=test-results-testcases --list
+          npx playwright test -c playwright.config.ts api/testcases.spec.ts ui/testcases.spec.ts --workers=10 --output=test-results-testcases
+          # The linked-issue-key aggregate reads are testcase endpoints; unique ID, testcase lane.
+          # Keep this report separate: a second invocation otherwise overwrites the full repository
+          # API/UI report above, losing its test inventory and successful visual attachments.
+          PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report-testcase-issue-keys npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-tail -g "TAI-A-22" --list
+          PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report-testcase-issue-keys npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-tail -g "TAI-A-22"
+      - name: Verify notification paging and unread counts
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-notifications
+        run: |
+          # Neither file was referenced by any workflow before this step, so their green runs
+          # proved nothing. -g "NOTIF-" selects the notification route and dropdown tests only;
+          # ui/navigation.spec.ts carries many unrelated navigation journeys.
+          npx playwright test -c playwright.config.ts api/notifications.spec.ts ui/navigation.spec.ts --workers=10 --output=test-results-notifications -g "NOTIF-" --list
+          npx playwright test -c playwright.config.ts api/notifications.spec.ts ui/navigation.spec.ts --workers=10 --output=test-results-notifications -g "NOTIF-"
+      - name: Verify platform-admin owner-only management
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-admin
+        run: |
+          # api/tail.spec.ts was not referenced by any workflow. Select only the superadmin
+          # authorization surface and the owner-only add/remove contract.
+          npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-admin -g "TAI-A-15|TAI-A-20|TAI-A-23" --list
+          npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-admin -g "TAI-A-15|TAI-A-20|TAI-A-23"
+      - name: Verify per-run report summary aggregation
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-reports
+        run: |
+          # api/reports.spec.ts was not referenced by any workflow, so its old zero-stub
+          # assertions had never actually run. Select only the per-run summary contract; the full
+          # report matrix builds eleven runs and is exercised elsewhere.
+          npx playwright test -c playwright.config.ts api/reports.spec.ts --workers=10 --output=test-results-reports -g "RPT-A-47|RPT-A-48|RPT-A-73" --list
+          npx playwright test -c playwright.config.ts api/reports.spec.ts --workers=10 --output=test-results-reports -g "RPT-A-47|RPT-A-48|RPT-A-73"
+      - name: Verify requirement matrix bug provenance
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-matrix
+        run: |
+          # The matrix must read bug_links, the source of truth for a bug's links, rather than the
+          # stale bugs.execution_id captured at creation.
+          npx playwright test -c playwright.config.ts api/reports.spec.ts --workers=10 --output=test-results-matrix -g "RPT-A-72" --list
+          npx playwright test -c playwright.config.ts api/reports.spec.ts --workers=10 --output=test-results-matrix -g "RPT-A-72"
+      - name: Verify persisted Model Studio revisions and mappings
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-model-studio
+        run: |
+          npx playwright test -c playwright.config.ts api/model-studio.spec.ts ui/model-studio.spec.ts --workers=10 --output=test-results-model-studio --list
+          npx playwright test -c playwright.config.ts api/model-studio.spec.ts ui/model-studio.spec.ts --workers=10 --output=test-results-model-studio
+      - name: Verify knowledge base restore and exact human review
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-kb
+        run: |
+          # Neither KB spec was referenced by a workflow before this step. Trash adds a real UI path
+          # and folder restore now brings back the subtree deleted with it, so the delete/restore
+          # contract needs to run. Select the impacted tests only: the UI file also carries
+          # intentionally red editor-validation tests (KBU-25/26).
+          selection="KB-A-05|KB-A-07|KB-A-21|KB-A-50|KB-A-51|KB-A-52|KB-A-53|KB-A-7[2-7]|KBU-08|KBU-09|KBU-10|KBU-10b|KBU-24|KBU-25|KBU-26|KBU-6[5-9]"
+          npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts ui/knowledge-base.spec.ts --workers=10 --output=test-results-kb -g "$selection" --list
+          npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts ui/knowledge-base.spec.ts --workers=10 --output=test-results-kb -g "$selection"
+      - name: Verify scheduled runs end to end
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-schedules
+        run: |
+          # Schedules are persisted now and the backend worker creates a new Test Run per due
+          # occurrence (EXO-A-08b). The selection is by title fragment because the EXO-A-09/11
+          # numbers are shared with unrelated tests in that file; neither spec was referenced by
+          # any workflow before this step.
+          selection="a created schedule|a schedule is updated|a due schedule|the schedule routes refuse|a schedule needs a name|a one-time schedule refuses|a one-time schedule with a future|a recurring schedule needs no Run At|a daily schedule|a weekly schedule|local rules refuse|a fired daily schedule|runs on demand without shifting|edited and run on demand|Schedule Run — the form|SWP-06"
+          npx playwright test -c playwright.config.ts api/execution-ops.spec.ts ui/cycles.spec.ts ui/screens-sweep.spec.ts --workers=10 --output=test-results-schedules -g "$selection" --list
+          npx playwright test -c playwright.config.ts api/execution-ops.spec.ts ui/cycles.spec.ts ui/screens-sweep.spec.ts --workers=10 --output=test-results-schedules -g "$selection"
+      - name: Verify log-mode email is recorded in the test outbox
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-email
+        run: |
+          # The outbox replaced the container log as the suite's mailbox: an OTP code or reset link
+          # now exists only there, never in stdout. These tests prove the recorded value is the real
+          # one (it completes a sign-in / resets a password), and the invite link resolves. The
+          # delivery-policy assertions in the same file skip without docker logs.
+          selection="an OTP is recorded in the test outbox|a wrong code is still rejected when the right one is in the outbox|the accept link is recorded in the outbox|ACU-07|ACU-08|ACU-10"
+          npx playwright test -c playwright.config.ts api/email-delivery.spec.ts ui/account.spec.ts --workers=10 --output=test-results-email -g "$selection" --list
+          npx playwright test -c playwright.config.ts api/email-delivery.spec.ts ui/account.spec.ts --workers=10 --output=test-results-email -g "$selection"
+      - name: Verify bulk execution actions from the run table
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-bulk-executions
+        run: |
+          # Neither bulk route was referenced by a workflow, so their coverage proved nothing, and
+          # the run table's multi-select gained the status action it previously lacked. Select the
+          # bulk API contract plus the run-detail UI that drives it. EXO-A-07/08/09 numbers are
+          # shared with the schedule tests above, so the two PATCH tests are matched by title.
+          selection="EXO-A-0[1-6]|a single-execution PATCH also refuses|a status-only PATCH does not clear|multi-selection applies it to exactly those rows|a refused bulk status|a completed run offers no bulk status action"
+          npx playwright test -c playwright.config.ts api/execution-ops.spec.ts ui/cycles.spec.ts --workers=10 --output=test-results-bulk-executions -g "$selection" --list
+          npx playwright test -c playwright.config.ts api/execution-ops.spec.ts ui/cycles.spec.ts --workers=10 --output=test-results-bulk-executions -g "$selection"
+      - name: Verify fresh MCP catalog and canonical QA fields on isolated backend
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-mcp
+        run: |
+          # Fresh granted discovery and the explicit unpublished-stage/human-apply lifecycle.
+          # A passing source catalog does not establish the external client's deployment.
+          selection="MCP-P07|a current session is served|disposable MCP agent create read update archive lifecycle preserves project and run boundaries|MCP list_suites|MCP suite description|MCP clone_test_suite"
+          npx playwright test -c playwright.config.ts api/mcp.spec.ts --workers=10 --output=test-results-mcp -g "$selection" --list
+          npx playwright test -c playwright.config.ts api/mcp.spec.ts --workers=10 --output=test-results-mcp -g "$selection"
+      - name: Verify Approved-only native run attachments
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-approval
+        run: |
+          npx playwright test -c playwright.config.ts api/run-approval.spec.ts --output=test-results-approval --workers=1 -g "Approved-only native run attachments"
+      - name: Verify consent, truthful coverage and selected human publication
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-governed-changes
+        run: |
+          # These cases use the same migrated disposable application, including real human
+          # sessions and a separate external token client. No model key or customer records.
+          selection='MCP-P18|REQ-U-coverage|ZYR-P07|ZYR-A-69|ZYU-14 |ZYU-6[4-8] |ZYU-117 |ZYU-12[8-9] |ZYU-13[0-2] |ZYU-141 |linking a bug preserves original execution evidence|EXE-U-31 |EXE-U-31f |marking an execution Failed opens the bug dialog'
+          npx playwright test -c playwright.config.ts \
+            api/mcp.spec.ts ui/projects.spec.ts ui/requirements.spec.ts \
+            api/zyra.spec.ts ui/zyra.spec.ts api/bugs.spec.ts ui/executions.spec.ts \
+            --workers=10 --output=test-results-governed-changes -g "$selection" --list
+          npx playwright test -c playwright.config.ts \
+            api/mcp.spec.ts ui/projects.spec.ts ui/requirements.spec.ts \
+            api/zyra.spec.ts ui/zyra.spec.ts api/bugs.spec.ts ui/executions.spec.ts \
+            --workers=10 --output=test-results-governed-changes -g "$selection"
+      - name: Verify existing native Run, execution, automation and evidence journeys
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-compatibility
+        run: |
+          # Preserve independent positive compatibility proofs; the new
+          # Approved-only gate must not break historical run/reporter behavior.
+          # The from-cases tests pin the deliberate contract change (it now seeds
+          # cases and refuses a Draft atomically) alongside that lifecycle.
+
+          npx playwright test -c playwright.config.ts \
+            api/cycles.spec.ts api/automation.spec.ts \
+            api/executions.spec.ts api/attachments.spec.ts \
+            --workers=1 --retries=0 --output=test-results-compatibility \
+            -g "supports the create -> read -> update -> list -> delete lifecycle|supports adding and removing test cases|the same id repeated inside one request is added once|AUT-01 a full session|adding a test case to a cycle auto-creates an Untested execution|an execution attachment uploads and appears in its list|from-cases seeds the run with its cases|from-cases refuses a Draft case"
+      - name: Verify fail-closed cache fixture commands
+        working-directory: e2e
+        run: node --test utils/entitlement-cache-invalidate.test.cjs
+      - name: Verify native retest, project prefetch and Run execution impact set
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-native-retest
+        run: |
+          # Full native Run/Execution/Plan/readable URL files plus project/member refresh owners.
+          # Full billing API/UI suites are executed below with billing enabled on the same
+          # disposable migrated database; none of their assertions are removed or skipped.
+          npx playwright test -c playwright.config.ts --list | tail -n 1
+          npx playwright test -c playwright.config.ts \
+            api/cycles.spec.ts api/executions.spec.ts api/route-resolve.spec.ts \
+            api/plans.spec.ts ui/cycles.spec.ts ui/executions.spec.ts ui/readable-urls.spec.ts \
+            api/projects.spec.ts ui/projects.spec.ts ui/members.spec.ts \
+            --workers=10 --retries=0 --output=test-results-native-retest --list
+          npx playwright test -c playwright.config.ts \
+            api/cycles.spec.ts api/executions.spec.ts api/route-resolve.spec.ts \
+            api/plans.spec.ts ui/cycles.spec.ts ui/executions.spec.ts ui/readable-urls.spec.ts \
+            api/projects.spec.ts ui/projects.spec.ts ui/members.spec.ts \
+            --workers=10 --retries=0 --output=test-results-native-retest
+      - name: Verify billing API and UI against read-only Stripe CI fixture
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-native-billing
+          TESBO_CI_STRIPE_READONLY_FIXTURE: "1"
+          STRIPE_SECRET_KEY: sk_test_tesbo_ci
+          STRIPE_WEBHOOK_SECRET: whsec_tesbo_ci
+          STRIPE_PRICE_ID_PRO_MONTHLY: price_tesbo_ci_monthly_usd
+          STRIPE_PRICE_ID_PRO_ANNUAL: price_tesbo_ci_annual_usd
+        run: |
+          # Switch ONLY after native and unrelated smoke cases complete; do not subject
+          # unrelated tenants to the now-enabled Launch billing limits.
+          old_pid=$(cat /tmp/tesbo-backend.pid)
+          kill "$old_pid"
+          for _ in $(seq 1 30); do
+            if ! kill -0 "$old_pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          if curl -fsS --max-time 2 http://127.0.0.1:7000/health >/dev/null 2>&1; then
+            echo "Original backend is still serving: refusing ambiguous billing evidence" >&2
+            exit 1
+          fi
+          pushd ../Tesbo-Backend-Nest >/dev/null
+          nohup node dist/main.js >/tmp/tesbo-backend-billing.log 2>&1 &
+          echo $! >/tmp/tesbo-backend-billing.pid
+          popd >/dev/null
+          for _ in $(seq 1 60); do
+            if curl -fsS --max-time 2 http://127.0.0.1:7000/api/billing/pricing >/tmp/tesbo-ci-billing-quote.json; then break; fi
+            sleep 1
+          done
+          node -e 'const p=require("/tmp/tesbo-ci-billing-quote.json");if(p.currency!=="usd"||!(p.monthlyAmount>0)||!(p.annualAmount>0))process.exit(1)'
+          npx playwright test -c playwright.config.ts \
+            api/billing.spec.ts ui/billing.spec.ts \
+            --workers=2 --retries=0 --output=test-results-native-billing --list
+          npx playwright test -c playwright.config.ts \
+            api/billing.spec.ts ui/billing.spec.ts \
+            --workers=2 --retries=0 --output=test-results-native-billing
       - name: Capture smoke evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -94,9 +375,11 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
           path: |
-            e2e/playwright-report-ci/
-            e2e/test-results/
+            e2e/playwright-report*/
+            e2e/test-results*/
             /tmp/tesbo-backend.log
+            /tmp/tesbo-backend-billing.log
+            /tmp/tesbo-stripe-ci.log
             /tmp/tesbo-web.log
 
   dependency-audit:

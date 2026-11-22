@@ -58,6 +58,14 @@ export type RbacTenantKind =
   | "kb-embeddings"
   // Wave 7 — execution bulk ops, schedules, share links
   | "exec-ops"
+  // Shared test-run approval invariant: native REST, MCP and automation
+  // entry points write only to this disposable project's cycles/cases.
+  | "run-approval"
+  // Isolated human+MCP machine token lifecycle; never use a real customer project.
+  | "mcp-lifecycle"
+  // Persisted Model Studio revisions/mappings. Own tenant so model drafts and links never touch
+  // an existing project's graph history or canonical cases.
+  | "model-studio"
   // Wave 8 — integrations (Jira / Linear), authorization and validation layer
   | "integrations"
   // Wave 9 — Zyra, AI keys, MCP
@@ -159,7 +167,8 @@ export interface RbacTenant {
   guest: RbacUser;
 }
 
-const PASSWORD = "E2E-Rbac-Pass-9f3!";
+// Positive seed credentials must also satisfy native change/reset policy for API cleanup.
+const PASSWORD = "E2e-Rbac-9!x";
 const MAIN_PROJECT = "RBAC Main Project";
 const SECOND_PROJECT = "RBAC Second Project";
 

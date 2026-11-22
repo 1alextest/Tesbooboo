@@ -20,8 +20,10 @@ import { ProjectOverviewCacheService } from "../../cache/project-overview-cache.
 import type Redis from "ioredis";
 
 
-export function makeLegacy(db: DatabaseService): LegacyService {
-  const requestCache = new RequestCacheService({} as unknown as AppConfigService);
+export function makeLegacy(db: DatabaseService, collaborators: {
+  config?: AppConfigService; storage?: StorageService; planLimits?: PlanLimitsService; requestCache?: RequestCacheService;
+} = {}): LegacyService {
+  const requestCache = collaborators.requestCache ?? new RequestCacheService({} as unknown as AppConfigService);
   const suitesCache = new SuitesCacheService({} as unknown as Redis, {} as unknown as AppConfigService);
   const testcasesListCache = new TestcasesListCacheService({} as unknown as Redis, {} as unknown as AppConfigService);
   const projectOverviewCache = new ProjectOverviewCacheService({} as unknown as Redis, {} as unknown as AppConfigService);
@@ -29,13 +31,13 @@ export function makeLegacy(db: DatabaseService): LegacyService {
     db,
     {} as unknown as EmailService,
     {} as unknown as PasswordService,
-    {} as unknown as AppConfigService,
-    {} as unknown as StorageService,
+    collaborators.config ?? {} as unknown as AppConfigService,
+    collaborators.storage ?? {} as unknown as StorageService,
     {} as unknown as RagIngestionService,
     {} as unknown as RagRetrievalService,
     {} as unknown as IntegrationSyncService,
     {} as unknown as ApiTokenService,
-    {} as unknown as PlanLimitsService,
+    collaborators.planLimits ?? {} as unknown as PlanLimitsService,
     requestCache,
     new ProjectLookupService(db, requestCache),
     {} as unknown as KbExtractionRunnerService,

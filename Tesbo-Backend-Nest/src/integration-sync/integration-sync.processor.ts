@@ -514,7 +514,7 @@ export class IntegrationSyncProcessor extends WorkerHost {
     } else if (commentsHash !== String(row.decision_summary_hash || "")) {
       const allocation = await this.decisions.resolveAllocation(projectId);
       if (allocation) {
-        decisionSummary = await this.decisions.summarize(allocation, ticket, comments);
+        decisionSummary = await this.decisions.summarize(allocation, ticket, comments, { organizationId, projectId, runId, ticketId });
         summarized = true;
         await this.db.query(`UPDATE ${c.table} SET decision_summary = $2, decision_summary_hash = $3 WHERE id = $1`, [
           ticketId,

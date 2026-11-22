@@ -370,23 +370,17 @@ export function recordGeneration(
   }
 }
 
-/**
- * What reconcileZyraReply decided about the reply's own honesty, and why — filed as its own
- * `[guardrail]` observation under the turn's trace.
- *
- * Deliberately does NOT take a `TurnHandle`. reconcileZyraReply runs in sendZyraChatMessage, after
- * buildZyraChatDecision has already returned and ended its own root span via endZyraTurn — by
- * design, that root span is closed the moment the router's decision is known, before
- * applyZyraChatOperations or reconciliation exist to report on. Re-opening or extending that span
- * would mean restructuring who owns ending the trace across every one of buildZyraChatDecision's
- * return paths (several of which — the degraded/capability-disabled ones — do not even call
- * endZyraTurn today, a pre-existing gap noted here rather than silently worked around). Instead this
- * attaches its own observation directly to the SAME deterministic trace id
- * (`createTraceId(messageId)`, the same derivation startZyraTurn uses) — the same pattern that
- * bootstraps the trace in the first place, just called a second time for a later moment in the same
- * turn. It lands under the same trace either way; a viewer sees it start after the root span's own
- * end time, which is a cosmetic ordering quirk, not a correctness one.
- */
+const STANDALONE_METADATA_KEYS = new Set([
+  "organizationId", "projectId", "sessionId", "userId", "planId", "fileId", "ticketId", "nativeTicketId", "runId", "ticketKey", "commentCount", "ext", "toolName"
+]);
+
+/** Metadata bypasses the SDK mask. Keep only the existing callers' bounded identity/count fields. */
+function standaloneMetadata(metadata?: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(metadata || {})
+    .filter(([key, value]) => STANDALONE_METADATA_KEYS.has(key) && typeof value === "string")
+    .map(([key, value]) => [key, shorten(value)]));
+}
+
 /**
  * Record a generation that is not part of an interactive Zyra turn (e.g. integration sync decision
  * summaries, background jobs). Creates/joins a trace by deterministic seed, never throws.
@@ -406,6 +400,7 @@ export async function recordStandaloneGeneration(ctx: {
   try {
     const { startObservation, createTraceId } = await import("@langfuse/tracing");
     const traceId = await createTraceId(ctx.traceSeed);
+    const metadata = standaloneMetadata(ctx.metadata);
     const span = startObservation(
       ctx.name,
       {
@@ -416,12 +411,13 @@ export async function recordStandaloneGeneration(ctx: {
         metadata: {
           provider: ctx.provider,
           ...(ctx.usage?.cached ? { cachedInputTokens: String(ctx.usage.cached) } : {}),
-          ...(ctx.metadata || {})
+          ...metadata
         },
-        ...(ctx.errorMessage ? { level: "ERROR", statusMessage: shorten(ctx.errorMessage) } : {})
+        ...(ctx.errorMessage ? { level: "ERROR", statusMessage: "Operation failed (details in masked output)" } : {})
       },
       { asType: "generation", parentSpanContext: { traceId, spanId: "0000000000000001", traceFlags: 1 } }
     ) as unknown as Observation;
+    stampTraceIdentity(span, { span, traceId, sessionId: metadata.sessionId, userId: metadata.userId });
     span.end();
   } catch (err) {
     logger.warn(`recordStandaloneGeneration failed: ${err instanceof Error ? err.message : err}`);
@@ -446,22 +442,41 @@ export async function recordStandaloneTool(ctx: {
   try {
     const { startObservation, createTraceId } = await import("@langfuse/tracing");
     const traceId = await createTraceId(ctx.traceSeed);
+    const metadata = standaloneMetadata(ctx.metadata);
     const span = startObservation(
       ctx.name,
       {
         input: ctx.input,
         output: ctx.errorMessage ? { error: ctx.errorMessage, ...(ctx.output !== undefined ? { output: ctx.output } : {}) } : ctx.output,
-        metadata: ctx.metadata || {},
-        ...(ctx.errorMessage ? { level: "ERROR", statusMessage: shorten(ctx.errorMessage) } : {})
+        metadata,
+        ...(ctx.errorMessage ? { level: "ERROR", statusMessage: "Operation failed (details in masked output)" } : {})
       },
       { asType: "tool", parentSpanContext: { traceId, spanId: "0000000000000001", traceFlags: 1 } }
     ) as unknown as Observation;
+    stampTraceIdentity(span, { span, traceId, sessionId: metadata.sessionId, userId: metadata.userId });
     span.end();
   } catch (err) {
     logger.warn(`recordStandaloneTool failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 
+/**
+ * What reconcileZyraReply decided about the reply's own honesty, and why — filed as its own
+ * `[guardrail]` observation under the turn's trace.
+ *
+ * Deliberately does NOT take a `TurnHandle`. reconcileZyraReply runs in sendZyraChatMessage, after
+ * buildZyraChatDecision has already returned and ended its own root span via endZyraTurn — by
+ * design, that root span is closed the moment the router's decision is known, before
+ * applyZyraChatOperations or reconciliation exist to report on. Re-opening or extending that span
+ * would mean restructuring who owns ending the trace across every one of buildZyraChatDecision's
+ * return paths (several of which — the degraded/capability-disabled ones — do not even call
+ * endZyraTurn today, a pre-existing gap noted here rather than silently worked around). Instead this
+ * attaches its own observation directly to the SAME deterministic trace id
+ * (`createTraceId(messageId)`, the same derivation startZyraTurn uses) — the same pattern that
+ * bootstraps the trace in the first place, just called a second time for a later moment in the same
+ * turn. It lands under the same trace either way; a viewer sees it start after the root span's own
+ * end time, which is a cosmetic ordering quirk, not a correctness one.
+ */
 export async function recordReconciliation(
   ctx: { messageId: string; sessionId: string; projectId: string; userId?: string | null },
   data: {

@@ -1,0 +1,819 @@
+﻿2026-11-20T03:27:41.2529405Z Current runner version: '2.338.2'
+2026-11-20T03:27:41.2545746Z ##[group]Runner Image Provisioner
+2026-11-20T03:27:41.2546660Z Hosted Compute Agent
+2026-11-20T03:27:41.2547089Z Version: 20261111.635
+2026-11-20T03:27:41.2547554Z Commit: b8a594ea514ff44cadb5342986c68b1eac6e22ed
+2026-11-20T03:27:41.2548086Z Build Date: 2026-11-11T01:49:01Z
+2026-11-20T03:27:41.2548570Z Worker ID: {b91d7c72-a3dc-4c3c-9b76-0b0b41915ee7}
+2026-11-20T03:27:41.2549118Z Region: us-west-2
+2026-11-20T03:27:41.2549512Z Cloud: AWS
+2026-11-20T03:27:41.2549875Z ##[endgroup]
+2026-11-20T03:27:41.2550877Z ##[group]Operating System
+2026-11-20T03:27:41.2551348Z Ubuntu
+2026-11-20T03:27:41.2551759Z 24.04.5
+2026-11-20T03:27:41.2552123Z LTS
+2026-11-20T03:27:41.2552488Z ##[endgroup]
+2026-11-20T03:27:41.2552906Z ##[group]Runner Image
+2026-11-20T03:27:41.2553334Z Image: ubuntu-24.04
+2026-11-20T03:27:41.2553789Z Version: 20261116.133.1
+2026-11-20T03:27:41.2554924Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261116.133/images/ubuntu/Ubuntu2404-Readme.md
+2026-11-20T03:27:41.2556051Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261116.133
+2026-11-20T03:27:41.2556736Z ##[endgroup]
+2026-11-20T03:27:41.2557568Z ##[group]GITHUB_TOKEN Permissions
+2026-11-20T03:27:41.2559102Z Contents: read
+2026-11-20T03:27:41.2559528Z Metadata: read
+2026-11-20T03:27:41.2559933Z ##[endgroup]
+2026-11-20T03:27:41.2561659Z Secret source: Actions
+2026-11-20T03:27:41.2562350Z Cache mode: write
+2026-11-20T03:27:41.2562825Z Prepare workflow directory
+2026-11-20T03:27:41.2863605Z Prepare all required actions
+2026-11-20T03:27:41.2899553Z Getting action download info
+2026-11-20T03:27:41.6481806Z Download action repository 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-11-20T03:27:43.1445540Z Download action repository 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-11-20T03:27:43.4416680Z Complete job name: database-integrity
+2026-11-20T03:27:43.4896495Z ##[group]Checking docker version
+2026-11-20T03:27:43.4906919Z ##[command]/usr/bin/docker version --format '{{.Server.APIVersion}}'
+2026-11-20T03:27:45.5742924Z '1.48'
+2026-11-20T03:27:45.5749684Z Docker daemon API version: '1.48'
+2026-11-20T03:27:45.5750174Z ##[command]/usr/bin/docker version --format '{{.Client.APIVersion}}'
+2026-11-20T03:27:45.5891441Z '1.48'
+2026-11-20T03:27:45.5893136Z Docker client API version: '1.48'
+2026-11-20T03:27:45.5898492Z ##[endgroup]
+2026-11-20T03:27:45.5900381Z ##[group]Clean up resources from previous jobs
+2026-11-20T03:27:45.5903983Z ##[command]/usr/bin/docker ps --all --quiet --no-trunc --filter "label=99810f"
+2026-11-20T03:27:45.6027032Z ##[command]/usr/bin/docker network prune --force --filter "label=99810f"
+2026-11-20T03:27:45.6138861Z ##[endgroup]
+2026-11-20T03:27:45.6139214Z ##[group]Create local container network
+2026-11-20T03:27:45.6146311Z ##[command]/usr/bin/docker network create --label 99810f github_network_ff2790a2854b4d04acf253e919f58cc5
+2026-11-20T03:27:45.6497776Z 55d769087763e3ea4358b6ffea9a77ecad26bf3bb5b2460aa32221639ce97bbb
+2026-11-20T03:27:45.6509207Z ##[endgroup]
+2026-11-20T03:27:45.6529044Z ##[group]Starting postgres service container
+2026-11-20T03:27:45.6544868Z ##[command]/usr/bin/docker pull pgvector/pgvector:pg16
+2026-11-20T03:27:46.4750821Z pg16: Pulling from pgvector/pgvector
+2026-11-20T03:27:46.7502006Z dd051e1b8c92: Pulling fs layer
+2026-11-20T03:27:46.7505644Z eee1703e0e36: Pulling fs layer
+2026-11-20T03:27:46.7506186Z 03a9acd43566: Pulling fs layer
+2026-11-20T03:27:46.7506518Z 85320d1bc048: Pulling fs layer
+2026-11-20T03:27:46.7506919Z dacdcfbc697e: Pulling fs layer
+2026-11-20T03:27:46.7507247Z 705db54eb6f9: Pulling fs layer
+2026-11-20T03:27:46.7507586Z 40a1c034d098: Pulling fs layer
+2026-11-20T03:27:46.7507904Z a0c21698d159: Pulling fs layer
+2026-11-20T03:27:46.7508233Z d66fa994cd3b: Pulling fs layer
+2026-11-20T03:27:46.7508603Z 53b079a925c4: Pulling fs layer
+2026-11-20T03:27:46.7509001Z bbc81ca93e43: Pulling fs layer
+2026-11-20T03:27:46.7509812Z 02082338f6fc: Pulling fs layer
+2026-11-20T03:27:46.7510183Z 88d6e4059ddb: Pulling fs layer
+2026-11-20T03:27:46.7510559Z 85a95895b814: Pulling fs layer
+2026-11-20T03:27:46.7510892Z ae3b39dd856e: Pulling fs layer
+2026-11-20T03:27:46.7511188Z c8474e93cf43: Pulling fs layer
+2026-11-20T03:27:46.7511529Z 88d6e4059ddb: Waiting
+2026-11-20T03:27:46.7511909Z d66fa994cd3b: Waiting
+2026-11-20T03:27:46.7512173Z 85a95895b814: Waiting
+2026-11-20T03:27:46.7512495Z 53b079a925c4: Waiting
+2026-11-20T03:27:46.7512774Z 02082338f6fc: Waiting
+2026-11-20T03:27:46.7513002Z bbc81ca93e43: Waiting
+2026-11-20T03:27:46.7513277Z ae3b39dd856e: Waiting
+2026-11-20T03:27:46.7513489Z c8474e93cf43: Waiting
+2026-11-20T03:27:46.7513717Z dacdcfbc697e: Waiting
+2026-11-20T03:27:46.7513944Z 705db54eb6f9: Waiting
+2026-11-20T03:27:46.7514157Z 40a1c034d098: Waiting
+2026-11-20T03:27:46.7514607Z 85320d1bc048: Waiting
+2026-11-20T03:27:46.7514838Z a0c21698d159: Waiting
+2026-11-20T03:27:46.9465788Z eee1703e0e36: Download complete
+2026-11-20T03:27:46.9907669Z 03a9acd43566: Verifying Checksum
+2026-11-20T03:27:46.9908393Z 03a9acd43566: Download complete
+2026-11-20T03:27:47.0686045Z dd051e1b8c92: Verifying Checksum
+2026-11-20T03:27:47.0687105Z dd051e1b8c92: Download complete
+2026-11-20T03:27:47.1690957Z 85320d1bc048: Verifying Checksum
+2026-11-20T03:27:47.1694685Z 85320d1bc048: Download complete
+2026-11-20T03:27:47.2515916Z dacdcfbc697e: Verifying Checksum
+2026-11-20T03:27:47.2516416Z dacdcfbc697e: Download complete
+2026-11-20T03:27:47.3052798Z 705db54eb6f9: Verifying Checksum
+2026-11-20T03:27:47.3054478Z 705db54eb6f9: Download complete
+2026-11-20T03:27:47.3680567Z 40a1c034d098: Verifying Checksum
+2026-11-20T03:27:47.3681855Z 40a1c034d098: Download complete
+2026-11-20T03:27:47.4566091Z a0c21698d159: Verifying Checksum
+2026-11-20T03:27:47.4568062Z a0c21698d159: Download complete
+2026-11-20T03:27:47.5654849Z 53b079a925c4: Download complete
+2026-11-20T03:27:47.6672416Z bbc81ca93e43: Download complete
+2026-11-20T03:27:47.7378128Z dd051e1b8c92: Pull complete
+2026-11-20T03:27:47.7452575Z eee1703e0e36: Pull complete
+2026-11-20T03:27:47.7619791Z 02082338f6fc: Verifying Checksum
+2026-11-20T03:27:47.7620421Z 02082338f6fc: Download complete
+2026-11-20T03:27:47.8314156Z 03a9acd43566: Pull complete
+2026-11-20T03:27:47.8525625Z 85320d1bc048: Pull complete
+2026-11-20T03:27:47.8738707Z 88d6e4059ddb: Download complete
+2026-11-20T03:27:47.9580005Z 85a95895b814: Download complete
+2026-11-20T03:27:47.9989100Z d66fa994cd3b: Verifying Checksum
+2026-11-20T03:27:47.9989500Z d66fa994cd3b: Download complete
+2026-11-20T03:27:48.0224872Z dacdcfbc697e: Pull complete
+2026-11-20T03:27:48.0521986Z 705db54eb6f9: Pull complete
+2026-11-20T03:27:48.0565100Z 40a1c034d098: Pull complete
+2026-11-20T03:27:48.0606128Z a0c21698d159: Pull complete
+2026-11-20T03:27:48.0869942Z ae3b39dd856e: Verifying Checksum
+2026-11-20T03:27:48.0870259Z ae3b39dd856e: Download complete
+2026-11-20T03:27:48.1820549Z c8474e93cf43: Verifying Checksum
+2026-11-20T03:27:48.1821071Z c8474e93cf43: Download complete
+2026-11-20T03:27:49.6832444Z d66fa994cd3b: Pull complete
+2026-11-20T03:27:49.6891736Z 53b079a925c4: Pull complete
+2026-11-20T03:27:49.6929410Z bbc81ca93e43: Pull complete
+2026-11-20T03:27:49.6965425Z 02082338f6fc: Pull complete
+2026-11-20T03:27:49.7004487Z 88d6e4059ddb: Pull complete
+2026-11-20T03:27:49.7043621Z 85a95895b814: Pull complete
+2026-11-20T03:27:49.7269286Z ae3b39dd856e: Pull complete
+2026-11-20T03:27:49.7524662Z c8474e93cf43: Pull complete
+2026-11-20T03:27:49.7549331Z Digest: sha256:484e838076e04939d27d3e176e91c86eea96236126023be8d3059761122e579f
+2026-11-20T03:27:49.7562020Z Status: Downloaded newer image for pgvector/pgvector:pg16
+2026-11-20T03:27:49.7568700Z docker.io/pgvector/pgvector:pg16
+2026-11-20T03:27:49.7618764Z ##[command]/usr/bin/docker create --name 4a269ed3baed4d6d8c039806fb7c5e8d_pgvectorpgvectorpg16_938f3c --label 99810f --network github_network_ff2790a2854b4d04acf253e919f58cc5 --network-alias postgres -p 5432:5432 --health-cmd "pg_isready -U postgres -d tesbo_ci" --health-interval 5s --health-timeout 5s --health-retries 15 -e "POSTGRES_USER=postgres" -e "POSTGRES_PASSWORD=postgres" -e "POSTGRES_DB=tesbo_ci" -e GITHUB_ACTIONS=true -e CI=true pgvector/pgvector:pg16
+2026-11-20T03:27:50.4964418Z 350afb609e9db7299173802fe1d35459cbb9562dda3345c54a3a62f93173a122
+2026-11-20T03:27:50.4981504Z ##[command]/usr/bin/docker start 350afb609e9db7299173802fe1d35459cbb9562dda3345c54a3a62f93173a122
+2026-11-20T03:27:51.4054585Z 350afb609e9db7299173802fe1d35459cbb9562dda3345c54a3a62f93173a122
+2026-11-20T03:27:51.4071591Z ##[command]/usr/bin/docker ps --all --filter id=350afb609e9db7299173802fe1d35459cbb9562dda3345c54a3a62f93173a122 --filter status=running --no-trunc --format "{{.ID}} {{.Status}}"
+2026-11-20T03:27:51.4176086Z 350afb609e9db7299173802fe1d35459cbb9562dda3345c54a3a62f93173a122 Up Less than a second (health: starting)
+2026-11-20T03:27:51.4191211Z ##[command]/usr/bin/docker port 350afb609e9db7299173802fe1d35459cbb9562dda3345c54a3a62f93173a122
+2026-11-20T03:27:51.4299349Z 5432/tcp -> 0.0.0.0:5432
+2026-11-20T03:27:51.4300003Z 5432/tcp -> [::]:5432
+2026-11-20T03:27:51.4341801Z ##[endgroup]
+2026-11-20T03:27:51.4349112Z ##[group]Waiting for all services to be ready
+2026-11-20T03:27:51.4359537Z ##[command]/usr/bin/docker inspect --format="{{if .Config.Healthcheck}}{{print .State.Health.Status}}{{end}}" 350afb609e9db7299173802fe1d35459cbb9562dda3345c54a3a62f93173a122
+2026-11-20T03:27:51.4462890Z starting
+2026-11-20T03:27:51.4475539Z postgres service is starting, waiting 2 seconds before checking again.
+2026-11-20T03:27:53.4487444Z ##[command]/usr/bin/docker inspect --format="{{if .Config.Healthcheck}}{{print .State.Health.Status}}{{end}}" 350afb609e9db7299173802fe1d35459cbb9562dda3345c54a3a62f93173a122
+2026-11-20T03:27:53.4595161Z starting
+2026-11-20T03:27:53.4603305Z postgres service is starting, waiting 3 seconds before checking again.
+2026-11-20T03:27:57.0931967Z ##[command]/usr/bin/docker inspect --format="{{if .Config.Healthcheck}}{{print .State.Health.Status}}{{end}}" 350afb609e9db7299173802fe1d35459cbb9562dda3345c54a3a62f93173a122
+2026-11-20T03:27:57.1037902Z healthy
+2026-11-20T03:27:57.1048803Z postgres service is healthy.
+2026-11-20T03:27:57.1049429Z ##[endgroup]
+2026-11-20T03:27:57.1278471Z ##[group]Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+2026-11-20T03:27:57.1278927Z with:
+2026-11-20T03:27:57.1279164Z   persist-credentials: false
+2026-11-20T03:27:57.1279457Z   repository: 1alextest/Tesbooboo
+2026-11-20T03:27:57.1281316Z   token: ***
+2026-11-20T03:27:57.1281544Z   ssh-strict: true
+2026-11-20T03:27:57.1281778Z   ssh-user: git
+2026-11-20T03:27:57.1281992Z   clean: true
+2026-11-20T03:27:57.1282286Z   sparse-checkout-cone-mode: true
+2026-11-20T03:27:57.1282557Z   fetch-depth: 1
+2026-11-20T03:27:57.1282808Z   fetch-tags: false
+2026-11-20T03:27:57.1283034Z   show-progress: true
+2026-11-20T03:27:57.1283250Z   lfs: false
+2026-11-20T03:27:57.1283493Z   submodules: false
+2026-11-20T03:27:57.1283730Z   set-safe-directory: true
+2026-11-20T03:27:57.1283970Z   allow-unsafe-pr-checkout: false
+2026-11-20T03:27:57.1284715Z env:
+2026-11-20T03:27:57.1285181Z   DATABASE_URL: ***localhost:5432/tesbo_ci
+2026-11-20T03:27:57.1285479Z ##[endgroup]
+2026-11-20T03:27:59.3631442Z Syncing repository: 1alextest/Tesbooboo
+2026-11-20T03:27:59.3632530Z ##[group]Getting Git version info
+2026-11-20T03:27:59.3632894Z Working directory is '/home/runner/work/Tesbooboo/Tesbooboo'
+2026-11-20T03:27:59.3633434Z [command]/usr/bin/git version
+2026-11-20T03:27:59.4546721Z git version 2.56.1
+2026-11-20T03:27:59.4561023Z ##[endgroup]
+2026-11-20T03:27:59.4573363Z Temporarily overriding HOME='/home/runner/work/_temp/9a93a563-b99b-4086-85cc-e034a8a34131' before making global git config changes
+2026-11-20T03:27:59.4574439Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-20T03:27:59.4578006Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Tesbooboo/Tesbooboo
+2026-11-20T03:27:59.4956227Z Deleting the contents of '/home/runner/work/Tesbooboo/Tesbooboo'
+2026-11-20T03:27:59.4960793Z ##[group]Initializing the repository
+2026-11-20T03:27:59.4963665Z [command]/usr/bin/git init /home/runner/work/Tesbooboo/Tesbooboo
+2026-11-20T03:27:59.5810591Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-11-20T03:27:59.5811199Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-11-20T03:27:59.5811607Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-11-20T03:27:59.5812045Z hint: call:
+2026-11-20T03:27:59.5812456Z hint:
+2026-11-20T03:27:59.5812778Z hint: 	git config --global init.defaultBranch <name>
+2026-11-20T03:27:59.5813079Z hint:
+2026-11-20T03:27:59.5813377Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-11-20T03:27:59.5813850Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-11-20T03:27:59.5814208Z hint:
+2026-11-20T03:27:59.5814604Z hint: 	git branch -m <name>
+2026-11-20T03:27:59.5814881Z hint:
+2026-11-20T03:27:59.5815175Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-11-20T03:27:59.5822387Z Initialized empty Git repository in /home/runner/work/Tesbooboo/Tesbooboo/.git/
+2026-11-20T03:27:59.5831275Z [command]/usr/bin/git remote add origin https://github.com/1alextest/Tesbooboo
+2026-11-20T03:27:59.5888234Z ##[endgroup]
+2026-11-20T03:27:59.5888666Z ##[group]Disabling automatic garbage collection
+2026-11-20T03:27:59.5890791Z [command]/usr/bin/git config --local gc.auto 0
+2026-11-20T03:27:59.5915086Z ##[endgroup]
+2026-11-20T03:27:59.5915672Z ##[group]Setting up auth
+2026-11-20T03:27:59.5920184Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-20T03:27:59.5948909Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-20T03:27:59.7111805Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-20T03:27:59.7139386Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-20T03:27:59.7288745Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-20T03:27:59.7313470Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-20T03:27:59.7462281Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-11-20T03:27:59.7490204Z ##[endgroup]
+2026-11-20T03:27:59.7490741Z ##[group]Fetching the repository
+2026-11-20T03:27:59.7501869Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +e49fab4df4043b621b7007e97d8646743f441b6b:refs/remotes/pull/167/merge
+2026-11-20T03:28:01.1225702Z From https://github.com/1alextest/Tesbooboo
+2026-11-20T03:28:01.1226259Z  * [new ref]         e49fab4df4043b621b7007e97d8646743f441b6b -> pull/167/merge
+2026-11-20T03:28:01.1229552Z ##[endgroup]
+2026-11-20T03:28:01.1230017Z ##[group]Determining the checkout info
+2026-11-20T03:28:01.1231746Z ##[endgroup]
+2026-11-20T03:28:01.1236522Z [command]/usr/bin/git sparse-checkout disable
+2026-11-20T03:28:01.1299337Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-11-20T03:28:01.1320406Z ##[group]Checking out the ref
+2026-11-20T03:28:01.1323631Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/167/merge
+2026-11-20T03:28:01.2414184Z Note: switching to 'refs/remotes/pull/167/merge'.
+2026-11-20T03:28:01.2414899Z
+2026-11-20T03:28:01.2415136Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-11-20T03:28:01.2415576Z changes and commit them, and you can discard any commits you make in this
+2026-11-20T03:28:01.2415991Z state without impacting any branches by switching back to a branch.
+2026-11-20T03:28:01.2416407Z
+2026-11-20T03:28:01.2416686Z If you want to create a new branch to retain commits you create, you may
+2026-11-20T03:28:01.2417111Z do so (now or later) by using -c with the switch command. Example:
+2026-11-20T03:28:01.2417348Z
+2026-11-20T03:28:01.2417496Z   git switch -c <new-branch-name>
+2026-11-20T03:28:01.2417690Z
+2026-11-20T03:28:01.2417818Z Or undo this operation with:
+2026-11-20T03:28:01.2417954Z
+2026-11-20T03:28:01.2418150Z   git switch -
+2026-11-20T03:28:01.2418318Z
+2026-11-20T03:28:01.2418566Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-11-20T03:28:01.2418865Z
+2026-11-20T03:28:01.2419252Z HEAD is now at e49fab4 Merge 965a87a13d2669354598f8d4b912f36fdb148867 into 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:28:01.2429307Z ##[endgroup]
+2026-11-20T03:28:01.2469272Z [command]/usr/bin/git log -1 --format=%H
+2026-11-20T03:28:01.2490337Z e49fab4df4043b621b7007e97d8646743f441b6b
+2026-11-20T03:28:01.2497044Z ##[group]Removing auth
+2026-11-20T03:28:01.2499964Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-20T03:28:01.2522832Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-20T03:28:01.2675234Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-20T03:28:01.2696837Z http.https://github.com/.extraheader
+2026-11-20T03:28:01.2701556Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-11-20T03:28:01.2723714Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-20T03:28:01.2870460Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-20T03:28:01.2892758Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-20T03:28:01.3035376Z ##[endgroup]
+2026-11-20T03:28:01.3224536Z ##[group]Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+2026-11-20T03:28:01.3224883Z with:
+2026-11-20T03:28:01.3225126Z   node-version: 22
+2026-11-20T03:28:01.3225348Z   cache: npm
+2026-11-20T03:28:01.3225637Z   cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
+2026-11-20T03:28:01.3225976Z   always-auth: false
+2026-11-20T03:28:01.3226300Z   check-latest: false
+2026-11-20T03:28:01.3227976Z   token: ***
+2026-11-20T03:28:01.3228189Z env:
+2026-11-20T03:28:01.3228544Z   DATABASE_URL: ***localhost:5432/tesbo_ci
+2026-11-20T03:28:01.3228830Z ##[endgroup]
+2026-11-20T03:28:01.6005420Z Found in cache @ /opt/hostedtoolcache/node/22.23.5/x64
+2026-11-20T03:28:01.6008270Z (node:2651) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-20T03:28:01.6008831Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-20T03:28:01.6010727Z ##[group]Environment details
+2026-11-20T03:28:05.4731503Z node: v22.23.5
+2026-11-20T03:28:05.4732068Z npm: 10.9.9
+2026-11-20T03:28:05.4732321Z yarn: 1.22.22
+2026-11-20T03:28:05.4732971Z ##[endgroup]
+2026-11-20T03:28:05.4747167Z [command]/opt/hostedtoolcache/node/22.23.5/x64/bin/npm config get cache
+2026-11-20T03:28:05.9628692Z /home/runner/.npm
+2026-11-20T03:28:06.3178097Z Cache hit for: node-cache-Linux-x64-npm-cb737a3df8991584f50914d87903aa9bae87ae61e6216c8b2e4642a6d5a35e8f
+2026-11-20T03:28:06.3269140Z (node:2651) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-11-20T03:28:07.6558152Z Received 0 of 112797852 (0.0%), 0.0 MBs/sec
+2026-11-20T03:28:08.6567031Z Received 58720256 of 112797852 (52.1%), 28.0 MBs/sec
+2026-11-20T03:28:09.1973138Z Received 112797852 of 112797852 (100.0%), 42.3 MBs/sec
+2026-11-20T03:28:09.1973982Z Cache Size: ~108 MB (112797852 B)
+2026-11-20T03:28:09.1995334Z [command]/usr/bin/tar -xf /home/runner/work/_temp/a80a175b-9c47-42bf-af87-064b44761cf5/cache.tzst -P -C /home/runner/work/Tesbooboo/Tesbooboo --use-compress-program unzstd
+2026-11-20T03:28:09.3695272Z Cache restored successfully
+2026-11-20T03:28:09.3730677Z Cache restored from key: node-cache-Linux-x64-npm-cb737a3df8991584f50914d87903aa9bae87ae61e6216c8b2e4642a6d5a35e8f
+2026-11-20T03:28:09.3905609Z ##[group]Run npm ci --ignore-scripts
+2026-11-20T03:28:09.3906057Z [36;1mnpm ci --ignore-scripts[0m
+2026-11-20T03:28:09.5190823Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:28:09.5191142Z env:
+2026-11-20T03:28:09.5191859Z   DATABASE_URL: ***localhost:5432/tesbo_ci
+2026-11-20T03:28:09.5192135Z ##[endgroup]
+2026-11-20T03:28:13.4022744Z npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+2026-11-20T03:28:13.4484085Z npm warn deprecated rimraf@2.7.1: Rimraf versions prior to v4 are no longer supported
+2026-11-20T03:28:13.4656376Z npm warn deprecated lodash.isequal@4.5.0: This package is deprecated. Use require('node:util').isDeepStrictEqual instead.
+2026-11-20T03:28:13.5308638Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-11-20T03:28:13.5311044Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-11-20T03:28:13.5313189Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-11-20T03:28:13.5315779Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-11-20T03:28:13.5318037Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-11-20T03:28:13.5331078Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-11-20T03:28:13.9111252Z npm warn deprecated fstream@1.0.12: This package is no longer supported.
+2026-11-20T03:28:14.4996637Z npm warn deprecated uuid@8.3.2: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
+2026-11-20T03:28:14.6651259Z npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-11-20T03:28:42.6448188Z
+2026-11-20T03:28:42.6449176Z added 1109 packages, and audited 1110 packages in 33s
+2026-11-20T03:28:42.6449763Z
+2026-11-20T03:28:42.6449961Z 160 packages are looking for funding
+2026-11-20T03:28:42.6450323Z   run `npm fund` for details
+2026-11-20T03:28:42.7971753Z
+2026-11-20T03:28:42.7972980Z 31 vulnerabilities (2 low, 29 moderate)
+2026-11-20T03:28:42.7973357Z
+2026-11-20T03:28:42.7974082Z To address issues that do not require attention, run:
+2026-11-20T03:28:42.7974769Z   npm audit fix
+2026-11-20T03:28:42.7974985Z
+2026-11-20T03:28:42.7975241Z To address all issues (including breaking changes), run:
+2026-11-20T03:28:42.7975968Z   npm audit fix --force
+2026-11-20T03:28:42.7976122Z
+2026-11-20T03:28:42.7976693Z Run `npm audit` for details.
+2026-11-20T03:28:42.8510041Z ##[group]Run npm run build
+2026-11-20T03:28:42.8510406Z [36;1mnpm run build[0m
+2026-11-20T03:28:42.8544056Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:28:42.8544490Z env:
+2026-11-20T03:28:42.8545145Z   DATABASE_URL: ***localhost:5432/tesbo_ci
+2026-11-20T03:28:42.8545481Z ##[endgroup]
+2026-11-20T03:28:42.9256400Z
+2026-11-20T03:28:42.9257101Z > tesbo-backend-nest@0.1.0 build
+2026-11-20T03:28:42.9257472Z > nest build
+2026-11-20T03:28:42.9257648Z
+2026-11-20T03:28:50.3010121Z ##[group]Run npm run migrate
+2026-11-20T03:28:50.3010439Z [36;1mnpm run migrate[0m
+2026-11-20T03:28:50.3037312Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:28:50.3037793Z env:
+2026-11-20T03:28:50.3038513Z   DATABASE_URL: ***localhost:5432/tesbo_ci
+2026-11-20T03:28:50.3038851Z ##[endgroup]
+2026-11-20T03:28:50.3758348Z
+2026-11-20T03:28:50.3759150Z > tesbo-backend-nest@0.1.0 migrate
+2026-11-20T03:28:50.3760149Z > node dist/database/migrate.js
+2026-11-20T03:28:50.3760449Z
+2026-11-20T03:28:50.4593682Z Applied V1_init_schema.sql
+2026-11-20T03:28:50.4772529Z Applied V2_test_cases_and_suites.sql
+2026-11-20T03:28:50.4875243Z Applied V3_plans_cycles_executions.sql
+2026-11-20T03:28:50.4915091Z Applied V4_import_export_jobs.sql
+2026-11-20T03:28:50.4956108Z Applied V5_api_tokens_webhooks.sql
+2026-11-20T03:28:50.4982697Z Applied V6_notifications.sql
+2026-11-20T03:28:50.4992953Z Applied V7_testcase_additional_fields.sql
+2026-11-20T03:28:50.5027650Z Applied V8_ai_generation_history.sql
+2026-11-20T03:28:50.5041898Z Applied V9_cycle_status.sql
+2026-11-20T03:28:50.5062908Z Applied V10_cycle_share.sql
+2026-11-20T03:28:50.5102204Z Applied V11_bugs.sql
+2026-11-20T03:28:50.5173814Z Applied V12_jira_integration.sql
+2026-11-20T03:28:50.5186844Z Applied V13_testcase_jira_link.sql
+2026-11-20T03:28:50.5219516Z Applied V14_knowledge_base_items.sql
+2026-11-20T03:28:50.5231468Z Applied V15_audit_logs_project_id.sql
+2026-11-20T03:28:50.5318364Z Applied V16_tesbo_reports.sql
+2026-11-20T03:28:50.5338355Z Applied V17_tesbo_run_metadata.sql
+2026-11-20T03:28:50.5345707Z Applied V18_tesbo_artifact_storage_keys.sql
+2026-11-20T03:28:50.5358262Z Applied V19_tesbo_case_detail_fields.sql
+2026-11-20T03:28:50.5426412Z Applied V20_automation_sessions_and_scripts.sql
+2026-11-20T03:28:50.5463001Z Applied V21_cycle_run_schedules.sql
+2026-11-20T03:28:50.5492326Z Applied V22_execution_automation_reports.sql
+2026-11-20T03:28:50.5552166Z Applied V23_automation_execution_queue.sql
+2026-11-20T03:28:50.5573669Z Applied V24_parallel_execution_settings.sql
+2026-11-20T03:28:50.5581432Z Applied V25_execution_automation_trace.sql
+2026-11-20T03:28:50.5630708Z Applied V26_automation_recordings.sql
+2026-11-20T03:28:50.5653691Z Applied V27_automation_recordings_timeline.sql
+2026-11-20T03:28:50.5670381Z Applied V28_plan_cycle_external_ids.sql
+2026-11-20T03:28:50.5712286Z Applied V29_workspace_ai_keys.sql
+2026-11-20T03:28:50.5726346Z Applied V30_automation_jobs_dispatch_index.sql
+2026-11-20T03:28:50.5752287Z Applied V31_platform_admins.sql
+2026-11-20T03:28:50.5761193Z Applied V32_project_type.sql
+2026-11-20T03:28:50.5780458Z Applied V33_tesbo_report_cases_unique.sql
+2026-11-20T03:28:50.5790032Z Applied V34_password_auth_setup.sql
+2026-11-20T03:28:50.5812055Z Applied V35_zyra_agent_tasks.sql
+2026-11-20T03:28:50.5822165Z Applied V36_zyra_activity_sources.sql
+2026-11-20T03:28:50.5832909Z Applied V37_workspace_ai_custom_providers.sql
+2026-11-20T03:28:50.5857382Z Applied V38_jira_oauth_config.sql
+2026-11-20T03:28:50.5877731Z Applied V39_platform_branding.sql
+2026-11-20T03:28:50.5888544Z Applied V40_rename_zyra_agent.sql
+2026-11-20T03:28:50.5933949Z Applied V41_zyra_chat_sessions.sql
+2026-11-20T03:28:50.5946642Z Applied V42_fix_known_provider_auth_fields.sql
+2026-11-20T03:28:50.5983412Z Applied V43_team_invites_and_roles.sql
+2026-11-20T03:28:50.6002027Z Applied V44_active_workspace.sql
+2026-11-20T03:28:50.6128468Z Applied V45_knowledge_base_v2.sql
+2026-11-20T03:28:50.6155181Z Applied V46_pending_signups.sql
+2026-11-20T03:28:50.6340995Z Applied V47_integration_connections.sql
+2026-11-20T03:28:50.6381426Z Applied V48_bug_links.sql
+2026-11-20T03:28:50.6388021Z Applied V49_bug_evidence.sql
+2026-11-20T03:28:50.6398670Z Applied V50_knowledge_files_extracted_text.sql
+2026-11-20T03:28:50.6405877Z Applied V51_knowledge_files_extraction_status.sql
+2026-11-20T03:28:50.6419846Z Applied V52_zyra_chat_active_plan.sql
+2026-11-20T03:28:50.6450389Z Applied V53_zyra_chat_last_completed_plan.sql
+2026-11-20T03:28:50.6563746Z Applied V54_enable_pgvector.sql
+2026-11-20T03:28:50.7923416Z Applied V55_knowledge_document_chunks.sql
+2026-11-20T03:28:50.7954798Z Applied V56_knowledge_embedding_status.sql
+2026-11-20T03:28:50.7971883Z Applied V57_knowledge_files_search_vector.sql
+2026-11-20T03:28:50.8025086Z Applied V58_actors_identity.sql
+2026-11-20T03:28:50.8063319Z Applied V59_testcases_soft_delete_and_actors.sql
+2026-11-20T03:28:50.8085620Z Applied V60_executions_soft_delete_and_actors.sql
+2026-11-20T03:28:50.8103821Z Applied V61_attachments_audit_logs_actor_fk.sql
+2026-11-20T03:28:50.8133400Z Applied V62_audit_logs_immutable.sql
+2026-11-20T03:28:50.8149119Z Applied V63_testcase_versions_snapshot_trigger.sql
+2026-11-20T03:28:50.8168649Z Applied V64_testcases_executions_active_views.sql
+2026-11-20T03:28:50.8177447Z Applied V65_mcp_agent_actor.sql
+2026-11-20T03:28:50.8192862Z Applied V66_testcase_linear_link.sql
+2026-11-20T03:28:50.8207176Z Applied V67_bug_severity.sql
+2026-11-20T03:28:50.8219715Z Applied V68_integration_personal_access_tokens.sql
+2026-11-20T03:28:50.8237880Z Applied V69_audit_logs_organization_id.sql
+2026-11-20T03:28:50.8265203Z Applied V70_billing_plan.sql
+2026-11-20T03:28:50.8359848Z Applied V71_custom_fields_for_testcases.sql
+2026-11-20T03:28:50.8431502Z Applied V72_integration_sync_pipeline.sql
+2026-11-20T03:28:50.8474044Z Applied V73_knowledge_document_comments.sql
+2026-11-20T03:28:50.8490971Z Applied V74_billing_lifecycle.sql
+2026-11-20T03:28:50.8508871Z Applied V75_organization_country.sql
+2026-11-20T03:28:50.8533143Z Applied V76_password_reset_tokens.sql
+2026-11-20T03:28:50.8554374Z Applied V77_admin_plan_override.sql
+2026-11-20T03:28:50.8576453Z Applied V78_cycle_items_unique_testcase.sql
+2026-11-20T03:28:50.8585825Z Applied V79_cycle_items_unique_testcase.sql
+2026-11-20T03:28:50.8598001Z Applied V80_password_reset_tokens.sql
+2026-11-20T03:28:50.8609926Z Applied V81_backfill_orphan_cycle_item_executions.sql
+2026-11-20T03:28:50.8670864Z Applied V82_testcase_search_trigram_index.sql
+2026-11-20T03:28:50.8692932Z Applied V83_bugs_priority.sql
+2026-11-20T03:28:50.8733650Z Applied V84_automation_run_ingest.sql
+2026-11-20T03:28:51.0421772Z Applied V85_embedding_dimension_1024.sql
+2026-11-20T03:28:51.0464917Z Applied V86_bugs_assignee.sql
+2026-11-20T03:28:51.0496828Z Applied V87_zyra_token_usage.sql
+2026-11-20T03:28:51.0530309Z Applied V88_integration_sync_nightly.sql
+2026-11-20T03:28:51.0553638Z Applied V89_zyra_chat_review.sql
+2026-11-20T03:28:51.0568770Z Applied V90_integration_sync_nightly_dedup.sql
+2026-11-20T03:28:51.0603770Z Applied V91_linear_tickets_project_scope.sql
+2026-11-20T03:28:51.0609883Z Applied V92_zyra_chat_resume_checkpoint.sql
+2026-11-20T03:28:51.0621473Z Applied V93_widen_ticket_summary.sql
+2026-11-20T03:28:51.0638763Z Applied V94_knowledge_document_versions_unique.sql
+2026-11-20T03:28:51.0654065Z Applied V95_linear_mapping_entity_type.sql
+2026-11-20T03:28:51.0681575Z Applied V96_ticket_mapped_remote_id.sql
+2026-11-20T03:28:51.0691103Z Applied V97_integration_connections_soft_disconnect.sql
+2026-11-20T03:28:51.0699574Z Applied V98_knowledge_sync_events_changed_fields.sql
+2026-11-20T03:28:51.0725006Z Applied V99_custom_field_definitions_soft_delete.sql
+2026-11-20T03:28:51.0734811Z Applied V100_zyra_chat_session_lock.sql
+2026-11-20T03:28:51.0745662Z Applied V101_testcase_citations.sql
+2026-11-20T03:28:51.0753551Z Applied V102_knowledge_document_versions_changed_diff.sql
+2026-11-20T03:28:51.0776465Z Applied V103_kb_folder_disconnect_cleanup.sql
+2026-11-20T03:28:51.0796487Z Applied V104_bugs_external_id.sql
+2026-11-20T03:28:51.0812037Z Applied V105_user_profile_fields.sql
+2026-11-20T03:28:51.1940557Z Applied V106_testcase_embeddings.sql
+2026-11-20T03:28:51.1958307Z Applied V107_ai_generation_requests_system_actor.sql
+2026-11-20T03:28:51.1986402Z Applied V108_ai_generation_requests_sweep_dedup.sql
+2026-11-20T03:28:51.2000738Z Applied V109_notifications_dedupe_key.sql
+2026-11-20T03:28:51.2029356Z Applied V110_suites_soft_delete.sql
+2026-11-20T03:28:51.2073772Z Applied V111_cycles_soft_delete.sql
+2026-11-20T03:28:51.2088348Z Applied V112_cycles_external_id_partial_index.sql
+2026-11-20T03:28:51.2113548Z Applied V113_bugs_soft_delete.sql
+2026-11-20T03:28:51.2139949Z Applied V114_plans_soft_delete.sql
+2026-11-20T03:28:51.2154915Z Applied V115_attachments_soft_delete.sql
+2026-11-20T03:28:51.2181576Z Applied V116_zyra_chat_sessions_soft_delete.sql
+2026-11-20T03:28:51.2206123Z Applied V117_bug_links_soft_delete.sql
+2026-11-20T03:28:51.2221412Z Applied V118_nightly_cycle_date_not_null_check.sql
+2026-11-20T03:28:51.2240280Z Applied V119_cycle_items_field_snapshots.sql
+2026-11-20T03:28:51.2249499Z Applied V120_zyra_range_drop_minimum.sql
+2026-11-20T03:28:51.2259912Z Applied V121_zyra_chat_resume_attempt.sql
+2026-11-20T03:28:51.2297779Z Applied V122_custom_tags.sql
+2026-11-20T03:28:51.2334153Z Applied V123_integration_ticket_comments.sql
+2026-11-20T03:28:51.2378386Z Applied V124_widen_ticket_issue_keys.sql
+2026-11-20T03:28:51.2387913Z Applied V125_integration_connection_auth_error.sql
+2026-11-20T03:28:51.2394865Z Applied V126_sync_run_remote_project_name.sql
+2026-11-20T03:28:51.2402576Z Applied V127_zyra_chat_context_refs.sql
+2026-11-20T03:28:51.2412697Z Applied V128_zyra_chat_trace_and_claims.sql
+2026-11-20T03:28:51.2444725Z Applied V129_bug_comments.sql
+2026-11-20T03:28:51.2453096Z Applied V130_bugs_severity_nullable.sql
+2026-11-20T03:28:51.2467369Z Applied V131_bug_comment_replies.sql
+2026-11-20T03:28:51.2479863Z Applied V132_zyra_generation_language.sql
+2026-11-20T03:28:51.2571987Z Applied V133_notion_integration.sql
+2026-11-20T03:28:51.2584505Z Applied V134_sync_run_resume_pass.sql
+2026-11-20T03:28:51.2614983Z Applied V135_project_scoped_run_task_seq.sql
+2026-11-20T03:28:51.2643341Z Applied V136_user_activity_tracking.sql
+2026-11-20T03:28:51.2658672Z Applied V137_analytics_report_runs.sql
+2026-11-20T03:28:51.2668654Z Applied V138_testcase_priority_not_set_default.sql
+2026-11-20T03:28:51.2687855Z Applied V139_suite_description_preconditions.sql
+2026-11-20T03:28:51.2700935Z Applied V140_run_history_fields.sql
+2026-11-20T03:28:51.2772379Z Applied V141_review_board.sql
+2026-11-20T03:28:51.2781214Z Applied V142_zyra_chat_message_options.sql
+2026-11-20T03:28:51.2790259Z Applied V143_review_state_fingerprints.sql
+2026-11-20T03:28:51.2801901Z Applied V144_cycle_items_testcase_index.sql
+2026-11-20T03:28:51.2832203Z Applied V145_graph_capture_history.sql
+2026-11-20T03:28:51.2855836Z Applied V146_project_source_bindings.sql
+2026-11-20T03:28:51.2895658Z Applied V147_graph_review_run_case_links.sql
+2026-11-20T03:28:51.2981277Z Applied V148_model_studio_revisions.sql
+2026-11-20T03:28:51.3013464Z Applied V149_testcase_classification_and_saved_views.sql
+2026-11-20T03:28:51.3024833Z Applied V150_testcase_versions_ignore_embedding_bookkeeping.sql
+2026-11-20T03:28:51.3059582Z Applied V151_testcase_approval_receipts.sql
+2026-11-20T03:28:51.3079979Z Applied V152_schedule_local_time.sql
+2026-11-20T03:28:51.3130577Z Applied V153_model_studio_governance.sql
+2026-11-20T03:28:51.3177874Z Applied V154_model_studio_governed_runs.sql
+2026-11-20T03:28:51.3217196Z Applied V155_testcase_review_semantics.sql
+2026-11-20T03:28:51.3240542Z Applied V156_knowledge_governed_snapshots.sql
+2026-11-20T03:28:51.3271234Z Applied V157_native_testcase_proposal_review.sql
+2026-11-20T03:28:51.3271691Z Applied 157 migration(s).
+2026-11-20T03:28:51.3415051Z ##[group]Run npm run migrate
+2026-11-20T03:28:51.3415397Z [36;1mnpm run migrate[0m
+2026-11-20T03:28:51.3441624Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:28:51.3441920Z env:
+2026-11-20T03:28:51.3442439Z   DATABASE_URL: ***localhost:5432/tesbo_ci
+2026-11-20T03:28:51.3442770Z ##[endgroup]
+2026-11-20T03:28:51.4163289Z
+2026-11-20T03:28:51.4164032Z > tesbo-backend-nest@0.1.0 migrate
+2026-11-20T03:28:51.4164615Z > node dist/database/migrate.js
+2026-11-20T03:28:51.4165004Z
+2026-11-20T03:28:51.4722890Z Database schema is up to date.
+2026-11-20T03:28:51.4851162Z ##[group]Run node scripts/ci/check-db-integrity.cjs
+2026-11-20T03:28:51.4851609Z [36;1mnode scripts/ci/check-db-integrity.cjs[0m
+2026-11-20T03:28:51.4879341Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:28:51.4879733Z env:
+2026-11-20T03:28:51.4880308Z   DATABASE_URL: ***localhost:5432/tesbo_ci
+2026-11-20T03:28:51.4880596Z ##[endgroup]
+2026-11-20T03:28:51.5483583Z Database integrity passed: 157 migrations, pgvector, unique run membership and immutable audit rows.
+2026-11-20T03:28:51.5568317Z ##[group]Run npm test -- --runTestsByPath src/behavior-graph/model-studio-runs.db.spec.ts src/legacy/execution-attribution.db.spec.ts src/legacy/run-status-atomic.db.spec.ts src/automation/automation-retry-ordering.db.spec.ts src/automation/automation-closure.db.spec.ts src/legacy/knowledge-document-writes.db.spec.ts src/legacy/repository-partial-edits.db.spec.ts src/legacy/bug-metadata-writes.db.spec.ts src/legacy/plan-project-lineage.db.spec.ts src/legacy/approved-run-cases.db.spec.ts src/legacy/testcase-proposal-review.db.spec.ts src/legacy/suite-project-isolation.db.spec.ts src/behavior-graph/current-cache-schema.db.spec.ts src/behavior-graph/current-cache-graph.reader.db.spec.ts src/behavior-graph/current-cache-graph.auth.db.spec.ts src/behavior-graph/current-cache-provider-identity.db.spec.ts src/behavior-graph/current-cache-graph.history.db.spec.ts
+2026-11-20T03:28:51.5572864Z [36;1mnpm test -- --runTestsByPath src/behavior-graph/model-studio-runs.db.spec.ts src/legacy/execution-attribution.db.spec.ts src/legacy/run-status-atomic.db.spec.ts src/automation/automation-retry-ordering.db.spec.ts src/automation/automation-closure.db.spec.ts src/legacy/knowledge-document-writes.db.spec.ts src/legacy/repository-partial-edits.db.spec.ts src/legacy/bug-metadata-writes.db.spec.ts src/legacy/plan-project-lineage.db.spec.ts src/legacy/approved-run-cases.db.spec.ts src/legacy/testcase-proposal-review.db.spec.ts src/legacy/suite-project-isolation.db.spec.ts src/behavior-graph/current-cache-schema.db.spec.ts src/behavior-graph/current-cache-graph.reader.db.spec.ts src/behavior-graph/current-cache-graph.auth.db.spec.ts src/behavior-graph/current-cache-provider-identity.db.spec.ts src/behavior-graph/current-cache-graph.history.db.spec.ts[0m
+2026-11-20T03:28:51.5602615Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:28:51.5602910Z env:
+2026-11-20T03:28:51.5603635Z   DATABASE_URL: ***localhost:5432/tesbo_ci
+2026-11-20T03:28:51.5603920Z ##[endgroup]
+2026-11-20T03:28:51.6345656Z
+2026-11-20T03:28:51.6346565Z > tesbo-backend-nest@0.1.0 test
+2026-11-20T03:28:51.6349544Z > jest --runInBand --runTestsByPath src/behavior-graph/model-studio-runs.db.spec.ts src/legacy/execution-attribution.db.spec.ts src/legacy/run-status-atomic.db.spec.ts src/automation/automation-retry-ordering.db.spec.ts src/automation/automation-closure.db.spec.ts src/legacy/knowledge-document-writes.db.spec.ts src/legacy/repository-partial-edits.db.spec.ts src/legacy/bug-metadata-writes.db.spec.ts src/legacy/plan-project-lineage.db.spec.ts src/legacy/approved-run-cases.db.spec.ts src/legacy/testcase-proposal-review.db.spec.ts src/legacy/suite-project-isolation.db.spec.ts src/behavior-graph/current-cache-schema.db.spec.ts src/behavior-graph/current-cache-graph.reader.db.spec.ts src/behavior-graph/current-cache-graph.auth.db.spec.ts src/behavior-graph/current-cache-provider-identity.db.spec.ts src/behavior-graph/current-cache-graph.history.db.spec.ts
+2026-11-20T03:28:51.6352277Z
+2026-11-20T03:29:01.0766741Z [31m[Nest] 3027  - [39m11/20/2026, 3:29:01 AM [31m  ERROR[39m [38;5;3m[DatabaseService] [39m[31mdatabase connection unavailable (pool total=1 idle=0 waiting=0): Connection terminated unexpectedly[39m
+2026-11-20T03:29:02.5979137Z PASS src/automation/automation-closure.db.spec.ts (10.549 s)
+2026-11-20T03:29:09.5804886Z [31m[Nest] 3027  - [39m11/20/2026, 3:29:09 AM [31m  ERROR[39m [38;5;3m[McpService] [39m[31mUnexpected MCP error: error: division by zero
+2026-11-20T03:29:09.5806088Z     at /home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/node_modules/pg-pool/index.js:45:11
+2026-11-20T03:29:09.5806800Z     at processTicksAndRejections (node:internal/process/task_queues:103:5)
+2026-11-20T03:29:09.5807760Z     at DatabaseService.query (/home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/src/database/database.service.ts:67:14)
+2026-11-20T03:29:09.5808955Z     at PlanLimitsService.<anonymous> (/home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/src/legacy/plan-project-lineage.db.spec.ts:645:52)
+2026-11-20T03:29:09.5811208Z     at McpService.callTool (/home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/src/mcp/mcp.service.ts:356:9)
+2026-11-20T03:29:09.5812238Z     at McpService.handleRequest (/home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/src/mcp/mcp.service.ts:157:22)
+2026-11-20T03:29:09.5813343Z     at McpController.respond (/home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/src/mcp/mcp.controller.ts:126:20)
+2026-11-20T03:29:09.5814765Z     at McpController.handleForToken (/home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/src/mcp/mcp.controller.ts:61:5)
+2026-11-20T03:29:09.5815884Z     at /home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/node_modules/@nestjs/core/router/router-execution-context.js:46:28
+2026-11-20T03:29:09.5817289Z     at /home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/node_modules/@nestjs/core/router/router-proxy.js:9:17[39m
+2026-11-20T03:29:09.9406945Z [31m[Nest] 3027  - [39m11/20/2026, 3:29:09 AM [31m  ERROR[39m [38;5;3m[McpService] [39m[31mUnexpected MCP error: error: division by zero
+2026-11-20T03:29:09.9408472Z     at /home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/node_modules/pg-pool/index.js:45:11
+2026-11-20T03:29:09.9409727Z     at processTicksAndRejections (node:internal/process/task_queues:103:5)
+2026-11-20T03:29:09.9411078Z     at DatabaseService.query (/home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/src/database/database.service.ts:67:14)
+2026-11-20T03:29:09.9412371Z     at PlanLimitsService.<anonymous> (/home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/src/legacy/plan-project-lineage.db.spec.ts:645:52)
+2026-11-20T03:29:09.9413859Z     at McpService.callTool (/home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/src/mcp/mcp.service.ts:356:9)
+2026-11-20T03:29:09.9415258Z     at McpService.handleRequest (/home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/src/mcp/mcp.service.ts:157:22)
+2026-11-20T03:29:09.9416582Z     at McpController.respond (/home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/src/mcp/mcp.controller.ts:126:20)
+2026-11-20T03:29:09.9417761Z     at McpController.handle (/home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/src/mcp/mcp.controller.ts:53:5)
+2026-11-20T03:29:09.9419089Z     at /home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/node_modules/@nestjs/core/router/router-execution-context.js:46:28
+2026-11-20T03:29:09.9420462Z     at /home/runner/work/Tesbooboo/Tesbooboo/Tesbo-Backend-Nest/node_modules/@nestjs/core/router/router-proxy.js:9:17[39m
+2026-11-20T03:29:14.4227213Z PASS src/legacy/plan-project-lineage.db.spec.ts (11.821 s)
+2026-11-20T03:29:17.1009331Z [33m[Nest] 3027  - [39m11/20/2026, 3:29:17 AM [33m   WARN[39m [38;5;3m[LegacyService] [39m[33mImport batch of 1 rows failed for project cf1fff22-70bf-499a-ad61-9d5f5b907e0f, replaying row by row: Bad Request Exception[39m
+2026-11-20T03:29:17.4145269Z PASS src/legacy/repository-partial-edits.db.spec.ts
+2026-11-20T03:29:18.9609500Z PASS src/legacy/knowledge-document-writes.db.spec.ts
+2026-11-20T03:29:19.7763567Z (node:3027) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+2026-11-20T03:29:19.7764840Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-20T03:29:20.7550924Z PASS src/behavior-graph/model-studio-runs.db.spec.ts
+2026-11-20T03:29:22.0848389Z PASS src/behavior-graph/current-cache-graph.history.db.spec.ts
+2026-11-20T03:29:22.7666442Z [32m[Nest] 3027  - [39m11/20/2026, 3:29:22 AM [32m    LOG[39m [38;5;3m[GraphChangeReviewRecovery] [39m[32mQA graph notification recovery: {"eligible":2,"delivered":2,"pending":0,"noRecipients":0,"failed":0}[39m
+2026-11-20T03:29:22.7668439Z [32m[Nest] 3027  - [39m11/20/2026, 3:29:22 AM [32m    LOG[39m [38;5;3m[GraphChangeReviewRecovery] [39m[32mQA graph notification recovery: {"eligible":0,"delivered":0,"pending":0,"noRecipients":0,"failed":0}[39m
+2026-11-20T03:29:22.9463246Z PASS src/behavior-graph/current-cache-provider-identity.db.spec.ts
+2026-11-20T03:29:24.4033424Z PASS src/legacy/approved-run-cases.db.spec.ts
+2026-11-20T03:29:25.6505588Z PASS src/legacy/testcase-proposal-review.db.spec.ts
+2026-11-20T03:29:26.7269600Z PASS src/legacy/bug-metadata-writes.db.spec.ts
+2026-11-20T03:29:27.4265802Z PASS src/legacy/execution-attribution.db.spec.ts
+2026-11-20T03:29:28.2348419Z PASS src/legacy/suite-project-isolation.db.spec.ts
+2026-11-20T03:29:29.0268026Z PASS src/legacy/run-status-atomic.db.spec.ts
+2026-11-20T03:29:30.0735414Z PASS src/behavior-graph/current-cache-graph.reader.db.spec.ts
+2026-11-20T03:29:30.7487828Z PASS src/automation/automation-retry-ordering.db.spec.ts
+2026-11-20T03:29:31.3966175Z PASS src/behavior-graph/current-cache-graph.auth.db.spec.ts
+2026-11-20T03:29:31.7096197Z PASS src/behavior-graph/current-cache-schema.db.spec.ts
+2026-11-20T03:29:31.7107331Z
+2026-11-20T03:29:31.7114691Z Test Suites: 17 passed, 17 total
+2026-11-20T03:29:31.7115328Z Tests:       611 passed, 611 total
+2026-11-20T03:29:31.7115686Z Snapshots:   0 total
+2026-11-20T03:29:31.7116201Z Time:        39.838 s
+2026-11-20T03:29:31.7120245Z Ran all test suites within paths "src/behavior-graph/model-studio-runs.db.spec.ts", "src/legacy/execution-attribution.db.spec.ts", "src/legacy/run-status-atomic.db.spec.ts", "src/automation/automation-retry-ordering.db.spec.ts", "src/automation/automation-closure.db.spec.ts", "src/legacy/knowledge-document-writes.db.spec.ts", "src/legacy/repository-partial-edits.db.spec.ts", "src/legacy/bug-metadata-writes.db.spec.ts", "src/legacy/plan-project-lineage.db.spec.ts", "src/legacy/approved-run-cases.db.spec.ts", "src/legacy/testcase-proposal-review.db.spec.ts", "src/legacy/suite-project-isolation.db.spec.ts", "src/behavior-graph/current-cache-schema.db.spec.ts", "src/behavior-graph/current-cache-graph.reader.db.spec.ts", "src/behavior-graph/current-cache-graph.auth.db.spec.ts", "src/behavior-graph/current-cache-provider-identity.db.spec.ts", "src/behavior-graph/current-cache-graph.history.db.spec.ts".
+2026-11-20T03:29:31.9473382Z Post job cleanup.
+2026-11-20T03:29:32.0441303Z (node:3408) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-20T03:29:32.0442287Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-20T03:29:32.0443124Z Cache hit occurred on the primary key node-cache-Linux-x64-npm-cb737a3df8991584f50914d87903aa9bae87ae61e6216c8b2e4642a6d5a35e8f, not saving cache.
+2026-11-20T03:29:32.0554984Z Post job cleanup.
+2026-11-20T03:29:32.1184969Z [command]/usr/bin/git version
+2026-11-20T03:29:32.1215983Z git version 2.56.1
+2026-11-20T03:29:32.1240637Z Temporarily overriding HOME='/home/runner/work/_temp/445f4008-754b-405a-b3f3-a955be96ab55' before making global git config changes
+2026-11-20T03:29:32.1242211Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-20T03:29:32.1243707Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Tesbooboo/Tesbooboo
+2026-11-20T03:29:32.1274759Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-20T03:29:32.1299331Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-20T03:29:32.1477713Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-20T03:29:32.1505867Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-20T03:29:32.1659997Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-20T03:29:32.1690310Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-20T03:29:32.1953157Z Print service container logs: 4a269ed3baed4d6d8c039806fb7c5e8d_pgvectorpgvectorpg16_938f3c
+2026-11-20T03:29:32.1956878Z ##[command]/usr/bin/docker logs --details 350afb609e9db7299173802fe1d35459cbb9562dda3345c54a3a62f93173a122
+2026-11-20T03:29:32.2074629Z  initdb: warning: enabling "trust" authentication for local connections
+2026-11-20T03:29:32.2075491Z  The files belonging to this database system will be owned by user "postgres".
+2026-11-20T03:29:32.2076321Z  initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+2026-11-20T03:29:32.2077072Z  This user must also own the server process.
+2026-11-20T03:29:32.2077529Z
+2026-11-20T03:29:32.2077867Z  The database cluster will be initialized with locale "en_US.utf8".
+2026-11-20T03:29:32.2078408Z  The default database encoding has accordingly been set to "UTF8".
+2026-11-20T03:29:32.2079000Z  The default text search configuration will be set to "english".
+2026-11-20T03:29:32.2079484Z
+2026-11-20T03:29:32.2079761Z  Data page checksums are disabled.
+2026-11-20T03:29:32.2080130Z
+2026-11-20T03:29:32.2080562Z  fixing permissions on existing directory /var/lib/postgresql/data ... ok
+2026-11-20T03:29:32.2081038Z  creating subdirectories ... ok
+2026-11-20T03:29:32.2081455Z  selecting dynamic shared memory implementation ... posix
+2026-11-20T03:29:32.2081882Z  selecting default max_connections ... 100
+2026-11-20T03:29:32.2082280Z  selecting default shared_buffers ... 128MB
+2026-11-20T03:29:32.2082656Z  selecting default time zone ... Etc/UTC
+2026-11-20T03:29:32.2083027Z  creating configuration files ... ok
+2026-11-20T03:29:32.2083423Z  running bootstrap script ... ok
+2026-11-20T03:29:32.2083797Z  performing post-bootstrap initialization ... ok
+2026-11-20T03:29:32.2084408Z  syncing data to disk ... ok
+2026-11-20T03:29:32.2084786Z
+2026-11-20T03:29:32.2085062Z
+2026-11-20T03:29:32.2085371Z  Success. You can now start the database server using:
+2026-11-20T03:29:32.2085791Z
+2026-11-20T03:29:32.2086127Z      pg_ctl -D /var/lib/postgresql/data -l logfile start
+2026-11-20T03:29:32.2086596Z
+2026-11-20T03:29:32.2087419Z  waiting for server to start....2026-11-20 03:27:51.783 UTC [48] LOG:  starting PostgreSQL 16.16 (Debian 16.16-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit
+2026-11-20T03:29:32.2088120Z  2026-11-20 03:27:51.783 UTC [48] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-11-20T03:29:32.2088590Z  2026-11-20 03:27:51.784 UTC [51] LOG:  database system was shut down at 2026-11-20 03:27:51 UTC
+2026-11-20T03:29:32.2089046Z  2026-11-20 03:27:51.787 UTC [48] LOG:  database system is ready to accept connections
+2026-11-20T03:29:32.2089615Z   done
+2026-11-20T03:29:32.2089826Z  server started
+2026-11-20T03:29:32.2090088Z  CREATE DATABASE
+2026-11-20T03:29:32.2090310Z
+2026-11-20T03:29:32.2090488Z
+2026-11-20T03:29:32.2090842Z  /usr/local/bin/docker-entrypoint.sh: ignoring /docker-entrypoint-initdb.d/*
+2026-11-20T03:29:32.2091176Z
+2026-11-20T03:29:32.2091506Z  waiting for server to shut down....2026-11-20 03:27:51.933 UTC [48] LOG:  received fast shutdown request
+2026-11-20T03:29:32.2091954Z  2026-11-20 03:27:51.933 UTC [48] LOG:  aborting any active transactions
+2026-11-20T03:29:32.2092546Z  2026-11-20 03:27:51.935 UTC [48] LOG:  background worker "logical replication launcher" (PID 54) exited with exit code 1
+2026-11-20T03:29:32.2092993Z  2026-11-20 03:27:51.936 UTC [49] LOG:  shutting down
+2026-11-20T03:29:32.2093353Z  2026-11-20 03:27:51.936 UTC [49] LOG:  checkpoint starting: shutdown immediate
+2026-11-20T03:29:32.2094186Z  2026-11-20 03:27:51.946 UTC [49] LOG:  checkpoint complete: wrote 931 buffers (5.7%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.009 s, sync=0.002 s, total=0.011 s; sync files=301, longest=0.001 s, average=0.001 s; distance=4328 kB, estimate=4328 kB; lsn=0/1935FE8, redo lsn=0/1935FE8
+2026-11-20T03:29:32.2095732Z  2026-11-20 03:27:51.949 UTC [48] LOG:  database system is shut down
+2026-11-20T03:29:32.2096163Z   done
+2026-11-20T03:29:32.2096468Z  server stopped
+2026-11-20T03:29:32.2096817Z
+2026-11-20T03:29:32.2097384Z  PostgreSQL init process complete; ready for start up.
+2026-11-20T03:29:32.2097787Z
+2026-11-20T03:29:32.2098573Z  2026-11-20 03:27:52.047 UTC [1] LOG:  starting PostgreSQL 16.16 (Debian 16.16-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit
+2026-11-20T03:29:32.2099335Z  2026-11-20 03:27:52.047 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2026-11-20T03:29:32.2099804Z  2026-11-20 03:27:52.047 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2026-11-20T03:29:32.2100234Z  2026-11-20 03:27:52.048 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-11-20T03:29:32.2100720Z  2026-11-20 03:27:52.049 UTC [64] LOG:  database system was shut down at 2026-11-20 03:27:51 UTC
+2026-11-20T03:29:32.2101168Z  2026-11-20 03:27:52.051 UTC [1] LOG:  database system is ready to accept connections
+2026-11-20T03:29:32.2101607Z  2026-11-20 03:28:51.546 UTC [157] ERROR:  audit_logs is append-only: UPDATE is not permitted
+2026-11-20T03:29:32.2102085Z  2026-11-20 03:28:51.546 UTC [157] CONTEXT:  PL/pgSQL function audit_logs_prevent_mutation() line 3 at RAISE
+2026-11-20T03:29:32.2102633Z  2026-11-20 03:28:51.546 UTC [157] STATEMENT:  UPDATE audit_logs SET action = 'tampered' WHERE id = $1
+2026-11-20T03:29:32.2103095Z  2026-11-20 03:28:51.547 UTC [157] ERROR:  audit_logs is append-only: DELETE is not permitted
+2026-11-20T03:29:32.2103556Z  2026-11-20 03:28:51.547 UTC [157] CONTEXT:  PL/pgSQL function audit_logs_prevent_mutation() line 3 at RAISE
+2026-11-20T03:29:32.2104066Z  2026-11-20 03:28:51.547 UTC [157] STATEMENT:  DELETE FROM audit_logs WHERE id = $1
+2026-11-20T03:29:32.2104628Z  2026-11-20 03:29:01.038 UTC [177] ERROR:  division by zero
+2026-11-20T03:29:32.2104964Z  2026-11-20 03:29:01.038 UTC [177] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2105344Z  2026-11-20 03:29:01.075 UTC [179] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2105688Z  2026-11-20 03:29:01.826 UTC [181] ERROR:  division by zero
+2026-11-20T03:29:32.2106027Z  2026-11-20 03:29:01.826 UTC [181] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2106373Z  2026-11-20 03:29:01.888 UTC [180] ERROR:  division by zero
+2026-11-20T03:29:32.2106783Z  2026-11-20 03:29:01.888 UTC [180] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2107087Z  2026-11-20 03:29:01.906 UTC [180] ERROR:  division by zero
+2026-11-20T03:29:32.2107416Z  2026-11-20 03:29:01.906 UTC [180] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2107726Z  2026-11-20 03:29:02.216 UTC [192] ERROR:  division by zero
+2026-11-20T03:29:32.2108044Z  2026-11-20 03:29:02.216 UTC [192] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2108519Z  2026-11-20 03:29:02.235 UTC [193] ERROR:  division by zero
+2026-11-20T03:29:32.2108836Z  2026-11-20 03:29:02.235 UTC [193] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2109150Z  2026-11-20 03:29:02.252 UTC [194] ERROR:  division by zero
+2026-11-20T03:29:32.2109511Z  2026-11-20 03:29:02.252 UTC [194] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2109806Z  2026-11-20 03:29:02.540 UTC [197] ERROR:  division by zero
+2026-11-20T03:29:32.2110137Z  2026-11-20 03:29:02.540 UTC [197] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2110468Z  2026-11-20 03:29:02.560 UTC [198] ERROR:  division by zero
+2026-11-20T03:29:32.2110817Z  2026-11-20 03:29:02.560 UTC [198] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2111146Z  2026-11-20 03:29:02.579 UTC [199] ERROR:  division by zero
+2026-11-20T03:29:32.2111737Z  2026-11-20 03:29:02.579 UTC [199] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2112098Z  2026-11-20 03:29:05.751 UTC [202] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2112493Z  2026-11-20 03:29:05.800 UTC [203] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2112927Z  2026-11-20 03:29:05.845 UTC [204] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2113335Z  2026-11-20 03:29:09.575 UTC [201] ERROR:  division by zero
+2026-11-20T03:29:32.2113650Z  2026-11-20 03:29:09.575 UTC [201] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2114039Z  2026-11-20 03:29:09.939 UTC [214] ERROR:  division by zero
+2026-11-20T03:29:32.2114470Z  2026-11-20 03:29:09.939 UTC [214] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2114831Z  2026-11-20 03:29:14.246 UTC [205] ERROR:  division by zero
+2026-11-20T03:29:32.2115244Z  2026-11-20 03:29:14.246 UTC [205] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2115620Z  2026-11-20 03:29:15.416 UTC [226] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2115991Z  2026-11-20 03:29:15.546 UTC [227] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2116417Z  2026-11-20 03:29:15.587 UTC [228] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2116793Z  2026-11-20 03:29:15.628 UTC [229] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2117156Z  2026-11-20 03:29:15.670 UTC [230] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2117602Z  2026-11-20 03:29:15.708 UTC [231] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2117969Z  2026-11-20 03:29:15.744 UTC [232] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2118361Z  2026-11-20 03:29:15.781 UTC [233] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2118761Z  2026-11-20 03:29:15.802 UTC [234] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2119115Z  2026-11-20 03:29:15.820 UTC [235] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2119500Z  2026-11-20 03:29:15.836 UTC [236] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2119907Z  2026-11-20 03:29:15.852 UTC [237] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2120294Z  2026-11-20 03:29:15.866 UTC [238] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2120663Z  2026-11-20 03:29:15.880 UTC [239] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2121070Z  2026-11-20 03:29:15.892 UTC [240] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2121432Z  2026-11-20 03:29:15.923 UTC [241] ERROR:  division by zero
+2026-11-20T03:29:32.2121758Z  2026-11-20 03:29:15.923 UTC [241] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2122163Z  2026-11-20 03:29:16.011 UTC [225] ERROR:  invalid input syntax for type uuid: "not-a-uuid"
+2026-11-20T03:29:32.2122566Z  2026-11-20 03:29:16.011 UTC [225] CONTEXT:  unnamed portal parameter $1 = '...'
+2026-11-20T03:29:32.2123049Z  2026-11-20 03:29:16.011 UTC [225] STATEMENT:  UPDATE testcases SET priority=COALESCE($2,priority),
+2026-11-20T03:29:32.2123522Z  	         suite_id = CASE WHEN $8::boolean THEN NULL ELSE COALESCE($3::uuid, suite_id) END,
+2026-11-20T03:29:32.2124135Z  	         status=COALESCE($4,status), owner_id=COALESCE($5,owner_id), automation_status=COALESCE($6,automation_status),
+2026-11-20T03:29:32.2124709Z  	         severity=COALESCE($9,severity),
+2026-11-20T03:29:32.2124990Z  	         updated_by=$7, updated_at=now()
+2026-11-20T03:29:32.2125388Z  	         WHERE id = ANY($1::uuid[]) AND project_id = $10 AND deleted_at IS NULL
+2026-11-20T03:29:32.2125725Z  	         RETURNING id
+2026-11-20T03:29:32.2126026Z  2026-11-20 03:29:16.029 UTC [225] ERROR:  controlled bulk statement fault
+2026-11-20T03:29:32.2126534Z  2026-11-20 03:29:16.029 UTC [225] CONTEXT:  PL/pgSQL function bulk_fault_364f8ce132a6490ca0b06c18bf66db97() line 6 at RAISE
+2026-11-20T03:29:32.2127046Z  2026-11-20 03:29:16.029 UTC [225] STATEMENT:  UPDATE testcases SET priority=COALESCE($2,priority),
+2026-11-20T03:29:32.2127521Z  	         suite_id = CASE WHEN $8::boolean THEN NULL ELSE COALESCE($3::uuid, suite_id) END,
+2026-11-20T03:29:32.2128058Z  	         status=COALESCE($4,status), owner_id=COALESCE($5,owner_id), automation_status=COALESCE($6,automation_status),
+2026-11-20T03:29:32.2128497Z  	         severity=COALESCE($9,severity),
+2026-11-20T03:29:32.2128765Z  	         updated_by=$7, updated_at=now()
+2026-11-20T03:29:32.2129178Z  	         WHERE id = ANY($1::uuid[]) AND project_id = $10 AND deleted_at IS NULL
+2026-11-20T03:29:32.2129518Z  	         RETURNING id
+2026-11-20T03:29:32.2129841Z  2026-11-20 03:29:16.117 UTC [225] ERROR:  invalid input syntax for type uuid: "not-a-uuid"
+2026-11-20T03:29:32.2130284Z  2026-11-20 03:29:16.117 UTC [225] CONTEXT:  unnamed portal parameter $1 = '...'
+2026-11-20T03:29:32.2130943Z  2026-11-20 03:29:16.117 UTC [225] STATEMENT:  UPDATE testcases SET deleted_at = now(), deleted_by = $2, updated_by = $2, updated_at = now() WHERE id = ANY($1::uuid[]) AND project_id = $3 AND deleted_at IS NULL RETURNING id
+2026-11-20T03:29:32.2131642Z  2026-11-20 03:29:16.143 UTC [242] ERROR:  controlled bulk statement fault
+2026-11-20T03:29:32.2132112Z  2026-11-20 03:29:16.143 UTC [242] CONTEXT:  PL/pgSQL function bulk_fault_50ad6b4050804e799a7123714f86c4ef() line 6 at RAISE
+2026-11-20T03:29:32.2132830Z  2026-11-20 03:29:16.143 UTC [242] STATEMENT:  UPDATE testcases SET deleted_at = now(), deleted_by = $2, updated_by = $2, updated_at = now() WHERE id = ANY($1::uuid[]) AND project_id = $3 AND deleted_at IS NULL RETURNING id
+2026-11-20T03:29:32.2133492Z  2026-11-20 03:29:17.173 UTC [262] ERROR:  division by zero
+2026-11-20T03:29:32.2133803Z  2026-11-20 03:29:17.173 UTC [262] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2134175Z  2026-11-20 03:29:17.333 UTC [271] ERROR:  division by zero
+2026-11-20T03:29:32.2134646Z  2026-11-20 03:29:17.333 UTC [271] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2134967Z  2026-11-20 03:29:18.188 UTC [276] ERROR:  division by zero
+2026-11-20T03:29:32.2135284Z  2026-11-20 03:29:18.188 UTC [276] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2135608Z  2026-11-20 03:29:18.206 UTC [277] ERROR:  division by zero
+2026-11-20T03:29:32.2135965Z  2026-11-20 03:29:18.206 UTC [277] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2136273Z  2026-11-20 03:29:18.223 UTC [278] ERROR:  division by zero
+2026-11-20T03:29:32.2136615Z  2026-11-20 03:29:18.223 UTC [278] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2136960Z  2026-11-20 03:29:18.452 UTC [285] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2137327Z  2026-11-20 03:29:18.486 UTC [286] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2137772Z  2026-11-20 03:29:18.523 UTC [287] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2138153Z  2026-11-20 03:29:18.559 UTC [288] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2138539Z  2026-11-20 03:29:18.595 UTC [289] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2138935Z  2026-11-20 03:29:18.630 UTC [290] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2139335Z  2026-11-20 03:29:18.666 UTC [291] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2139781Z  2026-11-20 03:29:18.708 UTC [292] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2140213Z  2026-11-20 03:29:18.791 UTC [275] ERROR:  Submitted and reviewed document versions are immutable
+2026-11-20T03:29:32.2140739Z  2026-11-20 03:29:18.791 UTC [275] CONTEXT:  PL/pgSQL function protect_governed_knowledge_version() line 7 at RAISE
+2026-11-20T03:29:32.2141364Z  2026-11-20 03:29:18.791 UTC [275] STATEMENT:  UPDATE knowledge_document_versions SET content_text = 'rewritten' WHERE id = $1
+2026-11-20T03:29:32.2141939Z  2026-11-20 03:29:18.792 UTC [275] ERROR:  Submitted and reviewed document versions are immutable
+2026-11-20T03:29:32.2142417Z  2026-11-20 03:29:18.792 UTC [275] CONTEXT:  PL/pgSQL function protect_governed_knowledge_version() line 7 at RAISE
+2026-11-20T03:29:32.2143060Z  2026-11-20 03:29:18.792 UTC [275] STATEMENT:  UPDATE knowledge_document_versions SET changed_summary = 'new meaning' WHERE id = $1
+2026-11-20T03:29:32.2143599Z  2026-11-20 03:29:18.792 UTC [275] ERROR:  Submitted and reviewed document versions are immutable
+2026-11-20T03:29:32.2144102Z  2026-11-20 03:29:18.792 UTC [275] CONTEXT:  PL/pgSQL function protect_governed_knowledge_version() line 7 at RAISE
+2026-11-20T03:29:32.2145011Z  2026-11-20 03:29:18.792 UTC [275] STATEMENT:  UPDATE knowledge_document_versions SET snapshot_kind = 'autosave' WHERE id = $1
+2026-11-20T03:29:32.2145526Z  2026-11-20 03:29:18.792 UTC [275] ERROR:  Submitted and reviewed document versions are immutable
+2026-11-20T03:29:32.2146010Z  2026-11-20 03:29:18.792 UTC [275] CONTEXT:  PL/pgSQL function protect_governed_knowledge_version() line 7 at RAISE
+2026-11-20T03:29:32.2146756Z  2026-11-20 03:29:18.792 UTC [275] STATEMENT:  UPDATE knowledge_document_versions SET created_by = '686634de-fa3a-4a43-9998-a6384d4bb15d'::uuid WHERE id = $1
+2026-11-20T03:29:32.2147266Z  2026-11-20 03:29:18.847 UTC [294] ERROR:  division by zero
+2026-11-20T03:29:32.2147646Z  2026-11-20 03:29:18.847 UTC [294] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2147997Z  2026-11-20 03:29:18.886 UTC [295] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2148474Z  2026-11-20 03:29:18.893 UTC [275] ERROR:  AI memory cannot bypass review by changing document type
+2026-11-20T03:29:32.2149019Z  2026-11-20 03:29:18.893 UTC [275] CONTEXT:  PL/pgSQL function invalidate_changed_knowledge_review() line 4 at RAISE
+2026-11-20T03:29:32.2149561Z  2026-11-20 03:29:18.893 UTC [275] STATEMENT:  UPDATE knowledge_documents SET document_type = 'general' WHERE id = $1
+2026-11-20T03:29:32.2150029Z  2026-11-20 03:29:19.810 UTC [298] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2150425Z  2026-11-20 03:29:19.845 UTC [299] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2150821Z  2026-11-20 03:29:19.885 UTC [300] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2151214Z  2026-11-20 03:29:19.925 UTC [301] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2151661Z  2026-11-20 03:29:19.964 UTC [302] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2152042Z  2026-11-20 03:29:20.002 UTC [303] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2152380Z  2026-11-20 03:29:20.096 UTC [297] ERROR:  division by zero
+2026-11-20T03:29:32.2152771Z  2026-11-20 03:29:20.096 UTC [297] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2153084Z  2026-11-20 03:29:20.287 UTC [304] ERROR:  division by zero
+2026-11-20T03:29:32.2153407Z  2026-11-20 03:29:20.287 UTC [304] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2153775Z  2026-11-20 03:29:20.560 UTC [305] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2154152Z  2026-11-20 03:29:24.209 UTC [325] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2154752Z  2026-11-20 03:29:24.266 UTC [323] ERROR:  Testcase approval receipts are immutable; record a new decision
+2026-11-20T03:29:32.2155297Z  2026-11-20 03:29:24.266 UTC [323] CONTEXT:  PL/pgSQL function prevent_testcase_approval_receipt_rewrite() line 3 at RAISE
+2026-11-20T03:29:32.2155962Z  2026-11-20 03:29:24.266 UTC [323] STATEMENT:  UPDATE testcase_approval_receipts SET reviewed_snapshot='{}'::jsonb WHERE id=$1
+2026-11-20T03:29:32.2156606Z  2026-11-20 03:29:24.274 UTC [323] ERROR:  new row for relation "testcase_approval_receipts" violates check constraint "testcase_approval_snapshot_binding"
+2026-11-20T03:29:32.2158082Z  2026-11-20 03:29:24.274 UTC [323] DETAIL:  Failing row contains (0ae3fdf2-bde9-4173-821d-16068e1711b3, c9578c0b-b85c-407f-b22d-6da61fb51312, cf7ae36d-b1b4-4ff3-9c31-3cdc152528dc, aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, 3039866e-247a-4272-ac04-1afb1c9e1efc, 2026-11-20 03:29:24.27224+00, ab234eeaaea80f68d126f9a33aee704a50a5a85b1ecc7379fb71de4899c613f4, {"case": {"id": "cf7ae36d-b1b4-4ff3-9c31-3cdc152528dc", "type": ..., null).
+2026-11-20T03:29:32.2159391Z  2026-11-20 03:29:24.274 UTC [323] STATEMENT:  INSERT INTO testcase_approval_receipts
+2026-11-20T03:29:32.2159889Z  	           (project_id,testcase_id,approved_revision,actor_id,semantic_revision,reviewed_snapshot,principal_kind)
+2026-11-20T03:29:32.2160330Z  	         SELECT project_id,id,repeat('a',64),$2,
+2026-11-20T03:29:32.2160725Z  	                encode(sha256(convert_to(testcase_approval_snapshot(id)::text,'UTF8')),'hex'),
+2026-11-20T03:29:32.2161211Z  	                testcase_approval_snapshot(id),NULL
+2026-11-20T03:29:32.2161503Z  	           FROM testcases WHERE id=$1
+2026-11-20T03:29:32.2161900Z  2026-11-20 03:29:24.384 UTC [327] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2162331Z  2026-11-20 03:29:25.275 UTC [328] ERROR:  Committed human proposal publication receipts are immutable
+2026-11-20T03:29:32.2162837Z  2026-11-20 03:29:25.275 UTC [328] CONTEXT:  PL/pgSQL function preserve_native_proposal_history() line 17 at RAISE
+2026-11-20T03:29:32.2163416Z  2026-11-20 03:29:25.275 UTC [328] STATEMENT:  UPDATE ai_generation_requests SET save_events='[]'::jsonb WHERE id=$1
+2026-11-20T03:29:32.2163920Z  2026-11-20 03:29:25.276 UTC [328] ERROR:  Committed human proposal publication receipts are immutable
+2026-11-20T03:29:32.2164548Z  2026-11-20 03:29:25.276 UTC [328] CONTEXT:  PL/pgSQL function preserve_native_proposal_history() line 17 at RAISE
+2026-11-20T03:29:32.2165223Z  2026-11-20 03:29:25.276 UTC [328] STATEMENT:  UPDATE ai_generation_requests SET save_events=jsonb_set(save_events,'{0,reviewerId}','"forged-reviewer"'::jsonb) WHERE id=$1
+2026-11-20T03:29:32.2165872Z  2026-11-20 03:29:25.277 UTC [328] ERROR:  Native proposal producer and request identity are immutable
+2026-11-20T03:29:32.2166373Z  2026-11-20 03:29:25.277 UTC [328] CONTEXT:  PL/pgSQL function preserve_native_proposal_history() line 7 at RAISE
+2026-11-20T03:29:32.2166918Z  2026-11-20 03:29:25.277 UTC [328] STATEMENT:  UPDATE ai_generation_requests SET proposal_provenance='{}'::jsonb WHERE id=$1
+2026-11-20T03:29:32.2167486Z  2026-11-20 03:29:25.277 UTC [328] ERROR:  Native proposal producer and request identity are immutable
+2026-11-20T03:29:32.2168015Z  2026-11-20 03:29:25.277 UTC [328] CONTEXT:  PL/pgSQL function preserve_native_proposal_history() line 7 at RAISE
+2026-11-20T03:29:32.2168579Z  2026-11-20 03:29:25.277 UTC [328] STATEMENT:  UPDATE ai_generation_requests SET proposal_request_key='rewritten-key' WHERE id=$1
+2026-11-20T03:29:32.2169106Z  2026-11-20 03:29:25.278 UTC [328] ERROR:  Native proposal producer and request identity are immutable
+2026-11-20T03:29:32.2169628Z  2026-11-20 03:29:25.278 UTC [328] CONTEXT:  PL/pgSQL function preserve_native_proposal_history() line 7 at RAISE
+2026-11-20T03:29:32.2170177Z  2026-11-20 03:29:25.278 UTC [328] STATEMENT:  UPDATE ai_generation_requests SET proposal_request_digest=repeat('a',64) WHERE id=$1
+2026-11-20T03:29:32.2170729Z  2026-11-20 03:29:25.290 UTC [328] ERROR:  Native proposal producer and request identity are immutable
+2026-11-20T03:29:32.2171253Z  2026-11-20 03:29:25.290 UTC [328] CONTEXT:  PL/pgSQL function preserve_native_proposal_history() line 7 at RAISE
+2026-11-20T03:29:32.2171787Z  2026-11-20 03:29:25.290 UTC [328] STATEMENT:  UPDATE ai_generation_requests SET proposal_provenance=$2::jsonb WHERE id=$1
+2026-11-20T03:29:32.2172415Z  2026-11-20 03:29:25.644 UTC [330] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2172810Z  2026-11-20 03:29:26.576 UTC [333] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2173188Z  2026-11-20 03:29:26.617 UTC [334] WARNING:  there is no transaction in progress
+2026-11-20T03:29:32.2173593Z  2026-11-20 03:29:26.634 UTC [335] ERROR:  division by zero
+2026-11-20T03:29:32.2173914Z  2026-11-20 03:29:26.634 UTC [335] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2174345Z  2026-11-20 03:29:26.662 UTC [336] ERROR:  division by zero
+2026-11-20T03:29:32.2174718Z  2026-11-20 03:29:26.662 UTC [336] STATEMENT:  SELECT 1 / 0
+2026-11-20T03:29:32.2175061Z  2026-11-20 03:29:28.204 UTC [349] ERROR:  controlled suite write fault
+2026-11-20T03:29:32.2175526Z  2026-11-20 03:29:28.204 UTC [349] CONTEXT:  PL/pgSQL function suite_fault_3c1778b578be4977a9c3df84e6071580() line 3 at RAISE
+2026-11-20T03:29:32.2176183Z  2026-11-20 03:29:28.204 UTC [349] STATEMENT:  UPDATE suites SET deleted_at = now(), deleted_by = $2, updated_at = now() WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL
+2026-11-20T03:29:32.2176759Z  2026-11-20 03:29:28.227 UTC [349] ERROR:  controlled suite write fault
+2026-11-20T03:29:32.2177273Z  2026-11-20 03:29:28.227 UTC [349] CONTEXT:  PL/pgSQL function suite_fault_e33a40da85aa4ae59c42aaffd1d896a6() line 3 at RAISE
+2026-11-20T03:29:32.2177943Z  2026-11-20 03:29:28.227 UTC [349] STATEMENT:  UPDATE suites SET deleted_at = now(), deleted_by = $2, updated_at = now() WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL
+2026-11-20T03:29:32.2182302Z Stop and remove container: 4a269ed3baed4d6d8c039806fb7c5e8d_pgvectorpgvectorpg16_938f3c
+2026-11-20T03:29:32.2186530Z ##[command]/usr/bin/docker rm --force 350afb609e9db7299173802fe1d35459cbb9562dda3345c54a3a62f93173a122
+2026-11-20T03:29:32.3358073Z 350afb609e9db7299173802fe1d35459cbb9562dda3345c54a3a62f93173a122
+2026-11-20T03:29:32.3381765Z Remove container network: github_network_ff2790a2854b4d04acf253e919f58cc5
+2026-11-20T03:29:32.3384837Z ##[command]/usr/bin/docker network rm github_network_ff2790a2854b4d04acf253e919f58cc5
+2026-11-20T03:29:32.4579900Z github_network_ff2790a2854b4d04acf253e919f58cc5
+2026-11-20T03:29:32.4652740Z Cleaning up orphan processes
+2026-11-20T03:29:32.4899854Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11d5960a326750d5838078e36cf38b85af677262, actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

@@ -1,0 +1,13 @@
+ts-jest[config] (WARN)
+    The "ts-jest" config option "isolatedModules" is deprecated and will be removed in v30.0.0. Please use "isolatedModules: true" in /workspace/scratch/fb086055b433/tesbo-review-3ebda243/Tesbo-Backend-Nest/tsconfig.json instead, see https://www.typescriptlang.org/tsconfig/#isolatedModules
+
+PASS src/auth/api-token-rest.integration.spec.ts (5.776 s)
+PASS src/behavior-graph/model-studio-runs.spec.ts
+PASS src/auth/api-token-rest.guard.spec.ts
+PASS src/legacy/bug-link-finalization.spec.ts
+
+Test Suites: 4 passed, 4 total
+Tests:       153 passed, 153 total
+Snapshots:   0 total
+Time:        8.379 s
+Ran all test suites within paths "src/auth/api-token-rest.guard.spec.ts", "src/auth/api-token-rest.integration.spec.ts", "src/behavior-graph/model-studio-runs.spec.ts", "src/legacy/bug-link-finalization.spec.ts".

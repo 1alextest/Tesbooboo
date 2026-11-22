@@ -240,7 +240,7 @@ from the UI denominator by `OUT_OF_SCOPE_PAGES` in the coverage script rather th
 | 4 | Import / export | **done** — 4 spec-side reds, see §5 | 2 | 37 | 4 spec defects |
 | 5 | Knowledge Base v2 | **done 2026-08-17** — API + UI, 10 product fixes | 4 | 127 | 0 |
 | 6 | Reports, analytics, dashboards | **API done** — `reports-ui` claimed, spec not written | 1 | 55 | 0 |
-| 7 | Execution bulk ops, schedules, share links | **done 2026-08-14** — bulk ops implemented; **scheduled runs are not implemented** | 1 | 17 | 3 (missing feature) |
+| 7 | Execution bulk ops, schedules, share links | **done** — bulk ops implemented; **scheduled runs implemented 2026-11-18** (persisted schedules, local rules, worker, edit/run-now) | 1 | 17 | 0 (EXO-A-07/08/10 now green) |
 | 8 | Integrations (Jira, Linear) | **done 2026-08-14** — 15 product fixes; was wrongly marked "blocked" | 1 | 25 | 0 |
 | 9 | Zyra, AI, RAG, MCP | **done 2026-08-17** — API + UI, 13 product fixes | 2 | 52 | 0 |
 | 10 | The tail (notifications, activity, API keys, admin, ingest) | **done 2026-08-14** — 10 product fixes | 1 | 20 | 0 |
@@ -615,21 +615,17 @@ await this.requireProjectAccess(uid, projectId);
 bugs in the suite, they share one fix, and `rbac.spec.ts` / `custom-field-values.spec.ts` already
 specify the expected behaviour exactly.
 
-### Missing feature, not a bug — scheduled runs
+### Scheduled runs — implemented 2026-11-18
 
-`EXO-A-07`, `EXO-A-08` and `EXO-A-10` in [api/execution-ops.spec.ts](../e2e/api/execution-ops.spec.ts)
-are red because **scheduled runs do not exist**. There is no schedules table and no runner; the four
-routes were stubs, of which `createSchedule` answered `201 { id: "local-schedule", ...body }` and
-stored nothing — so the UI told the user their schedule was saved.
+`EXO-A-07/08/10` were red because scheduled runs did not exist: the routes answered honestly with 501
+and the create UI had been retired rather than left as a dead end.
 
-They now answer **501** with a message, and `EXO-A-08b` (green) pins that honest refusal so it cannot
-regress to a fake success while the feature is missing. The three red tests are the specification for
-the feature: they pass when it is built, and `EXO-A-08b` is the one to delete then.
-
-Implementing a cron parser, a scheduler and a runner is a feature, not a bug fix, so it was left out
-deliberately rather than half-done. **This is the one decision in this session that is the product
-owner's rather than an engineer's:** build scheduled runs, or remove the routes and the UI that offers
-them. Leaving them at 501 indefinitely is the worst of the three.
+The feature is now built and those tests are green: persisted schedules (`cycle_run_schedules`),
+one-time / fixed-interval / **daily and weekly local wall-clock rules** with DST handling, a worker
+that claims atomically and creates a new Test Run per occurrence, edit and **Run now**, and the
+schedule screen restored against the working backend. `EXO-A-08b` became the due-schedule worker
+test, `EXO-A-11/12/13` cover the run-time rules, and `EXO-A-18` covers run-on-demand without shifting
+the cadence.
 
 ### Not a product bug — a spec defect
 
@@ -836,7 +832,7 @@ immediately before the run, and every one of the 16 stale reds that revision lis
 | Red | Count | What it is |
 |---|---|---|
 | `rbac.spec.ts` × 2, `workspace-setup.spec.ts` × 2, `custom-field-values.spec.ts` × 1 | 5 | §3 bugs 1, 2, 3, 11 — the last three missing-`@Req()` instances. **Product fix pending.** |
-| `execution-ops.spec.ts` `EXO-A-07/08/10` | 3 | §3 "Missing feature" — scheduled runs are not implemented. **Product decision pending.** |
+| `execution-ops.spec.ts` `EXO-A-07/08/10` | 3 | **Resolved 2026-11-18** — scheduled runs implemented; the tests were rewritten to the real contracts and are green. |
 | `workspaces.spec.ts` × 1 | 1 | §3 spec defect — an install-wide owner count that drifts on every re-run. |
 | `testcase-import.spec.ts` × 3 | 3 | **Spec defect, not a product bug.** `getByText("1 test case imported successfully")` resolves to two elements (the toast and the summary line), so it fails Playwright strict mode. Belongs to Wave 4's file — needs a `.first()` or a scoped locator. Not touched here per §7.2. |
 | `projects-list.spec.ts` `PRJ-C-10` | 1 | **A test and a fix that disagree.** It asserts a duplicate project key is "reported inline and creates nothing"; bug 10's fix (`nextFreeProjectKey`) makes a colliding key auto-suffix and succeed instead. The fix predates this session and only became observable when the backend was rebuilt. Someone has to decide which behaviour is intended — auto-suffix or inline error — and then either the fix or the test is wrong. |
@@ -1361,8 +1357,9 @@ The 90% target is met, so this is no longer a coverage list — it is a correctn
 
 1. **Fix §3 bugs 1–2 and 11** (one change: the last three missing-`@Req()` handlers), then bug 3's
    `archived_at` filter. That takes the suite to 4 red, all of them non-product.
-2. **Decide on scheduled runs** (§3 "Missing feature") — build it, or delete the routes and the UI
-   that offers them. They answer 501 today, which is honest but not a resting state.
+2. **Decide on scheduled runs** (§3 "Missing feature") — **resolved 2026-11-18: built** (see the
+   scheduled-runs section above). They answered 501 at the time, which was honest but not a resting
+   state.
 3. **Resolve `PRJ-C-10`** (§5): does a colliding project key auto-suffix or refuse? The fix and the
    test disagree and one of them is wrong.
 4. **Fix the four `testcase-import.spec.ts` strict-mode locators** and the `workspaces.spec.ts`

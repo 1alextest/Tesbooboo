@@ -65,6 +65,9 @@ playwright-report/
 /Tesbo-Backend-Nest/.stryker-tmp/
 /Tesbo-Backend-Nest/reports/mutation/
 
+# Local/CI architecture, duplication, policy and impact evidence
+/reports/quality/
+
 # Personal, machine-local Claude Code overrides (never share across branches/teammates)
 CLAUDE.local.md
 

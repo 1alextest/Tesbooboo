@@ -131,6 +131,12 @@ export function ZyraChatReviewPanel({
   const [status, setStatus] = useState<"checking" | "in_review" | "resolved">("checking");
   const [rows, setRows] = useState<ZyraChatTestcaseRow[]>(initialRows);
   const [selected, setSelected] = useState<number[]>(() => initialRows.map((_, index) => index));
+  const [proposal, setProposal] = useState<Pick<ZyraTask, "proposalRevision" | "proposalSnapshot"> | null>(null);
+  const [reviewReadError, setReviewReadError] = useState<string | null>(null);
+  const [snapshotOpen, setSnapshotOpen] = useState(false);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const editingRef = useRef<number | null>(null);
+  const readSequenceRef = useRef(0);
   // Generation progress of a batch still being written ("X of N"), from its live events.
   const [live, setLive] = useState(() => zyraLiveBatchProgress(reviewRequestId));
   const rowsRef = useRef(rows);
@@ -151,18 +157,25 @@ export function ZyraChatReviewPanel({
 
   // Re-read the batch: keep the selection of the rows already shown, select every row that is new.
   const resync = useCallback(async () => {
+    if (editingRef.current !== null || workingRef.current) { resyncPendingRef.current = true; return; }
     resyncPendingRef.current = false;
+    const sequence = ++readSequenceRef.current;
     try {
       const task = await getZyraTask(projectId, reviewRequestId);
-      if (task.taskStatus !== "in_review") return;
+      if (sequence !== readSequenceRef.current) return;
+      if (task.taskStatus !== "in_review") { setProposal(null); setStatus("resolved"); return; }
       const next = rowsFromTask(task);
       const shown = Math.min(rowsRef.current.length, next.length);
       rowsRef.current = next;
       setRows(next);
+      setProposal({ proposalRevision: task.proposalRevision, proposalSnapshot: task.proposalSnapshot });
+      setReviewReadError(task.proposalRevision ? null : "The current proposal is not available for verified review.");
       setSelected((prev) => [...prev.filter((index) => index < shown), ...next.map((_, index) => index).filter((index) => index >= shown)]);
       setStatus("in_review");
     } catch {
-      // The next event, or the next action's own re-read, tries again.
+      if (sequence !== readSequenceRef.current) return;
+      setProposal(null);
+      setReviewReadError("The current proposal could not be loaded. Reload it before publishing changes.");
     }
   }, [projectId, reviewRequestId]);
 
@@ -177,7 +190,7 @@ export function ZyraChatReviewPanel({
         setLive({ staged: event.staged, total: event.total });
         // "Discard all" closed the batch — the server takes nothing more into it.
         if (closedRef.current) return;
-        if (workingRef.current || statusRef.current === "checking") {
+        if (workingRef.current || editingRef.current !== null || statusRef.current === "checking") {
           resyncPendingRef.current = true;
           return;
         }
@@ -186,6 +199,9 @@ export function ZyraChatReviewPanel({
           rowsRef.current = [...rowsRef.current, event.row];
           setRows(rowsRef.current);
           setSelected((prev) => [...prev, index]);
+          // Live progress is not an exact review receipt. Obtain the matching native snapshot.
+          setProposal(null);
+          void resync();
           if (statusRef.current === "resolved") setStatus("in_review");
         } else {
           void resync();
@@ -209,6 +225,7 @@ export function ZyraChatReviewPanel({
   const isGenerating = Boolean(live) || generating;
 
   function startWork() {
+    readSequenceRef.current += 1;
     workingRef.current = true;
     setWorking(true);
   }
@@ -217,7 +234,6 @@ export function ZyraChatReviewPanel({
     setWorking(false);
     if (resyncPendingRef.current) void resync();
   }
-  const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -225,9 +241,11 @@ export function ZyraChatReviewPanel({
 
   useEffect(() => {
     let cancelled = false;
+    const sequence = ++readSequenceRef.current;
+    setProposal(null);
     getZyraTask(projectId, reviewRequestId)
       .then((task) => {
-        if (cancelled) return;
+        if (cancelled || sequence !== readSequenceRef.current) return;
         if (task.taskStatus === "in_review") {
           // Nothing is interactive while status is "checking", so no selection can be lost here —
           // except one carried over from this batch's panel shown while the turn was running.
@@ -235,6 +253,8 @@ export function ZyraChatReviewPanel({
           const recalled = recallZyraSelection(reviewRequestId);
           rowsRef.current = current;
           setRows(current);
+          setProposal({ proposalRevision: task.proposalRevision, proposalSnapshot: task.proposalSnapshot });
+          setReviewReadError(task.proposalRevision ? null : "The current proposal is not available for verified review.");
           setSelected(
             recalled
               ? [...recalled.selected.filter((index) => index < Math.min(recalled.count, current.length)), ...current.map((_, index) => index).filter((index) => index >= recalled.count)]
@@ -245,9 +265,10 @@ export function ZyraChatReviewPanel({
         if (resyncPendingRef.current) void resync();
       })
       .catch(() => {
-        // Fail open — let the user try acting on it; a batch that's actually already resolved
-        // elsewhere will reject the first action with a clear conflict message instead.
-        if (!cancelled) setStatus("in_review");
+        if (cancelled || sequence !== readSequenceRef.current) return;
+        setProposal(null);
+        setReviewReadError("The current proposal could not be loaded. Reload it before publishing changes.");
+        setStatus("in_review");
       });
     return () => {
       cancelled = true;
@@ -286,8 +307,9 @@ export function ZyraChatReviewPanel({
       // local index arithmetic, so the cards can never drift from what the next action addresses.
       const task = await deleteZyraTaskDraft(projectId, reviewRequestId, index);
       setRows(rowsFromTask(task));
+      setProposal({ proposalRevision: task.proposalRevision, proposalSnapshot: task.proposalSnapshot });
       setSelected((prev) => prev.filter((item) => item !== index).map((item) => (item > index ? item - 1 : item)));
-      if (editingIndex === index) setEditingIndex(null);
+      if (editingIndex === index) { editingRef.current = null; setEditingIndex(null); }
     } catch (err) {
       setError(err instanceof Error ? err.message : t("review.err.discard"));
     } finally {
@@ -299,7 +321,7 @@ export function ZyraChatReviewPanel({
     startWork();
     setError(null);
     try {
-      await editZyraTaskDraft(projectId, reviewRequestId, index, {
+      const task = await editZyraTaskDraft(projectId, reviewRequestId, index, {
         title: values.title,
         priority: values.priority,
         preconditions: values.preconditions,
@@ -309,23 +331,9 @@ export function ZyraChatReviewPanel({
         severity: values.severity,
         component: values.component,
       });
-      setRows((prev) =>
-        prev.map((row, i) =>
-          i === index
-            ? {
-                ...row,
-                title: values.title,
-                priority: values.priority,
-                preconditions: values.preconditions,
-                expectedSummary: values.description,
-                stepsJson: values.stepsJson,
-                ...(values.testData !== undefined ? { testData: values.testData } : {}),
-                severity: values.severity || null,
-                component: values.component || null,
-              }
-            : row
-        )
-      );
+      setRows(rowsFromTask(task));
+      setProposal({ proposalRevision: task.proposalRevision, proposalSnapshot: task.proposalSnapshot });
+      editingRef.current = null;
       setEditingIndex(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("review.err.saveEdit"));
@@ -335,13 +343,17 @@ export function ZyraChatReviewPanel({
   }
 
   async function handleSaveSelected() {
-    if (!selected.length) return;
+    if (!selected.length || !proposal?.proposalRevision || editingRef.current !== null) return;
     startWork();
     setError(null);
     setMessage(null);
     try {
       const savedSet = new Set(selected);
-      const result = await saveZyraTask(projectId, reviewRequestId, { selectedDraftIndexes: selected });
+      const result = await saveZyraTask(projectId, reviewRequestId, {
+        expectedProposalRevision: proposal.proposalRevision,
+        selectedDraftIndexes: selected,
+      });
+      setProposal(null);
       // Fire-and-forget: refreshes every module whose cache holds test-case-derived data, in the
       // background, without making this save feel slower. See lib/zyraCacheSync.ts.
       refreshPageCachesAfterZyraSave(projectId, workspace?.id);
@@ -356,14 +368,18 @@ export function ZyraChatReviewPanel({
         // start before it lands and then be overwritten by this older read. A failed re-read keeps
         // the locally-pruned rows above, which already mirror the same removal.
         try {
-          setRows(rowsFromTask(await getZyraTask(projectId, reviewRequestId)));
+          const task = await getZyraTask(projectId, reviewRequestId);
+          setRows(rowsFromTask(task));
+          setProposal({ proposalRevision: task.proposalRevision, proposalSnapshot: task.proposalSnapshot });
         } catch {
-          // keep the locally-pruned rows
+          setReviewReadError("The saved changes were acknowledged, but the remaining proposal could not be loaded. Reload it before another review.");
         }
       }
       setMessage(t("review.savedMsg", { n: result.savedCount }));
     } catch (err) {
       setError(err instanceof Error ? err.message : t("review.err.save"));
+      setProposal(null);
+      setReviewReadError("Reload the task to check which changes were saved before reviewing again.");
     } finally {
       endWork();
     }
@@ -404,7 +420,15 @@ export function ZyraChatReviewPanel({
   return (
     <div className="mt-3 space-y-2 rounded-lg border border-[var(--brand-border)] bg-[var(--surface)] p-3">
       {message && <p className="rounded-md border border-[var(--border)] bg-[var(--surface-secondary)] px-2.5 py-1.5 text-xs text-[var(--foreground)]">{message}</p>}
-      {error && <p className="rounded-md border border-[var(--error)]/40 bg-[var(--error-soft)] px-2.5 py-1.5 text-xs text-[var(--error-foreground)]">{error}</p>}
+      {error && <p role="alert" className="rounded-md border border-[var(--error)]/40 bg-[var(--error-soft)] px-2.5 py-1.5 text-xs text-[var(--error-foreground)]">{error}</p>}
+      {reviewReadError && <div role="alert" className="text-xs text-[var(--error-foreground)]">
+        <p>{reviewReadError}</p>
+        <Button size="sm" variant="secondary" disabled={working || editingIndex !== null} onClick={() => void resync()}>Reload proposal</Button>
+      </div>}
+      {proposal?.proposalSnapshot && <details onToggle={(event) => setSnapshotOpen(event.currentTarget.open)} className="rounded border border-[var(--border)] p-2 text-xs">
+        <summary>Inspect the saved proposal and target content</summary>
+        {snapshotOpen && <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words">{JSON.stringify(proposal.proposalSnapshot, null, 2)}</pre>}
+      </details>}
       {progressLine}
       {rows.length === 0 ? null : (
         <>
@@ -424,7 +448,7 @@ export function ZyraChatReviewPanel({
               <span title={isGenerating ? t("review.discardAllWhileGenerating") : undefined}>
                 <Button variant="secondary" size="sm" onClick={() => void handleDiscardAll()} disabled={working || isGenerating}>{t("review.discardAll")}</Button>
               </span>
-              <Button size="sm" onClick={() => void handleSaveSelected()} disabled={working || selected.length === 0}>
+              <Button size="sm" onClick={() => void handleSaveSelected()} disabled={working || selected.length === 0 || editingIndex !== null || !proposal?.proposalRevision}>
                 {working ? t("saving") : t("review.saveToRepo", { n: selected.length || "" })}
               </Button>
             </div>
@@ -472,7 +496,13 @@ export function ZyraChatReviewPanel({
                     </div>
                   </div>
                   <div className="flex shrink-0 gap-1.5">
-                    <Button variant="secondary" size="sm" onClick={() => setEditingIndex(editingIndex === index ? null : index)} disabled={working}>
+                    <Button variant="secondary" size="sm" onClick={() => {
+                      const next = editingIndex === index ? null : index;
+                      editingRef.current = next;
+                      readSequenceRef.current += 1;
+                      setEditingIndex(next);
+                      if (next === null && resyncPendingRef.current) void resync();
+                    }} disabled={working}>
                       {editingIndex === index ? t("close") : t("edit")}
                     </Button>
                     <Button variant="secondary" size="sm" onClick={() => void handleDiscard(index)} disabled={working}>{t("review.discard")}</Button>
@@ -483,7 +513,11 @@ export function ZyraChatReviewPanel({
                     <ZyraDraftEditor
                       row={row}
                       saving={working}
-                      onCancel={() => setEditingIndex(null)}
+                      onCancel={() => {
+                        editingRef.current = null;
+                        setEditingIndex(null);
+                        if (resyncPendingRef.current) void resync();
+                      }}
                       onSave={(values) => void handleSaveEdit(index, values)}
                     />
                   </div>

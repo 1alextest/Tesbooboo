@@ -1,0 +1,722 @@
+# ASER — Implementation roadmap and assurance plan
+
+**Canonical home:** Tesbo specification package revision **1.4.38 (proposed; NOT FROZEN)**, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the current 1.4.38 continuation requires exact-revision receipts.
+
+**State:** The roadmap is proposed; the dated implementation follow-up identifies the bounded source work separately. Do not merge unimplemented acceptance statements into deployment claims. Use Tesbo `development` → reviewed PR → green checks; never write directly to `main`.
+
+## Implementation follow-up — 19 November 2026
+
+PR #153 landed the existing specification corrections. PR #167 replaces the closed, unmerged PR #158 and reconciles its native-owner changes with the subsequently merged security, governed-model-run and inventory work. The replacement head `288c89b36dd5e748621752a175f1f4bdaac7ec87` retains PR #154's from-cases behavior and PR #164's `run_behavior_model`. V154 remains the merged model-run migration; the unmerged review, document and proposal migrations are V155, V156 and V157 respectively. Verification status and any later head are recorded in the existing assurance record. The broader roadmap below remains proposed and NOT FROZEN.
+
+| Concern | Implemented source contract | Remaining exit |
+| --- | --- | --- |
+| Human review and case/run truth | Trusted human-session review, exact case plus dependency revision, immutable receipt, semantic invalidation, and current-review-only run admission. Ordinary native and selected-proposal case renames preserve accepted run snapshots; new runs capture the newly reviewed identifier. Generic Approved flags and machine publication cannot substitute for review. | Migrated database, HTTP, browser, concurrency and compatibility evidence at the implementation head. The privileged history-import `refreshSnapshots` path and the full FR-048 separately governed correction/attempt contract remain an explicit broader historical-integrity gate. |
+| Native proposal publication | Existing `ai_generation_requests` stores external proposals, exact review snapshots and selected-save receipts. Human Save validates the rendered revision and explicit selection, applies native cases/suite/audit atomically, preserves unsaved proposals and producer provenance, and reconciles exact retries. Draft edit/delete reads return a coherent new review snapshot. | External inlet is a default-off protocol preview (`TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED`). It does not satisfy S0 or I3 admission and cannot be activated as a governed authoring feature without those gates. |
+| MCP consent and credential authority | Existing project settings hold explicit consent and named grants to actual API-token IDs. Both aliases recheck grant/scope/expiry/membership. Human owner/manager controls are denied to machine principals. Discovery and session fingerprints describe the caller's actual tools. | Isolated real HTTP/browser denial, stale-session and grant-edit evidence; operational client registration remains a human action. |
+| Bug/evidence integrity | Bug association preserves the complete execution result, actor, timestamps, snapshots and history for open/manual and finalized automated runs. Canonical README revisions 1.4.8–1.4.11 explicitly separate association from evidence-backed result writing. The earlier claim of a newer decision restoring automatic Failed was unsupported and is withdrawn. | Real migrated before/after evidence for association-only behavior and the legitimate explicit result writer. Full direct/side/unresolved finding classification and separately governed result correction remain outstanding. |
+| Truthful requirement coverage | The existing Requirements screen distinguishes available, loading, stale, denied and unavailable link reads; failed providers do not manufacture zero coverage or enable coverage-dependent actions. | Browser fault/recovery evidence. This change does not claim every provider connection/ticket-reader path is now repaired. |
+| Governed document history | V156 extends existing document versions with exact submitted/reviewed receipts, invalidation and common AI-context eligibility; legacy approvals are explicitly unverified until a human re-review. | Database/RAG/browser evidence; actual Skill identity, assignment, root bootstrap and resolver remain unimplemented. |
+| Governed model/native composition | Model candidate Draft plus mapping/audit share one transaction; native run, memberships, executions and model manifest share one transaction. Active-model locks order archive/revision/link changes; recorded case revisions are checked at link and dispatch, with a new basis requiring explicit unlink/relink. Model approval and candidate publication require a trusted human-session principal at both HTTP and domain boundaries; a token issuer's identity is insufficient. Browser run uncertainty persists across reload and requires explicit native readback or acknowledgment before a distinct new request. Ordinary native writers retain their existing ownership. | New migrated rollback/race cases and the existing full Model Studio API/UI journey, including machine denial, legitimate human review, injected provenance failure, stale mapping and uncertain-response recovery, must pass at the integrated head. Full accepted mapping history, unrecorded legacy/generated case-version provenance and server-level create idempotency remain separate contract gates; a browser request reference is not a server receipt. |
+
+**Verification target:** use the repository's existing isolated GitHub Actions PostgreSQL/Redis/backend/frontend/browser stack and disposable projects. The preview flag is set only in the isolated protocol test job. No shared/live database, production deployment, customer fixture or operational Skill grant is part of this verification. The required checks include migration inventory/idempotence, backend contracts, migrated transaction/race suites, genuine MCP sessions and browser review/error flows. Local unit/type checks do not replace those exits.
+
+The [19 November integration closure record](reviews/2026-11-19-integration-closure.md) records the current fixes, exact evidence boundaries and independent review inputs. Historical assurance remains in its original record; an old passing revision does not certify this integration.
+
+**Next implementation sequence, using existing owners:** first complete I3-Q's explicit executor assignment/attempt fencing and immutable prompt, case-free report byte intake/readback with provenance, independent retest lineage and mixed selected-apply outcomes. In parallel with read-only visibility, extend the existing source binding/capture owner with provider event receipts, replay/order handling and missed-hook reconciliation. Resolve the S0 operational choices below before exposing governed authoring; then bind native proposals to approved active Skill versions. These are real outstanding capabilities, not features certified by this publication preview. All seven engineering-record domains still require capability/impact assessment in the connected change workflow.
+
+## Step 0 — Grounding / ownership challenge (before schema work)
+
+1. Pin exact `development` commit and inspect current Tesbo source and earlier governed-asset evolution proposal, plus the original eight canonical Tesbo specs: `legacy` case/KB/bugs/requirements routes, `mcp.tools.ts`, `mcp.service.ts`, `behavior-graph`, `Model Studio`, Zyra task/activity/approval, files, migrations, sidebar and current tests.
+2. For each user job (create native requirement, link case, maintain internal/external manual, propose internal/external policy, track task, attach file, author skill candidate, read assigned skills, human activate skill), create **reuse / extend / transform / new / unresolved** decision with evidence; check whether some existing feature already satisfies it through a different UI.
+3. Compare deployed authenticated MCP `tools/list` and schema/fingerprint with this exact source, using a **separately authorized disposable test project**. Existing client observation of 50 tools vs source's 58 is an explicit outstanding gap.
+4. Use the same eight canonical files at revision 1.4.38 and their explicit owner/contract/trace amendments. Recheck them against the implementation head before adding schema or tools. The six repository views and the review record are not replacement canonical authorities or altered assurance methodology.
+5. Create a source-backed mapping from affected page/API/DB/graph artifact → rightful owner → existing tests → missing acceptance evidence.
+
+**Exit:** no competing owners; persisted source/deploy/capability receipts; authority/approval and unresolved questions explicit.
+
+## Integrated vertical milestone before full module expansion
+
+**Purpose:** demonstrate an end-to-end application change progressing from coding agent through Tesbo to independently reviewable, known-build verification and an authorized release decision. This order is an implementation **sequence**, not permission to defer security, QA or required skill governance. Build the smallest reusable S0 governance/security foundation before exposing new agent writes; deliver the full Skills Library UX/version evaluations later.
+
+| Milestone | Reuse and specific additions | Testable exit |
+| --- | --- | --- |
+| I0 — authority/source truth | Reconcile ASER/GAE into the exact latest eight Tesbo original specs (preserve P-07/P-14/P-17/P-18), bind one disposable project and known Git source, inspect existing Zyra/requirements/KB/case/graph routes | No competing canonical spec; explicit project access and approved expectation source |
+| I1 — change observed | Existing source binding + graph capture/history; optional Kiro-like agent hook and source-provider/CI reconciliation, stable source event identity, dedupe, unknown/stale gaps | Push with no hook remains visible; duplicate/out-of-order event not fabricated as two changes |
+| I2 — agent activity visible | Extend Zyra session/task/activity and graph read model with event tiers, identity, timestamps, redaction/access | Human reviewer distinguishes agent-reported run from verified execution, and can identify who owns stalled work |
+| I3 — governed authoring | **Minimum** human-controlled active skills version resolution; original P-07 official case protection; existing KB/native requirement extension and case draft, exact version-aware link; bounded project context and composite MCP adapter | One code-first external agent proposes linked requirement/case under pinned active skills; REST and legacy writers cannot bypass review |
+| I3-Q — retained original QA loop | T-201–207/T-301–308/T-401: ChatGPT task → assigned executor/own driver → original report → analysis/retest → exact human review/apply | QA-135–138 and ASE-INT-12 prove a case-free/no-native-model-key loop, original byte retrieval, linked new retest and selected official writes; a coding-source demo cannot substitute for it. |
+| I4 — independent consistency | Extend existing graph/change-review read model with accepted oracle vs code observation, contradictory policy/requirement detection, bounded unknown/negative-scope accounting | Implementation conflicting with approved policy is flagged, not ratified by generated requirement |
+| I5 — cross-role Change Workspace | Existing Zyra change review + test cases, KB, Bugs, requirements and tasks; role-sensitive projection, review owners, next actions, evidence navigation | BA/QA/PM see same change revision and can review, disagree, accept/reject without hidden duplicate stores |
+| I6 — release & aftercare | Readiness reasons, actual run/build/deployment identity, human release approval, post-deploy smoke/incident/retest links; project reports integration | Code/CI green without target proof remains insufficient; failed deployment/rollback updates correct change and risk owner |
+| I7 — metric and portability proof | DORA five metrics with definitions and source fields, human comprehension/defect rework measures; two coding-agent runtimes and Qase comparison | Metrics do not hide failed releases or invent missing data; measured benefit or explicit limitation |
+| I8 — broaden implemented domain capabilities | Complete remaining D-14 skills views, classified manuals/policies, native work items, evidence adapters and integrations | Every domain is already assessed from I1/I3 onward. A required but unimplemented domain stays blocked or has an explicit accountable scoped exception; I8 cannot be used to mark an incomplete release ready. |
+
+**Original-loop priority:** I3-Q is a shared integration exit, not a dependency on a native requirement/model or full I8 expansion. Deliver it alongside the first coherent integration using its existing Phase 1–3 foundations; a source-sync demo cannot replace it.
+
+**Independence:** all milestones have separate source-code review, authenticated API/MCP/DB/UI tests and role/permission negative tests; actual assurance team review of the **specification** is separate from implementer desk testing. The absence of an installed team runner must be labelled BLOCKED rather than simulated as executed.
+
+### Proposed GEX continuation of existing I0–I8 — not a parallel phase plan
+
+The outcome is *observed change → scoped code-dependency analysis → reasoned impacted native cases and unknowns → selected verification → original runner evidence → authorized QA/human decision*. Its implementation reuses existing F1–F6 and I3-Q; the proposed GEX labels are navigation tags, not new FR/T owners, schemas or Tesbo repositories.
+
+| GEX | Integrate with current owner | Independent outcome to prove |
+| --- | --- | --- |
+| 01 | I1/F1, FR-115/116; existing source binding/history, Zyra review | Hookless source commit appears through reconciliation; local uncommitted event has separate trust tier; restart recovers gaps |
+| 02 | I1/F1 + I4/F4, FR-116/118; existing observation graph | Scoped supported-language AST dependencies and explicit parser/dynamic/selection unknowns, with byte-backed identities |
+| 03 | I4/F4; FR-117/MBT-C Model Studio | Accepted model/guard/data/composed semantics are versioned, bounded and distinct from code observation; unsupported semantics refuse |
+| 04 | I4/F4; FR-118/119; `deriveQaReviewCandidates` | Direct/transitive candidates and unlinked/unknown scope explained against current native cases; no trust laundering or silent drop |
+| 05 | I3/F3 + I4/F4; model generator, shared native proposal workflow | Repeatable proposals, case matching, negative/recovery obligations, human approval and zero duplicate official publication |
+| 06 | I3-Q, T-201–207, native Run and external executor | Actual target action/assertion, build/oracle/fixture, immutable original report and linked retest; native model dispatch alone is insufficient |
+| 07 | I4/F4 + I6/F5; FR-118/119, evidence and run projections | Traceable obligation numerator/denominator, historical vs current, missing bytes/build and authorization-aware coverage |
+| 08 | I2/F2 + I3/F3 + I5/F5; Zyra/MCP/T-422 governance | One readable Change Packet, seven-domain applicability, honest actor evidence and human decisions; original case-free task loop remains mandatory |
+
+**Deployment/correctness gates:** Inspect current graph, model, notification, MCP, Run, file and review code/migrations at each implementation head. PR #167 remains separately open and owns some native model/run and P-07/P-18 corrective work; do not duplicate or silently supersede it. For each vertical slice, independently exercise authorized operations and denied operations with no writes; verify observer interruption and restart recovery, stale source/model revisions, parser uncertainty, duplicate or delayed events, source/target build mismatch, real attempt/evidence and authentic reviewer workflow. Model/workload budgets and weighted-selection value are measured rather than guessed. Old green CI or successful scenario discovery is not a release proof.
+
+### GEX manual-test quality and graph-learning continuation (existing I0–I8/F1–F6/I3-Q)
+
+**Product proof must begin with a native manual QA journey**, not a coding PR or CI. For a project containing only an accepted requirement/UX workflow and no repository/model/automation, deliver a meaningful reviewed manual test with complete actionable steps, observable Expected Results, repeatable data/actor/setup, negative/forbidden and risk-relevant coverage, semantic overlap check, native case approval, human execution/Actual Result, original status/evidence/defect and distinct retest. The graph's impact/quality obligations attach to **existing FR-117/118/119 and native Case/Run/Evidence owners**; all seven ASER domains are assessed as applicable, not fabricated. The same case may later have an authorized agent/CI adapter binding without duplication or loss of manual provenance.
+
+| Existing owner | Proposed graph quality/learning capability and independent exit |
+| --- | --- |
+| R-ASE-06, FR-117, native Case/Suite, shared review | Good manual, exploratory and automated *design* from code-free sources, accepted expected behavior, forbidden paths and nonduplicate coverage; weak oracles challenged |
+| Native Runs/Executions/Evidence/Bugs, I3-Q | Distinguish authentic human/manual observation from agent report and machine execution; preserve direct/side finding, result history, exact case/expected versions |
+| FR-118/119, F4 change/consistency views | Gap quality: missing behaviors, untested approved cases, weak expected results, unsupported test modes, stale links, unknown source; no reliance on 100% line/edge coverage |
+| Existing Zyra/graph history, F2/F4 | Attributed QA corrections, accepted/rejected case proposals, flaky/setup cause classification, real defects and drift enter **candidate** relationship/model updates, not self-authorizing expected truth |
+| T-422/D-14 Skills, F3 | Human-accepted reusable manual/automation authoring guidance, immutable candidates/assignments; learned examples cannot bypass a governed skill, test-case or model review |
+| I7 evaluation | Compare manual QA baseline vs rules-only graph vs learned graph and supported active inference; held-out human judgments, real defects, separate mutants, usability, oracle strength, unique gaps, duplicate rate, quality/cost and false negatives |
+
+**Proof sequencing:** read-only structural/requirements graph → independent behavioral gap/weak-oracle review → human-editable manual case candidates and protected native publication → authentic manual/agent attempts → feedback classification/review → project-scoped versioned candidate graph learning → optional statistical/active algorithms only after held-out comparison. These are **capability-gated increments of the same intended whole**, not a decision to omit manual testing, graph learning or future graph intelligence. Learning must work in cold-start mode with explicit uncertainty; automation and CI are optional for manual QA value. Unsafe active probing, leaked cross-project examples, duplicate-case autopublication, retroactive editing of real results, self-trained expected oracles and unmeasured defect recall are release blockers.
+
+**Research context, not Tesbo test proof:** the [quality survey](https://doi.org/10.1007/s11219-024-09698-w), [behavioral-gap preprint](https://arxiv.org/abs/2606.10417), [ML testing review](https://doi.org/10.1002/stvr.1845) and [industrial automata-learning study](https://doi.org/10.1007/978-3-319-25423-4_5) remain leads whose primary-source scope must be checked before empirical claims. ASE-FLOW-29..44 remains part of the existing planned suite; the later reasoning extension adds ASE-FLOW-45..54. All are NOT RUN and belong in the same P-14 eight-file owner/proof mapping.
+
+### GEX semantic/consequence analysis proof (existing I4/F4, I3/F3, I7; proposed)
+
+Extend the existing FR-118/119 graph, policy/manual owners, native Case/Run/Bug/Evidence and T-422 method resolver; no new canonical graph or autonomous policy author. The initial proof is **read-only**, from current approved policy and audience-scoped manual revisions, a business requirement and authentic evidence. Agents independently interpret the requested user outcome and explain grounded or disputed obligations, upstream/downstream consequences and affected native records without prespecified fault targets. Both code-first and code-free workflows must work.
+
+**Preserved subordinate proposal labels (NOT RUN; not additional canonical definitions):** Canonical 05 now maps these conditions to the existing 125-definition scope in the allocation below.
+- `GEX-SEM-01`: Approved policy conflicts with a current user manual and observed code. Explain distinct source authority, impacted actor/journey and unresolved requirement; refuse to rewrite policy or manufacture execution proof.
+- `GEX-SEM-02`: Approved policy changes without a code commit. Trace manual audience/version, permissions, states, downstream consumers, case coverage and uncertain links; distinguish stale manual from changed normative requirement.
+- `GEX-SEM-03`: Manual wording changes without any binding workflow change. Preserve a valid unchanged outcome and avoid duplicate requirements/cases.
+- `GEX-SEM-04`: Intermittent failure history mixes different environments and fixtures. Preserve individual attempts and causal alternatives; do not assert flaky test or root cause until evidence permits.
+- `GEX-SEM-05`: Defect-risk model sees sparse/biased labels or a new project. Abstain, explain uncertainty and use legitimate human/rules-only prioritization without dropping mandatory regression.
+- `GEX-SEM-06`: High graph edge/path coverage still misses a policy-required forbidden transition. Show independent normative gap and separated designed/mapped/executed/verified denominators.
+- `GEX-SEM-07`: Finite path budget exhausts mid-search with loops and data-state combinations. Report truncation and omitted candidates; retain critical obligations and don't claim completeness.
+- `GEX-SEM-08`: Agent infers a downstream consequence without an accepted link or source evidence. Keep hypothesis reviewable, explicitly UNKNOWN, and prohibit unauthorized write/Passed results.
+
+**Independent evaluation:** Compare existing deterministic graph projections, governed AI interpretation and no-change/manual baselines on held-out dissimilar systems and withheld critical scenarios. Measure unique actionable gaps, consequence trace accuracy, false claims, missed obligations, root-cause discrimination, risk calibration where data permits, flakiness false attribution, review labor, token/latency cost, privacy and rollback. First-run assurance teams get outcome plus pinned sources, not the scenarios above as suggested findings; these scenarios are for later engineering acceptance. The existing eight canonical documents, approval boundary, original I3-Q execution loop and CI/security gate remain mandatory.
+
+### Outcome-discovery diagnostic triage and targeted acceptance (DISC-01..05; NOT RUN)
+
+The diagnostic at `reviews/2026-11-20-semantic-skill-diagnostic.md` is an informed author application, **not** a blind assurance-team receipt. Against existing R-ASE-07/08/09/19/40 and FR-117/118/119, all five issues are *partly addressed* by present ownership, provenance and graph gap contracts; their missing discriminators are clarified here and in the subordinate requirements/design. None establishes a new database or a confirmed runtime defect.
+
+| Finding | Reused owner | Candidate specification clarification / proposed acceptance |
+| --- | --- | --- |
+| DISC-01 | R-ASE-08/09/40; governed Policy KB | Differentiate same-record CAS collision from conflicting independent effective obligations; preserve applicable versions and explicit authorized human ruling or unresolved result |
+| DISC-02 | FR-118/119; R-ASE-19 | Require conditional consequence mechanism, counterexample, genuinely unaffected connected neighbor and bounded independent falsification |
+| DISC-03 | Policy/Manual/Requirement revisions and source/build evidence | Interpret historical versus current versus future applicability using time-aligned records; unknown deployment cannot certify conformance |
+| DISC-04 | FR-118/119, scoped search, staged proposals | Find missing semantic link and reject lexical decoy without authorizing invented relationship or coverage |
+| DISC-05 | graph review, native history, derived projections, T-422 | Preserve correction, invalidate dependent candidates, constrain cache freshness and keep historical accepted records unchanged |
+
+**Proposed engineering acceptance identifiers (not canonical P-14 IDs):** `GEX-DISC-01..05` map one-to-one to the table. Each requires a positive neighbor and a negative control; record actual authorization, source/revision/actor, before/after graph views, unknown/truncated scope, outcome, cost and evidence. Evaluate separate current and candidate reasoning methods on unseen tasks and multiple domains using the original unchanged reviewer charters, without supplying these specific diagnoses to blind reviewers. An author checking these examples is not proof of independent skill effectiveness or full spec validation.
+
+**Admission boundary:** The exact eight-file revision 1.4.38 now maps these clarifications to existing owners and acceptance variations. Independently validate implementation against current owner contracts and deployed capabilities before reliance. Do not assert full causal inference, infer policy hierarchy, change native test statuses or hide existing PR security/CI blockers.
+
+### GEX governed AI reasoning and authored skill reuse — continuation, no new top-level product
+
+1. **Source/identity reconciliation:** inspect source artifact `manual-test-authoring` (525-line revision with A–H modes, state/role/permission/cross-cutting/test-condition/RTM/PTM and improvement journal), identify any contradictory earlier version, its missing referenced files and whether it is installed/approved anywhere; inspect the canonical D-14/T-422 ownership contract and verify its actual implementation and running MCP capabilities. Review `product-testing`/Primary User Type → Module → Context only from accessible exact source; do not claim local Nesberry edits are merged or live.
+2. **One method owner:** classify full reusable manual-test-authoring method and any graph-specific interpretation profile into *reuse / extend / compose / separate candidate only if justified*. Preserve effective resolver, version digests, authoring method governance and protected human approval. A method change can alter AI querying and case ideas using installed tools, not change protected data/algorithms/auth. Keep project-specific adapters and optional specialist methods distinct from general approved core.
+3. **Outcome-based graph insight:** add supported agent reasoning over permission-filtered, revision-pinned graph subgraphs; preserve state/transition/forbidden, upstream/downstream, user type/module/context, missing independent oracle, risk, existing Case matches, test-quality strength and source/provenance/uncertainty. Output proposed native Cases for human or delegated execution without requiring CI/code. Build no "shadow QA graph" or extra authoritative record store.
+4. **Real feedback/distillation:** capture case author review/correction reasons, meaningful manual/agent results, confirmed findings, false positives, inaccessible links and drift in existing history; derive inert Skill/graph/model hypotheses, promote only after independent trial and human approval. Project-specific lessons never automatically become global defaults. Run a fixed and held-out suite against champion/candidate method versions and at least two different app contexts.
+5. **Proof and rollout:** establish actual MCP read/candidate writer contract and client compatibility, negative auth, malicious source prompt-injection, invented edge rejection, stale skill/graph invalidation, pinned-input/output comparison with disclosed LLM variation (deterministic replay only for algorithms whose contract guarantees it), withheld oracle/no-code cases, human-readable manual case quality, no duplicate case writes, true manual run/evidence and rollback. Record exact LLM/version, Skill digest, graph revision, budget, outputs and independent reviewer decision. First rollout may be read-only, then governed proposals; no autonomous protected writes.
+
+**Implementation work still prohibited in this draft:** no production agent grants, automatic Skill activation, background model retraining, migrations, branch merges or target application's uncontrolled active probing. Final eight-file P-14 validation, fresh assurance closeout and current PR #167 concurrency/security overlap reconciliation remain separate gates.
+
+### Method improvement and independent review admission
+
+Use [§13.4.1 of the Skills view](skills-governance.md#1341-portable-method-for-discovery-and-principle-distillation), mirrored by canonical 06, to classify a material miss before changing a skill: missing rule, ambiguity, rule not reached, rule not applied, or result not checked. Preserve observed evidence separately from causal hypotheses. Repair the existing guidance or evaluation mechanism that owns the issue; do not add feature-shaped universal rules or modify team charters to manufacture the desired result.
+
+For a candidate method, record the intended outcome, relevant existing capability comparison, variation/invariant boundary, feasible alternatives, grounded choice and remaining uncertainty. Validate with independent tasks from differing contexts, a legitimate deterministic/no-AI outcome, a counterexample and an insufficient-evidence case. Keep authoring examples separate from held-out tasks; retain complete outputs and exact method/model/input identities. A document review can verify contract consistency but cannot prove the method would independently discover this particular direction or improve a deployed product.
+
+Rerun the existing nine specialist roles and separate Graph closeout under their unchanged charters and original ordering/quorum rules. Give cold reviewers the objective and pinned sources without prior findings, preferred architecture or prescribed journey list; freeze their initial receipts before comparison or informed deltas. Report actual independent executions, membership/quorum, scope and evidence limits. A missing capability, quorum or runtime observation remains explicit, never converted into a pass.
+
+## Work package S — Skills Library and human-only governance substrate (bounded security foundation before agent writes)
+
+**Scope:** Reconcile existing proposed governed test/requirement/skill assets in `docs/reviews/governed-asset-evolution-reconciliation.md` against the eight Tesbo canonical specs and actual KB versions/ACL, case approval, Zyra, MCP and graph writers. Implement only a justified incremental extension. Inventory and lock all user/agent/REST/MCP/import/background/legacy publication entrances **before** claiming the guard can be enforced.
+
+**Slice S0 (no agent-write exposure):** Implement the **minimum** immutable/versioned effective-skill reader, human-controlled assignment and protected bootstrapped Skills-authoring meta-skill required for integrated milestone I3. Full library search/evaluation and advanced UI should not hold back I1/I2 source/agent visibility, but no new governed agent writer may bypass active assigned skills or approved publication. Extend immutable skill identity + version history and public metadata read by authorized clients, authenticated context resolver with deterministic approved active assignments (module, subtype, audience, workspace/project), explicit unassigned/conflict behavior, and a protected bootstrapped Skills-authoring meta-skill. Define human governance authentication and separation of duties; implement revoke/disable, rollback-as-new-version, concurrency, cache invalidation, stale-work handling, ACL and audit. Human-only assignment API and UI must be denied to every MCP/machine principal, including tokens owned by admins.
+
+**Slice S1 (candidate-only):** Extend D-14 QA Standards & Playbooks with Skills Library and Assignments subviews, plus MCP `list/get/resolve`, `create_skill_candidate`, `propose_skill_version` through existing native domain boundaries, with immutable and idempotent candidate receipts. Candidates remain inert, unavailable for authoritative resolution regardless of ID or author. No agent activation, assignment, approval, priority or active-version edits through *any* route. Protect against candidate instruction injection and secret/data leakage.
+
+**Slice S2 (integration):** Pin skill version+digest and assignment IDs into authored or transformed candidate requirements/cases/manuals/policies/tasks/file descriptions and their change context; raw external evidence/source observations retain truthful not_applicable/unknown skill provenance and independent authorized intake; implement human review, evaluate/preview comparisons, stale assignment handling and backward-compatible migration. Backfill unknown provenance as UNKNOWN. Integrate with existing authoring, Zyra, graph and notifications; prove every bypass path closed. Do not require every module capability to be built before a read-only resolver pilot, but no governed write may bypass enforcement.
+
+**Ship together at each slice:** migration/ownership evidence, typed contracts, authorization (including direct URL/API), negative tests, realistic UI, conflict/revocation/partial failures, schema drift probe, CI test accounting, disposable-project authenticated lifecycle and a separate human-review proof. See `skills-governance.md` `SK-E2E-01..28` and `requirements.md` R-ASE-21..36.
+
+**Blockers:** proof of existing canonical skill asset ownership; human-only credential/authZ boundary distinct from the token owner's identity; approval model for root bootstrap and composition; policy on no active skill; compatibility with current MCP clients and direct REST writes. No automatic schema claim, release claim or authority migration before these are resolved.
+
+### S0 implementation boundary and legacy disposition — 18 November 2026
+
+The bounded implementation extends `knowledge_documents` and `knowledge_document_versions` through V156. Exact submitted and human-reviewed snapshots are separate from coalesced autosave rows; current AI-memory review binds to an immutable version, checks the presented revision and current existing owner/manager authority, and records its mandatory audit in the native transaction. This establishes the existing AI-memory review foundation only. It does not establish Skill identity, active assignment, a governing resolver, a bootstrap grant or approval of other engineering artifacts.
+
+**Legacy disposition:** retain historical document content, status and review metadata for authorized human list/get/history access. An approved flag without an exact same-document human review receipt remains `legacy_unverified`; do not backfill or invent that receipt. Such a row, a submitted candidate, a stale content/source binding or a binding to another document cannot become governing AI-memory context. Apply the shared exact-current predicate to native recent, selected, folder, ticket, citation, direct memory and update-drafting readers and to RAG keyword/ANN retrieval. Ordinary document behavior is preserved; an ordinary contextual source is not thereby a Skill grant or approved product oracle. Existing general-type rolling Zyra notes are not reclassified or claimed to satisfy governed Skills.
+
+ANN chunks must also carry the existing content hash for the current reviewed text. After a content change and fresh approval, old indexed chunks remain unavailable until matching chunks exist; no fallback may re-admit an unbound AI-memory row. Current approved text can still be retrieved through the independently filtered keyword/native paths. Indexing status/hash and search bookkeeping do not change the human edit revision or invalidate an unchanged review; actual governing body/source/type/folder changes do. This is source implementation pending migrated-database/browser execution, not a deployed availability or complete reader-security assurance claim.
+
+**Minimum next schema/contract fit:** reuse `knowledge_documents.id` for content identity and `knowledge_document_versions.id` plus digest for exact governed versions. Add an explicit Skill subtype/identity to that owner only after the authority decision, and one versioned assignment relation referencing approved exact versions with project/module/subtype/audience, required/optional status, assignment revision and revocation history. Do not copy Skill content into per-agent stores. Resolution must evaluate current access, active assignments, conflicts and revocation and pin the exact content and assignment versions into governed authoring. No resolver is exposed by this slice: capability remains `not_implemented`; once implemented without ratified authority it must report `authority_unconfigured`, not a successful empty manifest.
+
+| Operational decision still required | Concrete proposal for owner review; not an active grant |
+| --- | --- |
+| Initial scope | Project-only pilot; defer workspace/global inheritance until its authority and conflict rules are explicitly configured. |
+| Skill content approval | Existing project owner/manager human sessions may review exact Skill content; machine principals remain denied, even with an administrator-owned token. Ratify the role mapping before activation. |
+| Assignment and revocation | Existing project owner human sessions control assignments and revocation; decide whether managers also receive that capability and whether ordinary content review and assignment require different people. |
+| Root/meta-skill bootstrap and recovery | Name the actual human bootstrap/recovery authorities, ratify the exact first meta-skill version/digest, and decide the required independent review/quorum and any explicit single-maintainer exception. No reviewer agent or migration appoints them. |
+| Missing/conflicting mandatory guidance | Block governed authoring, preserve independently authorized raw evidence intake, and require a named accountable human decision for any scoped exception. |
+
+These choices, assignment storage/resolution, revocation/invalidation across consumers, semantic conflict handling and real client/UI proof remain S0 admission gates. The retained original external QA loop has its own task/assignment/report/selected-apply contracts; this KB change cannot close I3-Q.
+
+## Work package A — Native requirements and testcase links (first authored-artifact integration)
+
+Extend the existing Requirements UI and KB `requirement_note` document/version owner with a stable typed native requirement and acceptance criteria. Resolve and pin **approved active requirement and test-case skills**, including subtype-specific composition, to generated/updated candidates; missing/stale/conflicting required skills block guarded publication. Extend native relationship services and MCP to create/read/revise native requirements, author case candidates and link them by native ID/revision. Preserve external Jira/Linear/Notion ownership and synced mirrors, and existing testcase history. Recompute separate authored/approved/executed coverage.
+
+**Ship together:** migration only if actually needed; REST + MCP adapters; native UI; permissions; optimistic versions; idempotency; audit; reader migration/compatibility; API/UI/database tests; disposable agent create→read→update→link→approve/reject checks. Prove ASE-E2E-01, -02, -05, -07, -08, -11, -12.
+
+**Blockers:** demonstrate how the existing graph canonical link layer represents the native case relation without misusing `sourceRefs` or external ticket keys.
+
+## Work package B — Governed manuals and policies
+
+Use existing Knowledge Base documents/versions/folders. Implement internal/external and audience/subtype-classified user manual views and section review/update workflow, separately from source authority, exposure and confidentiality. Effective approved manual skills govern candidate drafts, with version pins. Add internal/external/externally mandated policy applicability and skill composition; keep audience, authority and distribution independent. Add decision/policy/rule governance and immutable accepted policy revisions, authority, previous/effective history, enforcement refs, and semantically valid corrections. Reuse Tesbo's actual reviewer/notification/audit services; adapt Nesberry policy triad by principle, not path or status vocabulary.
+
+**Ship together:** UI views + diffs, REST + MCP proposal interfaces, enforcement of human approval, history immutability, stale-impact notifications, missing-verification status and tests for both legitimate changes and adversarial unauthorized attempts. Prove ASE-E2E-03, -04, -13.
+
+**Blockers:** settle which existing KB version representation supports immutable accepted revisions and whether a narrow metadata extension is needed. Agent cannot assign its own normative authority.
+
+## Work package C — General work items and file/evidence access
+
+Use applicable approved task/issue and files/evidence skills to govern agent candidates and provenance. Extend existing Zyra task board/activity and Bugs relationships into one general project work-item/task journey, without changing the meaning of existing AI-generation tasks or duplicating Bugs. Add safe upload/link/metadata/byte-verification MCP/REST path over existing KB file/storage owner; use existing evidence links.
+
+**Ship together:** work-item classification/ownership/status, board UX, source-aware reopen/close rules, MCP integration, project membership/role limits, file size/type/content validation, provenance/hash and storage-exists truth. Prove ASE-E2E-02, -07, -09.
+
+**Blockers:** existing KB restore/download semantics and exact files/evidence owner must be re-verified. No speculative file service rewrite.
+
+## Work package D — Connected Change Packet and reviews
+
+Compose the existing FR-115/T-455 changeset identity, FR-119 impact lifecycle, FR-027–037 proposals and FR-118/T-426 typed relationships into the Change Packet view, using existing graph history/review, Zyra activities and notification delivery with exact effective skill-assignment/version/digest pins per applicable proposal, applicability dispositions, typed edges and durable review receipts. Handle idempotent resume, conflicting revisions, partial writes and per-domain approval. Surface the change in a **single** Zyra review screen and project traceability report rather than creating a second Copilot.
+
+**Ship together:** bounded batch API and thin MCP orchestration, atomic selected native publication with a shared transaction client; partial staging/external-effect journals and explicit resume under ASER-C03–05, stale/current links, history, deduplication and notifications, error recovery, exact typed report views. Prove ASE-E2E-01 through -10 and -14 through -15.
+
+**Blockers:** prove candidate vs approved vs executed vs deployed identity distinctions from the current graph and native runs before enabling completion badges.
+
+## Work package E — Agent adoption and CI guardrails
+
+Publish app-agnostic agent installation template with mandatory effective-skill resolution, conflict/absence/stale failure and meta-skill authoring controls; support Claude Code and a distinct `AGENTS.md`-reading agent. Inspect actual tool catalog at runtime, secure project binding, existing-record reconciliation, delegation and N/A reasoning. Add source/PR linkage verification and opt-in CI policy that reports missing domain assessments without mandating unnecessary updates.
+
+**Ship together:** negative tests for cached catalogs, token mismatch, no MCP connection, replay, conflicting revisions, human rejection, cross-project links and offline resolution. Prove ASE-E2E-04, -06, -07, -08, -14.
+
+**Blockers:** project-aware secure secrets and reconnect flow; avoid requiring always-on remote calls for builds without bound Tesbo integration.
+
+## Independent specification assurance (separate from implementation author)
+
+Use the **actual canonical** Nesberry team charters/orchestration as an independent review method applied to this Tesbo specification. Preserve original isolated findings and evidence before reconciling them. Do not reword the teams' instructions to elicit expected issues, and do not describe a written list of hypothetical objections as team findings.
+
+Review targets: the exact same eight canonical specification files and all six subordinate repository views (README, requirements, design, skills-governance, agent-rule template and this plan), plus the pinned Tesbo source/living baseline and the unchanged applicable Nesberry charters and referenced methodology. Confirm input hashes, source and charter revisions in every invocation; record sampling and unexamined areas rather than implying full-file or runtime coverage.
+
+For each invoked team preserve: role/charter SHA, input SHA, invocation identity, original findings, counterexamples, user/engineering consequence, evidence tier, proposed falsifiable test, explicit unknowns and false positives. Follow the canonical role order and **Graph then White closeout** using actual delegated reviewer invocations. Record any incomplete formal quorum or missing target verifier; an analytical agent receipt is not an operational human approval. An unexecuted review stays `not_run`.
+
+The *specification* is the review target; the teams' methodology is not being rewritten as part of this PR.
+
+## Verification gates
+
+- **Architecture:** no duplicate owner for requirements/cases/documents/policies/bugs/tasks/files; call native services with existing validation/authorization.
+- **Correctness:** reuse-first no-duplicate scenario; native requirement versioning/traceability; approval/publish exact-version checks; stale edit conflict; idempotency; partial failure recovery.
+- **Security:** project and token isolation; delegated principal has no elevated authority; target source binding; file access and byte verification; role/plan/approval bypass attempts.
+- **User experience:** correct modules/records visible to QA/BA/coding agent/PM/manual owner, accessibility and single Zyra workflow.
+- **Execution:** selected unit/integration/E2E suites actually execute; approved cases only; attached evidence and target revision truthful.
+- **Operations:** tool schema/version deployed identity, notification idempotency, rollback/cancel/retry, audit and history.
+- **Documentation:** descriptions match verified source and current UI; unimplemented features explicitly labeled proposed.
+
+- **Graph-extension falsifiers:** watcher/provider outage, duplicate/reordered/cancelled events, renamed/deleted source, unsupported/dynamic parse, direct/transitive/unlinked consumers, source/model/guard contradiction, cyclic/bounded path generation, existing-case equivalence and no duplicate write, native dispatch without target assertions, stale build/old Passed history, unavailable evidence bytes, foreign-project graph edge, revoked source binding and accessible role-specific UI.
+- **Evidence rule:** register new outcomes as ASE-FLOW-17..54 in the existing scenario matrix; map each to original FR/T/MBT/QA IDs under P-14 before canonical acceptance. Proposed tests, static source selection and prior successful CI do not constitute executed acceptance of these outcomes.
+
+## Non-authorized actions in this PR
+
+Do not modify production tenants, delete/migrate live data, mark tests passed, claim target E2E verified, silently revise approved policies, assume all 58 source tools are deployed, alter agent charters, or merge before review and green checks. No actual assurance-team execution is recorded by writing this plan.
+
+
+## Work package F — Event, human-activity, consistency and release additions (integrates I1-I7)
+**F1. Source observation and idempotent event reconciliation (I1):**
+- Inventory current graph/source bindings, graph capture, notification writers and provider integrations; define source event IDs/scope, observer schemas and subscribed source revisions; Kiro-like optional hook is **advisory**, never the only trigger or authorization.
+- Add or reuse provider/CI event intake, permissioned manual reconciliation and durable reconciliation cursor. Deduplicate same event, tolerate out-of-order delivery, preserve event gaps and `stale/unknown` state; audit unauthorized source and project.
+- Tests: source commit with no agent hook; duplicate webhook; forced gaps; hidden/unbound repo; changed deployed version without source PR; delayed source review notifications.
+
+**F2. Agent activity and trust-tiered timeline (I2):**
+- Reuse Zyra task/agent session/history and graph receipts, map external submitted events to observed/provider-attested/agent-reported/inferred/unknown without collecting unnecessary full prompts or hidden reasoning.
+- Add UI and API read models with actor attribution, correlation IDs, tool capability metadata, outcome, timestamps, privacy scope and access limits.
+- Tests: no runner receipt, delegated actor identity, missing agent event, wrong-project trace read, redacted restricted policy evidence, QA versus PM view.
+
+**F3. Compact context and safe composite MCP (I3):**
+- Select 1–2 compound operations that remove genuine agent round trips; extend the existing proposed `get_quality_context` and T-422 `get_effective_testing_method` owners; authoring/skill names are aliases/profiles until actual capabilities are advertised. A composite proposal adapter must not create a second context resolver or writer.
+- Keep native CRUD and reviewed apply as owners; introspection/scopes and project/plan locks apply to each suboperation. Use revision guard, payload digests, idempotency and per-item partial receipts.
+- Tests: authorization parity with direct endpoints, partial write/retry, concurrent updates, stale skill binding, legacy bulk bypass, disabled per-project MCP, old client catalog.
+
+**F4. Read-only cross-artifact consistency/negative-space analysis (I4):**
+- Existing graph/Model Studio and requirement/case/KB/policy references provide candidate relationships; define source authority, expected behavior vs observation, typed links and current revision.
+- Compare approved requirement/policy with changed code/agent inference and docs, output conflicts, unknowns, stale references and missing coverage; do not auto-edit authoritative artifacts or claim exhaustive semantic proof.
+- Tests: deliberate policy contradiction, stale linked case, missing documented customer journey, permitted N/A, no target build and false-positive challenge.
+
+**F5. Role-sensitive change/release workspace (I5-I6):**
+- Extend Zyra change-review page and existing project navigation/reports; no separate Copilot, independently writable readiness state or duplicate document system. Use the concrete ASER-UX01–03 capability/recovery mapping in canonical 02/07 and retain the existing exact-link, pending discovery and dirty-state contracts. Define role-specific decision needs for solo/developer, BA, QA, PM, policy/security, support and executives; preserve field/evidence ACL.
+- Release readiness includes specific source/deploy candidate, approved expectations, case/run results, verified evidence, known defects and risks, human sign-offs, rollback/forward and monitoring. Native policy P-07 and MCP P-18 remain binding.
+- Tests: three roles consistent identities, accessible status/navigation, no leaks, approval version drift, merged-not-deployed, degraded after smoke, wrong build, postdeploy incident and resumed QA.
+
+**F6. Delivery improvement measurement (I7):**
+- Integrate deployment/source/incident facts into existing reports, preserving provider attribution. Define DORA change lead time, deployment frequency, failed-deployment recovery time, change fail rate and deployment rework rate; avoid combining throughput and instability into a false safety score.
+- Add human-level time-to-understand, review effort, unmatched code changes, missing artifacts, inaccurate agent assertions, production defects and release rework only when observable.
+- Tests: blank deployment integration yields NO_DATA; failed release not excluded; rework deployment counted under explicit rule; clock normalization and period denominator; no causality claim from one snapshot.
+
+**GEX integration under F1:** first prove provider and optional local watcher observations remain distinct from immutable Git capture; support add/modify/delete/rename, missed-hook reconciliation, stale/out-of-order delivery and verifiable incremental/full source re-index without client-controlled server roots. Reuse current graph history and project source binding. An unhandled language, repository scope or dynamic relation is UNKNOWN, not a false no-impact candidate.
+
+**GEX integration under F4:** extend FR-117 Model Studio's current sequential generator only through versioned guarded/data/composed capabilities, then link verified source dependency paths to existing accepted model/requirement/case relationships under FR-118/119. Preserve original source/oracle/edge revisions, explicit unlinked candidate disclosure, coverage denominator and no duplicate native case creation. The internal Tesbo CI impact planner is not a new target-project graph owner.
+
+**GEX integration under F3/I3-Q:** native model-run creation is dispatch only. Join model obligations to the independently assigned executor with its own driver, original report bytes, verified assertions/build/fixture/oracle, separate retest attempt and exact human selection/review. Require real target proofs for conformance. Skill assignment and authoring governance do not arise from a watcher, graph path or code-derived test result.
+
+**Integration exits in order:** (1) source revision without agent is visible or explicitly UNKNOWN; (2) code-dependency links nominate native cases and preserve unlinked impact gaps; (3) bounded accepted behavior models propose nonduplicative scenarios; (4) target runner returns verifiable outcomes and coverage basis; (5) one source→QA→original evidence→retest→decision journey is proven in a disposable project. Different increments may ship partial capabilities, each labelled with unsupported semantics and unexecuted obligations; I3-Q cannot be skipped.
+
+**I1-I7 acceptance fixtures:** `requirements.md` R-ASE-37..48 and canonical-baseline ASE-FLOW-01..16, plus proposed GEX ASE-FLOW-17..54. These are **proposed tests**, not CI E2E executions or a new official canonical QA numbering authority. Bind every implementing task to existing original Tesbo FR/T/QA IDs after reading the current eight-file baseline.
+
+## Skills quality/acceptance and cross-module release gates
+1. **Version and assignment separation:** candidate/version, approval and effective binding are different states; older effective version remains active until independently authorized assignment changes.
+2. **Agent must be non-governing:** MCP and all machine-principal API paths cannot edit prior skill text, approve or assign/activate/deactivate, even if bearer token belongs to owner/admin. Reject client-supplied human assent.
+3. **Authority is not audience:** internal/external manuals and policies preserve independent source/authority, distribution and access rules and subtype-specific effective skills.
+4. **Root cannot self-authorize:** protected meta-skill bootstraps through human-only authority; new agent-authored meta candidates are inert; dependency cycles and weaker adapters are rejected.
+5. **Effective selection is deterministic:** version pin, context filters, composition/precedence, conflicts and missing required assignment are testable and observed, including after revocation and cache invalidation.
+6. **No historical fabrication:** new publication uses exact skill assignment/version/digests; historical artifacts without known pins remain UNKNOWN; frozen runs do not change retroactively.
+7. **Evaluation is not self-certification:** lint/pass-through examples don't prove improved output; held-out test cases and counterexamples, reviewer records and real verification required.
+8. **All write entrances covered:** regression tests exercise direct UI/REST/MCP, Zyra, imports, automation and older client routes rather than assuming a new Skills module implicitly gates them.
+9. **Green quality checks are distinct from deployment:** no actual implementation E2E/test/review claim until authenticated runtime checks and independent sign-off exist.
+
+### Specification assurance rerun obligation
+After any material Skills-governance spec revision run each of the established teams against the **spec itself** (Blue reuse, Red premises, Green seams, White completeness, QA lifecycle, Grey user journeys, Security trust boundary, Purple UX, Graph evidence, Elephant-Gold cold read) with Simulation performed as Grey’s declared G0/G1 activity, not an invented additional formal team. Record per-role evidence, falsifiers, findings, unresolved risks and outcome in a review receipt. **Charter-guided desk inspection by the specification author is NOT independently executed agent/team review**; log that distinction if no delegated independent-run capability is available. Do not modify the team charters to lead them to expected answers.
+
+## Integrated source prerequisites and rollout gates (revision 1.4.28)
+
+| Existing task / scope | Concrete prerequisite before affected capability is exposed | Required proof / evidence boundary |
+| --- | --- | --- |
+| T-002/103/104/305/430 + A/S0 | All case/status/approval/dependency writers retain principal kind and exact reviewed meaning; staged candidate IDs resolve only at apply | Positive and denied tests across UI, both MCP aliases, REST/entity, bulk/import/clone/restore, Zyra, SDK/jobs/integrations; valid human CAS and stale refusal; new-run eligibility and preserved old snapshots |
+| T-411/439 + E/F3 | P-18 opt-in/named-client policy at external initialization/discovery/calls, plus current membership/scope | OFF/unknown/revoked/cached-client probes on both aliases; legitimate enabled client works; native authorized access remains independent |
+| T-438/422/448–452 + B/S | Immutable governed snapshots and one guide resolver/binding owner; current coalesced KB history is not exact accepted history | Two edits inside snapshot window, intervening submission/review, concurrent base/assignment change, history/restore readback; global/workspace/project scope and reader authority checks |
+| T-307/207/433/459 + C/F3 | Bug association is separate from execution/result correction | Side finding linked to Passed/Untested keeps result/time/performer; explicit valid correction has its own approval and preserved prior attempt; sealed automated positive control |
+| T-455/456 + F1 | Stable source binding/configuration revisions and explicit multi-source capability | Rebind then delayed old event; two repos in one release and one source in two releases; configuration-only/source-free change; no false complete first slice |
+| Requirements owner + A/F4/F5 | Successful empty versus unavailable/partial/denied/stale linkage and coverage | Timeout/403/partial provider response, successful empty, source/project switch and late response; no duplicate suggestion or false zero/ready |
+| T-301–306/457 + D/F3 | Full operation lifecycle, native atomic apply, readback and explicit resume | Uncertain acknowledgement, partial staging, changed skills before resume, cancellation/rejection/supersession and required audit failure; no duplicated or half-published official records |
+| T-461 + F5/F6 | Phase-aware release/readiness and versioned deployment metric normalization | Tested candidate before deploy; actual build after deploy; failed smoke retained in production-change population; independently scoped risk/decision; missing data and censored recovery |
+
+These source conditions are not repaired by this documentation change. They are coupled implementation prerequisites already belonging to the named native owners. Their runtime regressions, migration and current UI checks are **NOT RUN** in this specification-only change. The archive preserves the previous scoped implementation evidence without expanding its claims.
+
+### Required evidence record per implementation task
+
+Keep fixture/project and principal/capability, exact source/build/schema, initial native IDs/revisions, action and injected fault, required and forbidden effects, authoritative readback/DB assertion, evidence bytes and cleanup in the task/PR. Verify the negative case and a valid neighboring path. A source check, structural document check, model agreement or scenario count is not executed product acceptance. Existing runtime limits, external client compatibility, root recovery/quorum, actual authority mappings, retention and operating budgets must be explicitly closed by their accountable owner before exposure; unknown remains a named gate.
+
+### R-ASE requirement → canonical owner/design → work → proof crosswalk
+
+All 48 scoped requirements are represented individually. Existing FR/T identifiers remain unchanged. `D` is the ASER design in canonical 03; `Cnn` is ASER-Cnn in canonical 04; `UXnn` is ASER-UXnn in canonical 02/07. Work packages S/A–F are integration slices of the listed existing task owners, not a second implementation backlog. Slash/range scenario shorthand denotes individual existing IDs in the same family. All scenario evidence remains **NOT RUN** unless a separate exact-revision runtime receipt says otherwise.
+
+| Requirement | Existing canonical allocation | Design / contract / UX | Work slice | Falsifiers / proof obligations |
+| --- | --- | --- | --- | --- |
+| R-ASE-01 | FR-115/118/119; T-455/457 | D §4/18; C02/C05 | D/F1 | ASE-E2E-01; ASE-FLOW-03; ASE-INT-07 |
+| R-ASE-02 | FR-119/124; T-457/461 | D §4; C01/C05 | D/F5 | ASE-E2E-04; ASE-INT-16 |
+| R-ASE-03 | FR-110/118; T-303/426/450 | D §2/5/18; C06 | A/E | ASE-E2E-02/11; ASE-INT-06 |
+| R-ASE-04 | FR-110/112; T-104/304/438 | D §3/18; C03 | A | ASE-E2E-01/11; ASE-INT-02/04 |
+| R-ASE-05 | FR-118/121; T-426/458 | D §4/14; C02 | A/F4 | ASE-E2E-12; ASE-FLOW-08 |
+| R-ASE-06 | FR-027–037; T-103/104/305/430 | D §5/18; C03 | A/S0 | ASE-E2E-12; ASE-INT-03/04 |
+| R-ASE-07 | P-05; T-438 | D §3/7/18; C03 | B | ASE-E2E-01/04; ASE-INT-02/13 |
+| R-ASE-08 | P-07; FR-112; T-304/438 | D §8/18; C03 | B | ASE-E2E-03/13; ASE-INT-02/11 |
+| R-ASE-09 | FR-118; T-426 | D §8; C02 | B/F4 | ASE-E2E-03; ASE-FLOW-05 |
+| R-ASE-10 | FR-071–079; T-201/206/307 | D §3/18; C03/C05 | C | ASE-E2E-02; ASE-INT-03 |
+| R-ASE-11 | FR-018–025; T-204/205/443 | D §3/6; C03/C06 | C | ASE-E2E-09; ASE-INT-09/14 |
+| R-ASE-12 | FR-010–017/060–063; T-102/105/203 | D §5/12; C03 | D/E | ASE-E2E-14; ASE-FLOW-03; ASE-INT-03 |
+| R-ASE-13 | FR-030/035; T-301/305 | D §6/13; C04 | D/F3 | ASE-E2E-05/06; ASE-INT-05 |
+| R-ASE-14 | FR-122; T-207/433/459 | D §15; C01/C03 | F5 | ASE-E2E-10; ASE-FLOW-04; ASE-INT-08/12 |
+| R-ASE-15 | P-10/P-18; T-401/411 | D §5/17; C03/C04; agent brief | E | ASE-E2E-08; ASE-FLOW-01; ASE-INT-12 |
+| R-ASE-16 | FR-115/119; T-456/457 | D §11/14; C01/C05 | E/F1 | ASE-FLOW-02; ASE-INT-16 |
+| R-ASE-17 | FR-065/066; T-005/401/439 | D §6/17; C04/C06 | E/F3 | ASE-E2E-08; ASE-FLOW-15 |
+| R-ASE-18 | FR-010–017/123; T-102/103/106/411/439 | D §6/18; C03/C06 | S0/E | ASE-E2E-07/12; ASE-INT-03/06/09 |
+| R-ASE-19 | FR-115–119; T-455/457/458 | D §11/14; C02/C05 | D/F4 | ASE-E2E-15; ASE-FLOW-05 |
+| R-ASE-20 | FR-030/119; T-206/306/457 | D §5/12; C05; UX03 | D/F5 | ASE-E2E-06; ASE-FLOW-07; ASE-INT-05 |
+| R-ASE-21 | FR-076/077/112; T-422/452 | D §10/18; Skills §2/12; C03 | S | SK-E2E-01/02/12/13; ASE-INT-01/02 |
+| R-ASE-22 | FR-107/108; T-449/450 | D §10/18; Skills §2/5; C03 | S | SK-E2E-04/05/06; ASE-INT-01 |
+| R-ASE-23 | P-07; FR-033; T-102/103 | D §10/18; Skills §3; C03 | S0 | SK-E2E-03/18; ASE-FLOW-12; ASE-INT-03 |
+| R-ASE-24 | FR-108/113; T-422/448 | D §10; Skills §4/12; C03 | S0 | SK-E2E-09/10/17; ASE-INT-01/11 |
+| R-ASE-25 | FR-108/111; T-450 | D §10; Skills §5/13; C03 | S0/S2 | SK-E2E-06/08/16; ASE-INT-09 |
+| R-ASE-26 | FR-108; T-422/450 | D §10; Skills §5/12; C03 | S | SK-E2E-08/09/17/22 |
+| R-ASE-27 | FR-112; T-452 | D §10; Skills §5; C03/C04 | S2 | SK-E2E-05/11/15; ASE-INT-05 |
+| R-ASE-28 | P-05; FR-123; T-438 | D §7/10; Skills §1/6; UX02 | B/S2 | SK-E2E-07; ASE-INT-06 |
+| R-ASE-29 | P-07; FR-118; T-438/426 | D §8/10; Skills §1; C02 | B/S2 | SK-E2E-07; ASE-FLOW-05 |
+| R-ASE-30 | FR-112/122; T-452/459 | D §10; Skills §12/13; C03 | S2/C | SK-E2E-15/28; ASE-INT-09 |
+| R-ASE-31 | FR-123; T-102/106/450 | D §10/18; Skills §6/14; C06 | S0/S1 | SK-E2E-09/14/21/25; ASE-INT-06 |
+| R-ASE-32 | FR-114; T-453 | D §10; Skills §8/13 | S1/F6 | SK-E2E-20/27 |
+| R-ASE-33 | FR-108/111; T-451 | D §7/18; UX02/03 | S1/F5 | SK-E2E-03/04/06; ASE-INT-13 |
+| R-ASE-34 | FR-037; P-17; T-002/103/430/439 | D §18; Skills §7/14; C06 | S0/S2 | SK-E2E-19; ASE-E2E-12; ASE-INT-11 |
+| R-ASE-35 | FR-119; T-457 | D §10/14; Skills §5/14; C05 | S2/D | SK-E2E-05/15; ASE-FLOW-09 |
+| R-ASE-36 | FR-108; T-450 | D §10/18; Skills §12; C06 | S0/S2 | SK-E2E-11/16; ASE-INT-14 |
+| R-ASE-37 | FR-115/116; T-455/456 | D §11/18; C02 | F1 | SK-E2E-23; ASE-FLOW-02/16; ASE-INT-07 |
+| R-ASE-38 | FR-060–063/122; T-203/206/433 | D §12; C01; UX02 | F2 | ASE-FLOW-04/07/12; ASE-INT-09/13 |
+| R-ASE-39 | FR-120/030/035; T-301/305/401 | D §13; C03/C04 | F3 | SK-E2E-24; ASE-FLOW-06; ASE-INT-04/05 |
+| R-ASE-40 | FR-115/118; T-455/458 | D §14; C01 | F4 | SK-E2E-26; ASE-FLOW-05; ASE-INT-10 |
+| R-ASE-41 | FR-119; T-306/460 | D §12; UX01–03 | F5 | ASE-FLOW-07/13; ASE-INT-13 |
+| R-ASE-42 | P-07; FR-124; T-461 | D §15; C01/C05 | F5 | ASE-FLOW-08/10; ASE-INT-08/16 |
+| R-ASE-43 | FR-122; T-207/433/459/461 | D §15; C01/C02 | F5 | ASE-FLOW-11/14; ASE-INT-08/15 |
+| R-ASE-44 | FR-124; T-461 | D §15; C01 | F6 | ASE-FLOW-11; ASE-INT-15 |
+| R-ASE-45 | FR-116/119; T-203/456/457 | D §11; C02/C04/C06 | F1 | ASE-FLOW-16; ASE-INT-07/14 |
+| R-ASE-46 | FR-123; T-106/440 | D §12; C06; UX02/03 | F2/F5 | ASE-FLOW-07/15; ASE-INT-06/13 |
+| R-ASE-47 | FR-114/124; T-005/453/461 | D §17; UX01/02 | F6/E | ASE-FLOW-01/07; ASE-INT-12/13 |
+| R-ASE-48 | P-07; FR-115; T-201/455 | D §5/18; C01/C05; UX01 | A–F | ASE-E2E-04; ASE-FLOW-13; ASE-INT-16 |
+
+### Additional integration falsifiers — planned, NOT RUN
+
+These 16 cases close specific integration seams exposed by independent review. They complement, not replace, ASE-E2E-01–15, ASE-FLOW-01–16, SK-E2E-01–28 and the existing canonical QA/MBT suites. Each runs only in an authorized isolated fixture with real native persistence where claimed. The oracle is the applicable contract, not the implementation or an agent summary. Every denied action must preserve forbidden state, and every refusal has a valid neighboring positive control.
+
+| ID | Fixture and steps / fault | Required effect and forbidden effect |
+| --- | --- | --- |
+| ASE-INT-01 | Approved platform guide G1, workspace pin and project overlay; read through old method entry and new skill/context profile; propose/approve G2 without assigning, then explicitly assign | Same T-422 identity/resolver and exact hashes from both entries; G1 remains effective until assignment; no fake project, copied core, implicit MCP enablement or model-key dependency. Candidate read is data only. |
+| ASE-INT-02 | Mutable KB draft A; submit B; edit C within 15 minutes; concurrently submit stale base and change skill assignment; approve/retrieve B and restore a permitted draft | B's exact governed content/semantic metadata/attachment and method hashes persist unchanged; stale submit refuses; ordinary autosave remains usable; no invented historic approval or mutation of the accepted snapshot. |
+| ASE-INT-03 | Current approved case A plus independent custom fields/links; machine token owned by admin and a permitted human; exercise create/update/status/bulk/clone/import/restore/approval and new-run entrances. Separately link a side Bug to a Passed/Untested attempt | Every protected path retains principal kind and exact reviewed meaning; machine cannot approve/publish; legitimate exact human transition works. A changed definition cannot inherit approval, skipped run items are disclosed, old run remains unchanged. Side association changes no verdict/time/performer; explicit valid correction has its own reviewed receipt. |
+| ASE-INT-04 | Shared staged requirement/case/suite operations, one already committed dependency and one unapproved dependency; select a batch and inject mandatory audit failure | New native IDs only inside valid apply; selection is dependency-closed; existing commitment reused exactly once. Unapproved dependency or audit failure produces zero official partial writes, no orphan suite and no independent audit success. |
+| ASE-INT-05 | Composite stages requirement, fails manual and loses case response; change effective skill; repeat same key/digest, then request explicit resume with stale/current journal revision | Duplicate only reads logical receipt; uncertain item is read back before action; committed operations never replay. Stale resume/skill blocks affected remaining work, preserves history and requires new candidate revision where intent changed; reused key with different payload conflicts. |
+| ASE-INT-06 | Approved assigned skill, authorized draft candidate and restricted policy/evidence across two projects; exercise direct/list/history/RAG/recent/folder/Zyra/export/graph/cache reads, then revoke access | Only approved assigned manifest is governing instruction; authorized candidates remain inspectable as data; no cross-project bytes/identity/count leak or cached privilege renewal. Missing access is permission-safe uncertainty, not successful empty or activation. |
+| ASE-INT-07 | Source A/configuration1, rebind B/configuration2; deliver duplicate/out-of-order A events; one release combines two repos and two releases consume one shared commit | Historical event retains A/config1; unrelated current head is not advanced; receipts dedupe without erasing distinct revisions. Release decisions/results remain independently scoped. Single-source capability refuses/incompletely labels multi-source claims. |
+| ASE-INT-08 | Known tested candidate B1 before deployment; exact human decision; deploy observed B2 or unknown build; later critical policy change and smoke failure | Initial decision can proceed with proper pre-deploy evidence without invented production proof. Wrong/unknown deployed build prevents post-deploy acceptance; changed context visibly stales prospective reliance. Original decision, failed observation and subsequent retest remain immutable. |
+| ASE-INT-09 | Revoke authoring skill while authorized runner/provider submits a raw failure; external MCP OFF in a separate branch; use agent-reported claim without independent target proof | Raw observation is retained only through its independently authorized route with truthful skill N/A/provenance; stale authored promotion remains blocked. MCP OFF denies its discovery/calls; a separately granted provider channel is not conflated with MCP. Receiving a report does not certify its described execution. |
+| ASE-INT-10 | Feed every ASER-C01 consistency value, unknown future schema value, approved-policy/code conflict and a valid cosmetic N/A | All consumers preserve exact meanings/reason/source/scope; unsupported schema refuses or truthfully degrades. Analyzer stays read-only; no generated requirement auto-ratifies code and no-detected-issue never means complete correctness. |
+| ASE-INT-11 | Legacy approved-looking rows with unknown provenance; adopted governed project, old client/import/job writer, revoked human capability and failed migration/audit | No fabricated approvals, skill pins or source history; explicit compatibility/rollout state. Old entrance cannot bypass the same native guard; denied/retried work preserves drafts and exact history. Root recovery requires separately authorized human policy, never agent emergency assent. |
+| ASE-INT-12 | Zero official cases and no Tesbo model key; external ChatGPT task/prompt → assigned executor own driver → original bytes → analysis → linked retest → human edits/rejects/selectively approves/applies | Exact task/attempt fences, immutable R1/R2 originals and true actor; analyst can consume actual permitted evidence. Only selected reviewed native effects persist once; manual fallback retains attribution. No run/model/case prerequisite, copied report substituted for original, or false local/production verification. |
+| ASE-INT-13 | Same change viewed by BA, QA, PM and solo multi-role human; restricted evidence, stale deep link, dirty comment, revoked action and project switch with delayed response | Common exact IDs with permission-filtered payloads; real next owner/action and recoverable denial. Native drill-down returns to same valid context, drafts/focus preserved; no private counts or stale cross-project content. Authentic UI, keyboard, reflow/zoom and AT checks are separate required runtime evidence. |
+| ASE-INT-14 | Resolver/source outage, lost notification acknowledgement, queue redelivery/dead-letter, expired claim, interrupted upload and unavailable bytes; also successful empty provider read | Distinct bounded states, durable obligations and safe readback/resume; no silent empty fallback, duplicate publication, false delivered/verified bytes or claim that local executor was killed. Measured task-specific resource/retry/retention limits and recovery owner are recorded before deployment. |
+| ASE-INT-15 | Fixed event fixture: production activations D1,D2; D2 later fails smoke, remediation deployment D3; duplicate D2 delivery; failed pre-production pipeline P; one unresolved incident and one unavailable provider | Normalize/dedupe at documented deployment grain: D2 stays in qualifying production population; P is separate, D3 classified consistently. Preserve denominators, source/time window, missing data and censored recovery; NO_DATA is not zero; no claimed Tesbo causality. |
+| ASE-INT-16 | Cosmetic change with no policy/manual effect; separately security-sensitive change requiring an unavailable policy/manual capability; mixed rejection and authorized deferral | All seven domains assessed; cosmetic N/A has reason with no fake record. Required unsupported work blocks relevant readiness unless a valid scoped authority permits an explicit exception. Rejected-only proposal can settle while independent QA/release obligations stay open; I8 is not a waiver. |
+
+### Full material-journey inventory for this integration
+
+Grey independently reconstructed 49 material journeys from actors/jobs, surfaces/entrypoints, requirements/states and available code/data paths. These are scoped review IDs, not new native test IDs. Initial evidence was 37 G0 simulations + 12 G1 source-grounded traces, with 24 HOLDS / 21 INCONCLUSIVE / 4 FAILS and **zero runtime observations**. The 43 high-risk and 6 medium-risk journeys each retain an explicit execution obligation below. A bounded HOLD does not establish full branch coverage or implementation; FAILS include source behavior that requires extension before the intended contract can hold. Independent QA challenge, delta results and exact branch omissions belong to the existing assurance record. This is not a line-by-line audit of the whole historic package or repository.
+
+| Journey | Goal | Risk | Original bounded evidence | Current implementation proof obligation |
+| --- | --- | --- | --- | --- |
+| GJ-01 | Create/adopt a workspace/project with one approved method reference and usable secure access; no accidental MCP enable or execution | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-02 | Enable, scope, inspect, rotate and revoke external access; disabled/foreign projects stay undiscoverable | High | G1: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-03 | Register/select an actually capable analyst backend and independent executor, then swap runtime without losing identity or granting privileges | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-04 | Start, switch, resume and hand off one durable project/session with truthful native/external summaries and intact drafts | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-05 | Retrieve exact authorized requirement, guide, case, report and skill context with explicit completeness | High | G1: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-06 | Ask a zero-case exploratory testing question and dispatch the exact reviewed prompt without a Tesbo AI key | High | G0: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-07 | Execute assigned authorized scope using the executor's own driver and report tested/blocked/not-tested truth | High | G0: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-08 | Clarify, cancel, expire, reassign or resume interrupted testing without widening scope or restoring stale authority | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-09 | Return and independently consume original case-free report/evidence, including manual fallback and supplements | High | G0: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-10 | Critique evidence, ask a precise linked retest and compare independent new report before revising proposals | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-11 | Human edits, rejects, approves and separately applies exact selected dependency-closed operations | High | G1: FAILS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-12 | Author/revise a case in existing editor while preserving structured content, reference images and unsaved work | High | G0: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-13 | Import/migrate/export cases losslessly and reconcile identities without silently publishing or corrupting history | High | G0: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-14 | Maintain suite placement and project metadata without unintended child/case changes | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-15 | Prepare/associate a plan and run using eligible approved cases, including scheduled/automation entrances | High | G1: FAILS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-16 | Perform a pinned test definition and record independently verified condition results, not just action checkmarks | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-17 | Triage direct/side/unresolved observations into correct existing/new defect and coverage action | High | G1: FAILS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-18 | Correct an accepted result or verify a reported fix while preserving all prior failures and exact history | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-19 | Create/revise native requirements and exact criterion/case relationships without requiring an external tracker | High | G1: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-20 | Read/sync an external requirement, distinguish stale/unavailable source and preserve provider authority | High | G1: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-21 | Maintain the correct manual/document section for its audience with exact history, independent access and review | High | G1: FAILS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-22 | Propose and human-authorize a policy change with decision, effective revision and enforcement evidence | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-23 | Track implementation/documentation/policy work and blockers without misclassifying generation tasks or duplicating Bugs | Medium | G1: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-24 | Upload/link/retrieve/retain general files and evidence with bytes, provenance and permission truth | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-25 | Start from spontaneous/prepared code and assess each relevant engineering domain in one resumable change | High | G0: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-26 | Observe/reconcile source changes without hooks and preserve multi-repo/branch scope, event ordering and gaps | High | G1: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-27 | Delegate work to multiple agents and resume with correct actual principal and common parent identity | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-28 | Recover a multi-artifact partial/ambiguous write and offline session without duplicating committed records | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-29 | Independently detect cross-artifact contradictions and unresolved obligations without rewriting the approved oracle | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-30 | Find, claim, assess and close durable QA impact work despite failed notifications and stale links | High | G1: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-31 | Discover/import/create/repair a skill candidate while retaining stable identity and inert immutable revisions | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-32 | Human reviews/promotes a skill and separately assigns/activates/revokes/recovers its effective binding | High | G0: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-33 | Govern an artifact write using exact contextual composed skills and recover in-flight drift/conflict | High | G0: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-34 | Evaluate a skill/method improvement against independent fixtures and preserve unknown/valid alternatives | Medium | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-35 | BA/QA/PM/support understand one change, inspect permitted proof and return to their next action | High | G0: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-36 | Release owner assesses exact candidate evidence and makes a fixed accountable decision | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-37 | Follow deployment through smoke failure, incident, rollback/fix-forward and independent later retest | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-38 | Read/export truthful delivery, coverage and instability measures with clear scope/denominators | Medium | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-39 | Inspect/correct/discard a bounded ephemeral model candidate without implied persistence or execution | Medium | G1: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-40 | Create/import, review, approve, activate, retire or roll back a persisted behavior-model revision | High | G0: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-41 | Map/reuse cases, generate bounded model paths and explicitly prepare an authorized native run | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-42 | Traverse exact typed requirement/model/case/attempt/Bug/evidence relationships, including missing/deleted historical sources | High | G0: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-43 | Capture/reconcile product-learning observations and approve an exact amendment without self-authorized implementation | Medium | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-44 | Share/revoke a run or evidence projection while keeping source/private history inaccessible | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-45 | Archive/delete/restore a project or record with truthful retention and link consequences | High | G0: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-46 | Restore identity/access and recover work after membership, token, session or entitlement changes | High | G0: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-47 | Roll out new governed writers and migrate old records/clients without fabricated provenance or hidden bypass | High | G0: INCONCLUSIVE | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-48 | Deliver a scheduled/outbound project report or notification with authorized recipients and retry truth | High | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+| GJ-49 | Derive target actors/module/context and draft source-backed stories without imposing Tesbo or pilot categories | Medium | G0: HOLDS | NOT RUN — fixture, before/after native truth, required/forbidden effect, alternate entrance and denied/retry branch; QA oracle and exact build evidence required. |
+
+The three independently identified major mechanism families are exact case approval versus status, Bug association versus independent execution truth, and governed snapshots versus ordinary KB edit history. ASE-INT-02/03 and the existing native task gates cover their implementation falsifiers. The original case-free QA loop is a separate capability gate (ASE-INT-12/QA-135–138). The full writer/reader inventory, actual human authority/root policy, migration, source/deployment/MCP compatibility, operational budgets and authentic UI/AT evidence remain required. The case list does not replace those gates or declare them passed.
+
+### Source-convergence proof allocation — definitions, not executed closure
+
+The source-to-target convergence table in canonical 03 is part of the existing FR-117/118/119, T-422, source-binding and native authoring/execution work. Reconcile the pinned source before making stronger current-state, human-governance, atomicity or learning claims. The existing IDs below are extended with explicit discriminating fixtures; this does not add another scenario family or change the 125-definition ASER total.
+
+| Existing proof owner | Concrete required/forbidden outcome at the real boundary | Current proof status |
+| --- | --- | --- |
+| MBT-AC-28/41; Model Studio applicability | Start with approved active r1; save and approve r2 without changing CURRENT r1. Race two explicit exact-version activations: one wins, the stale request conflicts. Rollback creates a new decision. Unknown legacy scope stays unselected; historical runs retain r1. Check UI, REST, MCP, generation, dispatch and coverage readers. | Source mismatch identified; implementation and runtime closure NOT RUN. |
+| MBT-C-05 and MBT-AC-45; ASE-INT-04/05/11; ASE-FLOW-24/25 | An AI/path suggestion remains unpublished until permitted selected apply. Fault after native case insertion but before required mapping/audit commit must not leave a forbidden canonical side effect. Exact retry and concurrent retry return the same committed identity; different legitimate operations remain distinct. Native human Draft flow remains valid. | Split-transaction source mechanism identified; real DB fault/retry proof NOT RUN. |
+| MBT native Run manifest contract; MBT-AC-37; ASE-INT-04/05/11/14 | Fault between native Run and manifest/audit; lose response after commit; retry/read back. Require one truthful committed identity or no forbidden effect, never an orphan presented as “nothing created.” A compensating delete or mock sharing a client is not proof of actual atomicity. | Source mechanism identified; native transaction/uncertainty proof NOT RUN. |
+| MBT-C-05/C-12; MBT-AC-29/34/35/36/43; ASE-INT-05/11; ASE-FLOW-26 | Accept exact model/case revision mapping; race removal with new dispatch. If removal wins, new use stops; already accepted historical reliance remains reconstructable. Missing legacy revision/decision stays UNKNOWN; restore does not reactivate. | Optional pins/physical unlink inspected; lifecycle and migration proof NOT RUN. |
+| ASE-INT-03; existing native approval/Model Studio checks | Deny matching-project machine credentials, including administrator-owned tokens, through both MCP aliases and direct REST; deny native AI masquerading as interactive assent. Preserve zero protected approval/status/audit-success effects. Permit independently authorized exact human action; test stale hash, replay and revocation. | Principal-kind source gap identified; all-writer/human-positive proof NOT RUN. |
+| ASE-INT-07; ASE-FLOW-28; T-455/456 | Two projects with distinct private source grants: A owner cannot bind/capture B's otherwise valid checkout/ref. Check binding, history, notification and metadata absence. Pair with authorized A capture, revocation during work and explicitly approved shared-source positive control. | Conditional source-entitlement gap; actual deployment policy/exposure UNKNOWN; runtime proof NOT RUN. |
+| ASE-FLOW-34/48/49/54; SK-E2E-31/38/39 | Capture a real correction or rejected/no-change suggestion without forcing regeneration or a native AI purchase. If optional regeneration runs, retain both immutable outputs and exact bases; no promotion/retroactive rewrite. Failed or partial matching remains unknown, distinct from an empty successful match. | Existing seams inspected; immutable capture, comparison and outcome efficacy NOT RUN. |
+| ASE-INT-03/06/14; ASE-FLOW-24/35/46/52 | Fail linked-case lookup with an existing link: show unavailable/stale, not zero coverage. Link a SIDE Bug to a genuine Passed or Untested manual attempt: status/time/performer remain unchanged. Separately authorized result correction preserves the original event. | Source mismatches identified; unchanged-reader/result regression proof NOT RUN. |
+| MBT-AC-39; ASE-INT-13/14; existing Model Studio UI tests | Delay A proposal generation, switch to B, then return A; also switch with already-loaded proposals, cancel/unmount and deliver a late write notice. Output stays on its original labeled model/revision or is discarded, never relabeled under B. Pair mapping-picker 503 with successful zero and one eligible result: distinct unavailable/retry versus empty/available states, with user selection preserved. | Source context/error-state gaps identified; authentic browser delay/recovery proof NOT RUN. |
+| MBT-COVERAGE/1; MBT-AC-02/34; ASE-FLOW-26/48 | Create two valid mappings for one native case and one actual occurrence: the declared observation count is one, not two. Add a distinct genuine retry: both actual occurrences remain represented. Exercise current versus historical/deleted scope, case/model revisions and evaluation/report consumers; mapping cardinality never weights an observation twice. | Native join shape and isolated source-equivalent mechanism inspected; real PostgreSQL/API/projection and learning-quality proof NOT RUN. |
+
+Acceptance definitions are not adequate execution fixtures until the implementing team binds actual principal, approved policy, source/build/schema, data setup, exact required and forbidden effects, authoritative readback, artifacts and cleanup. Test outside-effect faults using the real native transaction boundary; an implementation-shaped mock can conceal the failure. Keep source-supported findings open until their actual falsifiers pass. A documentation correction alone closes only the documentation omission.
+
+**Operation-grain control:** Retained MBT-AC-37 permits truthful PARTIAL for separately authorized native create, attach and mapping stages. Preserve that existing workflow and its committed receipt. The atomic source-convergence check above targets a single protected dispatch/publication operation whose required native effect and manifest/provenance belong to one commit; it does not retroactively combine independent user operations into a fictitious distributed transaction. Neither path may claim complete success for an uncertain or missing required stage.
+
+**Existing-test reconciliation:** At the pin, `e2e/api/model-studio.spec.ts` asserts the latest-head blocking behavior, and `bug-link-finalization.spec.ts` retains manual-run auto-failure on linking. Their passing protects the inspected behavior; it does not prove the retained target contract. Preserve historical test evidence and deliberately revise affected assertions with the implementing source change against independently accepted MBT/result contracts. Retain valid neighboring behavior such as finalized automation protection. Run the newly added source-entitlement, staging and removal-race fixtures explicitly; an older test with the same family ID does not cover a newly specified assertion.
+
+### Supplemental method-adoption proof within existing acceptance owners
+
+The recovered 285-line and 525-line method bodies are source inputs, not executed Skills. Extend the following existing acceptance definitions with concrete profile/consumer fixtures. Retain the 125 ASER definitions (15 ASE-E2E, 54 ASE-FLOW, 40 SK-E2E, 16 ASE-INT); do not count a refinement, an independent conceptual probe or an alias as another acceptance test or a runtime pass.
+
+| Existing owner | Added discriminating obligation | Evidence required before closure |
+| --- | --- | --- |
+| SK-E2E-35/36; accepted-oracle/native-case contract | Wrong shipped behavior conflicts with an accepted requirement; a separately approved limited release is a conforming neighbor; missing authority remains unknown. Preserve navigation observations without promoting them to expected truth. | Exact self-contained method/dependency version, actual outputs, independently grounded oracle, retained rejected cases; source-text review alone is insufficient. |
+| SK-E2E-32/35; ASE-FLOW-31/32/45; native case/history owners | Apply the declared method to a supported no-browser/no-role context or report legitimate N/A. Author a new case, review an executed case and reorganize its presentation: definition/attempt state and stable IDs never cross-mutate. Check native step fields and classification mapping; a valid manual path survives unsupported automation. | Reviewed profile/adapter, native schema/readback and actual positive/negative/history tests. A missing companion remains a package gap. |
+| SK-E2E-08/11/37/40; T-422 resolver | A case has multiple simultaneous method facets. The declared profile produces the complete permitted set or an explicit required-context conflict; changing a caller label cannot remove server-mandated protection. Unknown and unsupported contexts stay distinct. | Exact schema and matching grammar, current-policy fixtures, cross-alias/native consumer tests, and real protected-write revalidation. |
+| SK-E2E-04/05/11; MBT-AC-28/41 | Approved but unassigned method stays inactive; drafting/approving a new model leaves the selected active model unchanged. Preserve independently authorized historical inspection and inert candidate review. Drift before a write cannot silently substitute a newer version. | Separate owner and mode assertions, actual race/permission readback, retained original usage manifests. |
+| SK-E2E-31/38/39; ASE-FLOW-34/48/49/54 | Correction, rejection, regeneration and rollback retain original and successor outputs with reasons and exact bases. Intended reusable-case scope remains distinct from tested actor/data/build and evidenced equivalence. | Immutable before/after evidence, independently assessed output quality, legitimate no-change/UNKNOWN outcomes and scoped execution proof. |
+
+The earlier subordinate candidate labels SK-E2E-41/42 map to existing SK-E2E-04/05 and MBT-AC-28/41; SK-E2E-43 maps to SK-E2E-31/38/39 and ASE-FLOW-34/48/49/54; SK-E2E-44 maps to SK-E2E-05/11. These labels remain historical proposals, not newly allocated canonical IDs. The explicit fixtures above preserve their obligations without duplicating a suite or owner. Every runtime/profile-adoption result remains NOT RUN until the actual evidence is recorded.
+
+### Reconciliation with published canonical revisions 1.4.30 and 1.4.31
+
+## Revision 1.4.30 — portable method qualification
+
+Track method discovery evidence separately from Tesbo runtime acceptance. Before exposure, an independent evaluator records who selected the tasks and criteria, exact incumbent and candidate versions, task/evidence versions, permitted tool access and budgets, exposure checks, rubric and promotion threshold. Use unseen cases from dissimilar products with at least an undisclosed judgment gap, a simpler deterministic or no-change outcome, and conflicting or insufficient evidence. Give both arms equivalent authorized inputs and hold original outputs before synthesis. Record consequential discoveries, missed gaps, unsupported findings, effort, authority or evidence violations and regressions per case. Promotion requires predeclared thresholds and no material authority or evidence regression. Inconclusive trials stay on hold.
+
+For Tesbo runtime qualification, exercise active guidance degradation through detection, accountable response, stop or rollback and observable recovery. Verify restricted evidence is not exposed by the retained record and that history remains attributable. Method trial and runtime scenario status: NOT RUN.
+
+
+## Revision 1.4.31 — graph contracts and assurance findings
+
+Add these acceptance obligations to existing owners. Status for each is NOT RUN.
+
+| Proof | Existing owner | Observable acceptance |
+|---|---|---|
+| GEX-AC-01 | FR-115–119 / T-455–458 | Link policy and manual revisions, change one, show affected records and conflicts, deny restricted reads, require native approval before publication. |
+| GEX-AC-02 | Model Studio | Approve and activate A, save B, dispatch A, then concurrently change the active pointer and verify exact generation fencing. |
+| GEX-AC-03 | T-422 / SK-E2E-05/11/39 | Trigger degradation while work is queued and in flight. Confirm operator signal, eligible fallback and effective readback or pause. Stale results cannot replace current outputs. Historical evidence remains attributable and permitted. |
+| GEX-AC-04 | T-422 / SK-E2E-14 | Approved Skill bundles an inert reference. Revoke a sealed evaluation source while work is delayed. Verify no unauthorized transfer or readback and hold the affected verdict. |
+| GEX-AC-05 | T-455/456 | Lose an event during a binding rotation and finish an obsolete rebuild late. Verify stale detection, fencing, operator recovery and current convergence. Reindex unchanged source with another profile and distinguish extraction changes. |
+| GEX-AC-06 | T-201–207/301–308 | Target accepts an action, executor loses lease before reporting. Prove a single target effect where reconciliable and UNKNOWN with blocked mutating retry otherwise. |
+| GEX-AC-07 | FR-117/124 | Hand-calculate node, edge, guard and finite path coverage; prove unknown and bounded frontier handling. Compare diagnosis, flaky cohort and risk ranking against independent labeled controls. |
+| GEX-AC-08 | T-422 / portable method qualification | Pre-register equivalent access, fixed material dependencies or declared factors, independent arm-masked scoring where feasible, disagreement handling, repeated trials and uncertainty/sample rules. Keep the incumbent uncontaminated. Hold inconclusive promotion. |
+
+These obligations supplement the historical 125 planned definitions. The authoritative SK-E2E scenario rows are in this file. Model-calibration evidence and discovery trials do not substitute for independent Tesbo runtime acceptance.
+
+**Historical reconciliation boundary:** canonical revision 1.4.32 preserves the published 1.4.30/31 obligations and the source-convergence and imported-method refinements above. Earlier subordinate draft wording does not supersede that current canonical contract. All architecture/authority, implementation, runtime, visual and method-efficacy gates retain their recorded scope.
+
+The historical 125 ASER definitions and eight later GEX-AC proof obligations are distinct planned sets. SK-E2E-41..44 were subordinate candidate labels reconciled into existing canonical owners; they are not an additional canonical Skill test family.
+
+
+### Retained published Graph Analytics proposal
+
+Add planned acceptance to FR-115–119/124 and existing GEX proof. GA-AC-01 shows the DMIS approval-to-posting finding and carries authorized record links and exact scope into the native retest draft. GA-AC-02 separates no approved test, no run, missing evidence, stale, partial and unavailable states, including AI unavailable. GA-AC-03 verifies filters and deep links restore scope, permission changes remove cached detail and counts, and keyboard and narrow-width users get equivalent list and graph evidence. GA-AC-04 verifies the new report integrates with existing AI Insights and Traceability without duplicating their metrics. All four are NOT RUN.
+
+**Historical integration boundary:** the prepared 1.4.33 v7 candidate preserved the published 1.4.32 Graph Analytics proposal and reviewed portability corrections. Its exact receipts remain historical; the current canonical authority and later incoming amendments are stated below.
+
+The prior v7 target retained 125 ASER definitions, eight GEX-AC rows and four GA-AC prose obligations. The later published Graph Analytics amendment below explicitly supersedes that last set with five planned acceptance rows; none is an execution count.
+
+
+### Retained published Graph Analytics assurance amendments (1.4.33)
+
+The following split supersedes the v1.4.32 GA-AC summaries. All are NOT RUN.
+
+| Check | Existing owner | Fixture and expected/forbidden outcome |
+| --- | --- | --- |
+| GA-AC-01 · FR-119/121/122 | Graph change review + Cases/Runs/Evidence | DMIS conflicting manual, expired policy, approved current policy, current approval pass and older posting pass. Posting stays unverified through rejection, revision drift and revoked staging. Recover one receipt after lost reply, no implicit run or acknowledgment. Only a verified matching posting attempt resolves its gap. |
+| GA-AC-02 · FR-115–118/122 | Graph, Model Studio, Requirements/Policy | Independently count a modeled A/ newer draft B fixture and an approved requirement-only project, with duplicate retries, old-build pass, partial frontier and zero eligible. Match denominator and stages across surfaces; assert valid next action, no false complete count. Tie and critical/unknown fixtures retain canonical order during AI loss. |
+| GA-AC-03 · FR-123 | Reports + authorization/graph readers | With two principals, vary hidden edges; visible results stay equivalent. Revoke between pages, detail, queued AI and submission; deny stale/cross-principal cursors and prevent late data leakage. Publish a refresh mid-pagination, switch projects, exercise hard reload and Back/Forward; no mixed scope or duplicates. Verify keyboard, screen reader, 320 CSS px, 200% zoom and focus fallback after row removal. |
+| GA-AC-04 · FR-124 | Reports + independent QA adjudicator | Compare legacy Traceability/AI Insights and GA on equivalent inputs, including another project and no-impact, omitted dependency, contrary authority and downstream-failure controls. Record critical misses, false positives, quality of next action, time and total review effort against predeclared criteria. Withhold benefit claims pending results. Check contrasting suite execution vs obligation coverage and both export entry points, plus preserved six native exports. |
+| GA-AC-05 · T-455/456 and Reports | Index and Reports owners | Trace stale, partial, failed refresh and AI-only degradation to permitted correlations and responder. Recover upstream generation and prove current list/count/detail convergence without a clean-empty claim or silently rebased draft. |
+
+Record exact implementation revision, owner, fixture, actual evidence and disposition against each proof. Keep package unfrozen pending required independent closure and runtime proof.
+
+### Proposed 1.4.35 semantic assurance admission and journey refresh
+
+The separate eight-file v1.4.35 candidate refines existing FR-117/118/119, Policy/Manual KB, T-422 and native QA/evidence owners. The [exact-source disposition](reviews/2026-11-20-v1435-semantic-remediation.md) supersedes no historical receipts. F-01 exact original v1.4.34 package recovery is verified, and a v1.4.35 candidate ZIP has eight preserved bodies; this is not a full human approval.
+
+**Existing proof reuse:** GA-AC-03 already specifies hidden-edge visibility checks; strengthen its actual AI-inference output/citation/ranking and queued-context negative controls rather than allocating a parallel privacy test framework. GA-AC-05 already tests stale report projection; extend across *all* derived consumers after an explicit human correction. MBT and model/native histories own old-Passed/build/outcome distinction. No duplicate number namespace is granted to `SEM-PROBE-01..08`, which are author-written acceptance proposals in canonical 05, not independent Grey findings.
+
+**Fresh full-journey obligation:** Preserve original 49 GJ and later 50 independently derived G0/G1 jobs under their distinct versions. New unchanged-charter Grey review must independently reconstruct and challenge the current user-job denominator from the *exact* proposed 1.4.35 canonical source, not from these eight probes, earlier inventories or seeded answers. QA then checks real recovery/state cases; Security checks inferred private output/denied proof; Purple checks real current-UI explanation/contest controls; Graph maps genuine evidence and White alone decides freeze. No team's run should be counted unless its actual invocation and first-pass receipt exists.
+
+**Stop gates:** Source latest `development` implementation and merged PR #167/#168, current permissions/transactions and reports must be checked at exact head. No new protected write, UI proof, graph analytics or Skill activation is authorized by this documentation. An independent candidate cannot mark live GEX scenarios or original I3-Q report/retest as passed without genuine target observations.
+
+**Historical canonical checkpoint:** revision 1.4.34 preserves the complete published 1.4.33 and the assessed portability correction. The historical 125 ASER and eight GEX-AC definition rows remain unchanged; five GA-AC acceptance rows supersede the four earlier summaries. At that checkpoint GEX-SEM and GEX-DISC were pending subordinate proposals; the revision 1.4.38 allocation below now maps their conditions to existing canonical obligations. Incoming Graph Analytics refinements and later DISC content do not inherit earlier cold, UI, runtime or empirical review. All remain subject to their declared gates; the package is NOT FROZEN.
+
+### Canonical revision 1.4.38 admission allocation
+
+
+No additional FR, T, QA or ASER scenario family is created. Keep the current 125 scoped ASER definitions, all with their own actual execution status. Strengthen the existing owner work as follows; these rows allocate proof and are not additional test definitions or executed results.
+
+| Existing owner / implementation slice | Existing acceptance obligations and required additional evidence |
+| --- | --- |
+| FR-117 native model selection / T-455–458 integration | MBT-AC-28/29/41 cover Draft save, approval without activation, one current CAS winner, stale/default/old clients and historical/unknown migration. Verify both current native UI/API/MCP consumers and retained manual non-model work. |
+| Native case/run transactions, T-103/207/305/433 and Model Studio | Preserve PR #167 shared-client corrections. Reuse the actual model-run DB/API/MCP suites to inject mapping/manifest failure, competing retry/archive/unlink and occurrence remove/re-add at the final integrated source. No partial native write, false human assent or reassigned historical evidence is allowed. |
+| Source binding/capture, T-455/456 and R-ASE-37/45 | Extend ASE-FLOW-17–20/27/28 and existing cross-project source checks: destination ownership with an unentitled but server-allowlisted source refuses; entitled capture succeeds; loss/rebind during work prevents later promotion; an evidenced intentional global-sharing policy is a valid separately tested alternative. |
+| Native relationship/history, FR-118/T-426/458 | MBT-AC-34/35 and ASE-INT-11 prove mapping creation/removal history, exact relied-on basis, never-dispatched links, permitted erasure and unknown legacy handling without title matching or retrospective fabricated approval. |
+| Feedback/candidate/Skills, T-422 and existing Zyra review | SK-E2E-31/38/39 and ASE-FLOW-54 cover correction with unavailable generation, exact original/successor/rejected versions, independent judgment, matching outage, a valid similar-but-distinct case and rollback without rewriting history. |
+| Shared human review, P-07/T-305/430/439 | SK-E2E-03/18/19 and ASE-E2E-12/ASE-INT-11 preserve direct bearer refusals and legitimate explicit human actions while separately proving action-bound assent and native-AI origin across all applicable entrances. |
+
+### Subordinate candidate-ID reconciliation
+
+PR #168 proposed four additional labels before canonical reconciliation. Preserve their provenance as the aliases below; they do not create four more canonical definitions or independently passed outcomes. Strengthen the existing definitions when an alias exposes missing detail.
+
+| Subordinate candidate alias | Canonical owner obligations | Disposition |
+| --- | --- | --- |
+| `SK-E2E-41` | SK-E2E-04/05 and MBT-AC-28/41 | Two approved revisions resolve the explicitly activated basis, never implicit newest-approved. Subsumed. |
+| `SK-E2E-42` | SK-E2E-02/04 and MBT-AC-28 | Save, approval and activation remain independent. Subsumed. |
+| `SK-E2E-43` | SK-E2E-31/39 and ASE-FLOW-54 | Correction and exact before/after/rejected evidence survive regeneration and rollback. Subsumed with strengthened SK-E2E-31. |
+| `SK-E2E-44` | SK-E2E-05/11 and MBT-AC-29 | Changed effective selection is revalidated at the protected effect; no silent substitution. Subsumed. |
+
+The admission record must distinguish an old source finding, a correction seen in a newer open PR, final integrated runtime proof and actual deployment. An old failed tree cannot condemn a corrected head, and an old pass cannot certify a changed one. The original reviewer receipts remain immutable; later disposition is an informed delta.
+
+
+### Semantic/consequence proposal-label allocation
+
+The later PR168 semantic/consequence scenarios are preserved as acceptance variations under existing owners and canonical scenario IDs, not a new normative test family or executed results. Their original labels remain aliases for traceability. The scoped ASER denominator stays 125 planned definitions; broadened conditions must be executed and reported individually when implemented.
+
+| Historical proposal label | Existing canonical allocation | Required distinct condition/oracle |
+| --- | --- | --- |
+| `GEX-SEM-01` | ASE-FLOW-05/22/37/46; SK-E2E-34/36 | Approved policy, current manual and observed code disagree; preserve source authority, audience/version and unresolved expectations without promoting manual/code into policy. |
+| `GEX-SEM-02` | ASE-FLOW-21/45/52; ASE-INT-16 | An approved policy changes without a code commit; trace relevant manual, actor/state and downstream effects, and distinguish changed norm from stale guidance. |
+| `GEX-SEM-03` | ASE-INT-16; ASE-FLOW-24/32/38 | Manual wording changes without a binding behavior change; support a justified unchanged outcome and avoid duplicate requirements/cases. |
+| `GEX-SEM-04` | ASE-FLOW-26/35/36 | Intermittent history mixes environments/fixtures; preserve individual attempts and causal alternatives. A flakiness or root-cause claim needs discriminating evidence. |
+| `GEX-SEM-05` | ASE-FLOW-40/43/44/53 | Sparse/biased labels or a new project require uncalibrated/UNKNOWN and legitimate deterministic/human fallback; required regression is retained. |
+| `GEX-SEM-06` | ASE-FLOW-08/25/26/33/53 | High structural coverage misses a policy-required forbidden transition; independent normative coverage and designed/mapped/executed/verified denominators remain distinct. |
+| `GEX-SEM-07` | ASE-FLOW-20/23/41/52 | Loop/data/path budget exhausts mid-search; disclose omitted scope/truncation and preserve critical obligations without completeness claims. |
+| `GEX-SEM-08` | ASE-FLOW-47/51/52; SK-E2E-40 | Unsupported downstream consequence stays a reviewable hypothesis/UNKNOWN; no invented trusted edge, native mutation or Passed result. |
+
+The initial semantic proof remains read-only over approved scope/authority and authentic permitted evidence. Both code-first and code-free work must be possible. Independently selected dissimilar systems and held-out scenarios compare existing deterministic projections, governed AI interpretation and manual/no-change alternatives. Assess actionable gap/trace accuracy, false claims and missed obligations, causal/flakiness attribution, calibration only when data permits, human effort, resource cost, privacy and rollback. Named engineering acceptance variations are not a required finding list for cold reviewers. Capability exposure still requires the current contract, original case-free QA loop and CI/security evidence.
+
+
+**Native Run uncertain-outcome allocation:** Within ASE-FLOW-06/16/27 and ASE-INT-14, include native creation commit with lost response/ID, tab/process loss, repeated same intent, altered intent under the same key, delayed original, permission revocation and known-ID attachment retry. Verify one logical Run effect or explicit deterministic refusal/reconciliation, with correct case/occurrence links. Preserve deliberate new-Run creation as a distinct intent and do not use matching names as identity. This is an existing ASER-C04 admission obligation over the native owner, not a new scenario family or a claim that duplicate creation was observed.
+
+
+### Preserved canonical 1.4.31 contracts within revision 1.4.38
+
+Add these acceptance obligations to existing owners. Status for each is NOT RUN.
+
+| Proof | Existing owner | Observable acceptance |
+|---|---|---|
+| GEX-AC-01 | FR-115–119 / T-455–458 | Link policy and manual revisions, change one, show affected records and conflicts, deny restricted reads, require native approval before publication. |
+| GEX-AC-02 | Model Studio | Approve and activate A, save B, dispatch A, then concurrently change the active pointer and verify exact generation fencing. |
+| GEX-AC-03 | T-422 / SK-E2E-05/11/39 | Trigger degradation while work is queued and in flight. Confirm operator signal, eligible fallback and effective readback or pause. Stale results cannot replace current outputs. Historical evidence remains attributable and permitted. |
+| GEX-AC-04 | T-422 / SK-E2E-14 | Approved Skill bundles an inert reference. Revoke a sealed evaluation source while work is delayed. Verify no unauthorized transfer or readback and hold the affected verdict. |
+| GEX-AC-05 | T-455/456 | Lose an event during a binding rotation and finish an obsolete rebuild late. Verify stale detection, fencing, operator recovery and current convergence. Reindex unchanged source with another profile and distinguish extraction changes. |
+| GEX-AC-06 | T-201–207/301–308 | Target accepts an action, executor loses lease before reporting. Prove a single target effect where reconciliable and UNKNOWN with blocked mutating retry otherwise. |
+| GEX-AC-07 | FR-117/124 | Hand-calculate node, edge, guard and finite path coverage; prove unknown and bounded frontier handling. Compare diagnosis, flaky cohort and risk ranking against independent labeled controls. |
+| GEX-AC-08 | T-422 / portable method qualification | Pre-register equivalent access, fixed material dependencies or declared factors, independent arm-masked scoring where feasible, disagreement handling, repeated trials and uncertainty/sample rules. Keep the incumbent uncontaminated. Hold inconclusive promotion. |
+
+These obligations supplement the historical 125 planned definitions. The authoritative SK-E2E scenario rows are in this file. Model-calibration evidence and discovery trials do not substitute for independent Tesbo runtime acceptance.
+
+
+**Concurrent recovery allocation:** MBT-AC-14/37 and ASE-INT-13/14 cover two tabs admitting distinct intents at the same scope, lost response after commit, one tab replacing another's unresolved context, and an old completion clearing a newer intent. Assert retention or atomic refusal at the relevant boundary and later authoritative reconciliation; sequential helper checks alone do not establish cross-tab behavior. Multiple independent intentional Runs are legitimate. A supported no-retry/manual reconciliation protocol is valid when it preserves uncertainty and required evidence; global automatic idempotency is not the only implementation.
+
+
+**Generated-origin applicability allocation:** Extend MBT-AC-34/35 and ASE-INT-11 with generated-only case semantic edit/reapproval and mixed generated-plus-explicit relation changes. Historical origin remains true; current model applicability requires its declared reviewed semantic basis. Retain an unchanged valid generated case as a control and preserve older Run manifests.
+
+**Post-wait authority allocation:** Under R-ASE-18/ASER-C03 and the existing Model Studio DB/API work, hold a domain lock, allow preflight access, revoke relevant membership/workspace authority, then release the lock and verify no unauthorized mapping effect. Reverse the ordering to verify legitimate serialization and retained history. Include link, unlink and applicable sibling writers through real entrances. These are planned witnesses under existing owners, not a new ACL service or executed evidence.
+
+
+### Final source-review admissions in canonical revision 1.4.38
+
+Canonical 03 §18.2.1, 05's final source-case allocation and 07's concrete UI task table own the added evidence. Reuse existing actor support while separating issuer authorization from machine-result provenance; V60's execution actor FK contradicts the stale users-FK comment. Carry admitted credential/grant context into source-capture effect and delivery fences, distinguishing pre-commit revocation from lawful committed history and later access. Current capture has no client idempotency-key argument. Preserve typed governing guidance separately from retrieved reference data through real consumers. Source entitlement is conditional on actual sharing policy; no arbitrary raw-source exfiltration or successful prompt/tool escape was demonstrated.
+
+Extend existing native routes, Model Studio and shared UI primitives for exact case/revision navigation, proposal scope/late responses, explicit unsaved-work recovery, dialog/field accessibility, truthful failed discovery and authority-aware graph copy. A stale-digest refusal does not make the displayed decision context correct. Distinguish generator strategy omissions from genuine resource exclusions; the isolated pure-generator diagnostic is not product acceptance. Existing scenario IDs own these variations; counts remain 125 scoped ASER definitions plus eight supplemental GEX-AC obligations, all with actual execution status preserved. Source findings remain open until their appropriate implementation and runtime evidence; no installed Skill, deployed behavior, authentic UI parity or formal team quorum is certified.
+
+
+**Current canonical authority — revision 1.4.38:** The same eight canonical files preserve the saved v1.4.37 Graph Analytics/profile amendments and this continuation's source/review reconciliation. The count boundaries are 125 scoped ASER definitions, eight supplemental GEX-AC obligations and five unique GA-AC IDs with fifteen cumulative fixture rows; none is an execution total. SK-E2E-41..44, GEX-SEM-01..08 and GEX-DISC-01..05 are aliases/variations mapped to existing canonical owners, not extra definitions. Original and later informed receipts keep exact byte/source scopes. The package remains PROPOSED / NOT FROZEN.
+
+
+Canonical 05 also maps GEX-DISC-01..05 to existing ASE-FLOW/SK-E2E obligations; they add no scenario family. Its current-source checkpoint note qualifies the retained base6897 status table with source419/b07 corrections. The five unique GA-AC IDs retain all fifteen cumulative fixture rows as a separate planned set, not counted inside125.
+
+
+### Canonical discovery alias allocations — revision 1.4.38
+
+| Historical proposal label | Existing canonical allocation | Distinct condition / oracle |
+| --- | --- | --- |
+| `GEX-DISC-01` | ASE-FLOW-05/22/37/46; SK-E2E-34/36; governed Policy/Requirement owners | Distinguish same-record revision/CAS conflict from separately authoritative overlapping obligations; retain both applicable sources and explicit authorized precedence/exception or unresolved conflict. Newest or most-specific-looking text does not automatically win. |
+| `GEX-DISC-02` | ASE-FLOW-21/45/52; FR-118/119 | Trace relationship, necessary guard, actor/state, consequence and contrary/no-effect evidence. A linked but unaffected neighbor prevents conflating reachability with confirmed causal effect. |
+| `GEX-DISC-03` | ASE-FLOW-26/37/46; SK-E2E-04/05/11 | Distinguish effective, published, observed and deployed times across historical/current/future requests. Unknown deployment stays unknown; no future evidence or currently active version rewrites an earlier attempt. |
+| `GEX-DISC-04` | ASE-FLOW-21/45/52; FR-118/119 shared proposal/review | Propose a meaningful missing relation with cited conditions, reject a lexical decoy, and preserve inaccessible/partial scope. Only authorized native acceptance makes the relation authoritative; no invented coverage follows. |
+| `GEX-DISC-05` | SK-E2E-31/38/39; ASE-FLOW-48/49/54 | Preserve an exact contested inference and correction; invalidate or rederive known dependent candidate views with truthful unresolved consumers. Keep accepted records, unrelated facts, previous runs and original method outputs intact. |
+
+### Current continuation checkpoint — revision 1.4.38
+
+The current canonical parent is the saved eight-file v1.4.37 archive, version 17, SHA-256 `1ed8afd0a978ab9b257c10d61549f6085c7f1f593713a26b0ae56a4540562848`. Preserve all v1.4.35–37 Graph Analytics amendments, including the separate applicability/evidence/outcome/impact axes, bounded frontier witness, mixed governing obligations, permission-safe visible snapshots, native operation receipts and source-index convergence. The pilot is a synthetic DMIS approval-to-posting fixture; it establishes neither a universal application schema nor live DMIS testing.
+
+PR168 and PR167 were merged externally as `f43013473b3a8b725bb547187e21b4459d0e8838` and `1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea`. This continuation performed neither merge. Its repository-view parent is open draft PR169 at `bddd97971637a54c6e2aff9e7686cfb9c9f25d8e`, based on that merged development commit. The later PR169 head `c07d4c2a16912ca71fbc319aec9a23e68a452edd` adds only a separate executable-preflight review record; all six view bytes remain bddd-identical. Preserve that record and its distinct candidate/executor limits; it is not another role receipt or a verdict on this continuation’s independently pinned reviews. Statements in preserved incoming review chapters about their own source6897 inspection retain that historical scope. This continuation independently inspected source419 and compared full trees through e3d0, b07 and merged1fe: no backend changes across those intervals; b07→1fe changes only ten documentation blobs and no frontend blobs. Thus the qualified source findings in §18.2.1 of canonical03 remain applicable at that merge checkpoint. This is source continuity, not deployment, runtime or acceptance certification. The separately observed b07 CI results retain their exact executed-test scope.
+
+Retain 125 unique scoped ASER definitions, eight supplemental GEX-AC obligations and five unique GA-AC IDs. The five GA IDs carry fifteen cumulative table rows from revisions33/35/37; later fixtures extend the same checks, without adding ten test identities or erasing earlier assertions. Repeated GEX-SEM-01..08 allocations are cumulative fixture/proof-owner contributions to the same eight aliases. Apply the union of their stated assertions and existing owner allocations; they are not competing definitions or alternative authorities. SK-E2E-41..44 and GEX-DISC-01..05 likewise remain mapped aliases. All new product acceptance outcomes remain NOT RUN. Original cold receipts remain unchanged; later target-specific reconciliation is explicitly informed. The package is PROPOSED / NOT FROZEN.
+
+### Cumulative Graph Analytics fixtures retained from revisions35/37
+
+These are cumulative assertions under existing IDs/aliases; all application outcomes remain NOT RUN. Preserve earlier rows and apply the union of the allocated proof conditions.
+
+| Existing check | Additional required fixture assertions |
+| --- | --- |
+| GA-AC-01 | Test approval-only, older posting, verified current posting FAIL and PASS as distinct controls. Assert evidence status, observed outcome, action and unchanged impact disposition. Include two owned impacts and two paths to one impact. Verify exact pins, authority rollover without recapture, identical retry, changed-payload conflict and native no-write readback. |
+| GA-AC-02 | Hand-count one mixed model/policy project with reviewed equivalent pair, unmapped critical policy and conflict. Precompute counts at each stage; contrast complete empty, partial, unavailable and unknown. Assert critical → unknown → noncritical across ties/pages with AI off, and each state-specific action. |
+| GA-AC-03 | Compare absent vs private proof and hidden-only index publication mid-page across observable cursor behavior, ranks, counts, paths, facets, snippets, freshness, placeholders and deep links. Revoke while AI is queued; verify late result and reuse are rejected. |
+| GA-AC-04 | Add conforming, no-impact, omitted-dependency, unknown, missing-requirement and downstream-failure cases. Omitted/unexamined dependency cannot produce a complete negative conclusion. Apply FR-124 replay reliability/safety and itemized lifecycle cost including coding-agent upkeep, repair, infrastructure and reconciliation. Predeclare critical-miss and safety regression no-go thresholds. |
+| GA-AC-05 | Exercise missed event, overlapping rebuild, cursor/extractor change in same generation and no progress. Verify owner/escalation, bounded recovery, exact active snapshot convergence and safe logs. AI-only degradation preserves deterministic outputs. |
+| GA-AC-01 | DMIS synthetic posting cases: approval-only, old build, same build wrong actor/data/state/path all remain unverified. Matching FAIL is verified/unmet. Matching PASS is verified/met absent contrary evidence. Both orders, delayed arrival and simultaneous FAIL/PASS yield verified/mixed with native triage and original receipts intact. Authorized correction has its own audit. Commit barrier: exact simultaneous retry gives one native receipt/effect, changed payload conflicts, precommit revocation yields zero effects. Assert no implicit run/impact changes. |
+| GA-AC-02 | Golden mixed project: A modeled PASS plus equivalent approved policy, B unmapped policy verified FAIL, C model obligation with no run, D unresolved governing conflict. Before withdrawal: 3 known eligible, 2 verified, 1 met, 1 conflict outside known denominator; scope incomplete. Withdrawal produces 4 known eligible (A model and A policy distinct; policy has no applicable execution), 2 verified, 1 met, 1 conflict; historical snapshot retains prior counts. |
+| GA-AC-03 | Compare absent/private worlds and include a permitted control reader who can actually see the difference. Hidden-only rebuild leaves cursor continuation, status, freshness and detail unchanged for restricted reader. An authorized visible change follows refresh/history contract. Revoke during queued AI and during native storage read; reject late delivery and reuse. |
+| GA-AC-04 | Independently declared downstream consumer silently omitted by extractor must yield limited/unknown; genuine unaffected control with valid bounded frontier witness permits scoped no impact. Include backdated authority correction and recorded vs recomputed historical modes. Retain FR-124 comparative controls. |
+| GA-AC-05 | Same binding, stale worker finishes after newer cursor/profile published. Assert no regression across list/count/detail and continued authorized history. Freeze head to test stall deadline, bounded retry/escalation and convergence. Include missed event, backlog and AI-only outage. |
+
+### Additional semantic allocations retained from revision36
+
+These are cumulative assertions under existing IDs/aliases; all application outcomes remain NOT RUN. Preserve earlier rows and apply the union of the allocated proof conditions.
+
+| Alias | Existing proof owners | Additional required fixture assertions |
+| --- | --- | --- |
+| `GEX-SEM-01` | ASE-FLOW-37/46; SK-E2E-26/34/36 | Approved applicable policy conflicts with an audience-scoped manual and observed code. Retain all three sources and exact revisions; identify the applicable norm and contested interpretation, refuse automatic expected-oracle or policy rewrite. Include an inapplicable/expired policy control. |
+| `GEX-SEM-02` | ASE-FLOW-21/45/52; FR-119 impact owner | Policy changes without code change. Explain grounded versus hypothetical effects on manual audience/revision, roles, state guards, audit/notifications and cases; absent links stay unknown. Required effect cannot depend on a code event. |
+| `GEX-SEM-03` | ASE-FLOW-32/45; R-ASE-19/40 | Editorial manual change preserves binding workflow. Valid no-impact/no-new-case result; changed guidance can still need its own review. Compare a genuinely changed obligation and retain the decision basis. |
+| `GEX-SEM-04` | ASE-FLOW-36/43; MBT-AC-34 | Compare repeated failures across distinct build/environment/fixture scopes. Preserve unique attempts and alternative setup/product/infrastructure explanations. Temporal association alone proves neither cause nor flaky test code; selected discriminating checks need actual independent observations. |
+| `GEX-SEM-05` | ASE-FLOW-40/43/48/53; SK-E2E-20/33 | Sparse or biased labels/new project produce abstention and valid manual/rules baseline. Where optional prediction is justified, independently inspect temporal/project holdouts, label provenance, leakage, calibration, misses and drift; required coverage is never silently dropped. |
+| `GEX-SEM-06` | ASE-FLOW-33/53; MBT-AC-02/34; MBT-COVERAGE/1 | High structural coverage omits an applicable forbidden transition. Independent normative source exposes the gap; model/design/mapped/selected/attempted/conformant denominators remain separate, with exact eligible revision/actor/data/build/environment scope. |
+| `GEX-SEM-07` | ASE-FLOW-23/41/52; ASER-C06 | Loop/data/path budget expires. Disclose omitted candidates, truncation and unknown feasibility; preserve policy-critical obligations and legitimate bounded selection. Neither AI ranking nor budget exhaustion certifies completeness. |
+| `GEX-SEM-08` | ASE-FLOW-47/51/52; SK-E2E-40 | Unsupported inferred consequence remains a cited hypothesis/UNKNOWN, never an authoritative edge, defect, policy change or Passed result. Read analysis and native writes retain separate permissions and review. |
+
+### Additional discovery allocations retained from revision36
+
+These are cumulative assertions under existing IDs/aliases; all application outcomes remain NOT RUN. Preserve earlier rows and apply the union of the allocated proof conditions.
+
+| Alias | Existing proof owners | Additional required fixture assertions |
+| --- | --- | --- |
+| `GEX-DISC-01` | GEX-AC-01; ASE-INT-10; SK-E2E-26; GEX-SEM-01 alias | Compare two independently applicable contradictory obligations with two concurrent versions of one identity. Apply only an approved scope/precedence/exception ruling; otherwise retain unresolved conflict and allow unaffected authorized actions. |
+| `GEX-DISC-02` | GEX-AC-07; ASE-FLOW-21/45/47/52 | Same typed relationship, satisfied versus unsatisfied guard and a genuinely unaffected connected neighbor. Explain necessary condition and discriminating observation; supported no-effect or UNKNOWN is valid, graph path alone never proves cause. |
+| `GEX-DISC-03` | GEX-AC-01/07; MBT-AC-34; ASE-FLOW-26; GA-AC-01/02 | Use historically correct manual, later effective policy, future publication and old/unknown deployed build. Current and historical queries retain distinct as-of/effective/recorded/observed/deployed meaning and cannot borrow future execution evidence. |
+| `GEX-DISC-04` | GEX-AC-01; ASE-FLOW-24/32/47/52; SK-E2E-29 | Authorized unlinked content shares a material condition; a lexical decoy does not. Propose only a grounded inert candidate relation, record matching uncertainty and denied-source limits, preserve a valid existing-case/no-new-link outcome. |
+| `GEX-DISC-05` | GEX-AC-03/04; ASE-FLOW-34/48/54; SK-E2E-31/38/39; GA-AC-03/05 | Reject an exact inferred claim, then read graph detail, change summary, search, release projection, notification history and caches. Each known consumer shows corrected state or explicit stale/blocked reliance; original attempts and decisions remain. Include delayed regeneration, revoked source, unaffected neighbor and already delivered external notification; no fictitious recall or automatic training/promotion. |
+
+### Preserved Graph Analytics boundary — revision 1.4.38
+
+Canonical02/03/04/05/07 retain the v1.4.35–37 contracts. Keep applicability, evidence sufficiency, observed outcome and impact disposition independent. Matching FAIL is verified/unmet; admissible PASS plus FAIL is verified/mixed, regardless of arrival order. An authorized correction remains attributable and never silently overwrites the original report. Count reviewed equivalent obligations once while their decision applies; withdrawing equivalence recomputes current scope and preserves historical counts. Unresolved authority conflicts stay outside the known eligible denominator and keep scope incomplete.
+
+An asserted no-impact result requires an independently grounded bounded frontier witness; missing or unexamined consumers remain limited/unknown. Initial entry is a native human project session. Read-only tokens receive no Graph Analytics metadata under AC-092; later credential access requires its own explicit grant. Authorized-visible content determines pagination/freshness identity: a hidden-only rebuild must not leak through cursor expiry or status. Recheck current grants at deferred AI and native attachment delivery. Exact native operation commitment and idempotent receipts govern handoffs, changed-payload conflicts and revocation; an unknown outcome needs safe readback before repetition. Recorded history and retrospective recomputation declare distinct cutoffs. Source binding, desired cursor/profile and rebuild epoch fence publication, with worker progress, budgets and an owner-approved operational envelope. Viewing/staging has no implicit Run side effect; an exact authorized native creation can legitimately prepare a Run before later dispatch. Retain partial later-stage receipts and atomic Run-plus-manifest semantics at their existing native owners.
+
+### Retained incoming Skill alias assertions — revision 1.4.38
+
+Together with the earlier four shorter allocations, these four incoming rows form eight cumulative assertions under the same four SK-E2E-41..44 aliases. Preserve the union of fixture conditions and existing proof owners. They add no canonical definitions or execution credit; all application outcomes remain NOT RUN.
+
+| Alias | Existing proof owners | Additional required fixture assertions |
+| --- | --- | --- |
+| Proposed alias `SK-E2E-41` | SK-E2E-04/06; MBT-AC-28/41 | Two approved revisions, only older explicitly active: effective method resolver and Model Studio CURRENT consumers select the applicable active revision and digest. No latest-approved fallback; separately authorized Draft preview and HISTORICAL selection remain valid under MBT-C02 with mode-specific pins and consent. Test the two distinct native owners, not an assumed shared table. |
+| Proposed alias `SK-E2E-42` | SK-E2E-02/04; MBT-AC-41 | Save draft, then approve successor without activation. Existing active selection stays effective; exact approved successor remains separately reviewable. |
+| Proposed alias `SK-E2E-43` | SK-E2E-31/39; ASE-FLOW-34/48/54 | Correction, reason, attribution and before/after evidence survive optional regeneration, rejection, rollback and model change. Old outputs and attempts retain their own identities; no forced paid regeneration. |
+| Proposed alias `SK-E2E-44` | SK-E2E-05/11; ASE-FLOW-09 | Assignment changes between context retrieval and a protected write. Revalidate actual native owner/version server-side, return stale/reselection without hidden substitution, and preserve authorized raw observation capture. |

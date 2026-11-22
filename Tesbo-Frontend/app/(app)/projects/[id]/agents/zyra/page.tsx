@@ -1723,6 +1723,10 @@ export default function ZyraChatPage() {
                 <IconClipboardCheck size={15} stroke={1.9} />
                 {t("top.taskBoard")}
               </Link>
+              <Link href={`/projects/${projectId}/agents/zyra/changes`} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 text-sm font-medium text-[var(--foreground)] hover:bg-[var(--surface-secondary)]">
+                <IconClipboardCheck size={15} stroke={1.9} />
+                Change review
+              </Link>
               <Link href={`/projects/${projectId}/agents/zyra/settings`} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 text-sm font-medium text-[var(--foreground)] hover:bg-[var(--surface-secondary)]">
                 <IconSettings size={15} stroke={1.9} />
                 {t("top.settings")}

@@ -1,0 +1,97 @@
+{
+  "archive_sha256": "deb8e12ae99ce8e54e021e36649e2b93dd11f51b20f6bd7fa8f664e305f61cec",
+  "html_sha256": "09dbe9628fe2bb6eeca76f450d83cf719743c71b010d1a2ecc13370b866f8713",
+  "report_json_sha256": "a650831f6797d0e363e90030669f24eb747727116f13dfadb7cc9d01e13ad5f9",
+  "report_stats": {
+    "total": 18,
+    "expected": 18,
+    "unexpected": 0,
+    "flaky": 0,
+    "skipped": 0,
+    "ok": true
+  },
+  "captures": [
+    {
+      "name": "model-run-outcome-unknown-after-reload",
+      "report_attachment_path": "data/2368db980225296f3c7d42ee65266bd344853c50.png",
+      "path": "/workspace/scratch/fb086055b433/tesbo-ci-evidence/6d921151/home/runner/work/Tesbooboo/Tesbooboo/e2e/playwright-report-model-studio/data/2368db980225296f3c7d42ee65266bd344853c50.png",
+      "sha256": "20decf8979a2e62a8e14eb0bb01daa3d32bfdf772d0bab09eeb90d57c78491c5",
+      "width": 1280,
+      "height": 720,
+      "testId": "d758f893fa8344f7766b-fdc72cff6e9d837958b9",
+      "testTitle": "a committed model run with a lost response stays blocked across reload until the reviewer identifies its native run",
+      "projectName": "ui",
+      "outcome": "expected",
+      "resultStatus": "passed",
+      "retry": 0,
+      "testLocation": {
+        "file": "ui/model-studio.spec.ts",
+        "line": 74,
+        "column": 5
+      }
+    },
+    {
+      "name": "model-run-reconciled-historical-revision-retained",
+      "report_attachment_path": "data/bb2ae1510682e2761f5028b1af89d3f57f215362.png",
+      "path": "/workspace/scratch/fb086055b433/tesbo-ci-evidence/6d921151/home/runner/work/Tesbooboo/Tesbooboo/e2e/playwright-report-model-studio/data/bb2ae1510682e2761f5028b1af89d3f57f215362.png",
+      "sha256": "8a35a75d7d9c81481cbfcfdc1d57d5f95a1b33603665c6af0eed879557911475",
+      "width": 1280,
+      "height": 720,
+      "testId": "d758f893fa8344f7766b-fdc72cff6e9d837958b9",
+      "testTitle": "a committed model run with a lost response stays blocked across reload until the reviewer identifies its native run",
+      "projectName": "ui",
+      "outcome": "expected",
+      "resultStatus": "passed",
+      "retry": 0,
+      "testLocation": {
+        "file": "ui/model-studio.spec.ts",
+        "line": 74,
+        "column": 5
+      }
+    },
+    {
+      "name": "model-coverage-unavailable-draft-retained",
+      "report_attachment_path": "data/29064c75718db0b014f8fc204cd93545d44779ac.png",
+      "path": "/workspace/scratch/fb086055b433/tesbo-ci-evidence/6d921151/home/runner/work/Tesbooboo/Tesbooboo/e2e/playwright-report-model-studio/data/29064c75718db0b014f8fc204cd93545d44779ac.png",
+      "sha256": "1a658c1c95f823f15f395cf66389f856acce02cd208790a1b03de3acdf57ab45",
+      "width": 1280,
+      "height": 720,
+      "testId": "d758f893fa8344f7766b-12e2b0712cda79aa7058",
+      "testTitle": "coverage loading and denial preserve the run draft and selected cases until a successful retry, while real empty coverage stays empty",
+      "projectName": "ui",
+      "outcome": "expected",
+      "resultStatus": "passed",
+      "retry": 0,
+      "testLocation": {
+        "file": "ui/model-studio.spec.ts",
+        "line": 248,
+        "column": 5
+      }
+    },
+    {
+      "name": "model-coverage-recovered-selection-retained",
+      "report_attachment_path": "data/d23897df0a5c49bee73025f8497e9cff33c17a71.png",
+      "path": "/workspace/scratch/fb086055b433/tesbo-ci-evidence/6d921151/home/runner/work/Tesbooboo/Tesbooboo/e2e/playwright-report-model-studio/data/d23897df0a5c49bee73025f8497e9cff33c17a71.png",
+      "sha256": "1d912b283af46e49350941e817da587df61ec282a3c61f0d9f313b63b3b28204",
+      "width": 1280,
+      "height": 720,
+      "testId": "d758f893fa8344f7766b-12e2b0712cda79aa7058",
+      "testTitle": "coverage loading and denial preserve the run draft and selected cases until a successful retry, while real empty coverage stays empty",
+      "projectName": "ui",
+      "outcome": "expected",
+      "resultStatus": "passed",
+      "retry": 0,
+      "testLocation": {
+        "file": "ui/model-studio.spec.ts",
+        "line": 248,
+        "column": 5
+      }
+    }
+  ],
+  "source": "6d921151498e2a52b244ade4efd19efd7ecbf71b",
+  "merge_build": "375f0895f4e1bf106a1772dee34fe7880ab0461b",
+  "source_and_merge_tree": "e733ff65d25d7c2e8934b2f9b2f87665a1efb1af",
+  "run_id": 44665137189,
+  "job_id": 136052473874,
+  "archive_members_equal_extracted_files": true
+}

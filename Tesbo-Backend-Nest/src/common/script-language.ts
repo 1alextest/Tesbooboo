@@ -30,7 +30,9 @@ const NOISE = [
   /```[\s\S]*?```/g,
   /`[^`\n]*`/g,
   /\b(?:https?:\/\/|www\.)\S+/gi,
-  /[^\s@]+@[^\s@]+\.[^\s@]+/g,
+  // Bounded: this runs over an entire exported document, so an unbounded address pattern that
+  // backtracks polynomially is a denial-of-service risk on hostile export content.
+  /[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{1,63}/g,
   /\b[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*-\d+\b/g
 ];
 

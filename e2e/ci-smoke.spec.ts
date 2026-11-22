@@ -1,9 +1,27 @@
+import { issueMcpTestToken } from "./utils/mcp-access";
+import { createTestcaseFixtureResponse } from "./utils/testcase-approval";
 import { expect, request as newRequest, test, type APIRequestContext, type Page, type Route, type TestInfo } from "@playwright/test";
 import { Client } from "pg";
 import { hashPasswordForSeed } from "./utils/password";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { verifyProductionReporter } from "./utils/ci-reporter";
+import { verifyContentSecurity } from "./utils/ci-content-security";
+import { verifyDocumentWrites } from "./utils/ci-document-writes";
+import { verifyRepositoryPartialEdits } from "./utils/ci-repository-partial-edits";
+import { verifyBugMetadataWrites } from "./utils/ci-bug-metadata-writes";
+import { verifyReviewBoardUi } from "./utils/ci-review-board-ui";
+import { verifyPlanProjectLineage } from "./utils/ci-plan-project-lineage";
+import { verifyTestcaseBulkScope } from "./utils/ci-testcase-bulk-scope";
+import { verifyCiZyraReviewFeedback } from "./utils/ci-zyra-review-feedback";
+import { verifyCiZyraSuiteFeedback } from "./utils/ci-zyra-suite-feedback";
+import { verifyCiZyraAnswerFeedback } from "./utils/ci-zyra-answer-feedback";
+import { verifyCiZyraMoveFeedback } from "./utils/ci-zyra-move-feedback";
+import { verifyCiZyraSingleMove } from "./utils/ci-zyra-single-move";
+import { verifyCiZyraAliasMove } from "./utils/ci-zyra-alias-move";
+import { verifyCiZyraMissingSuite } from "./utils/ci-zyra-missing-suite";
+import { verifyCiZyraMoveTraceCount } from "./utils/ci-zyra-move-trace-count";
+import { verifyCiZyraOverlappingMoveTrace } from "./utils/ci-zyra-overlapping-move-trace";
 
 async function verifyBugCreateAccess(request: APIRequestContext, api: string, projectId: string, ownerId: string, organizationId: string) {
   // Called only after the test's explicit loopback/disposable-database safety checks.
@@ -29,7 +47,7 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
     });
     expect(login.ok(), await login.text()).toBeTruthy();
 
-    const testcaseResponse = await request.post(`${base}/testcases`, { data: { title: "CI authorization control" } });
+    const testcaseResponse = await createTestcaseFixtureResponse(request, `${base}/testcases`, { data: { title: "CI authorization control", status: "Approved" } });
     expect(testcaseResponse.ok(), await testcaseResponse.text()).toBeTruthy();
     testcaseId = (await testcaseResponse.json()).id;
     const cycleResponse = await request.post(`${base}/cycles`, { data: { name: "CI authorization control" } });
@@ -63,7 +81,7 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
     await denied(nonmember, 404);
     const tokens: Record<string, string> = {};
     for (const scope of ["read", "write"]) {
-      const response = await request.post(`${base}/apikeys`, { data: { name: `CI bug ${scope}`, scopes: [scope] } });
+      const response = await issueMcpTestToken(request, `${base}/apikeys`, { data: { name: `CI bug ${scope}`, scopes: [scope] } });
       expect(response.ok(), await response.text()).toBeTruthy();
       const token = await response.json();
       tokenIds.push(token.id);
@@ -97,7 +115,9 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
     await denied(request, 404);
     await db.query("UPDATE projects SET archived_at = NULL WHERE id = $1", [projectId]);
 
+    expect((await persisted()).execution[0]).toMatchObject({ status: "Passed", executed_by: ownerId });
     for (const transport of ["REST", "MCP"]) {
+      const before = await persisted();
       const response = await anonymous.post(transport === "REST" ? `${base}/bugs` : `${base}/mcp`, {
         headers: { Authorization: `Bearer ${tokens.write}` },
         data: transport === "REST" ? body : { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "create_bug", arguments: body } }
@@ -109,7 +129,11 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
       bugs.push(created.id);
       expect(created).toMatchObject({ reportedBy: ownerId });
       expect(created.links).toEqual(expect.arrayContaining([expect.objectContaining(body.links[0])]));
-      expect((await persisted()).execution[0]).toMatchObject({ status: "Failed", executed_by: ownerId });
+      const after = await persisted();
+      // REST and MCP associations retain the complete observed result, actor and timestamps.
+      expect(after.execution).toEqual(before.execution);
+      expect(after.run).toEqual(before.run);
+      expect(after.snapshot).toEqual(before.snapshot);
     }
     await verifyHistoryImportText(request, nonmember, anonymous, db, api, projectId);
   } finally {
@@ -151,7 +175,7 @@ async function verifyHistoryImportText(
   });
   try {
     for (let i = 0; i < 2; i++) {
-      const created = await request.post(`${base}/testcases`, { data: { title: `CI history text ${i}` } });
+      const created = await createTestcaseFixtureResponse(request, `${base}/testcases`, { data: { title: `CI history text ${i}`, status: "Approved" } });
       expect(created.ok(), await created.text()).toBeTruthy();
       cases.push(await created.json());
     }
@@ -288,7 +312,7 @@ async function verifyBugLinkReadIsolation(
   foreign: { testcaseId: string; cycleId: string; executionId: string }
 ) {
   const base = `${api}/api/projects/${projectId}`;
-  const response = await request.post(`${base}/apikeys`, { data: { name: "CI bug-link read isolation", scopes: ["read"] } });
+  const response = await issueMcpTestToken(request, `${base}/apikeys`, { data: { name: "CI bug-link read isolation", scopes: ["read"] } });
   expect(response.ok(), await response.text()).toBeTruthy();
   const token = await response.json();
   const headers = { Authorization: `Bearer ${token.token}` };
@@ -369,7 +393,7 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
     const foreignProject = (await foreignResponse.json()).id;
     const targets: Array<{ testcaseId: string; cycleId: string; executionId: string }> = [];
     for (const [index, project] of [projectId, projectId, foreignProject].entries()) {
-      const caseResponse = await request.post(`${api}/api/projects/${project}/testcases`, { data: { title: `CI relationship case ${index}` } });
+      const caseResponse = await createTestcaseFixtureResponse(request, `${api}/api/projects/${project}/testcases`, { data: { title: `CI relationship case ${index}`, status: "Approved" } });
       expect(caseResponse.ok(), await caseResponse.text()).toBeTruthy();
       const testcaseId = (await caseResponse.json()).id;
       cases.push({ id: testcaseId, project });
@@ -384,7 +408,7 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
       targets.push({ testcaseId, cycleId, executionId });
     }
     const [first, second, foreign] = targets;
-    const tokenResponse = await request.post(`${base}/apikeys`, { data: { name: "CI relationship writer", scopes: ["write"] } });
+    const tokenResponse = await issueMcpTestToken(request, `${base}/apikeys`, { data: { name: "CI relationship writer", scopes: ["write"] } });
     expect(tokenResponse.ok(), await tokenResponse.text()).toBeTruthy();
     const token = await tokenResponse.json(); tokenId = token.id;
     const headers = { Authorization: `Bearer ${token.token}` };
@@ -439,10 +463,12 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
       }
     }
 
-    // Positive controls: real MCP create/add/edit, normal manual auto-failure, no link-row churn,
+    // Positive controls: real MCP create/add/edit preserve the observed result and link identity,
     // then metadata edits preserving deleted history and strict refusal after explicit removal.
     const passed = await request.patch(`${api}/api/cycles/${first.cycleId}/executions/${first.executionId}`, { data: { status: "Passed" } });
     expect(passed.ok(), await passed.text()).toBeTruthy();
+    const executionBeforeLinks = (await db.query("SELECT * FROM executions WHERE id = $1", [first.executionId])).rows;
+    expect(executionBeforeLinks[0]).toMatchObject({ status: "Passed", executed_by: ownerId });
     const mcp = async (name: string, args: Record<string, unknown>) => {
       const response = await tokenClient.post(`${base}/mcp`, { headers, data: { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name, arguments: args } } });
       expect(response.ok(), await response.text()).toBeTruthy();
@@ -453,12 +479,13 @@ async function verifyBugLinkRelationships(request: APIRequestContext, api: strin
     const reported = await mcp("create_bug", { title: "CI valid relationship report", links: [first] });
     bugs.push(reported.id);
     expect(reported.links).toEqual([expect.objectContaining(first)]);
-    expect((await db.query("SELECT status FROM executions WHERE id = $1", [first.executionId])).rows[0].status).toBe("Failed");
+    expect((await db.query("SELECT * FROM executions WHERE id = $1", [first.executionId])).rows).toEqual(executionBeforeLinks);
     const linked = await mcp("link_testcase_to_bug", { bugId: bug.id, ...first });
     const original = (await db.query("SELECT * FROM bug_links WHERE bug_id = $1 ORDER BY id", [bug.id])).rows;
     const edited = await mcp("update_bug", { bugId: bug.id, title: "CI valid metadata edit", links: linked.links });
     expect(edited.links).toEqual(linked.links);
     expect((await db.query("SELECT * FROM bug_links WHERE bug_id = $1 ORDER BY id", [bug.id])).rows).toEqual(original);
+    expect((await db.query("SELECT * FROM executions WHERE id = $1", [first.executionId])).rows).toEqual(executionBeforeLinks);
     expect((await request.delete(`${api}/api/cycles/${first.cycleId}`)).ok()).toBeTruthy();
     const historical = await mcp("update_bug", { bugId: bug.id, title: "CI historical metadata edit", links: edited.links });
     expect(historical.links).toEqual(expect.arrayContaining([expect.objectContaining({ ...first, cycleName: expect.stringContaining("(deleted)") })]));
@@ -525,7 +552,7 @@ async function verifyBrowserMutationResponseLoss(page: Page, api: string, web: s
   await db.connect();
   try {
     const title = "CI lost browser create acknowledgement";
-    const testcaseResponse = await request.post(`${base}/testcases`, { data: { title } });
+    const testcaseResponse = await createTestcaseFixtureResponse(request, `${base}/testcases`, { data: { title, status: "Approved" } });
     expect(testcaseResponse.ok(), await testcaseResponse.text()).toBeTruthy();
     const testcase = await testcaseResponse.json();
     caseId = testcase.id;
@@ -595,7 +622,7 @@ test("fresh installation sends unauthenticated users to setup", async ({ page })
 });
 
 test("history import, bug authorization and finalized automation preserve persisted results and truthful UI", async ({ page }, testInfo) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const api = process.env.CI_API_BASE_URL!;
   const web = process.env.CI_WEB_BASE_URL!;
   // This test bootstraps a fresh installation. Explicit loopback URLs AND the existing
@@ -627,10 +654,11 @@ test("history import, bug authorization and finalized automation preserve persis
     await verifyBugLinkRelationships(request, api, projectId, bootstrap.userId);
     await verifyBrowserMutationResponseLoss(page, api, web, projectId, testInfo);
     await verifyProductionReporter(page, api, web, projectId, bootstrap.userId, testInfo);
+    await verifyContentSecurity(page, api, web, projectId, testInfo);
     for (const surface of ["drawer", "full-page"]) {
       for (const status of ["pass", "fail"]) {
         const title = `CI sealed ${surface} ${status}`;
-        const testcaseResponse = await request.post(`${base}/testcases`, { data: { title } });
+        const testcaseResponse = await createTestcaseFixtureResponse(request, `${base}/testcases`, { data: { title, status: "Approved" } });
         expect(testcaseResponse.ok(), await testcaseResponse.text()).toBeTruthy();
         const testcase = await testcaseResponse.json();
         cases.push(testcase.id);
@@ -713,6 +741,243 @@ test("history import, bug authorization and finalized automation preserve persis
     for (const id of runs) await request.delete(`${api}/api/cycles/${id}`, { failOnStatusCode: false });
     for (const id of cases) await request.delete(`${base}/testcases/${id}`, { failOnStatusCode: false });
   }
+});
+
+test("knowledge document saves and restores preserve ordering, drafts and persisted history", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  // Reuse the installation/bootstrap above, but give this batch its own project and real session.
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy();
+  const created = await page.request.post(`${api}/api/projects`, { data: { name: "CI Document Integrity", key: "CDI" } });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const consoleErrors: string[] = [];
+  page.on("pageerror", (error) => consoleErrors.push(error.message));
+  await verifyDocumentWrites(page, api, web, (await created.json()).id, testInfo);
+  expect(consoleErrors).toEqual([]);
+});
+
+test("repository partial edits and UI-created MCP tokens preserve persisted relationships and scope", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy();
+  const ownerId = (await login.json()).userId as string;
+  const created = await page.request.post(`${api}/api/projects`, { data: { name: "CI Repository Integrity", key: "CRI" } });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const consoleErrors: string[] = [];
+  page.on("pageerror", (error) => consoleErrors.push(error.message));
+  await verifyRepositoryPartialEdits(page, api, web, (await created.json()).id, ownerId, testInfo);
+  expect(consoleErrors).toEqual([]);
+});
+
+test("bug metadata edits preserve explicit clears, live omissions, evidence and accurate attribution", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy();
+  const ownerId = (await login.json()).userId as string;
+  const created = await page.request.post(`${api}/api/projects`, { data: { name: "CI Bug Metadata Integrity", key: "BMI" } });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const consoleErrors: string[] = [];
+  page.on("pageerror", (error) => consoleErrors.push(error.message));
+  await verifyBugMetadataWrites(page, api, web, (await created.json()).id, ownerId, testInfo);
+  expect(consoleErrors).toEqual([]);
+});
+
+test("Review Board distinguishes coverage, failures, filters and project context", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy();
+  const created = await page.request.post(`${api}/api/projects`, { data: { name: "CI Review Scope", key: "CRV" } });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyReviewBoardUi(page, api, web, (await created.json()).id, testInfo);
+  expect(errors).toEqual([]);
+});
+
+test("Plan and Run references enforce project lineage across HTTP, MCP and the existing browser workflow", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy();
+  const ids: string[] = [];
+  for (const [name, key] of [["CI Plan Lineage A", "PLA"], ["CI Plan Lineage B", "PLB"]]) {
+    const response = await page.request.post(`${api}/api/projects`, { data: { name, key } });
+    expect(response.ok(), await response.text()).toBeTruthy(); ids.push((await response.json()).id);
+  }
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyPlanProjectLineage(page, api, web, ids[0], ids[1], testInfo);
+  expect(errors).toEqual([]);
+});
+
+test("testcase bulk writers and Suite removal preserve project isolation through REST, MCP and the existing UI", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy(); const owner = (await login.json()).userId as string;
+  const project = await page.request.post(`${api}/api/projects`, { data: { name: "CI Bulk Testcase Scope", key: "BSC" } });
+  expect(project.ok(), await project.text()).toBeTruthy();
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyTestcaseBulkScope(page, api, web, (await project.json()).id, owner, testInfo);
+  expect(errors).toEqual([]);
+});
+
+test("Zyra review close feedback preserves prior saves and distinguishes refused closes", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy();
+  const ownerId = (await login.json()).userId as string;
+  const created = await page.request.post(`${api}/api/projects`, { data: { name: "CI Zyra Review Feedback", key: "ZRF" } });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const other = await page.request.post(`${api}/api/projects`, { data: { name: "CI Zyra Other Project", key: "ZRO" } });
+  expect(other.ok(), await other.text()).toBeTruthy();
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyCiZyraReviewFeedback(page, api, web, (await created.json()).id, (await other.json()).id, ownerId, testInfo);
+  expect(errors).toEqual([]);
+});
+
+test("Zyra suite replies distinguish failed operations from persisted and reused suites", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy();
+  const ownerId = (await login.json()).userId as string;
+  const ids: string[] = [];
+  for (const [name, key] of [["CI Zyra Suite Feedback", "ZSF"], ["CI Zyra Suite Other", "ZSO"]]) {
+    const created = await page.request.post(`${api}/api/projects`, { data: { name, key } });
+    expect(created.ok(), await created.text()).toBeTruthy(); ids.push((await created.json()).id);
+  }
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyCiZyraSuiteFeedback(page, api, web, ids[0], ids[1], ownerId, testInfo);
+  expect(errors).toEqual([]);
+});
+
+test("Zyra informational answers preserve repository state and retain genuine false-completion warnings", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy();
+  const ids: string[] = [];
+  for (const [name, key] of [["CI Zyra Answer Feedback", "ZAF"], ["CI Zyra Answer Other", "ZAO"]]) {
+    const created = await page.request.post(`${api}/api/projects`, { data: { name, key } });
+    expect(created.ok(), await created.text()).toBeTruthy(); ids.push((await created.json()).id);
+  }
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyCiZyraAnswerFeedback(page, api, web, ids[0], ids[1], testInfo);
+  expect(errors).toEqual([]);
+});
+
+test("Zyra suite assignment reports operation errors without losing completed moves or prior suites", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy(); const ownerId = (await login.json()).userId as string;
+  const ids: string[] = [];
+  for (const [name, key] of [["CI Zyra Move Feedback", "ZMF"], ["CI Zyra Move Other", "ZMO"]]) {
+    const created = await page.request.post(`${api}/api/projects`, { data: { name, key } });
+    expect(created.ok(), await created.text()).toBeTruthy(); ids.push((await created.json()).id);
+  }
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyCiZyraMoveFeedback(page, api, web, ids[0], ids[1], ownerId, testInfo);
+  expect(errors).toEqual([]);
+});
+
+test("Zyra single-case suite moves treat scalar and list IDs equally without crossing project scope", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy(); const ownerId = (await login.json()).userId as string;
+  const ids: string[] = [];
+  for (const [name, key] of [["CI Zyra Single Move", "ZSM"], ["CI Zyra Single Other", "ZSN"]]) {
+    const created = await page.request.post(`${api}/api/projects`, { data: { name, key } }); expect(created.ok(), await created.text()).toBeTruthy(); ids.push((await created.json()).id);
+  }
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyCiZyraSingleMove(page, api, web, ids[0], ids[1], ownerId, testInfo); expect(errors).toEqual([]);
+});
+
+test("Zyra suite-move aliases do not invent missing cases and retain genuine unresolved targets", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy(); const ownerId = (await login.json()).userId as string;
+  const ids: string[] = [];
+  for (const [name, key] of [["CI Zyra Alias Move", "ZAM"], ["CI Zyra Alias Other", "ZAQ"]]) {
+    const created = await page.request.post(`${api}/api/projects`, { data: { name, key } }); expect(created.ok(), await created.text()).toBeTruthy(); ids.push((await created.json()).id);
+  }
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyCiZyraAliasMove(page, api, web, ids[0], ids[1], ownerId, testInfo); expect(errors).toEqual([]);
+});
+
+test("Zyra unavailable suite destinations preserve existing cases and report refused assignments beside valid moves", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy(); const ownerId = (await login.json()).userId as string;
+  const ids: string[] = [];
+  for (const [name, key] of [["CI Zyra Destination", "ZDS"], ["CI Zyra Destination Other", "ZDT"]]) {
+    const created = await page.request.post(`${api}/api/projects`, { data: { name, key } }); expect(created.ok(), await created.text()).toBeTruthy(); ids.push((await created.json()).id);
+  }
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyCiZyraMissingSuite(page, api, web, ids[0], ids[1], ownerId, testInfo); expect(errors).toEqual([]);
+});
+
+test("Zyra move trace counts persisted cases beyond the 25-card preview without changing writes", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy(); const ownerId = (await login.json()).userId as string;
+  const ids: string[] = [];
+  for (const [name, key] of [["CI Zyra Move Trace", "ZMT"], ["CI Zyra Move Trace Other", "ZMU"]]) {
+    const created = await page.request.post(`${api}/api/projects`, { data: { name, key } }); expect(created.ok(), await created.text()).toBeTruthy(); ids.push((await created.json()).id);
+  }
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyCiZyraMoveTraceCount(page, api, web, ids[0], ids[1], ownerId, testInfo); expect(errors).toEqual([]);
+});
+
+test("Zyra overlapping suite moves count distinct saved cases while retaining both writes and capped previews", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = process.env.CI_API_BASE_URL!, web = process.env.CI_WEB_BASE_URL!;
+  for (const target of [api, web, process.env.DATABASE_URL!]) expect(["127.0.0.1", "localhost"]).toContain(new URL(target).hostname);
+  expect(new URL(process.env.DATABASE_URL!).pathname).toBe("/tesbo_ci");
+  const login = await page.request.post(`${api}/api/auth/password/login`, { data: { email: "ci-bug-links@tesbo.invalid", password: "Ci-Bugs-2026!" } });
+  expect(login.ok(), await login.text()).toBeTruthy(); const ownerId = (await login.json()).userId as string;
+  const ids: string[] = [];
+  for (const [name, key] of [["CI Zyra Overlapping Moves", "ZOM"], ["CI Zyra Overlapping Other", "ZON"]]) {
+    const created = await page.request.post(`${api}/api/projects`, { data: { name, key } }); expect(created.ok(), await created.text()).toBeTruthy(); ids.push((await created.json()).id);
+  }
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await verifyCiZyraOverlappingMoveTrace(page, api, web, ids[0], ids[1], ownerId, testInfo); expect(errors).toEqual([]);
 });
 
 test("browser API transport never replays ambiguous mutations and retains bounded read retries", async () => {

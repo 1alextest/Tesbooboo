@@ -1,0 +1,562 @@
+{
+  "verifier": "Tesbo documentation structural binding v1",
+  "input_manifest_sha256": "d6e054ec4567344b1b458b1bf6efbdedb78cb1d80e5c7f5c5767dbebf6e445be",
+  "input_revision": "1.4.29-candidate-v7",
+  "checks": [
+    {
+      "check": "exact_manifest_members",
+      "passed": true,
+      "detail": {
+        "expected": 14,
+        "actual": 14
+      }
+    },
+    {
+      "check": "exact_eight_canonical_files",
+      "passed": true,
+      "detail": [
+        "00_README.md",
+        "01_PRODUCT_REQUIREMENTS.md",
+        "02_WORKFLOW_AND_UX_SPEC.md",
+        "03_TECHNICAL_DESIGN.md",
+        "04_MCP_API_CONTRACTS.md",
+        "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+        "06_IMPLEMENTATION_AGENT_BRIEF.md",
+        "07_UI_DESIGN_TASKS.md"
+      ]
+    },
+    {
+      "check": "frozen_bytes:canonical/00_README.md",
+      "passed": true,
+      "detail": {
+        "bytes": 146346,
+        "sha256": "c3819ab140da8a1e5a67d781dc42dbb8a6d7eed6f6e3f95dd04b3a63e87bd366"
+      }
+    },
+    {
+      "check": "frozen_bytes:canonical/01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": {
+        "bytes": 205608,
+        "sha256": "3e603c4632a611534e947b84179870511a6e1aeff85c279804b80d48be87b7be"
+      }
+    },
+    {
+      "check": "frozen_bytes:canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": {
+        "bytes": 126061,
+        "sha256": "f54e0c605dda7ec8d736ec1091b62531410fba1065008e8dfbfc0877412983e5"
+      }
+    },
+    {
+      "check": "frozen_bytes:canonical/03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": {
+        "bytes": 336954,
+        "sha256": "2487a09fb7376e5f1a1d96e353df774bf29a774d628a27763738dd4a2975639b"
+      }
+    },
+    {
+      "check": "frozen_bytes:canonical/04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": {
+        "bytes": 162975,
+        "sha256": "ea32eca4c982979c9fe85e14a3850b3308ddbe89d1d71796ab20d4c98a800c09"
+      }
+    },
+    {
+      "check": "frozen_bytes:canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": {
+        "bytes": 327016,
+        "sha256": "42f85c83f793aad058f2164b7c373328e7fbcaa2650bfde1e6edfefc4e3eec9b"
+      }
+    },
+    {
+      "check": "frozen_bytes:canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": {
+        "bytes": 111058,
+        "sha256": "c4e79c5006caefda4aa3bc043e34a96da913186cedde0e7a8be95f38b5d810ea"
+      }
+    },
+    {
+      "check": "frozen_bytes:canonical/07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": {
+        "bytes": 114300,
+        "sha256": "d4187ffa2f74a5bb38c3b8fd7c0c7a65e5f83d55e6cb478fcb1f7e85c5c5f80f"
+      }
+    },
+    {
+      "check": "frozen_bytes:views/AGENT_RULE_TEMPLATE.md",
+      "passed": true,
+      "detail": {
+        "bytes": 22931,
+        "sha256": "a2eaeaa1b072609552fe9ad556ce06d1b5044df9557562aa2f81b4208efeaaf3"
+      }
+    },
+    {
+      "check": "frozen_bytes:views/README.md",
+      "passed": true,
+      "detail": {
+        "bytes": 33957,
+        "sha256": "ef57b24414ac3c5f8f54670fe3f85a3dea3a74d1cbba14232b3e5945bc268dd8"
+      }
+    },
+    {
+      "check": "frozen_bytes:views/design.md",
+      "passed": true,
+      "detail": {
+        "bytes": 116276,
+        "sha256": "ab3a4c115609d94d13d7fae33442bbef8c2d55ef07043b7dc9fe9199ce6069b3"
+      }
+    },
+    {
+      "check": "frozen_bytes:views/implementation-plan.md",
+      "passed": true,
+      "detail": {
+        "bytes": 92851,
+        "sha256": "f4c35e7da39c073b5e331d5dae9266e4d7e25db5d66829987beed199dc9bb547"
+      }
+    },
+    {
+      "check": "frozen_bytes:views/requirements.md",
+      "passed": true,
+      "detail": {
+        "bytes": 80007,
+        "sha256": "addacd8ce039165e050ecc6d4a51d3d380716e9612f235b79aa3ee81b5198e86"
+      }
+    },
+    {
+      "check": "frozen_bytes:views/skills-governance.md",
+      "passed": true,
+      "detail": {
+        "bytes": 57797,
+        "sha256": "23fdbe1106ca6df1377168fe31c60b3009e4b55fada0dce68a32d1d107d17fbb"
+      }
+    },
+    {
+      "check": "baseline_archive_identity",
+      "passed": true,
+      "detail": "6094687758ebf1e5dfa3c6ed8e2209b8967a190523815ba1e1197d11867374ef"
+    },
+    {
+      "check": "baseline_eight_members",
+      "passed": true,
+      "detail": [
+        "00_README.md",
+        "01_PRODUCT_REQUIREMENTS.md",
+        "02_WORKFLOW_AND_UX_SPEC.md",
+        "03_TECHNICAL_DESIGN.md",
+        "04_MCP_API_CONTRACTS.md",
+        "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+        "06_IMPLEMENTATION_AGENT_BRIEF.md",
+        "07_UI_DESIGN_TASKS.md"
+      ]
+    },
+    {
+      "check": "historical_body_preserved:00_README.md",
+      "passed": true,
+      "detail": "Only exact current revision header and README pointer substitutions permitted before the appended amendment."
+    },
+    {
+      "check": "historical_identifiers_retained:00_README.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:00_README.md",
+      "passed": true,
+      "detail": "## Revision 1.4.29"
+    },
+    {
+      "check": "no_unresolved_placeholder:00_README.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "historical_body_preserved:01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": "Only exact current revision header and README pointer substitutions permitted before the appended amendment."
+    },
+    {
+      "check": "historical_identifiers_retained:01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": "## Revision 1.4.29"
+    },
+    {
+      "check": "no_unresolved_placeholder:01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "historical_body_preserved:02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": "Only exact current revision header and README pointer substitutions permitted before the appended amendment."
+    },
+    {
+      "check": "historical_identifiers_retained:02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": "## Revision 1.4.29"
+    },
+    {
+      "check": "no_unresolved_placeholder:02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "historical_body_preserved:03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": "Only exact current revision header and README pointer substitutions permitted before the appended amendment."
+    },
+    {
+      "check": "historical_identifiers_retained:03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": "## Revision 1.4.29"
+    },
+    {
+      "check": "no_unresolved_placeholder:03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "local_link:03_TECHNICAL_DESIGN.md:06_IMPLEMENTATION_AGENT_BRIEF.md#principle-distillation-and-contextual-instantiation",
+      "passed": true,
+      "detail": "Existence only; anchor meaning and semantic support require review."
+    },
+    {
+      "check": "historical_body_preserved:04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": "Only exact current revision header and README pointer substitutions permitted before the appended amendment."
+    },
+    {
+      "check": "historical_identifiers_retained:04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": "## Revision 1.4.29"
+    },
+    {
+      "check": "no_unresolved_placeholder:04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "historical_body_preserved:05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": "Only exact current revision header and README pointer substitutions permitted before the appended amendment."
+    },
+    {
+      "check": "historical_identifiers_retained:05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": "## Revision 1.4.29"
+    },
+    {
+      "check": "no_unresolved_placeholder:05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "historical_body_preserved:06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": "Only exact current revision header and README pointer substitutions permitted before the appended amendment."
+    },
+    {
+      "check": "historical_identifiers_retained:06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": "## Revision 1.4.29"
+    },
+    {
+      "check": "no_unresolved_placeholder:06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "historical_body_preserved:07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": "Only exact current revision header and README pointer substitutions permitted before the appended amendment."
+    },
+    {
+      "check": "historical_identifiers_retained:07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": "## Revision 1.4.29"
+    },
+    {
+      "check": "no_unresolved_placeholder:07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "scenario_identifier_set:ASE-E2E",
+      "passed": true,
+      "detail": {
+        "unique_definition_rows": 15,
+        "expected": 15,
+        "ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ]
+      }
+    },
+    {
+      "check": "scenario_identifier_set:ASE-FLOW",
+      "passed": true,
+      "detail": {
+        "unique_definition_rows": 54,
+        "expected": 54,
+        "ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54
+        ]
+      }
+    },
+    {
+      "check": "scenario_identifier_set:SK-E2E",
+      "passed": true,
+      "detail": {
+        "unique_definition_rows": 40,
+        "expected": 40,
+        "ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40
+        ]
+      }
+    },
+    {
+      "check": "scenario_identifier_set:ASE-INT",
+      "passed": true,
+      "detail": {
+        "unique_definition_rows": 16,
+        "expected": 16,
+        "ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16
+        ]
+      }
+    },
+    {
+      "check": "scenario_count",
+      "passed": true,
+      "detail": {
+        "ASE-E2E": 15,
+        "ASE-FLOW": 54,
+        "SK-E2E": 40,
+        "ASE-INT": 16
+      }
+    },
+    {
+      "check": "source_commit_accessible",
+      "passed": true,
+      "detail": {
+        "sha": "6897f989b055a955280f810c7daace86f74057fa",
+        "git_exit": 0
+      }
+    }
+  ],
+  "passed": true,
+  "limits": [
+    "No semantic requirement-to-design-to-test completeness certification.",
+    "No application runtime, authentic UI, deployed source, human authority or efficacy proof.",
+    "No inference that an installed skill or source implementation satisfies a proposed contract."
+  ],
+  "reviewer_execution": {
+    "member": "/root/green_member_b",
+    "assessment": "INFORMED v5-to-v7 documentation delta",
+    "started_utc": "2026-11-20T05:31:51.041701+00:00",
+    "finished_utc": "2026-11-20T05:31:51.297228+00:00",
+    "command_argv": [
+      "python3",
+      "/workspace/scratch/ce8c3109f396/assurance-run-20261119/verify-spec-package.py",
+      "--input",
+      "/workspace/scratch/ce8c3109f396/assurance-run-20261119/input-v7",
+      "--baseline-zip",
+      "/workspace/scratch/ce8c3109f396/canonical-inputs/creating a testing tool to make my job easier/Tesbo_Specifications_v1.4.28.zip",
+      "--receipt",
+      "/workspace/scratch/ce8c3109f396/assurance-run-20261119/verification/green-b-informed-v7.json"
+    ],
+    "command_shell_display": "python3 /workspace/scratch/ce8c3109f396/assurance-run-20261119/verify-spec-package.py --input /workspace/scratch/ce8c3109f396/assurance-run-20261119/input-v7 --baseline-zip '/workspace/scratch/ce8c3109f396/canonical-inputs/creating a testing tool to make my job easier/Tesbo_Specifications_v1.4.28.zip' --receipt /workspace/scratch/ce8c3109f396/assurance-run-20261119/verification/green-b-informed-v7.json",
+    "stdout": "{\"passed\": true, \"checks\": 57, \"failed\": [], \"manifest_sha256\": \"d6e054ec4567344b1b458b1bf6efbdedb78cb1d80e5c7f5c5767dbebf6e445be\", \"counts\": {\"ASE-E2E\": 15, \"ASE-FLOW\": 54, \"SK-E2E\": 40, \"ASE-INT\": 16}}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "verifier_sha256": "643a17b8351b3f5a169ffcf8ae31526659ecaa0a9efe6e73cca971b8aabe8a54",
+    "evidence_mode": "Executed target-bound documentation verification; document-level semantic delta; no product runtime test",
+    "reviewed_receipt_hashes": {
+      "green-b-v3.md": "589db063cf11aae3d58292a39fa121d0fc32563f26089ee7dd5ddb82e1754751",
+      "green-b-informed-v5.md": "2629bdda068868a5b4dba5fd5e0deb3ff99cb54128c7eda9d1b8390c2167e3af",
+      "green-a-informed-v5.md": "38db29f5403a41e7396907422bafb3ee812b42d8b0857272e86658c391a83ff1",
+      "green-a-informed-v7.md": "04547c507f35dbf8a75376210903581aa0bf4f98fda873367eb784a65fe9ef4e",
+      "qa-informed-v6.md": "a64760b5e9860ac23016bef67475d51702e3e91b90136bd773157be8524a7ca6",
+      "qa-informed-v7.md": "f24bfe9f21f7787c02dfafa28e6aab0d982632fe16e098393cf4457eca3bf280"
+    },
+    "original_probe_sha256": "4888f73cfb35e74cba7c314c4928d0f4cdb9f7c10ec6f6ec2d2b093d4484e64c",
+    "limits": "Structural input/history/ID/link checks only. No implementation, authority, authentic UI, causal/predictive efficacy or operational gate closure. Original mechanism probe not rerun."
+  }
+}

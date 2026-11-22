@@ -3,11 +3,14 @@ import path from "node:path";
 import { expect, request as newRequestContext, test } from "@playwright/test";
 import { env } from "../utils/env";
 import { dbControlAvailable, literal, scalar } from "../utils/psql";
+import { testcaseEditState } from "../utils/testcase-edit-state";
+import { approveTestcase, createTestcaseFixtureResponse } from "../utils/testcase-approval";
+import { loginAs, provisionRbacTenant } from "../utils/rbac-tenant";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 
 async function createCase(request: import("@playwright/test").APIRequestContext, data: Record<string, unknown> = {}) {
-  const res = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+  const res = await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, {
     data: { title: `E2E ${Date.now()}`, ...data },
   });
   return res.json();
@@ -26,6 +29,61 @@ async function deleteSuite(request: import("@playwright/test").APIRequestContext
 }
 
 test.describe("test case CRUD", () => {
+  test("row revisions preserve a newer edit and permit an explicitly reviewed retry", async ({ request }) => {
+    const created = await createCase(request, { attachments: "Original Notes" });
+    const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
+    try {
+      const initial = await (await request.get(url)).json();
+      expect(initial.editRevision).toMatch(/^[a-f0-9]{64}$/);
+      const first = await request.put(url, { data: { expectedRevision: initial.editRevision, attachments: "First reviewer Notes" } });
+      expect(first.ok()).toBeTruthy();
+      const committed = await (await request.get(url)).json();
+      const stale = await request.put(url, { data: { expectedRevision: initial.editRevision, attachments: "Stale Notes", title: "Do not replace" } });
+      expect(stale.status()).toBe(409);
+      expect((await stale.json()).code).toBe("TESTCASE_EDIT_CONFLICT");
+      expect(testcaseEditState(await (await request.get(url)).json())).toEqual(testcaseEditState(committed));
+      const retry = await request.put(url, { data: { expectedRevision: committed.editRevision, description: "Reviewed against current Notes" } });
+      expect(retry.ok()).toBeTruthy();
+      const saved = await (await request.get(url)).json();
+      expect(saved).toMatchObject({
+        id: initial.id, externalId: initial.externalId, suiteId: initial.suiteId, ownerId: initial.ownerId,
+        title: initial.title, attachments: "First reviewer Notes", description: "Reviewed against current Notes"
+      });
+      expect(saved.editRevision).not.toBe(committed.editRevision);
+    } finally { await deleteCase(request, created.id); }
+  });
+
+  test("malformed revisions never change a case and cannot restore a deleted case", async ({ request }) => {
+    const created = await createCase(request);
+    const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
+    try {
+      const initial = await (await request.get(url)).json();
+      for (const expectedRevision of [null, "", " ", "a".repeat(63), "a".repeat(65), "g".repeat(64), 1, true, [initial.editRevision], {}]) {
+        const refused = await request.put(url, { data: { expectedRevision, title: "Invalid replacement" } });
+        expect(refused.status()).toBe(400);
+        expect(testcaseEditState(await (await request.get(url)).json())).toEqual(testcaseEditState(initial));
+      }
+      await deleteCase(request, created.id);
+      const missing = await request.put(url, { data: { expectedRevision: initial.editRevision, title: "Must not restore" } });
+      expect(missing.status()).toBe(404);
+    } finally { await deleteCase(request, created.id); }
+  });
+
+  test("two simultaneous edits using one revision cannot both commit", async ({ request }) => {
+    const created = await createCase(request);
+    const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
+    try {
+      const initial = await (await request.get(url)).json();
+      const results = await Promise.all(["Editor one", "Editor two"].map((attachments) =>
+        request.put(url, { data: { expectedRevision: initial.editRevision, attachments } })));
+      expect(results.map((response) => response.status()).sort()).toEqual([200, 409]);
+      const winner = results.findIndex((response) => response.ok());
+      const saved = await (await request.get(url)).json();
+      expect(saved.attachments).toBe(["Editor one", "Editor two"][winner]);
+      expect(saved.id).toBe(created.id);
+    } finally { await deleteCase(request, created.id); }
+  });
+
   test("supports the create -> read -> update -> list -> delete lifecycle", { tag: '@tesbo.testId("TES-TC-551")' }, async ({ request }) => {
     const title = `E2E smoke test case ${Date.now()}`;
 
@@ -172,14 +230,16 @@ test.describe("test case CRUD", () => {
         data: { title: `${created.title} (edited)` },
       });
       expect(plainEdit.ok()).toBeTruthy();
-      expect((await plainEdit.json()).sourceRefs).toEqual([original]);
+      // The mutation endpoint is allowed to reply 204 with no JSON payload.
+      // Prove persisted citations through the authoritative GET reader.
+      expect((await (await request.get(`/api/projects/${ctx.projectId}/testcases/${created.id}`)).json()).sourceRefs).toEqual([original]);
 
       const replacement = { type: "bug", id: "E2E-REPLACEMENT", title: "Replacement citation" };
       const withNewRefs = await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
         data: { sourceRefs: [replacement] },
       });
       expect(withNewRefs.ok()).toBeTruthy();
-      expect((await withNewRefs.json()).sourceRefs).toEqual([replacement]);
+      expect((await (await request.get(`/api/projects/${ctx.projectId}/testcases/${created.id}`)).json()).sourceRefs).toEqual([replacement]);
     } finally {
       await deleteCase(request, created.id);
     }
@@ -299,17 +359,14 @@ test.describe("test case CRUD", () => {
     }
   });
 
-  test("estimatedDuration is accepted on create/update but silently discarded (dead field)", { tag: '@tesbo.testId("TES-TC-555")' }, async ({
+  test("estimatedDuration is preserved on create and explicit update", { tag: '@tesbo.testId("TES-TC-555")' }, async ({
     request,
   }) => {
-    // KNOWN GAP: the `estimated_duration` column exists (migrations/V7_testcase_additional_fields.sql)
-    // and the manual test-case form / import mapping UI both expose it, but createTestCase and
-    // updateTestCase never reference it in their INSERT/UPDATE column lists — anything sent here
-    // is silently dropped rather than persisted or rejected. Pinned per
-    // FEATURE_DOCUMENTATION.md Appendix C4.
+    // Earlier source review documented a dropped field. This is now persisted by
+    // the existing writer: pin the *current* storage contract, not the obsolete defect.
     const created = await createCase(request, { estimatedDuration: 45 });
     try {
-      expect(created.estimatedDuration).toBeNull();
+      expect(String(created.estimatedDuration)).toBe("45");
 
       await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
         data: { estimatedDuration: 90 },
@@ -317,7 +374,7 @@ test.describe("test case CRUD", () => {
       const after = await (
         await request.get(`/api/projects/${ctx.projectId}/testcases/${created.id}`)
       ).json();
-      expect(after.estimatedDuration).toBeNull();
+      expect(String(after.estimatedDuration)).toBe("90");
     } finally {
       await deleteCase(request, created.id);
     }
@@ -407,12 +464,14 @@ test.describe("move to suite", () => {
     const created = await createCase(request, { suiteId: suite.id });
 
     try {
-      await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
+      const res = await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
         data: { suiteId: null },
       });
+      expect(res.ok(), await res.text()).toBeTruthy();
       const after = await (
         await request.get(`/api/projects/${ctx.projectId}/testcases/${created.id}`)
       ).json();
+      // Explicit null is the "unassign" signal; omitting suiteId is what preserves it.
       expect(after.suiteId).toBeNull();
     } finally {
       await deleteCase(request, created.id);
@@ -420,25 +479,24 @@ test.describe("move to suite", () => {
     }
   });
 
-  test("omitting suiteId on update un-assigns the suite (suite_id is overwritten, not COALESCEd)", { tag: '@tesbo.testId("TES-TC-561")' }, async ({
+  test("omitting suiteId on update preserves the canonical suite assignment", { tag: '@tesbo.testId("TES-TC-561")' }, async ({
     request,
   }) => {
-    // KNOWN GAP (documented, not test.fail() — mirrors updateSuite's parentId bug in
-    // suites.spec.ts): unlike every other column in updateTestCase, `suite_id=$2` is bound
-    // directly to `body.suiteId ?? null` instead of COALESCE(...) — so any update that doesn't
-    // explicitly resend the current suiteId silently un-suites the test case.
+    // Updates must preserve omitted fields; an unrelated description edit
+    // cannot silently move a case out of its suite.
     const suite = await createSuite(request, `E2E Move Unassign ${Date.now()}`);
     const created = await createCase(request, { suiteId: suite.id });
 
     try {
-      await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
+      const res = await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
         data: { description: "unrelated update, no suiteId sent" },
       });
+      expect(res.ok(), await res.text()).toBeTruthy();
 
       const after = await (
         await request.get(`/api/projects/${ctx.projectId}/testcases/${created.id}`)
       ).json();
-      expect(after.suiteId).toBeNull();
+      expect(after.suiteId).toBe(suite.id);
     } finally {
       await deleteCase(request, created.id);
       await deleteSuite(request, suite.id);
@@ -581,15 +639,23 @@ test.describe("bulk operations", () => {
     const b = await createCase(request, { priority: "P3", status: "Draft" });
 
     try {
-      const res = await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-update`, {
+      const forbidden = await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-update`, {
         data: { testcaseIds: [a.id, b.id], priority: "P0", status: "Approved", ownerId: me.userId },
+      });
+      expect(forbidden.status()).toBe(400);
+      for (const id of [a.id, b.id]) {
+        const unchanged = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${id}`)).json();
+        expect(unchanged).toMatchObject({ priority: "P3", status: "Draft" });
+      }
+      const res = await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-update`, {
+        data: { testcaseIds: [a.id, b.id], priority: "P0", status: "In Review", ownerId: me.userId },
       });
       expect(res.ok()).toBeTruthy();
 
       for (const id of [a.id, b.id]) {
         const after = await (await request.get(`/api/projects/${ctx.projectId}/testcases/${id}`)).json();
         expect(after.priority).toBe("P0");
-        expect(after.status).toBe("Approved");
+        expect(after.status).toBe("In Review");
         expect(after.ownerId).toBe(me.userId);
       }
     } finally {
@@ -642,13 +708,13 @@ test.describe("bulk operations", () => {
 
     try {
       await request.post(`/api/projects/${ctx.projectId}/testcases/bulk-update`, {
-        data: { testcaseIds: [created.id], status: "Approved" },
+        data: { testcaseIds: [created.id], status: "In Review" },
       });
       const after = await (
         await request.get(`/api/projects/${ctx.projectId}/testcases/${created.id}`)
       ).json();
       expect(after.severity).toBe("High");
-      expect(after.status).toBe("Approved");
+      expect(after.status).toBe("In Review");
     } finally {
       await deleteCase(request, created.id);
     }
@@ -720,7 +786,7 @@ test.describe("bulk operations", () => {
     expect(res.ok()).toBeTruthy();
   });
 
-  test("archiving sets status to Archived; restoring a prior status is just another update", { tag: '@tesbo.testId("TES-TC-570")' }, async ({
+  test("archiving preserves history; restoring approval requires a new exact human review", { tag: '@tesbo.testId("TES-TC-570")' }, async ({
     request,
   }) => {
     const created = await createCase(request, { status: "Approved" });
@@ -734,14 +800,13 @@ test.describe("bulk operations", () => {
       ).json();
       expect(archived.status).toBe("Archived");
 
-      // The frontend's "Unarchive" button always sends status:"Draft" regardless of what the
-      // status was before archiving, rather than restoring "Approved" (see
-      // FEATURE_DOCUMENTATION.md Section B5) — a UI-level gap, not a backend one. The backend
-      // itself has no opinion on the prior value and accepts whatever status a direct PUT sends,
-      // which is what this asserts.
-      await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
+      // A historic Approved label cannot restore a current human decision through a generic write.
+      const refused = await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, {
         data: { status: "Approved" },
       });
+      expect(refused.status()).toBe(400);
+      await request.put(`/api/projects/${ctx.projectId}/testcases/${created.id}`, { data: { status: "Draft" } });
+      await approveTestcase(request, ctx.projectId, created.id);
       const restored = await (
         await request.get(`/api/projects/${ctx.projectId}/testcases/${created.id}`)
       ).json();
@@ -1340,7 +1405,7 @@ test.describe("pagination", () => {
         failOnStatusCode: false,
       });
       expect(unknown.status(), `an unknown but well-formed suiteId — ${await unknown.text()}`).toBe(200);
-      expect((await unknown.json()).list).toEqual([]);
+      expect(await unknown.json()).toEqual([]);
     } finally {
       for (const id of [...filed, ...unfiled]) await deleteCase(request, id);
       await deleteSuite(request, suite.id);
@@ -1947,10 +2012,17 @@ test.describe("Not set priority, extra types and To Be Automated", () => {
   });
 
   test("creating a test case without a token is refused", async ({ playwright }) => {
-    const anon = await playwright.request.newContext({ baseURL: env.apiBaseUrl });
+    // Do not inherit the configured account-A storage state in an anonymous probe.
+    const anon = await playwright.request.newContext({
+      baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] }
+    });
     try {
       const res = await anon.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: "E2E anon", priority: "Not set" }, failOnStatusCode: false });
-      expect([401, 403]).toContain(res.status());
+      // Missing-session writes are refused by requireUser as a 400 across the legacy API
+      // (FEATURE_DOCUMENTATION's documented contract); no route here returns 401/403. The body
+      // above is valid, so a 400 can only come from the missing caller. The point of the test is
+      // that the write is refused, not which refusal status happens to be used.
+      expect([400, 401, 403]).toContain(res.status());
     } finally {
       await anon.dispose();
     }
@@ -2074,11 +2146,21 @@ test.describe("editing a test case ID", () => {
     const p = `Z${Date.now()}`;
     const tc = await createCase(request, { title: `E2E ID History ${p}` });
     try {
+      const snapshotCount = () => Number(scalar(`SELECT COUNT(*)::int FROM testcase_versions
+        WHERE testcase_id = ${literal(tc.id)};`));
+      const baseline = snapshotCount();
       const put = await request.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-3`, title: `E2E ID History ${p} edited` } });
       expect(put.ok(), await put.text()).toBeTruthy();
-      const rows = scalar(`SELECT count(*) || ':' || count(*) FILTER (WHERE snapshot->>'external_id' = ${literal(tc.externalId)} AND snapshot->>'title' = ${literal(`E2E ID History ${p}`)}) FROM testcase_versions WHERE testcase_id = ${literal(tc.id)};`);
-      // One snapshot, holding the case as it was before the edit (old id AND old title).
-      expect(rows).toBe("1:1");
+      // The single ID-edit action contributes one historical snapshot even if
+      // creation/other legitimate earlier mutations already generated versions.
+      expect(snapshotCount() - baseline).toBe(1);
+      // Parenthesise each extraction: ->> and || share "any other operator" precedence and
+      // associate left, so the bare chain parsed as ((snapshot->>'external_id') || ':' || snapshot)
+      // ->> 'title' — a text value on the left of ->>. This test had never run in CI.
+      const latest = scalar(`SELECT (snapshot->>'external_id') || ':' || (snapshot->>'title')
+        FROM testcase_versions WHERE testcase_id = ${literal(tc.id)}
+        ORDER BY version DESC LIMIT 1;`);
+      expect(latest).toBe(`${tc.externalId}:E2E ID History ${p}`);
     } finally {
       await deleteCase(request, tc.id);
     }
@@ -2089,9 +2171,11 @@ test.describe("editing a test case ID", () => {
     const p = `Z${Date.now()}`;
     const tc = await createCase(request, { title: `E2E ID Only ${p}` });
     try {
+      const before = Number(scalar(`SELECT COUNT(*)::int FROM testcase_versions WHERE testcase_id = ${literal(tc.id)};`));
       const put = await request.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-4` } });
       expect(put.ok(), await put.text()).toBeTruthy();
-      expect(scalar(`SELECT count(*) FROM testcase_versions WHERE testcase_id = ${literal(tc.id)};`)).toBe("1");
+      const after = Number(scalar(`SELECT COUNT(*)::int FROM testcase_versions WHERE testcase_id = ${literal(tc.id)};`));
+      expect(after - before).toBe(1);
     } finally {
       await deleteCase(request, tc.id);
     }
@@ -2140,24 +2224,48 @@ test.describe("editing a test case ID", () => {
     }
   });
 
-  test("a run that already holds the case shows the new ID, including after the case is deleted", async ({ request }) => {
+  test("an existing run keeps its accepted case ID after rename and deletion while a new run uses the reviewed new ID", async ({ request }) => {
+    expect(dbControlAvailable(), "isolated database access is required to compare the complete accepted run evidence").toBe(true);
     const p = `Z${Date.now()}`;
-    const tc = await createCase(request, { title: `E2E Run Snapshot ${p}` });
+    const tc = await createCase(request, { title: `E2E Run Snapshot ${p}`, status: "Approved" });
     const cycle = await (await request.post(`/api/projects/${ctx.projectId}/cycles`, { data: { name: `E2E Run Snapshot ${p}` } })).json();
+    let nextCycleId = "";
+    const persisted = () => scalar(`SELECT jsonb_build_object(
+      'run', (SELECT to_jsonb(c) FROM cycles c WHERE c.id=${literal(cycle.id)}),
+      'items', (SELECT jsonb_agg(to_jsonb(i) ORDER BY i.id) FROM cycle_items i WHERE i.cycle_id=${literal(cycle.id)}),
+      'executions', (SELECT jsonb_agg(to_jsonb(e) ORDER BY e.id) FROM executions e JOIN cycle_items i ON i.id=e.cycle_item_id WHERE i.cycle_id=${literal(cycle.id)}))::text;`);
     try {
-      await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [tc.id] } });
+      const attachment = await request.post(`/api/cycles/${cycle.id}/testcases`, {
+        data: { testcaseIds: [tc.id] }, failOnStatusCode: false
+      });
+      expect(attachment.ok(), await attachment.text()).toBeTruthy();
       const before = await (await request.get(`/api/cycles/${cycle.id}/executions`)).json();
+      expect(before).toHaveLength(1);
       expect(before[0].externalId).toBe(tc.externalId);
+      const originalEvidence = persisted();
 
       const put = await request.put(caseUrl(tc.id), { data: { externalId: `${p}-TC-9` } });
       expect(put.ok(), await put.text()).toBeTruthy();
-      expect((await (await request.get(`/api/cycles/${cycle.id}/executions`)).json())[0].externalId).toBe(`${p}-TC-9`);
+      expect((await (await request.get(`/api/cycles/${cycle.id}/executions`)).json())[0].externalId).toBe(tc.externalId);
+      expect(persisted()).toBe(originalEvidence);
+      const reviewed = await approveTestcase(request, ctx.projectId, tc.id);
+      expect(reviewed.externalId).toBe(`${p}-TC-9`);
+      const next = await request.post(`/api/projects/${ctx.projectId}/cycles/from-cases`, {
+        data: { name: `E2E Current Snapshot ${p}`, testcaseIds: [tc.id] }
+      });
+      expect(next.ok(), await next.text()).toBeTruthy();
+      const nextRun = await next.json(); nextCycleId = nextRun.id;
+      expect(nextRun).toMatchObject({ requested: 1, added: 1, skipped: 0 });
+      expect((await (await request.get(`/api/cycles/${nextCycleId}/executions`)).json())[0].externalId).toBe(`${p}-TC-9`);
+      expect(persisted()).toBe(originalEvidence);
 
       await deleteCase(request, tc.id);
-      expect((await (await request.get(`/api/cycles/${cycle.id}/executions`)).json())[0].externalId).toBe(`${p}-TC-9`);
+      expect((await (await request.get(`/api/cycles/${cycle.id}/executions`)).json())[0].externalId).toBe(tc.externalId);
+      expect(persisted()).toBe(originalEvidence);
     } finally {
       await deleteCase(request, tc.id);
       await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
+      if (nextCycleId) await request.delete(`/api/cycles/${nextCycleId}`, { failOnStatusCode: false });
     }
   });
 
@@ -2323,6 +2431,141 @@ test.describe("repository paging", () => {
     } finally {
       await asB.dispose();
       await anon.dispose();
+    }
+  });
+});
+
+test.describe("authoring technique and review views", () => {
+  test("persist, filter, preserve on omission, clear explicitly and refuse unknown values", async ({ request }) => {
+    const stamp = Date.now();
+    const a = await createCase(request, { title: `E2E technique A ${stamp}`, technique: "state_testing", reviewViews: ["positive", "state"] });
+    const b = await createCase(request, { title: `E2E technique B ${stamp}`, technique: "boundary_value_analysis", reviewViews: ["negative"] });
+    const url = `/api/projects/${ctx.projectId}/testcases`;
+    try {
+      expect(await (await request.get(`${url}/${a.id}`)).json()).toMatchObject({ technique: "state_testing", reviewViews: ["positive", "state"] });
+
+      const byTechnique = await (await request.get(url, { params: { search: String(stamp), technique: "state_testing" } })).json();
+      expect(byTechnique.map((row: { id: string }) => row.id)).toEqual([a.id]);
+      const byView = await (await request.get(url, { params: { search: String(stamp), view: "negative" } })).json();
+      expect(byView.map((row: { id: string }) => row.id)).toEqual([b.id]);
+
+      const omitted = await request.put(`${url}/${a.id}`, { data: { description: "unrelated edit" } });
+      expect(omitted.ok(), await omitted.text()).toBeTruthy();
+      expect(await (await request.get(`${url}/${a.id}`)).json()).toMatchObject({ technique: "state_testing", reviewViews: ["positive", "state"] });
+
+      const cleared = await request.put(`${url}/${a.id}`, { data: { technique: "", reviewViews: [] } });
+      expect(cleared.ok(), await cleared.text()).toBeTruthy();
+      expect(await (await request.get(`${url}/${a.id}`)).json()).toMatchObject({ technique: null, reviewViews: [] });
+
+      for (const bad of [{ technique: "nope" }, { reviewViews: ["nope"] }, { reviewViews: "negative" }]) {
+        const res = await request.put(`${url}/${b.id}`, { data: bad, failOnStatusCode: false });
+        expect(res.status(), JSON.stringify(bad)).toBe(400);
+      }
+      expect(await (await request.get(`${url}/${b.id}`)).json()).toMatchObject({ technique: "boundary_value_analysis", reviewViews: ["negative"] });
+    } finally {
+      await deleteCase(request, a.id);
+      await deleteCase(request, b.id);
+    }
+  });
+});
+
+test.describe("saved test-case views", () => {
+  test("members save, share and delete filter views with creator/owner authorization", async () => {
+    const tenant = await provisionRbacTenant("mcp-lifecycle");
+    test.skip(!tenant, "requires direct SQL control for the disposable tenant");
+    const projectId = tenant!.mainProjectId;
+    const owner = await loginAs(tenant!.owner);
+    const qa = await loginAs(tenant!.qa);
+    const created: string[] = [];
+    try {
+      const sharedRes = await owner.post(`/api/projects/${projectId}/testcase-views`, {
+        data: { name: `E2E shared view ${Date.now()}`, filters: { priority: "P1", search: "login" }, isShared: true }
+      });
+      expect(sharedRes.status(), await sharedRes.text()).toBe(201);
+      const shared = await sharedRes.json();
+      created.push(shared.id);
+      expect(shared).toMatchObject({ projectId, isShared: true, name: expect.any(String), filters: { priority: "P1", search: "login" } });
+
+      const qaList = await (await qa.get(`/api/projects/${projectId}/testcase-views`)).json();
+      expect(qaList.map((view: { id: string }) => view.id)).toContain(shared.id);
+
+      const privateRes = await qa.post(`/api/projects/${projectId}/testcase-views`, {
+        data: { name: `E2E qa view ${Date.now()}`, filters: { view: "negative" } }
+      });
+      expect(privateRes.status()).toBe(201);
+      const qaPrivate = await privateRes.json();
+      created.push(qaPrivate.id);
+      const ownerList = await (await owner.get(`/api/projects/${projectId}/testcase-views`)).json();
+      expect(ownerList.map((view: { id: string }) => view.id)).not.toContain(qaPrivate.id);
+
+      expect((await qa.patch(`/api/projects/${projectId}/testcase-views/${shared.id}`, { data: { name: "hijack" } })).status()).toBe(403);
+      const ownerEdit = await owner.patch(`/api/projects/${projectId}/testcase-views/${shared.id}`, { data: { name: `${shared.name} edited` } });
+      expect(ownerEdit.ok(), await ownerEdit.text()).toBeTruthy();
+
+      // QA is not a member of the tenant's second project.
+      expect((await qa.get(`/api/projects/${tenant!.secondProjectId}/testcase-views`)).status()).toBe(404);
+
+      expect((await qa.delete(`/api/projects/${projectId}/testcase-views/${qaPrivate.id}`)).ok()).toBeTruthy();
+      created.splice(created.indexOf(qaPrivate.id), 1);
+      expect((await owner.delete(`/api/projects/${projectId}/testcase-views/${shared.id}`)).ok()).toBeTruthy();
+      created.splice(created.indexOf(shared.id), 1);
+
+      for (const bad of [
+        { name: "", filters: {} },
+        { name: "bad", filters: { unknown: "x" } },
+        { name: "bad", filters: [] },
+        { name: "x".repeat(81), filters: {} }
+      ]) {
+        const res = await owner.post(`/api/projects/${projectId}/testcase-views`, { data: bad, failOnStatusCode: false });
+        expect(res.status(), JSON.stringify(bad)).toBe(400);
+      }
+    } finally {
+      for (const id of created) await owner.delete(`/api/projects/${projectId}/testcase-views/${id}`, { failOnStatusCode: false });
+      await Promise.all([owner.dispose(), qa.dispose()]);
+    }
+  });
+});
+
+test.describe("exact-revision approval", () => {
+  test("approves the reviewed revision, refuses a changed revision, and records a receipt", async ({ request }) => {
+    const created = await createCase(request, { title: `E2E approval ${Date.now()}` });
+    const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
+    try {
+      const initial = await (await request.get(url)).json();
+      expect(initial.status).toBe("Draft");
+
+      const approved = await request.post(`${url}/approve`, { data: { expectedRevision: initial.editRevision, expectedApprovalRevision: initial.approvalRevision } });
+      expect(approved.status(), await approved.text()).toBe(200);
+      const body = await approved.json();
+      expect(body.testcase).toMatchObject({ id: created.id, status: "Approved" });
+      expect(body.receipt).toMatchObject({ testcaseId: created.id, approvedRevision: initial.editRevision });
+
+      const receipts = await (await request.get(`${url}/approvals`)).json();
+      expect(receipts.map((receipt: { approvedRevision: string }) => receipt.approvedRevision)).toContain(initial.editRevision);
+
+      // A change after the review makes the previously reviewed revision stale.
+      expect((await request.put(url, { data: { description: "changed after review" } })).ok()).toBeTruthy();
+      const stale = await request.post(`${url}/approve`, { data: { expectedRevision: initial.editRevision, expectedApprovalRevision: initial.approvalRevision }, failOnStatusCode: false });
+      expect(stale.status()).toBe(409);
+      expect((await stale.json()).code).toBe("TESTCASE_APPROVAL_CONFLICT");
+      expect(await (await request.get(`${url}/approvals`)).json()).toHaveLength(receipts.length);
+      expect((await (await request.get(url)).json()).status).toBe("In Review");
+
+      expect((await request.post(`${url}/approve`, { data: {}, failOnStatusCode: false })).status()).toBe(400);
+      expect((await request.post(`${url}/approve`, { data: { expectedRevision: "nope" }, failOnStatusCode: false })).status()).toBe(400);
+
+      const asB = await newRequestContext.newContext({
+        baseURL: env.apiBaseUrl,
+        storageState: path.join(__dirname, "../.auth/state-b.json")
+      });
+      try {
+        const current = await (await request.get(url)).json();
+        expect((await asB.post(`${url}/approve`, { data: { expectedRevision: current.editRevision, expectedApprovalRevision: current.approvalRevision }, failOnStatusCode: false })).status()).toBe(404);
+      } finally {
+        await asB.dispose();
+      }
+    } finally {
+      await deleteCase(request, created.id);
     }
   });
 });

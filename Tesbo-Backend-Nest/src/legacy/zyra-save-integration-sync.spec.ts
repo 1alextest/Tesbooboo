@@ -127,7 +127,7 @@ describe("zyraSave — ticket auto-comment", () => {
       settings: { jiraAutoComment: true }
     });
 
-    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {});
+    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]}, {kind:"human_session"});
     await settle();
 
     expect(claims(calls)).toHaveLength(1);
@@ -152,7 +152,7 @@ describe("zyraSave — ticket auto-comment", () => {
     const { svc, calls } = makeLegacy();
     const { jiraPost } = arrange(svc, { result: saved([CREATED_ROW], ["add"]), settings: { jiraAutoComment: false } });
 
-    const result = await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {});
+    const result = await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]}, {kind:"human_session"});
     await settle();
 
     expect(result.savedCount).toBe(1);
@@ -164,7 +164,7 @@ describe("zyraSave — ticket auto-comment", () => {
     const { svc, calls } = makeLegacy();
     const { jiraPost } = arrange(svc, { result: saved([CREATED_ROW], ["add"]), settings: {} });
 
-    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {});
+    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]}, {kind:"human_session"});
     await settle();
 
     expect(claims(calls).map((c) => c.params[6])).toEqual(["skipped_disabled"]);
@@ -175,7 +175,7 @@ describe("zyraSave — ticket auto-comment", () => {
     const { svc, calls } = makeLegacy();
     const { jiraPost } = arrange(svc, { result: saved([CREATED_ROW], ["add"]), settings: { jiraAutoComment: true }, jiraConnected: false });
 
-    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {});
+    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]}, {kind:"human_session"});
     await settle();
 
     expect(claims(calls).map((c) => c.params[6])).toEqual(["skipped_not_connected"]);
@@ -186,7 +186,7 @@ describe("zyraSave — ticket auto-comment", () => {
     const { svc, calls } = makeLegacy();
     const { jiraPost, linearPost } = arrange(svc, { result: saved([NO_LINK_ROW], ["add"]), settings: { jiraAutoComment: true, linearAutoComment: true } });
 
-    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {});
+    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]}, {kind:"human_session"});
     await settle();
 
     expect(claims(calls)).toHaveLength(0);
@@ -198,7 +198,7 @@ describe("zyraSave — ticket auto-comment", () => {
     const { svc, calls } = makeLegacy();
     arrange(svc, { result: { savedCount: 0, suiteId: null, testcases: [] }, settings: { jiraAutoComment: true } });
 
-    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {});
+    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]}, {kind:"human_session"});
     await settle();
 
     expect(claims(calls)).toHaveLength(0);
@@ -208,7 +208,7 @@ describe("zyraSave — ticket auto-comment", () => {
     const { svc, calls } = makeLegacy({ claimTaken: true });
     const { jiraPost } = arrange(svc, { result: saved([CREATED_ROW], ["add"]), settings: { jiraAutoComment: true } });
 
-    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {});
+    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]}, {kind:"human_session"});
     await settle();
 
     expect(claims(calls)).toHaveLength(1);
@@ -222,7 +222,7 @@ describe("zyraSave — ticket auto-comment", () => {
     const { jiraPost } = arrange(svc, { result: saved([UPDATED_ROW], ["update"]), settings: { jiraAutoComment: true } });
     jiraPost.mockRejectedValue(new Error("Jira request failed (403)."));
 
-    const result = await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {});
+    const result = await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]}, {kind:"human_session"});
     await settle();
 
     expect(result).toMatchObject({ savedCount: 1, remaining: 0 });
@@ -237,7 +237,7 @@ describe("zyraSave — ticket auto-comment", () => {
     arrange(svc, { result: saved([CREATED_ROW], ["add"]), settings: { jiraAutoComment: true } });
     jest.spyOn(svc, "getProject").mockRejectedValue(new Error("db down"));
 
-    const result = await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {});
+    const result = await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]}, {kind:"human_session"});
 
     expect(result).toMatchObject({ savedCount: 1, remaining: 0 });
     expect(result.testcases).toEqual([CREATED_ROW]);
@@ -250,7 +250,7 @@ describe("zyraSave — ticket auto-comment", () => {
       settings: { linearAutoComment: true, jiraAutoComment: false }
     });
 
-    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {});
+    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]}, {kind:"human_session"});
     await settle();
 
     const byProvider = Object.fromEntries(claims(calls).map((c) => [c.params[3], c.params[6]]));
@@ -266,7 +266,7 @@ describe("zyraSave — ticket auto-comment", () => {
     const { svc, calls } = makeLegacy();
     const { linearPost } = arrange(svc, { result: saved([LINEAR_ROW], ["add"]), settings: { jiraAutoComment: true } });
 
-    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {});
+    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]}, {kind:"human_session"});
     await settle();
 
     expect(claims(calls).map((c) => c.params[6])).toEqual(["skipped_disabled"]);
@@ -277,7 +277,7 @@ describe("zyraSave — ticket auto-comment", () => {
     const { svc } = makeLegacy();
     arrange(svc, { result: saved([UPDATED_ROW], ["update"]), settings: {} });
 
-    const result = await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {});
+    const result = await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]}, {kind:"human_session"});
 
     expect(result).not.toHaveProperty("touchedActions");
     expect(result).not.toHaveProperty("saveEventId");
@@ -296,7 +296,7 @@ describe("ticket comment failure reasons — 401 and 403 need different fixes", 
     const { jiraPost } = arrange(svc, { result: saved([CREATED_ROW], ["add"]), settings: { jiraAutoComment: true } });
     jiraPost.mockRejectedValue(authError(svc, 403));
 
-    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {});
+    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]}, {kind:"human_session"});
     await settle();
 
     const reason = String(statusUpdates(calls)[0].params[1]);
@@ -310,7 +310,7 @@ describe("ticket comment failure reasons — 401 and 403 need different fixes", 
     const { jiraPost } = arrange(svc, { result: saved([CREATED_ROW], ["add"]), settings: { jiraAutoComment: true } });
     jiraPost.mockRejectedValue(authError(svc, 401));
 
-    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {});
+    await svc.zyraSave(PROJECT_ID, "u1", TASK_ID, {expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]}, {kind:"human_session"});
     await settle();
 
     const reason = String(statusUpdates(calls)[0].params[1]);

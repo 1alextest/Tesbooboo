@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useParams } from "@/lib/routeParams";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
@@ -1191,7 +1192,7 @@ function KnowledgeBasePageInner() {
     }
     return window.confirm(
       hasContents
-        ? `Deleting "${label}" will also move all its contents to trash. Continue?`
+        ? `Deleting "${label}" will also delete its contents: folders and documents go to trash, uploaded files are permanently removed. Continue?`
         : `Delete "${label}"? It will be moved to trash.`,
     );
   }
@@ -1318,7 +1319,10 @@ function KnowledgeBasePageInner() {
     const confirmed =
       item.type === "folder"
         ? await confirmFolderDelete(item.id, label)
-        : window.confirm(`Delete "${label}"? It will be moved to trash.`);
+        : item.type === "file"
+          ? // File bytes are purged from storage on delete; this item cannot appear restorable.
+            window.confirm(`Delete "${label}"? The file is permanently removed and cannot be restored.`)
+          : window.confirm(`Delete "${label}"? It will be moved to trash.`);
     if (!confirmed) return;
     setError(null);
     try {
@@ -1459,6 +1463,13 @@ function KnowledgeBasePageInner() {
           </div>
           {summary && (
             <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+              <Link
+                href={`/projects/${projectId}/knowledge-base/trash`}
+                className="flex items-center gap-1.5 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[12px] text-[var(--muted)] transition-colors hover:bg-[var(--surface-secondary)] hover:text-[var(--foreground)]"
+              >
+                <IconTrash size={14} stroke={1.75} />
+                Trash
+              </Link>
               <div className="rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3.5 py-1.5 text-center">
                 <div className="text-[16px] font-semibold leading-tight tracking-tight text-[var(--foreground)]">{summary.total}</div>
                 <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--muted-soft)]">Total</div>

@@ -1,3 +1,4 @@
+import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
@@ -11,8 +12,8 @@ async function makeExecutionFixture(request: import("@playwright/test").APIReque
     })
   ).json();
   const testcase = await (
-    await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-      data: { title: `E2E Execution Test Case ${Date.now()}` },
+    await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, {
+      data: { title: `E2E Execution Test Case ${Date.now()}`, status: "Approved" },
     })
   ).json();
   await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
@@ -416,9 +417,10 @@ test.describe("run history survives a deleted test case", () => {
   async function fullFieldTestCase(request: import("@playwright/test").APIRequestContext) {
     const steps = [{ stepNumber: 1, action: "Open the page", expectedResult: "Page loads" }];
     return (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, {
         data: {
           title: `E2E Deleted TC Snapshot ${Date.now()}`,
+          status: "Approved",
           description: "Full description",
           preconditions: "Some precondition",
           postconditions: "Some postcondition",

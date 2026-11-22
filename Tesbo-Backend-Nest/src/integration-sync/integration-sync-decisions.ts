@@ -1,4 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 import { DatabaseService } from "../database/database.service";
 import { recordStandaloneGeneration } from "../observability/ai-trace";
 import { DECISION_PROMPT_CHAR_BUDGET } from "./integration-sync.constants";
@@ -80,7 +81,8 @@ export class IntegrationSyncDecisions {
     return key;
   }
 
-  async summarize(allocation: ChatAllocation, ticket: RemoteTicket, comments: RemoteComment[]): Promise<string | null> {
+  async summarize(allocation: ChatAllocation, ticket: RemoteTicket, comments: RemoteComment[],
+    scope: { organizationId: string; projectId: string; runId: string; ticketId: string }): Promise<string | null> {
     if (!comments.length) return null;
 
     const thread = this.buildThread(comments);
@@ -94,8 +96,12 @@ export class IntegrationSyncDecisions {
 
     const provider = String(allocation.provider || "").toLowerCase();
     const model = allocation.default_model || (provider === "anthropic" ? "claude-sonnet-4-6" : "gpt-4o-mini");
-    const traceSeed = `integration-sync:decision:${ticket.issueId}:${Date.now()}`;
-    const traceMeta = { ticketKey: String(ticket.issueKey || ""), ticketId: String(ticket.issueId || ""), commentCount: String(comments.length) };
+    // Provider IDs and wall-clock milliseconds are not unique across projects or retries.
+    // Reuse the caller's native scope and distinguish each actual completion attempt.
+    const traceSeed = `integration-sync:decision:${scope.projectId}:${scope.runId}:${scope.ticketId}:${randomUUID()}`;
+    const traceMeta = { organizationId: scope.organizationId, projectId: scope.projectId,
+      runId: scope.runId, nativeTicketId: scope.ticketId, ticketKey: String(ticket.issueKey || ""),
+      ticketId: String(ticket.issueId || ""), commentCount: String(comments.length) };
 
     try {
       const raw = provider === "anthropic" ? await this.callAnthropic(allocation, userPrompt) : await this.callOpenAI(allocation, userPrompt);
