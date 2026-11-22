@@ -16179,13 +16179,29 @@ export class LegacyService implements OnModuleInit {
     const contentText = `${title}\n\n${instructions}`;
     const contentHtml = `<h1>${this.escapeProposalHtml(title)}</h1><pre>${this.escapeProposalHtml(instructions)}</pre>`;
     const inserted = await this.db.transaction(async client => {
+      // A skillKey identifies the project's stable skill identity. A duplicate is a refusal, not a
+      // generic 500 from the profile's unique index. Check before the document insert so the
+      // ordinary path never creates and then rolls back a second KB row.
+      const existing = await client.query("SELECT document_id FROM skill_profiles WHERE project_id=$1 AND skill_key=$2", [projectId, skillKey]);
+      if (existing.rows[0]) {
+        throw new ConflictException({ code: "SKILL_KEY_CONFLICT", error: "A skill with this key already exists in this project" });
+      }
       const folderId = await this.kbRootFolderId(client, projectId, String(project.organization_id));
       const doc = (await client.query(
         `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, status, created_by, updated_by)
          VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,'skill','draft',$8,$8) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
         [project.organization_id, projectId, folderId, title, JSON.stringify(contentJson), contentHtml, contentText, uid]
       )).rows[0];
-      await client.query("INSERT INTO skill_profiles(document_id,project_id,skill_key,module,subtype) VALUES ($1,$2,$3,$4,$5)", [doc.id, projectId, skillKey, module, subtype]);
+      try {
+        await client.query("INSERT INTO skill_profiles(document_id,project_id,skill_key,module,subtype) VALUES ($1,$2,$3,$4,$5)", [doc.id, projectId, skillKey, module, subtype]);
+      } catch (error) {
+        // Two concurrent candidates can both pass the pre-check; the unique index decides. The
+        // transaction rolls back the loser's document, and the caller receives the same refusal.
+        if ((error as { code?: string }).code === "23505") {
+          throw new ConflictException({ code: "SKILL_KEY_CONFLICT", error: "A skill with this key already exists in this project" });
+        }
+        throw error;
+      }
       await this.logProjectActivity(projectId, uid, "skill_candidate_created", "knowledge_document", doc.id, title, { skillKey, module, subtype }, client);
       return doc;
     });
