@@ -11,27 +11,27 @@ import { RpcCode } from "./mcp.types";
 describe("MCP native staging producer provenance", () => {
   it("creates the existing immutable API-token producer receipt from server context only", () => {
     const source = { tokenId: "server-token", actorId: "server-actor" };
-    expect(apiTokenStagingProducer(source, { requireAgentActor: true })).toEqual({
+    expect(apiTokenStagingProducer(source, { requireAgentActor: true, operation: "testcase" })).toEqual({
       kind: "api_token", transport: "mcp", tokenId: "server-token", actorId: "server-actor"
     });
     expect(source).toEqual({ tokenId: "server-token", actorId: "server-actor" });
   });
 
   it("allows a requirement proposal without an agent actor while preserving the existing receipt", () => {
-    expect(apiTokenStagingProducer({ tokenId: "server-token", actorId: null }, { requireAgentActor: false }))
+    expect(apiTokenStagingProducer({ tokenId: "server-token", actorId: null }, { requireAgentActor: false, operation: "requirement" }))
       .toEqual({ kind: "api_token", transport: "mcp", tokenId: "server-token" });
   });
 
   it("refuses an absent real API token before any native staging operation", () => {
     for (const actorId of [null, "server-actor"]) {
-      expect(() => apiTokenStagingProducer({ tokenId: undefined, actorId }, { requireAgentActor: false }))
-        .toThrow("An authenticated API-token credential is required");
+      expect(() => apiTokenStagingProducer({ tokenId: undefined, actorId }, { requireAgentActor: false, operation: "requirement" }))
+        .toThrow("An authenticated credential is required");
     }
   });
 
   it("requires the actual MCP agent identity for testcase staging", () => {
     try {
-      apiTokenStagingProducer({ tokenId: "server-token", actorId: null }, { requireAgentActor: true });
+      apiTokenStagingProducer({ tokenId: "server-token", actorId: null }, { requireAgentActor: true, operation: "testcase" });
       throw new Error("Expected the missing-actor refusal");
     } catch (error) {
       expect(error).toMatchObject({ code: RpcCode.ToolExecutionError, data: { code: "AGENT_IDENTITY_UNAVAILABLE" } });
