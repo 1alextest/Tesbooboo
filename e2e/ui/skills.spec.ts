@@ -386,6 +386,7 @@ test.describe("governed skills operator journey (UI)", () => {
       requirementId = applied.receipt.requirement.documentId;
       requirementVersionId = applied.receipt.requirement.versionId;
       caseId = applied.receipt.testcase.id;
+      const caseGroup = `${caseId}-AC-1`;
 
       const page = await open(browser, `/agents/tasks/${taskId}`);
       await expect(page.getByTestId("requirement-change-bundle")).toContainText("Applied. The persisted apply receipt");
@@ -476,16 +477,16 @@ test.describe("governed skills operator journey (UI)", () => {
       expect(approvedCase.ok(), await approvedCase.text()).toBe(true);
       const caseAfter = await (await ownerApi.get(`${base()}/testcases/${caseId}`)).json();
       await page.reload();
-      const caseLinkState = page.getByTestId(`requirement-link-state-${caseId}`);
+      const caseLinkState = page.getByTestId(`requirement-link-state-${caseGroup}`);
       await expect(caseLinkState).toContainText("not active on the approved requirement version");
-      await expect(page.getByTestId("requirement-link-case-revision")).toContainText(caseAfter.editRevision);
-      await expect(page.getByTestId("requirement-link-case-revision")).toContainText(caseAfter.approvalRevision);
-      await expect(page.getByTestId(`requirement-link-activate-${caseId}`)).toBeVisible();
+      await expect(page.getByTestId(`requirement-link-case-revision-${caseGroup}`)).toContainText(caseAfter.editRevision);
+      await expect(page.getByTestId(`requirement-link-case-revision-${caseGroup}`)).toContainText(caseAfter.approvalRevision);
+      await expect(page.getByTestId(`requirement-link-activate-${caseGroup}`)).toBeVisible();
 
       // A reader can inspect the exact revisions but cannot activate.
       const qaActivation = await open(browser, `/agents/tasks/${taskId}`, "qa");
-      await expect(qaActivation.getByTestId(`requirement-link-readonly-${caseId}`)).toBeVisible();
-      await expect(qaActivation.getByTestId(`requirement-link-activate-${caseId}`)).toHaveCount(0);
+      await expect(qaActivation.getByTestId(`requirement-link-readonly-${caseGroup}`)).toBeVisible();
+      await expect(qaActivation.getByTestId(`requirement-link-activate-${caseGroup}`)).toHaveCount(0);
       await qaActivation.close();
 
       // Stale case revision: change the case after the exact revision was read; activation is
@@ -494,8 +495,8 @@ test.describe("governed skills operator journey (UI)", () => {
         data: { title: `${caseTitle} changed`, expectedRevision: caseAfter.editRevision }
       });
       expect(changedCase.ok(), await changedCase.text()).toBe(true);
-      await page.getByTestId(`requirement-link-activate-${caseId}`).click();
-      await expect(page.getByTestId(`requirement-link-error-${caseId}`)).toContainText("changed since this revision");
+      await page.getByTestId(`requirement-link-activate-${caseGroup}`).click();
+      await expect(page.getByTestId(`requirement-link-error-${caseGroup}`)).toContainText("changed since this revision");
       // Requirement approval copies the link onto the approved version; both generations stay
       // active until a successful activation retires them. A refused activation writes neither.
       expect(scalar(`SELECT COUNT(*)::int FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)} AND state='active';`)).toBe("2");
@@ -517,8 +518,8 @@ test.describe("governed skills operator journey (UI)", () => {
       }
       const caseReady = restoredCaseRecord;
       await page.reload();
-      await expect(page.getByTestId("requirement-link-case-revision")).toContainText(caseReady.editRevision);
-      await expect(page.getByTestId(`requirement-link-activate-${caseId}`)).toBeVisible();
+      await expect(page.getByTestId(`requirement-link-case-revision-${caseGroup}`)).toContainText(caseReady.editRevision);
+      await expect(page.getByTestId(`requirement-link-activate-${caseGroup}`)).toBeVisible();
 
       // Lost activation response: hold the reconciliation coverage read, prove no success is
       // claimed, then reconcile the single active link from authoritative coverage.
@@ -549,13 +550,13 @@ test.describe("governed skills operator journey (UI)", () => {
         holdCoverage = true;
         await route.abort("failed");
       });
-      await page.getByTestId(`requirement-link-activate-${caseId}`).click();
+      await page.getByTestId(`requirement-link-activate-${caseGroup}`).click();
       await activationHeld;
-      await expect(page.getByTestId(`requirement-link-error-${caseId}`)).toContainText("could not be confirmed");
-      await expect(page.getByTestId(`requirement-link-notice-${caseId}`)).toHaveCount(0);
+      await expect(page.getByTestId(`requirement-link-error-${caseGroup}`)).toContainText("could not be confirmed");
+      await expect(page.getByTestId(`requirement-link-notice-${caseGroup}`)).toHaveCount(0);
       releaseCoverage();
-      await expect(page.getByTestId(`requirement-link-notice-${caseId}`)).toContainText("verified after an unconfirmed response");
-      await expect(page.getByTestId(`requirement-link-error-${caseId}`)).toHaveCount(0);
+      await expect(page.getByTestId(`requirement-link-notice-${caseGroup}`)).toContainText("verified after an unconfirmed response");
+      await expect(page.getByTestId(`requirement-link-error-${caseGroup}`)).toHaveCount(0);
       await expect(page.getByTestId("requirement-coverage-readings")).toContainText("Approved: yes");
       expect(scalar(`SELECT COUNT(*)::int FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)} AND state='active';`)).toBe("1");
       const active = scalar(`SELECT id FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)} AND state='active';`);
@@ -566,8 +567,8 @@ test.describe("governed skills operator journey (UI)", () => {
 
       // Reload reads the resulting link and coverage state back.
       await page.reload();
-      await expect(page.getByTestId(`requirement-link-state-${caseId}`)).toContainText("active on the approved requirement version");
-      await expect(page.getByTestId(`requirement-link-activate-${caseId}`)).toHaveCount(0);
+      await expect(page.getByTestId(`requirement-link-state-${caseGroup}`)).toContainText("active on the approved requirement version");
+      await expect(page.getByTestId(`requirement-link-activate-${caseGroup}`)).toHaveCount(0);
       await expect(page.getByTestId("requirement-coverage-link-id")).toContainText(active);
       await expect(page.getByTestId("requirement-coverage-readings")).toContainText("Approved: yes");
 

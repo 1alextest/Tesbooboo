@@ -767,7 +767,8 @@ the real execution evidence without inventing a second coverage model.
 ### 16.4 Verification boundary
 
 Backend coverage: `testcase-proposal-review.db.spec.ts` exercises the apply receipt projection, the execution/cycle
-evidence identities, and activation refusals for an unapproved or changed case without changing the active link.
+evidence identities, and activation refusals for an unapproved case, a changed case revision, a reader, a missing
+link and an inactive link without changing the active link.
 API coverage: `api/requirements.spec.ts` exercises the persisted receipt, stale approval refusal, exact-version
 approval, reapply and Passed/Failed readings. Browser coverage: `ui/skills.spec.ts` exercises reload, reader
 permissions, stale review, a lost approval response, failed content load, exact-version activation, stale case
@@ -786,11 +787,15 @@ execution are not inferred from these automated checks.
   action through the existing `POST /requirements/:documentId/links/:linkId/reapply` endpoint, quoting the exact
   current case edit revision and approval revision.
 - The surface shows the exact requirement version, the case edit/approval revisions, why activation is needed, and
-  the current link. Approval copies links onto the approved version; the panel shows one row per case, prefers the
-  approved-version generation, and says the earlier generation will be retired.
+  the current link. Approval copies links onto the approved version; the panel shows one row per case **and
+  criterion set** (the live-link group), prefers the approved-version generation within that group, and says the
+  earlier generation will be retired. Distinct criterion groups for the same case remain separate rows.
 - Activation is offered only when the requirement has an approved version and the case is currently approved. The
-  backend still enforces the owner/manager rule, the exact revisions and the approved target; the UI gate is an
-  affordance, not authority.
+  backend enforces the owner/manager rule and the exact case revisions; it uses the current approved version when
+  one exists and otherwise retains the link's requirement version, so the surface's approval gate is an affordance,
+  not the endpoint's only condition.
+- Lost-response reconciliation matches the same case + criterion group on the approved version, not merely the same
+  case, so another approved group can never be reported as this activation's result.
 - On success the earlier link is retired and one active link is created on the approved requirement version, and
   coverage `approved` moves true. A lost response is reported as unconfirmed, then reconciled from coverage; a retry
   uses the same link and revisions and the backend replays the single active link.
@@ -812,3 +817,9 @@ execution are not inferred from these automated checks.
 | L7 external approve/coverage refusal has no direct endpoint test | Code-enforced; direct external-provider test remains a follow-up. |
 | L8 positive applied-banner branch was not asserted | Asserted in the activation UI journey. |
 | L9 PR body wording | Corrected. |
+
+Activation review dispositions: a live link is grouped by case **and** criterion set, so distinct criterion groups
+remain separate and activation retires only the selected group; lost-response reconciliation matches the same group
+on the approved version, so another approved group cannot be reported as this activation. Reader, missing-link,
+inactive-link and case-revision refusals are exercised in the DB spec. A browser fixture with two criterion groups
+for one case and a dedicated 5xx activation-mapping test remain follow-ups.

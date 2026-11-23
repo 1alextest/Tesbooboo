@@ -654,6 +654,22 @@ type Body=Record<string,any>;
         expect(afterStale.rows).toEqual(beforeStale.rows);
         coverage=await service().requirementCoverage(project,user,requirementId);
         expect(coverage.readings.approved).toBe(false);
+
+        // Missing link and an inactive link are separate refusals; a reader cannot activate.
+        await expect(service().reapplyRequirementCaseLink(project,user,requirementId,randomUUID(),
+          {expectedCaseRevision:caseAfter.edit_revision,expectedApprovalRevision:caseAfter.approval_revision},human))
+          .rejects.toMatchObject({status:404});
+        const reader=(await admin.query("INSERT INTO users(email,name) VALUES ($1,'Link activation reader') RETURNING id",[`link-reader-${randomUUID()}@tesbo.invalid`])).rows[0].id;
+        await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[org,reader]);
+        await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[project,reader]);
+        await expect(service().reapplyRequirementCaseLink(project,reader,requirementId,link.linkId,
+          {expectedCaseRevision:caseAfter.edit_revision,expectedApprovalRevision:caseAfter.approval_revision},human))
+          .rejects.toMatchObject({status:403});
+        await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,reader]);
+        await admin.query("UPDATE requirement_case_links SET state='retired' WHERE project_id=$1 AND requirement_id=$2",[project,requirementId]);
+        await expect(service().reapplyRequirementCaseLink(project,user,requirementId,link.linkId,
+          {expectedCaseRevision:"1".repeat(64),expectedApprovalRevision:"1".repeat(64)},human))
+          .rejects.toMatchObject({status:409,response:{code:"LINK_NOT_ACTIVE"}});
       }finally{
         if(requirementId) await cleanupRequirement(requirementId);
         await cleanupSkills(skillIds);
