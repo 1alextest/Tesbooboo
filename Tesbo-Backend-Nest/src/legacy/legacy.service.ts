@@ -17078,6 +17078,16 @@ export class LegacyService implements OnModuleInit {
           return { doc, decidedVersionId: String(reviewed.id), sourceVersionId: versionId, replayed: true };
         }
       }
+      // A newer submission supersedes an older one even when the content is identical. Without
+      // this, a manager holding an older tab can bind an approval to a version the UI no longer
+      // shows as current, leaving the latest submission "awaiting" a decision that already exists.
+      const latestSubmitted = (await client.query(
+        `SELECT id FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind='submitted'
+          ORDER BY version_number DESC LIMIT 1`, [documentId]
+      )).rows[0];
+      if (latestSubmitted && String(latestSubmitted.id) !== versionId) {
+        throw new ConflictException({ code: "GOVERNED_VERSION_SUPERSEDED", error: "A newer submitted version exists; review that exact version instead" });
+      }
       if (version.snapshot_metadata?.contentDigest !== knowledgeDocumentContentDigest(doc)) {
         throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "The document changed after this version was submitted; review the exact submitted version or submit a refreshed revision" });
       }

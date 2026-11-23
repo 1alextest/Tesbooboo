@@ -2788,8 +2788,11 @@ test.describe("knowledge base (UI)", () => {
       data: { expectedRevision: revised.editRevision, submissionKey: crypto.randomUUID() },
     });
     expect(secondSubmission.status(), await secondSubmission.text()).toBe(201);
+    const secondVersion = await secondSubmission.json();
     await page.reload();
-    await expect(page.getByTestId("governed-submitted-version")).toContainText("Submitted v2");
+    // The metadata save, approval and edit each add autosave/decision snapshots, so the second
+    // submission's number is not fixed at 2. Assert the number the API actually returned.
+    await expect(page.getByTestId("governed-submitted-version")).toContainText(`Submitted v${secondVersion.versionNumber}`);
     await expect(page.getByTestId("governed-decision")).toHaveCount(0);
     // QA is checked while the owner still has both actions, so "QA sees nothing" proves the role
     // gate rather than the already-decided state hiding the buttons from everybody.

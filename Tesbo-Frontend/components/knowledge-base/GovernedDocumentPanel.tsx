@@ -78,6 +78,7 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
   const [submittedDetail, setSubmittedDetail] = useState<KnowledgeDocumentVersionDetail | null>(null);
   const [decision, setDecision] = useState<KnowledgeDocumentVersion | null>(null);
   const [openedVersion, setOpenedVersion] = useState<KnowledgeDocumentVersionDetail | null>(null);
+  const [metadataDirty, setMetadataDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,9 +94,11 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
   const currentDecision = decisionOf(decision ?? undefined);
 
   useEffect(() => {
-    if (!governed) return;
+    // An editor autosave replaces `doc` while the user may be editing governance fields. Keep the
+    // unsaved local values until Save/Submit, rather than silently discarding them.
+    if (!governed || metadataDirty) return;
     setMetadata(metadataOf(doc));
-  }, [doc, governed]);
+  }, [doc, governed, metadataDirty]);
 
   const load = useCallback(async () => {
     if (!governed) return;
@@ -141,6 +144,7 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
 
   function patchMetadata(patch: Partial<Metadata>) {
     setMetadata((previous) => ({ ...previous, ...patch }));
+    setMetadataDirty(true);
     setMessage(null);
     setError(null);
   }
@@ -153,6 +157,7 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
         governedMetadata: metadata as unknown as Record<string, unknown>,
         expectedRevision: doc.editRevision,
       });
+      setMetadataDirty(false);
       await onChanged();
       setMessage("Governance metadata saved. The exact content and metadata can now be submitted for review.");
       return updated;
@@ -173,6 +178,7 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
         governedMetadata: metadata as unknown as Record<string, unknown>,
         expectedRevision: doc.editRevision,
       });
+      setMetadataDirty(false);
       const revision = saved.editRevision;
       if (!revision) throw new Error("Reload the document before submitting this revision.");
       const existing = submissionKey.current;
@@ -221,6 +227,7 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
   if (!governed) return null;
   const subtypes = doc.documentType === "policy" ? POLICY_SUBTYPES : MANUAL_SUBTYPES;
   const submittedMetadata = submittedDetail?.snapshotMetadata?.governedMetadata as Metadata | undefined;
+  const openedMetadata = openedVersion?.snapshotMetadata?.governedMetadata as Metadata | undefined;
   const decidedOnSubmitted = Boolean(decision && submittedVersion
     && decision.snapshotMetadata?.sourceVersionId === submittedVersion.id);
 
@@ -303,6 +310,13 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
               <p className="font-medium">v{openedVersion.versionNumber} · {openedVersion.snapshotKind} (read-only)</p>
               <Button size="sm" variant="secondary" onClick={() => setOpenedVersion(null)}>Close</Button>
             </div>
+            {openedMetadata && (
+              <p className="mb-2">
+                Audience: {openedMetadata.audience} · Confidentiality: {openedMetadata.confidentiality} · Distribution: {openedMetadata.distribution}
+                {" · "}Authority: {openedMetadata.sourceAuthority?.kind} — {openedMetadata.sourceAuthority?.label}
+                {" · "}Effectivity: {openedMetadata.effectivity?.from || "—"} to {openedMetadata.effectivity?.to || "—"}
+              </p>
+            )}
             <div className="max-h-64 overflow-auto"><VersionContent detail={openedVersion} /></div>
           </div>
         )}

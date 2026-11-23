@@ -1144,6 +1144,14 @@ type Body=Record<string,any>;
 
         const exposed=await admin.query(`SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE id=$1 AND ${knowledgeDocumentAiContextSql()}`,[docId]);
         expect(exposed.rows[0].n).toBe(0);
+        // Two identical submissions bind to different exact versions; approving the older one
+        // must not leave the latest submission showing as undecided.
+        const older=await service().submitKnowledgeDocument(project,user,docId,
+          {expectedRevision:rejected.editRevision,submissionKey:randomUUID()},human);
+        await service().submitKnowledgeDocument(project,user,docId,
+          {expectedRevision:rejected.editRevision,submissionKey:randomUUID()},human);
+        await expect(service().approveGovernedKnowledgeDocument(project,user,docId,{versionId:older.id},human))
+          .rejects.toMatchObject({status:409,response:{code:"GOVERNED_VERSION_SUPERSEDED"}});
         await expect(service().updateKnowledgeDocument(project,user,docId,
           {documentType:"general",expectedRevision:rejected.editRevision}))
           .rejects.toMatchObject({status:400});

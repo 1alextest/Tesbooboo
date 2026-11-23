@@ -216,10 +216,9 @@ policy. An approved document does not become Zyra-visible merely because it is a
 8. **`reviewBinding` read model.** `reviewBinding='exact_snapshot'` currently means "an exact decision snapshot is
    bound", including a rejection. Consumers that require approval semantics must also check `status`; the governed
    panel does. Splitting approval/rejection into separate read fields is a follow-up once a consumer needs it.
-9. **Newer submission supersedes an older one.** Unlike the Skill reviewer, the governed reviewer does not refuse an
-   older submitted version when a newer submitted version exists; it relies on the digest check. Approving an older
-   still-matching version is possible but the UI targets the latest submission. Align the guard if a consumer can
-   reach older versions directly.
+9. **Newer submission supersedes an older one (implemented).** The governed reviewer refuses a version when a newer
+   `submitted` snapshot exists (`GOVERNED_VERSION_SUPERSEDED`), matching the Skill reviewer. A lost-response replay
+   of the already-recorded decision still returns its receipt first.
 10. **One-time `editRevision` change on deploy.** Adding `governed_metadata` changes the legacy `editRevision` hash
     once for every row. A client holding a pre-deploy revision sees a `DOCUMENT_REVISION_CONFLICT` and must reload.
     No persisted state depends on the old value; excluding the column from the hash would let concurrent metadata
@@ -227,3 +226,12 @@ policy. An approved document does not become Zyra-visible merely because it is a
 11. **Sweep exclusion test depth.** The processor exclusion is behavioural; the boot sweep is asserted by its SQL
     predicate because the query is global across projects and a DB fixture would contend with unrelated pending rows.
     The terminal `embedding_status='unsupported'` state is asserted through the real DB.
+12. **Autosave restore metadata.** Decision snapshots carry the exact governance metadata; autosave snapshots do not.
+    Restoring an autosave therefore keeps the current metadata and the trigger re-drafts the document. Restore of a
+    decision snapshot restores its metadata with the body.
+13. **MCP surface.** `create_knowledge_document`/`update_knowledge_document` still enumerate only legacy types and do
+    not accept `governedMetadata`. Governed manuals/policies are intentionally absent from that agent-facing surface
+    until a human-governed authoring contract exists; the tool descriptions should say so when that surface changes.
+14. **Submit does not flush a pending editor autosave.** The panel submits the persisted revision and only patches
+    metadata first. The page autosaves quickly and the empty-state copy asks the author to save content first, but a
+    click inside the debounce window can submit the prior body. A shared editor flush hook is the follow-up.
