@@ -257,7 +257,7 @@ async function nativeReadOnlyPilot(endpoint, token, session, tools) {
   if (gaps.length) throw new Error(gaps.join("; "));
   const parsed = new URL(endpoint);
   // A shared MCP endpoint cannot prove which project an authorized list belongs to.
-  if (!/^\/api\/projects\/[^/]+\/mcp$/.test(parsed.pathname)) {
+  if (!/^\/api\/projects\/[^/]+\/mcp\/?$/.test(parsed.pathname)) {
     throw new Error("Native pilot requires the existing project-specific MCP endpoint");
   }
   const invokeRead = async (id, name, args) => {
