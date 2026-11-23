@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, NotImplementedException } from "@nestjs/common";
 import type { DatabaseService } from "../database/database.service";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
-import { proposalDigest } from "./testcase-proposal-review";
+import { nativeProposalProducerIdentity, proposalDigest } from "./testcase-proposal-review";
 
 const project = "00000000-0000-4000-8000-000000000001";
 const user = "00000000-0000-4000-8000-000000000002";
@@ -332,3 +332,50 @@ describe("requirement bundle lifecycle boundary", () => {
     expect(f.query.mock.calls.some(([sql])=>/INSERT |UPDATE /.test(sql))).toBe(false);
   });
 });
+
+describe("native proposal producer identity — stable review/replay lineage", () => {
+  it("preserves the exact API-token provenance and principalKey for case and requirement staging", () => {
+    const source = { kind: "api_token" as const, tokenId: token, actorId: "mcp-actor", transport: "mcp" as const };
+    const result = nativeProposalProducerIdentity(source, user);
+    expect(result).toEqual({
+      principalKey: `api_token:${token}`,
+      producerActorId: "mcp-actor",
+      provenance: { kind: "api_token", principalKey: `api_token:${token}`,
+        issuerId: user, tokenId: token, actorId: "mcp-actor" },
+      activityActor: "agent"
+    });
+    expect(source).toEqual({ kind: "api_token", tokenId: token, actorId: "mcp-actor", transport: "mcp" });
+  });
+
+  it("preserves a null API-token actor without inventing a human approver", () => {
+    const result = nativeProposalProducerIdentity({ kind: "api_token", tokenId: token }, user);
+    expect(result.provenance).toEqual({ kind: "api_token", principalKey: `api_token:${token}`,
+      issuerId: user, tokenId: token, actorId: null });
+    expect(result.producerActorId).toBeNull();
+    expect(result.activityActor).toBe("agent");
+  });
+
+  it("continues to attribute human-session proposals to the actual user", () => {
+    const result = nativeProposalProducerIdentity({ kind: "human_session" }, user);
+    expect(result).toEqual({ principalKey: `human_session:${user}`, producerActorId: user,
+      provenance: { kind: "human_session", principalKey: `human_session:${user}`,
+        issuerId: user, tokenId: null, actorId: user },
+      activityActor: "user" });
+  });
+
+  it("refuses a new OAuth kind rather than silently fabricating API-token provenance", () => {
+    expect(() => nativeProposalProducerIdentity(
+      { kind: "oauth_access", grantId: "forged" } as never, user
+    )).toThrow(ForbiddenException);
+  });
+
+  it("keeps identity stable across equivalent retries, distinct across producer kinds", () => {
+    const first = nativeProposalProducerIdentity({ kind: "api_token", tokenId: token, transport: "rest" }, user);
+    const retry = nativeProposalProducerIdentity({ kind: "api_token", tokenId: token, transport: "mcp" }, user);
+    const humanSource = nativeProposalProducerIdentity({ kind: "human_session" }, user);
+    expect(first.principalKey).toBe(retry.principalKey);
+    expect(first.provenance).toEqual(retry.provenance);
+    expect(humanSource.principalKey).not.toBe(first.principalKey);
+  });
+});
+
