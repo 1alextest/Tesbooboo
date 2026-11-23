@@ -406,6 +406,13 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
     // Defect-fix follow-up: the same coding agent updates the established native case through
     // the existing MCP unpublished proposal owner. A human Save keeps its identity, requirement
     // link and past execution evidence; its changed definition cannot inherit the old approval.
+    const historicalAttempts = () => scalar(`SELECT COALESCE(json_agg(
+      json_build_object('status', e.status, 'approvalRevision', item.snapshot_approval_revision,
+                        'executionId', e.id, 'runId', item.cycle_id)
+      ORDER BY e.executed_at)::text, '[]')
+      FROM executions e JOIN cycle_items item ON item.id=e.cycle_item_id
+      WHERE item.testcase_id=${literal(caseId)};`);
+    const immutableAttemptHistory = historicalAttempts();
     const revisedSteps = [...regressionSteps, {
       stepNumber: 3, action: "Retry after a failed source or stale-review response",
       expectedResult: "The existing reviewed task is reloaded; no duplicate official case is added"
@@ -425,6 +432,7 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
     expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(ctx.projectId)} AND title=${literal(caseTitle)};`)).toBe("1");
     expect(scalar(`SELECT COUNT(*)::int FROM requirement_case_links WHERE requirement_id=${literal(requirementId)} AND state='active';`)).toBe("1");
     expect(scalar(`SELECT COUNT(*)::int FROM executions e JOIN cycle_items item ON item.id=e.cycle_item_id WHERE item.testcase_id=${literal(caseId)};`)).toBe("2");
+    expect(historicalAttempts()).toBe(immutableAttemptHistory);
     readings = await coverage();
     expect(readings.readings).toMatchObject({ authored: true, approved: false, passing: false });
   } finally {
