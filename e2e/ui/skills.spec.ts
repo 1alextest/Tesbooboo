@@ -496,7 +496,9 @@ test.describe("governed skills operator journey (UI)", () => {
       expect(changedCase.ok(), await changedCase.text()).toBe(true);
       await page.getByTestId(`requirement-link-activate-${caseId}`).click();
       await expect(page.getByTestId(`requirement-link-error-${caseId}`)).toContainText("changed since this revision");
-      expect(scalar(`SELECT COUNT(*)::int FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)} AND state='active';`)).toBe("1");
+      // Requirement approval copies the link onto the approved version; both generations stay
+      // active until a successful activation retires them. A refused activation writes neither.
+      expect(scalar(`SELECT COUNT(*)::int FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)} AND state='active';`)).toBe("2");
 
       // Restore the exact title and, if the edit invalidated approval, re-approve the current case
       // revision before the real activation.
