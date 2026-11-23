@@ -55,6 +55,43 @@ type Body=Record<string,any>;
   const save=(review:Body,indexes:number[],extra:Body={},svc=service())=>svc.zyraSave(project,user,review.id,{expectedProposalRevision:review.proposalRevision,selectedDraftIndexes:indexes,...extra},human);
   const suite=async(name:string)=>(await admin.query("INSERT INTO suites(project_id,name) VALUES ($1,$2) RETURNING id",[project,`${name} ${randomUUID()}`])).rows[0].id as string;
 
+  it("refuses a producer revoked while its staging request waits for the suite-write boundary", async () => {
+    const tokenId=(await admin.query(
+      "INSERT INTO api_tokens(user_id,project_id,name,token_hash,scopes) VALUES ($1,$2,'Revocation barrier producer',$3,'read,write') RETURNING id",
+      [user,project,randomUUID().replaceAll("-","").repeat(2)]
+    )).rows[0].id as string;
+    const blocker=new Client({connectionString:url});
+    let attempt:Promise<unknown>|undefined;
+    await blocker.connect();
+    const before=(await tasks()).rows;
+    const caseRows=(await nativeCases()).rows;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT pg_advisory_xact_lock(hashtext($1))",[`suite-tree:${project}`]);
+      attempt=stage([{opType:"create",draft:{title:"Revoked token cannot stage"}}],randomUUID(),
+        {kind:"api_token",tokenId,transport:"rest"}).then(()=>null,(error:unknown)=>error);
+      const deadline=Date.now()+5000;let waiting=false;
+      while(Date.now()<deadline){
+        waiting=!!(await admin.query(
+          "SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%pg_advisory_xact_lock%'",
+          [applicationName])).rowCount;
+        if(waiting)break;
+        await new Promise(resolve=>setTimeout(resolve,20));
+      }
+      expect(waiting).toBe(true);
+      await admin.query("DELETE FROM api_tokens WHERE id=$1 AND project_id=$2",[tokenId,project]);
+      await blocker.query("COMMIT");
+      expect(await attempt).toMatchObject({status:403});
+      expect((await tasks()).rows).toEqual(before);
+      expect((await nativeCases()).rows).toEqual(caseRows);
+    } finally {
+      await blocker.query("ROLLBACK");
+      if(attempt)await attempt;
+      await blocker.end();
+      await admin.query("DELETE FROM api_tokens WHERE id=$1 AND project_id=$2",[tokenId,project]);
+    }
+  },15000);
+
   it("default-off preview has no persisted effects and same-key content replay is bounded",async()=>{
     const before=(await tasks()).rows,casesBefore=(await nativeCases()).rows;
     process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED="0";
