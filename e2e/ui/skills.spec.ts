@@ -685,7 +685,10 @@ test.describe("governed skills operator journey (UI)", () => {
         requestKey: `ui-task-review-${suffix}`, title: `UI task review bundle ${suffix}`,
         operations: [
           { opType: "requirement_revision", operationId: requirementOperationId, title,
-            description: "Fixture for the task review surface.", criteria: [{ key: "AC-1", text: "The obligation is observable" }] },
+            description: "Fixture for the task review surface.", criteria: [
+              { key: "AC-1", text: "The obligation is observable" },
+              { key: "AC-2", text: "The second obligation is observable" }
+            ] },
           { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle } },
           { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] }
         ]
