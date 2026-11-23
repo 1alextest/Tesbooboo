@@ -1105,14 +1105,17 @@ test.describe("governed skills operator journey (UI)", () => {
       exec("UPDATE project_members SET role='qa_engineer' WHERE project_id=" + literal(tenant!.mainProjectId) +
         " AND user_id=" + literal(tenant!.qa.userId) + ";");
       const refused = await stage();
+      const requirementRows = () => scalar("SELECT COUNT(*)::int FROM knowledge_documents WHERE project_id=" +
+        literal(tenant!.mainProjectId) + " AND title=" + literal(`Apply role requirement ${suffix}`) + ";");
+      const beforeRefusal = requirementRows();
       const page = await open(browser, "/agents/tasks/" + refused.id, "qa");
       const refusedPromise = page.waitForResponse(response =>
         response.request().method() === "POST" && response.url().includes("/proposals/" + refused.id + "/apply"));
       await page.getByTestId("requirement-bundle-apply").click();
       expect((await refusedPromise).status()).toBe(403);
       expect(scalar("SELECT task_status FROM ai_generation_requests WHERE id=" + literal(refused.id) + ";")).toBe("in_review");
-      expect(scalar("SELECT COUNT(*)::int FROM knowledge_documents WHERE project_id=" + literal(tenant!.mainProjectId) +
-        " AND title=" + literal(`Apply role requirement ${suffix}`) + ";")).toBe("0");
+      // The two legacy applies above share this title; the refusal must add nothing.
+      expect(requirementRows()).toBe(beforeRefusal);
       await page.close();
     } finally {
       exec("UPDATE project_members SET role='qa_engineer' WHERE project_id=" + literal(tenant!.mainProjectId) +
