@@ -41,7 +41,9 @@ import { SUITE_NAME_MAX_LENGTH, validateSuiteName } from "@/lib/validation";
 import { isMarkdownSource, renderMarkdown } from "@/lib/markdown";
 import { TechniqueBadges } from "@/components/agents/ZyraChatReviewPanel";
 import { ZyraSeverityBadge } from "@/components/agents/ZyraContextDrawer";
+import { RequirementReviewPanel } from "@/components/agents/RequirementReviewPanel";
 import { sortActivitiesNewestFirst } from "@/components/agents/TaskQuickViewPanel";
+import { isKnowledgeOwnerOrManager } from "@/lib/knowledge-permissions";
 import { ZyraLanguageContext, zyraLanguage, zyraText } from "@/lib/zyra-i18n";
 import { formatDateTime } from "@/lib/date";
 import { useAppData } from "@/components/app/AppDataProvider";
@@ -204,7 +206,7 @@ export default function ZyraTaskDetailPage() {
   const projectId = params.id as string;
   const taskId = params.taskId as string;
   const { currentUser } = useAppData();
-  const { project } = useProjectData();
+  const { project, projectMembers } = useProjectData();
   const projectName = String(project.name || "");
   const [task, setTask] = useState<ZyraTask | null>(null);
   const [suites, setSuites] = useState<SuiteNode[]>([]);
@@ -593,6 +595,11 @@ export default function ZyraTaskDetailPage() {
   // to review, or to retry after a failure. Disabling it here for todo/in_progress avoids a
   // pointless round trip that the server would reject with a 409 anyway.
   const isRequirementBundle = task.provider === "external_requirement_proposal" || Boolean(task.requirementBundle?.length);
+  const requirementApplyReceipt = task.requirementApplyReceipt;
+  // Rejected and withdrawn bundles also end as `done`; only an apply receipt means publication.
+  const requirementApplied = done && Boolean(requirementApplyReceipt);
+  const currentProjectRole = projectMembers.find((member) => member.userId === currentUser?.userId)?.role;
+  const canApproveRequirement = isKnowledgeOwnerOrManager(currentProjectRole);
   const canGiveFeedback = !isRequirementBundle && (taskStatusNow === "in_review" || taskStatusNow === "failed");
   type RequirementBundleEntry = {
     opType?: string; title?: string; description?: string; reason?: string;
@@ -741,7 +748,11 @@ export default function ZyraTaskDetailPage() {
               <div>
                 <h2 className="text-lg font-semibold text-[var(--foreground)]">Requirement change bundle</h2>
                 <p className="mt-1 text-sm text-[var(--muted)]">
-                  Staging only. No requirement version, test case, active link or approval exists until a human publishes it.
+                  {requirementApplied
+                    ? "Applied. The exact submitted requirement version is available in the review panel below; approval, case activation and execution remain separate human decisions."
+                    : done
+                      ? "This bundle closed without publication. The recorded outcome below is authoritative; no requirement version, case or link was created."
+                      : "Staging only. No requirement version, test case, active link or approval exists until a human publishes it."}
                 </p>
               </div>
               {bundleRequirement && (
@@ -804,11 +815,15 @@ export default function ZyraTaskDetailPage() {
                 </p>
               )}
               <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-sm" data-testid="requirement-bundle-publication-gate">
-                {skillsResolved
-                  ? "Publication uses the pinned, conflict-free effective skills shown above. Apply creates an immutable submitted requirement version, a Draft case and an exact link in one transaction; requirement approval remains a separate human decision."
-                  : task.skillContext?.status === "conflict"
-                    ? "Publication is blocked: the effective-skill assignments conflict. Resolve the assignment conflict before applying."
-                    : "Publication is blocked: a required approved effective skill is unassigned. Reject or withdraw this bundle, or assign the required skills and stage a refreshed proposal."}
+                {requirementApplied
+                  ? "This bundle is published. Open the exact submitted version and its truthful coverage in the review panel below."
+                  : done
+                    ? "This bundle was not published. No requirement version, case or link was created; the recorded outcome above is authoritative."
+                    : skillsResolved
+                      ? "Publication uses the pinned, conflict-free effective skills shown above. Apply creates an immutable submitted requirement version, a Draft case and an exact link in one transaction; requirement approval remains a separate human decision."
+                      : task.skillContext?.status === "conflict"
+                        ? "Publication is blocked: the effective-skill assignments conflict. Resolve the assignment conflict before applying."
+                        : "Publication is blocked: a required approved effective skill is unassigned. Reject or withdraw this bundle, or assign the required skills and stage a refreshed proposal."}
               </p>
             </div>
             {!done && (
@@ -828,6 +843,16 @@ export default function ZyraTaskDetailPage() {
             )}
           </div>
         </Card>
+      )}
+
+      {isRequirementBundle && requirementApplyReceipt?.requirement.documentId && requirementApplyReceipt.requirement.versionId && (
+        <RequirementReviewPanel
+          key={`${requirementApplyReceipt.requirement.documentId}:${requirementApplyReceipt.requirement.versionId}`}
+          projectId={projectId}
+          documentId={requirementApplyReceipt.requirement.documentId}
+          versionId={requirementApplyReceipt.requirement.versionId}
+          canApprove={canApproveRequirement}
+        />
       )}
 
       <div className="flex flex-wrap gap-2 border-b border-[var(--border)]">

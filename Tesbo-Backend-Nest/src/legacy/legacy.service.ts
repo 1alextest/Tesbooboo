@@ -73,6 +73,10 @@ import { runWithZyraDraftSink, runWithoutZyraDraftSink, runWithZyraLiveBatch, zy
 import { Subject } from "rxjs";
 
 type Body = Record<string, any>;
+type SkillAssignmentBatchTarget = {
+  module: string; subtype: string; operation: string; expectedAssignmentId: string | null; precedence: number;
+};
+const SKILL_MODULES = new Set(["requirements", "test_cases", "user_manuals", "policies", "tasks_issues", "files_evidence", "skills"]);
 export type PlanRunWriteTarget = "plan" | "planItem" | "cycle" | "execution" | "historyImport" | "sharing" | "retest" | "retestRecovery";
 
 /** Everything processZyraSaveEntriesSequential/Batched need that isn't `selected` or `client` itself. */
@@ -4094,7 +4098,8 @@ export class LegacyService implements OnModuleInit {
   /** Serialize effective Skills from final resolution through commit. Acquire before domain or
    * authority row locks, including on KB paths that can change assignment eligibility. */
   private async lockSkillAssignments(client: PoolClient, projectId: string) {
-    await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`skill-assignments:${projectId}`]);
+    // PostgreSQL UUID equality is case-insensitive; every spelling must share this boundary.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`skill-assignments:${projectId.toLowerCase()}`]);
   }
 
   private async assertSkillsInactive(client: PoolClient, projectId: string, documentIds: string[]) {
@@ -16259,18 +16264,22 @@ export class LegacyService implements OnModuleInit {
     const subtype = String(body.subtype || "*").trim() || "*";
     const instructions = typeof body.instructions === "string" ? body.instructions.trim() : "";
     if (!title || title.length > 512) throw new BadRequestException({ error: "Skill title must contain 1–512 characters" });
-    if (!["requirements", "test_cases", "user_manuals", "policies", "tasks_issues", "files_evidence", "skills"].includes(module)) {
+    if (!SKILL_MODULES.has(module)) {
       throw new BadRequestException({ error: "Unknown skill module" });
     }
     if (!instructions || instructions.length > 20000) throw new BadRequestException({ error: "Skill instructions must contain 1–20000 characters" });
     // The optional key is part of the requested content only when the caller supplied it. An
     // automatically generated identity must not change the request digest between retries.
-    // Preserve the original optional-key semantics for null/false/0/blank values: an absent key is
-    // generated. Only a supplied non-empty string becomes part of the request identity.
-    const suppliedSkillKey = !body.skillKey ? null : String(body.skillKey).trim() || null;
-    const skillKey = suppliedSkillKey || `SKL-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`;
+    // Null/false/0/undefined mean "no key". An explicitly supplied blank or whitespace-only string
+    // is refused rather than silently generating an identity: an empty field must not disable the
+    // request identity a retry depends on.
+    const rawSkillKey = body.skillKey;
+    const suppliedSkillKey = rawSkillKey === undefined || rawSkillKey === null || rawSkillKey === false || rawSkillKey === 0
+      ? null
+      : String(rawSkillKey).trim();
+    const skillKey = suppliedSkillKey ?? `SKL-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`;
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$/.test(skillKey)) throw new BadRequestException({ error: "skillKey must be 2–64 safe characters" });
-    const requestKey = body.requestKey == null || body.requestKey === "" ? null : String(body.requestKey).trim();
+    const requestKey = body.requestKey === undefined || body.requestKey === null ? null : String(body.requestKey).trim();
     if (requestKey !== null && (!requestKey || requestKey.length > 160)) {
       throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
     }
@@ -16402,6 +16411,17 @@ export class LegacyService implements OnModuleInit {
     return { ...toCamel(result.doc), skillProfile: toCamel(result.profile), approvedVersionId: result.approvedVersionId, replayed: result.replayed };
   }
 
+  /** Shared native assignment eligibility; the latest reviewed pointer is not an assignment pin. */
+  private async skillAssignmentSource(client: PoolClient, projectId: string, skillDocumentId: string, versionId: string, modules: string[]) {
+    const doc = (await client.query("SELECT id,document_type,project_id,is_deleted FROM knowledge_documents WHERE id=$1 AND project_id=$2", [skillDocumentId, projectId])).rows[0];
+    if (!doc || doc.is_deleted || doc.document_type !== "skill") throw new NotFoundException({ error: "Skill not found" });
+    const version = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [versionId, skillDocumentId])).rows[0];
+    if (!version || version.snapshot_kind !== "approved") throw new BadRequestException({ error: "Only an approved immutable skill version can be assigned" });
+    const profile = (await client.query("SELECT * FROM skill_profiles WHERE document_id=$1 AND project_id=$2", [skillDocumentId, projectId])).rows[0];
+    if (!profile || modules.some(module => profile.module !== module)) throw new BadRequestException({ error: "The assignment module must match the skill profile" });
+    return { version, profile };
+  }
+
   /** Human-only assignment of an approved immutable version to one project authoring context. */
   async assignSkill(projectId: string, userId: string | null | undefined, body: Body = {}, principal?: ReviewPrincipal) {
     requireHumanReviewPrincipal(principal);
@@ -16420,12 +16440,7 @@ export class LegacyService implements OnModuleInit {
       await this.lockSkillAssignments(client, projectId);
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
-      const doc = (await client.query("SELECT id,document_type,project_id,is_deleted FROM knowledge_documents WHERE id=$1 AND project_id=$2", [skillDocumentId, projectId])).rows[0];
-      if (!doc || doc.is_deleted || doc.document_type !== "skill") throw new NotFoundException({ error: "Skill not found" });
-      const version = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [versionId, skillDocumentId])).rows[0];
-      if (!version || version.snapshot_kind !== "approved") throw new BadRequestException({ error: "Only an approved immutable skill version can be assigned" });
-      const profile = (await client.query("SELECT * FROM skill_profiles WHERE document_id=$1", [skillDocumentId])).rows[0];
-      if (!profile || profile.module !== module) throw new BadRequestException({ error: "The assignment module must match the skill profile" });
+      const { profile } = await this.skillAssignmentSource(client, projectId, skillDocumentId, versionId, [module]);
       await client.query(
         `UPDATE skill_assignments SET status='inactive', deactivated_by=$4, deactivated_at=now()
           WHERE project_id=$1 AND module=$2 AND subtype=$3 AND operation=$5 AND status='active'`,
@@ -16446,6 +16461,167 @@ export class LegacyService implements OnModuleInit {
       return { created, resolved };
     });
     return { assignment: toCamel(assignment.created), resolution: assignment.resolved };
+  }
+
+  private skillAssignmentBatchInput(body: Body) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw new BadRequestException({ error: "A Skill assignment command is required" });
+    }
+    const identity = (value: unknown, field: string) => {
+      if (typeof value !== "string" || !isUuid(value.trim())) {
+        throw new BadRequestException({ error: `${field} must be a UUID` });
+      }
+      return value.trim().toLowerCase();
+    };
+    const requestKey = identity(body.requestKey, "requestKey");
+    const skillDocumentId = identity(body.skillDocumentId, "skillDocumentId");
+    const versionId = identity(body.versionId, "versionId");
+    if (!Array.isArray(body.targets) || body.targets.length < 1 || body.targets.length > 50) {
+      throw new BadRequestException({ error: "Select between 1 and 50 assignment targets" });
+    }
+    const seen = new Set<string>();
+    const targets: SkillAssignmentBatchTarget[] = Array.from(body.targets, (input: unknown) => {
+      if (!input || typeof input !== "object" || Array.isArray(input)) {
+        throw new BadRequestException({ error: "Each assignment target must be an object" });
+      }
+      const item = input as Body;
+      const scope = (field: string, limit: number) => {
+        const value = typeof item[field] === "string" ? item[field].trim() : "";
+        if (!value || value.length > limit || value.includes("\u0000")) {
+          throw new BadRequestException({ error: `${field} must contain 1–${limit} characters; use * for an explicit wildcard` });
+        }
+        return value;
+      };
+      const module = scope("module", 32), subtype = scope("subtype", 32), operation = scope("operation", 64);
+      if (!SKILL_MODULES.has(module)) throw new BadRequestException({ error: "Unknown skill module" });
+      const expectedAssignmentId = item.expectedAssignmentId === null ? null : identity(item.expectedAssignmentId, "expectedAssignmentId");
+      const precedence = item.precedence === undefined ? 0 : item.precedence;
+      if (typeof precedence !== "number" || !Number.isInteger(precedence) || precedence < -1000 || precedence > 1000) {
+        throw new BadRequestException({ error: "precedence must be an integer between -1000 and 1000" });
+      }
+      const key = JSON.stringify([module, subtype, operation]);
+      if (seen.has(key)) throw new BadRequestException({ error: "Each assignment target may appear only once" });
+      seen.add(key);
+      return { module, subtype, operation, expectedAssignmentId, precedence };
+    });
+    // Order and explicit default zero are presentation choices, not a different command intent.
+    targets.sort((a, b) => {
+      const left = JSON.stringify([a.module, a.subtype, a.operation]);
+      const right = JSON.stringify([b.module, b.subtype, b.operation]);
+      return left < right ? -1 : left > right ? 1 : 0;
+    });
+    const requestDigest = createHash("sha256").update(JSON.stringify({ skillDocumentId, versionId, targets })).digest("hex");
+    return { requestKey, skillDocumentId, versionId, targets, requestDigest };
+  }
+
+  /** One native transaction for a bounded, explicitly reviewed assignment selection.
+   * Receipt replay precedes live dependency checks: it describes a historical commitment,
+   * never an assertion that its assignments or Skill are still active.
+   */
+  async assignSkillBatch(projectId: string, userId: string | null | undefined, body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    const { requestKey, skillDocumentId, versionId, targets, requestDigest } = this.skillAssignmentBatchInput(body);
+    return this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
+      const previous = (await client.query(
+        "SELECT requested_by,request_digest,receipt FROM skill_assignment_requests WHERE project_id=$1 AND request_key=$2",
+        [projectId, requestKey]
+      )).rows[0];
+      if (previous) {
+        if (String(previous.requested_by) !== uid || previous.request_digest !== requestDigest) {
+          throw new ConflictException({ code: "SKILL_ASSIGNMENT_REQUEST_CONFLICT", error: "This request key already belongs to another assignment command" });
+        }
+        return { receipt: previous.receipt as Body, replayed: true };
+      }
+      const { version, profile } = await this.skillAssignmentSource(client, projectId, skillDocumentId, versionId, targets.map(target => target.module));
+      const contentDigest = version.snapshot_metadata?.contentDigest;
+      if (typeof contentDigest !== "string" || !/^[a-f0-9]{64}$/.test(contentDigest)) {
+        throw new BadRequestException({ error: "The approved Skill version has no verifiable content digest" });
+      }
+      const current = (await client.query(
+        `SELECT a.* FROM skill_assignments a
+           JOIN jsonb_to_recordset($2::jsonb) AS t(module text,subtype text,operation text)
+             ON a.module=t.module AND a.subtype=t.subtype AND a.operation=t.operation
+          WHERE a.project_id=$1 AND a.status='active' FOR UPDATE OF a`,
+        [projectId, JSON.stringify(targets)]
+      )).rows;
+      const scopeKey = (target: { module: string; subtype: string; operation: string }) => JSON.stringify([target.module, target.subtype, target.operation]);
+      const currentByScope = new Map(current.map(row => [scopeKey(row as SkillAssignmentBatchTarget), row]));
+      for (const target of targets) {
+        const prior = currentByScope.get(scopeKey(target));
+        if ((prior ? String(prior.id) : null) !== target.expectedAssignmentId) {
+          throw new ConflictException({ code: "SKILL_ASSIGNMENT_STALE", error: "An assignment changed after it was reviewed; refresh and review the selected targets again",
+            target: { module: target.module, subtype: target.subtype, operation: target.operation } });
+        }
+      }
+      const committedAt = new Date().toISOString();
+      const results: Body[] = [];
+      for (const selection of targets) {
+        const { module, subtype, operation, precedence } = selection;
+        const target = { module, subtype, operation };
+        const prior = currentByScope.get(scopeKey(target));
+        const before = prior ? toCamel(prior) : null;
+        if (prior && String(prior.skill_document_id) === skillDocumentId && String(prior.skill_version_id) === versionId && prior.precedence === precedence) {
+          results.push({ target, outcome: "already_satisfied", before, after: before });
+          continue;
+        }
+        if (prior) {
+          await client.query(
+            "UPDATE skill_assignments SET status='inactive',deactivated_by=$3,deactivated_at=$4 WHERE id=$1 AND project_id=$2",
+            [prior.id, projectId, uid, committedAt]
+          );
+        }
+        const created = (await client.query(
+          `INSERT INTO skill_assignments(project_id,module,subtype,operation,skill_document_id,skill_version_id,assigned_by,precedence,assigned_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+          [projectId, module, subtype, operation, skillDocumentId, versionId, uid, precedence, committedAt]
+        )).rows[0];
+        results.push({ target, outcome: prior ? "replaced" : "added", before, after: toCamel(created),
+          ...(prior ? { priorDeactivation: { assignmentId: String(prior.id), actorId: uid, at: committedAt } } : {}) });
+      }
+      // Use the same symmetric eligibility/overlap owner as single-context assignment.
+      // Check the final selection, including unchanged generations, before committing any effect.
+      for (const result of results) {
+        const conflicts = await findSkillAssignmentConflicts(client, projectId, result.target, result.after.id);
+        if (conflicts.length) throw new ConflictException({ code: "SKILL_ASSIGNMENT_CONFLICT", error: "A selected scope overlaps another active Skill assignment", conflicts });
+      }
+      // Persist exactly the JSON returned to the first caller so replay is identical, including dates.
+      const receipt: Body = JSON.parse(JSON.stringify({
+        schemaVersion: 1, id: randomUUID(), requestKey, projectId: String(authority.id), skillDocumentId, skillVersionId: versionId,
+        actorId: uid, principalKind: "human_session", requestDigest, contentDigest, committedAt, targets: results
+      }));
+      await client.query(
+        `INSERT INTO skill_assignment_requests(id,project_id,request_key,request_digest,requested_by,skill_document_id,skill_version_id,content_digest,committed_at,receipt)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
+        [receipt.id, projectId, requestKey, requestDigest, uid, skillDocumentId, versionId, contentDigest, committedAt, JSON.stringify(receipt)]
+      );
+      await this.logProjectActivity(projectId, uid, "skill_assignment_batch_committed", "skill_assignment_request", receipt.id, profile.skill_key,
+        { receipt }, client);
+      return { receipt, replayed: false };
+    });
+  }
+
+  /** Actor-owned recovery uses current human authority, even after a timeout or later revocation. */
+  async skillAssignmentBatch(projectId: string, userId: string | null | undefined, requestKey: string, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    if (!isUuid(projectId)) throw new NotFoundException({ error: "Project not found" });
+    if (typeof requestKey !== "string" || !isUuid(requestKey.trim())) throw new BadRequestException({ error: "requestKey must be a UUID" });
+    return this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
+      const stored = (await client.query(
+        "SELECT receipt FROM skill_assignment_requests WHERE project_id=$1 AND request_key=$2 AND requested_by=$3",
+        [projectId, requestKey.trim().toLowerCase(), uid]
+      )).rows[0];
+      if (!stored) throw new NotFoundException({ error: "Skill assignment command not found" });
+      return { receipt: stored.receipt as Body, replayed: true };
+    });
   }
 
   async deactivateSkillAssignment(projectId: string, userId: string | null | undefined, assignmentId: string, _body: Body = {}, principal?: ReviewPrincipal) {
@@ -16796,13 +16972,16 @@ export class LegacyService implements OnModuleInit {
               ${TESTCASE_EDIT_REVISION_SQL} AS current_edit_revision,
               ${TESTCASE_APPROVAL_REVISION_SQL} AS current_approval_revision,
               ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current,
-              attempt.attempt_count, attempt.latest_status, attempt.latest_at, attempt.conflicting_attempts
+              attempt.attempt_count, attempt.latest_status, attempt.latest_at, attempt.conflicting_attempts,
+              attempt.latest_execution_id, attempt.latest_cycle_id
          FROM requirement_case_links l
          JOIN testcases ON testcases.id=l.testcase_id AND testcases.project_id=l.project_id
          LEFT JOIN LATERAL (
            SELECT COUNT(*)::int AS attempt_count,
                   (ARRAY_AGG(e.status ORDER BY e.executed_at DESC, e.id DESC))[1] AS latest_status,
                   MAX(e.executed_at) AS latest_at,
+                  (ARRAY_AGG(e.id ORDER BY e.executed_at DESC, e.id DESC))[1] AS latest_execution_id,
+                  (ARRAY_AGG(ci.cycle_id ORDER BY e.executed_at DESC, e.id DESC))[1] AS latest_cycle_id,
                   BOOL_OR(e.status='Passed') AND BOOL_OR(e.status='Failed') AS conflicting_attempts
              FROM executions e
              JOIN cycle_items ci ON ci.id=e.cycle_item_id AND ci.testcase_id=l.testcase_id
@@ -16827,7 +17006,11 @@ export class LegacyService implements OnModuleInit {
         linkId: String(row.id), testcaseId: String(row.testcase_id), title: String(row.title),
         criterionKeys: normalizeJsonArray(row.criterion_keys).map(String), requirementVersionId: String(row.requirement_version_id),
         authored: true, approved, executed, passing: executed && row.latest_status === "Passed",
-        latestAttempt: row.latest_status ? { status: String(row.latest_status), executedAt: row.latest_at } : null,
+        latestAttempt: row.latest_status ? {
+          status: String(row.latest_status), executedAt: row.latest_at,
+          executionId: row.latest_execution_id ? String(row.latest_execution_id) : null,
+          cycleId: row.latest_cycle_id ? String(row.latest_cycle_id) : null
+        } : null,
         attemptCount: Number(row.attempt_count || 0), conflictingAttempts: row.conflicting_attempts === true,
         reasons: [
           ...(onApprovedVersion ? [] : ["REQUIREMENT_VERSION_SUPERSEDED"]),
@@ -16937,6 +17120,38 @@ export class LegacyService implements OnModuleInit {
 
   private requirementDecisionReceipt(row: Body): Body | null {
     return normalizeJsonArray(row.activity_log).find((entry: Body) => entry.kind === "requirement_bundle_decision")?.decisionReceipt || null;
+  }
+
+  /**
+   * The bounded apply receipt the Zyra task surface may use to reopen the exact submitted
+   * requirement version. `save_events` also carries the full proposal snapshot, pinned skills and
+   * decision digest; none of that is needed to review the published version, so it is not exposed.
+   * The last matching apply wins, which is the one that moved the task to done.
+   */
+  private requirementApplyReceipt(row: Body): Body | null {
+    const receipt = normalizeJsonArray(row.save_events)
+      .filter((event: Body) => event?.action === "requirement_bundle_apply" && event?.requirement?.documentId && event?.requirement?.versionId)
+      .sort((left: Body, right: Body) => String(left.appliedAt || "").localeCompare(String(right.appliedAt || "")))
+      .pop();
+    if (!receipt) return null;
+    const requirement = receipt.requirement as Body;
+    const testcase = receipt.testcase as Body | null;
+    const link = receipt.link as Body | null;
+    return {
+      requirement: {
+        documentId: String(requirement.documentId),
+        versionId: String(requirement.versionId),
+        versionNumber: requirement.versionNumber ?? null,
+        editRevision: requirement.editRevision ?? null
+      },
+      testcase: testcase?.id ? {
+        id: String(testcase.id), title: testcase.title ?? null, editRevision: testcase.editRevision ?? null
+      } : null,
+      link: link?.id ? {
+        id: String(link.id), criterionKeys: normalizeJsonArray(link.criterionKeys).map(String)
+      } : null,
+      appliedAt: receipt.appliedAt ?? null
+    };
   }
 
   private assertOrdinaryProposalMutation(row: Body): void {
@@ -27870,7 +28085,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         ? row.skill_context
         : bundleEntries.find((entry: Body) => entry.skillContext)?.skillContext || REQUIREMENT_SKILL_CONTEXT;
     }
-    if (this.isRequirementBundleTask(row)) item.requirementDecision = this.requirementDecisionReceipt(row);
+    if (this.isRequirementBundleTask(row)) {
+      item.requirementDecision = this.requirementDecisionReceipt(row);
+      // Apply is the only moment the submitted requirement version identity is chosen. Persist it
+      // in the task payload so the review surface can reopen the exact version after a reload
+      // without re-deriving it from the mutable requirement document.
+      item.requirementApplyReceipt = this.requirementApplyReceipt(row);
+    }
     if (snapshot) {
       item.proposalSnapshot = snapshot;
       item.proposalRevision = row.proposal_review_revision;

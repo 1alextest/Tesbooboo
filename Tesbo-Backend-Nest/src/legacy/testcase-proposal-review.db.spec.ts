@@ -544,7 +544,8 @@ type Body=Record<string,any>;
     const attempt=async(caseId:string,approvalRevision:string,status:string,at:Date)=>{
       const run=(await admin.query("INSERT INTO cycles(project_id,name,source,status) VALUES ($1,$2,'manual','In Progress') RETURNING id",[project,`Coverage ${randomUUID()}`])).rows[0].id;
       const item=(await admin.query("INSERT INTO cycle_items(cycle_id,testcase_id,snapshot_approval_revision) VALUES ($1,$2,$3) RETURNING id",[run,caseId,approvalRevision])).rows[0].id;
-      await admin.query("INSERT INTO executions(cycle_item_id,status,executed_by,executed_at) VALUES ($1,$2,$3,$4)",[item,status,user,at]);
+      const execution=(await admin.query("INSERT INTO executions(cycle_item_id,status,executed_by,executed_at) VALUES ($1,$2,$3,$4) RETURNING id",[item,status,user,at])).rows[0].id;
+      return {executionId:String(execution),cycleId:String(run)};
     };
 
     it("resolves exact skills, applies atomically and reports authored/approved/executed/passing separately",async()=>{
@@ -560,6 +561,16 @@ type Body=Record<string,any>;
         requirementId=applied.receipt.requirement.documentId;
         const caseId=applied.receipt.testcase.id;
         expect(applied.receipt.link.testcaseApprovalRevision).toBeNull();
+        // The task surface reopens this exact version after a reload from the bounded receipt,
+        // never by re-deriving it from the (mutable) requirement document.
+        const reloaded=await service().requirementProposalTask(project,user,staged.id);
+        expect(reloaded.requirementApplyReceipt).toMatchObject({
+          requirement:{documentId:requirementId,versionId:applied.receipt.requirement.versionId,versionNumber:applied.receipt.requirement.versionNumber},
+          testcase:{id:caseId},
+          link:{id:applied.receipt.link.id}
+        });
+        expect(reloaded.requirementApplyReceipt).not.toHaveProperty("proposalSnapshot");
+        expect(reloaded.requirementApplyReceipt).not.toHaveProperty("decisionKey");
         expect((await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind='submitted'",[requirementId])).rows[0].n).toBe(1);
         expect((await admin.query("SELECT COUNT(*)::int AS n FROM testcases WHERE id=$1 AND status='Draft'",[caseId])).rows[0].n).toBe(1);
 
@@ -583,9 +594,10 @@ type Body=Record<string,any>;
         coverage=await service().requirementCoverage(project,user,requirementId);
         expect(coverage.readings).toMatchObject({authored:true,approved:true,executed:false,passing:false});
 
-        await attempt(caseId,after.approval_revision,"Passed",new Date());
+        const passedAttempt=await attempt(caseId,after.approval_revision,"Passed",new Date());
         coverage=await service().requirementCoverage(project,user,requirementId);
         expect(coverage.readings).toMatchObject({approved:true,executed:true,passing:true,mixed:false});
+        expect(coverage.cases[0].latestAttempt).toMatchObject({status:"Passed",executionId:passedAttempt.executionId,cycleId:passedAttempt.cycleId});
 
         await attempt(caseId,after.approval_revision,"Failed",new Date(Date.now()+1000));
         coverage=await service().requirementCoverage(project,user,requirementId);
@@ -934,6 +946,18 @@ type Body=Record<string,any>;
         expect(explicitReplay.skillKey).toBe(explicit.skillKey);
         await expect(service().createSkillCandidate(project,user,{...explicitOps,skillKey:undefined},{kind:"human_session"} as never)).rejects.toMatchObject({status:409,response:{code:"SKILL_REQUEST_CONFLICT"}});
 
+        await expect(service().createSkillCandidate(project,user,{title:`Empty request ${randomUUID()}`,module:"requirements",subtype:"functional",instructions:"RULE-EMPTY-REQUEST: one outcome.",requestKey:""},{kind:"human_session"} as never)).rejects.toMatchObject({status:400});
+        await expect(service().createSkillCandidate(project,user,{title:`Blank key ${randomUUID()}`,module:"requirements",subtype:"functional",skillKey:"   ",instructions:"RULE-BLANK-KEY: one outcome.",requestKey:randomUUID()},{kind:"human_session"} as never)).rejects.toMatchObject({status:400});
+        await expect(service().createSkillCandidate(project,user,{title:`Empty key ${randomUUID()}`,module:"requirements",subtype:"functional",skillKey:"",instructions:"RULE-EMPTY-KEY: one outcome.",requestKey:randomUUID()},{kind:"human_session"} as never)).rejects.toMatchObject({status:400});
+
+        const falsyKey=randomUUID(), falsyTitle=`Falsy key ${randomUUID()}`;
+        const falsy=await service().createSkillCandidate(project,user,{title:falsyTitle,module:"requirements",subtype:"functional",skillKey:false as never,instructions:"RULE-FALSY: one outcome.",requestKey:falsyKey},{kind:"human_session"} as never);
+        created.push(falsy.id);
+        expect(falsy.skillKey).not.toBe("false");
+        const falsyReplay=await service().createSkillCandidate(project,user,{title:falsyTitle,module:"requirements",subtype:"functional",instructions:"RULE-FALSY: one outcome.",requestKey:falsyKey},{kind:"human_session"} as never);
+        expect(falsyReplay.id).toBe(falsy.id);
+        expect(falsyReplay.skillKey).toBe(falsy.skillKey);
+
         const nullKey=randomUUID(), nullTitle=`Null key ${randomUUID()}`;
         const nullOps={title:nullTitle,module:"requirements",subtype:"functional",skillKey:null as unknown as string,instructions:"RULE-NULL: one outcome.",requestKey:nullKey};
         const nullCandidate=await service().createSkillCandidate(project,user,nullOps,{kind:"human_session"} as never);
@@ -1098,18 +1122,25 @@ type Body=Record<string,any>;
         try{
           const good=command(skill,[target("requirement_revision")]);
           const invalid=[
+            null,[],false,"assignment",
+            {...good,requestKey:null},{...good,requestKey:1},{...good,skillDocumentId:null},{...good,versionId:{}},
             {...good,requestKey:"not-a-uuid"},{...good,targets:[]},{...good,targets:Array.from({length:51},(_,i)=>target(`custom_${i}`))},
+            {...good,targets:null},{...good,targets:[null]},{...good,targets:[[]]},{...good,targets:[false]},
             {...good,targets:[target("requirement_revision"),target(" requirement_revision ")]},
             {...good,targets:[{module:"requirements",subtype:"functional",operation:"requirement_revision"}]},
             {...good,targets:[target("",null),target("*")]},
             {...good,targets:[target("requirement_revision",null,{precedence:"1"})]},
+            ...[null,false,1.5,-1001,1001].map(precedence=>({...good,targets:[target("requirement_revision",null,{precedence})]})),
+            {...good,targets:[target("requirement_revision",null,{subtype:null})]},
+            {...good,targets:[target("requirement_revision",null,{subtype:" "})]},
+            {...good,targets:[target("requirement_revision","not-a-uuid")]},
             {...good,targets:[target("requirement_revision",null,{subtype:"x".repeat(33)})]},
             {...good,targets:[target("x".repeat(65))]},
             {...good,targets:[target("requirement_revision",null,{module:"unknown"})]},
             {...good,targets:[target("requirement_revision",null,{module:"test_cases"})]}
           ];
           const before=await snapshot();
-          for(const input of invalid){await expect(batch(input)).rejects.toMatchObject({status:400});expect(await snapshot()).toEqual(before);}
+          for(const input of invalid){await expect(batch(input as Body)).rejects.toMatchObject({status:400});expect(await snapshot()).toEqual(before);}
           const submitted=(await admin.query("SELECT id FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind='submitted' ORDER BY version_number DESC LIMIT 1",[skill.doc.id])).rows[0].id;
           await expect(batch({...good,versionId:submitted})).rejects.toMatchObject({status:400});
           await expect(batch({...good,skillDocumentId:randomUUID()})).rejects.toMatchObject({status:404});
@@ -1127,6 +1158,53 @@ type Body=Record<string,any>;
           expect(result.receipt.targets).toHaveLength(50);
           expect((await active()).filter((row:Body)=>row.skill_document_id===skill.doc.id)).toHaveLength(50);
         }finally{await cleanupSkills([skill.doc.id,other.doc.id]);}
+      });
+
+      it("normalizes UUID spelling and scope defaults while preserving immutable command bindings after Skill deletion",async()=>{
+        const skill=await approved();
+        try{
+          const input=command(skill,[target("uuid_scope",null,{precedence:-1000})]);
+          const upper={...input,requestKey:` ${input.requestKey.toUpperCase()} `,skillDocumentId:skill.doc.id.toUpperCase(),versionId:skill.versionId.toUpperCase()};
+          const [first,concurrent]=await Promise.all([batch(input),batch(upper,service(),user,human,project.toUpperCase())]);
+          expect(concurrent.receipt).toEqual(first.receipt);
+          expect([first.replayed,concurrent.replayed].filter(Boolean)).toHaveLength(1);
+          expect(first.receipt.requestKey).toBe(input.requestKey);
+          expect(await batch(input)).toEqual({receipt:first.receipt,replayed:true});
+          expect((await receipt(input.requestKey.toUpperCase())).receipt).toEqual(first.receipt);
+          await expect(receipt(randomUUID())).rejects.toMatchObject({status:404});
+          await expect(receipt("invalid")).rejects.toMatchObject({status:400});
+          for(const mutation of ["requested_by=gen_random_uuid()","request_key=gen_random_uuid()","request_digest=repeat('f',64)","content_digest=repeat('e',64)","committed_at=now()"]){
+            await expect(admin.query(`UPDATE skill_assignment_requests SET ${mutation} WHERE id=$1`,[first.receipt.id])).rejects.toThrow(/immutable/i);
+          }
+          await expect(admin.query(
+            `INSERT INTO skill_assignment_requests(id,project_id,request_key,request_digest,requested_by,skill_document_id,skill_version_id,content_digest,committed_at,receipt)
+             SELECT gen_random_uuid(),project_id,gen_random_uuid(),request_digest,requested_by,skill_document_id,skill_version_id,content_digest,committed_at,receipt
+             FROM skill_assignment_requests WHERE id=$1`,[first.receipt.id]
+          )).rejects.toMatchObject({code:"23514"});
+          await cleanupSkills([skill.doc.id]);
+          const removed=await snapshot();
+          expect(await batch(input)).toEqual({receipt:first.receipt,replayed:true});
+          expect((await receipt(input.requestKey)).receipt).toEqual(first.receipt);
+          expect(await snapshot()).toEqual(removed);
+        }finally{await cleanupSkills([skill.doc.id]);}
+      });
+
+      it("preserves native project archival and denies recovery or replay while the project is archived",async()=>{
+        const skill=await approved();
+        try{
+          const input=command(skill,[target("archive_scope",null,{precedence:1000})]);
+          const committed=await batch(input);
+          await service().deleteProjectForUser(user,project);
+          expect((await admin.query("SELECT archived_at FROM projects WHERE id=$1",[project])).rows[0].archived_at).not.toBeNull();
+          const archived=await snapshot();
+          await expect(batch(input)).rejects.toMatchObject({status:404});
+          await expect(receipt(input.requestKey)).rejects.toMatchObject({status:403});
+          expect(await snapshot()).toEqual(archived);
+          expect((await admin.query("SELECT receipt FROM skill_assignment_requests WHERE id=$1",[committed.receipt.id])).rows[0].receipt).toEqual(committed.receipt);
+        }finally{
+          await admin.query("UPDATE projects SET archived_at=NULL WHERE id=$1",[project]);
+          await cleanupSkills([skill.doc.id]);
+        }
       });
 
       it("assigns an older approved identity without changing the latest approved pointer",async()=>{
@@ -1188,6 +1266,27 @@ type Body=Record<string,any>;
           await locker.query("ROLLBACK").catch(()=>undefined);if(pending)await pending;await locker.end();
           await admin.query("UPDATE project_members SET role='owner' WHERE project_id=$1 AND user_id=$2",[project,user]);
           await cleanupSkills([old.doc.id,next.doc.id]);
+        }
+      },15000);
+
+      it("serializes alternate project UUID spellings before rechecking human authority",async()=>{
+        const skill=await approved();
+        const locker=new Client({connectionString:url});await locker.connect();let pending:Promise<Body>|undefined;
+        try{
+          await locker.query("BEGIN");
+          await locker.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)",[`skill-assignments:${project}`]);
+          const input=command(skill,[target("uppercase_project")]);
+          pending=batch(input,service(),user,human,project.toUpperCase()).then((value:Body)=>({value}),(error:Body)=>({error}));
+          expect(await waitUntil(()=>waitingOn("%pg_advisory_xact_lock%"))).toBe(true);
+          await admin.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2",[project,user]);
+          await locker.query("COMMIT");
+          const before=await snapshot();
+          expect((await pending!).error).toMatchObject({status:403});
+          expect(await snapshot()).toEqual(before);
+        }finally{
+          await locker.query("ROLLBACK").catch(()=>undefined);if(pending)await pending;await locker.end();
+          await admin.query("UPDATE project_members SET role='owner' WHERE project_id=$1 AND user_id=$2",[project,user]);
+          await cleanupSkills([skill.doc.id]);
         }
       },15000);
 

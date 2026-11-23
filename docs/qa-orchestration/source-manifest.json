@@ -1,0 +1,58 @@
+{
+  "package": "Tesbo_Specifications_v1.4.45.zip",
+  "package_revision": "1.4.45",
+  "status": "NOT FROZEN",
+  "archive_bytes": 632297,
+  "archive_sha256": "bb06fb5b4080b81fd521f77ea4cc26a39b823a873d2cf221a182d984a6a088aa",
+  "scope": "Exact publication of the eight owner-supplied canonical Markdown originals. Historical headers and review scopes are preserved. Publication is not implementation, acceptance, deployment or a package freeze.",
+  "files": [
+    {
+      "path": "00_README.md",
+      "bytes": 168706,
+      "sha256": "c912ba92de2ac04cb0e7906627ab5baf2d7e8a9973770830cc2de92727071372",
+      "git_blob": "4b142f9332fa7a1f651a223be99f2493153c0fc5"
+    },
+    {
+      "path": "01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 228764,
+      "sha256": "25063479d835c0f0945c38cb3b2c5a34357f61e68dd4bfcce89f08f4cb6ea40b",
+      "git_blob": "3ded987c73fd59d1ba34ca5e55dfb7fc623ea67f"
+    },
+    {
+      "path": "02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 143881,
+      "sha256": "0fa13560dde06ca331061f27a65307b6c55f9766cd666c35c6d4e4b24fbe7fbf",
+      "git_blob": "f1da967acaf81ea52fac13c08661bb7702012405"
+    },
+    {
+      "path": "03_TECHNICAL_DESIGN.md",
+      "bytes": 410261,
+      "sha256": "277c8b115ca23904df521ee56df211766217e2b8f09ff488773450978a6ccf9e",
+      "git_blob": "a89b385c1241ff72217420a24849377cdba70a81"
+    },
+    {
+      "path": "04_MCP_API_CONTRACTS.md",
+      "bytes": 188593,
+      "sha256": "fbe715ec8dc8f21a668d0c8dadfc25b374991a949892d123c17ecbfe218cbfbd",
+      "git_blob": "fcb0f56c1b4fb7c7c6d8388df6bbe6c9f75316f7"
+    },
+    {
+      "path": "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 396832,
+      "sha256": "cfda859a2e5216dce4091e65364878d01a052c046cc4a17de5be327357ad0e8e",
+      "git_blob": "0fe385bc1790eaadc112ec2efb3c42c2d311565f"
+    },
+    {
+      "path": "06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 154591,
+      "sha256": "8f66240db406d8b2fc700aed54f075590f64054059ab07deaa55470b90d063e2",
+      "git_blob": "46a705782dea2549fb513b48f0c75fcd4fa4cc04"
+    },
+    {
+      "path": "07_UI_DESIGN_TASKS.md",
+      "bytes": 149169,
+      "sha256": "11fe6d5d9c5fa9a9e960dd247e0ae9cb735e5f72c6a429ef398549e72ebc76d1",
+      "git_blob": "1bbb188cd9d785819ba9b219623c5dfc628dfaf9"
+    }
+  ]
+}

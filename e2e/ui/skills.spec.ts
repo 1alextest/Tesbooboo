@@ -397,6 +397,199 @@ test.describe("governed skills operator journey (UI)", () => {
     }
   });
 
+  test("owner reopens, approves and reads coverage from the task surface while QA, stale and lost responses stay truthful", async ({ browser }) => {
+    const suffix = Date.now();
+    const title = `Task review requirement ${suffix}`;
+    const caseTitle = `Task review case ${suffix}`;
+    const skillDocs: string[] = [];
+    const cycleIds: string[] = [];
+    let taskId = "";
+    let requirementId = "";
+    let requirementVersionId = "";
+    let caseId = "";
+    try {
+      // Fixture setup through the same native API the product uses; the review itself is the UI.
+      const requirementSkill = await apiSkill("requirements", "functional", "requirement_revision");
+      skillDocs.push(requirementSkill.documentId);
+      const linkSkill = await apiSkill("requirements", "functional", "requirement_case_link");
+      skillDocs.push(linkSkill.documentId);
+      const caseSkill = await apiSkill("test_cases", "manual", "testcase_create");
+      skillDocs.push(caseSkill.documentId);
+
+      const requirementOperationId = randomUUID(), testcaseOperationId = randomUUID();
+      const stagedResponse = await ownerApi.post(`${base()}/requirements/proposals`, { data: {
+        requestKey: `ui-task-review-${suffix}`, title: `UI task review bundle ${suffix}`,
+        operations: [
+          { opType: "requirement_revision", operationId: requirementOperationId, title,
+            description: "Fixture for the task review surface.", criteria: [{ key: "AC-1", text: "The obligation is observable" }] },
+          { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle } },
+          { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] }
+        ]
+      } });
+      expect(stagedResponse.ok(), await stagedResponse.text()).toBe(true);
+      const staged = await stagedResponse.json();
+      taskId = staged.id;
+      expect(staged.skillContext).toMatchObject({ status: "resolved" });
+      const appliedResponse = await ownerApi.post(`${base()}/requirements/proposals/${taskId}/apply`, { data: { expectedProposalRevision: staged.proposalRevision } });
+      expect(appliedResponse.ok(), await appliedResponse.text()).toBe(true);
+      const applied = await appliedResponse.json();
+      requirementId = applied.receipt.requirement.documentId;
+      requirementVersionId = applied.receipt.requirement.versionId;
+      caseId = applied.receipt.testcase.id;
+
+      const page = await open(browser, `/agents/tasks/${taskId}`);
+      const review = page.getByTestId("requirement-review-panel");
+      await expect(review).toBeVisible();
+      await expect(review.getByTestId("requirement-review-version")).toContainText(requirementVersionId);
+      await expect(review.getByTestId("requirement-review-criteria")).toContainText("The obligation is observable");
+      await expect(review.getByTestId("requirement-review-approve")).toBeVisible();
+      await expect(review.getByTestId("requirement-coverage-readings")).toContainText("Authored: yes");
+      await expect(review.getByTestId("requirement-coverage-readings")).toContainText("Approved: no");
+      await expect(review.getByTestId("requirement-coverage-case-link")).toHaveAttribute("href", new RegExp(`testcases\\?search=${encodeURIComponent(caseTitle)}`));
+
+      // Reload reopens the exact version from the persisted task receipt.
+      await page.reload();
+      await expect(page.getByTestId("requirement-review-version")).toContainText(requirementVersionId);
+      await expect(page.getByTestId("requirement-review-approve")).toBeVisible();
+
+      // A reader can inspect the review and the coverage but cannot approve.
+      const qaPage = await open(browser, `/agents/tasks/${taskId}`, "qa");
+      await expect(qaPage.getByTestId("requirement-review-readonly")).toBeVisible();
+      await expect(qaPage.getByTestId("requirement-review-approve")).toHaveCount(0);
+      const qaApprove = await qaApi.post(`${base()}/requirements/${requirementId}/approve`, { data: { versionId: requirementVersionId } });
+      expect(qaApprove.status()).toBe(403);
+      await qaPage.close();
+
+      // A failed exact-version load disables approval and offers a retry; approval returns only
+      // after the required content loads successfully.
+      const versionEndpoint = `**/api/projects/${tenant!.mainProjectId}/knowledge-base/documents/${requirementId}/versions/${requirementVersionId}`;
+      await page.route(versionEndpoint, (route) => route.fulfill({ status: 503, json: { error: "Version read unavailable" } }));
+      await page.reload();
+      await expect(page.getByTestId("requirement-review-error")).toBeVisible();
+      await expect(page.getByTestId("requirement-review-approve")).toHaveCount(0);
+      await page.unroute(versionEndpoint);
+      await page.getByTestId("requirement-review-retry").click();
+      await expect(page.getByTestId("requirement-review-approve")).toBeVisible();
+
+      // Stale: the document moved on after the version was submitted. The old version is refused,
+      // and the UI does not claim approval.
+      const changed = await ownerApi.patch(`${base()}/knowledge-base/documents/${requirementId}`, { data: { title: `${title} changed` } });
+      expect(changed.ok(), await changed.text()).toBe(true);
+      await page.getByTestId("requirement-review-approve").click();
+      await expect(page.getByTestId("requirement-review-approval-error")).toContainText("changed after this version was submitted");
+      await expect(page.getByTestId("requirement-review-approved")).toHaveCount(0);
+      expect(scalar(`SELECT COUNT(*)::int FROM knowledge_document_versions WHERE document_id=${literal(requirementId)} AND snapshot_kind='approved';`)).toBe("0");
+      const restored = await ownerApi.patch(`${base()}/knowledge-base/documents/${requirementId}`, { data: { title } });
+      expect(restored.ok(), await restored.text()).toBe(true);
+
+      // Lost approval response: hold the reconciliation read so the unconfirmed state is stable,
+      // then prove the single commit is visible only after the authoritative re-read.
+      let holdContent = false;
+      let releaseContent!: () => void;
+      let contentHeld!: () => void;
+      const held = new Promise<void>((resolve) => { contentHeld = resolve; });
+      const release = new Promise<void>((resolve) => { releaseContent = resolve; });
+      const documentEndpoint = `**/api/projects/${tenant!.mainProjectId}/knowledge-base/documents/${requirementId}`;
+      const approveEndpoint = `**/api/projects/${tenant!.mainProjectId}/requirements/${requirementId}/approve`;
+      await page.route(documentEndpoint, async (route) => {
+        if (!holdContent) return route.continue();
+        holdContent = false;
+        contentHeld();
+        await release;
+        return route.continue();
+      });
+      await page.route(approveEndpoint, async (route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        const actual = await route.fetch();
+        expect(actual.ok(), await actual.text()).toBe(true);
+        holdContent = true;
+        await route.abort("failed");
+      });
+      await page.getByTestId("requirement-review-approve").click();
+      await held;
+      await expect(page.getByTestId("requirement-review-approval-error")).toContainText("could not be confirmed");
+      await expect(page.getByTestId("requirement-review-approved")).toHaveCount(0);
+      releaseContent();
+      await expect(page.getByTestId("requirement-review-approved")).toBeVisible();
+      await expect(page.getByTestId("requirement-review-approval-error")).toHaveCount(0);
+      expect(scalar(`SELECT COUNT(*)::int FROM knowledge_document_versions WHERE document_id=${literal(requirementId)} AND snapshot_kind='approved' AND snapshot_metadata->>'sourceVersionId'=${literal(requirementVersionId)};`)).toBe("1");
+      await page.unroute(documentEndpoint);
+      await page.unroute(approveEndpoint);
+
+      // Coverage follows the persisted state: approving the case and re-applying its exact basis
+      // turns approved/executed/passing on, with a link to the real execution evidence.
+      const caseBefore = await (await ownerApi.get(`${base()}/testcases/${caseId}`)).json();
+      const approvedCase = await ownerApi.post(`${base()}/testcases/${caseId}/approve`, {
+        data: { expectedRevision: caseBefore.editRevision, expectedApprovalRevision: caseBefore.approvalRevision }
+      });
+      expect(approvedCase.ok(), await approvedCase.text()).toBe(true);
+      const caseAfter = await (await ownerApi.get(`${base()}/testcases/${caseId}`)).json();
+      const beforeReapply = await (await ownerApi.get(`${base()}/requirements/${requirementId}/coverage`)).json();
+      const link = beforeReapply.cases.find((item: Record<string, any>) => item.requirementVersionId === beforeReapply.approvedVersionId) || beforeReapply.cases[0];
+      const reapplied = await ownerApi.post(`${base()}/requirements/${requirementId}/links/${link.linkId}/reapply`, {
+        data: { expectedCaseRevision: caseAfter.editRevision, expectedApprovalRevision: caseAfter.approvalRevision }
+      });
+      expect(reapplied.ok(), await reapplied.text()).toBe(true);
+      const runId = scalar(`INSERT INTO cycles(project_id,name) VALUES (${literal(tenant!.mainProjectId)},${literal(`UI review coverage ${suffix}`)}) RETURNING id;`);
+      cycleIds.push(runId);
+      const itemId = scalar(`INSERT INTO cycle_items(cycle_id,testcase_id,snapshot_approval_revision) VALUES (${literal(runId)},${literal(caseId)},${literal(caseAfter.approvalRevision)}) RETURNING id;`);
+      const executionId = scalar(`INSERT INTO executions(cycle_item_id,status,executed_by,executed_at)
+        SELECT ${literal(itemId)},'Passed',pm.user_id,now() FROM project_members pm
+         WHERE pm.project_id=${literal(tenant!.mainProjectId)}
+         ORDER BY CASE pm.role WHEN 'owner' THEN 0 ELSE 1 END, pm.user_id LIMIT 1 RETURNING id;`);
+      await page.reload();
+      await expect(page.getByTestId("requirement-coverage-readings")).toContainText("Approved: yes");
+      await expect(page.getByTestId("requirement-coverage-readings")).toContainText("Executed: yes");
+      await expect(page.getByTestId("requirement-coverage-readings")).toContainText("Passing: yes");
+      await expect(page.getByTestId("requirement-coverage-execution-link")).toHaveAttribute("href", new RegExp(`cycles/${runId}/execute/${executionId}`));
+
+      // A successful zero and an unavailable read are different states.
+      exec(`UPDATE requirement_case_links SET state='retired' WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)};`);
+      await page.reload();
+      await expect(page.getByTestId("requirement-coverage-empty")).toBeVisible();
+      await expect(page.getByTestId("requirement-coverage-unavailable")).toHaveCount(0);
+
+      const coverageEndpoint = `**/api/projects/${tenant!.mainProjectId}/requirements/${requirementId}/coverage`;
+      await page.route(coverageEndpoint, (route) => route.fulfill({ status: 503, json: { error: "Coverage service unavailable" } }));
+      await page.reload();
+      await expect(page.getByTestId("requirement-coverage-unavailable")).toBeVisible();
+      await expect(page.getByTestId("requirement-coverage-empty")).toHaveCount(0);
+      await page.unroute(coverageEndpoint);
+      await page.getByTestId("requirement-coverage-retry").click();
+      await expect(page.getByTestId("requirement-coverage-empty")).toBeVisible();
+
+      // The supporting-case link lands on the repository with the case search applied.
+      const search = encodeURIComponent(caseTitle);
+      await page.goto(`/projects/${tenant!.mainProjectId}/testcases?search=${search}`);
+      await expect(page.getByPlaceholder("Search by ID, title, or type")).toHaveValue(caseTitle);
+      await expect(page.getByText(caseTitle).first()).toBeVisible();
+      await page.getByRole("button", { name: "Clear search" }).click();
+      await expect(page.getByPlaceholder("Search by ID, title, or type")).toHaveValue("");
+      await expect(page).not.toHaveURL(/[?&]search=/);
+    } finally {
+      if (taskId) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(taskId)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      if (requirementId) {
+        exec(`DELETE FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)};`);
+        exec(`DELETE FROM requirement_profiles WHERE document_id=${literal(requirementId)};`);
+        exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(requirementId)};`);
+        exec(`DELETE FROM knowledge_documents WHERE id=${literal(requirementId)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      }
+      // Executions reference cycle items, and cycle items reference the case; tear those down
+      // before deleting the case itself.
+      for (const id of cycleIds) {
+        exec(`DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id=${literal(id)});`);
+        exec(`DELETE FROM cycle_items WHERE cycle_id=${literal(id)};`);
+        exec(`DELETE FROM cycles WHERE id=${literal(id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      }
+      exec(`DELETE FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(caseTitle)};`);
+      for (const id of skillDocs) {
+        exec(`DELETE FROM skill_assignments WHERE project_id=${literal(tenant!.mainProjectId)} AND skill_document_id=${literal(id)};`);
+        exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(id)};`);
+        exec(`DELETE FROM knowledge_documents WHERE id=${literal(id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      }
+    }
+  });
+
   test("approval of the wrong revision and unauthorized assignment changes are refused", async ({ browser }) => {
     const suffix = Date.now();
     const skill = await apiSkill("requirements", "functional", "requirement_revision");

@@ -1073,6 +1073,12 @@ export interface ZyraTask {
   /** The server's committed decision on the exact reviewed bundle, also returned on a safe retry. */
   requirementDecision?: { id: string; decision: "rejected" | "withdrawn"; proposalRevision: string;
     reviewerId: string; reason: string | null; createdAt: string } | null;
+  /**
+   * Persisted apply receipt, bounded to the native identities the task surface may reopen. It is
+   * reconstructed from save_events on every read, so a reload returns the same exact submitted
+   * requirement version without re-deriving it from the mutable requirement document.
+   */
+  requirementApplyReceipt?: RequirementApplyReceipt | null;
   /** Exact server revision of the reviewable operations and their target context. */
   proposalRevision?: string;
   proposalSnapshot?: Record<string, unknown>;
@@ -1083,6 +1089,13 @@ export interface ZyraTask {
   updatedAt: string;
   /** "en" | "ru", set server-side from the script of what the user typed; drives the task view's UI language (lib/zyra-i18n.ts). Missing/unknown renders as English. */
   language?: string;
+}
+
+export interface RequirementApplyReceipt {
+  requirement: { documentId: string; versionId: string; versionNumber: number | null; editRevision: string | null };
+  testcase: { id: string; title: string | null; editRevision: string | null } | null;
+  link: { id: string; criterionKeys: string[] } | null;
+  appliedAt: string | null;
 }
 
 export interface ZyraCapabilities {
@@ -1531,6 +1544,67 @@ export async function applyRequirementProposal(projectId: string, taskId: string
     method: "POST",
     body: { expectedProposalRevision },
   });
+}
+
+/**
+ * Human-only approval of the exact submitted requirement version under review. The backend pins
+ * the version identity, refuses a version whose content digest no longer matches the document
+ * (DOCUMENT_REVISION_CONFLICT), and replays the same approval for an exact retry.
+ */
+export async function approveRequirementVersion(
+  projectId: string,
+  documentId: string,
+  versionId: string
+): Promise<KnowledgeDocument & {
+  approvedVersionId: string; sourceVersionId: string; linkRowsCreated: number; replayed: boolean;
+}> {
+  return api(`/api/projects/${projectId}/requirements/${documentId}/approve`, {
+    method: "POST",
+    body: { versionId },
+  });
+}
+
+export interface RequirementCoverageCriterion {
+  key: string;
+  text: string;
+  authored: boolean;
+  approved: boolean;
+  executed: boolean;
+  passing: boolean;
+  mixed: boolean;
+  caseCount: number;
+}
+
+export interface RequirementCoverageCase {
+  linkId: string;
+  testcaseId: string;
+  title: string;
+  criterionKeys: string[];
+  /** The exact requirement version this link was applied against. */
+  requirementVersionId: string;
+  authored: boolean;
+  approved: boolean;
+  executed: boolean;
+  passing: boolean;
+  latestAttempt: { status: string; executedAt: string; executionId: string | null; cycleId: string | null } | null;
+  attemptCount: number;
+  conflictingAttempts: boolean;
+  reasons: string[];
+}
+
+export interface RequirementCoverage {
+  requirementId: string;
+  approvedVersionId: string | null;
+  latestSubmittedVersionId: string | null;
+  readings: { authored: boolean; approved: boolean; executed: boolean; passing: boolean; mixed: boolean };
+  criteria: RequirementCoverageCriterion[];
+  cases: RequirementCoverageCase[];
+  basis: string;
+}
+
+/** Authored/approved/executed/passing coverage, computed from persisted links and exact-basis attempts. */
+export async function getRequirementCoverage(projectId: string, documentId: string): Promise<RequirementCoverage> {
+  return api(`/api/projects/${projectId}/requirements/${documentId}/coverage`);
 }
 
 // ─── Governed Skills (human-managed library and assignments) ───────────────────────────────

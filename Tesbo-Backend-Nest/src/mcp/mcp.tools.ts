@@ -1980,7 +1980,7 @@ export function buildMcpTools(): McpTool[] {
     },
     {
       name: "stage_requirement_change_bundle", requiredScope: "write",
-      description: "Stage one unpublished Work Package A bundle — a native requirement revision candidate, a Draft testcase candidate and a link intent between them — in the existing proposal review task owner. Requires an explicit requestKey; retry it only with the identical content. Nothing is published: no requirement document/version, testcase, active link or approval is created. The bundle stays staging-only because approved effective requirement/testcase skills cannot yet be resolved; a human may review, reject or withdraw it. Returns a task and proposal revision, never official IDs.",
+      description: "Stage one unpublished Work Package A bundle — a native requirement revision candidate, a Draft testcase candidate and a link intent between them — in the existing proposal review task owner. Requires an explicit requestKey; retry it only with the identical content. Nothing is published: no requirement document/version, testcase, active link or approval is created. The native owner resolves and pins the effective Skill context for the bundle's operations. Unassigned or conflicting contexts can be staged but block application. Applying the exact reviewed revision is a separate authorized human action that revalidates the pinned Skill context; staging does not approve or assign Skills. Returns a task and proposal revision, never official IDs.",
       inputSchema: { type: "object", additionalProperties: false, required: ["requestKey", "operations"], properties: {
         requestKey: { type: "string", minLength: 1, maxLength: 160 }, title: { type: "string", maxLength: 512 },
         operations: { type: "array", minItems: 1, maxItems: 3, items: { oneOf: [
@@ -2022,7 +2022,7 @@ export function buildMcpTools(): McpTool[] {
     },
     {
       name: "get_requirement_proposal_task", requiredScope: "read",
-      description: "Read one staged requirement change bundle in this project: the requirement revision candidate, the Draft testcase candidate, the link intent, and the skill context that blocks publication. Reading cannot approve, apply or activate anything.",
+      description: "Read one native requirement change bundle review task in this project, including its current proposal snapshot and revision, requirement/testcase candidates, link intent and Skill context pinned at staging. A resolved context alone does not authorize publication or establish that its assignments are still current. Reading cannot approve, apply, assign or activate anything.",
       inputSchema: { type: "object", additionalProperties: false, required: ["taskId"], properties: { taskId: { type: "string" } } },
       handler: async (args, ctx) => ctx.legacy.requirementProposalTask(ctx.projectId, ctx.userId, requireString(args, "taskId"))
     },
