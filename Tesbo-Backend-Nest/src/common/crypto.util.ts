@@ -73,6 +73,6 @@ export function oauthReferenceFingerprint(namespace: string, value: string): str
       Buffer.from("tesbo-oauth-adapter-index-v1"), Buffer.from("reference-fingerprint-v1"), 32));
   }
   return createHmac("sha256", oauthReferenceKey)
-    .update(namespace, "utf8").update("\\0").update(value, "utf8")
+    .update(namespace, "utf8").update("\0").update(value, "utf8")
     .digest("hex");
 }
