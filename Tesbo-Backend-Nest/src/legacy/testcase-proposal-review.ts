@@ -1,4 +1,4 @@
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException } from "@nestjs/common";
 import { createHash } from "crypto";
 import type { ReviewPrincipal } from "../common/human-review-principal";
 
@@ -35,3 +35,29 @@ export const TESTCASE_PROPOSAL_FIELDS = new Set([
   "customFieldValues", "customTagIds", "suiteId", "externalId", "jiraIssueKey", "jiraUrl", "linearIssueKey",
   "linearUrl", "notionPageId", "notionUrl", "technique", "reviewViews"
 ]);
+
+/**
+ * Authoritative native proposal producer identity shared by testcase and requirement
+ * staging. Keep the principal key and receipt byte-compatible with existing rows:
+ * both are used for deduplication, auditing, human review, and historical replay.
+ *
+ * This is NOT an OAuth credential authenticator. The enclosing staging transaction
+ * still checks current membership, credential existence/scopes, project MCP consent
+ * and the required tool. An OAuth producer must only be added after those checks
+ * and its own persisted identity/replay contract are independently verified.
+ */
+export function nativeProposalProducerIdentity(principal: TestcaseProposalPrincipal, issuerId: string) {
+  if (principal.kind !== "human_session" && principal.kind !== "api_token") {
+    throw new ForbiddenException({ error: "A trusted proposal producer identity is required" });
+  }
+  const principalKey = principal.kind === "api_token" ? `api_token:${principal.tokenId}` : `human_session:${issuerId}`;
+  const producerActorId = principal.kind === "human_session" ? issuerId : principal.actorId ?? null;
+  const provenance = {
+    kind: principal.kind,
+    principalKey,
+    issuerId,
+    tokenId: principal.tokenId ?? null,
+    actorId: producerActorId
+  };
+  return { principalKey, producerActorId, provenance, activityActor: principal.kind === "api_token" ? "agent" as const : "user" as const };
+}
