@@ -12773,8 +12773,8 @@ export class LegacyService implements OnModuleInit {
     const project = await this.requireProjectAccess(uid, projectId);
     const doc = await this.kbDocument(projectId, documentId);
     const res = await this.db.query(
-      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, status, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'draft', $9, $9) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, status, created_by, updated_by)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, 'draft', $10, $10) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
       [
         project.organization_id,
         projectId,
@@ -12784,11 +12784,14 @@ export class LegacyService implements OnModuleInit {
         doc.content_html,
         doc.content_text,
         doc.document_type,
+        JSON.stringify(doc.governed_metadata ?? {}),
         uid
       ]
     );
     await this.logProjectActivity(projectId, uid, "duplicated", "knowledge_document", res.rows[0].id, res.rows[0].title, {});
-    this.enqueueEmbedding(project.organization_id, projectId, "document", res.rows[0].id, "created");
+    if (!isGovernedDocumentType(doc.document_type)) {
+      this.enqueueEmbedding(project.organization_id, projectId, "document", res.rows[0].id, "created");
+    }
     return toCamel(res.rows[0]);
   }
 
