@@ -31,6 +31,18 @@ describe("native testcase proposal review boundary", () => {
     expect(f.access).not.toHaveBeenCalled(); expect(f.query).not.toHaveBeenCalled(); expect(f.transaction).not.toHaveBeenCalled();
   });
 
+  it.each(["testcase", "requirement"])("refuses forged OAuth principal for %s staging before any native transaction", async inlet => {
+    process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED="1";
+    const f=fixture();
+    const args={requestKey:"forged-oauth",operations:[]};
+    const forged={kind:"oauth_access",grantId:"forged",tokenId:token} as never;
+    const attempt=inlet==="testcase"
+      ? f.svc.stageTestcaseChanges(project,user,args,forged)
+      : f.svc.stageRequirementChangeBundle(project,user,args,forged);
+    await expect(attempt).rejects.toBeInstanceOf(ForbiddenException);
+    expect(f.transaction).not.toHaveBeenCalled();
+  });
+
   it.each([undefined,{kind:"api_token" as const}])("requires an explicit human principal before Save reads or writes: %j", async principal => {
     const f=fixture();
     await expect(f.svc.zyraSave(project,user,task,{expectedProposalRevision:"a".repeat(64),selectedDraftIndexes:[0]},principal)).rejects.toBeInstanceOf(ForbiddenException);
