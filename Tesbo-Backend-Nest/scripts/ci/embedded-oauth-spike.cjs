@@ -76,6 +76,25 @@ async function main() {
     assert.ok(typeof metadata.authorization_endpoint === "string", "Missing authorization endpoint");
     assert.ok(typeof metadata.token_endpoint === "string", "Missing token endpoint");
 
+    // A fake client must not obtain a token from an unissued authorization code.
+    // No Tesbo user, login, consent or credential is configured by this fixture.
+    const invalidExchange = await fetch(metadata.token_endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: "tesbo-oauth-spike-public",
+        code: "code-never-issued-by-this-provider",
+        code_verifier: "no-authorized-session",
+        redirect_uri: "http://127.0.0.1/unused-callback"
+      }),
+      redirect: "manual",
+      signal: AbortSignal.timeout(5000)
+    });
+    assert.ok([400, 401].includes(invalidExchange.status),
+      `An unissued code unexpectedly returned HTTP ${invalidExchange.status}`);
+
+
     process.stdout.write(JSON.stringify({
       result: "test_only_compatibility_pass",
       version: PINNED_VERSION,
