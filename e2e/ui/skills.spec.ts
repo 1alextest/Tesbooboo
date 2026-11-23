@@ -490,7 +490,7 @@ test.describe("governed skills operator journey (UI)", () => {
 
       // Stale case revision: change the case after the exact revision was read; activation is
       // refused and the surface re-reads the current state.
-      const changedCase = await ownerApi.patch(`${base()}/testcases/${caseId}`, {
+      const changedCase = await ownerApi.put(`${base()}/testcases/${caseId}`, {
         data: { title: `${caseTitle} changed`, expectedRevision: caseAfter.editRevision }
       });
       expect(changedCase.ok(), await changedCase.text()).toBe(true);
@@ -501,7 +501,7 @@ test.describe("governed skills operator journey (UI)", () => {
       // Restore the exact title and, if the edit invalidated approval, re-approve the current case
       // revision before the real activation.
       const changedAfter = await (await ownerApi.get(`${base()}/testcases/${caseId}`)).json();
-      const restoredCase = await ownerApi.patch(`${base()}/testcases/${caseId}`, {
+      const restoredCase = await ownerApi.put(`${base()}/testcases/${caseId}`, {
         data: { title: caseTitle, expectedRevision: changedAfter.editRevision }
       });
       expect(restoredCase.ok(), await restoredCase.text()).toBe(true);
