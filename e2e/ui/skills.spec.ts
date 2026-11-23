@@ -1050,6 +1050,89 @@ test.describe("governed skills operator journey (UI)", () => {
     });
   });
 
+  test("bundle apply accepts documented legacy manager aliases and refuses a QA reader without publishing", async ({ browser }) => {
+    const suffix = randomUUID();
+    const skillDocs: string[] = [];
+    const taskIds: string[] = [];
+    const requirementIds: string[] = [];
+    const caseIds: string[] = [];
+    try {
+      for (const [module, subtype, operation] of [
+        ["requirements", "functional", "requirement_revision"],
+        ["requirements", "functional", "requirement_case_link"],
+        ["test_cases", "manual", "testcase_create"],
+      ]) skillDocs.push((await apiSkill(module, subtype, operation)).documentId);
+
+      const stage = async () => {
+        const requirementOperationId = randomUUID(), testcaseOperationId = randomUUID();
+        const response = await ownerApi.post(base() + "/requirements/proposals", { data: {
+          requestKey: `apply-role-${suffix}-${randomUUID()}`, title: `Apply role bundle ${suffix}`,
+          operations: [
+            { opType: "requirement_revision", operationId: requirementOperationId,
+              title: `Apply role requirement ${suffix}`, description: "Legacy-role apply fixture.",
+              criteria: [{ key: "AC-1", text: "The obligation is observable" }] },
+            { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: `Apply role case ${suffix}` } },
+            { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] },
+          ],
+        } });
+        expect(response.ok(), await response.text()).toBe(true);
+        const staged = await response.json();
+        taskIds.push(staged.id);
+        return staged;
+      };
+
+      // The role parser treats both legacy names as the manager interpretation, at the HTTP
+      // boundary the browser actually calls — not only in the DB service spec.
+      for (const role of ["admin", "test_manager"]) {
+        const staged = await stage();
+        exec("UPDATE project_members SET role=" + literal(role) + " WHERE project_id=" +
+          literal(tenant!.mainProjectId) + " AND user_id=" + literal(tenant!.qa.userId) + ";");
+        const page = await open(browser, "/agents/tasks/" + staged.id, "qa");
+        const responsePromise = page.waitForResponse(response =>
+          response.request().method() === "POST" && response.url().includes("/proposals/" + staged.id + "/apply"));
+        await page.getByTestId("requirement-bundle-apply").click();
+        const appliedResponse = await responsePromise;
+        expect(appliedResponse.status(), await appliedResponse.text()).toBe(201);
+        const applied = await appliedResponse.json();
+        requirementIds.push(applied.receipt.requirement.documentId);
+        caseIds.push(applied.receipt.testcase.id);
+        await page.reload();
+        await expect(page.getByTestId("requirement-bundle-publication-gate")).toContainText("This bundle is published");
+        await page.close();
+      }
+
+      // A raw QA reader still gets the same refusal, and the bundle stays unpublished.
+      exec("UPDATE project_members SET role='qa_engineer' WHERE project_id=" + literal(tenant!.mainProjectId) +
+        " AND user_id=" + literal(tenant!.qa.userId) + ";");
+      const refused = await stage();
+      const page = await open(browser, "/agents/tasks/" + refused.id, "qa");
+      const refusedPromise = page.waitForResponse(response =>
+        response.request().method() === "POST" && response.url().includes("/proposals/" + refused.id + "/apply"));
+      await page.getByTestId("requirement-bundle-apply").click();
+      expect((await refusedPromise).status()).toBe(403);
+      expect(scalar("SELECT task_status FROM ai_generation_requests WHERE id=" + literal(refused.id) + ";")).toBe("in_review");
+      expect(scalar("SELECT COUNT(*)::int FROM knowledge_documents WHERE project_id=" + literal(tenant!.mainProjectId) +
+        " AND title=" + literal(`Apply role requirement ${suffix}`) + ";")).toBe("0");
+      await page.close();
+    } finally {
+      exec("UPDATE project_members SET role='qa_engineer' WHERE project_id=" + literal(tenant!.mainProjectId) +
+        " AND user_id=" + literal(tenant!.qa.userId) + ";");
+      for (const id of taskIds) exec("DELETE FROM ai_generation_requests WHERE id=" + literal(id) + " AND project_id=" + literal(tenant!.mainProjectId) + ";");
+      for (const id of requirementIds) {
+        exec("DELETE FROM requirement_case_links WHERE project_id=" + literal(tenant!.mainProjectId) + " AND requirement_id=" + literal(id) + ";");
+        exec("DELETE FROM requirement_profiles WHERE document_id=" + literal(id) + ";");
+        exec("UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=" + literal(id) + ";");
+        exec("DELETE FROM knowledge_documents WHERE id=" + literal(id) + " AND project_id=" + literal(tenant!.mainProjectId) + ";");
+      }
+      for (const id of caseIds) exec("DELETE FROM testcases WHERE id=" + literal(id) + " AND project_id=" + literal(tenant!.mainProjectId) + ";");
+      for (const id of skillDocs) {
+        exec("DELETE FROM skill_assignments WHERE project_id=" + literal(tenant!.mainProjectId) + " AND skill_document_id=" + literal(id) + ";");
+        exec("UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=" + literal(id) + ";");
+        exec("DELETE FROM knowledge_documents WHERE id=" + literal(id) + " AND project_id=" + literal(tenant!.mainProjectId) + ";");
+      }
+    }
+  });
+
   test("owner reopens, approves and reads coverage from the task surface while QA, stale and lost responses stay truthful", async ({ browser }) => {
     const suffix = Date.now();
     const title = `Task review requirement ${suffix}`;

@@ -621,6 +621,9 @@ type Body=Record<string,any>;
       const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
       const taskIds:string[]=[];
       let requirementId="";
+      let adminRequirementId="";
+      let appliedCaseId="";
+      let adminCaseId="";
       let legacyId="";
       const addMember=async(role:string,label:string)=>{
         const id=(await admin.query("INSERT INTO users(email,name) VALUES ($1,$2) RETURNING id",[`apply-${label.replaceAll(" ","-")}-${randomUUID()}@tesbo.invalid`,label])).rows[0].id;
@@ -636,7 +639,18 @@ type Body=Record<string,any>;
           {expectedProposalRevision:legacyBundle.proposalRevision},human);
         expect(applied.replayed).toBe(false);
         requirementId=applied.receipt.requirement.documentId;
+        appliedCaseId=applied.receipt.testcase.id;
         expect(applied.receipt.reviewerId).toBe(legacyId);
+
+        // The other documented legacy alias maps to the same manager interpretation.
+        await admin.query("UPDATE project_members SET role='admin' WHERE project_id=$1 AND user_id=$2",[project,legacyId]);
+        const adminBundle=await stageBundle(ops()); taskIds.push(adminBundle.id);
+        const adminApplied=await service().applyRequirementProposal(project,legacyId,adminBundle.id,
+          {expectedProposalRevision:adminBundle.proposalRevision},human);
+        adminRequirementId=adminApplied.receipt.requirement.documentId;
+        adminCaseId=adminApplied.receipt.testcase.id;
+        expect(adminApplied.replayed).toBe(false);
+        await admin.query("UPDATE project_members SET role='test_manager' WHERE project_id=$1 AND user_id=$2",[project,legacyId]);
 
         // Hold the task row after the initial authorization check, change the role, then release:
         // the post-wait check must re-read and normalize the current role.
@@ -650,7 +664,7 @@ type Body=Record<string,any>;
             {expectedProposalRevision:waitBundle.proposalRevision},human).then(v=>({v}),e=>({e}));
           // The suite shares a busy disposable PostgreSQL instance; wait longer than the generic
           // polling helper so we observe the actual post-initial-lock wait, then release promptly.
-          const lockDeadline=Date.now()+15000;
+          const lockDeadline=Date.now()+30000;
           let sawWait=false;
           while(Date.now()<lockDeadline){
             if(await waitingOn("%ai_generation_requests%FOR UPDATE%")){sawWait=true;break;}
@@ -661,7 +675,7 @@ type Body=Record<string,any>;
           await blocker.query("COMMIT");
           const settled=await Promise.race([
             pending,
-            new Promise<{e?:Body}>((resolve)=>setTimeout(()=>resolve({e:{status:0,code:"TEST_WAIT_TIMEOUT"}}),15000))
+            new Promise<{e?:Body}>((resolve)=>setTimeout(()=>resolve({e:{status:0,code:"TEST_WAIT_TIMEOUT"}}),30000))
           ]);
           expect(settled.e).toMatchObject({status:403});
         }finally{
@@ -673,6 +687,9 @@ type Body=Record<string,any>;
       }finally{
         for(const id of taskIds) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[id]);
         if(requirementId) await cleanupRequirement(requirementId);
+        if(adminRequirementId) await cleanupRequirement(adminRequirementId);
+        for(const id of [appliedCaseId,adminCaseId].filter(Boolean))
+          await admin.query("DELETE FROM testcases WHERE id=$1 AND project_id=$2",[id,project]);
         for(const id of [legacyId].filter(Boolean)){
           await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,id]);
           await admin.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2",[org,id]);

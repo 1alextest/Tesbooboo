@@ -1037,7 +1037,9 @@ matching native task when the permitted connection is available.
 ### 16.9 Apply authorization uses the normalized owner/manager policy
 
 Apply authorization (REQ-WPA-13): requirement-bundle apply now uses the same normalized owner/manager role
-policy as requirement approval and link activation at both the initial and post-wait authorization checks.
-Legacy `admin`/`test_manager` members can apply, a raw `qa_engineer` is refused, and a role change while the
-apply waits is re-read and refused after the wait. Membership, human-session, exact-revision and effective-Skill
-checks are unchanged.
+policy as requirement approval, proposal rejection and link activation at both authorization checks. Legacy
+`admin`/`test_manager` members can apply, a raw `qa_engineer` is refused, and a role change while the apply
+waits is re-read and refused after the wait. The initial check is a non-locking fail-fast preflight; the
+post-wait check is the authoritative `FOR SHARE` membership read and is held through commit. A locking
+preflight would have held the membership rows for the whole task wait, making a demotion unable to commit
+between the checks. Membership, human-session, exact-revision and effective-Skill checks are unchanged.

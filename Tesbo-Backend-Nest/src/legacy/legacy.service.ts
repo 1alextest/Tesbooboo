@@ -4079,13 +4079,17 @@ export class LegacyService implements OnModuleInit {
   /** Current native human authority, held through the caller's transaction commit.
    * Call after any domain serialization wait; this deliberately bypasses request-cache access.
    * Feature-specific capabilities remain with their owner rather than entering this shared check.
+   *
+   * `lock: false` is only for a fail-fast preflight that runs before a domain wait; the caller must
+   * still call this again with the default lock after the wait. A locking preflight would hold the
+   * membership rows for the whole wait, so a demotion could never commit between the two checks.
    */
-  async requireCurrentProjectAuthority(client: PoolClient, projectId: string, userId: string | null | undefined) {
+  async requireCurrentProjectAuthority(client: PoolClient, projectId: string, userId: string | null | undefined, lock = true) {
     const uid = this.requireUser(userId);
     const access = await client.query(`SELECT p.*,pm.role AS caller_role,om.role AS workspace_role FROM projects p JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=$2
       JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id=$2
       JOIN users u ON u.id=$2 AND u.active_organization_id=p.organization_id
-      WHERE p.id=$1 AND p.archived_at IS NULL FOR SHARE OF p,pm,om,u`, [projectId,uid]);
+      WHERE p.id=$1 AND p.archived_at IS NULL ${lock ? "FOR SHARE OF p,pm,om,u" : ""}`, [projectId,uid]);
     if (!access.rows[0]) throw new ForbiddenException({ error: "Current project and workspace membership are required" });
     return access.rows[0];
   }
@@ -16211,7 +16215,7 @@ export class LegacyService implements OnModuleInit {
       if (!this.parseRole(authority.caller_role) || !this.parseRole(authority.workspace_role)) {
         throw new ForbiddenException({ error: "A current project and workspace role is required" });
       }
-      if (decision === "rejected") this.kbRequireOwnerOrManager(authority.caller_role);
+      if (decision === "rejected") this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
       const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
       const existing = locked.rows[0];
       if (!existing) throw new NotFoundException({ error: "Requirement proposal not found" });
@@ -16749,7 +16753,9 @@ export class LegacyService implements OnModuleInit {
     const result = await this.db.transaction(async client => {
       await this.lockSkillAssignments(client, projectId);
       await this.lockTestcaseSuiteWrites(client, projectId);
-      const authority = await this.requireProposalAuthority(client, projectId, uid);
+      // Fail fast without holding the membership rows: the authoritative check runs after the task
+      // wait, and a locking preflight here would prevent a demotion from committing before it.
+      const authority = await this.requireProposalAuthority(client, projectId, uid, false);
       // Use the shared normalized role policy here and after the wait, matching approval and link
       // activation. Legacy admin/test_manager values are the manager interpretation.
       this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
@@ -17307,8 +17313,8 @@ export class LegacyService implements OnModuleInit {
     return { list: await Promise.all(rows.rows.map(row => this.zyraTask(projectId, userId, String(row.id)))) };
   }
 
-  private async requireProposalAuthority(client: PoolClient, projectId: string, uid: string) {
-    const access = await this.requireCurrentProjectAuthority(client, projectId, uid);
+  private async requireProposalAuthority(client: PoolClient, projectId: string, uid: string, lock = true) {
+    const access = await this.requireCurrentProjectAuthority(client, projectId, uid, lock);
     if (!this.parseRole(access.caller_role) || !this.parseRole(access.workspace_role)) throw new ForbiddenException({error:"A current authoring role is required"});
     if (!this.normalizeZyraCapabilities(this.parseProjectSettings(access.settings).zyraAgent?.capabilities).testcaseStorage) {
       throw new ForbiddenException({ error: "Testcase proposal storage is disabled for this project" });
