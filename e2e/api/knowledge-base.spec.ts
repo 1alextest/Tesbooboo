@@ -1291,9 +1291,10 @@ test.describe("knowledge base v2 — folders and documents", () => {
     const submitted = await submittedResponse.json();
     const decisionUrl = (action: "governed-approval" | "governed-rejection") => kbUrl(`/documents/${doc.id}/${action}`);
 
-    // Role and session gates are checked before any state change.
+    // Role and session gates are checked before any state change. The guest fixture is not a
+    // project member in this tenant, so its refusal is the same 404 the other KB boundaries use.
     expect((await asQa.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false })).status()).toBe(403);
-    expect((await asGuest.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false })).status()).toBe(403);
+    expect((await asGuest.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false })).status()).toBe(404);
     await expectUnauthenticated(await anon.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false }), "anonymous governed approval");
     // A document in another project is not reachable, even by the owner of this one.
     expect((await asOwner.post(kbUrl(`/documents/${doc.id}/governed-approval`, tenant!.secondProjectId), {
