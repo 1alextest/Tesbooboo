@@ -16263,7 +16263,12 @@ export class LegacyService implements OnModuleInit {
       throw new BadRequestException({ error: "Unknown skill module" });
     }
     if (!instructions || instructions.length > 20000) throw new BadRequestException({ error: "Skill instructions must contain 1–20000 characters" });
-    const skillKey = String(body.skillKey || `SKL-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`).trim();
+    // The optional key is part of the requested content only when the caller supplied it. An
+    // automatically generated identity must not change the request digest between retries.
+    const suppliedSkillKey = body.skillKey === undefined || String(body.skillKey).trim() === ""
+      ? null
+      : String(body.skillKey).trim();
+    const skillKey = suppliedSkillKey || `SKL-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`;
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$/.test(skillKey)) throw new BadRequestException({ error: "skillKey must be 2–64 safe characters" });
     const requestKey = body.requestKey === undefined ? null : String(body.requestKey).trim();
     if (requestKey !== null && (!requestKey || requestKey.length > 160)) {
@@ -16273,7 +16278,7 @@ export class LegacyService implements OnModuleInit {
       ? `api_token:${principal.tokenId || ""}`
       : `human_session:${uid}`;
     const requestDigest = requestKey
-      ? createHash("sha256").update(JSON.stringify({ title, module, subtype, skillKey, instructions })).digest("hex")
+      ? createHash("sha256").update(JSON.stringify({ title, module, subtype, skillKey: suppliedSkillKey, instructions })).digest("hex")
       : null;
     const contentJson = { schemaVersion: "tesbo-skill/1", module, subtype, instructions };
     const contentText = `${title}\n\n${instructions}`;
@@ -16283,13 +16288,21 @@ export class LegacyService implements OnModuleInit {
       if (requestKey) {
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`skill-create:${projectId}:${principalKey}:${requestKey}`]);
         const prior = await client.query(
-          `SELECT sp.document_id, sp.creation_request_digest
+          `SELECT sp.document_id, sp.creation_request_digest, sp.skill_key
              FROM skill_profiles sp
             WHERE sp.project_id=$1 AND sp.creation_principal=$2 AND sp.creation_request_key=$3`,
           [projectId, principalKey, requestKey]
         );
         if (prior.rows[0]) {
-          if (prior.rows[0].creation_request_digest !== requestDigest) {
+          // V161 originally hashed the automatically generated key. Recompute that legacy basis
+          // only when the caller still omits the key, so old rows replay without weakening a
+          // changed explicit-key request into a false match.
+          const legacyDigest = !suppliedSkillKey
+            ? createHash("sha256").update(JSON.stringify({ title, module, subtype, skillKey: prior.rows[0].skill_key, instructions })).digest("hex")
+            : null;
+          const digestMatches = prior.rows[0].creation_request_digest === requestDigest
+            || (!!legacyDigest && prior.rows[0].creation_request_digest === legacyDigest);
+          if (!digestMatches) {
             throw new ConflictException({ code: "SKILL_REQUEST_CONFLICT", error: "This requestKey already belongs to different candidate content" });
           }
           const existingDoc = (await client.query(

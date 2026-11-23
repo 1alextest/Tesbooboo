@@ -681,3 +681,14 @@ of the exact candidate content.
 - The Skills form keeps one key across an uncertain creation response and clears it only after creation
   is acknowledged or the candidate content changes, so an ordinary retry resumes the same native draft.
   A failed reconciliation read still exposes no false success.
+
+#### Omitted optional Skill key
+
+The request digest covers the **requested** content, not an automatically generated identity. When
+`skillKey` is omitted, the digest uses `null`; two identical retries therefore match and the first
+candidate's generated key is returned. Explicit keys remain part of the digest.
+
+Rows written by the original V161 algorithm hashed the generated key. For compatibility, a retry that
+still omits the key also compares against the legacy digest computed from that row's stored key. An
+explicit-key request never uses the legacy fallback, so changing the key cannot be mistaken for reuse.
+Concurrent omitted-key retries serialize on the request lock and converge on one candidate.
