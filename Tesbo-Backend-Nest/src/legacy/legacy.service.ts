@@ -16599,8 +16599,10 @@ export class LegacyService implements OnModuleInit {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
         [receipt.id, projectId, requestKey, requestDigest, uid, skillDocumentId, versionId, contentDigest, committedAt, JSON.stringify(receipt)]
       );
+      // Project Activity is also readable by members and machine tokens. Keep the full
+      // actor-owned command in its protected receipt store; the mandatory audit links to it.
       await this.logProjectActivity(projectId, uid, "skill_assignment_batch_committed", "skill_assignment_request", receipt.id, profile.skill_key,
-        { receipt }, client);
+        { receiptId: receipt.id, skillDocumentId, versionId, targetCount: results.length }, client);
       return { receipt, replayed: false };
     });
   }

@@ -1625,6 +1625,7 @@ export interface SkillVersionRecord {
 
 export interface SkillAssignmentRecord {
   id: string;
+  projectId?: string;
   module: string;
   subtype: string;
   operation: string;
@@ -1635,6 +1636,7 @@ export interface SkillAssignmentRecord {
   skillTitle?: string;
   skillKey?: string;
   contentDigest?: string;
+  precedence?: number;
   assignedBy: string | null;
   assignedAt: string;
   deactivatedBy: string | null;
@@ -1644,6 +1646,10 @@ export interface SkillAssignmentRecord {
 export interface SkillRecord {
   id: string;
   title: string;
+  /** Existing native document representations, also used by the authorized Library search. */
+  contentText: string | null;
+  contentJson: unknown;
+  contentHtml: string | null;
   createdBy: string | null;
   isReadOnly: boolean;
   skillKey: string | null;
@@ -1697,6 +1703,43 @@ export async function assignSkill(projectId: string, data: {
   skillDocumentId: string; versionId: string; module: string; subtype: string; operation: string; precedence?: number;
 }): Promise<{ assignment: SkillAssignmentRecord; resolution: SkillResolutionRecord }> {
   return api(`/api/projects/${projectId}/skill-assignments`, { method: "POST", body: data });
+}
+
+export interface SkillAssignmentBatchRequest {
+  requestKey: string;
+  skillDocumentId: string;
+  versionId: string;
+  targets: Array<{ module: string; subtype: string; operation: string; expectedAssignmentId: string | null; precedence?: number }>;
+}
+
+export interface SkillAssignmentBatchReceipt {
+  schemaVersion: 1;
+  id: string;
+  requestKey: string;
+  projectId: string;
+  skillDocumentId: string;
+  skillVersionId: string;
+  actorId: string;
+  principalKind: "human_session";
+  requestDigest: string;
+  contentDigest: string;
+  committedAt: string;
+  targets: Array<{
+    target: { module: string; subtype: string; operation: string };
+    outcome: "added" | "replaced" | "already_satisfied";
+    before: SkillAssignmentRecord | null;
+    after: SkillAssignmentRecord;
+    priorDeactivation?: { assignmentId: string; actorId: string; at: string };
+  }>;
+}
+
+/** One native transaction; an immutable receipt is evidence of this command, not current readiness. */
+export async function assignSkillBatch(projectId: string, data: SkillAssignmentBatchRequest): Promise<{ receipt: SkillAssignmentBatchReceipt; replayed: boolean }> {
+  return api(`/api/projects/${projectId}/skill-assignment-batches`, { method: "POST", body: data });
+}
+
+export async function getSkillAssignmentBatch(projectId: string, requestKey: string): Promise<{ receipt: SkillAssignmentBatchReceipt; replayed: true }> {
+  return api(`/api/projects/${projectId}/skill-assignment-batches/${requestKey}`);
 }
 
 export async function deactivateSkillAssignment(projectId: string, assignmentId: string): Promise<{ assignment: SkillAssignmentRecord; replayed: boolean }> {

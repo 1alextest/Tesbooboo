@@ -44,12 +44,13 @@ test.describe("governed skills operator journey (UI)", () => {
     test.skip(reason !== null, reason ?? "");
   });
 
-  async function open(browser: Browser, path: string, as: "owner" | "qa" = "owner"): Promise<Page> {
+  async function open(browser: Browser, path: string, as: "owner" | "qa" = "owner", options?: { projectRef?: string; beforeNavigate?: (page: Page) => Promise<void> }): Promise<Page> {
     const context = await browser.newContext({ storageState: states.get(as) });
     openedContexts.add(context);
     context.on("close", () => openedContexts.delete(context));
     const page = await context.newPage();
-    await page.goto(`/projects/${tenant!.mainProjectId}${path}`);
+    await options?.beforeNavigate?.(page);
+    await page.goto(`/projects/${options?.projectRef || tenant!.mainProjectId}${path}`);
     return page;
   }
 
@@ -118,9 +119,9 @@ test.describe("governed skills operator journey (UI)", () => {
     return version;
   }
 
-  async function assignDoc(documentId: string, versionId: string, operation: string) {
+  async function assignDoc(documentId: string, versionId: string, operation: string, precedence = 0) {
     const assigned = await ownerApi.post(`${base()}/skill-assignments`, { data: {
-      skillDocumentId: documentId, versionId, module: "requirements", subtype: "functional", operation
+      skillDocumentId: documentId, versionId, module: "requirements", subtype: "functional", operation, precedence
     } });
     expect(assigned.ok(), await assigned.text()).toBe(true);
     return assigned.json();
@@ -177,6 +178,8 @@ test.describe("governed skills operator journey (UI)", () => {
   }
 
   async function fillCandidate(page: Page, title: string, key: string, instructions: string) {
+    await page.getByRole("tab", { name: /^Library/ }).click();
+    if (await page.getByTestId("skill-candidate-open").isVisible()) await page.getByTestId("skill-candidate-open").click();
     await page.getByTestId("skill-title").fill(title);
     await page.getByTestId("skill-key").fill(key);
     await page.getByTestId("skill-module").selectOption("requirements");
@@ -212,6 +215,8 @@ test.describe("governed skills operator journey (UI)", () => {
   }
 
   async function uiSkill(page: Page, title: string, key: string, module: string, subtype: string) {
+    await page.getByRole("tab", { name: /^Library/ }).click();
+    if (await page.getByTestId("skill-candidate-open").isVisible()) await page.getByTestId("skill-candidate-open").click();
     await page.getByTestId("skill-title").fill(title);
     await page.getByTestId("skill-key").fill(key);
     await page.getByTestId("skill-module").selectOption(module);
@@ -225,6 +230,7 @@ test.describe("governed skills operator journey (UI)", () => {
     await expect(page.getByTestId("skill-review-content")).toContainText("Author requirements with observable criteria and exact citations.");
     await page.getByTestId("skill-review-panel").getByTestId("skill-review-approve").click();
     await expect(page.getByText(new RegExp(`Approved ${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))).toBeVisible();
+    await page.getByRole("button", { name: "Close review", exact: true }).click();
   }
 
   test("library discovery opens exact dated history without changing approvals or assignments", async ({ browser }) => {
@@ -277,6 +283,235 @@ test.describe("governed skills operator journey (UI)", () => {
     }
   });
 
+  test("library filters distinguish an empty result and retain a candidate when its form closes", async ({ browser }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const doc = await createSkillDoc(`Library filter ${suffix}`, `FILTER-${suffix}`, `SEARCH-INSTRUCTIONS-${suffix}`);
+    let policyId = "";
+    try {
+      const policy = await ownerApi.post(`${base()}/skills`, { data: { title: `Policy library ${suffix}`, module: "policies", subtype: "security", instructions: `POLICY-ONLY-${suffix}` } });
+      expect(policy.ok(), await policy.text()).toBe(true);
+      policyId = (await policy.json()).id;
+      const page = await open(browser, "/settings/skills");
+      await page.getByTestId("skill-library-search").fill(`SEARCH-INSTRUCTIONS-${suffix}`);
+      await expect(page.getByTestId("skill-library-result-count")).toContainText("1 result");
+      await page.getByTestId("skill-library-module-filter").selectOption("policies");
+      await expect(page.getByTestId("skill-library-result-count")).toContainText("0 results");
+      await expect(page.getByTestId("skill-library-empty")).toContainText("No skills match");
+      await page.getByTestId("skill-library-clear").click();
+      await expect(page.getByTestId(`skill-${doc.id}`)).toBeVisible();
+      await page.getByTestId("skill-library-module-filter").selectOption("policies");
+      await expect(page.getByTestId(`skill-${policyId}`)).toBeVisible();
+      await expect(page.getByTestId(`skill-${doc.id}`)).toHaveCount(0);
+      await page.getByTestId("skill-library-clear").click();
+      await page.getByTestId("skill-candidate-open").click();
+      expect(await page.getByTestId("skill-module").locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)))
+        .toEqual(["requirements", "test_cases", "user_manuals", "policies", "tasks_issues", "files_evidence", "skills"]);
+      await page.getByTestId("skill-title").fill(`Unsent candidate ${suffix}`);
+      await page.getByTestId("skill-instructions").fill("Preserve this unsent work across disclosure and tabs.");
+      await page.getByTestId("skill-candidate-close").click();
+      await page.getByRole("tab", { name: /^Assignments/ }).click();
+      await page.getByRole("tab", { name: /^Library/ }).click();
+      await page.getByTestId("skill-candidate-open").click();
+      await expect(page.getByTestId("skill-title")).toHaveValue(`Unsent candidate ${suffix}`);
+      await expect(page.getByTestId("skill-instructions")).toHaveValue("Preserve this unsent work across disclosure and tabs.");
+      expect(scalar(`SELECT COUNT(*) FROM knowledge_documents WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(`Unsent candidate ${suffix}`)};`)).toBe("0");
+      await page.route(`**${base()}/skills`, (route) => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Injected inventory unavailable" }) }));
+      await page.getByTestId("skills-refresh").click();
+      await expect(page.getByTestId("skill-library-result-count")).toContainText("Inventory unavailable");
+      await expect(page.getByTestId("skill-library-empty")).toHaveCount(0);
+      await expect(page.getByTestId("skill-title")).toHaveValue(`Unsent candidate ${suffix}`);
+    } finally { if (policyId) await cleanupSkill(policyId); await cleanupSkill(doc.id); }
+  });
+
+  test("one exact older approved version is assigned atomically and an already satisfied generation is retained", async ({ browser }) => {
+    const fixture = await reviewFixture();
+    try {
+      // Existing native clients can set precedence. This form has no priority edit and must
+      // preserve that fact when the selected version is already satisfied.
+      const prioritized = await assignDoc(fixture.documentId, fixture.a1.id, "requirement_revision", 17);
+      fixture.assignmentId = String(prioritized.assignment.id);
+      const beforeRead = await ownerApi.get(`${base()}/skills/effective?module=requirements&subtype=functional&operation=requirement_revision`);
+      expect(beforeRead.ok(), await beforeRead.text()).toBe(true);
+      const beforeResolution = await beforeRead.json();
+      expect(beforeResolution).toMatchObject({ status: "resolved", assignments: [{ assignmentId: fixture.assignmentId }] });
+      expect(beforeResolution.digest).toMatch(/^[a-f0-9]{64}$/);
+      const page = await open(browser, "/settings/skills");
+      const history = page.getByTestId(`skill-history-${fixture.documentId}`);
+      await history.getByText(/Version history/).click();
+      await test.info().attach("skills-library-history-native", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+      await history.getByTestId(`skill-history-view-${fixture.a1.id}`).click();
+      await expect(page.getByTestId("skill-review-version")).toContainText(fixture.a1.id);
+      await test.info().attach("skills-exact-version-native-desktop", { body: await page.screenshot(), contentType: "image/png" });
+      await page.getByRole("tab", { name: /^Assignments/ }).click();
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("tab", { name: /^Assignments/ })).toBeFocused();
+      await page.getByRole("tab", { name: /^Library/ }).click();
+      await history.getByTestId(`skill-history-view-${fixture.a1.id}`).click();
+      const desktop = page.viewportSize()!;
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect(page.getByRole("dialog", { name: /Inspect saved/ })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Close review", exact: true })).toBeVisible();
+      await test.info().attach("skills-exact-version-native-narrow", { body: await page.screenshot(), contentType: "image/png" });
+      await page.keyboard.press("Escape");
+      await expect(history.getByTestId(`skill-history-view-${fixture.a1.id}`)).toBeFocused();
+      await page.setViewportSize(desktop);
+      await history.getByTestId(`skill-history-view-${fixture.a1.id}`).click();
+      await page.getByTestId("skill-review-assign").click();
+      await expect(page.getByRole("tab", { name: /^Assignments/ })).toHaveAttribute("aria-selected", "true");
+      await expect(page.getByTestId("skill-assignment-version")).toHaveValue(fixture.a1.id);
+      await page.getByTestId("skill-target-requirement_revision").check();
+      await page.getByTestId("skill-target-requirement_case_link").check();
+      await expect(page.getByTestId("skill-assignment-preview")).toContainText("Already satisfied");
+      await expect(page.getByTestId("skill-assignment-preview")).toContainText("recorded priority 17 retained");
+      await test.info().attach("skills-assignment-preview-native", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+      const saved = page.waitForResponse((response) => response.url().endsWith("/skill-assignment-batches") && response.request().method() === "POST");
+      await page.getByTestId("skill-assign").click();
+      const response = await saved;
+      expect(response.ok(), await response.text()).toBe(true);
+      const { receipt } = await response.json();
+      expect(receipt.skillVersionId).toBe(fixture.a1.id);
+      expect(receipt.targets).toHaveLength(2);
+      expect(receipt.targets.find((entry: { target: { operation: string } }) => entry.target.operation === "requirement_revision"))
+        .toMatchObject({ outcome: "already_satisfied", before: { id: fixture.assignmentId, precedence: 17 }, after: { id: fixture.assignmentId, precedence: 17 } });
+      await expect(page.getByTestId("skill-assignment-receipt")).toContainText(receipt.requestKey);
+      const ledger = await (await ownerApi.get(`${base()}/skill-assignments`)).json();
+      const active = ledger.list.filter((entry: { skillDocumentId: string; status: string }) => entry.skillDocumentId === fixture.documentId && entry.status === "active");
+      expect(active).toHaveLength(2);
+      expect(active.every((entry: { skillVersionId: string }) => entry.skillVersionId === fixture.a1.id)).toBe(true);
+      expect(active.find((entry: { id: string }) => entry.id === fixture.assignmentId)).toMatchObject({ precedence: 17 });
+      const afterRead = await ownerApi.get(`${base()}/skills/effective?module=requirements&subtype=functional&operation=requirement_revision`);
+      expect(afterRead.ok(), await afterRead.text()).toBe(true);
+      const afterResolution = await afterRead.json();
+      expect(afterResolution).toMatchObject({ status: "resolved", assignments: [{ assignmentId: fixture.assignmentId }] });
+      expect(afterResolution.digest).toBe(beforeResolution.digest);
+      expect(scalar(`SELECT reviewed_version_id FROM knowledge_documents WHERE id=${literal(fixture.documentId)};`)).toBe(fixture.a2.id);
+      // Revoke the displayed generation, even when a neighboring binding has the same version.
+      await page.getByTestId(`skill-revoke-${fixture.assignmentId}`).click();
+      await expect(page.getByTestId(`skill-assignment-${fixture.assignmentId}`)).toContainText("revoked");
+      const neighbor = active.find((entry: { id: string }) => entry.id !== fixture.assignmentId);
+      expect(scalar(`SELECT status FROM skill_assignments WHERE id=${literal(neighbor.id)};`)).toBe("active");
+    } finally { await cleanupSkill(fixture.documentId); }
+  });
+
+  test("a stale batch preserves selected targets until the owner reviews the refreshed generations", async ({ browser }) => {
+    const fixture = await reviewFixture();
+    try {
+      const page = await open(browser, "/settings/skills");
+      await page.getByRole("tab", { name: /^Assignments/ }).click();
+      await page.getByTestId("skill-assignment-open").click();
+      await page.getByTestId("skill-assignment-skill").selectOption(fixture.documentId);
+      await page.getByTestId("skill-assignment-version").selectOption(fixture.a2.id);
+      await page.getByTestId("skill-target-requirement_revision").check();
+      await page.getByTestId("skill-target-requirement_case_link").check();
+      const replacement = await assignDoc(fixture.documentId, fixture.a2.id, "requirement_revision");
+      const refused = page.waitForResponse((response) => response.url().endsWith("/skill-assignment-batches") && response.request().method() === "POST");
+      await page.getByTestId("skill-assign").click();
+      expect((await refused).status()).toBe(409);
+      await expect(page.getByTestId("skill-assignment-error")).toContainText(/changed|stale|review/i);
+      await expect(page.getByTestId("skill-target-requirement_case_link")).toBeChecked();
+      expect(scalar(`SELECT COUNT(*) FROM skill_assignments WHERE skill_document_id=${literal(fixture.documentId)} AND operation='requirement_case_link';`)).toBe("0");
+      await page.getByTestId("skill-assignment-review-targets").click();
+      await expect(page.getByTestId("skill-assignment-preview")).toContainText(replacement.assignment.id);
+      await page.getByTestId("skill-assign").click();
+      await expect(page.getByTestId("skill-assignment-receipt")).toBeVisible();
+      expect(scalar(`SELECT COUNT(*) FROM skill_assignments WHERE skill_document_id=${literal(fixture.documentId)} AND status='active';`)).toBe("2");
+    } finally { await cleanupSkill(fixture.documentId); }
+  });
+
+  test("an approved skill outside Work Package A keeps its module and accepts an explicit custom context", async ({ browser }) => {
+    const suffix = randomUUID().slice(0, 8);
+    let documentId = "";
+    try {
+      const created = await ownerApi.post(`${base()}/skills`, { data: {
+        title: `Custom policy skill ${suffix}`, module: "policies", subtype: "security", instructions: "Require an explicit review context for policy revisions."
+      } });
+      expect(created.ok(), await created.text()).toBe(true);
+      const doc = await created.json();
+      documentId = doc.id;
+      const submitted = await submitDoc(doc);
+      const approved = await approveDoc(doc.id, submitted.id);
+      const page = await open(browser, "/settings/skills");
+      await page.getByRole("tab", { name: /^Assignments/ }).click();
+      await page.getByTestId("skill-assignment-open").click();
+      await page.getByTestId("skill-assignment-skill").selectOption(doc.id);
+      await expect(page.getByTestId("skill-assignment-module")).toHaveValue("policies");
+      await expect(page.getByTestId("skill-assignment-module")).toBeDisabled();
+      await expect(page.getByTestId("skill-target-requirement_revision")).toHaveCount(0);
+      await expect(page.getByTestId("skill-target-testcase_create")).toHaveCount(0);
+      await page.getByTestId("skill-assignment-subtype").fill("security");
+      await page.getByTestId("skill-assignment-operation").fill(`policy_review_${suffix}`);
+      await page.getByTestId("skill-assignment-add-target").click();
+      await page.getByTestId("skill-assign").click();
+      await expect(page.getByTestId("skill-assignment-receipt")).toContainText(`policy_review_${suffix}`);
+      const effective = await ownerApi.get(`${base()}/skills/effective?module=policies&subtype=security&operation=policy_review_${suffix}`);
+      expect(effective.ok(), await effective.text()).toBe(true);
+      expect(await effective.json()).toMatchObject({ status: "resolved", assignments: [{ skillDocumentId: doc.id, skillVersionId: approved.id }] });
+      const neighbor = await ownerApi.get(`${base()}/skills/effective?module=policies&subtype=security&operation=untouched_${suffix}`);
+      expect(neighbor.ok(), await neighbor.text()).toBe(true);
+      expect(await neighbor.json()).toMatchObject({ status: "unassigned", assignments: [] });
+    } finally { if (documentId) await cleanupSkill(documentId); }
+  });
+
+  test("a lost batch response survives UUID normalization and reload without another assignment write", async ({ browser }) => {
+    const fixture = await reviewFixture();
+    let writes = 0;
+    let nativeReceipt: { requestKey: string; id: string } | undefined;
+    let releaseRouting!: () => void;
+    let routingReached!: () => void;
+    let routingDelivered!: () => void;
+    const routingGate = new Promise<void>((resolve) => { releaseRouting = resolve; });
+    const routingSeen = new Promise<void>((resolve) => { routingReached = resolve; });
+    const routingDone = new Promise<void>((resolve) => { routingDelivered = resolve; });
+    const batchEndpoint = new RegExp(`${base()}/skill-assignment-batches$`, "i");
+    const receiptEndpoint = new RegExp(`${base()}/skill-assignment-batches/[^/?]+$`, "i");
+    try {
+      const upperProject = tenant!.mainProjectId.toUpperCase();
+      const page = await open(browser, "/settings/skills", "owner", { projectRef: upperProject, beforeNavigate: async (page) => {
+        // The provider renders UUID links immediately. Hold its real canonical response until
+        // this same project already has an unresolved assignment request.
+        await page.route("**/api/route-resolve?**", async (route) => {
+          if (new URL(route.request().url()).searchParams.get("project") !== upperProject) return route.continue();
+          const response = await route.fetch();
+          expect(response.ok(), await response.text()).toBe(true);
+          routingReached();
+          await routingGate;
+          await route.fulfill({ response });
+          routingDelivered();
+        });
+      } });
+      await routingSeen;
+      await page.getByRole("tab", { name: /^Assignments/ }).click();
+      await page.getByTestId("skill-assignment-open").click();
+      await page.getByTestId("skill-assignment-skill").selectOption(fixture.documentId);
+      await page.getByTestId("skill-target-requirement_case_link").check();
+      await page.route(batchEndpoint, async (route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        writes++;
+        const response = await route.fetch();
+        expect(response.ok(), await response.text()).toBe(true);
+        nativeReceipt = (await response.json()).receipt;
+        await route.abort("connectionfailed");
+      });
+      await page.route(receiptEndpoint, (route) => route.fulfill({
+        status: 503, contentType: "application/json", body: JSON.stringify({ error: "Injected receipt read unavailable" })
+      }));
+      await page.getByTestId("skill-assign").click();
+      await expect(page.getByTestId("skill-assignment-pending")).toContainText(/unconfirmed|could not be confirmed/i);
+      await expect(page.getByTestId("skill-assignment-recover")).toBeEnabled();
+      expect(nativeReceipt).toBeTruthy();
+      releaseRouting();
+      await routingDone;
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await expect(page.getByTestId("skill-assignment-pending")).toContainText(nativeReceipt!.requestKey);
+      await page.unroute(receiptEndpoint);
+      await page.reload();
+      await page.getByRole("tab", { name: /^Assignments/ }).click();
+      await expect(page.getByTestId("skill-assignment-receipt")).toContainText(nativeReceipt!.requestKey);
+      expect(writes).toBe(1);
+      expect(scalar(`SELECT COUNT(*) FROM skill_assignments WHERE skill_document_id=${literal(fixture.documentId)} AND operation='requirement_case_link';`)).toBe("1");
+    } finally { releaseRouting(); await cleanupSkill(fixture.documentId); }
+  });
+
   test("owner configures skills and assignments, an agent stages, and the owner publishes the exact bundle", async ({ browser }) => {
     const suffix = Date.now();
     const requirementTitle = `UI requirement skill ${suffix}`;
@@ -297,11 +532,15 @@ test.describe("governed skills operator journey (UI)", () => {
           AND title IN (${literal(requirementTitle)},${literal(caseTitle)});`);
       if (createdSkills) skillDocs.push(...createdSkills.split(","));
 
+      await page.getByRole("tab", { name: /^Assignments/ }).click();
+      await page.getByTestId("skill-assignment-open").click();
       const assign = async (key: string, module: string, subtype: string, operation: string) => {
         await page.getByTestId("skill-assignment-skill").selectOption({ label: `${key} (${module}/${subtype})` });
-        await page.getByTestId("skill-assignment-module").fill(module);
+        await expect(page.getByTestId("skill-assignment-module")).toHaveValue(module);
+        await expect(page.getByTestId("skill-assignment-module")).toBeDisabled();
         await page.getByTestId("skill-assignment-subtype").fill(subtype);
         await page.getByTestId("skill-assignment-operation").fill(operation);
+        await page.getByTestId("skill-assignment-add-target").click();
         await page.getByTestId("skill-assign").click();
         await expect(page.getByText(/Assigned /)).toBeVisible();
       };
@@ -609,6 +848,7 @@ test.describe("governed skills operator journey (UI)", () => {
 
       const page = await open(browser, "/settings/skills", "qa");
       await expect(page.getByTestId("skills-settings")).toBeVisible();
+      await page.getByRole("tab", { name: /^Assignments/ }).click();
       await expect(page.getByTestId("skill-assignment-form")).toHaveCount(0);
       await expect(page.getByTestId(`skill-assignment-${skill.assignmentId}`)).toBeVisible();
       await expect(page.getByTestId(`skill-revoke-${skill.assignmentId}`)).toHaveCount(0);
@@ -768,7 +1008,7 @@ test.describe("governed skills operator journey (UI)", () => {
         if (failReconciliationRead) {
           await expect(page.getByTestId("skill-library-unavailable")).toBeVisible();
           await expect(page.getByRole("button", { name: "Submit draft", exact: true })).toHaveCount(0);
-          const refresh = page.getByTestId("skill-readiness").getByRole("button", { name: "Refresh" });
+          const refresh = page.getByTestId("skills-refresh");
           const refusedRead = page.waitForResponse((result) => result.request().method() === "GET" && new URL(result.url()).pathname === `${base()}/skills` && result.status() === 503);
           await refresh.click();
           await refusedRead;
@@ -1044,13 +1284,14 @@ test.describe("governed skills operator journey (UI)", () => {
       await page.getByTestId("skill-review-approve").click();
       await expect(page.getByTestId("skill-review-superseded")).toBeVisible();
       await expect(page.getByTestId("skill-library-unavailable")).toBeVisible();
+      await page.getByRole("tab", { name: /^Assignments/ }).click();
       await expect(page.getByTestId("skill-history-unavailable")).toBeVisible();
       await expect(page.getByTestId("skill-readiness-requirement_revision")).toContainText("Unavailable");
       await page.getByTestId("skill-review-current").click();
       await expect(page.getByTestId("skill-review-content")).toContainText("RULE-V2");
       await expect(page.getByTestId("skill-review-approve")).toBeDisabled();
       await page.unroute(`**${base()}/skills`);
-      await page.getByTestId("skill-readiness").getByRole("button", { name: "Refresh" }).click();
+      await page.getByTestId("skills-refresh").click();
       await expect(page.getByTestId("skill-review-approve")).toBeEnabled();
       await page.getByTestId("skill-review-approve").click();
       await expect(page.getByText(new RegExp(`Approved .* version ${v2.versionNumber}`))).toBeVisible();
@@ -1094,7 +1335,7 @@ test.describe("governed skills operator journey (UI)", () => {
       await expect(page.locator('[data-testid="skill-diff"]')).toContainText(`v${a1.versionNumber}`);
       await expect(page.getByTestId("skill-diff")).toContainText("Active version for requirements / functional / requirement_revision");
       await assignDoc(doc.id, a2.id, "requirement_revision");
-      const refresh = page.getByTestId("skill-readiness").getByRole("button", { name: "Refresh" });
+      const refresh = page.getByTestId("skills-refresh");
       await refresh.click();
       await expect(refresh).toBeEnabled();
       await expect(page.getByTestId("skill-diff")).toHaveCount(0);
@@ -1189,7 +1430,7 @@ test.describe("governed skills operator journey (UI)", () => {
       const response = await refused;
       expect(response.status()).toBe(409);
       expect(await response.json()).toMatchObject({ code: "DOCUMENT_REVISION_CONFLICT" });
-      const refresh = page.getByTestId("skill-readiness").getByRole("button", { name: "Refresh" });
+      const refresh = page.getByTestId("skills-refresh");
       await expect(refresh).toBeEnabled();
       await refresh.click();
       await expect(refresh).toBeEnabled();
@@ -1263,6 +1504,9 @@ test.describe("governed skills operator journey (UI)", () => {
       expect(updated.ok(), await updated.text()).toBe(true);
       await submitDoc(await updated.json());
       page = await open(browser, "/settings/skills");
+      await page.getByTestId("skill-library-search").fill("RULE-HTML-ONLY");
+      await expect(page.getByTestId(`skill-${doc.id}`)).toBeVisible();
+      await expect(page.getByTestId("skill-library-result-count")).toContainText("1 result");
       await page.getByTestId(`skill-review-open-${doc.id}`).click();
       await expect(page.getByTestId("skill-review-content")).toContainText("RULE-TEXT");
       await expect(page.getByTestId("skill-review-content")).toContainText("RULE-JSON-ONLY");
@@ -1280,7 +1524,7 @@ test.describe("governed skills operator journey (UI)", () => {
       const absent = await ownerApi.patch(`${base()}/knowledge-base/documents/${doc.id}`, { data: { contentText: null } });
       expect(absent.ok(), await absent.text()).toBe(true);
       await submitDoc(await absent.json());
-      const refresh = page.getByTestId("skill-readiness").getByRole("button", { name: "Refresh" });
+      const refresh = page.getByTestId("skills-refresh");
       await refresh.click();
       await expect(refresh).toBeEnabled();
       await page.getByTestId(`skill-review-open-${doc.id}`).click();
@@ -1417,8 +1661,12 @@ test.describe("governed skills operator journey (UI)", () => {
     let dropped = false;
     let documentId = "";
     let createdSkillKey = "";
+    const requestKeys: string[] = [];
     try {
       const page = await open(browser, "/settings/skills");
+      page.on("request", (request) => {
+        if (request.method() === "POST" && new URL(request.url()).pathname === `${base()}/skills`) requestKeys.push(request.postDataJSON().requestKey);
+      });
       const endpoint = `**/api/projects/${tenant!.mainProjectId}/skills`;
       await page.route(endpoint, async (route) => {
         if (route.request().method() !== "POST" || dropped) return route.continue();
@@ -1427,6 +1675,7 @@ test.describe("governed skills operator journey (UI)", () => {
         createdSkillKey = (await response.json()).skillKey;
         await route.abort(); // ...but the client never receives the response
       });
+      await page.getByTestId("skill-candidate-open").click();
       await page.getByTestId("skill-title").fill(title);
       await page.getByTestId("skill-subtype").fill("functional");
       await page.getByTestId("skill-instructions").fill("RULE-LOST: preserve one candidate across an uncertain creation response.");
@@ -1434,9 +1683,17 @@ test.describe("governed skills operator journey (UI)", () => {
       await expect(page.getByTestId("skill-create-submit")).toBeEnabled();
       await expect(page.getByTestId("skill-title")).toHaveValue(title);
       await page.unroute(endpoint);
+      await page.getByTestId("skill-candidate-close").click();
+      await page.reload();
+      await page.getByTestId("skill-candidate-open").click();
+      await expect(page.getByTestId("skill-title")).toHaveValue(title);
+      await expect(page.getByTestId("skill-instructions")).toHaveValue("RULE-LOST: preserve one candidate across an uncertain creation response.");
       await page.getByTestId("skill-create-submit").click();
       await expect(page.getByText(/Skill candidate submitted as version/)).toBeVisible();
       expect(dropped).toBe(true);
+      expect(requestKeys).toHaveLength(2);
+      expect(requestKeys[0]).toMatch(/^[a-f0-9-]{36}$/);
+      expect(requestKeys[1]).toBe(requestKeys[0]);
       documentId = scalar(`SELECT id FROM knowledge_documents WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(title)};`);
       expect(documentId).not.toBe("");
       expect(createdSkillKey).toMatch(/^SKL-/);

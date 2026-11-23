@@ -706,6 +706,91 @@ assignment. Null/false/0/undefined `skillKey` values mean omitted and generate a
 
 Concurrent omitted-key retries serialize on the request lock and converge on one candidate.
 
+### 15.4 Library, exact history and atomic assignment continuation (PR216)
+
+**Scope and decision provenance (23 November 2026):** this is the existing D-14/T-451 implementation
+continuation, not another Skills owner or canonical specification. The recovered conversation identifies
+the user's 05:28 UTC "yes continue" as acceptance of native Library/Assignments, real version inspection,
+multi-select assignment and persistence/history, followed by 05:29 UTC "do it" and the 12:56/14:03 UTC
+continuation requests. That is retrieved conversation evidence, not an exported transcript. The original
+tests-first PR216 head is `85fd39633d3eeebb75e966e54d8bd5ffa901854e`; implementation resumes over
+development `724f878e83a98bed7e62196415d4a921b39af4b2`. The PR's existence is not the product authority.
+
+Canonical07 v1.4.43's proposal qualification and v1.4.44's then-current form description remain historical
+design evidence. This bounded continuation exposes the existing native eligibility: a saved immutable
+approved version of this live project Skill, belonging to that Skill and matching its module. The existing
+assignment service, V159 constraint and shared resolver already allow such an approved snapshot when a
+newer approved pointer or submission exists. Exposing it from history adds no per-version retirement,
+rollback service, implicit activation, successor authoring or return-for-revision policy. The eight original
+v1.4.45 files remain unchanged; their broader NOT FROZEN status is not promoted by this implementation.
+
+**Presentation and preservation:** Library and Assignments organize the existing Settings surface. Library
+supports title/key/instructions search, module/subtype/review/assignment filters and the current result
+count. Each Skill exposes dated saved-version history, newest/oldest ordering, exact read-only inspection,
+and a return to the originating history control. Explicit review still uses the current submitted-version
+guard. Assignment selection carries the exact approved version ID. Full text, structured JSON, inert HTML,
+source metadata, digest, author/reason/date, sourceVersionId approval lineage and bounded comparison retain
+their existing owners. Approval still creates a separate snapshot and leaves active assignments pinned.
+All seven native modules and explicit custom subtype/operation contexts remain available. The three
+Work Package A contexts are shortcuts and readiness inputs, not a universal operation catalog.
+
+**Command and recovery contract:**
+
+- `POST /api/projects/:projectId/skill-assignment-batches` accepts a UUID `requestKey`, exact
+  `skillDocumentId`, approved `versionId`, and 1–50 explicit targets. Each target supplies `module`,
+  `subtype`, `operation`, `expectedAssignmentId` (the reviewed active generation or explicit `null`),
+  and optional integer `precedence` from -1000 to 1000. Scope values are nonempty, trimmed and bounded
+  at 32/32/64 characters; `*` is an explicit wildcard. UUID casing, target order and explicit default
+  precedence zero normalize to the same command. Duplicate scopes and malformed members are refused.
+- The existing project assignment lock serializes the command with single-target writes and revocation.
+  Current owner/manager authority is checked inside that lock. Every expected generation is checked
+  before a write. An already satisfied version/precedence preserves the assignment ID and downstream
+  basis digest. A changed target deactivates its exact prior generation and creates one new generation;
+  unselected neighboring contexts stay unchanged.
+- The shared eligible-assignment resolver checks the final selected set, including already satisfied
+  targets, for symmetric wildcard overlap. Conflicts cannot silently deactivate neighboring assignments.
+  All selected writes, the command receipt and mandatory audit commit in one database transaction.
+  Failure of any assignment, receipt or audit write rolls the entire command back.
+  The member-readable Activity audit contains only the receipt ID, Skill/version IDs and target count;
+  the full command key, digest and before/after receipt stay in the actor-owned receipt store. An audit
+  reference must not create an alternate read path around the receipt's human/actor boundary.
+- `V163` adds only the missing command fact, `skill_assignment_requests`; KB versions and
+  `skill_assignments` remain the content and binding owners. The immutable receipt contains its ID,
+  request/project/actor identity, `human_session` principal, normalized request digest, exact Skill
+  version/content digest, commit time and each target's `added`, `replaced` or `already_satisfied`
+  outcome with before/after assignment snapshots and any prior deactivation.
+- The same actor/project/key/content replays the original receipt without another assignment or audit.
+  Changed content or another actor using that key receives `SKILL_ASSIGNMENT_REQUEST_CONFLICT` (409).
+  A changed reviewed generation receives `SKILL_ASSIGNMENT_STALE` (409); overlapping eligible scopes
+  receive `SKILL_ASSIGNMENT_CONFLICT` (409). The client preserves work and requests a fresh review.
+- `GET /api/projects/:projectId/skill-assignment-batches/:requestKey` recovers only the acting human's
+  committed receipt, after the same current owner/manager check. A missing receipt returns 404, which
+  is not proof that an outstanding write cannot later commit. Receipt readback is historical: later
+  revocation or Skill deletion does not erase the original acknowledgement or reactivate a binding.
+  The native project delete action archives the project; archival remains possible and subsequent
+  command/recovery access is refused. Hard database purge is not an exposed project operation.
+- API-token principals cannot submit or read these human command receipts, including replay. Ordinary
+  Skill reads and governed candidate submission retain their existing permission boundaries. The UI
+  keeps a stable command and request key through uncertain delivery and reload, reconciles before
+  presenting success, and never interprets a failed discovery/read as an empty inventory.
+
+**Verification and record boundary:** the original automatic CI checked out
+`13ec1245df280bac0456a85dd66a5b86f96b0674`, tree `44483b07f6a27987d14d30c02cfe5f7038b185fc`,
+with ordered parents `[5f43b49b6872b44ab7cf5a875193dfb725aec3e1,85fd39633d3eeebb75e966e54d8bd5ffa901854e]`.
+The full DB log has 669 passes and 15 new command failures (missing service/table); the Skills UI log
+has 23 passes and one failure at the missing Library tab. Those are the actual failing-first results,
+not results for this implementation. Subsequent current-source execution, independent challenge and
+White admission belong to the complete PR216 report/method receipts; this document does not assert a
+passing implementation run merely because tests exist.
+
+The existing DB suite owns transaction, concurrency, generation, eligibility and rollback assertions;
+`e2e/api/requirements.spec.ts` owns real route/principal/receipt proof; `e2e/ui/skills.spec.ts` owns discovery,
+inspection, current review, batch/reload recovery and prior behavior preservation. Persistent case
+preparation and seven-domain dispositions are in the existing cross-module acceptance ledger. Reuse
+TESBOPROJECT and semantically matching cases; native publication and official execution need their own
+actual receipts. **Tesbo sync not performed** by this implementation session while no callable Tesbo
+connector is exposed. Manual walkthroughs remain deferred/UNRUN; ordinary automatic CI is separate.
+
 ## 16. Native requirement review and coverage readback (Slice 3, project-scoped)
 
 ### 16.1 Exact submitted version after apply and reload
