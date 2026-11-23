@@ -73,6 +73,10 @@ import { runWithZyraDraftSink, runWithoutZyraDraftSink, runWithZyraLiveBatch, zy
 import { Subject } from "rxjs";
 
 type Body = Record<string, any>;
+type SkillAssignmentBatchTarget = {
+  module: string; subtype: string; operation: string; expectedAssignmentId: string | null; precedence: number;
+};
+const SKILL_MODULES = new Set(["requirements", "test_cases", "user_manuals", "policies", "tasks_issues", "files_evidence", "skills"]);
 export type PlanRunWriteTarget = "plan" | "planItem" | "cycle" | "execution" | "historyImport" | "sharing" | "retest" | "retestRecovery";
 
 /** Everything processZyraSaveEntriesSequential/Batched need that isn't `selected` or `client` itself. */
@@ -4094,7 +4098,8 @@ export class LegacyService implements OnModuleInit {
   /** Serialize effective Skills from final resolution through commit. Acquire before domain or
    * authority row locks, including on KB paths that can change assignment eligibility. */
   private async lockSkillAssignments(client: PoolClient, projectId: string) {
-    await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`skill-assignments:${projectId}`]);
+    // PostgreSQL UUID equality is case-insensitive; every spelling must share this boundary.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`skill-assignments:${projectId.toLowerCase()}`]);
   }
 
   private async assertSkillsInactive(client: PoolClient, projectId: string, documentIds: string[]) {
@@ -16259,7 +16264,7 @@ export class LegacyService implements OnModuleInit {
     const subtype = String(body.subtype || "*").trim() || "*";
     const instructions = typeof body.instructions === "string" ? body.instructions.trim() : "";
     if (!title || title.length > 512) throw new BadRequestException({ error: "Skill title must contain 1–512 characters" });
-    if (!["requirements", "test_cases", "user_manuals", "policies", "tasks_issues", "files_evidence", "skills"].includes(module)) {
+    if (!SKILL_MODULES.has(module)) {
       throw new BadRequestException({ error: "Unknown skill module" });
     }
     if (!instructions || instructions.length > 20000) throw new BadRequestException({ error: "Skill instructions must contain 1–20000 characters" });
@@ -16406,6 +16411,17 @@ export class LegacyService implements OnModuleInit {
     return { ...toCamel(result.doc), skillProfile: toCamel(result.profile), approvedVersionId: result.approvedVersionId, replayed: result.replayed };
   }
 
+  /** Shared native assignment eligibility; the latest reviewed pointer is not an assignment pin. */
+  private async skillAssignmentSource(client: PoolClient, projectId: string, skillDocumentId: string, versionId: string, modules: string[]) {
+    const doc = (await client.query("SELECT id,document_type,project_id,is_deleted FROM knowledge_documents WHERE id=$1 AND project_id=$2", [skillDocumentId, projectId])).rows[0];
+    if (!doc || doc.is_deleted || doc.document_type !== "skill") throw new NotFoundException({ error: "Skill not found" });
+    const version = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [versionId, skillDocumentId])).rows[0];
+    if (!version || version.snapshot_kind !== "approved") throw new BadRequestException({ error: "Only an approved immutable skill version can be assigned" });
+    const profile = (await client.query("SELECT * FROM skill_profiles WHERE document_id=$1 AND project_id=$2", [skillDocumentId, projectId])).rows[0];
+    if (!profile || modules.some(module => profile.module !== module)) throw new BadRequestException({ error: "The assignment module must match the skill profile" });
+    return { version, profile };
+  }
+
   /** Human-only assignment of an approved immutable version to one project authoring context. */
   async assignSkill(projectId: string, userId: string | null | undefined, body: Body = {}, principal?: ReviewPrincipal) {
     requireHumanReviewPrincipal(principal);
@@ -16424,12 +16440,7 @@ export class LegacyService implements OnModuleInit {
       await this.lockSkillAssignments(client, projectId);
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
-      const doc = (await client.query("SELECT id,document_type,project_id,is_deleted FROM knowledge_documents WHERE id=$1 AND project_id=$2", [skillDocumentId, projectId])).rows[0];
-      if (!doc || doc.is_deleted || doc.document_type !== "skill") throw new NotFoundException({ error: "Skill not found" });
-      const version = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [versionId, skillDocumentId])).rows[0];
-      if (!version || version.snapshot_kind !== "approved") throw new BadRequestException({ error: "Only an approved immutable skill version can be assigned" });
-      const profile = (await client.query("SELECT * FROM skill_profiles WHERE document_id=$1", [skillDocumentId])).rows[0];
-      if (!profile || profile.module !== module) throw new BadRequestException({ error: "The assignment module must match the skill profile" });
+      const { profile } = await this.skillAssignmentSource(client, projectId, skillDocumentId, versionId, [module]);
       await client.query(
         `UPDATE skill_assignments SET status='inactive', deactivated_by=$4, deactivated_at=now()
           WHERE project_id=$1 AND module=$2 AND subtype=$3 AND operation=$5 AND status='active'`,
@@ -16450,6 +16461,169 @@ export class LegacyService implements OnModuleInit {
       return { created, resolved };
     });
     return { assignment: toCamel(assignment.created), resolution: assignment.resolved };
+  }
+
+  private skillAssignmentBatchInput(body: Body) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw new BadRequestException({ error: "A Skill assignment command is required" });
+    }
+    const identity = (value: unknown, field: string) => {
+      if (typeof value !== "string" || !isUuid(value.trim())) {
+        throw new BadRequestException({ error: `${field} must be a UUID` });
+      }
+      return value.trim().toLowerCase();
+    };
+    const requestKey = identity(body.requestKey, "requestKey");
+    const skillDocumentId = identity(body.skillDocumentId, "skillDocumentId");
+    const versionId = identity(body.versionId, "versionId");
+    if (!Array.isArray(body.targets) || body.targets.length < 1 || body.targets.length > 50) {
+      throw new BadRequestException({ error: "Select between 1 and 50 assignment targets" });
+    }
+    const seen = new Set<string>();
+    const targets: SkillAssignmentBatchTarget[] = Array.from(body.targets, (input: unknown) => {
+      if (!input || typeof input !== "object" || Array.isArray(input)) {
+        throw new BadRequestException({ error: "Each assignment target must be an object" });
+      }
+      const item = input as Body;
+      const scope = (field: string, limit: number) => {
+        const value = typeof item[field] === "string" ? item[field].trim() : "";
+        if (!value || value.length > limit || value.includes("\u0000")) {
+          throw new BadRequestException({ error: `${field} must contain 1–${limit} characters; use * for an explicit wildcard` });
+        }
+        return value;
+      };
+      const module = scope("module", 32), subtype = scope("subtype", 32), operation = scope("operation", 64);
+      if (!SKILL_MODULES.has(module)) throw new BadRequestException({ error: "Unknown skill module" });
+      const expectedAssignmentId = item.expectedAssignmentId === null ? null : identity(item.expectedAssignmentId, "expectedAssignmentId");
+      const precedence = item.precedence === undefined ? 0 : item.precedence;
+      if (typeof precedence !== "number" || !Number.isInteger(precedence) || precedence < -1000 || precedence > 1000) {
+        throw new BadRequestException({ error: "precedence must be an integer between -1000 and 1000" });
+      }
+      const key = JSON.stringify([module, subtype, operation]);
+      if (seen.has(key)) throw new BadRequestException({ error: "Each assignment target may appear only once" });
+      seen.add(key);
+      return { module, subtype, operation, expectedAssignmentId, precedence };
+    });
+    // Order and explicit default zero are presentation choices, not a different command intent.
+    targets.sort((a, b) => {
+      const left = JSON.stringify([a.module, a.subtype, a.operation]);
+      const right = JSON.stringify([b.module, b.subtype, b.operation]);
+      return left < right ? -1 : left > right ? 1 : 0;
+    });
+    const requestDigest = createHash("sha256").update(JSON.stringify({ skillDocumentId, versionId, targets })).digest("hex");
+    return { requestKey, skillDocumentId, versionId, targets, requestDigest };
+  }
+
+  /** One native transaction for a bounded, explicitly reviewed assignment selection.
+   * Receipt replay precedes live dependency checks: it describes a historical commitment,
+   * never an assertion that its assignments or Skill are still active.
+   */
+  async assignSkillBatch(projectId: string, userId: string | null | undefined, body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    const { requestKey, skillDocumentId, versionId, targets, requestDigest } = this.skillAssignmentBatchInput(body);
+    return this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
+      const previous = (await client.query(
+        "SELECT requested_by,request_digest,receipt FROM skill_assignment_requests WHERE project_id=$1 AND request_key=$2",
+        [projectId, requestKey]
+      )).rows[0];
+      if (previous) {
+        if (String(previous.requested_by) !== uid || previous.request_digest !== requestDigest) {
+          throw new ConflictException({ code: "SKILL_ASSIGNMENT_REQUEST_CONFLICT", error: "This request key already belongs to another assignment command" });
+        }
+        return { receipt: previous.receipt as Body, replayed: true };
+      }
+      const { version, profile } = await this.skillAssignmentSource(client, projectId, skillDocumentId, versionId, targets.map(target => target.module));
+      const contentDigest = version.snapshot_metadata?.contentDigest;
+      if (typeof contentDigest !== "string" || !/^[a-f0-9]{64}$/.test(contentDigest)) {
+        throw new BadRequestException({ error: "The approved Skill version has no verifiable content digest" });
+      }
+      const current = (await client.query(
+        `SELECT a.* FROM skill_assignments a
+           JOIN jsonb_to_recordset($2::jsonb) AS t(module text,subtype text,operation text)
+             ON a.module=t.module AND a.subtype=t.subtype AND a.operation=t.operation
+          WHERE a.project_id=$1 AND a.status='active' FOR UPDATE OF a`,
+        [projectId, JSON.stringify(targets)]
+      )).rows;
+      const scopeKey = (target: { module: string; subtype: string; operation: string }) => JSON.stringify([target.module, target.subtype, target.operation]);
+      const currentByScope = new Map(current.map(row => [scopeKey(row as SkillAssignmentBatchTarget), row]));
+      for (const target of targets) {
+        const prior = currentByScope.get(scopeKey(target));
+        if ((prior ? String(prior.id) : null) !== target.expectedAssignmentId) {
+          throw new ConflictException({ code: "SKILL_ASSIGNMENT_STALE", error: "An assignment changed after it was reviewed; refresh and review the selected targets again",
+            target: { module: target.module, subtype: target.subtype, operation: target.operation } });
+        }
+      }
+      const committedAt = new Date().toISOString();
+      const results: Body[] = [];
+      for (const selection of targets) {
+        const { module, subtype, operation, precedence } = selection;
+        const target = { module, subtype, operation };
+        const prior = currentByScope.get(scopeKey(target));
+        const before = prior ? toCamel(prior) : null;
+        if (prior && String(prior.skill_document_id) === skillDocumentId && String(prior.skill_version_id) === versionId && prior.precedence === precedence) {
+          results.push({ target, outcome: "already_satisfied", before, after: before });
+          continue;
+        }
+        if (prior) {
+          await client.query(
+            "UPDATE skill_assignments SET status='inactive',deactivated_by=$3,deactivated_at=$4 WHERE id=$1 AND project_id=$2",
+            [prior.id, projectId, uid, committedAt]
+          );
+        }
+        const created = (await client.query(
+          `INSERT INTO skill_assignments(project_id,module,subtype,operation,skill_document_id,skill_version_id,assigned_by,precedence,assigned_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+          [projectId, module, subtype, operation, skillDocumentId, versionId, uid, precedence, committedAt]
+        )).rows[0];
+        results.push({ target, outcome: prior ? "replaced" : "added", before, after: toCamel(created),
+          ...(prior ? { priorDeactivation: { assignmentId: String(prior.id), actorId: uid, at: committedAt } } : {}) });
+      }
+      // Use the same symmetric eligibility/overlap owner as single-context assignment.
+      // Check the final selection, including unchanged generations, before committing any effect.
+      for (const result of results) {
+        const conflicts = await findSkillAssignmentConflicts(client, projectId, result.target, result.after.id);
+        if (conflicts.length) throw new ConflictException({ code: "SKILL_ASSIGNMENT_CONFLICT", error: "A selected scope overlaps another active Skill assignment", conflicts });
+      }
+      // Persist exactly the JSON returned to the first caller so replay is identical, including dates.
+      const receipt: Body = JSON.parse(JSON.stringify({
+        schemaVersion: 1, id: randomUUID(), requestKey, projectId: String(authority.id), skillDocumentId, skillVersionId: versionId,
+        actorId: uid, principalKind: "human_session", requestDigest, contentDigest, committedAt, targets: results
+      }));
+      await client.query(
+        `INSERT INTO skill_assignment_requests(id,project_id,request_key,request_digest,requested_by,skill_document_id,skill_version_id,content_digest,committed_at,receipt)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
+        [receipt.id, projectId, requestKey, requestDigest, uid, skillDocumentId, versionId, contentDigest, committedAt, JSON.stringify(receipt)]
+      );
+      // Project Activity is also readable by members and machine tokens. Keep the full
+      // actor-owned command in its protected receipt store; the mandatory audit links to it.
+      await this.logProjectActivity(projectId, uid, "skill_assignment_batch_committed", "skill_assignment_request", receipt.id, profile.skill_key,
+        { receiptId: receipt.id, skillDocumentId, versionId, targetCount: results.length }, client);
+      return { receipt, replayed: false };
+    });
+  }
+
+  /** Actor-owned recovery uses current human authority, even after a timeout or later revocation. */
+  async skillAssignmentBatch(projectId: string, userId: string | null | undefined, requestKey: string, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    if (!isUuid(projectId)) throw new NotFoundException({ error: "Project not found" });
+    if (typeof requestKey !== "string" || !isUuid(requestKey.trim())) throw new BadRequestException({ error: "requestKey must be a UUID" });
+    return this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
+      const stored = (await client.query(
+        "SELECT receipt FROM skill_assignment_requests WHERE project_id=$1 AND request_key=$2 AND requested_by=$3",
+        [projectId, requestKey.trim().toLowerCase(), uid]
+      )).rows[0];
+      if (!stored) throw new NotFoundException({ error: "Skill assignment command not found" });
+      return { receipt: stored.receipt as Body, replayed: true };
+    });
   }
 
   async deactivateSkillAssignment(projectId: string, userId: string | null | undefined, assignmentId: string, _body: Body = {}, principal?: ReviewPrincipal) {

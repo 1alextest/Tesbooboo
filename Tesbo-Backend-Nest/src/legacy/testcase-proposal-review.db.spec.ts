@@ -994,5 +994,322 @@ type Body=Record<string,any>;
         await cleanupSkills(created);
       }
     });
+
+    describe("atomic Skills assignment commands",()=>{
+      const target=(operation:string,expectedAssignmentId:string|null=null,extra:Body={})=>({module:"requirements",subtype:"functional",operation,expectedAssignmentId,...extra});
+      const batch=(body:Body,svc=service(),actor=user,principal:Body=human,projectId=project)=>(svc as unknown as Body).assignSkillBatch(projectId,actor,body,principal);
+      const receipt=(key:string,actor=user,principal:Body=human,projectId=project)=>(service() as unknown as Body).skillAssignmentBatch(projectId,actor,key,principal);
+      const command=(skill:Body,targets:Body[])=>({requestKey:randomUUID(),skillDocumentId:skill.doc.id,versionId:skill.versionId,targets});
+      const snapshot=async()=>({...(await assignmentWrites()),requests:(await admin.query("SELECT * FROM skill_assignment_requests WHERE project_id=$1 ORDER BY id",[project])).rows});
+      const approved=async()=>{
+        const doc=await service().createSkillCandidate(project,user,{title:`Batch Skill ${randomUUID()}`,module:"requirements",subtype:"functional",instructions:"RULE-BATCH: retain exact outcomes and unchanged neighbors."},human);
+        const submitted=await service().submitKnowledgeDocument(project,user,doc.id,{expectedRevision:doc.editRevision,submissionKey:randomUUID()},human);
+        const reviewed=await service().approveSkillVersion(project,user,doc.id,{versionId:submitted.id},human);
+        return {doc,versionId:String(reviewed.approvedVersionId)};
+      };
+      const active=async()=> (await admin.query("SELECT * FROM skill_assignments WHERE project_id=$1 AND status='active' ORDER BY id",[project])).rows;
+
+      it("commits mixed additions and replacements as one exact receipt while preserving unselected neighbors",async()=>{
+        const old=await skillFor("requirements","functional","requirement_revision"),next=await approved();
+        const neighbor=await skillFor("test_cases","manual","testcase_create");
+        try{
+          const custom=await service().assignSkill(project,user,{skillDocumentId:old.doc.id,versionId:old.versionId,module:"requirements",subtype:"functional",operation:"unselected_custom",precedence:17},human);
+          const neighborIds=[neighbor.assignmentId,String(custom.assignment.id)];
+          const neighborsBefore=(await admin.query("SELECT * FROM skill_assignments WHERE id=ANY($1::uuid[]) ORDER BY id",[neighborIds])).rows;
+          const input=command(next,[target("requirement_revision",old.assignmentId,{precedence:8}),target("requirement_case_link")]);
+          const result=await batch(input);
+          expect(result.replayed).toBe(false);
+          expect(result.receipt).toMatchObject({schemaVersion:1,requestKey:input.requestKey,projectId:project,skillDocumentId:next.doc.id,skillVersionId:next.versionId,actorId:user,principalKind:"human_session"});
+          expect(result.receipt.requestDigest).toMatch(/^[a-f0-9]{64}$/);
+          expect(result.receipt.contentDigest).toMatch(/^[a-f0-9]{64}$/);
+          const revision=result.receipt.targets.find((item:Body)=>item.target.operation==="requirement_revision");
+          const link=result.receipt.targets.find((item:Body)=>item.target.operation==="requirement_case_link");
+          expect(revision).toMatchObject({outcome:"replaced",before:{id:old.assignmentId,status:"active"},after:{skillDocumentId:next.doc.id,skillVersionId:next.versionId,status:"active",precedence:8},priorDeactivation:{assignmentId:old.assignmentId,actorId:user,at:result.receipt.committedAt}});
+          expect(link).toMatchObject({outcome:"added",before:null,after:{skillVersionId:next.versionId,status:"active",precedence:0}});
+          const retired=(await admin.query("SELECT * FROM skill_assignments WHERE id=$1",[old.assignmentId])).rows[0];
+          expect(retired.status).toBe("inactive");expect(retired.deactivated_by).toBe(user);expect(retired.deactivated_at.toISOString()).toBe(result.receipt.committedAt);
+          expect((await admin.query("SELECT * FROM skill_assignments WHERE id=ANY($1::uuid[]) ORDER BY id",[neighborIds])).rows).toEqual(neighborsBefore);
+          expect((await receipt(input.requestKey)).receipt).toEqual(result.receipt);
+          expect((await admin.query("SELECT COUNT(*)::int AS n FROM skill_assignment_requests WHERE project_id=$1 AND request_key=$2",[project,input.requestKey])).rows[0].n).toBe(1);
+          expect((await admin.query("SELECT diff FROM audit_logs WHERE project_id=$1 AND action='skill_assignment_batch_committed' AND entity_id=$2",[project,result.receipt.id])).rows).toHaveLength(1);
+          const activity=await service().listActivityForUser(user,project,{entityType:"skill_assignment_request",entityId:result.receipt.id});
+          expect(activity.total).toBe(1);
+          expect(JSON.parse(activity.list[0].diff)).toEqual({receiptId:result.receipt.id,skillDocumentId:next.doc.id,versionId:next.versionId,targetCount:2});
+          expect(JSON.stringify(activity)).not.toContain(input.requestKey);
+        }finally{await cleanupSkills([old.doc.id,next.doc.id,neighbor.doc.id]);}
+      });
+
+      it("keeps satisfied generation IDs and digests, including mixed satisfied/added selections and legacy repeated writes",async()=>{
+        const skill=await skillFor("requirements","functional","requirement_revision");
+        try{
+          const pin=await service().effectiveSkills(project,user,{});
+          const prior=(await active()).find((row:Body)=>row.id===skill.assignmentId);
+          const input=command(skill,[target("requirement_revision",skill.assignmentId),target("requirement_case_link")]);
+          const result=await batch(input);
+          expect(result.receipt.targets.find((item:Body)=>item.target.operation==="requirement_revision")).toMatchObject({outcome:"already_satisfied",before:{id:skill.assignmentId},after:{id:skill.assignmentId}});
+          expect((await active()).find((row:Body)=>row.id===skill.assignmentId)).toEqual(prior);
+          expect((await service().effectiveSkills(project,user,{})).digest).toBe(pin.digest);
+          const allSatisfied=command(skill,result.receipt.targets.map((item:Body)=>target(item.target.operation,item.after.id)));
+          const rowsBefore=(await snapshot()).assignments;
+          const unchanged=await batch(allSatisfied);
+          expect(unchanged.receipt.targets.every((item:Body)=>item.outcome==="already_satisfied")).toBe(true);
+          expect((await snapshot()).assignments).toEqual(rowsBefore);
+          const legacyBody={skillDocumentId:skill.doc.id,versionId:skill.versionId,module:"requirements",subtype:"functional",operation:"legacy_retry"};
+          const first=await service().assignSkill(project,user,legacyBody,human),second=await service().assignSkill(project,user,legacyBody,human);
+          expect(first.assignment.id).not.toBe(second.assignment.id);
+        }finally{await cleanupSkills([skill.doc.id]);}
+      });
+
+      it("replays normalized reordered intent once, rejects changed intent and preserves the historical receipt after retirement",async()=>{
+        const skill=await approved();
+        try{
+          const input=command(skill,[target("requirement_revision"),target("requirement_case_link")]);
+          const first=await batch(input);
+          const committed=await snapshot();
+          const reordered={...input,targets:[...input.targets].reverse().map((item:Body)=>({...item,module:` ${item.module} `,subtype:` ${item.subtype} `,operation:` ${item.operation} `,precedence:0}))};
+          expect(await batch(reordered)).toEqual({receipt:first.receipt,replayed:true});
+          expect(await snapshot()).toEqual(committed);
+          await expect(batch({...input,targets:[target("requirement_revision",null,{precedence:9}),target("requirement_case_link")]})).rejects.toMatchObject({status:409,response:{code:"SKILL_ASSIGNMENT_REQUEST_CONFLICT"}});
+          expect(await snapshot()).toEqual(committed);
+          for(const item of first.receipt.targets)await service().deactivateSkillAssignment(project,user,item.after.id,{},human);
+          await admin.query("UPDATE knowledge_documents SET is_deleted=true WHERE id=$1",[skill.doc.id]);
+          const retired=await snapshot();
+          expect(await batch(input)).toEqual({receipt:first.receipt,replayed:true});
+          expect((await receipt(input.requestKey)).receipt).toEqual(first.receipt);
+          expect(await snapshot()).toEqual(retired);
+          expect((await service().effectiveSkills(project,user,{})).status).toBe("unassigned");
+          await expect(admin.query("UPDATE skill_assignment_requests SET receipt=receipt||'{\"changed\":true}'::jsonb WHERE project_id=$1 AND request_key=$2",[project,input.requestKey])).rejects.toThrow(/immutable/i);
+          await expect(admin.query("DELETE FROM skill_assignment_requests WHERE project_id=$1 AND request_key=$2",[project,input.requestKey])).rejects.toThrow(/immutable/i);
+        }finally{await cleanupSkills([skill.doc.id]);}
+      });
+
+      it("converges concurrent identical commands and refuses a competing command's stale expected generation",async()=>{
+        const skill=await approved();
+        try{
+          const input=command(skill,[target("requirement_revision"),target("requirement_case_link")]);
+          const [left,right]=await Promise.all([batch(input),batch({...input,targets:[...input.targets].reverse()})]);
+          expect(left.receipt).toEqual(right.receipt);expect([left.replayed,right.replayed].filter(Boolean)).toHaveLength(1);
+          const before=await snapshot();
+          await expect(batch({...input,requestKey:randomUUID()})).rejects.toMatchObject({status:409,response:{code:"SKILL_ASSIGNMENT_STALE"}});
+          expect(await snapshot()).toEqual(before);
+          expect((await active()).filter((row:Body)=>row.skill_document_id===skill.doc.id)).toHaveLength(2);
+        }finally{await cleanupSkills([skill.doc.id]);}
+      });
+
+      it("refuses stale expected IDs for any selected target without replacing the others",async()=>{
+        const old=await skillFor("requirements","functional","requirement_revision"),next=await approved();
+        try{
+          for(const expected of [null,randomUUID()]){
+            const before=await snapshot();
+            await expect(batch(command(next,[target("requirement_revision",expected),target("requirement_case_link")]))).rejects.toMatchObject({status:409,response:{code:"SKILL_ASSIGNMENT_STALE"}});
+            expect(await snapshot()).toEqual(before);
+          }
+        }finally{await cleanupSkills([old.doc.id,next.doc.id]);}
+      });
+
+      it("refuses selected or existing wildcard overlap atomically without implicit cleanup",async()=>{
+        const skill=await approved();
+        try{
+          const before=await snapshot();
+          await expect(batch(command(skill,[target("*",null,{subtype:"*"}),target("requirement_revision")]))).rejects.toMatchObject({status:409,response:{code:"SKILL_ASSIGNMENT_CONFLICT"}});
+          expect(await snapshot()).toEqual(before);
+          const wildcard=await service().assignSkill(project,user,{skillDocumentId:skill.doc.id,versionId:skill.versionId,module:"requirements",subtype:"*",operation:"*",precedence:999},human);
+          const assigned=await snapshot();
+          await expect(batch(command(skill,[target("requirement_revision"),target("requirement_case_link")]))).rejects.toMatchObject({status:409,response:{code:"SKILL_ASSIGNMENT_CONFLICT"}});
+          expect(await snapshot()).toEqual(assigned);
+          expect((await active()).some((row:Body)=>row.id===wildcard.assignment.id)).toBe(true);
+        }finally{await cleanupSkills([skill.doc.id]);}
+      });
+
+      it("rejects malformed, incomplete, duplicate and over-limit selections before any effects",async()=>{
+        const skill=await approved();
+        try{
+          const good=command(skill,[target("requirement_revision")]);
+          const invalid=[
+            null,[],false,"assignment",
+            {...good,requestKey:null},{...good,requestKey:1},{...good,skillDocumentId:null},{...good,versionId:{}},
+            {...good,requestKey:"not-a-uuid"},{...good,targets:[]},{...good,targets:Array.from({length:51},(_,i)=>target(`custom_${i}`))},
+            {...good,targets:null},{...good,targets:[null]},{...good,targets:[[]]},{...good,targets:[false]},
+            {...good,targets:[target("requirement_revision"),target(" requirement_revision ")]},
+            {...good,targets:[{module:"requirements",subtype:"functional",operation:"requirement_revision"}]},
+            {...good,targets:[target("",null),target("*")]},
+            {...good,targets:[target("requirement_revision",null,{precedence:"1"})]},
+            ...[null,false,1.5,-1001,1001].map(precedence=>({...good,targets:[target("requirement_revision",null,{precedence})]})),
+            {...good,targets:[target("requirement_revision",null,{subtype:null})]},
+            {...good,targets:[target("requirement_revision",null,{subtype:" "})]},
+            {...good,targets:[target("requirement_revision","not-a-uuid")]},
+            {...good,targets:[target("requirement_revision",null,{subtype:"x".repeat(33)})]},
+            {...good,targets:[target("x".repeat(65))]},
+            {...good,targets:[target("requirement_revision",null,{module:"unknown"})]},
+            {...good,targets:[target("requirement_revision",null,{module:"test_cases"})]}
+          ];
+          const before=await snapshot();
+          for(const input of invalid){await expect(batch(input as Body)).rejects.toMatchObject({status:400});expect(await snapshot()).toEqual(before);}
+          const submitted=(await admin.query("SELECT id FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind='submitted' ORDER BY version_number DESC LIMIT 1",[skill.doc.id])).rows[0].id;
+          await expect(batch({...good,versionId:submitted})).rejects.toMatchObject({status:400});
+          await expect(batch({...good,skillDocumentId:randomUUID()})).rejects.toMatchObject({status:404});
+          expect(await snapshot()).toEqual(before);
+        }finally{await cleanupSkills([skill.doc.id]);}
+      });
+
+      it("accepts the bounded fifty-target custom scope contract and rejects a foreign document/version",async()=>{
+        const skill=await approved(),other=await approved();
+        try{
+          const before=await snapshot();
+          await expect(batch({...command(skill,[target("requirement_revision")]),versionId:other.versionId})).rejects.toMatchObject({status:400});
+          expect(await snapshot()).toEqual(before);
+          const result=await batch(command(skill,Array.from({length:50},(_,i)=>target(`custom_${i}`))));
+          expect(result.receipt.targets).toHaveLength(50);
+          expect((await active()).filter((row:Body)=>row.skill_document_id===skill.doc.id)).toHaveLength(50);
+        }finally{await cleanupSkills([skill.doc.id,other.doc.id]);}
+      });
+
+      it("normalizes UUID spelling and scope defaults while preserving immutable command bindings after Skill deletion",async()=>{
+        const skill=await approved();
+        try{
+          const input=command(skill,[target("uuid_scope",null,{precedence:-1000})]);
+          const upper={...input,requestKey:` ${input.requestKey.toUpperCase()} `,skillDocumentId:skill.doc.id.toUpperCase(),versionId:skill.versionId.toUpperCase()};
+          const [first,concurrent]=await Promise.all([batch(input),batch(upper,service(),user,human,project.toUpperCase())]);
+          expect(concurrent.receipt).toEqual(first.receipt);
+          expect([first.replayed,concurrent.replayed].filter(Boolean)).toHaveLength(1);
+          expect(first.receipt.requestKey).toBe(input.requestKey);
+          expect(await batch(input)).toEqual({receipt:first.receipt,replayed:true});
+          expect((await receipt(input.requestKey.toUpperCase())).receipt).toEqual(first.receipt);
+          await expect(receipt(randomUUID())).rejects.toMatchObject({status:404});
+          await expect(receipt("invalid")).rejects.toMatchObject({status:400});
+          for(const mutation of ["requested_by=gen_random_uuid()","request_key=gen_random_uuid()","request_digest=repeat('f',64)","content_digest=repeat('e',64)","committed_at=now()"]){
+            await expect(admin.query(`UPDATE skill_assignment_requests SET ${mutation} WHERE id=$1`,[first.receipt.id])).rejects.toThrow(/immutable/i);
+          }
+          await expect(admin.query(
+            `INSERT INTO skill_assignment_requests(id,project_id,request_key,request_digest,requested_by,skill_document_id,skill_version_id,content_digest,committed_at,receipt)
+             SELECT gen_random_uuid(),project_id,gen_random_uuid(),request_digest,requested_by,skill_document_id,skill_version_id,content_digest,committed_at,receipt
+             FROM skill_assignment_requests WHERE id=$1`,[first.receipt.id]
+          )).rejects.toMatchObject({code:"23514"});
+          await cleanupSkills([skill.doc.id]);
+          const removed=await snapshot();
+          expect(await batch(input)).toEqual({receipt:first.receipt,replayed:true});
+          expect((await receipt(input.requestKey)).receipt).toEqual(first.receipt);
+          expect(await snapshot()).toEqual(removed);
+        }finally{await cleanupSkills([skill.doc.id]);}
+      });
+
+      it("preserves native project archival and denies recovery or replay while the project is archived",async()=>{
+        const skill=await approved();
+        try{
+          const input=command(skill,[target("archive_scope",null,{precedence:1000})]);
+          const committed=await batch(input);
+          await service().deleteProjectForUser(user,project);
+          expect((await admin.query("SELECT archived_at FROM projects WHERE id=$1",[project])).rows[0].archived_at).not.toBeNull();
+          const archived=await snapshot();
+          await expect(batch(input)).rejects.toMatchObject({status:404});
+          await expect(receipt(input.requestKey)).rejects.toMatchObject({status:403});
+          expect(await snapshot()).toEqual(archived);
+          expect((await admin.query("SELECT receipt FROM skill_assignment_requests WHERE id=$1",[committed.receipt.id])).rows[0].receipt).toEqual(committed.receipt);
+        }finally{
+          await admin.query("UPDATE projects SET archived_at=NULL WHERE id=$1",[project]);
+          await cleanupSkills([skill.doc.id]);
+        }
+      });
+
+      it("assigns an older approved identity without changing the latest approved pointer",async()=>{
+        const skill=await approved();
+        try{
+          await admin.query("UPDATE knowledge_documents SET content_text='RULE-NEW: a different reviewed instruction.',status='draft',reviewed_version_id=NULL WHERE id=$1",[skill.doc.id]);
+          const draft=await service().getKnowledgeDocument(project,user,skill.doc.id);
+          const submitted=await service().submitKnowledgeDocument(project,user,skill.doc.id,{expectedRevision:draft.editRevision,submissionKey:randomUUID()},human);
+          const newer=await service().approveSkillVersion(project,user,skill.doc.id,{versionId:submitted.id},human);
+          expect(newer.approvedVersionId).not.toBe(skill.versionId);expect(newer.approvedVersionId).not.toBe(submitted.id);
+          const result=await batch(command(skill,[target("requirement_revision"),target("requirement_case_link")]));
+          expect(result.receipt.skillVersionId).toBe(skill.versionId);
+          expect(result.receipt.targets.every((item:Body)=>item.after.skillVersionId===skill.versionId)).toBe(true);
+          expect((await admin.query("SELECT reviewed_version_id FROM knowledge_documents WHERE id=$1",[skill.doc.id])).rows[0].reviewed_version_id).toBe(newer.approvedVersionId);
+        }finally{await cleanupSkills([skill.doc.id]);}
+      });
+
+      it("rechecks current human authority on writes and receipt retries without leaking another actor's command",async()=>{
+        const skill=await approved();
+        const other=(await admin.query("INSERT INTO users(email,name,active_organization_id) VALUES ($1,'Other governor',$2) RETURNING id",[`batch-${randomUUID()}@tesbo.invalid`,org])).rows[0].id;
+        await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'owner')",[org,other]);
+        await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'owner')",[project,other]);
+        try{
+          const input=command(skill,[target("requirement_revision")]);
+          const committed=await batch(input),before=await snapshot();
+          await expect(batch(input,service(),user,{kind:"api_token"})).rejects.toMatchObject({status:403,response:{code:"HUMAN_REVIEW_REQUIRED"}});
+          await expect(receipt(input.requestKey,user,{kind:"api_token"})).rejects.toMatchObject({status:403});
+          await expect(batch(input,service(),other)).rejects.toMatchObject({status:409,response:{code:"SKILL_ASSIGNMENT_REQUEST_CONFLICT"}});
+          await expect(receipt(input.requestKey,other)).rejects.toMatchObject({status:404});
+          await expect(receipt(input.requestKey,user,human,foreignProject)).rejects.toMatchObject({status:403});
+          await admin.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2",[project,user]);
+          await expect(batch(input)).rejects.toMatchObject({status:403});
+          await expect(receipt(input.requestKey)).rejects.toMatchObject({status:403});
+          expect(await snapshot()).toEqual(before);
+          await admin.query("UPDATE project_members SET role='owner' WHERE project_id=$1 AND user_id=$2",[project,user]);
+          expect((await receipt(input.requestKey)).receipt.id).toBe(committed.receipt.id);
+        }finally{
+          await admin.query("UPDATE project_members SET role='owner' WHERE project_id=$1 AND user_id=$2",[project,user]);
+          await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,other]);
+          await cleanupSkills([skill.doc.id]);
+        }
+      });
+
+      it.each(["generation","authority"])("revalidates %s after waiting at the shared project mutation boundary",async change=>{
+        const old=await skillFor("requirements","functional","requirement_revision"),next=await approved();
+        const locker=new Client({connectionString:url});await locker.connect();let pending:Promise<Body>|undefined;
+        try{
+          await locker.query("BEGIN");await locker.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)",[`skill-assignments:${project}`]);
+          pending=batch(command(next,[target("requirement_revision",old.assignmentId),target("requirement_case_link")])).then((value:Body)=>({value}),(error:Body)=>({error}));
+          expect(await waitUntil(()=>waitingOn("%pg_advisory_xact_lock%"))).toBe(true);
+          if(change==="generation"){
+            await locker.query("UPDATE skill_assignments SET status='inactive',deactivated_by=$2,deactivated_at=now() WHERE id=$1",[old.assignmentId,user]);
+            await locker.query("INSERT INTO skill_assignments(project_id,module,subtype,operation,skill_document_id,skill_version_id,assigned_by) SELECT project_id,module,subtype,operation,skill_document_id,skill_version_id,$2 FROM skill_assignments WHERE id=$1",[old.assignmentId,user]);
+          }else await admin.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2",[project,user]);
+          await locker.query("COMMIT");const before=await snapshot();
+          expect((await pending!).error).toMatchObject(change==="generation"?{status:409,response:{code:"SKILL_ASSIGNMENT_STALE"}}:{status:403});
+          expect(await snapshot()).toEqual(before);
+        }finally{
+          await locker.query("ROLLBACK").catch(()=>undefined);if(pending)await pending;await locker.end();
+          await admin.query("UPDATE project_members SET role='owner' WHERE project_id=$1 AND user_id=$2",[project,user]);
+          await cleanupSkills([old.doc.id,next.doc.id]);
+        }
+      },15000);
+
+      it("serializes alternate project UUID spellings before rechecking human authority",async()=>{
+        const skill=await approved();
+        const locker=new Client({connectionString:url});await locker.connect();let pending:Promise<Body>|undefined;
+        try{
+          await locker.query("BEGIN");
+          await locker.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)",[`skill-assignments:${project}`]);
+          const input=command(skill,[target("uppercase_project")]);
+          pending=batch(input,service(),user,human,project.toUpperCase()).then((value:Body)=>({value}),(error:Body)=>({error}));
+          expect(await waitUntil(()=>waitingOn("%pg_advisory_xact_lock%"))).toBe(true);
+          await admin.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2",[project,user]);
+          await locker.query("COMMIT");
+          const before=await snapshot();
+          expect((await pending!).error).toMatchObject({status:403});
+          expect(await snapshot()).toEqual(before);
+        }finally{
+          await locker.query("ROLLBACK").catch(()=>undefined);if(pending)await pending;await locker.end();
+          await admin.query("UPDATE project_members SET role='owner' WHERE project_id=$1 AND user_id=$2",[project,user]);
+          await cleanupSkills([skill.doc.id]);
+        }
+      },15000);
+
+      it.each(["second_assignment","receipt","audit"])("rolls back every selected effect when the mandatory %s write fails",async failure=>{
+        const old=await skillFor("requirements","functional","requirement_revision"),next=await approved();
+        const name=`batch_refuse_${randomUUID().replaceAll("-","")}`;
+        const table=failure==="second_assignment"?"skill_assignments":failure==="receipt"?"skill_assignment_requests":"audit_logs";
+        const condition=failure==="second_assignment"?" AND NEW.operation='requirement_revision'":failure==="audit"?" AND NEW.action='skill_assignment_batch_committed'":"";
+        try{
+          const before=await snapshot();
+          await admin.query(`CREATE FUNCTION ${name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.project_id='${project}'::uuid${condition} THEN RAISE EXCEPTION 'forced batch mandatory write failure'; END IF; RETURN NEW; END $$`);
+          await admin.query(`CREATE TRIGGER ${name} BEFORE INSERT ON ${table} FOR EACH ROW EXECUTE FUNCTION ${name}()`);
+          await expect(batch(command(next,[target("requirement_revision",old.assignmentId),target("requirement_case_link")]))).rejects.toThrow(/forced batch mandatory write failure/);
+          expect(await snapshot()).toEqual(before);
+        }finally{
+          await admin.query(`DROP TRIGGER IF EXISTS ${name} ON ${table}`);await admin.query(`DROP FUNCTION IF EXISTS ${name}()`);
+          await cleanupSkills([old.doc.id,next.doc.id]);
+        }
+      });
+    });
   });
 });

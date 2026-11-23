@@ -403,6 +403,144 @@ test("skill assignment overlap is refused in both insertion orders without losin
   }
 });
 
+test("atomic Skill assignment routes commit mixed targets once and retain their exact receipt", async ({ request }) => {
+  const docs: string[] = [];
+  const subtype = `batch-${randomUUID().slice(0, 8)}`;
+  try {
+    const previous = await createApprovedSkill(request, docs, "requirements", subtype, "previous");
+    const chosen = await createApprovedSkill(request, docs, "requirements", subtype, "chosen");
+    const assign = async (operation: string) => {
+      const response = await request.post(`${base}/skill-assignments`, { data: {
+        skillDocumentId: previous.documentId, versionId: previous.versionId,
+        module: "requirements", subtype, operation,
+      } });
+      expect(response.status(), await response.text()).toBe(201);
+      return (await response.json()).assignment;
+    };
+    const replaced = await assign("replace");
+    const neighbor = await assign("neighbor");
+    const key = randomUUID();
+    const command = {
+      requestKey: key, skillDocumentId: chosen.documentId, versionId: chosen.versionId,
+      targets: [
+        { module: "requirements", subtype, operation: "replace", expectedAssignmentId: replaced.id },
+        { module: "requirements", subtype, operation: "add", expectedAssignmentId: null },
+      ],
+    };
+    const saved = await request.post(`${base}/skill-assignment-batches`, { data: command });
+    expect(saved.status(), await saved.text()).toBe(201);
+    const result = await saved.json();
+    expect(result).toMatchObject({ replayed: false, receipt: {
+      schemaVersion: 1, requestKey: key, projectId: ctx.projectId,
+      skillDocumentId: chosen.documentId, skillVersionId: chosen.versionId,
+      principalKind: "human_session",
+    } });
+    expect(result.receipt.targets).toHaveLength(2);
+    expect(result.receipt.targets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ outcome: "replaced", before: expect.objectContaining({ id: replaced.id }), after: expect.objectContaining({ skillVersionId: chosen.versionId }) }),
+      expect.objectContaining({ outcome: "added", before: null, after: expect.objectContaining({ skillVersionId: chosen.versionId }) }),
+    ]));
+    const ledger = () => scalar(`SELECT jsonb_agg(to_jsonb(a) ORDER BY a.id)::text FROM skill_assignments a WHERE a.project_id=${literal(ctx.projectId)} AND a.subtype=${literal(subtype)};`);
+    const committedLedger = ledger();
+    expect(scalar(`SELECT status FROM skill_assignments WHERE id=${literal(replaced.id)};`)).toBe("inactive");
+    expect(scalar(`SELECT status||':'||skill_version_id::text FROM skill_assignments WHERE id=${literal(neighbor.id)};`)).toBe(`active:${previous.versionId}`);
+    for (const operation of ["replace", "add"]) {
+      const effective = await request.get(`${base}/skills/effective`, { params: { module: "requirements", subtype, operation } });
+      expect(effective.status(), await effective.text()).toBe(200);
+      expect(await effective.json()).toMatchObject({ status: "resolved", assignments: [expect.objectContaining({ skillVersionId: chosen.versionId })] });
+    }
+    const recovered = await request.get(`${base}/skill-assignment-batches/${key}`);
+    expect(recovered.status(), await recovered.text()).toBe(200);
+    expect(await recovered.json()).toEqual({ receipt: result.receipt, replayed: true });
+    const replay = await request.post(`${base}/skill-assignment-batches`, { data: {
+      ...command, targets: [...command.targets].reverse().map(target => ({ ...target, subtype: ` ${target.subtype} `, precedence: 0 })),
+    } });
+    expect(replay.status(), await replay.text()).toBe(201);
+    expect(await replay.json()).toEqual({ receipt: result.receipt, replayed: true });
+    const changed = await request.post(`${base}/skill-assignment-batches`, {
+      data: { ...command, versionId: previous.versionId }, failOnStatusCode: false,
+    });
+    expect(changed.status(), await changed.text()).toBe(409);
+    expect(await changed.json()).toMatchObject({ code: "SKILL_ASSIGNMENT_REQUEST_CONFLICT" });
+    expect(ledger()).toBe(committedLedger);
+
+    // A command receipt is historical evidence, not a live eligibility pointer.
+    // Revocation must not erase the acknowledged outcome or turn readback into a write.
+    const addedId = result.receipt.targets.find((target: { outcome: string }) => target.outcome === "added").after.id;
+    const revoked = await request.patch(`${base}/skill-assignments/${addedId}/deactivate`, { data: {} });
+    expect(revoked.ok(), await revoked.text()).toBe(true);
+    const historical = await request.get(`${base}/skill-assignment-batches/${key}`);
+    expect(historical.status(), await historical.text()).toBe(200);
+    expect(await historical.json()).toEqual({ receipt: result.receipt, replayed: true });
+    expect(scalar(`SELECT status FROM skill_assignments WHERE id=${literal(addedId)};`)).toBe("inactive");
+  } finally {
+    for (const id of docs) {
+      exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+      exec(`DELETE FROM knowledge_documents WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+    }
+  }
+});
+
+test("machine tokens cannot create or read human Skill assignment command receipts", async ({ request }) => {
+  const docs: string[] = [];
+  let machine: APIRequestContext | undefined;
+  let tokenId: string | undefined;
+  const subtype = `machine-${randomUUID().slice(0, 8)}`;
+  try {
+    const skill = await createApprovedSkill(request, docs, "requirements", subtype, "human boundary");
+    const command = { requestKey: randomUUID(), skillDocumentId: skill.documentId, versionId: skill.versionId,
+      targets: [{ module: "requirements", subtype, operation: "human", expectedAssignmentId: null }],
+    };
+    const human = await request.post(`${base}/skill-assignment-batches`, { data: command });
+    expect(human.status(), await human.text()).toBe(201);
+    const original = await human.json();
+    const issued = await issueMcpTestToken(request, `${base}/apikeys`, {
+      data: { name: `E2E batch principal ${Date.now()}`, scopes: ["read", "write"] },
+    });
+    expect(issued.ok(), await issued.text()).toBe(true);
+    const token = await issued.json(); tokenId = token.id;
+    machine = await newRequest.newContext({ baseURL: env.apiBaseUrl,
+      storageState: { cookies: [], origins: [] }, extraHTTPHeaders: { Authorization: `Bearer ${token.token}` },
+    });
+    const before = scalar(`SELECT jsonb_agg(to_jsonb(a) ORDER BY a.id)::text FROM skill_assignments a WHERE a.project_id=${literal(ctx.projectId)} AND a.subtype=${literal(subtype)};`);
+    const receiptCount = scalar(`SELECT COUNT(*) FROM skill_assignment_requests WHERE project_id=${literal(ctx.projectId)};`);
+    for (const response of [
+      await machine.post(`${base}/skill-assignment-batches`, { data: command, failOnStatusCode: false }),
+      await machine.post(`${base}/skill-assignment-batches`, { data: { ...command, requestKey: randomUUID() }, failOnStatusCode: false }),
+      await machine.get(`${base}/skill-assignment-batches/${command.requestKey}`, { failOnStatusCode: false }),
+    ]) {
+      expect(response.status(), await response.text()).toBe(403);
+      expect(await response.json()).toMatchObject({ code: "HUMAN_REVIEW_REQUIRED" });
+    }
+    // Activity is a legitimate project read surface, including for this machine token.
+    // Its audit reference must not become an alternate read of the actor-owned receipt.
+    const activity = await machine.get(`${base}/activity`, { params: {
+      entityType: "skill_assignment_request", entityId: original.receipt.id,
+    } });
+    expect(activity.status(), await activity.text()).toBe(200);
+    const feed = await activity.json();
+    expect(feed.total).toBe(1);
+    expect(feed.list).toHaveLength(1);
+    expect(JSON.parse(feed.list[0].diff)).toEqual({
+      receiptId: original.receipt.id, skillDocumentId: skill.documentId, versionId: skill.versionId, targetCount: 1,
+    });
+    expect(JSON.stringify(feed)).not.toContain(command.requestKey);
+    expect(JSON.stringify(feed)).not.toContain(original.receipt.requestDigest);
+    expect(scalar(`SELECT jsonb_agg(to_jsonb(a) ORDER BY a.id)::text FROM skill_assignments a WHERE a.project_id=${literal(ctx.projectId)} AND a.subtype=${literal(subtype)};`)).toBe(before);
+    expect(scalar(`SELECT COUNT(*) FROM skill_assignment_requests WHERE project_id=${literal(ctx.projectId)};`)).toBe(receiptCount);
+    const readback = await request.get(`${base}/skill-assignment-batches/${command.requestKey}`);
+    expect(readback.status(), await readback.text()).toBe(200);
+    expect(await readback.json()).toEqual({ receipt: original.receipt, replayed: true });
+  } finally {
+    if (tokenId) await request.delete(`${base}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    await machine?.dispose();
+    for (const id of docs) {
+      exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+      exec(`DELETE FROM knowledge_documents WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+    }
+  }
+});
+
 test("generic KB writes cannot bypass active Skill assignments and recovery never reactivates them", async ({ request }) => {
   const docs: string[] = [];
   const folders: string[] = [];

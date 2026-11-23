@@ -1775,6 +1775,16 @@ export class LegacyController {
     return this.legacy.assignSkill(projectId, req.userId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
+  @Post("/api/projects/:projectId/skill-assignment-batches")
+  assignSkillBatch(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.assignSkillBatch(projectId, req.userId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Get("/api/projects/:projectId/skill-assignment-batches/:requestKey")
+  skillAssignmentBatch(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("requestKey") requestKey: string) {
+    return this.legacy.skillAssignmentBatch(projectId, req.userId, requestKey, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
   @Patch("/api/projects/:projectId/skill-assignments/:assignmentId/deactivate")
   deactivateSkillAssignment(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("assignmentId") assignmentId: string, @Body() body: Record<string, any>) {
     return this.legacy.deactivateSkillAssignment(projectId, req.userId, assignmentId, body, { kind: req.apiToken ? "api_token" : "human_session" });

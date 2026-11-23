@@ -166,6 +166,37 @@ test("native requirement preview files receive explicit KB, authorization and te
   assert.deepEqual(unknown.unmappedPaths, [unrelated]);
 });
 
+test("native Skill assignment form retains the Skills page's domain, spec and check ownership", () => {
+  const result = plan(["Tesbo-Frontend/components/skills/SkillAssignmentForm.tsx"]);
+  const page = plan(["Tesbo-Frontend/app/(app)/projects/[id]/settings/skills/page.tsx"]);
+  assert.equal(result.status, "selection-only");
+  assert.deepEqual(result.unmappedPaths, []);
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.owningDomains, ["executions", "knowledge", "testcases", "zyra"]);
+  assert.deepEqual(result.selectedSpecs, page.selectedSpecs);
+  assert.deepEqual(result.requiredChecks.map(check => check.id), page.requiredChecks.map(check => check.id));
+  for (const spec of ["e2e/ui/skills.spec.ts", "e2e/api/requirements.spec.ts", "e2e/api/knowledge-base.spec.ts", "e2e/api/testcases.spec.ts",
+    "e2e/api/execution-ops.spec.ts", "e2e/api/zyra.spec.ts"]) hasSpec(result, spec);
+  for (const id of ["backend-quality", "frontend-quality", "database-integrity", "transactional-concurrency", "playwright-smoke"]) {
+    assert.ok(result.requiredChecks.some(check => check.id === id), `Missing ${id} for Skill assignment form`);
+  }
+  assert.equal(result.verification.status, "not-run", "A mapped form selects evidence without claiming runtime execution");
+});
+
+test("an unrelated Skills component stays unmapped even when another changed owner selects every domain", () => {
+  const unrelated = "Tesbo-Frontend/components/skills/SkillEligibilityEditor.tsx";
+  for (const paths of [[unrelated], [unrelated, "Tesbo-Backend-Nest/src/legacy/legacy.service.ts"]]) {
+    const result = plan(paths);
+    assert.equal(result.status, "review-required");
+    assert.deepEqual(result.unmappedPaths, [unrelated]);
+    assert.ok(result.diagnostics.some(item => item.code === "UNMAPPED_PRODUCT_PATH" && item.path === unrelated));
+    if (paths.length > 1) {
+      assert.equal(result.owningDomains.length, Object.keys(config.domains).length);
+      hasSpec(result, "e2e/ui/skills.spec.ts");
+    }
+  }
+});
+
 test("unknown product paths fail review even if a shared-risk pattern adds many tests", () => {
   for (const filename of ["Tesbo-Backend-Nest/src/unowned/feature.ts", "Tesbo-Frontend/lib/unowned.ts",
     "Tesbo-Backend-Nest/src/new-area/new-session.guard.ts", "unexpected-root-product.ts"]) {
