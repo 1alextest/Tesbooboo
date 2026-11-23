@@ -6,7 +6,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { requireApprovedMcpEndpoint } from "./mcp-approved-origin.mjs";
-import { REQUIRED_TOOLS, PROPOSAL_TOOLS, catalogFingerprint, catalogGaps, schemaGaps, summarize } from "./mcp-deploy-check.mjs";
+import { REQUIRED_TOOLS, PROPOSAL_TOOLS, NATIVE_PILOT_READ_TOOLS,
+  readOnlyPilotCatalogGaps, summarizeNativePilotCases, catalogFingerprint, catalogGaps,
+  schemaGaps, summarize } from "./mcp-deploy-check.mjs";
 
 const text = { type: "string" };
 const citations = { type: "array" };
@@ -492,4 +494,43 @@ test("health and authenticated MCP redirects are refused without following anoth
   assert.equal(rpc.status, 1, rpc.stdout + rpc.stderr);
   assert.equal(rpc.requests.length, 2);
   assert.ok(rpc.requests.every(row => row.redirect === "manual"));
+});
+
+
+test("TESBOPROJECT pilot requires both pre-existing authorized read tools, not write methods", () => {
+  const allowed = [...validTools(), tool("list_testcases"), tool("list_suites")];
+  assert.deepEqual(NATIVE_PILOT_READ_TOOLS, ["list_testcases", "list_suites"]);
+  assert.deepEqual(readOnlyPilotCatalogGaps(allowed), []);
+  assert.deepEqual(readOnlyPilotCatalogGaps(validTools()), [
+    "native pilot read permission unavailable: list_testcases",
+    "native pilot read permission unavailable: list_suites"
+  ]);
+  assert.deepEqual(readOnlyPilotCatalogGaps(null), ["native pilot tool catalog is unavailable"]);
+});
+
+test("bounded native inventory reports only counts, never case identities or sensitive fields", () => {
+  const cases = [
+    { id: "private-case-A", title: "Sensitive medical case", status: "Draft", sourceRefs: ["private"] },
+    { id: "private-case-B", title: "Hidden client name", status: "Approved", token: "synthetic-secret" },
+    { id: "private-case-C", title: "Unknown confidential title", status: "not-known" }
+  ];
+  const suites = { suites: [{ id: "private-suite", name: "Secret owner suite" }] };
+  const result = summarizeNativePilotCases(cases, suites);
+  assert.deepEqual(result, { sampledCases: 3, sampleLimit: 25, suites: 1,
+    statusCounts: { Draft: 1, "In Review": 0, Approved: 1, Deprecated: 0, Archived: 0, Other: 1 },
+    fullCaseTotalVerified: false, recordMutation: false });
+  for(const privateValue of ["private-case-A", "private-suite", "Sensitive", "Hidden", "synthetic-secret"]) {
+    assert.ok(!JSON.stringify(result).includes(privateValue));
+  }
+});
+
+test("pilot refuses malformed, duplicate and unbounded native records", () => {
+  const one = {id:"same",status:"Draft"};
+  const suites = {suites:[{id:"s1"}]};
+  for(const c of [[one,one],[{}],new Array(26).fill(0).map((_,i)=>({id:String(i)}))]){
+    assert.throws(()=>summarizeNativePilotCases(c,suites),/incomplete|bounded/);
+  }
+  assert.throws(()=>summarizeNativePilotCases([one],{suites:[{name:"missing id"}]}),/incomplete|bounded/);
+  assert.throws(()=>summarizeNativePilotCases({unexpected:[]},suites),/incomplete|bounded/);
+  assert.throws(()=>summarizeNativePilotCases([one],{suites:new Array(2001).fill(0).map((_,i)=>({id:String(i)}))}),/incomplete|bounded/);
 });
