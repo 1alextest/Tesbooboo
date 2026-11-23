@@ -934,6 +934,17 @@ type Body=Record<string,any>;
         expect(explicitReplay.skillKey).toBe(explicit.skillKey);
         await expect(service().createSkillCandidate(project,user,{...explicitOps,skillKey:undefined},{kind:"human_session"} as never)).rejects.toMatchObject({status:409,response:{code:"SKILL_REQUEST_CONFLICT"}});
 
+        await expect(service().createSkillCandidate(project,user,{title:`Empty request ${randomUUID()}`,module:"requirements",subtype:"functional",instructions:"RULE-EMPTY-REQUEST: one outcome.",requestKey:""},{kind:"human_session"} as never)).rejects.toMatchObject({status:400});
+        await expect(service().createSkillCandidate(project,user,{title:`Blank key ${randomUUID()}`,module:"requirements",subtype:"functional",skillKey:"   ",instructions:"RULE-BLANK-KEY: one outcome.",requestKey:randomUUID()},{kind:"human_session"} as never)).rejects.toMatchObject({status:400});
+
+        const falsyKey=randomUUID(), falsyTitle=`Falsy key ${randomUUID()}`;
+        const falsy=await service().createSkillCandidate(project,user,{title:falsyTitle,module:"requirements",subtype:"functional",skillKey:false as never,instructions:"RULE-FALSY: one outcome.",requestKey:falsyKey},{kind:"human_session"} as never);
+        created.push(falsy.id);
+        expect(falsy.skillKey).not.toBe("false");
+        const falsyReplay=await service().createSkillCandidate(project,user,{title:falsyTitle,module:"requirements",subtype:"functional",instructions:"RULE-FALSY: one outcome.",requestKey:falsyKey},{kind:"human_session"} as never);
+        expect(falsyReplay.id).toBe(falsy.id);
+        expect(falsyReplay.skillKey).toBe(falsy.skillKey);
+
         const nullKey=randomUUID(), nullTitle=`Null key ${randomUUID()}`;
         const nullOps={title:nullTitle,module:"requirements",subtype:"functional",skillKey:null as unknown as string,instructions:"RULE-NULL: one outcome.",requestKey:nullKey};
         const nullCandidate=await service().createSkillCandidate(project,user,nullOps,{kind:"human_session"} as never);

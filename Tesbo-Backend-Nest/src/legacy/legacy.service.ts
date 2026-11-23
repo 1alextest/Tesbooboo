@@ -16265,12 +16265,15 @@ export class LegacyService implements OnModuleInit {
     if (!instructions || instructions.length > 20000) throw new BadRequestException({ error: "Skill instructions must contain 1–20000 characters" });
     // The optional key is part of the requested content only when the caller supplied it. An
     // automatically generated identity must not change the request digest between retries.
-    // Preserve the original optional-key semantics for null/false/0/blank values: an absent key is
-    // generated. Only a supplied non-empty string becomes part of the request identity.
-    const suppliedSkillKey = !body.skillKey ? null : String(body.skillKey).trim() || null;
-    const skillKey = suppliedSkillKey || `SKL-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`;
+    // Null/false/0/undefined mean "no key". An explicitly supplied blank or whitespace-only string
+    // stays supplied and is refused by the key regex, as it was before this change.
+    const rawSkillKey = body.skillKey;
+    const suppliedSkillKey = rawSkillKey === undefined || rawSkillKey === null || rawSkillKey === false || rawSkillKey === 0
+      ? null
+      : String(rawSkillKey).trim();
+    const skillKey = suppliedSkillKey ?? `SKL-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`;
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$/.test(skillKey)) throw new BadRequestException({ error: "skillKey must be 2–64 safe characters" });
-    const requestKey = body.requestKey == null || body.requestKey === "" ? null : String(body.requestKey).trim();
+    const requestKey = body.requestKey === undefined || body.requestKey === null ? null : String(body.requestKey).trim();
     if (requestKey !== null && (!requestKey || requestKey.length > 160)) {
       throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
     }
