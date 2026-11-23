@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { expect, request as newRequest, test, type APIRequestContext } from "@playwright/test";
 import { env } from "../utils/env";
 import { issueMcpTestToken } from "../utils/mcp-access";
+import { stageAndApplyMcpTestcases } from "../utils/mcp-proposals";
 import { exec, literal, scalar } from "../utils/psql";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
@@ -401,6 +402,30 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
     readings = await coverage();
     expect(readings.readings).toMatchObject({ executed: true, passing: false, mixed: true });
     expect(readings.cases[0].latestAttempt.status).toBe("Failed");
+
+    // Defect-fix follow-up: the same coding agent updates the established native case through
+    // the existing MCP unpublished proposal owner. A human Save keeps its identity, requirement
+    // link and past execution evidence; its changed definition cannot inherit the old approval.
+    const revisedSteps = [...regressionSteps, {
+      stepNumber: 3, action: "Retry after a failed source or stale-review response",
+      expectedResult: "The existing reviewed task is reloaded; no duplicate official case is added"
+    }];
+    const revised = await stageAndApplyMcpTestcases(request, mcp!, agentCredential.token, ctx.projectId, [{
+      opType: "update", testcaseId: caseId, expectedRevision: caseAfter.editRevision,
+      reason: "Coding-agent regression coverage improved after a defect fix",
+      fields: { steps: revisedSteps, description: "Existing regression case with explicit recovery behaviour." }
+    }]);
+    expect(revised.staged.publication).toBe("unpublished");
+    const amendedCase = await (await request.get(`${base}/testcases/${caseId}`)).json();
+    expect(amendedCase.id).toBe(caseId);
+    expect(amendedCase.editRevision).not.toBe(caseAfter.editRevision);
+    expect(amendedCase.approvalCurrent).toBe(false);
+    expect(JSON.parse(amendedCase.steps)).toEqual(revisedSteps);
+    expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(ctx.projectId)} AND title=${literal(caseTitle)};`)).toBe("1");
+    expect(scalar(`SELECT COUNT(*)::int FROM requirement_case_links WHERE requirement_id=${literal(requirementId)} AND state='active';`)).toBe("1");
+    expect(scalar(`SELECT COUNT(*)::int FROM executions e JOIN cycle_items item ON item.id=e.cycle_item_id WHERE item.testcase_id=${literal(caseId)};`)).toBe("2");
+    readings = await coverage();
+    expect(readings.readings).toMatchObject({ authored: true, approved: false, passing: false });
   } finally {
     if (mcp) await mcp.dispose();
     if (tokenId) await request.delete(`${base}/apikeys/${tokenId}`, { failOnStatusCode: false });
