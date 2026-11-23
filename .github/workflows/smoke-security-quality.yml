@@ -582,6 +582,11 @@ jobs:
           persist-credentials: false
       - name: Build backend image
         run: docker build -t tesbo-backend:ci Tesbo-Backend-Nest
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+      - name: Verify Compose migrator in the runtime image without a database
+        run: node scripts/check-runtime-migrator.mjs tesbo-backend:ci
       - name: Scan backend image for high and critical findings
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
         with:
