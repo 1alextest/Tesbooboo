@@ -14,7 +14,7 @@ Four separately executed analytical research challenges covered eleven lenses:
 | --- | --- | --- |
 | Reuse and semantic governance | Blue, Graph, one-owner/enforcement | `resp_a24f97cf-2659-4d56-8d15-0381da7ffdd4` |
 | Adversarial trust and authority | Red, Security, lifecycle attack | `resp_25125eba-68c2-46ce-a4d0-cfd44c3fb6eb` |
-| Client, server, runtime and end-to-end seams | Green, QA, protocol compatibility | `resp_ffa1a44f-placeholder` (see method note below) |
+| Client, server, runtime and end-to-end seams | Green, QA, protocol compatibility | UNRECORDED (see method note below) |
 | Human outcome, operability and completeness | Grey, Purple, Observability, White | `resp_e029f86d-86d9-44c0-ae10-c1c1d7c5c0e1` |
 
 **Method/qualification.** Each research challenge received the same source-anchored architecture facts and a different adversarial charter. Reviewers could research external standards and library documentation but **could not independently read the private Tesbo repository**; their findings are hypotheses until reconciled against code by the coordinating reviewer. The Green/QA response identifier was not retained in the tool summary and is deliberately **UNRECORDED**, not authenticated by the placeholder above. These research passes are independent *analytical challenges*, not independently authenticated GitHub contributors, real Tesbo reviewer receipts, a human owner decision or White signoff. No OAuth code, live ChatGPT sign-in, official TESBOPROJECT test run, database migration or deployment was executed by this review.
