@@ -576,6 +576,8 @@ type Body=Record<string,any>;
 
         let coverage=await service().requirementCoverage(project,user,requirementId);
         expect(coverage.readings).toMatchObject({authored:true,approved:false,executed:false,passing:false});
+        const appliedCaseRevision=await revisionsOf(caseId);
+        expect(coverage.cases[0]).toMatchObject({testcaseRevision:appliedCaseRevision.edit_revision,testcaseApprovalRevision:null});
 
         const approved=await service().approveRequirementVersion(project,user,requirementId,{versionId:applied.receipt.requirement.versionId},human);
         expect(approved.approvedVersionId).toBeTruthy();

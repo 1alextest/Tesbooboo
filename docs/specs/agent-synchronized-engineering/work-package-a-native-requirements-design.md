@@ -884,9 +884,10 @@ the reliability acceptance cases; publication and execution are not inferred fro
 - Replay is constrained to the requirement's current approved version. A lost activation followed by a newer
   requirement approval cannot return a superseded-version link as replayed; it is refused as inactive, and a
   subsequent intentional activation creates a new identity on the current approved version.
-- Lost-response reconciliation matches the same case + criterion group on the approved version, not merely the same
-  case. Uncertain outcomes are held per group, so several rapid activations cannot overwrite one another; each is
-  reconciled independently from authoritative coverage.
+- Lost-response reconciliation matches the same case + criterion group, the current approved version and the exact
+  case edit/approval revisions captured at request time, not merely the same case. Uncertain outcomes are held per
+  group, so several rapid activations cannot overwrite one another; each is reconciled independently from
+  authoritative coverage.
 - On success the selected exact criterion group is retired and one active link is created on the approved requirement
   version; other criterion groups, including the same keys in a different order, remain active. Coverage `approved`
   moves true. A lost response is reported as unconfirmed, then reconciled from coverage; a retry uses the same link
