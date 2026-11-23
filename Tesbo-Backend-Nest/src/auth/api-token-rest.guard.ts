@@ -22,6 +22,15 @@ export class ApiTokenRestGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    // An OAuth access token can NEVER be a browser session or an API token. Until a
+    // real OAuth resource-server verifier and explicit MCP-only route policy ship,
+    // reject even a synthetic OAuth principal before any REST owner or MCP tool.
+    if (req.oauthAccess) {
+      throw new ForbiddenException({
+        code: "OAUTH_MACHINE_ACCESS_DISABLED",
+        error: "OAuth machine access has not been enabled for this route"
+      });
+    }
     const token = req.apiToken;
     if (!token) return true; // Preserve established browser-session auth.
 
