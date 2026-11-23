@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 const REPO = "1alextest/Tesbooboo";
 const SHA = /^[0-9a-f]{40}$/i;
 
-export function verifyPublishedPr({ pr, commit, appSlug, branch }) {
+export function verifyPublishedPr({ pr, commit, appSlug, branch, expectedTreeSha }) {
   if (typeof appSlug !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(appSlug)) {
     throw new Error("Verified GitHub App slug unavailable");
   }
@@ -16,7 +16,8 @@ export function verifyPublishedPr({ pr, commit, appSlug, branch }) {
       pr?.state !== "open" || !SHA.test(pr?.head?.sha ?? "")) {
     throw new Error("Published PR lacks expected bot author, base, draft or exact repository identity");
   }
-  if (commit?.sha !== pr.head.sha ||
+  if (!SHA.test(expectedTreeSha ?? "") || commit?.commit?.tree?.sha !== expectedTreeSha ||
+      commit?.sha !== pr.head.sha ||
       commit?.commit?.verification?.verified !== true ||
       commit?.commit?.verification?.reason !== "valid" ||
       commit?.committer?.login !== bot) {
@@ -46,8 +47,10 @@ export async function checkPublishedPr(env = process.env, fetchImpl = fetch) {
   const number = env.PR_NUMBER;
   const sha = env.SOURCE_SHA;
   const branch = env.BOT_BRANCH;
+  const expectedTreeSha = env.EXPECTED_TREE_SHA;
   if (!/^[1-9]\d{0,8}$/.test(number ?? "") ||
-      !SHA.test(sha ?? "") || branch !== "tesbo-agent/" + sha.toLowerCase() ||
+      !SHA.test(sha ?? "") || !SHA.test(expectedTreeSha ?? "") ||
+      branch !== "tesbo-agent/" + sha.toLowerCase() ||
       !env.APP_TOKEN || !env.APP_SLUG ||
       env.GITHUB_REPOSITORY !== REPO) {
     throw new Error("Invalid bot publication verification context");
@@ -55,7 +58,7 @@ export async function checkPublishedPr(env = process.env, fetchImpl = fetch) {
   const pr = await githubRead("/pulls/" + number, env.APP_TOKEN, fetchImpl);
   if (!SHA.test(pr?.head?.sha ?? "")) throw new Error("Published PR head SHA unavailable");
   const commit = await githubRead("/commits/" + pr.head.sha, env.APP_TOKEN, fetchImpl);
-  return verifyPublishedPr({ pr, commit, appSlug: env.APP_SLUG, branch });
+  return verifyPublishedPr({ pr, commit, appSlug: env.APP_SLUG, branch, expectedTreeSha });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
