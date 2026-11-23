@@ -227,6 +227,56 @@ test.describe("governed skills operator journey (UI)", () => {
     await expect(page.getByText(new RegExp(`Approved ${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))).toBeVisible();
   }
 
+  test("library discovery opens exact dated history without changing approvals or assignments", async ({ browser }) => {
+    const fixture = await reviewFixture();
+    try {
+      const before = scalar(`SELECT jsonb_build_object('versions', (SELECT COUNT(*) FROM knowledge_document_versions WHERE document_id=${literal(fixture.documentId)}),
+        'approved', d.reviewed_version_id, 'assignments', (SELECT jsonb_agg(to_jsonb(a) ORDER BY a.id) FROM skill_assignments a WHERE a.skill_document_id=d.id))::text
+        FROM knowledge_documents d WHERE d.id=${literal(fixture.documentId)};`);
+      const page = await open(browser, "/settings/skills");
+      await expect(page.getByRole("tab", { name: /^Library/ })).toHaveAttribute("aria-selected", "true");
+      await page.getByTestId("skill-library-search").fill("RULE-V3");
+      await page.getByTestId("skill-library-module-filter").selectOption("requirements");
+      await page.getByTestId("skill-library-subtype-filter").selectOption("functional");
+      await page.getByTestId("skill-library-assignment-filter").selectOption("assigned");
+      await page.getByTestId("skill-library-review-filter").selectOption("awaiting_review");
+      await expect(page.getByTestId(`skill-${fixture.documentId}`)).toBeVisible();
+      await expect(page.getByTestId("skill-library-result-count")).toContainText("1 result");
+      const latest = page.getByTestId(`skill-open-latest-${fixture.documentId}`);
+      await latest.click();
+      await expect(page.getByTestId("skill-review-version")).toContainText(`v${fixture.v3.versionNumber}`);
+      await expect(page.getByTestId("skill-review-content")).toContainText("RULE-V3");
+      await expect(page.getByTestId("skill-review-approve")).toHaveCount(0);
+      await page.getByRole("button", { name: "Close review", exact: true }).click();
+      await expect(latest).toBeFocused();
+
+      const history = page.getByTestId(`skill-history-${fixture.documentId}`);
+      await history.getByText(/Version history/, { exact: false }).click();
+      await page.getByTestId("skill-history-sort").selectOption("oldest");
+      const rows = history.locator('[data-skill-history-version]');
+      await expect(rows.first()).toHaveAttribute("data-skill-history-version", fixture.v1.id);
+      await expect(rows.last()).toHaveAttribute("data-skill-history-version", fixture.v3.id);
+      await expect(history.getByTestId(`skill-saved-at-${fixture.a1.id}`)).toHaveAttribute("datetime", fixture.a1.createdAt);
+      await expect(history.getByTestId(`skill-submitted-at-${fixture.a1.id}`)).toHaveAttribute("datetime", fixture.v1.createdAt);
+      const view = history.getByTestId(`skill-history-view-${fixture.v1.id}`);
+      await view.click();
+      await expect(page.getByTestId("skill-review-content")).toContainText("RULE-BASE");
+      await expect(page.getByTestId("skill-review-content")).not.toContainText("RULE-V3");
+      await expect(page.getByTestId("skill-review-approve")).toHaveCount(0);
+      await page.getByRole("button", { name: "Close review", exact: true }).click();
+      await expect(view).toBeFocused();
+      await expect(page.getByTestId("skill-library-search")).toHaveValue("RULE-V3");
+      await expect(page.getByTestId("skill-history-sort")).toHaveValue("oldest");
+      await expect(history).toHaveAttribute("open", "");
+      const after = scalar(`SELECT jsonb_build_object('versions', (SELECT COUNT(*) FROM knowledge_document_versions WHERE document_id=${literal(fixture.documentId)}),
+        'approved', d.reviewed_version_id, 'assignments', (SELECT jsonb_agg(to_jsonb(a) ORDER BY a.id) FROM skill_assignments a WHERE a.skill_document_id=d.id))::text
+        FROM knowledge_documents d WHERE d.id=${literal(fixture.documentId)};`);
+      expect(after).toBe(before);
+    } finally {
+      await cleanupSkill(fixture.documentId);
+    }
+  });
+
   test("owner configures skills and assignments, an agent stages, and the owner publishes the exact bundle", async ({ browser }) => {
     const suffix = Date.now();
     const requirementTitle = `UI requirement skill ${suffix}`;
