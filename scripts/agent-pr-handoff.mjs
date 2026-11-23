@@ -131,7 +131,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     appendFileSync(process.env.GITHUB_OUTPUT,
       ["bot_branch=" + result.botBranch, "source_sha=" + result.sourceSha,
        "base_sha=" + result.baseSha, "source_branch=" + result.sourceBranch,
-       "file_count=" + result.fileCount].join("\n") + "\n");
+       "file_count=" + result.fileCount, "tree_sha=" + result.treeSha].join("\n") + "\n");
     console.log("Candidate staged with exact tree identity; " + result.fileCount + " changed files");
   }).catch(error => {
     console.error("Agent PR handoff refused: " + error.message);
