@@ -73,7 +73,7 @@ test("protected policy and workflow paths do not enter an agent publisher", () =
   for (const file of [
     ".github/workflows/evil.yml", ".github/assurance-policy.json",
     "AGENTS.md", "CLAUDE.md", "scripts/agent-pr-verify-publication.mjs",
-    "scripts/assurance-pr-gate.mjs", ".gitmodules"
+    "scripts/assurance-pr-gate.mjs", "scripts/branch-rulesets.mjs", ".gitmodules"
   ]) assert.equal(isProtectedCandidatePath(file), true, file);
   for (const file of ["src/main.ts", "e2e/api/tests.spec.ts", "docs/qa-orchestration/00_README.md"]) {
     assert.equal(isProtectedCandidatePath(file), false, file);
@@ -140,9 +140,9 @@ test("bot publication requires native bot PR owner, signed HEAD, and matching co
     user: { login: "tesbo-publisher[bot]", type: "Bot" },
     base: { ref: "development" }, head: { ref: branch, sha: SOURCE,
       repo: { full_name: "1alextest/Tesbooboo" } } };
-  const commit = { sha: SOURCE, commit: { verification: { verified: true, reason: "valid" } },
+  const commit = { sha: SOURCE, commit: { tree: { sha: BASE }, verification: { verified: true, reason: "valid" } },
     committer: { login: "tesbo-publisher[bot]" } };
-  assert.deepEqual(verifyPublishedPr({ pr, commit, appSlug: "tesbo-publisher", branch }),
+  assert.deepEqual(verifyPublishedPr({ pr, commit, appSlug: "tesbo-publisher", branch, expectedTreeSha: BASE }),
     { prNumber: 77, sha: SOURCE, bot: "tesbo-publisher[bot]" });
   for (const change of [
     { pr: { ...pr, user: { login: "1alextest", type: "User" } } },
@@ -150,7 +150,7 @@ test("bot publication requires native bot PR owner, signed HEAD, and matching co
     { pr: { ...pr, base: { ref: "main" } } },
     { commit: { ...commit, commit: { verification: { verified: false, reason: "unsigned" } } } },
     { commit: { ...commit, committer: { login: "1alextest" } } }
-  ]) assert.throws(() => verifyPublishedPr({ pr, commit, appSlug: "tesbo-publisher", branch, ...change }));
+  ]) assert.throws(() => verifyPublishedPr({ pr, commit, appSlug: "tesbo-publisher", branch, expectedTreeSha: BASE, ...change }));
 });
 
 test("installed workflow never auto-merges, and bot token follows preflight", () => {
