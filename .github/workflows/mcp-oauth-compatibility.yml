@@ -36,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/tesbo-oidc-spike"
-          printf '%s\\n' '{"name":"tesbo-oidc-spike","version":"0.0.0","private":true}' > "$RUNNER_TEMP/tesbo-oidc-spike/package.json"
+          echo '{"name":"tesbo-oidc-spike","version":"0.0.0","private":true}' > "$RUNNER_TEMP/tesbo-oidc-spike/package.json"
           npm install --prefix "$RUNNER_TEMP/tesbo-oidc-spike" --save-exact --ignore-scripts --no-audit --no-fund oidc-provider@9.15.1
           npm audit --prefix "$RUNNER_TEMP/tesbo-oidc-spike" --omit=dev --audit-level=high
           node Tesbo-Backend-Nest/scripts/ci/embedded-oauth-spike.cjs "$RUNNER_TEMP/tesbo-oidc-spike"
