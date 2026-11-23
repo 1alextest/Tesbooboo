@@ -210,12 +210,14 @@ A single human “Apply selected” action on the exact proposal revision runs o
 ### 4.5 Skills gate (D7 resolved)
 
 - Requirement and test-case skills are **required** for guarded publication under Work Package A (WP-A lines 178–180; R-ASE-25/26).
-- The resolver is not implemented and the deployed catalog exposes no skill tools. Therefore:
-  - Staging, reading, diff review and **rejection/withdrawal** are allowed in preview.
-  - **Protected apply, requirement approval, link activation and any claim of approved/executed/passing coverage are blocked** with `SKILL_CONTEXT_UNAVAILABLE`, even in preview. There is no “blocked once the resolver exists” loophole.
-  - `skill_context = {status:"unavailable"}` is recorded on every staged operation and displayed on the review surface.
-  - Once the resolver exists, the same gate requires a resolved, pinned, conflict-free assignment set; `UNASSIGNED`, stale, revoked or conflicting resolution blocks apply/approval unless an explicit, scoped project policy (which does not exist today) says otherwise. Raw observations and evidence intake remain independently permitted.
-- Consequence: **the positive half of Work Package A (apply → approve → coverage) is blocked on the minimal effective-skill capability.** The first slice can ship and prove staging, review, lineage, refusal and non-publication; its positive acceptance rows remain BLOCKED, not NOT RUN.
+- The effective-skill resolver and the native project-scoped Skills operator surface are implemented (§14, §15). Guarded publication proceeds only with a **resolved, pinned, conflict-free** assignment set for the three Work Package A targets.
+- Staging, reading, diff review and **rejection/withdrawal** remain available without a resolved context.
+- **Protected apply, requirement approval, link re-application and any claim of approved/executed/passing coverage** are refused, with no native publication writes, when:
+  - a required approved skill is unassigned → `SKILL_CONTEXT_UNAVAILABLE`;
+  - the pinned basis changed after review → `SKILL_CONTEXT_STALE`;
+  - the effective assignment is ambiguous → `SKILL_ASSIGNMENT_CONFLICT`.
+- The refusal code and the pinned/current bases are returned to the review surface; `skill_context` is recorded on every staged operation. Raw observations and evidence intake remain independently permitted.
+- Consequence: the positive half of Work Package A (apply → approve → coverage) is implemented and exercised when the targets are assigned. It remains **blocked in TESBOPROJECT** until a human approves/assigns the required Skill versions and applies the staged bundles; that is a governance state, not a missing capability.
 
 ---
 
@@ -242,7 +244,7 @@ Four readings per requirement version and criterion; a linked draft may raise on
 | **Executed** | Approved AND at least one **qualifying attempt** exists. |
 | **Passing** | Executed AND the **latest qualifying attempt** has status `Passed`. |
 
-Additional reported facts (not part of the four readings): attempt count per status, latest attempt status/time, `open_unstarted_items`, `conflicting_attempts` (qualifying attempts disagree), and per-criterion stale/missing reasons.
+Additional reported facts (not part of the four readings): attempt count per status, latest attempt status/time and its `executionId`/`cycleId` (used only to link to the persisted evidence), `open_unstarted_items`, `conflicting_attempts` (qualifying attempts disagree), and per-criterion stale/missing reasons.
 
 ### 5.3 Edge controls
 
@@ -531,15 +533,21 @@ per criterion and case, using only persisted attempts whose `cycle_items.snapsho
 link's approval revision. A later PASS/FAIL disagreement remains visible as `mixed`; the latest qualifying attempt
 decides `passing`.
 
+The task read surface exposes a bounded `requirementApplyReceipt` rebuilt from the committed apply events: the exact
+requirement document/version identity, the Draft case and the link, and nothing else from `save_events` (never the
+proposal snapshot or decision digest). This is what lets the Zyra task page reopen the submitted version after a
+reload without re-deriving it from the mutable requirement document. Approval still goes through
+`approveRequirementVersion` with the exact version id; the task surface does not infer approval from apply.
+
 ### 14.4 Explicit limits
 
 - Project-scoped only; no cross-project/global packs, composition precedence beyond deterministic single-match,
-  candidate evaluation, root meta-skill bootstrap, cache, MCP skill tools or Skills Library UI. Those remain
-  specified, not implemented.
+  candidate evaluation, root meta-skill bootstrap, cache or MCP skill tools. Those remain specified, not
+  implemented. The project-scoped Skills operator surface is implemented and documented in §15.
 - Skill approval and assignment are separate human-session actions; API tokens may create/submit candidates and
   read resolution, but cannot approve, assign or deactivate.
-- Manual/policy subtype breadth and a full assignment-management UI remain future work; the API surface is the
-  native owner today.
+- Manual/policy subtype breadth remains future work. Assignment management is available in the native Skills
+  operator surface.
 - No migration backfills historical pins. Historical links/attempts remain readable; current readings require the
   current approved versions and exact case basis.
 
@@ -697,3 +705,66 @@ compatibility ambiguity is limited to pre-V162 rows and never creates a second c
 assignment. Null/false/0/undefined `skillKey` values mean omitted and generate an identity. An explicitly supplied empty or whitespace-only string is deliberately refused (400) rather than generating an identity: an empty field cannot silently disable retry identity. `requestKey` null is omitted; empty/whitespace and oversized values are 400.
 
 Concurrent omitted-key retries serialize on the request lock and converge on one candidate.
+
+## 16. Native requirement review and coverage readback (Slice 3, project-scoped)
+
+### 16.1 Exact submitted version after apply and reload
+
+Apply remains the only action that creates the submitted requirement version. The committed apply receipt is
+persisted in `ai_generation_requests.save_events`; the task read path now projects a bounded
+`requirementApplyReceipt` from it (requirement document/version/version number/edit revision, Draft case identity and
+link identity). The Zyra task page uses that receipt to reopen the exact version through the existing
+`GET /knowledge-base/documents/:documentId/versions/:versionId` endpoint and the document through the existing
+document detail endpoint.
+
+- The version's stored content, acceptance criteria, version number/id, author/time, snapshot digest, document
+  review status and linked cases are shown.
+- The reviewed approved snapshot is read separately, so approval status is derived from
+  `snapshot_metadata.sourceVersionId`, not guessed from a status label or from the link.
+- A reload reconstructs the panel from persisted task and requirement state; the document id is never recovered by
+  title or by the mutable document's current contents.
+- Older applied bundles expose the same receipt from their existing `save_events`; no history is rewritten.
+
+### 16.2 Explicit approval of the version under review
+
+The approval control calls the existing `POST /requirements/:documentId/approve` endpoint with the exact
+version id. Authorization is the backend's shared owner/manager review rule; a reader can inspect the version and
+coverage but is not offered the control, and an API attempt by a reader is refused with 403.
+
+- Approval is enabled only after the required version content, document status and reviewed snapshot load. A failed
+  content load leaves approval disabled and offers a retry.
+- A stale version (`DOCUMENT_REVISION_CONFLICT`) leaves the submitted version untouched and reports that the
+  requirement changed after submission; it never reports approval.
+- Permission refusals, missing versions and server failures are reported as such.
+- A lost approval response is reported as **unconfirmed**, then the component re-reads the authoritative document
+  and review snapshot. If the server committed, the single approved snapshot is shown; a retry is idempotent and
+  never produces a second approval.
+- The submitted version, its snapshot and its links are never rewritten by approval; the approved-version link
+  transition remains the separate, explicit re-apply action.
+
+### 16.3 Truthful coverage readback
+
+The task surface reads the existing `GET /requirements/:documentId/coverage` endpoint and preserves its four
+readings and basis. `latestAttempt` now also carries the persisted `executionId` and `cycleId` so the UI can link to
+the real execution evidence without inventing a second coverage model.
+
+- Readings are shown as authored, approved, executed and passing, with mixed PASS/FAIL attempts called out.
+- Per-criterion counts and the linked-case rows show the exact requirement version each link targets (approved,
+  submitted or historical) and the qualifying-attempt basis.
+- Supporting cases link to the test-case repository with the case search applied; qualifying attempts link to the
+  native execution page when an execution and cycle are present.
+- A successful empty result renders as an authored zero. An unavailable coverage read renders as unavailable with a
+  retry and is never presented as zero.
+- Coverage is re-read after approval and after case/execution state changes; no reading is cached as authority.
+
+### 16.4 Verification boundary
+
+Backend coverage: `testcase-proposal-review.db.spec.ts` exercises the apply receipt projection and the
+execution/cycle evidence identities against migrated PostgreSQL. API coverage: `api/requirements.spec.ts` exercises
+the persisted receipt, stale approval refusal, exact-version approval, reapply and Passed/Failed readings. Browser
+coverage: `ui/skills.spec.ts` exercises reload, reader permissions, stale review, a lost approval response, coverage
+after case/execution changes, successful zero, unavailable coverage and the supporting-case/execution links.
+
+Native Tesbo execution remains **UNRUN**. The REQ-WPA-10 acceptance bundle is staged as a review task until a human
+applies it, approves the requirement/case and creates the intended suite; publication and execution are not inferred
+from these automated checks.

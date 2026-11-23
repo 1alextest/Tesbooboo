@@ -343,6 +343,9 @@ export default function TestCasesPage() {
   const activeLinearIssueKey = searchParams.get("linearIssueKey") || "";
   // A Notion test case links by full page id; the chip below shows the short `notion:xxxxxxxx` label.
   const activeNotionPageId = searchParams.get("notionPageId") || "";
+  // Deep link from requirement coverage ("supporting case") and evidence surfaces. It seeds the
+  // same search the reviewer would type; it is not a separate filter or authority.
+  const activeSearch = searchParams.get("search") || "";
 
   // Take over the shared TopBar with this page's breadcrumb + actions (portaled below),
   // and hide the default global "Search projects" search while this page is mounted.
@@ -494,7 +497,7 @@ export default function TestCasesPage() {
   const [isRenamingSuite, setIsRenamingSuite] = useState(false);
   const [renameSuiteError, setRenameSuiteError] = useState("");
 
-  const [suiteSearch, setSuiteSearch] = useState("");
+  const [suiteSearch, setSuiteSearch] = useState(activeSearch);
   const [suiteStatusFilter, setSuiteStatusFilter] = useState("all");
   const [suitePriorityFilter, setSuitePriorityFilter] = useState("all");
   const [suiteTypeFilter, setSuiteTypeFilter] = useState("all");
@@ -771,6 +774,12 @@ export default function TestCasesPage() {
     if (bucket) return bucket.count;
     return Math.max(0, repositoryTotalCount - suiteCaseCountSum);
   }, [repoSummary, repositoryTotalCount, suiteCaseCountSum]);
+
+  // A new deep-linked search (for example, another requirement's supporting case) replaces the
+  // current query while this page stays mounted. An empty param never clears text the user typed.
+  useEffect(() => {
+    if (activeSearch) setSuiteSearch(activeSearch);
+  }, [activeSearch]);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
