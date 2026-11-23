@@ -936,6 +936,7 @@ type Body=Record<string,any>;
 
         await expect(service().createSkillCandidate(project,user,{title:`Empty request ${randomUUID()}`,module:"requirements",subtype:"functional",instructions:"RULE-EMPTY-REQUEST: one outcome.",requestKey:""},{kind:"human_session"} as never)).rejects.toMatchObject({status:400});
         await expect(service().createSkillCandidate(project,user,{title:`Blank key ${randomUUID()}`,module:"requirements",subtype:"functional",skillKey:"   ",instructions:"RULE-BLANK-KEY: one outcome.",requestKey:randomUUID()},{kind:"human_session"} as never)).rejects.toMatchObject({status:400});
+        await expect(service().createSkillCandidate(project,user,{title:`Empty key ${randomUUID()}`,module:"requirements",subtype:"functional",skillKey:"",instructions:"RULE-EMPTY-KEY: one outcome.",requestKey:randomUUID()},{kind:"human_session"} as never)).rejects.toMatchObject({status:400});
 
         const falsyKey=randomUUID(), falsyTitle=`Falsy key ${randomUUID()}`;
         const falsy=await service().createSkillCandidate(project,user,{title:falsyTitle,module:"requirements",subtype:"functional",skillKey:false as never,instructions:"RULE-FALSY: one outcome.",requestKey:falsyKey},{kind:"human_session"} as never);

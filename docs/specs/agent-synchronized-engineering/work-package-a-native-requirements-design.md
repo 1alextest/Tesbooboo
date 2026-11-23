@@ -694,6 +694,6 @@ from their stored key. A new explicit-key row can therefore never replay as an o
 rows the original request cannot be reconstructed, so an explicit-origin row and a generated-origin row
 are indistinguishable; an omitted-key retry on such a row may replay when content matches. That
 compatibility ambiguity is limited to pre-V162 rows and never creates a second candidate, approval or
-assignment. Null/false/0/undefined `skillKey` values mean omitted and generate an identity; an explicitly supplied blank or whitespace-only string remains invalid. `requestKey` null is omitted, while empty/whitespace and oversized values remain 400.
+assignment. Null/false/0/undefined `skillKey` values mean omitted and generate an identity. An explicitly supplied empty or whitespace-only string is deliberately refused (400) rather than generating an identity: an empty field cannot silently disable retry identity. `requestKey` null is omitted; empty/whitespace and oversized values are 400.
 
 Concurrent omitted-key retries serialize on the request lock and converge on one candidate.

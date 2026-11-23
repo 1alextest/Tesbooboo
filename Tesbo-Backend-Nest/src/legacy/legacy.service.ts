@@ -16266,7 +16266,8 @@ export class LegacyService implements OnModuleInit {
     // The optional key is part of the requested content only when the caller supplied it. An
     // automatically generated identity must not change the request digest between retries.
     // Null/false/0/undefined mean "no key". An explicitly supplied blank or whitespace-only string
-    // stays supplied and is refused by the key regex, as it was before this change.
+    // is refused rather than silently generating an identity: an empty field must not disable the
+    // request identity a retry depends on.
     const rawSkillKey = body.skillKey;
     const suppliedSkillKey = rawSkillKey === undefined || rawSkillKey === null || rawSkillKey === false || rawSkillKey === 0
       ? null
