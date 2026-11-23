@@ -512,6 +512,20 @@ test("machine tokens cannot create or read human Skill assignment command receip
       expect(response.status(), await response.text()).toBe(403);
       expect(await response.json()).toMatchObject({ code: "HUMAN_REVIEW_REQUIRED" });
     }
+    // Activity is a legitimate project read surface, including for this machine token.
+    // Its audit reference must not become an alternate read of the actor-owned receipt.
+    const activity = await machine.get(`${base}/activity`, { params: {
+      entityType: "skill_assignment_request", entityId: original.receipt.id,
+    } });
+    expect(activity.status(), await activity.text()).toBe(200);
+    const feed = await activity.json();
+    expect(feed.total).toBe(1);
+    expect(feed.list).toHaveLength(1);
+    expect(JSON.parse(feed.list[0].diff)).toEqual({
+      receiptId: original.receipt.id, skillDocumentId: skill.documentId, versionId: skill.versionId, targetCount: 1,
+    });
+    expect(JSON.stringify(feed)).not.toContain(command.requestKey);
+    expect(JSON.stringify(feed)).not.toContain(original.receipt.requestDigest);
     expect(scalar(`SELECT jsonb_agg(to_jsonb(a) ORDER BY a.id)::text FROM skill_assignments a WHERE a.project_id=${literal(ctx.projectId)} AND a.subtype=${literal(subtype)};`)).toBe(before);
     expect(scalar(`SELECT COUNT(*) FROM skill_assignment_requests WHERE project_id=${literal(ctx.projectId)};`)).toBe(receiptCount);
     const readback = await request.get(`${base}/skill-assignment-batches/${command.requestKey}`);

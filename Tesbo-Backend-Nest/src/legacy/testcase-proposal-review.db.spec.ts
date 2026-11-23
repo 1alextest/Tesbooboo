@@ -1032,6 +1032,10 @@ type Body=Record<string,any>;
           expect((await receipt(input.requestKey)).receipt).toEqual(result.receipt);
           expect((await admin.query("SELECT COUNT(*)::int AS n FROM skill_assignment_requests WHERE project_id=$1 AND request_key=$2",[project,input.requestKey])).rows[0].n).toBe(1);
           expect((await admin.query("SELECT diff FROM audit_logs WHERE project_id=$1 AND action='skill_assignment_batch_committed' AND entity_id=$2",[project,result.receipt.id])).rows).toHaveLength(1);
+          const activity=await service().listActivityForUser(user,project,{entityType:"skill_assignment_request",entityId:result.receipt.id});
+          expect(activity.total).toBe(1);
+          expect(JSON.parse(activity.list[0].diff)).toEqual({receiptId:result.receipt.id,skillDocumentId:next.doc.id,versionId:next.versionId,targetCount:2});
+          expect(JSON.stringify(activity)).not.toContain(input.requestKey);
         }finally{await cleanupSkills([old.doc.id,next.doc.id,neighbor.doc.id]);}
       });
 
