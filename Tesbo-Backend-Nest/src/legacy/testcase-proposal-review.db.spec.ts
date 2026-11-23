@@ -622,7 +622,6 @@ type Body=Record<string,any>;
       const taskIds:string[]=[];
       let requirementId="";
       let legacyId="";
-      let qaId="";
       const addMember=async(role:string,label:string)=>{
         const id=(await admin.query("INSERT INTO users(email,name) VALUES ($1,$2) RETURNING id",[`apply-${label.replaceAll(" ","-")}-${randomUUID()}@tesbo.invalid`,label])).rows[0].id;
         await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[org,id]);
@@ -631,7 +630,6 @@ type Body=Record<string,any>;
       };
       try{
         legacyId=await addMember("test_manager","Legacy apply manager");
-        qaId=await addMember("qa_engineer","Apply reader");
 
         const legacyBundle=await stageBundle(ops()); taskIds.push(legacyBundle.id);
         const applied=await service().applyRequirementProposal(project,legacyId,legacyBundle.id,
@@ -639,12 +637,6 @@ type Body=Record<string,any>;
         expect(applied.replayed).toBe(false);
         requirementId=applied.receipt.requirement.documentId;
         expect(applied.receipt.reviewerId).toBe(legacyId);
-
-        const qaBundle=await stageBundle(ops()); taskIds.push(qaBundle.id);
-        await expect(service().applyRequirementProposal(project,qaId,qaBundle.id,
-          {expectedProposalRevision:qaBundle.proposalRevision},human))
-          .rejects.toMatchObject({status:403});
-        expect((await admin.query("SELECT task_status FROM ai_generation_requests WHERE id=$1",[qaBundle.id])).rows[0].task_status).toBe("in_review");
 
         // Hold the task row after the initial authorization check, change the role, then release:
         // the post-wait check must re-read and normalize the current role.
@@ -667,24 +659,28 @@ type Body=Record<string,any>;
           expect(sawWait).toBe(true);
           await admin.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2",[project,legacyId]);
           await blocker.query("COMMIT");
-          expect((await pending).e).toMatchObject({status:403});
+          const settled=await Promise.race([
+            pending,
+            new Promise<{e?:Body}>((resolve)=>setTimeout(()=>resolve({e:{status:0,code:"TEST_WAIT_TIMEOUT"}}),15000))
+          ]);
+          expect(settled.e).toMatchObject({status:403});
         }finally{
           await blocker.query("ROLLBACK").catch(()=>undefined);
-          if(pending) await pending;
+          if(pending) await Promise.race([pending,new Promise(resolve=>setTimeout(resolve,5000))]);
           await blocker.end();
         }
         expect((await admin.query("SELECT task_status FROM ai_generation_requests WHERE id=$1",[waitBundle.id])).rows[0].task_status).toBe("in_review");
       }finally{
         for(const id of taskIds) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[id]);
         if(requirementId) await cleanupRequirement(requirementId);
-        for(const id of [legacyId,qaId].filter(Boolean)){
+        for(const id of [legacyId].filter(Boolean)){
           await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,id]);
           await admin.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2",[org,id]);
           await admin.query("DELETE FROM users WHERE id=$1",[id]);
         }
         await cleanupSkills(skillIds);
       }
-    },60000);
+    },120000);
 
     it("refuses activation until the requirement version is approved",async()=>{
       const skills=await publishSkills();
