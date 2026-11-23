@@ -440,7 +440,8 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
           )}
         </div>
 
-        {coverageLoading && <p className="mt-2 text-sm text-[var(--muted)]" data-testid="requirement-coverage-loading">Loading coverage…</p>}
+        {coverageLoading && !coverage && <p className="mt-2 text-sm text-[var(--muted)]" data-testid="requirement-coverage-loading">Loading coverage…</p>}
+        {coverageLoading && coverage && <p className="mt-2 text-xs text-[var(--muted)]" data-testid="requirement-coverage-refreshing">Refreshing coverage…</p>}
         {coverageError && (
           <div className="mt-2 rounded-lg border border-[var(--warning-border)] p-3" data-testid="requirement-coverage-unavailable">
             <p className="text-sm text-[var(--warning-foreground)]">Coverage is unavailable. This is not a zero result.</p>
@@ -450,7 +451,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
             </Button>
           </div>
         )}
-        {!coverageLoading && !coverageError && coverage && (
+        {!coverageError && coverage && (
           <>
             <div className="mt-2 flex flex-wrap gap-2" data-testid="requirement-coverage-readings">
               <StatusChip tone={coverageReadingTone(coverage.readings.authored)}>Authored: {coverage.readings.authored ? "yes" : "no"}</StatusChip>
