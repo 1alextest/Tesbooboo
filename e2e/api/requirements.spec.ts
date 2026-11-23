@@ -225,12 +225,14 @@ test("a bundle is unreachable from another project and mismatched link criteria 
   }
 });
 
-test("governed skills allow protected publication, exact approval and separate coverage readings", async ({ request }) => {
+test("a coding-agent MCP bundle stages requirement-linked native regression cases for human approval and evidence", async ({ request }) => {
   const suffix = Date.now();
   const skillDocs: string[] = [];
   const taskIds: string[] = [];
   const cycleIds: string[] = [];
   let requirementId = "";
+  let mcp: APIRequestContext | undefined;
+  let tokenId: string | undefined;
   try {
     const makeSkill = (module: string, subtype: string, operation: string) => createApprovedSkill(request, skillDocs, module, subtype, operation);
     const assign = async (skill: { documentId: string; versionId: string }, module: string, subtype: string, operation: string) => {
@@ -263,15 +265,55 @@ test("governed skills allow protected publication, exact approval and separate c
     const requirementOperationId = randomUUID(), testcaseOperationId = randomUUID();
     const operations = [
       { opType: "requirement_revision", operationId: requirementOperationId, title, description: "Published through the governed path.", criteria: [{ key: "AC-1", text: "The obligation is observable" }, { key: "AC-2", text: "The second obligation is observable" }] },
-      { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle, description: "Candidate case for the governed requirement." } },
+      { opType: "testcase_create", operationId: testcaseOperationId, draft: {
+        title: caseTitle, description: "Regression case authored alongside application automated tests.",
+        preconditions: "Project-owned agent grant and approved requirement/test-case methods are available.",
+        steps: [
+          { stepNumber: 1, action: "Stage a requirement and case bundle through project-bound MCP",
+            expectedResult: "One unpublished review task is returned without an official test case" },
+          { stepNumber: 2, action: "Review and apply the exact proposal as an authorized human",
+            expectedResult: "One native Draft case is linked to the reviewed requirement revision" }
+        ],
+        postconditions: "Published case identity persists; no result or Passed claim is invented.",
+        automationRepo: "1alextest/Tesbooboo",
+        automationPath: "e2e/api/requirements.spec.ts",
+        automationFramework: "Playwright"
+      } },
       { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] },
     ];
-    const stagedResponse = await stageRest(request, operations);
-    expect(stagedResponse.status(), await stagedResponse.text()).toBe(201);
-    const staged = await stagedResponse.json();
-    taskIds.push(staged.id);
+    const tokenResponse = await issueMcpTestToken(request, `${base}/apikeys`, {
+      data: { name: `E2E code-agent linked case ${suffix}`, scopes: ["read", "write"] }
+    });
+    expect(tokenResponse.ok(), await tokenResponse.text()).toBe(true);
+    const agentCredential = await tokenResponse.json();
+    tokenId = agentCredential.id;
+    mcp = await newRequest.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
+
+    // A machine client cannot directly publish native cases, even with write scope.
+    const denied = await mcp.post(`${base}/mcp`, {
+      headers: { Authorization: `Bearer ${agentCredential.token}` },
+      data: { jsonrpc: "2.0", id: 2, method: "tools/call",
+        params: { name: "create_testcase", arguments: { title: caseTitle } } }
+    });
+    expect(denied.ok(), await denied.text()).toBe(true);
+    expect((await denied.json()).error?.data?.code).toBe("HUMAN_PUBLICATION_REQUIRED");
+
+    const requestKey = randomUUID();
+    const proposed = await stageMcp(mcp, agentCredential.token, operations, requestKey);
+    const staged = proposed.task;
+    taskIds.push(proposed.taskId);
+    expect(proposed).toMatchObject({ publication: "unpublished", taskId: staged.id });
     expect(staged.skillContext).toMatchObject({ status: "resolved" });
     expect(staged.skillContext.assignments).toHaveLength(3);
+
+    // MCP staging is idempotent; it does not create a native requirement, case, link or approval.
+    const repeated = await stageMcp(mcp, agentCredential.token, operations, requestKey);
+    expect(repeated.taskId).toBe(staged.id);
+    const proposedCase = await request.get(`${base}/requirements/proposals/${staged.id}`);
+    expect(proposedCase.ok(), await proposedCase.text()).toBe(true);
+    expect((await proposedCase.json()).proposalRevision).toBe(staged.proposalRevision);
+    expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(ctx.projectId)} AND title=${literal(caseTitle)};`)).toBe("0");
+    expect(scalar(`SELECT COUNT(*)::int FROM knowledge_documents WHERE project_id=${literal(ctx.projectId)} AND title=${literal(title)};`)).toBe("0");
 
     const appliedResponse = await request.post(`${base}/requirements/proposals/${staged.id}/apply`, {
       data: { expectedProposalRevision: staged.proposalRevision }
@@ -315,6 +357,10 @@ test("governed skills allow protected publication, exact approval and separate c
     expect((await approvedRequirement.json()).approvedVersionId).toBeTruthy();
 
     const caseBefore = await (await request.get(`${base}/testcases/${caseId}`)).json();
+    expect(caseBefore.status).toBe("Draft");
+    expect(JSON.parse(caseBefore.steps)).toEqual(operations[1].draft.steps);
+    expect(caseBefore.automationRepo).toBe("1alextest/Tesbooboo");
+    expect(caseBefore.automationPath).toBe("e2e/api/requirements.spec.ts");
     const approvedCase = await request.post(`${base}/testcases/${caseId}/approve`, {
       data: { expectedRevision: caseBefore.editRevision, expectedApprovalRevision: caseBefore.approvalRevision }
     });
@@ -355,6 +401,8 @@ test("governed skills allow protected publication, exact approval and separate c
     expect(readings.readings).toMatchObject({ executed: true, passing: false, mixed: true });
     expect(readings.cases[0].latestAttempt.status).toBe("Failed");
   } finally {
+    if (mcp) await mcp.dispose();
+    if (tokenId) await request.delete(`${base}/apikeys/${tokenId}`, { failOnStatusCode: false });
     for (const id of taskIds) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
     if (requirementId) {
       exec(`DELETE FROM requirement_case_links WHERE project_id=${literal(ctx.projectId)} AND requirement_id=${literal(requirementId)};`);
