@@ -16750,17 +16750,15 @@ export class LegacyService implements OnModuleInit {
       await this.lockSkillAssignments(client, projectId);
       await this.lockTestcaseSuiteWrites(client, projectId);
       const authority = await this.requireProposalAuthority(client, projectId, uid);
-      if (String(authority.caller_role) !== "owner" && String(authority.caller_role) !== "manager") {
-        throw new ForbiddenException({ error: "Only project owners and managers can apply a requirement change bundle" });
-      }
+      // Use the shared normalized role policy here and after the wait, matching approval and link
+      // activation. Legacy admin/test_manager values are the manager interpretation.
+      this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
       const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
       const existing = locked.rows[0];
       if (!existing) throw new NotFoundException({ error: "Requirement proposal not found" });
       // Re-read current human authority after the task wait, before any reviewed content is used.
       const authorityAfterWait = await this.requireCurrentProjectAuthority(client, projectId, uid);
-      if (!["owner", "manager"].includes(String(authorityAfterWait.caller_role))) {
-        throw new ForbiddenException({ error: "Only project owners and managers can apply a requirement change bundle" });
-      }
+      this.kbRequireOwnerOrManager(this.normalizeRole(String(authorityAfterWait.caller_role)));
       if (!this.taskHasRequirementBundle(existing.generated_payload)) throw new BadRequestException({ error: "This task is not a requirement change bundle" });
       const prior = normalizeJsonArray(existing.save_events).find((event: Body) => event.decisionKey === decisionKey);
       if (prior) return { receipt: prior, replayed: true };

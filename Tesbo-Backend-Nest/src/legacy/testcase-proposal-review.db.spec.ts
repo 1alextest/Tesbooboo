@@ -616,6 +616,68 @@ type Body=Record<string,any>;
       }
     });
 
+    it("uses the normalized owner/manager role for bundle apply at both authorization points",async()=>{
+      const skills=await publishSkills();
+      const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
+      const taskIds:string[]=[];
+      let requirementId="";
+      let legacyId="";
+      let qaId="";
+      const addMember=async(role:string,label:string)=>{
+        const id=(await admin.query("INSERT INTO users(email,name) VALUES ($1,$2) RETURNING id",[`apply-${label.replaceAll(" ","-")}-${randomUUID()}@tesbo.invalid`,label])).rows[0].id;
+        await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[org,id]);
+        await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,$3)",[project,id,role]);
+        return id as string;
+      };
+      try{
+        legacyId=await addMember("test_manager","Legacy apply manager");
+        qaId=await addMember("qa_engineer","Apply reader");
+
+        const legacyBundle=await stageBundle(ops()); taskIds.push(legacyBundle.id);
+        const applied=await service().applyRequirementProposal(project,legacyId,legacyBundle.id,
+          {expectedProposalRevision:legacyBundle.proposalRevision},human);
+        expect(applied.replayed).toBe(false);
+        requirementId=applied.receipt.requirement.documentId;
+        expect(applied.receipt.reviewerId).toBe(legacyId);
+
+        const qaBundle=await stageBundle(ops()); taskIds.push(qaBundle.id);
+        await expect(service().applyRequirementProposal(project,qaId,qaBundle.id,
+          {expectedProposalRevision:qaBundle.proposalRevision},human))
+          .rejects.toMatchObject({status:403});
+        expect((await admin.query("SELECT task_status FROM ai_generation_requests WHERE id=$1",[qaBundle.id])).rows[0].task_status).toBe("in_review");
+
+        // Hold the task row after the initial authorization check, change the role, then release:
+        // the post-wait check must re-read and normalize the current role.
+        const waitBundle=await stageBundle(ops()); taskIds.push(waitBundle.id);
+        const blocker=new Client({connectionString:url}); await blocker.connect();
+        let pending:Promise<{v?:Body;e?:Body}>|undefined;
+        try{
+          await blocker.query("BEGIN");
+          await blocker.query("SELECT id FROM ai_generation_requests WHERE id=$1 FOR UPDATE",[waitBundle.id]);
+          pending=service().applyRequirementProposal(project,legacyId,waitBundle.id,
+            {expectedProposalRevision:waitBundle.proposalRevision},human).then(v=>({v}),e=>({e}));
+          expect(await waitUntil(()=>waitingOn("%ai_generation_requests%FOR UPDATE%"))).toBe(true);
+          await admin.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2",[project,legacyId]);
+          await blocker.query("COMMIT");
+          expect((await pending).e).toMatchObject({status:403});
+        }finally{
+          await blocker.query("ROLLBACK").catch(()=>undefined);
+          if(pending) await pending;
+          await blocker.end();
+        }
+        expect((await admin.query("SELECT task_status FROM ai_generation_requests WHERE id=$1",[waitBundle.id])).rows[0].task_status).toBe("in_review");
+      }finally{
+        for(const id of taskIds) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[id]);
+        if(requirementId) await cleanupRequirement(requirementId);
+        for(const id of [legacyId,qaId].filter(Boolean)){
+          await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,id]);
+          await admin.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2",[org,id]);
+          await admin.query("DELETE FROM users WHERE id=$1",[id]);
+        }
+        await cleanupSkills(skillIds);
+      }
+    });
+
     it("refuses activation until the requirement version is approved",async()=>{
       const skills=await publishSkills();
       const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
