@@ -61,9 +61,12 @@ and [R-ASE-06](docs/specs/agent-synchronized-engineering/requirements.md)
 for proposed native candidate/review semantics; do not treat unapproved Skills or
 unfrozen specifications as executable authority.
 
-For Tesbo self-testing, discover and reuse the existing **TESBOPROJECT** and its native
-requirements, cases, suites and regression history; never create a second project or infer
-a project ID from prose. With an actually authorized, current MCP connection, search for
+For persistent Tesbo self-testing records, discover and reuse the existing
+**TESBOPROJECT** and its native requirements, cases, suites and regression history;
+do not create a competing long-lived testing project or infer a project ID from prose.
+Destructive automated CI fixtures must instead remain in the suite's explicitly
+isolated disposable tenants and must **never** run against TESBOPROJECT. With an
+actually authorized, current MCP connection, search for
 existing native cases before staging appropriate new/updated cases using the permitted
 proposal tools and exact revision guards. Record the requirement/criterion link, test
 preconditions, actions and observable expected results, source/CI revision and
