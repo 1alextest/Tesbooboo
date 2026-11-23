@@ -1,38 +1,68 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 import type Redis from "ioredis";
 import { AppConfigService } from "../config/app-config.service";
 import { REDIS_CACHE_CLIENT } from "./redis-cache.tokens";
 
-// Same reasoning as SuitesCacheService: invalidation is the primary correctness mechanism, this TTL
-// is strictly a backstop for a missed hook or a failed Redis command.
+// Invalidation is the primary correctness mechanism; TTL bounds missed hooks/Redis failures.
 const TTL_SECONDS = 10;
 const MAX_VALUE_BYTES = 200 * 1024;
-// Bounds the per-project key-set index to roughly the cache entries' own lifetime, refreshed on every
-// add — an abandoned index (a project nobody revisits) just expires rather than growing forever.
-const KEY_INDEX_TTL_SECONDS = 20;
+// A generation outlives every page populated under it, but abandoned projects leave no permanent key.
+const GENERATION_TTL_SECONDS = 20;
 
-function listKey(projectId: string, limit: number, offset: number): string {
-  return `testcases-nofilter:${projectId}:${limit}:${offset}`;
+function projectKey(projectId: string): string {
+  // PostgreSQL UUID identity is case-insensitive. URL reads and DB-derived invalidations must agree.
+  // v2 never interprets an older worker's unversioned page as a generation-bound value.
+  return `testcases-nofilter:v2:{${projectId.toLowerCase()}}`;
 }
 
-function keyIndexKey(projectId: string): string {
-  return `testcases-nofilter-keys:${projectId}`;
+function generationKey(projectId: string): string {
+  return `${projectKey(projectId)}:generation`;
+}
+
+function listKey(projectId: string, limit: number, offset: number): string {
+  return `${projectKey(projectId)}:page:${limit}:${offset}`;
+}
+
+// Capture the generation and page in one Redis observation, before the authoritative query starts.
+// A missing/expired/evicted generation gets a new token, never a resettable default epoch.
+const READ_SCRIPT = `-- testcase-list-read-v2
+local generation = redis.call('GET', KEYS[1])
+if not generation then
+  generation = ARGV[1]
+  redis.call('SET', KEYS[1], generation, 'EX', ARGV[2])
+end
+return {generation, redis.call('GET', KEYS[2]) or false}
+`;
+
+// A read crossing invalidation may finish its old snapshot, but cannot seed later readers with it.
+// Never recreate a missing generation from the captured token: that would revive an obsolete read.
+const PUBLISH_SCRIPT = `-- testcase-list-publish-v2
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+  return 0
+end
+redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+redis.call('EXPIRE', KEYS[1], ARGV[4])
+return 1
+`;
+
+export interface TestcasesListCacheRead<T> {
+  value?: T;
+  generation?: string;
 }
 
 /**
- * Redis-backed cache for LegacyService.listTestCases(projectId, query) — but only for the shape with
- * every filter dimension absent (plain pagination through the whole non-archived repository), never
- * for an arbitrary filtered/sorted/searched query. See Phase Set C's C2 for why: listTestCases takes
- * ~10 independent, freely-combinable filter params, so caching arbitrary shapes would produce
- * near-zero hit rates and unbounded per-project Redis key growth.
+ * Cache for the unfiltered LegacyService testcase list, keyed by project and pagination only.
+ * Filters, sorting and search continue to use the authoritative query directly.
  *
- * One project can have several distinct (limit, offset) cache entries alive at once (unlike
- * SuitesCacheService's single per-project key), so invalidation walks a per-project secondary index
- * of the exact keys currently populated — the same SADD-index pattern SessionCacheService uses for
- * invalidateAllForUser — rather than trying to guess every live key.
+ * Every page carries the generation captured before its query. Atomic generation rotation makes
+ * all project pages unreadable at once, without a secondary key index or enumeration/deletion race.
+ * Old page bytes expire under the existing ten-second bound. Each serving worker must use this
+ * protocol; a mixed fleet with older unfenced workers is not a consistency guarantee.
  *
- * Best-effort throughout, exactly like the other Redis caches: a Redis error is treated as a cache
- * miss, so the caller always falls back to running the real query.
+ * Redis remains optional: failed/disabled reads have no population token and fall back to Postgres.
+ * Failed invalidation remains best-effort with the TTL backstop; this is not a durable DB/Redis
+ * transaction or a guarantee against Redis restoring older state during failover.
  */
 @Injectable()
 export class TestcasesListCacheService {
@@ -43,47 +73,55 @@ export class TestcasesListCacheService {
     private readonly config: AppConfigService
   ) {}
 
-  async get<T>(projectId: string, limit: number, offset: number): Promise<T | undefined> {
-    if (!this.config.testcasesListCacheEnabled) return undefined;
+  async read<T>(projectId: string, limit: number, offset: number): Promise<TestcasesListCacheRead<T>> {
+    if (!this.config.testcasesListCacheEnabled) return {};
     try {
-      const raw = await this.redis.get(listKey(projectId, limit, offset));
-      if (raw === null) return undefined;
-      return JSON.parse(raw) as T;
+      const response = await this.redis.eval(
+        READ_SCRIPT, 2, generationKey(projectId), listKey(projectId, limit, offset),
+        randomUUID(), GENERATION_TTL_SECONDS
+      );
+      if (!Array.isArray(response) || response.length !== 2 || typeof response[0] !== "string" ||
+          (response[1] !== null && typeof response[1] !== "string")) {
+        throw new Error("Unexpected testcase cache read response");
+      }
+      const [generation, raw] = response as [string, string | null];
+      if (raw === null) return { generation };
+      const envelope: unknown = JSON.parse(raw);
+      if (typeof envelope !== "object" || envelope === null ||
+          !("generation" in envelope) || envelope.generation !== generation || !("value" in envelope)) {
+        return { generation };
+      }
+      return { generation, value: envelope.value as T };
     } catch (error) {
       this.logger.warn(`testcases-list cache read failed, falling back to Postgres: ${(error as Error).message}`);
-      return undefined;
+      return {};
     }
   }
 
-  async set<T>(projectId: string, limit: number, offset: number, value: T): Promise<void> {
-    if (!this.config.testcasesListCacheEnabled) return;
+  async get<T>(projectId: string, limit: number, offset: number): Promise<T | undefined> {
+    return (await this.read<T>(projectId, limit, offset)).value;
+  }
+
+  async set<T>(projectId: string, limit: number, offset: number, value: T, generation: string | undefined): Promise<void> {
+    if (!this.config.testcasesListCacheEnabled || !generation) return;
     try {
-      const serialized = JSON.stringify(value);
-      // Oversized payload: skip caching rather than storing it — a fail-open, not an error.
+      const serialized = JSON.stringify({ generation, value });
+      // Bound the actual stored envelope; oversized results still return intact from Postgres.
       if (Buffer.byteLength(serialized, "utf8") > MAX_VALUE_BYTES) return;
-      const key = listKey(projectId, limit, offset);
-      const indexKey = keyIndexKey(projectId);
-      await this.redis.multi().set(key, serialized, "EX", TTL_SECONDS).sadd(indexKey, key).expire(indexKey, KEY_INDEX_TTL_SECONDS).exec();
+      await this.redis.eval(
+        PUBLISH_SCRIPT, 2, generationKey(projectId), listKey(projectId, limit, offset),
+        generation, serialized, TTL_SECONDS, GENERATION_TTL_SECONDS
+      );
     } catch (error) {
       this.logger.warn(`testcases-list cache write failed (non-fatal): ${(error as Error).message}`);
     }
   }
 
-  /** Called once, after a write to `testcases` for this project has durably committed. Clears every
-   *  (limit, offset) variant cached for the project, not just one. */
+  /** Called after a testcase write commits. One atomic rotation invalidates every pagination variant. */
   async invalidate(projectId: string): Promise<void> {
     if (!this.config.testcasesListCacheEnabled) return;
     try {
-      const indexKey = keyIndexKey(projectId);
-      const keys = await this.redis.smembers(indexKey);
-      if (!keys.length) {
-        await this.redis.del(indexKey);
-        return;
-      }
-      const pipeline = this.redis.multi();
-      for (const key of keys) pipeline.del(key);
-      pipeline.del(indexKey);
-      await pipeline.exec();
+      await this.redis.set(generationKey(projectId), randomUUID(), "EX", GENERATION_TTL_SECONDS);
     } catch (error) {
       this.logger.warn(`testcases-list cache invalidation failed (non-fatal): ${(error as Error).message}`);
     }

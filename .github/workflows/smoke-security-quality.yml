@@ -108,6 +108,14 @@ jobs:
       - name: Verify explicit tracing opt-in and installed SDK export boundaries
         working-directory: Tesbo-Backend-Nest
         run: npx jest --runInBand src/observability
+      - name: Verify testcase cache generation fencing with disposable Redis
+        working-directory: Tesbo-Backend-Nest
+        env:
+          TESTCASES_CACHE_TEST_REDIS_URL: redis://127.0.0.1:6379
+        run: |
+          # Reuse this job's throwaway Redis; the integration spec refuses non-loopback targets
+          # and cleans only its unique project keys. The pure regression also proves real cache hits.
+          npm test -- --runTestsByPath src/legacy/testcase-list-cache-consistency.spec.ts src/legacy/testcase-requirement-cache.spec.ts src/cache/testcases-list-cache.redis.integration.spec.ts
       - name: Verify Review Board runtime evidence in the disposable stack
         working-directory: Tesbo-Backend-Nest
         env:
@@ -471,6 +479,23 @@ jobs:
           npx playwright test -c playwright.config.ts \
             api/billing.spec.ts ui/billing.spec.ts \
             --workers=2 --retries=0 --output=test-results-native-billing
+      - name: Verify testcase cache metadata writers and repository consumers
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-testcase-cache
+        run: |
+          # These complete owner files include Launch/expired-grace refusals. Reuse the
+          # billing-enabled disposable backend verified by the preceding billing step.
+          # Full existing owners: definition/value/tag writes change the cached row or its approval
+          # state; repository counters and pagination consume it. Retain every case and refusal.
+          npx playwright test -c playwright.config.ts \
+            api/custom-fields.spec.ts api/custom-field-values.spec.ts api/custom-tags.spec.ts \
+            ui/testcases-repository.spec.ts ui/testcases-pagination.spec.ts \
+            --workers=10 --retries=0 --output=test-results-testcase-cache --list
+          npx playwright test -c playwright.config.ts \
+            api/custom-fields.spec.ts api/custom-field-values.spec.ts api/custom-tags.spec.ts \
+            ui/testcases-repository.spec.ts ui/testcases-pagination.spec.ts \
+            --workers=10 --retries=0 --output=test-results-testcase-cache
       - name: Verify requirement preview authorization with billing enabled and preview off/on
         working-directory: e2e
         env:

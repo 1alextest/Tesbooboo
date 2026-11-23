@@ -932,7 +932,8 @@ and L7 (direct external-provider refusal test) remain tracked follow-ups; L1/L3/
 **Scope and authority:** the owner accepted the PR221 reliability follow-ups on 23 November 2026.
 This continuation reuses PR226's version-constrained replay, per-group state, alias normalization and
 regressions, then extends the existing link activation endpoint, coverage projection and task review
-panel. PR228 is a dependent continuation into PR226, not a competing development implementation.
+panel. PR228 began as a dependent continuation targeting PR226. It now targets development,
+preserving the merged PR226 history and the merged PR232 testcase-list cache repair.
 It introduces no link writer, proposal store, approval policy, schema, OAuth principal or
 alternative regression project. Implementation and execution evidence remain separate from native
 TESBOPROJECT acceptance; record actual CI and review receipts on the corresponding PR.

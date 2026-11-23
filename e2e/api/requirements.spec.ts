@@ -317,6 +317,14 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
     expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(ctx.projectId)} AND title=${literal(caseTitle)};`)).toBe("0");
     expect(scalar(`SELECT COUNT(*)::int FROM knowledge_documents WHERE project_id=${literal(ctx.projectId)} AND title=${literal(title)};`)).toBe("0");
 
+    // Warm the exact unfiltered repository shape before this independent publication path commits.
+    // Its case must appear without another testcase write, filtered bypass, sleep or TTL workaround.
+    const repositoryBeforeResponse = await request.get(`${base}/testcases`, { params: { limit: 500, offset: 0 } });
+    expect(repositoryBeforeResponse.ok(), await repositoryBeforeResponse.text()).toBe(true);
+    const repositoryBefore = await repositoryBeforeResponse.json();
+    expect(repositoryBefore.some((row: { title: string }) => row.title === caseTitle)).toBe(false);
+    expect(Buffer.byteLength(JSON.stringify(repositoryBefore), "utf8")).toBeLessThan(190 * 1024);
+
     const appliedResponse = await request.post(`${base}/requirements/proposals/${staged.id}/apply`, {
       data: { expectedProposalRevision: staged.proposalRevision }
     });
@@ -325,6 +333,12 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
     requirementId = applied.receipt.requirement.documentId;
     const requirementVersionId = applied.receipt.requirement.versionId as string;
     const caseId = applied.receipt.testcase.id as string;
+
+    const repositoryAfterResponse = await request.get(`${base}/testcases`, { params: { limit: 500, offset: 0 } });
+    expect(repositoryAfterResponse.ok(), await repositoryAfterResponse.text()).toBe(true);
+    expect(await repositoryAfterResponse.json()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: caseId, title: caseTitle, status: "Draft", approvalCurrent: false }),
+    ]));
 
     // The task payload the review surface reloads carries the exact submitted version identity,
     // and only the bounded identities — never the proposal snapshot or decision digest.

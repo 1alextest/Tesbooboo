@@ -4710,12 +4710,14 @@ export class LegacyService implements OnModuleInit {
     // a guessed subset — see Phase Set C's C2 for why includeArchived in particular had to be added
     // here (it's a separate field from `status` that also widens the result set).
     const cacheable = LegacyService.isNoFilterTestcasesQuery(query);
-    if (cacheable) {
-      const cached = await this.testcasesListCache.get<{ rows: Body[]; total: number }>(projectId, limit, offset);
-      if (cached !== undefined) return cached;
-    }
+    // Capture the population token before the query. A later invalidation must fence this read out,
+    // even if another worker has already populated a newer page by the time this query finishes.
+    const cached = cacheable
+      ? await this.testcasesListCache.read<{ rows: Body[]; total: number }>(projectId, limit, offset)
+      : undefined;
+    if (cached?.value !== undefined) return cached.value;
     const result = await this.listTestCasesUncached(projectId, query, limit, offset);
-    if (cacheable) await this.testcasesListCache.set(projectId, limit, offset, result);
+    if (cacheable) await this.testcasesListCache.set(projectId, limit, offset, result, cached?.generation);
     return result;
   }
 
@@ -16820,6 +16822,12 @@ export class LegacyService implements OnModuleInit {
           testcaseId: testcase?.id ?? null, linkId: link?.id ?? null, skillContext: currentSkills }, client);
       return { receipt, replayed: false };
     });
+    if (!result.replayed && result.receipt?.testcase?.id) {
+      // This bundle uses the nested case writer; its outer commit owns repository projections.
+      // Replays and requirement-only bundles publish no testcase and need no cache mutation.
+      await this.suitesCache.invalidate(projectId);
+      await this.testcasesListCache.invalidate(projectId);
+    }
     if (result.receipt?.requirement?.documentId && organizationId) {
       this.enqueueEmbedding(organizationId, projectId, "document", String(result.receipt.requirement.documentId), "updated");
     }
