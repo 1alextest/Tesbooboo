@@ -9,6 +9,8 @@ export const REPO='1alextest/Tesbooboo';
 // from 8becc53fae3fe6eb299f00c07e278647d4370be3, combined with PR193's WPA-01
 // selection on development f456af1b. PR209 adds the reviewed runtime-migrator contract
 // to the existing container-security job. Contexts are defined here once.
+// PR #232 adds reviewed testcase cache protocol and metadata-consumer coverage inside
+// the existing smoke job; its source pin changes without changing required contexts.
 // A workflow edit (including a same-name job edit) requires source review and pin reconciliation.
 // PR #223 proposes a new, separately tested agent-pr-handoff-contracts job. The existing
 // required 24 CI contexts remain intact; adding this job to live required checks is a
@@ -22,7 +24,7 @@ export const WORKFLOW_SOURCES=[
   contexts:['sdk-quality','frontend-quality','backend-quality','architecture-quality']},
  {path:'.github/workflows/behavioral-quality.yml',sha:'39161db0ed9758a7c4161555a0b26d7679438fa7',
   contexts:['api-mcp-contracts','database-integrity','transactional-concurrency']},
- {path:'.github/workflows/smoke-security-quality.yml',sha:'d9f69e8fa0f9685f3b59537c668bb9a7f93572f5',
+ {path:'.github/workflows/smoke-security-quality.yml',sha:'b554af6daa18f0dd69fb7a3f2ab7cb6a59cbd890',
   contexts:['playwright-smoke','dependency-audit','container-security']},
  {path:'.github/workflows/security-analysis.yml',sha:'39249b3ae3702887e51bafbd5d26ea4d7b6befad',
   contexts:['codeql-javascript-typescript','dependency-lock-integrity (sdk/playwright-reporter)',
