@@ -11,6 +11,19 @@ import { decryptSecret, encryptSecret, oauthReferenceFingerprint } from "../comm
  * not stored or represented here.
  */
 export type ProviderRecord = Record<string, unknown>;
+
+/** Public interface required by oidc-provider; hide implementation-private fields
+ * from the exported factory's declaration type (TS4094 under CommonJS). */
+export interface McpOAuthProviderAdapter {
+  upsert(id: string, payload: ProviderRecord, expiresIn?: number): Promise<void>;
+  find(id: string): Promise<ProviderRecord | undefined>;
+  findByUid(uid: string): Promise<ProviderRecord | undefined>;
+  findByUserCode(userCode: string): Promise<ProviderRecord | undefined>;
+  consume(id: string): Promise<void>;
+  destroy(id: string): Promise<void>;
+  revokeByGrantId(grantId: string): Promise<void>;
+}
+export type McpOAuthProviderAdapterConstructor = new (model: string) => McpOAuthProviderAdapter;
 type StoredRow = { encrypted_payload: string; consumed_at: Date | string | null };
 
 const MAX_PAYLOAD_BYTES = 256 * 1024;
@@ -51,7 +64,7 @@ function expiresAt(model: string, lifetimeSeconds?: number): string | null {
   return new Date(limit).toISOString();
 }
 
-export function createMcpOAuthPostgresAdapter(db: Pick<DatabaseService, "query">) {
+export function createMcpOAuthPostgresAdapter(db: Pick<DatabaseService, "query">): McpOAuthProviderAdapterConstructor {
   return class McpOAuthPostgresAdapter {
     private readonly model: string;
 
