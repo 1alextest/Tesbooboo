@@ -48,6 +48,37 @@ Work only in `1alextest/Tesbooboo`; `development` is the integration branch and 
 
 Read the current canonical package before related work: [00_README.md](docs/qa-orchestration/00_README.md) and the seven companion files through [07_UI_DESIGN_TASKS.md](docs/qa-orchestration/07_UI_DESIGN_TASKS.md), published together under `docs/qa-orchestration/`. The [source manifest](docs/qa-orchestration/source-manifest.json) binds the exact owner-supplied v1.4.45 archive and all eight original files. The package remains **NOT FROZEN**; repository publication does not extend earlier review scopes or establish implementation, acceptance or deployment. Retain each original file's own historical revision headers. The single `Tesbo_Existing_Application_Baseline_v1.0.md` remains the owner's external living work record; read it when available and report missing access rather than inventing a substitute. The older `origin/docs/qa-specs-product-direction-20261028` branch contains only two older canonical files and is historical, not the current package source. Follow [06_IMPLEMENTATION_AGENT_BRIEF.md](docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md) and its session product-distillation contract. The separate PR extension under `docs/qa-orchestration/extensions/` retains its own scope and EXT-* IDs; its mention does not assert that the extension is present on this branch. Preserve existing `CLAUDE.md` and module-specific instructions; resolve material conflicts explicitly.
 
+## Coding changes and native Tesbo QA records
+
+When implementing a feature, defect fix or meaningful behavior change, do **both** parts of the
+engineering work: write and execute the relevant repository unit/integration/E2E tests, **and**
+assess the matching native Tesbo Requirements, Test Cases, Manuals, Policies, Tasks/Bugs and
+Files/Evidence. Assess Skills governance and record a justified `unchanged`, `not_applicable`
+or `blocked` outcome for domains that do not require a change. This is one connected
+change history, not seven obligatory new records. See the existing
+[ASER agent authoring contract](docs/specs/agent-synchronized-engineering/AGENT_RULE_TEMPLATE.md)
+and [R-ASE-06](docs/specs/agent-synchronized-engineering/requirements.md)
+for proposed native candidate/review semantics; do not treat unapproved Skills or
+unfrozen specifications as executable authority.
+
+For persistent Tesbo self-testing records, discover and reuse the existing
+**TESBOPROJECT** and its native requirements, cases, suites and regression history;
+do not create a competing long-lived testing project or infer a project ID from prose.
+Destructive automated CI fixtures must instead remain in the suite's explicitly
+isolated disposable tenants and must **never** run against TESBOPROJECT. With an
+actually authorized, current MCP connection, search for
+existing native cases before staging appropriate new/updated cases using the permitted
+proposal tools and exact revision guards. Record the requirement/criterion link, test
+preconditions, actions and observable expected results, source/CI revision and
+review-task identity. Machine proposals are **unpublished** until a permitted human
+applies them; approval, Run admission and actually executed evidence remain distinct.
+
+If MCP project consent, effective Skills assignment, writer capability or access is
+missing, do not bypass it by direct REST/DB writes, invent an official Test Case ID,
+or claim an agent's code tests are native Test Run results. Report the specific
+`Tesbo sync not performed` gap and retain a reviewable PR handoff for the existing
+native records. A CI-green source commit is not a Tesbo-approved or executed case.
+
 ## Session product distillation
 
 Capture meaningful friction, corrections, workarounds, missing capabilities and successful reusable practices with exact source/permission/version references. At milestones/handoff, classify observations, inspect existing functionality/specs/candidates, and update the same Product Discovery Register. Link repeated observations rather than duplicating features. Propose testable amendments with alternatives, impact and uncertainties. Preserve historical decisions and allow a truthful no-new-discovery outcome. Retrospective review uses only authorized accessible sources and records coverage gaps and processed revisions.
