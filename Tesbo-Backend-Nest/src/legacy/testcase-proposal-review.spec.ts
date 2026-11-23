@@ -369,6 +369,10 @@ describe("native proposal producer identity — stable review/replay lineage", (
     )).toThrow(ForbiddenException);
   });
 
+  it.each([undefined, "", "not-a-token-uuid"])("fails closed on missing or malformed API-token identity: %p", tokenId => {
+    expect(() => nativeProposalProducerIdentity({ kind: "api_token", tokenId }, user)).toThrow(ForbiddenException);
+  });
+
   it("keeps identity stable across equivalent retries, distinct across producer kinds", () => {
     const first = nativeProposalProducerIdentity({ kind: "api_token", tokenId: token, transport: "rest" }, user);
     const retry = nativeProposalProducerIdentity({ kind: "api_token", tokenId: token, transport: "mcp" }, user);
