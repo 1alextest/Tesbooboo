@@ -619,6 +619,8 @@ type Body=Record<string,any>;
       const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
       let requirementId="";
       let caseId="";
+      let readerId="";
+      let legacyRoleId="";
       try{
         const staged=await stageBundle(ops());
         expect(staged.skillContext).toMatchObject({status:"resolved"});
@@ -669,17 +671,129 @@ type Body=Record<string,any>;
         await expect(service().reapplyRequirementCaseLink(project,user,requirementId,randomUUID(),
           {expectedCaseRevision:caseAfter.edit_revision,expectedApprovalRevision:caseAfter.approval_revision},human))
           .rejects.toMatchObject({status:404});
-        const reader=(await admin.query("INSERT INTO users(email,name) VALUES ($1,'Link activation reader') RETURNING id",[`link-reader-${randomUUID()}@tesbo.invalid`])).rows[0].id;
-        await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[org,reader]);
-        await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[project,reader]);
-        await expect(service().reapplyRequirementCaseLink(project,reader,requirementId,link.linkId,
+        readerId=(await admin.query("INSERT INTO users(email,name) VALUES ($1,'Link activation reader') RETURNING id",[`link-reader-${randomUUID()}@tesbo.invalid`])).rows[0].id;
+        await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[org,readerId]);
+        await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[project,readerId]);
+        await expect(service().reapplyRequirementCaseLink(project,readerId,requirementId,link.linkId,
           {expectedCaseRevision:caseAfter.edit_revision,expectedApprovalRevision:caseAfter.approval_revision},human))
           .rejects.toMatchObject({status:403});
-        await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,reader]);
+
+        // A legacy project role normalizes to manager, matching requirement approval and the
+        // surface's affordance. The missing link gives a 404 once authorization passes; raw
+        // role matching would return 403.
+        legacyRoleId=(await admin.query("INSERT INTO users(email,name) VALUES ($1,'Legacy link manager') RETURNING id",[`link-legacy-${randomUUID()}@tesbo.invalid`])).rows[0].id;
+        await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[org,legacyRoleId]);
+        await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'test_manager')",[project,legacyRoleId]);
+        await expect(service().reapplyRequirementCaseLink(project,legacyRoleId,requirementId,randomUUID(),
+          {expectedCaseRevision:caseAfter.edit_revision,expectedApprovalRevision:caseAfter.approval_revision},human))
+          .rejects.toMatchObject({status:404});
+
         await admin.query("UPDATE requirement_case_links SET state='retired' WHERE project_id=$1 AND requirement_id=$2",[project,requirementId]);
         await expect(service().reapplyRequirementCaseLink(project,user,requirementId,link.linkId,
           {expectedCaseRevision:"1".repeat(64),expectedApprovalRevision:"1".repeat(64)},human))
           .rejects.toMatchObject({status:409,response:{code:"LINK_NOT_ACTIVE"}});
+      }finally{
+        if(requirementId) await cleanupRequirement(requirementId);
+        for(const fixtureUserId of [readerId,legacyRoleId].filter(Boolean)){
+          await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,fixtureUserId]);
+          await admin.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2",[org,fixtureUserId]);
+          await admin.query("DELETE FROM users WHERE id=$1",[fixtureUserId]);
+        }
+        await cleanupSkills(skillIds);
+      }
+    });
+
+    it("replays activation only against the current approved requirement version",async()=>{
+      const skills=await publishSkills();
+      const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
+      let requirementId="";
+      let caseId="";
+      try{
+        const staged=await stageBundle(ops());
+        const applied=await service().applyRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human);
+        requirementId=applied.receipt.requirement.documentId;
+        caseId=applied.receipt.testcase.id;
+        await service().approveRequirementVersion(project,user,requirementId,{versionId:applied.receipt.requirement.versionId},human);
+        const caseBefore=await revisionsOf(caseId);
+        await service().approveTestCaseForUser(user,project,caseId,{expectedRevision:caseBefore.edit_revision,expectedApprovalRevision:caseBefore.approval_revision},human);
+        const caseAfter=await revisionsOf(caseId);
+        const coverage=await service().requirementCoverage(project,user,requirementId);
+        const original=coverage.cases.find((item:Body)=>item.requirementVersionId===coverage.latestSubmittedVersionId)||coverage.cases[0];
+        // The lost-response activation commits a new link on approved v1.
+        const activated=await service().reapplyRequirementCaseLink(project,user,requirementId,original.linkId,
+          {expectedCaseRevision:caseAfter.edit_revision,expectedApprovalRevision:caseAfter.approval_revision},human);
+        expect(activated.replayed).toBe(false);
+        const lostLink=String(activated.link.id);
+        const lostVersion=String(activated.link.requirementVersionId);
+
+        // A newer requirement version is submitted and approved after the lost response.
+        const updated=await service().updateKnowledgeDocument(project,user,requirementId,{
+          contentJson:{schemaVersion:"tesbo-requirement/1",description:"Newer requirement content",criteria:[{key:"AC-1",text:"Newer obligation"}]},
+          contentText:"Newer requirement content",contentHtml:"<p>Newer requirement content</p>",expectedRevision:await revision(requirementId)
+        });
+        const submitted=await service().submitKnowledgeDocument(project,user,requirementId,
+          {expectedRevision:updated.editRevision,submissionKey:randomUUID()},human);
+        const approvedV2=await service().approveRequirementVersion(project,user,requirementId,{versionId:submitted.id},human);
+
+        // Retrying the inactive original link must not replay the v1 generation after v2 approval.
+        const before=await admin.query("SELECT id,state,requirement_version_id,testcase_revision,testcase_approval_revision FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 ORDER BY id",[project,requirementId]);
+        await expect(service().reapplyRequirementCaseLink(project,user,requirementId,original.linkId,
+          {expectedCaseRevision:caseAfter.edit_revision,expectedApprovalRevision:caseAfter.approval_revision},human))
+          .rejects.toMatchObject({status:409,response:{code:"LINK_NOT_ACTIVE"}});
+        const after=await admin.query("SELECT id,state,requirement_version_id,testcase_revision,testcase_approval_revision FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 ORDER BY id",[project,requirementId]);
+        expect(after.rows).toEqual(before.rows);
+        expect(after.rows.find(row=>String(row.id)===lostLink)).toMatchObject({state:"active",requirement_version_id:lostVersion});
+
+        // The still-active v1 link can be intentionally rebound to the current approved version; the
+        // returned identity is the new v2 link, and the v1 generation is retired.
+        const rebound=await service().reapplyRequirementCaseLink(project,user,requirementId,lostLink,
+          {expectedCaseRevision:caseAfter.edit_revision,expectedApprovalRevision:caseAfter.approval_revision},human);
+        expect(rebound.replayed).toBe(false);
+        expect(String(rebound.link.id)).not.toBe(lostLink);
+        expect(String(rebound.link.requirementVersionId)).toBe(String(approvedV2.approvedVersionId));
+        const active=await admin.query("SELECT id,state,requirement_version_id FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 AND state='active'",[project,requirementId]);
+        expect(active.rows.some(row=>String(row.id)===String(rebound.link.id)&&String(row.requirement_version_id)===String(approvedV2.approvedVersionId))).toBe(true);
+        expect(active.rows.some(row=>String(row.id)===lostLink)).toBe(false);
+      }finally{
+        if(requirementId) await cleanupRequirement(requirementId);
+        await cleanupSkills(skillIds);
+      }
+    });
+
+    it("activates one exact criterion group without retiring a different array order",async()=>{
+      const skills=await publishSkills();
+      const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
+      let requirementId="";
+      let caseId="";
+      try{
+        const staged=await stageBundle(ops());
+        const applied=await service().applyRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human);
+        requirementId=applied.receipt.requirement.documentId;
+        caseId=applied.receipt.testcase.id;
+        await service().approveRequirementVersion(project,user,requirementId,{versionId:applied.receipt.requirement.versionId},human);
+        const caseBefore=await revisionsOf(caseId);
+        await service().approveTestCaseForUser(user,project,caseId,{expectedRevision:caseBefore.edit_revision,expectedApprovalRevision:caseBefore.approval_revision},human);
+        const caseAfter=await revisionsOf(caseId);
+        const approvedVersion=String((await admin.query("SELECT reviewed_version_id FROM knowledge_documents WHERE id=$1",[requirementId])).rows[0].reviewed_version_id);
+        const insert=async(keys:string[])=>String((await admin.query(
+          `INSERT INTO requirement_case_links
+             (project_id,requirement_id,requirement_version_id,criterion_keys,testcase_id,testcase_revision,testcase_approval_revision,state,proposed_by,applied_by,applied_at)
+           VALUES ($1,$2,$3,$4::text[],$5,$6,$7,'active',$8,$8,now()) RETURNING id`,
+          [project,requirementId,approvedVersion,keys,caseId,caseAfter.edit_revision,caseAfter.approval_revision,user]
+        )).rows[0].id);
+        const groupA=await insert(["AC-1","AC-2"]);
+        const groupB=await insert(["AC-2","AC-1"]);
+        const otherBefore=await admin.query("SELECT id,state,criterion_keys FROM requirement_case_links WHERE id=$1",[groupB]);
+        const activated=await service().reapplyRequirementCaseLink(project,user,requirementId,groupA,
+          {expectedCaseRevision:caseAfter.edit_revision,expectedApprovalRevision:caseAfter.approval_revision},human);
+        expect(activated.replayed).toBe(false);
+        expect(activated.link.criterionKeys).toEqual(["AC-1","AC-2"]);
+        expect((await admin.query("SELECT state FROM requirement_case_links WHERE id=$1",[groupA])).rows[0].state).toBe("retired");
+        const otherAfter=await admin.query("SELECT id,state,criterion_keys FROM requirement_case_links WHERE id=$1",[groupB]);
+        expect(otherAfter.rows).toEqual(otherBefore.rows);
+        const active=await admin.query("SELECT id,criterion_keys FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 AND testcase_id=$3 AND state='active' ORDER BY id",[project,requirementId,caseId]);
+        expect(active.rows.some(row=>String(row.id)===String(activated.link.id)&&JSON.stringify(row.criterion_keys)===JSON.stringify(["AC-1","AC-2"]))).toBe(true);
+        expect(active.rows.some(row=>String(row.id)===groupB&&JSON.stringify(row.criterion_keys)===JSON.stringify(["AC-2","AC-1"]))).toBe(true);
       }finally{
         if(requirementId) await cleanupRequirement(requirementId);
         await cleanupSkills(skillIds);

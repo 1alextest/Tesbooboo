@@ -16906,19 +16906,30 @@ export class LegacyService implements OnModuleInit {
     }
     return this.db.transaction(async client => {
       const access = await this.requireCurrentProjectAuthority(client, projectId, uid);
-      if (!["owner", "manager"].includes(String(access.caller_role))) throw new ForbiddenException({ error: "Only project owners and managers can re-apply a requirement link" });
+      // Use the same normalized role policy as requirement approval and the review surface:
+      // legacy admin/test_manager values normalize to manager.
+      if (!["owner", "manager"].includes(this.normalizeRole(String(access.caller_role)))) {
+        throw new ForbiddenException({ error: "Only project owners and managers can re-apply a requirement link" });
+      }
       const doc = (await client.query(
         `SELECT id,document_type,source_provider,reviewed_version_id FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE`,
         [documentId, projectId]
       )).rows[0];
       if (!doc || doc.document_type !== "requirement_note" || doc.source_provider) throw new NotFoundException({ error: "Native requirement not found" });
+      if (!doc.reviewed_version_id) {
+        throw new ConflictException({ code: "REQUIREMENT_NOT_APPROVED", error: "Approve the exact requirement version before activating a case link" });
+      }
+      const requirementVersionId = String(doc.reviewed_version_id);
       const link = (await client.query("SELECT * FROM requirement_case_links WHERE id=$1 AND project_id=$2 AND requirement_id=$3 FOR UPDATE", [linkId, projectId, documentId])).rows[0];
       if (!link) throw new NotFoundException({ error: "Requirement link not found" });
       if (link.state !== "active") {
+        // A lost-response retry may only replay the current approved generation, never a link that
+        // was superseded by a later requirement approval.
         const prior = (await client.query(
           `SELECT * FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 AND testcase_id=$3
-             AND testcase_revision=$4 AND testcase_approval_revision=$5 AND criterion_keys=$6 AND state='active' LIMIT 1`,
-          [projectId, documentId, link.testcase_id, expectedCaseRevision, expectedApprovalRevision, link.criterion_keys]
+             AND testcase_revision=$4 AND testcase_approval_revision=$5 AND criterion_keys=$6
+             AND requirement_version_id=$7 AND state='active' LIMIT 1`,
+          [projectId, documentId, link.testcase_id, expectedCaseRevision, expectedApprovalRevision, link.criterion_keys, requirementVersionId]
         )).rows[0];
         if (prior) return { link: toCamel(prior), retiredLinkId: String(link.id), replayed: true };
         throw new ConflictException({ code: "LINK_NOT_ACTIVE", error: "This link is no longer active; load the current requirement coverage and choose an active link" });
@@ -16933,10 +16944,6 @@ export class LegacyService implements OnModuleInit {
       if (testcase.approval_current !== true || String(testcase.approval_revision) !== expectedApprovalRevision) {
         throw new ConflictException({ code: "CASE_NOT_APPROVED", error: "The case is not currently approved at the reviewed revision" });
       }
-      if (!doc.reviewed_version_id) {
-        throw new ConflictException({ code: "REQUIREMENT_NOT_APPROVED", error: "Approve the exact requirement version before activating a case link" });
-      }
-      const requirementVersionId = String(doc.reviewed_version_id);
       // One live relation per case/criteria. Retire every active/proposed generation that would
       // collide with the current approved basis, not only the row the caller happened to read.
       await client.query(

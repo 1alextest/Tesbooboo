@@ -125,8 +125,8 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
   const [caseBasesNonce, setCaseBasesNonce] = useState(0);
   const [activatingLinkId, setActivatingLinkId] = useState<string | null>(null);
   const [activationErrors, setActivationErrors] = useState<Record<string, string>>({});
-  const [activationNotice, setActivationNotice] = useState<{ groupKey: string; testcaseId: string; linkId: string; retiredLinkId: string; replayed: boolean } | null>(null);
-  const [unconfirmedActivation, setUnconfirmedActivation] = useState<{ groupKey: string; linkId: string; testcaseId: string; criterionKeys: string[]; caseRevision: string; approvalRevision: string } | null>(null);
+  const [activationNotices, setActivationNotices] = useState<Record<string, { groupKey: string; testcaseId: string; linkId: string; retiredLinkId: string; replayed: boolean }>>({});
+  const [unconfirmedActivations, setUnconfirmedActivations] = useState<Record<string, { groupKey: string; linkId: string; testcaseId: string; criterionKeys: string[]; caseRevision: string; approvalRevision: string }>>({});
 
   const [approving, setApproving] = useState(false);
   const [approvalError, setApprovalError] = useState<string | null>(null);
@@ -210,24 +210,29 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
   // An activation whose response was lost is reconciled from coverage: if the same case is now
   // active on the approved version, the commit is verified and the unconfirmed message is cleared.
   useEffect(() => {
-    if (!coverage || !unconfirmedActivation) return;
-    // Reconcile only this case + criterion group on the approved version. Another approved group
-    // for the same case must never be presented as the result of this activation.
-    const item = coverage.cases.find((entry) => linkGroupKey(entry) === unconfirmedActivation.groupKey
-      && entry.approved && entry.requirementVersionId === coverage.approvedVersionId);
-    if (!item) return;
-    setActivationErrors((previous) => {
-      if (!previous[unconfirmedActivation.groupKey]) return previous;
-      const next = { ...previous };
-      delete next[unconfirmedActivation.groupKey];
-      return next;
-    });
-    setActivationNotice({
-      groupKey: unconfirmedActivation.groupKey, testcaseId: unconfirmedActivation.testcaseId,
-      linkId: item.linkId, retiredLinkId: unconfirmedActivation.linkId, replayed: true
-    });
-    setUnconfirmedActivation(null);
-  }, [coverage, unconfirmedActivation]);
+    if (!coverage || Object.keys(unconfirmedActivations).length === 0) return;
+    const remaining = { ...unconfirmedActivations };
+    let changed = false;
+    for (const [groupKey, attempt] of Object.entries(unconfirmedActivations)) {
+      // Reconcile each attempt independently. Only this case + criterion group on the approved
+      // version can verify it; another approved group must never be presented as this result.
+      const item = coverage.cases.find((entry) => linkGroupKey(entry) === groupKey
+        && entry.approved && entry.requirementVersionId === coverage.approvedVersionId);
+      if (!item) continue;
+      delete remaining[groupKey];
+      setActivationErrors((previous) => {
+        if (!previous[groupKey]) return previous;
+        const next = { ...previous };
+        delete next[groupKey];
+        return next;
+      });
+      setActivationNotices((previous) => ({ ...previous, [groupKey]: {
+        groupKey, testcaseId: attempt.testcaseId, linkId: item.linkId, retiredLinkId: attempt.linkId, replayed: true
+      } }));
+      changed = true;
+    }
+    if (changed) setUnconfirmedActivations(remaining);
+  }, [coverage, unconfirmedActivations]);
 
   // An approved snapshot names the exact submission it came from. A different approved
   // submission must never render as if this reviewed version were approved.
@@ -293,12 +298,22 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
       delete next[groupKey];
       return next;
     });
-    setActivationNotice(null);
+    setActivationNotices((previous) => {
+      const next = { ...previous };
+      delete next[groupKey];
+      return next;
+    });
     try {
       const result = await reapplyRequirementCaseLink(projectId, documentId, item.linkId, basis.editRevision, basis.approvalRevision);
       if (!mounted.current) return;
-      setActivationNotice({ groupKey, testcaseId: item.testcaseId, linkId: result.link.id, retiredLinkId: result.retiredLinkId, replayed: result.replayed });
-      setUnconfirmedActivation(null);
+      setActivationNotices((previous) => ({ ...previous, [groupKey]: {
+        groupKey, testcaseId: item.testcaseId, linkId: result.link.id, retiredLinkId: result.retiredLinkId, replayed: result.replayed
+      } }));
+      setUnconfirmedActivations((previous) => {
+        const next = { ...previous };
+        delete next[groupKey];
+        return next;
+      });
       setCoverageNonce((value) => value + 1);
       setCaseBasesNonce((value) => value + 1);
     } catch (err) {
@@ -327,10 +342,10 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
         uncertain = true;
       }
       setActivationErrors((previous) => ({ ...previous, [groupKey]: message }));
-      if (uncertain) setUnconfirmedActivation({
+      if (uncertain) setUnconfirmedActivations((previous) => ({ ...previous, [groupKey]: {
         groupKey, linkId: item.linkId, testcaseId: item.testcaseId, criterionKeys: item.criterionKeys,
-        caseRevision: basis.editRevision, approvalRevision: basis.approvalRevision
-      });
+        caseRevision: basis.editRevision, approvalRevision: String(basis.approvalRevision)
+      } }));
       setCoverageNonce((value) => value + 1);
       setCaseBasesNonce((value) => value + 1);
     } finally {
@@ -541,7 +556,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
                   const basisState = caseBases[item.testcaseId];
                   const basis = basisState?.basis ?? null;
                   const activationError = activationErrors[groupKey];
-                  const notice = activationNotice?.groupKey === groupKey ? activationNotice : null;
+                  const notice = activationNotices[groupKey] ?? null;
                   const requirementApproved = Boolean(coverage.approvedVersionId);
                   const activationReady = canApprove && !activatingLinkId && requirementApproved
                     && basis?.approvalCurrent === true && basis.editRevision.length === 64 && Boolean(basis.approvalRevision) && !item.approved;
