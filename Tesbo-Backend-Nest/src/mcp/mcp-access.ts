@@ -74,3 +74,23 @@ export function onlyReducesMcpAccess(before: ProjectMcpAccess, after: ProjectMcp
     return true;
   });
 }
+
+/**
+ * The credential's effective scopes, its owner-approved MCP grant, and the explicit
+ * tool allowlist must ALL permit an operation. This is deliberately credential-type
+ * neutral: OAuth must eventually resolve a valid principal and grant before reaching
+ * this boundary, never invent an API-token ID or skip current DB/role/consent checks.
+ *
+ * This pure predicate does not establish authentication, membership or grant freshness.
+ * Those are revalidated by the existing McpService authority on every request.
+ */
+export function hasApprovedMcpToolPermission(
+  credentialScopes: readonly string[],
+  grant: { readonly scopes: readonly ("read" | "write")[]; readonly allowedTools: readonly string[] | null },
+  requiredScope: "read" | "write",
+  toolName: string
+): boolean {
+  return credentialScopes.includes(requiredScope) &&
+    grant.scopes.includes(requiredScope) &&
+    (grant.allowedTools === null || grant.allowedTools.includes(toolName));
+}
