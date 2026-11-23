@@ -1582,7 +1582,7 @@ export interface RequirementCoverageCase {
   criterionKeys: string[];
   /** The exact requirement version this link was applied against. */
   requirementVersionId: string;
-  /** The exact case revision the link was applied against. */
+  /** Persisted link basis, distinct from the case's current edit/approval revisions. */
   testcaseRevision: string;
   testcaseApprovalRevision: string | null;
   authored: boolean;
@@ -1633,11 +1633,12 @@ export async function reapplyRequirementCaseLink(
   documentId: string,
   linkId: string,
   expectedCaseRevision: string,
-  expectedApprovalRevision: string
+  expectedApprovalRevision: string,
+  expectedRequirementVersionId?: string
 ): Promise<{ link: RequirementCaseLinkRecord; retiredLinkId: string; replayed: boolean }> {
   return api(`/api/projects/${projectId}/requirements/${documentId}/links/${linkId}/reapply`, {
     method: "POST",
-    body: { expectedCaseRevision, expectedApprovalRevision },
+    body: { expectedCaseRevision, expectedApprovalRevision, expectedRequirementVersionId },
   });
 }
 

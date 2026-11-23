@@ -126,7 +126,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
   const [activatingLinkId, setActivatingLinkId] = useState<string | null>(null);
   const [activationErrors, setActivationErrors] = useState<Record<string, string>>({});
   const [activationNotices, setActivationNotices] = useState<Record<string, { groupKey: string; testcaseId: string; linkId: string; retiredLinkId: string; replayed: boolean }>>({});
-  const [unconfirmedActivations, setUnconfirmedActivations] = useState<Record<string, { groupKey: string; linkId: string; testcaseId: string; criterionKeys: string[]; caseRevision: string; approvalRevision: string }>>({});
+  const [unconfirmedActivations, setUnconfirmedActivations] = useState<Record<string, { groupKey: string; linkId: string; testcaseId: string; criterionKeys: string[]; requirementVersionId: string; caseRevision: string; approvalRevision: string }>>({});
 
   const [approving, setApproving] = useState(false);
   const [approvalError, setApprovalError] = useState<string | null>(null);
@@ -207,17 +207,17 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
     return () => { active = false; };
   }, [coverage, projectId, caseBasesNonce]);
 
-  // An activation whose response was lost is reconciled from coverage: if the same case is now
-  // active on the approved version, the commit is verified and the unconfirmed message is cleared.
+  // Reconcile the exact requested state from persisted link revisions. This confirms the current
+  // matching link, not which actor committed it or whether an older generation was retired.
   useEffect(() => {
-    if (!coverage || Object.keys(unconfirmedActivations).length === 0) return;
+    if (!coverage || coverageLoading || coverageError || Object.keys(unconfirmedActivations).length === 0) return;
     const remaining = { ...unconfirmedActivations };
     let changed = false;
     for (const [groupKey, attempt] of Object.entries(unconfirmedActivations)) {
-      // Reconcile each attempt independently. Only this case + criterion group on the approved
-      // version can verify it; another approved group must never be presented as this result.
+      // A later requirement/case approval or another ordered group cannot verify this attempt.
       const item = coverage.cases.find((entry) => linkGroupKey(entry) === groupKey
-        && entry.approved && entry.requirementVersionId === coverage.approvedVersionId
+        && entry.approved && entry.requirementVersionId === attempt.requirementVersionId
+        && coverage.approvedVersionId === attempt.requirementVersionId
         && entry.testcaseRevision === attempt.caseRevision
         && entry.testcaseApprovalRevision === attempt.approvalRevision);
       if (!item) continue;
@@ -229,12 +229,19 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
         return next;
       });
       setActivationNotices((previous) => ({ ...previous, [groupKey]: {
-        groupKey, testcaseId: attempt.testcaseId, linkId: item.linkId, retiredLinkId: attempt.linkId, replayed: true
+        groupKey, testcaseId: attempt.testcaseId, linkId: item.linkId, retiredLinkId: "", replayed: true
       } }));
       changed = true;
     }
-    if (changed) setUnconfirmedActivations(remaining);
-  }, [coverage, unconfirmedActivations]);
+    if (changed) setUnconfirmedActivations((previous) => {
+      const next = { ...previous };
+      for (const [groupKey, attempt] of Object.entries(unconfirmedActivations)) {
+        // Preserve an attempt recorded after this read/effect captured its input.
+        if (!remaining[groupKey] && next[groupKey] === attempt) delete next[groupKey];
+      }
+      return next;
+    });
+  }, [coverage, coverageLoading, coverageError, unconfirmedActivations]);
 
   // An approved snapshot names the exact submission it came from. A different approved
   // submission must never render as if this reviewed version were approved.
@@ -292,8 +299,10 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
     const basisState = caseBases[item.testcaseId];
     const basis = basisState?.basis;
     const groupKey = linkGroupKey(item);
-    if (!canApprove || activatingLinkId || !coverage?.approvedVersionId || !basis || !basis.approvalCurrent
+    if (!canApprove || activatingLinkId || coverageLoading || coverageError || basisState?.loading || basisState?.error
+      || !coverage?.approvedVersionId || !basis || !basis.approvalCurrent
       || !basis.approvalRevision || basis.editRevision.length !== 64 || item.approved) return;
+    const requirementVersionId = coverage.approvedVersionId;
     setActivatingLinkId(item.linkId);
     setActivationErrors((previous) => {
       const next = { ...previous };
@@ -306,7 +315,8 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
       return next;
     });
     try {
-      const result = await reapplyRequirementCaseLink(projectId, documentId, item.linkId, basis.editRevision, basis.approvalRevision);
+      const result = await reapplyRequirementCaseLink(projectId, documentId, item.linkId,
+        basis.editRevision, basis.approvalRevision, requirementVersionId);
       if (!mounted.current) return;
       setActivationNotices((previous) => ({ ...previous, [groupKey]: {
         groupKey, testcaseId: item.testcaseId, linkId: result.link.id, retiredLinkId: result.retiredLinkId, replayed: result.replayed
@@ -316,6 +326,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
         delete next[groupKey];
         return next;
       });
+      setCoverageLoading(true);
       setCoverageNonce((value) => value + 1);
       setCaseBasesNonce((value) => value + 1);
     } catch (err) {
@@ -331,6 +342,9 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
           message = "The case is not currently approved at the revision on screen. Approve the case first.";
         } else if (err.status === 409 && err.code === "REQUIREMENT_NOT_APPROVED") {
           message = "The requirement version is not approved. Approve the exact requirement version before activating the link.";
+        } else if (err.status === 409 && err.code === "REQUIREMENT_VERSION_CONFLICT") {
+          message = "The approved requirement version changed since it was displayed. Review the current version before activating its link.";
+          setContentNonce((value) => value + 1);
         } else if (err.status === 409 && err.code === "LINK_NOT_ACTIVE") {
           message = "That link is no longer active. Reload the current coverage and choose the current link.";
         } else if (err.status >= 500) {
@@ -345,9 +359,10 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
       }
       setActivationErrors((previous) => ({ ...previous, [groupKey]: message }));
       if (uncertain) setUnconfirmedActivations((previous) => ({ ...previous, [groupKey]: {
-        groupKey, linkId: item.linkId, testcaseId: item.testcaseId, criterionKeys: item.criterionKeys,
+        groupKey, linkId: item.linkId, testcaseId: item.testcaseId, criterionKeys: item.criterionKeys, requirementVersionId,
         caseRevision: basis.editRevision, approvalRevision: String(basis.approvalRevision)
       } }));
+      setCoverageLoading(true);
       setCoverageNonce((value) => value + 1);
       setCaseBasesNonce((value) => value + 1);
     } finally {
@@ -477,6 +492,22 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
           )}
         </div>
 
+        {Object.keys(unconfirmedActivations).length > 0 && (
+          <Button size="sm" variant="secondary" className="mt-2"
+            disabled={coverageLoading || Boolean(activatingLinkId)}
+            onClick={() => { setCoverageLoading(true); reconcile(); }}>
+            Verify activation outcomes
+          </Button>
+        )}
+        {Object.entries(activationErrors)
+          .filter(([groupKey]) => !linkedCases.some((item) => linkGroupKey(item) === groupKey))
+          .map(([groupKey, message]) => (
+            <p key={groupKey} className="mt-2 rounded-lg border border-[var(--error)]/40 bg-[var(--error-soft)] px-3 py-2 text-sm text-[var(--error-foreground)]"
+              role="alert" data-testid={`requirement-link-error-${groupKey}`}>
+              {message} The previously selected link is not shown on the current coverage basis.
+            </p>
+          ))}
+
         {coverageLoading && !coverage && <p className="mt-2 text-sm text-[var(--muted)]" data-testid="requirement-coverage-loading">Loading coverage…</p>}
         {coverageLoading && coverage && <p className="mt-2 text-xs text-[var(--muted)]" data-testid="requirement-coverage-refreshing">Refreshing coverage…</p>}
         {coverageError && (
@@ -558,9 +589,11 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
                   const basisState = caseBases[item.testcaseId];
                   const basis = basisState?.basis ?? null;
                   const activationError = activationErrors[groupKey];
-                  const notice = activationNotices[groupKey] ?? null;
+                  const notice = !coverageLoading && !coverageError && item.approved
+                    && activationNotices[groupKey]?.linkId === item.linkId ? activationNotices[groupKey] : null;
                   const requirementApproved = Boolean(coverage.approvedVersionId);
-                  const activationReady = canApprove && !activatingLinkId && requirementApproved
+                  const activationReady = canApprove && !activatingLinkId && !coverageLoading && !coverageError
+                    && !basisState?.loading && !basisState?.error && requirementApproved
                     && basis?.approvalCurrent === true && basis.editRevision.length === 64 && Boolean(basis.approvalRevision) && !item.approved;
                   const activationReasons = [
                     ...(item.reasons.includes("REQUIREMENT_VERSION_SUPERSEDED") ? ["the link still targets the submitted requirement version"] : []),

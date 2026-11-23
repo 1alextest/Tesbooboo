@@ -926,3 +926,110 @@ Activation reliability dispositions (REQ-WPA-12):
 
 Remaining #219 items: L2 (backend missing-source guard), L5 (exact case-id deep link), L6 (explicit newer-basis test)
 and L7 (direct external-provider refusal test) remain tracked follow-ups; L1/L3/L4/L8/L9 are fixed or asserted.
+
+### 16.7 Activation reliability continuation — exact basis and independent recovery
+
+**Scope and authority:** the owner accepted the PR221 reliability follow-ups on 23 November 2026.
+This continuation reuses PR226's version-constrained replay, per-group state, alias normalization and
+regressions, then extends the existing link activation endpoint, coverage projection and task review
+panel. PR228 began as a dependent continuation targeting PR226. It now targets development,
+preserving the merged PR226 history and the merged PR232 testcase-list cache repair.
+It introduces no link writer, proposal store, approval policy, schema, OAuth principal or
+alternative regression project. Implementation and execution evidence remain separate from native
+TESBOPROJECT acceptance; record actual CI and review receipts on the corresponding PR.
+
+**Existing owners and observed gaps.** `LegacyService.reapplyRequirementCaseLink` owns the human
+activation transaction and immutable link generations. Its retired-link replay lookup lacked the
+current approved requirement version and preceded the missing-approval check. The task panel quoted
+case revisions but not the displayed approved requirement version, and kept only one pending outcome
+and one notice across criterion groups. Its coverage reconciliation did not compare the captured case
+revisions. `requirementCoverage` already selects the persisted case revisions but did not project them.
+The current API, schema index and UI all preserve criterion array order; this continuation preserves
+that identity and tests the reversed-order neighbor rather than silently normalizing history.
+
+**Bounded contract:**
+
+- The existing activation request accepts optional `expectedRequirementVersionId`. When present it
+  must be a UUID and match the requirement's approved version under the existing transaction lock,
+  before replay or mutation. A changed displayed basis produces `409 REQUIREMENT_VERSION_CONFLICT`
+  with no link, audit or document changes. The supplied version precondition is evaluated first;
+  without it, missing approval remains `REQUIREMENT_NOT_APPROVED`.
+  The task panel always supplies the approved version it displayed. Existing callers that omit the
+  field retain their current-basis behavior; their absence does not prove what a human previously saw.
+- A retired-link retry may return an active generation only on the current approved requirement
+  basis, for the same case, exact ordered criterion group and requested case revisions. A stale
+  requirement basis cannot return an older generation as current. Existing historic rows remain
+  readable and unchanged; a legitimate retry creates neither a new generation nor a second audit.
+  Before returning a replay candidate, the writer also validates the case's current edit and approval
+  basis. It acquires the case lock, then reads the snapshots in a fresh statement, following the
+  existing case-approval owner so dependency changes committed during a lock wait are visible.
+  A missing candidate retains `LINK_NOT_ACTIVE`; a changed or unapproved case cannot turn historical
+  data into successful current activation.
+- Coverage projects the existing stored `testcaseRevision` and nullable `testcaseApprovalRevision`
+  for each link. These identify the linked basis; they are not substituted with the current mutable
+  case's revisions. Existing authored/approved/executed/passing definitions remain unchanged.
+- The panel retains pending outcomes and notices by exact ordered group. Starting or completing one
+  group cannot erase another group's uncertainty. Confirmation requires that group's captured
+  approved requirement ID, case edit revision and case approval revision to match a currently
+  approved persisted link. A newer approved link can describe current coverage without proving the
+  earlier uncertain request succeeded. A failed read remains unavailable, never an empty result.
+- Pending outcomes expose **Verify activation outcomes**, using the existing coverage read and
+  preserving their captured basis. Activation remains unavailable while the prerequisite coverage
+  or case-basis reads are unsettled. HTTP 5xx and lost responses remain unconfirmed until a qualifying
+  authoritative read, and do not authorize an automatic new write.
+- Activation uses the existing canonical owner/manager role policy, including the documented legacy
+  `admin` and `test_manager` aliases. Pre-PR226 `FEATURE_DOCUMENTATION.md` (role table and Project
+  Members), `normalizeRole`, `parseRole`, knowledge approval and the older knowledge permission helper
+  independently establish this mapping. The literal predicate introduced by the link writer was
+  inconsistent with that owner. PR226 restores the shared normalizer; this continuation preserves it.
+  The initially proposed raw-alias-denial test was an incorrect oracle and is corrected to prove
+  legitimate alias activation plus QA/machine refusal, with valid active-workspace membership so the
+  tests actually reach the role guard. No new role or machine permission is introduced.
+
+**Verification plan:** extend the existing migrated-DB proposal suite, API requirements journey and
+Skills/task UI suite. Prove current-basis replay, cleared/moved requirement approval, stale displayed
+basis, malformed optional input, legacy request compatibility, ordered neighbor preservation, exact
+coverage revisions, independent uncertain groups, later-revision nonconfirmation, and permission/5xx
+truth. Fault injection delays or loses actual native responses; it does not invent a successful
+receipt. Run destructive fixtures only in the established disposable CI tenants. Preserve the
+original failing-source result, the fixed-source result and any intervening fixture correction.
+
+**Native records:** reuse the existing TESBOPROJECT. PR226 reports a staged REQ-WPA-12 reliability
+bundle (task `3a961980-261a-47d9-b019-7331027b4695`) alongside the older REQ-WPA-11 lead. Treat that PR
+receipt as a discovery lead, verify the live identities/revisions and reuse or update the matching
+records before proposing new ones. Then stage the reviewable cases from the existing cross-module
+acceptance ledger. At this
+continuation's discovery, the session exposed no Tesbo connector, the Tesbo plugin search had no
+result, and the browser required sign-in. Current native inventories, assignments and exact IDs were
+not verified. **Tesbo sync not performed; native cases and executions remain Draft/UNRUN or blocked.**
+Repository tests must not be relabeled as official Tesbo executions. The source-side cases and
+operator contract can be prepared while this access gap remains.
+
+### 16.8 Unresolved governed activation basis — separate from reliability delivery
+
+**Observed contradiction:** §4.5 requires effective, pinned Skills checks for link re-application,
+but the current link writer does not call the assignment lock, effective resolver or pinned-context
+assertion. Requirement approval does. This is a pre-existing source-level gap; the current session
+has not executed a live revoked-assignment activation or verified TESBOPROJECT's assignments.
+
+Copying the approval guard alone does not resolve every supported lifecycle. A full requirement +
+case + link bundle pins all three operation targets, while a valid requirement-only revision pins
+only `requirement_revision`. Its submitted/approved version preserves that narrower context, and
+the current bundle normalizer requires a new case for a link operation. Consequently, reapplying an
+existing case after a requirement-only revision cannot simply require a link pin on the new snapshot
+without breaking the existing intentional rebind path.
+
+**Decision needed:** which reviewed immutable Skill context authorizes link re-application after a
+requirement-only revision? Options include retaining and validating the originating link's reviewed
+context, explicitly carrying forward a reviewed link context into the new requirement review, or
+requiring an explicit new link review. Each has different stale-context and user-review consequences.
+The recommendation is to define that lineage through the existing proposal/version owners, then
+enforce effective assignments and exact reviewed pins in the shared writer for both fresh activation
+and replay. Do not silently fabricate a pin or substitute the latest assignment for reviewed consent.
+
+This requires authorized product/governance judgment and a focused contract amendment; it is not an
+unambiguous guard insertion. The bounded reliability repair can proceed, but **complete governed
+activation acceptance remains partial** until this decision, implementation and a real regression
+for revoked/changed assignments are complete. No new schema, service, live approval or bypass is
+authorized by recording this gap. Preserve the observation in the existing living work record and
+matching native task when the permitted connection is available.
