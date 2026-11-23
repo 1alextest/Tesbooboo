@@ -27,7 +27,7 @@ import { writeNotifications } from "./notification-writer";
 import { assertNotGenericApproval, expectedApprovalRevision, expectedTestcaseRevision, TESTCASE_APPROVAL_CURRENT_SQL, TESTCASE_APPROVAL_REVISION_SQL, TESTCASE_EDIT_REVISION_SQL } from "./testcase-edit-revision";
 import { requireHumanReviewPrincipal, type ReviewPrincipal } from "../common/human-review-principal";
 import { readMcpAccess } from "../mcp/mcp-access";
-import { expectedProposalRevision, MAX_TESTCASE_PROPOSAL_OPERATIONS, proposalDigest, selectedProposalIndexes, TESTCASE_PROPOSAL_FIELDS, type TestcaseProposalPrincipal } from "./testcase-proposal-review";
+import { expectedProposalRevision, MAX_TESTCASE_PROPOSAL_OPERATIONS, proposalDigest, selectedProposalIndexes, TESTCASE_PROPOSAL_FIELDS, nativeProposalProducerIdentity, type TestcaseProposalPrincipal } from "./testcase-proposal-review";
 import { expectedKnowledgeDocumentRevision, knowledgeDocumentAiContextSql, knowledgeDocumentContentDigest, KNOWLEDGE_DOCUMENT_REVISION_SQL } from "./knowledge-document-revision";
 import { classifySkillResolution, findSkillAssignmentConflicts, requirementBundleTargets, resolveEffectiveSkills, type SkillResolution } from "../skills/skills-governance";
 import { isCoverageAnalysisRequest, notificationLinks, notificationMessages, runLabel, type NotificationLink, type NotificationType } from "./notification-events";
@@ -16050,11 +16050,9 @@ export class LegacyService implements OnModuleInit {
       return { opType: raw.opType, native: true, testcaseId: String(raw.testcaseId), targetEditRevision: revision,
         fields: raw.opType === "archive" ? { status: "Archived" } : fields, reason: String(raw.reason || "").slice(0, 4000) };
     });
-    const principalKey = principal.kind === "api_token" ? `api_token:${principal.tokenId}` : `human_session:${uid}`;
+    const { principalKey, producerActorId, provenance, activityActor } = nativeProposalProducerIdentity(principal, uid);
     const title = String(body.title || "Proposed testcase changes").trim().slice(0, 512);
     const requestDigest = proposalDigest({ title, operations });
-    const producerActorId = principal.kind === "human_session" ? uid : principal.actorId ?? null;
-    const provenance = { kind: principal.kind, principalKey, issuerId: uid, tokenId: principal.tokenId ?? null, actorId: producerActorId };
     const taskId = await this.db.transaction(async client => {
       await this.lockTestcaseSuiteWrites(client, projectId);
       const authority = await this.requireProposalAuthority(client, projectId, uid);
@@ -16083,7 +16081,7 @@ export class LegacyService implements OnModuleInit {
         `INSERT INTO ai_generation_requests
           (project_id,requested_by,provider,model,user_story,requested_count,generated_count,generated_payload,agent_name,task_status,proposal_request_key,proposal_request_digest,proposal_provenance,activity_log)
          VALUES ($1,$2,'external_proposal',NULL,$3,$4,$4,$5::jsonb,$6,'in_review',$7,$8,$9::jsonb,$10::jsonb) RETURNING id`,
-        [projectId,uid,title,operations.length,JSON.stringify(operations),ZYRA_AGENT_NAME,requestKey,requestDigest,JSON.stringify(provenance),JSON.stringify([{actor:principal.kind === "api_token" ? "agent" : "user",stage:"in_review",title:"Submitted testcase proposals",detail:`${operations.length} unpublished proposal(s) await human review.`,createdAt:new Date().toISOString(),provenance}])]
+        [projectId,uid,title,operations.length,JSON.stringify(operations),ZYRA_AGENT_NAME,requestKey,requestDigest,JSON.stringify(provenance),JSON.stringify([{actor: activityActor,stage:"in_review",title:"Submitted testcase proposals",detail:`${operations.length} unpublished proposal(s) await human review.`,createdAt:new Date().toISOString(),provenance}])]
       );
       await this.logProjectActivity(projectId, producerActorId, "testcase_proposals_staged", "ai_generation_request", result.rows[0].id, title, { provenance, requestDigest, count: operations.length }, client);
       return String(result.rows[0].id);
@@ -16114,9 +16112,7 @@ export class LegacyService implements OnModuleInit {
     const bundle = this.normalizeRequirementBundle(body.operations);
     const title = String(body.title || "Proposed requirement change bundle").trim().slice(0, 512);
     const requestDigest = proposalDigest({ title, operations: bundle.operations });
-    const principalKey = principal.kind === "api_token" ? `api_token:${principal.tokenId}` : `human_session:${uid}`;
-    const producerActorId = principal.kind === "human_session" ? uid : principal.actorId ?? null;
-    const provenance = { kind: principal.kind, principalKey, issuerId: uid, tokenId: principal.tokenId ?? null, actorId: producerActorId };
+    const { principalKey, producerActorId, provenance, activityActor } = nativeProposalProducerIdentity(principal, uid);
     const taskId = await this.db.transaction(async client => {
       await this.lockSkillAssignments(client, projectId);
       await this.lockTestcaseSuiteWrites(client, projectId);
@@ -16147,7 +16143,7 @@ export class LegacyService implements OnModuleInit {
          VALUES ($1,$2,'external_requirement_proposal',NULL,$3,$4,$4,$5::jsonb,$6,'in_review',$7,$8,$9::jsonb,$10::jsonb,$11::jsonb) RETURNING id`,
         [projectId, uid, title, bundle.operations.length, JSON.stringify(bundle.operations), ZYRA_AGENT_NAME, requestKey,
           requestDigest, JSON.stringify(provenance),
-          JSON.stringify([{ actor: principal.kind === "api_token" ? "agent" : "user", stage: "in_review",
+          JSON.stringify([{ actor: activityActor, stage: "in_review",
             title: "Submitted requirement change bundle",
             detail: "One requirement revision, one testcase candidate and one link intent await human review. Nothing was published.",
             createdAt: new Date().toISOString(), provenance, skillContext }]), JSON.stringify(skillContext)]
