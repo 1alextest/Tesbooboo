@@ -145,10 +145,13 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
   useEffect(() => { void loadContent(); }, [loadContent, contentNonce]);
   useEffect(() => { void loadCoverage(); }, [loadCoverage, coverageNonce]);
 
+  // An approved snapshot names the exact submission it came from. A different approved
+  // submission must never render as if this reviewed version were approved.
+  const approvedAs = reviewedVersion && reviewedVersion.snapshotKind === "approved"
+    && reviewedVersion.snapshotMetadata?.sourceVersionId === versionId ? reviewedVersion : null;
   // A lost approval response is reconciled by re-reading the review state. If the server did
   // commit, show the verified approval instead of leaving an "unconfirmed" message on screen.
-  const approvedByReload = Boolean(reviewedVersion && reviewedVersion.snapshotKind === "approved"
-    && reviewedVersion.snapshotMetadata?.sourceVersionId === versionId);
+  const approvedByReload = Boolean(approvedAs);
   useEffect(() => {
     if (!approvedByReload) return;
     setApprovalError((current) => current?.includes("could not be confirmed") ? null : current);
@@ -199,18 +202,18 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
   // The criterion text is the exact submitted version's, not the current mutable document's.
   // Readings still come from the coverage endpoint, joined by criterion key.
   const coverageCriteria = coverage
-    ? (criteria.length
-      ? criteria.map((criterion) => {
-        const reading = coverage.criteria.find((item) => item.key === criterion.key);
-        return { ...criterion, caseCount: reading?.caseCount ?? 0, authored: reading?.authored ?? false,
-          approved: reading?.approved ?? false, executed: reading?.executed ?? false,
-          passing: reading?.passing ?? false, mixed: reading?.mixed ?? false };
-      })
-      : coverage.criteria)
+    ? criteria.map((criterion) => {
+      const reading = coverage.criteria.find((item) => item.key === criterion.key);
+      return { ...criterion, caseCount: reading?.caseCount ?? 0, authored: reading?.authored ?? false,
+        approved: reading?.approved ?? false, executed: reading?.executed ?? false,
+        passing: reading?.passing ?? false, mixed: reading?.mixed ?? false };
+    })
     : [];
+  const coverageMatchesReviewedVersion = Boolean(coverage && (
+    approvedAs
+    || (coverage.latestSubmittedVersionId && coverage.latestSubmittedVersionId === versionId)));
   const review = reviewState(document, reviewedVersion, versionId);
   const approvalReady = canApprove && !contentLoading && !contentError && Boolean(version) && Boolean(document) && !review.approved && !approving;
-  const approvedAs = reviewedVersion?.snapshotKind === "approved" ? reviewedVersion : null;
 
   return (
     <Card className="p-4 space-y-4" data-testid="requirement-review-panel">
@@ -306,7 +309,11 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
           </div>
           {!coverageLoading && !coverageError && coverage && (
             <span className="text-xs text-[var(--muted)]" data-testid="requirement-coverage-basis">
-              Requirement {coverage.approvedVersionId ? "approved version" : "submitted version"} basis
+              {approvedAs
+                ? "Coverage basis: this approved version"
+                : coverage.latestSubmittedVersionId === versionId
+                  ? "Coverage basis: this latest submitted version"
+                  : "Coverage basis: a newer approved/submitted version"}
             </span>
           )}
         </div>
@@ -331,6 +338,17 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
               {coverage.readings.mixed && <StatusChip tone="warning">Mixed PASS/FAIL attempts</StatusChip>}
             </div>
 
+            {!coverageMatchesReviewedVersion && (
+              <p className="mt-2 text-xs text-[var(--warning-foreground)]" data-testid="requirement-coverage-other-basis">
+                The current coverage basis is a newer version. These readings describe that basis, not the version under review.
+              </p>
+            )}
+
+            {coverageCriteria.length === 0 ? (
+              <p className="mt-3 text-sm text-[var(--muted)]" data-testid="requirement-coverage-no-criteria">
+                This submitted version stored no acceptance criteria. The coverage readings above still use the current coverage basis.
+              </p>
+            ) : (
             <div className="mt-3 overflow-x-auto">
               <table className="w-full min-w-[720px] border-collapse text-left text-sm">
                 <thead className="text-xs uppercase tracking-[0.08em] text-[var(--muted-soft)]">
@@ -360,12 +378,13 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
                 </tbody>
               </table>
             </div>
+            )}
 
             <div className="mt-4 space-y-2">
               <h4 className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Linked cases</h4>
               {coverage.cases.length === 0 ? (
                 <p className="text-sm text-[var(--muted)]" data-testid="requirement-coverage-empty">
-                  Coverage loaded successfully: no case is linked to this requirement version yet. That is a truthful zero, not an unavailable read.
+                  Coverage loaded successfully: no case is linked on the coverage basis shown above. That is a truthful zero, not an unavailable read.
                 </p>
               ) : (
                 coverage.cases.map((item) => (
