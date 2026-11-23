@@ -78,7 +78,9 @@ function versionBasisLabel(item: RequirementCoverageCase, coverage: RequirementC
 
 /** One live relation is scoped to a case *and* its criterion set, not to the case alone. */
 function linkGroupKey(item: Pick<RequirementCoverageCase, "testcaseId" | "criterionKeys">): string {
-  return `${item.testcaseId}-${[...item.criterionKeys].sort().join("-")}`;
+  // Preserve the exact array order the backend uses for its retire/replay comparison, and use a
+  // separator the criterion-key grammar does not allow so keys cannot collide with the join.
+  return `${item.testcaseId}::${item.criterionKeys.join("::")}`;
 }
 
 /**
@@ -310,6 +312,8 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
           message = "The case changed since this revision was read. Reload and review the current approved revision before activating.";
         } else if (err.status === 409 && err.code === "CASE_NOT_APPROVED") {
           message = "The case is not currently approved at the revision on screen. Approve the case first.";
+        } else if (err.status === 409 && err.code === "REQUIREMENT_NOT_APPROVED") {
+          message = "The requirement version is not approved. Approve the exact requirement version before activating the link.";
         } else if (err.status === 409 && err.code === "LINK_NOT_ACTIVE") {
           message = "That link is no longer active. Reload the current coverage and choose the current link.";
         } else if (err.status >= 500) {
@@ -541,8 +545,10 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
                   const requirementApproved = Boolean(coverage.approvedVersionId);
                   const activationReady = canApprove && !activatingLinkId && requirementApproved
                     && basis?.approvalCurrent === true && basis.editRevision.length === 64 && Boolean(basis.approvalRevision) && !item.approved;
-                  const needsActivation = !item.approved && item.reasons.some((reason) =>
-                    reason === "REQUIREMENT_VERSION_SUPERSEDED" || reason === "CASE_REVISION_CHANGED_OR_NOT_APPROVED");
+                  const activationReasons = [
+                    ...(item.reasons.includes("REQUIREMENT_VERSION_SUPERSEDED") ? ["the link still targets the submitted requirement version"] : []),
+                    ...(item.reasons.includes("CASE_REVISION_CHANGED_OR_NOT_APPROVED") ? ["the case is not approved at the linked revision"] : []),
+                  ];
                   const hiddenGenerations = coverage.cases.filter((entry) => linkGroupKey(entry) === groupKey).length > 1;
                   return (
                   <div key={groupKey} className="rounded-lg border border-[var(--border)] p-3" data-testid={`requirement-coverage-case-${groupKey}`}>
@@ -613,11 +619,9 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
                           ? `active on the approved requirement version (link ${item.linkId.slice(0, 8)}…).`
                           : "not active on the approved requirement version."}
                       </p>
-                      {needsActivation && (
+                      {activationReasons.length > 0 && (
                         <p className="mt-1 text-xs text-[var(--muted)]">
-                          Activation is needed because {item.reasons.includes("REQUIREMENT_VERSION_SUPERSEDED")
-                            ? "the link still targets the submitted requirement version"
-                            : "the case was approved after the link was authored"}.
+                          Activation is needed because {activationReasons.join(" and ")}.
                         </p>
                       )}
                       {activationError && (

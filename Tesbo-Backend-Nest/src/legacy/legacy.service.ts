@@ -16759,7 +16759,10 @@ export class LegacyService implements OnModuleInit {
       if (testcase.approval_current !== true || String(testcase.approval_revision) !== expectedApprovalRevision) {
         throw new ConflictException({ code: "CASE_NOT_APPROVED", error: "The case is not currently approved at the reviewed revision" });
       }
-      const requirementVersionId = doc.reviewed_version_id ? String(doc.reviewed_version_id) : String(link.requirement_version_id);
+      if (!doc.reviewed_version_id) {
+        throw new ConflictException({ code: "REQUIREMENT_NOT_APPROVED", error: "Approve the exact requirement version before activating a case link" });
+      }
+      const requirementVersionId = String(doc.reviewed_version_id);
       // One live relation per case/criteria. Retire every active/proposed generation that would
       // collide with the current approved basis, not only the row the caller happened to read.
       await client.query(

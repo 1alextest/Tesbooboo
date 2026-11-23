@@ -386,12 +386,14 @@ test.describe("governed skills operator journey (UI)", () => {
       requirementId = applied.receipt.requirement.documentId;
       requirementVersionId = applied.receipt.requirement.versionId;
       caseId = applied.receipt.testcase.id;
-      const caseGroup = `${caseId}-AC-1`;
+      const caseGroup = `${caseId}::AC-1`;
 
       const page = await open(browser, `/agents/tasks/${taskId}`);
       await expect(page.getByTestId("requirement-change-bundle")).toContainText("Applied. The persisted apply receipt");
       const review = page.getByTestId("requirement-review-panel");
       await expect(review).toBeVisible();
+      // Activation is not offered until the exact requirement version is approved.
+      await expect(page.getByTestId(`requirement-link-requirement-unapproved-${caseGroup}`)).toBeVisible();
       await expect(review.getByTestId("requirement-review-version")).toContainText(requirementVersionId);
       await expect(review.getByTestId("requirement-review-criteria")).toContainText("The obligation is observable");
       await expect(review.getByTestId("requirement-review-approve")).toBeVisible();
