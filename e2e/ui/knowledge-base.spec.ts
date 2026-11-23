@@ -2777,8 +2777,34 @@ test.describe("knowledge base (UI)", () => {
     await expect(page.getByTestId("governed-decision")).toContainText("approved");
     await expect(page.getByTestId("governed-submitted-metadata")).toContainText("Audience: external");
 
+    // A later rejection must be reported as the current decision. The old bug preferred the first
+    // approved snapshot, so this reload showed "approved" and hid the reject action for v2.
+    const revisedResponse = await api.patch(kbUrl(`/documents/${documentId}`), {
+      data: { contentText: "Manual body revised", contentHtml: "<p>Manual body revised</p>", expectedRevision: approved.editRevision },
+    });
+    expect(revisedResponse.status(), await revisedResponse.text()).toBe(200);
+    const revised = await revisedResponse.json();
+    const secondSubmission = await api.post(kbUrl(`/documents/${documentId}/submissions`), {
+      data: { expectedRevision: revised.editRevision, submissionKey: crypto.randomUUID() },
+    });
+    expect(secondSubmission.status(), await secondSubmission.text()).toBe(201);
+    await page.reload();
+    await expect(page.getByTestId("governed-submitted-version")).toContainText("Submitted v2");
+    await expect(page.getByTestId("governed-decision")).toHaveCount(0);
+    await page.getByTestId("governed-reject").click();
+    await expect(page.getByTestId("governed-decision")).toContainText("rejected");
+    await expect(page.getByTestId("governed-approve")).toHaveCount(0);
+    const rejected = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(rejected.status).toBe("rejected");
+
+    // Prior exact decisions stay openable read-only even though governed snapshots are never
+    // restorable through the content-history restore path.
+    await page.getByTestId("governed-version-open").first().click();
+    await expect(page.getByTestId("governed-version-detail")).toBeVisible();
+
     const qaPage = await openDocument(browser, documentId, "qa");
     await expect(qaPage.getByTestId("governed-approve")).toHaveCount(0);
+    await expect(qaPage.getByTestId("governed-reject")).toHaveCount(0);
   });
 
   test("KBU-63 an ordinary document keeps its editor, editable title, Save and Delete", async ({ browser }) => {

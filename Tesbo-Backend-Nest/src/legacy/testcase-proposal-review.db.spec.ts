@@ -1060,6 +1060,7 @@ type Body=Record<string,any>;
         distribution:"internal",sourceAuthority:{kind:"internal",label:"Project owner",reference:null},
         effectivity:{from:"2026-01-01",to:null},enforcementRefs:[]};
       let docId="";
+      let duplicateId="";
       let legacyId="";
       let qaId="";
       try{
@@ -1067,11 +1068,29 @@ type Body=Record<string,any>;
           documentType:"user_manual",contentText:"Manual body",contentHtml:"<p>Manual body</p>",governedMetadata:metadata});
         docId=created.id;
         expect(created.governedMetadata).toMatchObject({audience:"internal",subtype:"manual",confidentiality:"internal"});
+        // Exposure hold: the row is terminally unsupported so neither the boot sweep nor an
+        // explicitly queued job can send confidential text to an embedding provider.
+        expect((await admin.query("SELECT embedding_status FROM knowledge_documents WHERE id=$1",[docId])).rows[0].embedding_status)
+          .toBe("unsupported");
 
         await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Invalid manual ${randomUUID()}`,
           documentType:"user_manual",governedMetadata:{...metadata,audience:"nope"}})).rejects.toMatchObject({status:400});
         await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Missing metadata ${randomUUID()}`,
           documentType:"user_manual"})).rejects.toMatchObject({status:400});
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Unknown metadata key ${randomUUID()}`,
+          documentType:"user_manual",governedMetadata:{...metadata,unexpected:true}})).rejects.toMatchObject({status:400});
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Impossible date ${randomUUID()}`,
+          documentType:"user_manual",governedMetadata:{...metadata,effectivity:{from:"2026-02-31",to:null}}})).rejects.toMatchObject({status:400});
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Inverted effectivity ${randomUUID()}`,
+          documentType:"user_manual",governedMetadata:{...metadata,effectivity:{from:"2026-06-01",to:"2026-01-01"}}})).rejects.toMatchObject({status:400});
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Manual enforcement ${randomUUID()}`,
+          documentType:"user_manual",governedMetadata:{...metadata,enforcementRefs:["ACME-1"]}})).rejects.toMatchObject({status:400});
+
+        const duplicate=await service().duplicateKnowledgeDocument(project,user,docId);
+        duplicateId=duplicate.id;
+        expect(duplicate.governedMetadata).toMatchObject({audience:"internal",subtype:"manual",confidentiality:"internal",distribution:"internal"});
+        expect((await admin.query("SELECT embedding_status FROM knowledge_documents WHERE id=$1",[duplicateId])).rows[0].embedding_status)
+          .toBe("unsupported");
 
         const submitted=await service().submitKnowledgeDocument(project,user,docId,
           {expectedRevision:created.editRevision,submissionKey:randomUUID()},human);
@@ -1096,6 +1115,29 @@ type Body=Record<string,any>;
         const retry=await service().approveGovernedKnowledgeDocument(project,user,docId,{versionId:submitted.id},human);
         expect(retry).toMatchObject({decidedVersionId:approved.decidedVersionId,replayed:true});
 
+        // A later rejection must supersede the earlier approval as the current decision. The
+        // snapshot is bound to the exact newly submitted version, not to the document's latest
+        // content at review time.
+        const current=await service().getKnowledgeDocument(project,user,docId);
+        const edited=await service().updateKnowledgeDocument(project,user,docId,
+          {contentText:"Manual body revised",contentHtml:"<p>Manual body revised</p>",expectedRevision:current.editRevision});
+        const second=await service().submitKnowledgeDocument(project,user,docId,
+          {expectedRevision:edited.editRevision,submissionKey:randomUUID()},human);
+        const rejected=await service().rejectGovernedKnowledgeDocument(project,user,docId,
+          {versionId:second.id,reason:"Effectivity is out of date"},human);
+        expect(rejected).toMatchObject({status:"rejected",sourceVersionId:second.id,replayed:false});
+        const rejectedRetry=await service().rejectGovernedKnowledgeDocument(project,user,docId,
+          {versionId:second.id,reason:"Effectivity is out of date"},human);
+        expect(rejectedRetry).toMatchObject({decidedVersionId:rejected.decidedVersionId,replayed:true});
+        const decisions=await admin.query(
+          `SELECT snapshot_kind,snapshot_metadata->>'sourceVersionId' AS source_version_id,version_number
+             FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind IN ('approved','rejected')
+            ORDER BY version_number`,[docId]);
+        expect(decisions.rows.map(row=>row.snapshot_kind)).toEqual(["approved","rejected"]);
+        expect(decisions.rows[1]).toMatchObject({snapshot_kind:"rejected",source_version_id:second.id});
+        expect((await admin.query("SELECT status,reviewed_version_id FROM knowledge_documents WHERE id=$1",[docId])).rows[0])
+          .toMatchObject({status:"rejected",reviewed_version_id:rejected.decidedVersionId});
+
         const exposed=await admin.query(`SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE id=$1 AND ${knowledgeDocumentAiContextSql()}`,[docId]);
         expect(exposed.rows[0].n).toBe(0);
 
@@ -1103,7 +1145,7 @@ type Body=Record<string,any>;
         await expect(service().approveGovernedKnowledgeDocument(project,user,legacyId,{versionId:submitted.id},human))
           .rejects.toMatchObject({status:400});
       }finally{
-        for(const id of [docId,legacyId].filter(Boolean)){
+        for(const id of [docId,duplicateId,legacyId].filter(Boolean)){
           await admin.query("UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=$1",[id]);
           await admin.query("DELETE FROM knowledge_document_versions WHERE document_id=$1",[id]);
           await admin.query("DELETE FROM knowledge_documents WHERE id=$1",[id]);

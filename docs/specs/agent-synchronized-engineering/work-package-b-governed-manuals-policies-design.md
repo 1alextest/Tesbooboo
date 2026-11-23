@@ -101,6 +101,8 @@ For `user_manual` and `policy` only:
 - Manual subtypes: `manual`, `quick_start`, `reference`, `runbook`.
 - Policy subtypes: `policy`, `standard`, `procedure`, `guideline`.
 - Non-governed document types must keep `{}`; unknown keys are rejected for governed types.
+- Dates must be real calendar dates. `Date.parse` rolls `2026-02-31` forward to March, so validation
+  round-trips the parsed value through `toISOString().slice(0, 10)` and compares it with the input.
 - `effectivity.from <= effectivity.to` when both exist.
 - No implicit relation between audience, distribution and confidentiality: an external-audience document can be
   withheld from distribution; a public-confidentiality document can still be internal-audience; source authority is
@@ -124,11 +126,11 @@ For `user_manual` and `policy` only:
 | `createKnowledgeDocument` | Accept and validate `governedMetadata`; default `{}`; new types require the full contract. |
 | `updateKnowledgeDocument` / `writeKnowledgeDocument` | Accept, validate, store; treat a metadata change as content changed; exact-revision CAS. |
 | `submitKnowledgeDocument` | Unchanged; snapshots the exact document including metadata. |
-| New `approveGovernedKnowledgeVersion` / `rejectGovernedKnowledgeVersion` | Owner/manager human-session exact-version decision for manual/policy; content digest; approved/rejected snapshot; `reviewed_version_id`/status; replay; stale conflict. |
+| New `approveGovernedKnowledgeDocument` / `rejectGovernedKnowledgeDocument` | Owner/manager human-session exact-version decision for manual/policy; content digest; approved/rejected snapshot; `reviewed_version_id`/status; replay; stale conflict. |
 | `restoreKnowledgeDocumentVersion` | For governed types, restore the snapshot's governed metadata with the body. |
 | `getKnowledgeDocument` / list / version history | Return metadata and snapshot metadata. |
-| KB UI | Type templates, metadata form, submit-for-review, exact submitted-version review/diff/approve/reject, history/readback. |
-| Zyra AI context / RAG | New types excluded until the exposure policy in §8 is approved. No embedding enqueue for new types in this slice. |
+| KB UI | Type templates, metadata form, submit-for-review, exact submitted-version review/diff/approve/reject, a read-only exact-version timeline, and history/readback. |
+| Zyra AI context / RAG | New types excluded until the exposure policy in §8 is approved. New and duplicated governed rows are created `embedding_status='unsupported'`; the boot sweep and embedding processor also exclude `user_manual`/`policy` so a status reset or an already-queued job cannot leak text. |
 
 ---
 
@@ -137,11 +139,15 @@ For `user_manual` and `policy` only:
 1. An authorised owner/manager chooses **the exact submitted version**; the decision is `approved` or `rejected`.
 2. Approval writes one approved snapshot with `authority: "governed_document_review"`, `sourceVersionId`, and the
    exact metadata/digest; it sets `status='approved'` and `reviewed_version_id`.
-3. Rejection writes one rejected snapshot with the source version and reason; it sets `status='rejected'` and does
-   not create an approved binding.
+3. Rejection writes one rejected snapshot with the source version and reason; it sets `status='rejected'` and also
+   sets `reviewed_version_id` to that rejected decision snapshot. `reviewed_version_id` names the exact decision
+   snapshot, not an approval flag; `status` and the snapshot kind carry approved vs rejected. A rejection therefore
+   never creates an approved binding by itself.
 4. A later edit clears the exact binding through the existing review-invalidation rules; a stale approval is refused.
 5. A QA reader can read/author where the existing KB mutation rule allows but cannot approve/reject.
 6. Agent-authored content remains a draft/submission until this human decision; no agent token can approve.
+7. The UI reports the **latest** decision snapshot by version number, so a later rejection supersedes an earlier
+   approval; it does not show the first approved snapshot forever.
 
 ---
 
@@ -153,8 +159,12 @@ For `user_manual` and `policy` only:
 AND document_type NOT IN ('user_manual','policy')
 ```
 
-to the non-memory branch, and skip `enqueueEmbedding` for the new types. This is a deliberate containment boundary,
-not a final exposure policy. An approved document does not become Zyra-visible merely because it is approved.
+to the non-memory branch, and skip `enqueueEmbedding` for the new types. New and duplicated governed rows are
+created with `embedding_status='unsupported'`, and both the boot-time `resumeInterruptedEmbeddings` sweep and
+`RagEmbeddingProcessor` also exclude by document type. The type filter is the durable guard: a future migration
+that resets terminal statuses (V85 did this for a dimension change) or a job queued before the item became governed
+still cannot put its text on the embedding wire. This is a deliberate containment boundary, not a final exposure
+policy. An approved document does not become Zyra-visible merely because it is approved.
 
 ---
 
@@ -172,9 +182,10 @@ not a final exposure policy. An approved document does not become Zyra-visible m
 
 ## 7. Verification
 
-- DB/API: metadata validation (valid, missing, unknown key, invalid enum/date/refs), legacy `{}` compatibility,
-  digest change on metadata edit, submitted snapshot metadata, owner approve, QA refusal, stale approval,
-  lost-response replay, reject decision, restore metadata, AI-context exclusion.
+- DB/API: metadata validation (valid, missing, unknown key, invalid enum/impossible date/inverted effectivity/
+  misplaced refs), duplicate metadata preservation and embedding hold, legacy `{}` compatibility, digest change on
+  metadata edit, submitted snapshot metadata, owner approve, QA refusal, stale approval, lost-response replay,
+  later rejection superseding an earlier approval, AI-context exclusion.
 - UI: author a manual/policy with metadata, submit, owner reviews exact version/diff and approves; QA read-only;
   stale edit refusal; history/readback; confidential doc not offered to Zyra context.
 - Native Tesbo: REQ-WPB-01 task `d5b7ab51-1c6b-460b-971f-280d1f567edb` staged; execution UNRUN until human apply.
@@ -187,8 +198,10 @@ not a final exposure policy. An approved document does not become Zyra-visible m
    Package B requires them for agent-authored candidates. Do not treat this slice as full WP-B closure.
 2. **Exposure policy.** When may an approved manual/policy enter Zyra context? Which audience/confidentiality/
    distribution/effectivity combinations are eligible? The first slice is intentionally dark.
-3. **Rejection binding.** Confirm that a rejected decision records the rejected snapshot and status but does not set
-   an approved `reviewed_version_id`; if it should bind the rejected version, document that separately.
+3. **Rejection binding (decided for this slice).** A rejected decision records a rejected snapshot and sets both
+   `status='rejected'` and `reviewed_version_id` to that rejected decision snapshot. `reviewed_version_id` identifies
+   the exact decision snapshot, while `status` and snapshot kind distinguish approved from rejected; no approved
+   binding is created. Revisit only if a consumer needs to interpret `reviewed_version_id` as approval-only.
 4. **Distribution semantics.** The first slice uses `internal | external | withheld` as a scope. If distribution is a
    channel list or per-recipient entitlement, that is a wider model requiring a separate decision.
 5. **Policy enforcement references.** The first slice stores references only; it does not execute or enforce them.

@@ -12290,9 +12290,14 @@ export class LegacyService implements OnModuleInit {
 
     const documentType = String(body.documentType || "general");
     const governedMetadata = normalizeGovernedMetadata(body.governedMetadata, documentType);
+    // Exposure hold: governed content stays out of the embedding pipeline until an owner decides
+    // how it may leave the project. `unsupported` is the terminal state that keeps the boot-time
+    // sweep from requeueing it; the sweep and processor also filter by document type so the hold
+    // survives a migration that resets terminal embedding states.
+    const embeddingStatus = isGovernedDocumentType(documentType) ? "unsupported" : "pending";
     const res = await this.db.query(
-      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, status, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, 'draft', $10, $10) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, embedding_status, status, created_by, updated_by)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10, 'draft', $11, $11) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
       [
         project.organization_id,
         projectId,
@@ -12303,6 +12308,7 @@ export class LegacyService implements OnModuleInit {
         body.contentText || null,
         documentType,
         JSON.stringify(governedMetadata),
+        embeddingStatus,
         uid
       ]
     );
@@ -12772,9 +12778,10 @@ export class LegacyService implements OnModuleInit {
     const uid = this.requireUser(userId);
     const project = await this.requireProjectAccess(uid, projectId);
     const doc = await this.kbDocument(projectId, documentId);
+    const embeddingStatus = isGovernedDocumentType(doc.document_type) ? "unsupported" : "pending";
     const res = await this.db.query(
-      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, status, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, 'draft', $10, $10) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, embedding_status, status, created_by, updated_by)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10, 'draft', $11, $11) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
       [
         project.organization_id,
         projectId,
@@ -12785,6 +12792,7 @@ export class LegacyService implements OnModuleInit {
         doc.content_text,
         doc.document_type,
         JSON.stringify(doc.governed_metadata ?? {}),
+        embeddingStatus,
         uid
       ]
     );

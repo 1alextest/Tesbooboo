@@ -93,7 +93,9 @@ export class RagIngestionService {
   async resumeInterruptedEmbeddings(): Promise<void> {
     const docs = await this.db
       .query<{ id: string; project_id: string; organization_id: string }>(
-        "SELECT id, project_id, organization_id FROM knowledge_documents WHERE embedding_status IN ('pending','queued','processing') AND is_deleted = false"
+        // Governed manuals/policies are under an exposure hold: they are never embedded until a
+        // human owner accepts a distribution policy for them, so a restart must not requeue them.
+        "SELECT id, project_id, organization_id FROM knowledge_documents WHERE embedding_status IN ('pending','queued','processing') AND is_deleted = false AND document_type NOT IN ('user_manual','policy')"
       )
       .catch(() => ({ rows: [] as Array<{ id: string; project_id: string; organization_id: string }> }));
     const files = await this.db

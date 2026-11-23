@@ -77,6 +77,7 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
   const [submittedVersion, setSubmittedVersion] = useState<KnowledgeDocumentVersion | null>(null);
   const [submittedDetail, setSubmittedDetail] = useState<KnowledgeDocumentVersionDetail | null>(null);
   const [decision, setDecision] = useState<KnowledgeDocumentVersion | null>(null);
+  const [openedVersion, setOpenedVersion] = useState<KnowledgeDocumentVersionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,9 +88,9 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   const governed = isGoverned(doc.documentType);
-  const approvedSnapshot = versions.find((version) => version.snapshotKind === "approved");
-  const rejectedSnapshot = versions.find((version) => version.snapshotKind === "rejected");
-  const currentDecision = decisionOf(approvedSnapshot || rejectedSnapshot);
+  // A later rejection supersedes an earlier approval. Taking the first approved snapshot would
+  // report the old approval and hide the actions for the newly submitted version.
+  const currentDecision = decisionOf(decision ?? undefined);
 
   useEffect(() => {
     if (!governed) return;
@@ -105,9 +106,10 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
       const list = result.list || [];
       if (!mounted.current) return;
       setVersions(list);
-      const approved = list.find((version) => version.snapshotKind === "approved");
-      const rejected = list.find((version) => version.snapshotKind === "rejected");
-      setDecision(approved || rejected || null);
+      const latestDecision = list
+        .filter((version) => version.snapshotKind === "approved" || version.snapshotKind === "rejected")
+        .sort((a, b) => b.versionNumber - a.versionNumber)[0] || null;
+      setDecision(latestDecision);
       const submitted = list.find((version) => version.snapshotKind === "submitted");
       if (!submitted) {
         setSubmittedVersion(null);
@@ -126,6 +128,16 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
   }, [doc.id, governed, projectId]);
 
   useEffect(() => { void load(); }, [load]);
+
+  async function openVersion(version: KnowledgeDocumentVersion) {
+    setError(null);
+    try {
+      const detail = await getKnowledgeDocumentVersion(projectId, doc.id, version.id);
+      if (mounted.current) setOpenedVersion(detail);
+    } catch (err) {
+      if (mounted.current) setError(err instanceof Error ? err.message : "That exact version could not be read.");
+    }
+  }
 
   function patchMetadata(patch: Partial<Metadata>) {
     setMetadata((previous) => ({ ...previous, ...patch }));
@@ -275,6 +287,25 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
 
       <details className="border-t border-[var(--border)] pt-3" open>
         <summary className="cursor-pointer text-sm font-medium">Version history and diffs</summary>
+        {versions.some((version) => version.snapshotKind !== "autosave") && (
+          <div className="mt-2 space-y-1" data-testid="governed-version-timeline">
+            {versions.filter((version) => version.snapshotKind !== "autosave").map((version) => (
+              <div key={version.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-[var(--border)] px-2 py-1 text-xs">
+                <span>v{version.versionNumber} · {version.snapshotKind} · {version.createdAt ? formatDateTime(version.createdAt) : "—"}</span>
+                <Button size="sm" variant="secondary" onClick={() => void openVersion(version)} data-testid="governed-version-open">Open exact version</Button>
+              </div>
+            ))}
+          </div>
+        )}
+        {openedVersion && (
+          <div className="mt-2 rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 text-xs" data-testid="governed-version-detail">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="font-medium">v{openedVersion.versionNumber} · {openedVersion.snapshotKind} (read-only)</p>
+              <Button size="sm" variant="secondary" onClick={() => setOpenedVersion(null)}>Close</Button>
+            </div>
+            <div className="max-h-64 overflow-auto"><VersionContent detail={openedVersion} /></div>
+          </div>
+        )}
         <div className="mt-2"><ChangeHistoryList projectId={projectId} documentId={doc.id} showHeading={false} /></div>
       </details>
     </Card>

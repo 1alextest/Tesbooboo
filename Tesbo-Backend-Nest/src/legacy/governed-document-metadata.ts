@@ -47,8 +47,12 @@ function enumValue(value: unknown, allowed: Set<string>, label: string): string 
 
 function optionalDate(value: unknown, label: string): string | null {
   if (value === undefined || value === null || value === "") return null;
-  if (typeof value !== "string" || !DATE.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) {
-    throw new BadRequestException({ error: `${label} must be a YYYY-MM-DD date or null` });
+  const parsed = typeof value === "string" && DATE.test(value) ? new Date(`${value}T00:00:00Z`) : null;
+  // Date.parse rolls 2026-02-31 forward to March rather than rejecting it, so compare the
+  // round-tripped value. Effectivity dates decide which policy applies, so an impossible date
+  // must fail instead of silently becoming a different one.
+  if (!parsed || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+    throw new BadRequestException({ error: `${label} must be a real YYYY-MM-DD date or null` });
   }
   return value;
 }
