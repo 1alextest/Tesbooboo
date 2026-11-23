@@ -80,6 +80,7 @@ async function main() {
     // shape passed directly to Adapter.upsert().
     const providerA = new Provider(issuer, configuration(AdapterA));
     const grant = new providerA.Grant({ accountId, clientId });
+    grant.addOIDCScope("openid");
     grantId = await grant.save();
     assert.equal(typeof grantId, "string");
     assert.ok(grantId.length > 8);
@@ -149,6 +150,54 @@ async function main() {
     assert.equal(discovery.issuer, issuer);
     assert.ok(discovery.code_challenge_methods_supported?.includes("S256"));
 
+    // An actual HTTP token exchange through the synthetic, loopback-only
+    // authorization-server fixture. The code is minted internally from a
+    // trusted test model; this does NOT test user login or user consent.
+    const httpCode = new providerB.AuthorizationCode({
+      accountId, clientId, grantId,
+      redirectUri: "http://127.0.0.1/never-used",
+      codeChallenge: challenge,
+      codeChallengeMethod: "S256",
+      authTime: Math.trunc(Date.now() / 1000),
+      scope: "openid"
+    });
+    const httpCodeValue = await httpCode.save();
+    const form = new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: clientId,
+      redirect_uri: "http://127.0.0.1/never-used",
+      code: httpCodeValue,
+      code_verifier: verifier
+    });
+    const tokenResponse = await fetch(discovery.token_endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: form,
+      redirect: "manual",
+      signal: AbortSignal.timeout(5000)
+    });
+    assert.equal(tokenResponse.status, 200,
+      `Synthetic authorization-code exchange failed with HTTP ${tokenResponse.status}`);
+    const issued = await tokenResponse.json();
+    assert.ok(typeof issued.access_token === "string" && issued.access_token,
+      "No synthetic access token returned from code exchange");
+    const replayResponse = await fetch(discovery.token_endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: form,
+      redirect: "manual",
+      signal: AbortSignal.timeout(5000)
+    });
+    assert.equal(replayResponse.status, 400, "Redeeming one code twice must be rejected");
+    const replayBody = await replayResponse.json();
+    assert.equal(replayBody.error, "invalid_grant");
+
+    // Revoke the synthetic grant-linked token family. No bearer is accepted
+    // anywhere by Tesbo's actual MCP or REST auth modules.
+    await new AdapterB("AccessToken").revokeByGrantId(grantId);
+    await new AdapterB("RefreshToken").revokeByGrantId(grantId);
+
+
     // Revoke synthetic adapter state and prove a separate provider instance
     // cannot recover a stale grant. This does not replace live MCP grant checks.
     await new AdapterA("Grant").destroy(grantId);
@@ -162,11 +211,12 @@ async function main() {
       realAuthorizationCodeModel: true,
       codePkceRetainedAcrossInstances: true,
       concurrentCodeConsumeWinner: true,
+      syntheticHttpCodeExchangeAndReplayDenied: true,
       encryptedAtRest: true,
       readableAcrossProviderInstances: true,
       revokedStateUnavailable: true,
       metadataPkceS256: true,
-      realUsersOrTokensIssued: false,
+      realTesboUsersOrProductionTokensIssued: false,
       tesboProjectTouched: false
     }) + "\n");
   } finally {
