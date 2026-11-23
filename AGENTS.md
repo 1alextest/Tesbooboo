@@ -2,6 +2,8 @@
 
 Work only in `1alextest/Tesbooboo`; `development` is the integration branch and `main` is release-only. Use a feature branch and a draft PR into `development`; do not merge, deploy or weaken CI without the owner's explicit authority. Each PR explains Purpose, Impact, reuse/source evidence, tests actually run, limitations and rollback.
 
+**Agent PR authorship:** After the trusted GitHub App publisher has been installed on the protected default branch and its real signed-PR pilot accepted, agent-authored changes use the exact candidate-to-bot handoff in [docs/agent-bot-pr-handoff.md](docs/agent-bot-pr-handoff.md). The separate App authors and pushes the draft PR; the owner remains its eligible human reviewer. Neither App nor agent may approve, merge, waive assurance or change branch rules. **Before verified activation**, keep the existing feature-branch/draft-PR path and report the bot handoff as unavailable; do not fake bot identity.
+
 ## Rule ownership
 
 - **This file owns the engineering principles below.** They are binding.
