@@ -41,15 +41,20 @@ function descriptionOf(version: KnowledgeDocumentVersionDetail | null): string {
 function reviewState(document: KnowledgeDocument | null, reviewed: KnowledgeDocumentVersionDetail | null, versionId: string) {
   const sourceVersionId = reviewed?.snapshotMetadata?.sourceVersionId;
   if (reviewed && reviewed.snapshotKind === "approved" && sourceVersionId === versionId) {
-    return { approved: true, currentBasis: true, label: `Approved as v${reviewed.versionNumber}` };
+    return { approved: true, currentBasis: true, blocked: false, label: `Approved as v${reviewed.versionNumber}` };
+  }
+  if (reviewed && reviewed.snapshotKind === "approved" && !sourceVersionId) {
+    // Without the recorded source submission the backend cannot recognize an exact replay, so
+    // offering approval could create a second snapshot from the same content.
+    return { approved: false, currentBasis: false, blocked: true, label: `Approved as v${reviewed.versionNumber}, but its source submission is not recorded; approval is blocked until that basis is verified` };
   }
   if (reviewed && reviewed.snapshotKind !== "approved") {
-    return { approved: false, currentBasis: false, label: "The document's reviewed version is not an approved snapshot" };
+    return { approved: false, currentBasis: false, blocked: false, label: "The document's reviewed version is not an approved snapshot" };
   }
   if (reviewed) {
-    return { approved: false, currentBasis: false, label: `The current approved basis is v${reviewed.versionNumber} from a different submission` };
+    return { approved: false, currentBasis: false, blocked: false, label: `The current approved basis is v${reviewed.versionNumber} from a different submission` };
   }
-  return { approved: false, currentBasis: true, label: document?.status === "approved" ? "Approved, but no exact snapshot is bound" : "Submitted, awaiting human approval" };
+  return { approved: false, currentBasis: true, blocked: false, label: document?.status === "approved" ? "Approved, but no exact snapshot is bound" : "Submitted, awaiting human approval" };
 }
 
 const REASON_LABELS: Record<string, string> = {
@@ -213,7 +218,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
     approvedAs
     || (coverage.latestSubmittedVersionId && coverage.latestSubmittedVersionId === versionId)));
   const review = reviewState(document, reviewedVersion, versionId);
-  const approvalReady = canApprove && !contentLoading && !contentError && Boolean(version) && Boolean(document) && !review.approved && !approving;
+  const approvalReady = canApprove && !contentLoading && !contentError && Boolean(version) && Boolean(document) && !review.approved && !review.blocked && !approving;
 
   return (
     <Card className="p-4 space-y-4" data-testid="requirement-review-panel">

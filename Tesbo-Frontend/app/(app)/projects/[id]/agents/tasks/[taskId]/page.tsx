@@ -596,6 +596,8 @@ export default function ZyraTaskDetailPage() {
   // pointless round trip that the server would reject with a 409 anyway.
   const isRequirementBundle = task.provider === "external_requirement_proposal" || Boolean(task.requirementBundle?.length);
   const requirementApplyReceipt = task.requirementApplyReceipt;
+  // Rejected and withdrawn bundles also end as `done`; only an apply receipt means publication.
+  const requirementApplied = done && Boolean(requirementApplyReceipt);
   const currentProjectRole = projectMembers.find((member) => member.userId === currentUser?.userId)?.role;
   const canApproveRequirement = isKnowledgeOwnerOrManager(currentProjectRole);
   const canGiveFeedback = !isRequirementBundle && (taskStatusNow === "in_review" || taskStatusNow === "failed");
@@ -746,9 +748,11 @@ export default function ZyraTaskDetailPage() {
               <div>
                 <h2 className="text-lg font-semibold text-[var(--foreground)]">Requirement change bundle</h2>
                 <p className="mt-1 text-sm text-[var(--muted)]">
-                  {done
+                  {requirementApplied
                     ? "Applied. The exact submitted requirement version is available in the review panel below; approval, case activation and execution remain separate human decisions."
-                    : "Staging only. No requirement version, test case, active link or approval exists until a human publishes it."}
+                    : done
+                      ? "This bundle closed without publication. The recorded outcome below is authoritative; no requirement version, case or link was created."
+                      : "Staging only. No requirement version, test case, active link or approval exists until a human publishes it."}
                 </p>
               </div>
               {bundleRequirement && (
@@ -811,13 +815,15 @@ export default function ZyraTaskDetailPage() {
                 </p>
               )}
               <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-sm" data-testid="requirement-bundle-publication-gate">
-                {done
+                {requirementApplied
                   ? "This bundle is published. Open the exact submitted version and its truthful coverage in the review panel below."
-                  : skillsResolved
-                    ? "Publication uses the pinned, conflict-free effective skills shown above. Apply creates an immutable submitted requirement version, a Draft case and an exact link in one transaction; requirement approval remains a separate human decision."
-                    : task.skillContext?.status === "conflict"
-                      ? "Publication is blocked: the effective-skill assignments conflict. Resolve the assignment conflict before applying."
-                      : "Publication is blocked: a required approved effective skill is unassigned. Reject or withdraw this bundle, or assign the required skills and stage a refreshed proposal."}
+                  : done
+                    ? "This bundle was not published. No requirement version, case or link was created; the recorded outcome above is authoritative."
+                    : skillsResolved
+                      ? "Publication uses the pinned, conflict-free effective skills shown above. Apply creates an immutable submitted requirement version, a Draft case and an exact link in one transaction; requirement approval remains a separate human decision."
+                      : task.skillContext?.status === "conflict"
+                        ? "Publication is blocked: the effective-skill assignments conflict. Resolve the assignment conflict before applying."
+                        : "Publication is blocked: a required approved effective skill is unassigned. Reject or withdraw this bundle, or assign the required skills and stage a refreshed proposal."}
               </p>
             </div>
             {!done && (

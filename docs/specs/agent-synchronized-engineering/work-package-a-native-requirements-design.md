@@ -750,16 +750,17 @@ the real execution evidence without inventing a second coverage model.
 
 - Readings are shown as authored, approved, executed and passing, with mixed PASS/FAIL attempts called out.
 - Per-criterion text is taken from the exact submitted version under review and joined to the coverage readings by
-  criterion key; per-criterion counts and the linked-case rows show the requirement version each link targets
-  (approved or currently submitted) and the qualifying-attempt basis.
+  criterion key. Linked-case rows show the requirement version each link targets (approved or currently submitted)
+  and the qualifying-attempt basis.
 - Supporting cases link to the test-case repository with the case search applied; qualifying attempts link to the
   native execution page when an execution and cycle are present.
 - The coverage endpoint computes against the current approved/latest-submitted basis. When the reviewed version is
   older, the surface says the basis is newer and scopes the readings (including a zero) to that basis instead of
   attributing them to the reviewed version. A reviewed version that is itself the approved or latest-submitted
   basis is identified as such.
-- A successful empty result renders as an authored zero for the stated basis. An unavailable coverage read renders
-  as unavailable with a retry and is never presented as zero.
+- A successful empty result renders as a successful zero for the stated basis (the `Authored: no` reading plus the
+  explicit no-link message). An unavailable coverage read renders as unavailable with a retry and is never presented
+  as zero.
 - Coverage is re-read on load, after approval and on an explicit retry; changes made in another surface (case
   approval, a re-applied link, a new execution) appear after a reload or retry. No reading is cached as authority.
 
