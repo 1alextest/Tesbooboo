@@ -69,6 +69,27 @@ const url = process.env.DATABASE_URL || "";
       await adapter("DeviceCode").destroy(codeId);
     });
 
+    it("preserves model-scoped non-expiring Client and Grant protocol records without granting Tesbo access", async () => {
+      const clientId = id("client");
+      const grantId = id("oidc-grant");
+      const client = { client_id: clientId, token_endpoint_auth_method: "none" };
+      const grant = { kind: "Grant", accountId: id("account"), clientId, resources: {} };
+      await adapter("Client").upsert(clientId, client);
+      await adapter("Grant").upsert(grantId, grant);
+      expect(await adapter("Client").find(clientId)).toEqual(client);
+      expect(await adapter("Grant").find(grantId)).toEqual(grant);
+      expect(await adapter("AuthorizationCode").find(clientId)).toBeUndefined();
+      const rows = await db.query(
+        "SELECT model,expires_at FROM mcp_oauth_provider_artifacts WHERE id_fingerprint=ANY($1::char(64)[])",
+        [[oauthReferenceFingerprint("oauth:Client:id", clientId),
+          oauthReferenceFingerprint("oauth:Grant:id", grantId)]]
+      );
+      expect(rows.rows).toHaveLength(2);
+      expect(rows.rows.every(row => row.expires_at === null)).toBe(true);
+      await adapter("Client").destroy(clientId);
+      await adapter("Grant").destroy(grantId);
+    });
+
     it("consumes an authorization code exactly once across concurrent database connections", async () => {
       const credential = id("consumed-code");
       await adapter("AuthorizationCode").upsert(credential, { grantId: id("grant") }, 90);
