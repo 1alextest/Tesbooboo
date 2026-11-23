@@ -6,7 +6,7 @@
 
 ## Assurance review reconciliation — 2026-11-23 (changes required)
 
-The [full eleven-lens challenge](../reviews/MCP-OAUTH-ASSURANCE-2026-11-23.md) exposes **18 tracked findings (OA-01–OA-18)**. Review performed as distinct analytical lenses by one agent; **not** independently delegated-team output, human approval, or acceptance. This document remains **DRAFT**. Findings from the current implementation and protocol standards take precedence over ambiguous language below until they are resolved.
+The [full eleven-lens challenge](../reviews/MCP-OAUTH-ASSURANCE-2026-11-23.md) exposes **19 tracked findings (OA-01–OA-19)**. Review performed as distinct analytical lenses by one agent; **not** independently delegated-team output, human approval, or acceptance. This document remains **DRAFT**. Findings from the current implementation and protocol standards take precedence over ambiguous language below until they are resolved.
 
 ### Mandatory design constraints recovered from source and standards
 
@@ -25,6 +25,16 @@ The [full eleven-lens challenge](../reviews/MCP-OAUTH-ASSURANCE-2026-11-23.md) e
 - **Owner must decide before material code:** which AS/issuer and credential owner; whether human end-user consent requires an independently approved owner-level named-client grant; whether ordinary members can request read scope; project selection strategy; refresh/key lifetime and incident policy.
 - **Evidence must decide:** actual ChatGPT registration variant/redirect, current ChatGPT workspace's usable write capability, HTTP transport conformance, production proxy/host/issuer behavior and source-specific middleware hooks. Treat uncertainty as blocked, not implicit approval.
 - **Independent gate:** Blue, Red, Security, Green, QA, Grey, Purple, Graph, Observability, lifecycle and White should produce distinct actual source-bound reports and methods before final design approval. The analytical report linked above is **not** those independent receipts.
+
+---
+
+### Additional source-verified OAuth identity obligation (OA-19)
+
+**Principal provenance must not conflate `issuerId` with an OAuth issuer.** The existing native proposal records use `issuerId` for the *Tesbo user* who initiated/owns a human or API-token submission. OAuth's verified `iss` URI and `sub` must be separately represented, along with the client ID, project-bound grant ID, Tesbo linked user and agent actor; old receipts remain immutable. Link `iss+sub` to an existing Tesbo user only through a governed, explicit binding, not by equal email or same subject string from another identity provider. Record the reason and authority for linking/unlinking. Reject wrong resource/project, mismatched issuer, unmapped subject, conflicting account, revoked grant or forged provenance before any native proposal write. Add OA-T17: equal subjects at different issuers must never share an OAuth grant, task producer or historical API-token identity.
+
+**Architecture source finding:** current backend auth owners contain OTP/password sessions and API-token issuance but no inspected installed inbound OAuth authorization server. The specification's D1 issuer choice therefore remains **unresolved**; source reuse is not justification to implement a home-grown OAuth authorization server. Evaluate a reviewed conformant library or existing IdP against Tesbo's login, user binding, project consent, persistent grants, refresh rotation and deployment constraints before choosing one. OAuth remains disabled until the approved issuer, consent authority, protocol version and live ChatGPT compatibility are demonstrated. The existing API token path stays unchanged.
+
+The latest external multi-lens challenges were run as four separate research passes but could not access this private repository; their source-dependent hypotheses were verified or rejected separately in the [assurance record](../reviews/MCP-OAUTH-ASSURANCE-2026-11-23.md). They are not authenticated Independent/White project approvals.
 
 ---
 
