@@ -509,12 +509,14 @@ test.describe("governed skills operator journey (UI)", () => {
         exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(requirementId)};`);
         exec(`DELETE FROM knowledge_documents WHERE id=${literal(requirementId)} AND project_id=${literal(tenant!.mainProjectId)};`);
       }
-      exec(`DELETE FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(caseTitle)};`);
+      // Executions reference cycle items, and cycle items reference the case; tear those down
+      // before deleting the case itself.
       for (const id of cycleIds) {
         exec(`DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id=${literal(id)});`);
         exec(`DELETE FROM cycle_items WHERE cycle_id=${literal(id)};`);
         exec(`DELETE FROM cycles WHERE id=${literal(id)} AND project_id=${literal(tenant!.mainProjectId)};`);
       }
+      exec(`DELETE FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(caseTitle)};`);
       for (const id of skillDocs) {
         exec(`DELETE FROM skill_assignments WHERE project_id=${literal(tenant!.mainProjectId)} AND skill_document_id=${literal(id)};`);
         exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(id)};`);
