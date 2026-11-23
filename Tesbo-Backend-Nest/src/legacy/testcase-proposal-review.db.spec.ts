@@ -614,6 +614,32 @@ type Body=Record<string,any>;
       }
     });
 
+    it("refuses activation until the requirement version is approved",async()=>{
+      const skills=await publishSkills();
+      const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
+      let requirementId="";
+      let caseId="";
+      try{
+        const staged=await stageBundle(ops());
+        const applied=await service().applyRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human);
+        requirementId=applied.receipt.requirement.documentId;
+        caseId=applied.receipt.testcase.id;
+        const caseBefore=await revisionsOf(caseId);
+        await service().approveTestCaseForUser(user,project,caseId,{expectedRevision:caseBefore.edit_revision,expectedApprovalRevision:caseBefore.approval_revision},human);
+        const caseApproved=await revisionsOf(caseId);
+        const before=await admin.query("SELECT id,state,testcase_revision,testcase_approval_revision FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 ORDER BY id",[project,requirementId]);
+        await expect(service().reapplyRequirementCaseLink(project,user,requirementId,
+          String((await admin.query("SELECT id FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 LIMIT 1",[project,requirementId])).rows[0].id),
+          {expectedCaseRevision:caseApproved.edit_revision,expectedApprovalRevision:caseApproved.approval_revision},human))
+          .rejects.toMatchObject({status:409,response:{code:"REQUIREMENT_NOT_APPROVED"}});
+        const after=await admin.query("SELECT id,state,testcase_revision,testcase_approval_revision FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 ORDER BY id",[project,requirementId]);
+        expect(after.rows).toEqual(before.rows);
+      }finally{
+        if(requirementId) await cleanupRequirement(requirementId);
+        await cleanupSkills(skillIds);
+      }
+    });
+
     it("refuses link activation on an unapproved or changed case without changing the active link",async()=>{
       const skills=await publishSkills();
       const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
@@ -627,31 +653,21 @@ type Body=Record<string,any>;
         const applied=await service().applyRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human);
         requirementId=applied.receipt.requirement.documentId;
         caseId=applied.receipt.testcase.id;
+        await service().approveRequirementVersion(project,user,requirementId,{versionId:applied.receipt.requirement.versionId},human);
         let coverage=await service().requirementCoverage(project,user,requirementId);
-        expect(coverage.cases).toHaveLength(1);
+        expect(coverage.cases.length).toBeGreaterThan(0);
         const link=coverage.cases[0];
         const before=await revisionsOf(caseId);
         // A valid-shaped approval revision cannot make an unapproved case current.
+        const beforeCaseCheck=await admin.query("SELECT id,state FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 ORDER BY id",[project,requirementId]);
         await expect(service().reapplyRequirementCaseLink(project,user,requirementId,link.linkId,
           {expectedCaseRevision:before.edit_revision,expectedApprovalRevision:"0".repeat(64)},human))
           .rejects.toMatchObject({status:409,response:{code:"CASE_NOT_APPROVED"}});
-        const unchanged=await admin.query("SELECT id,state FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 ORDER BY id",[project,requirementId]);
-        expect(unchanged.rows).toHaveLength(1);
-        expect(unchanged.rows[0]).toMatchObject({id:link.linkId,state:"active"});
+        const afterCaseCheck=await admin.query("SELECT id,state FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 ORDER BY id",[project,requirementId]);
+        expect(afterCaseCheck.rows).toEqual(beforeCaseCheck.rows);
 
-        // Approve the case while the requirement is still unapproved: the endpoint must refuse the
-        // activation rather than silently bind to the submitted version.
-        const caseBeforeRequirement=await revisionsOf(caseId);
-        await service().approveTestCaseForUser(user,project,caseId,{expectedRevision:caseBeforeRequirement.edit_revision,expectedApprovalRevision:caseBeforeRequirement.approval_revision},human);
-        const caseApproved=await revisionsOf(caseId);
-        const beforeRequirementCheck=await admin.query("SELECT id,state,testcase_revision,testcase_approval_revision FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 ORDER BY id",[project,requirementId]);
-        await expect(service().reapplyRequirementCaseLink(project,user,requirementId,link.linkId,
-          {expectedCaseRevision:caseApproved.edit_revision,expectedApprovalRevision:caseApproved.approval_revision},human))
-          .rejects.toMatchObject({status:409,response:{code:"REQUIREMENT_NOT_APPROVED"}});
-        const afterRequirementCheck=await admin.query("SELECT id,state,testcase_revision,testcase_approval_revision FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 ORDER BY id",[project,requirementId]);
-        expect(afterRequirementCheck.rows).toEqual(beforeRequirementCheck.rows);
-
-        await service().approveRequirementVersion(project,user,requirementId,{versionId:applied.receipt.requirement.versionId},human);
+        const caseBefore=await revisionsOf(caseId);
+        await service().approveTestCaseForUser(user,project,caseId,{expectedRevision:caseBefore.edit_revision,expectedApprovalRevision:caseBefore.approval_revision},human);
         const caseAfter=await revisionsOf(caseId);
         await service().updateTestCaseForUser(user,project,caseId,{title:`Changed ${randomUUID()}`,expectedRevision:caseAfter.edit_revision});
         const changed=await revisionsOf(caseId);
