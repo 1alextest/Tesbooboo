@@ -669,8 +669,62 @@ test.describe("governed skills operator journey (UI)", () => {
 
   async function attachActivationView(page: Page, name: string) {
     const screenshotPath = test.info().outputPath(name + ".png");
-    await page.getByTestId("requirement-review-panel").screenshot({ path: screenshotPath });
-    await test.info().attach(name, { path: screenshotPath, contentType: "image/png" });
+    const panel = page.getByTestId("requirement-review-panel");
+    const main = page.locator(".tesbo-app-shell > main");
+    const originalViewport = page.viewportSize();
+    if (!originalViewport) throw new Error("Activation captures require the configured desktop viewport.");
+    const originalScroll = await main.evaluate(element => ({ top: element.scrollTop, left: element.scrollLeft }));
+    const panelHeight = await panel.evaluate(element => element.getBoundingClientRect().height);
+    const headerHeight = await main.locator(":scope > header").evaluate(element => element.getBoundingClientRect().height);
+    // The app scrolls main inside h-screen. A locator capture alone cannot reveal the parts
+    // clipped by that ancestor. Keep desktop width and temporarily fit the panel below its header.
+    const captureViewport = { width: originalViewport.width,
+      height: Math.max(originalViewport.height, Math.ceil(panelHeight + headerHeight + 32)) };
+    try {
+      await page.setViewportSize(captureViewport);
+      await panel.evaluate(element => {
+        const scroller = element.closest("main")!;
+        const header = scroller.querySelector(":scope > header")!;
+        scroller.scrollTo({ left: scroller.scrollLeft, behavior: "instant",
+          top: scroller.scrollTop + element.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+            - header.getBoundingClientRect().height - 16 });
+      });
+      const geometry = await panel.evaluate(element => {
+        const rect = element.getBoundingClientRect();
+        const panelBounds = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+        const clippedBy: string[] = [];
+        const clippingAncestors = [];
+        const outside = (clip: typeof panelBounds, x: boolean, y: boolean) =>
+          (x && (rect.left < clip.left - 0.5 || rect.right > clip.right + 0.5)) ||
+          (y && (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5));
+        if (rect.width <= 0 || rect.height <= 0) clippedBy.push("empty panel");
+        if (outside({ left: 0, top: 0, right: innerWidth, bottom: innerHeight }, true, true)) clippedBy.push("viewport");
+        for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+          const style = getComputedStyle(ancestor);
+          const clipsX = /^(auto|scroll|hidden|clip)$/.test(style.overflowX);
+          const clipsY = /^(auto|scroll|hidden|clip)$/.test(style.overflowY);
+          if (!clipsX && !clipsY) continue;
+          const bounds = ancestor.getBoundingClientRect();
+          const clip = { left: bounds.left + ancestor.clientLeft, top: bounds.top + ancestor.clientTop,
+            right: bounds.left + ancestor.clientLeft + ancestor.clientWidth,
+            bottom: bounds.top + ancestor.clientTop + ancestor.clientHeight };
+          clippingAncestors.push({ tag: ancestor.tagName, overflowX: style.overflowX, overflowY: style.overflowY, clip });
+          if (outside(clip, clipsX, clipsY)) clippedBy.push(ancestor.tagName + " overflow");
+        }
+        const header = element.closest("main")!.querySelector(":scope > header")!.getBoundingClientRect();
+        if (rect.top < header.bottom - 0.5) clippedBy.push("sticky header");
+        return { viewport: { width: innerWidth, height: innerHeight }, panelBounds,
+          stickyHeaderBottom: header.bottom, clippingAncestors, clippedBy };
+      });
+      await test.info().attach(name + "-geometry", { contentType: "application/json",
+        body: JSON.stringify({ scope: "Desktop width with temporary expanded height", originalViewport, captureViewport, geometry }, null, 2) });
+      expect(geometry.clippedBy, "The complete activation panel must fit before its evidence capture").toEqual([]);
+      await panel.screenshot({ path: screenshotPath });
+      await test.info().attach(name, { path: screenshotPath, contentType: "image/png" });
+    } finally {
+      await page.setViewportSize(originalViewport);
+      await main.evaluate((element, position) => element.scrollTo({ ...position, behavior: "instant" }), originalScroll);
+    }
   }
 
   async function withActivationFixture(run: (fixture: ActivationFixture) => Promise<void>) {
