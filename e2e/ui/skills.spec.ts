@@ -80,8 +80,8 @@ test.describe("governed skills operator journey (UI)", () => {
     return { documentId: doc.id as string, submittedVersionId: version.id as string, approvedVersionId: approval.approvedVersionId as string, assignmentId: String((await assignment.json()).assignment.id) };
   }
 
-  async function createSkillDoc(title: string, key: string, instructions: string) {
-    const created = await ownerApi.post(`${base()}/skills`, { data: {
+  async function createSkillDoc(title: string, key: string, instructions: string, api: APIRequestContext = ownerApi) {
+    const created = await api.post(`${base()}/skills`, { data: {
       title, module: "requirements", subtype: "functional", skillKey: key, instructions
     } });
     expect(created.ok(), await created.text()).toBe(true);
@@ -444,6 +444,10 @@ test.describe("governed skills operator journey (UI)", () => {
         // state after reload rather than depending on an in-memory create response.
         const card = page.getByTestId(`skill-${documentId}`);
         await expect(card).toBeVisible();
+        for (const field of ["skill-title", "skill-key", "skill-instructions"]) {
+          await expect(page.getByTestId(field)).toHaveValue("");
+        }
+        await expect(page.getByTestId("skill-create-submit")).toBeDisabled();
         await page.reload();
         await expect(card).toBeVisible();
         const submitted = page.waitForResponse((result) => result.request().method() === "POST" && result.url().endsWith(`/documents/${documentId}/submissions`));
@@ -511,6 +515,9 @@ test.describe("governed skills operator journey (UI)", () => {
         expect(committedState).toMatchObject({ documentIds: [documentId], profileCount: 1, submittedCount: 1,
           approvedCount: 0, assignmentCount: 0, reviewedVersionId: null });
         await expect(page.getByTestId("skill-create-submit")).toBeDisabled();
+        for (const field of ["skill-title", "skill-key", "skill-module", "skill-subtype", "skill-instructions"]) {
+          await expect(page.getByTestId(field)).toBeDisabled();
+        }
         blockLibraryReads = failReconciliationRead;
         release();
 
@@ -620,6 +627,9 @@ test.describe("governed skills operator journey (UI)", () => {
       const originalAudits = submissionAudits();
       expect(originalAudits).toHaveLength(1);
       expect(originalAudits[0]).toMatchObject({ versionId: originalReceipt!.id });
+      for (const field of ["skill-title", "skill-key", "skill-module", "skill-subtype", "skill-instructions"]) {
+        await expect(page.getByTestId(field)).toBeDisabled();
+      }
       replayDraft = true;
       release();
       const card = page.getByTestId(`skill-${documentId}`);
@@ -643,6 +653,67 @@ test.describe("governed skills operator journey (UI)", () => {
       release();
       await page?.context().close();
       await cleanupCandidatesWithTitle(title);
+    }
+  });
+
+  test("QA can submit their own writable draft but cannot submit another creator's or a read-only candidate", async ({ browser }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const records: { id: string; title: string; editRevision: string }[] = [];
+    let page: Page | undefined;
+    try {
+      const own = await createSkillDoc(`QA own draft ${suffix}`, `QA-OWN-${suffix}`, "RULE-QA: submit my saved candidate without approving or assigning it.", qaApi);
+      records.push(own);
+      const other = await createSkillDoc(`Other creator draft ${suffix}`, `QA-OTHER-${suffix}`, "RULE-OTHER: only the existing native mutation authority can submit this candidate.");
+      records.push(other);
+      const readOnly = await createSkillDoc(`QA read-only draft ${suffix}`, `QA-MIRROR-${suffix}`, "RULE-MIRROR: provider-owned content remains read-only.", qaApi);
+      records.push(readOnly);
+      // Provider sync sets these native fields. As in the existing KB-A-48 fixture, arrange only
+      // this disposable candidate; no live integration or foreign project record is changed.
+      exec(`UPDATE knowledge_documents SET is_read_only=true, source_provider='jira'
+        WHERE id=${literal(readOnly.id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      const mirror = await qaApi.get(`${base()}/knowledge-base/documents/${readOnly.id}`);
+      expect(mirror.ok(), await mirror.text()).toBe(true);
+      const nativeMirror = await mirror.json();
+      expect(nativeMirror).toMatchObject({ id: readOnly.id, isReadOnly: true, sourceProvider: "jira" });
+      const ownBefore = candidateRecoveryState(own.id, own.title);
+      const otherBefore = candidateRecoveryState(other.id, other.title);
+      const mirrorBefore = candidateRecoveryState(readOnly.id, readOnly.title);
+      for (const state of [ownBefore, otherBefore, mirrorBefore]) {
+        expect(state).toMatchObject({ submittedCount: 0, approvedCount: 0, assignmentCount: 0, reviewedVersionId: null });
+      }
+      page = await open(browser, "/settings/skills", "qa");
+      const ownCard = page.getByTestId(`skill-${own.id}`);
+      await expect(ownCard.getByRole("button", { name: "Submit draft", exact: true })).toBeEnabled();
+      await expect(page.getByTestId(`skill-${other.id}`)).toBeVisible();
+      await expect(page.getByTestId(`skill-${other.id}`).getByRole("button", { name: "Submit draft", exact: true })).toHaveCount(0);
+      await expect(page.getByTestId(`skill-${readOnly.id}`)).toBeVisible();
+      await expect(page.getByTestId(`skill-${readOnly.id}`).getByRole("button", { name: "Submit draft", exact: true })).toHaveCount(0);
+
+      const foreign = await qaApi.post(`${base()}/knowledge-base/documents/${other.id}/submissions`, {
+        data: { expectedRevision: other.editRevision, submissionKey: randomUUID() }
+      });
+      expect(foreign.status()).toBe(403);
+      expect(await foreign.json()).toMatchObject({ error: "You can only modify items you created" });
+      const mirrored = await qaApi.post(`${base()}/knowledge-base/documents/${readOnly.id}/submissions`, {
+        data: { expectedRevision: nativeMirror.editRevision, submissionKey: randomUUID() }
+      });
+      expect(mirrored.status()).toBe(400);
+      expect((await mirrored.json()).error).toContain("its body can't be edited");
+      const submitted = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith(`/documents/${own.id}/submissions`));
+      await ownCard.getByRole("button", { name: "Submit draft", exact: true }).click();
+      const receipt = await submitted;
+      expect(receipt.ok(), await receipt.text()).toBe(true);
+      await expect(ownCard.getByRole("button", { name: /Review submitted v/ })).toBeVisible();
+      expect(candidateRecoveryState(own.id, own.title)).toEqual({ ...ownBefore, submittedCount: 1 });
+      expect(candidateRecoveryState(other.id, other.title)).toEqual(otherBefore);
+      expect(candidateRecoveryState(readOnly.id, readOnly.title)).toEqual(mirrorBefore);
+      await ownCard.getByRole("button", { name: /Review submitted v/ }).click();
+      await expect(page.getByTestId("skill-review-content")).toContainText("RULE-QA");
+      await expect(page.getByTestId("skill-review-approve")).toHaveCount(0);
+      await expect(page.getByTestId("skill-assignment-form")).toHaveCount(0);
+    } finally {
+      await page?.context().close();
+      for (const record of records) await cleanupSkill(record.id);
     }
   });
 

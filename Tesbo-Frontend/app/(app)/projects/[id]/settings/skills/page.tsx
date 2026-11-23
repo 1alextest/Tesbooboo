@@ -56,6 +56,18 @@ function contextKey(target: { module: string; subtype: string; operation: string
 function shortDigest(digest: string | null | undefined) {
   return digest ? `${digest.slice(0, 12)}…` : "—";
 }
+
+/** One logical initial submission per actor and saved draft, including after a reload.
+ * This is an idempotency key, never authority: the native owner rechecks the actor and revision.
+ */
+async function draftSubmissionKey(actorId: string, projectId: string, documentId: string, revision: string) {
+  const input = JSON.stringify(["tesbo-skill-initial-submission/v1", actorId, projectId, documentId, revision]);
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input))).slice(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x80;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 function versionFields(detail: KnowledgeDocumentVersionDetail | null): VersionField[] {
   if (!detail) return [];
   const metadata = detail.snapshotMetadata || {};
@@ -272,7 +284,7 @@ export default function SkillsSettingsPage() {
   const reviewMeta = reviewSkill?.versions.find((version) => version.id === reviewVersion?.id) || null;
   const reviewApproval = governedVersions.find((version) => version.kind === "approved" && version.sourceVersionId === reviewVersion?.id);
 
-  async function run(action: (isCurrent: () => boolean) => Promise<void>) {
+  async function run(action: (isCurrent: () => boolean) => Promise<void>, reconcileOnFailure = false) {
     if (busy) return;
     const request = ++mutationRequest.current;
     const isCurrent = () => activeProject.current === projectId && mutationRequest.current === request;
@@ -280,7 +292,12 @@ export default function SkillsSettingsPage() {
     setError(null);
     setMessage(null);
     try { await action(isCurrent); if (isCurrent()) await load(); }
-    catch (err) { if (isCurrent()) setError(err instanceof Error ? err.message : "The Skills action failed."); }
+    catch (err) {
+      if (isCurrent()) {
+        setError(err instanceof Error ? err.message : "The Skills action failed.");
+        if (reconcileOnFailure) await load();
+      }
+    }
     finally { if (isCurrent()) setBusy(false); }
   }
 
@@ -427,17 +444,43 @@ export default function SkillsSettingsPage() {
   }
 
   function createAndSubmit() {
+    if (!currentUserId) return;
     void run(async (isCurrent) => {
       const created = await createSkillCandidate(projectId, {
         title: newTitle.trim(), module: newModule, subtype: newSubtype.trim() || "*",
         ...(newKey.trim() ? { skillKey: newKey.trim() } : {}),
         instructions: newInstructions.trim()
       });
-      const version = await submitSkillVersion(projectId, created.id, created.editRevision);
       if (!isCurrent()) return;
+      // Creation has committed. Never present the old form as another create attempt when the
+      // separate submission fails; the native library owns recovery of this exact draft.
       setNewTitle(""); setNewKey(""); setNewInstructions("");
-      setMessage(`Skill candidate submitted as version ${version.versionNumber}. It is inert until a human approves it.`);
-    });
+      await submitSavedDraft(created, currentUserId, isCurrent);
+    }, true);
+  }
+
+  function canSubmitDraft(skill: SkillRecord) {
+    return !!currentUserId && !!skill.skillKey && !!skill.module && !skill.submittedVersionId
+      && skill.state === "draft" && skill.status === "draft"
+      && !skill.isReadOnly && (canManage || skill.createdBy === currentUserId);
+  }
+
+  async function submitSavedDraft(skill: Pick<SkillRecord, "id" | "title" | "editRevision">, actorId: string, isCurrent: () => boolean) {
+    try {
+      const submissionKey = await draftSubmissionKey(actorId, projectId, skill.id, skill.editRevision);
+      if (!isCurrent()) return;
+      const version = await submitSkillVersion(projectId, skill.id, skill.editRevision, submissionKey);
+      if (isCurrent()) setMessage(`Skill candidate submitted as version ${version.versionNumber}. It is inert until a human approves it.`);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "The submission outcome could not be confirmed.";
+      throw new Error(`${skill.title} is saved. ${detail} Check its current status in the Skills library before trying submission again.`);
+    }
+  }
+
+  function resumeSubmission(skill: SkillRecord) {
+    if (loading || loadError || !currentUserId || !canSubmitDraft(skill)) return;
+    const actorId = currentUserId;
+    void run((isCurrent) => submitSavedDraft(skill, actorId, isCurrent), true);
   }
 
   function assign() {
@@ -528,6 +571,7 @@ export default function SkillsSettingsPage() {
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {submitted && <Button size="sm" disabled={busy} onClick={() => void openReview(skill)} data-testid={`skill-review-open-${skill.id}`}>Review submitted v{submitted.versionNumber}</Button>}
+                        {canSubmitDraft(skill) && <Button size="sm" variant="secondary" disabled={busy || loading || !!loadError} onClick={() => resumeSubmission(skill)} data-testid={`skill-submit-draft-${skill.id}`}>Submit draft</Button>}
                       </div>
                     </div>
                     <details className="mt-2 text-xs text-[var(--muted)]">
@@ -689,14 +733,14 @@ export default function SkillsSettingsPage() {
           <h2 className="text-base font-semibold flex items-center gap-2"><IconPlus size={18} /> New skill candidate</h2>
           <p className="text-sm text-[var(--muted)]">Creating and submitting a candidate does not approve or assign it.</p>
           <div className="grid gap-3 md:grid-cols-2" data-testid="skill-candidate-form">
-            <Field><FieldLabel>Title</FieldLabel><Input data-testid="skill-title" value={newTitle} onChange={(event) => setNewTitle(event.target.value)} maxLength={512} /></Field>
-            <Field><FieldLabel>Skill key (optional)</FieldLabel><Input data-testid="skill-key" value={newKey} onChange={(event) => setNewKey(event.target.value)} placeholder="REQ-AUTHORING" maxLength={64} /></Field>
-            <Field><FieldLabel>Module</FieldLabel><Select data-testid="skill-module" value={newModule} onChange={(event) => setNewModule(event.target.value as SkillModule)}>{MODULES.map((module) => <option key={module} value={module}>{module}</option>)}</Select></Field>
-            <Field><FieldLabel>Subtype</FieldLabel><Input data-testid="skill-subtype" value={newSubtype} onChange={(event) => setNewSubtype(event.target.value)} placeholder="functional" maxLength={32} /></Field>
-            <div className="md:col-span-2"><Field><FieldLabel>Instructions</FieldLabel><Textarea data-testid="skill-instructions" value={newInstructions} onChange={(event) => setNewInstructions(event.target.value)} rows={4} maxLength={20000} /></Field></div>
+            <Field><FieldLabel>Title</FieldLabel><Input data-testid="skill-title" value={newTitle} onChange={(event) => setNewTitle(event.target.value)} maxLength={512} disabled={busy} /></Field>
+            <Field><FieldLabel>Skill key (optional)</FieldLabel><Input data-testid="skill-key" value={newKey} onChange={(event) => setNewKey(event.target.value)} placeholder="REQ-AUTHORING" maxLength={64} disabled={busy} /></Field>
+            <Field><FieldLabel>Module</FieldLabel><Select data-testid="skill-module" value={newModule} onChange={(event) => setNewModule(event.target.value as SkillModule)} disabled={busy}>{MODULES.map((module) => <option key={module} value={module}>{module}</option>)}</Select></Field>
+            <Field><FieldLabel>Subtype</FieldLabel><Input data-testid="skill-subtype" value={newSubtype} onChange={(event) => setNewSubtype(event.target.value)} placeholder="functional" maxLength={32} disabled={busy} /></Field>
+            <div className="md:col-span-2"><Field><FieldLabel>Instructions</FieldLabel><Textarea data-testid="skill-instructions" value={newInstructions} onChange={(event) => setNewInstructions(event.target.value)} rows={4} maxLength={20000} disabled={busy} /></Field></div>
           </div>
           {(!newTitle.trim() || !newInstructions.trim()) && <FieldError>A title and instructions are required.</FieldError>}
-          <Button onClick={createAndSubmit} disabled={busy || !newTitle.trim() || !newInstructions.trim()} data-testid="skill-create-submit">Create and submit candidate</Button>
+          <Button onClick={createAndSubmit} disabled={busy || !currentUserId || !newTitle.trim() || !newInstructions.trim()} data-testid="skill-create-submit">Create and submit candidate</Button>
         </Card>
 
         {canManage && (
