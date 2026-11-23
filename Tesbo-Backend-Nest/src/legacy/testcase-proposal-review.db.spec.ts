@@ -708,6 +708,7 @@ type Body=Record<string,any>;
       const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
       let requirementId="";
       let caseId="";
+      let v2TaskId="";
       try{
         const staged=await stageBundle(ops());
         const applied=await service().applyRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human);
@@ -726,14 +727,18 @@ type Body=Record<string,any>;
         const lostLink=String(activated.link.id);
         const lostVersion=String(activated.link.requirementVersionId);
 
-        // A newer requirement version is submitted and approved after the lost response.
-        const updated=await service().updateKnowledgeDocument(project,user,requirementId,{
-          contentJson:{schemaVersion:"tesbo-requirement/1",description:"Newer requirement content",criteria:[{key:"AC-1",text:"Newer obligation"}]},
-          contentText:"Newer requirement content",contentHtml:"<p>Newer requirement content</p>",expectedRevision:await revision(requirementId)
-        });
-        const submitted=await service().submitKnowledgeDocument(project,user,requirementId,
-          {expectedRevision:updated.editRevision,submissionKey:randomUUID()},human);
-        const approvedV2=await service().approveRequirementVersion(project,user,requirementId,{versionId:submitted.id},human);
+        // A newer requirement version is staged/applied/approved after the lost response. This
+        // native path carries the pinned skill context into the submitted version.
+        const v2Title=`Replay v2 ${randomUUID()}`;
+        const stagedV2=await service().stageRequirementChangeBundle(project,user,{
+          requestKey:randomUUID(), title:v2Title,
+          operations:[{opType:"requirement_revision",operationId:randomUUID(),documentId:requirementId,
+            expectedRevision:await revision(requirementId),title:v2Title,description:"Newer requirement content",
+            criteria:[{key:"AC-1",text:"Newer obligation"}]}]
+        },{kind:"api_token",tokenId:token,transport:"rest"} as never);
+        v2TaskId=stagedV2.id;
+        const appliedV2=await service().applyRequirementProposal(project,user,stagedV2.id,{expectedProposalRevision:stagedV2.proposalRevision},human);
+        const approvedV2=await service().approveRequirementVersion(project,user,requirementId,{versionId:appliedV2.receipt.requirement.versionId},human);
 
         // Retrying the inactive original link must not replay the v1 generation after v2 approval.
         const before=await admin.query("SELECT id,state,requirement_version_id,testcase_revision,testcase_approval_revision FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 ORDER BY id",[project,requirementId]);
@@ -755,6 +760,7 @@ type Body=Record<string,any>;
         expect(active.rows.some(row=>String(row.id)===String(rebound.link.id)&&String(row.requirement_version_id)===String(approvedV2.approvedVersionId))).toBe(true);
         expect(active.rows.some(row=>String(row.id)===lostLink)).toBe(false);
       }finally{
+        if(v2TaskId) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[v2TaskId]);
         if(requirementId) await cleanupRequirement(requirementId);
         await cleanupSkills(skillIds);
       }
