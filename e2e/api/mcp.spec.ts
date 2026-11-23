@@ -830,7 +830,7 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
     });
   });
 
-  test("modern 2026 stateless clients receive an explicit version refusal without changing legacy MCP", async ({ request }) => {
+  test("MCP-P07 modern 2026 stateless clients receive an explicit version refusal without changing legacy MCP", async ({ request }) => {
     await withToken(request, ["read"], async (api, token) => {
       for (const url of ["/api/mcp", `/api/projects/${ctx.projectId}/mcp`]) {
         const payload = {
