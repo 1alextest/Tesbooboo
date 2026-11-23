@@ -11,10 +11,12 @@ import type { McpToolContext } from "./mcp.types";
  */
 export function apiTokenStagingProducer(
   context: Pick<McpToolContext, "tokenId" | "actorId">,
-  options: { requireAgentActor: boolean }
+  options: { requireAgentActor: boolean; operation: "testcase" | "requirement" }
 ): { kind: "api_token"; transport: "mcp"; tokenId: string; actorId?: string } {
   if (!context.tokenId) {
-    throw new McpError(RpcCode.ProjectScopeDenied, "An authenticated API-token credential is required to stage this proposal");
+    throw new McpError(RpcCode.ProjectScopeDenied, options.operation === "testcase"
+      ? "An authenticated credential is required to stage testcase proposals"
+      : "An authenticated credential is required to stage a requirement change bundle");
   }
   if (options.requireAgentActor && !context.actorId) {
     throw new McpError(
