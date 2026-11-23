@@ -661,6 +661,240 @@ test.describe("governed skills operator journey (UI)", () => {
     }
   });
 
+  type ActivationFixture = {
+    taskId: string; requirementId: string; submittedVersionId: string; approvedVersionId: string;
+    caseId: string; caseBasis: { editRevision: string; approvalRevision: string };
+    groups: { selected: string; reversed: string; other: string }; extraTaskIds: string[];
+  };
+
+  async function withActivationFixture(run: (fixture: ActivationFixture) => Promise<void>) {
+    const suffix = randomUUID();
+    const skillDocs: string[] = [], taskIds: string[] = [];
+    let requirementId = "", caseId = "";
+    try {
+      for (const [module, subtype, operation] of [
+        ["requirements", "functional", "requirement_revision"],
+        ["requirements", "functional", "requirement_case_link"],
+        ["test_cases", "manual", "testcase_create"],
+      ]) skillDocs.push((await apiSkill(module, subtype, operation)).documentId);
+      const requirementOperationId = randomUUID(), testcaseOperationId = randomUUID();
+      const stagedResponse = await ownerApi.post(base() + "/requirements/proposals", { data: {
+        requestKey: "activation-recovery-" + suffix, title: "Activation recovery " + suffix,
+        operations: [
+          { opType: "requirement_revision", operationId: requirementOperationId,
+            title: "Activation requirement " + suffix, description: "Native ordered-group recovery fixture.",
+            criteria: ["AC-1", "AC-2", "AC-3"].map(key => ({ key, text: "Observable obligation " + key })) },
+          { opType: "testcase_create", operationId: testcaseOperationId,
+            draft: { title: "Activation case " + suffix } },
+          { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId,
+            testcaseOperationId, criterionKeys: ["AC-1", "AC-2"] },
+        ],
+      } });
+      expect(stagedResponse.ok(), await stagedResponse.text()).toBe(true);
+      const staged = await stagedResponse.json();
+      taskIds.push(staged.id);
+      const appliedResponse = await ownerApi.post(base() + "/requirements/proposals/" + staged.id + "/apply",
+        { data: { expectedProposalRevision: staged.proposalRevision } });
+      expect(appliedResponse.ok(), await appliedResponse.text()).toBe(true);
+      const applied = await appliedResponse.json();
+      requirementId = applied.receipt.requirement.documentId;
+      caseId = applied.receipt.testcase.id;
+      const submittedVersionId = String(applied.receipt.requirement.versionId);
+      const approved = await ownerApi.post(base() + "/requirements/" + requirementId + "/approve",
+        { data: { versionId: submittedVersionId } });
+      expect(approved.ok(), await approved.text()).toBe(true);
+      const approvedVersionId = String((await approved.json()).approvedVersionId);
+      const beforeCase = await (await ownerApi.get(base() + "/testcases/" + caseId)).json();
+      const approvedCase = await ownerApi.post(base() + "/testcases/" + caseId + "/approve",
+        { data: { expectedRevision: beforeCase.editRevision, expectedApprovalRevision: beforeCase.approvalRevision } });
+      expect(approvedCase.ok(), await approvedCase.text()).toBe(true);
+      const caseBasis = await (await ownerApi.get(base() + "/testcases/" + caseId)).json();
+      // The current bundle creates one link. Seed two valid neighboring groups only in this
+      // suite's disposable tenant, copying the real native link's provenance and stored basis.
+      // Array order is part of today's identity; the reversed neighbor must stay untouched.
+      for (const keys of [["AC-2", "AC-1"], ["AC-3"]]) {
+        exec("INSERT INTO requirement_case_links " +
+          "(project_id,requirement_id,requirement_version_id,criterion_keys,testcase_id,testcase_revision," +
+          "testcase_approval_revision,state,proposed_by,applied_by,applied_at) " +
+          "SELECT project_id,requirement_id,requirement_version_id,ARRAY[" + keys.map(literal).join(",") + "]::text[]," +
+          "testcase_id,testcase_revision,testcase_approval_revision,state,proposed_by,applied_by,applied_at " +
+          "FROM requirement_case_links WHERE project_id=" + literal(tenant!.mainProjectId) +
+          " AND requirement_id=" + literal(requirementId) + " AND requirement_version_id=" + literal(approvedVersionId) +
+          " AND state='active' AND criterion_keys=ARRAY['AC-1','AC-2']::text[];");
+      }
+      await run({ taskId: staged.id, requirementId, submittedVersionId, approvedVersionId, caseId, caseBasis,
+        groups: { selected: caseId + "::AC-1::AC-2", reversed: caseId + "::AC-2::AC-1", other: caseId + "::AC-3" },
+        extraTaskIds: taskIds });
+    } finally {
+      for (const id of taskIds) exec("DELETE FROM ai_generation_requests WHERE id=" + literal(id) + " AND project_id=" + literal(tenant!.mainProjectId) + ";");
+      if (requirementId) {
+        exec("DELETE FROM requirement_case_links WHERE project_id=" + literal(tenant!.mainProjectId) + " AND requirement_id=" + literal(requirementId) + ";");
+        exec("DELETE FROM requirement_profiles WHERE document_id=" + literal(requirementId) + ";");
+        exec("UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=" + literal(requirementId) + ";");
+        exec("DELETE FROM knowledge_documents WHERE id=" + literal(requirementId) + " AND project_id=" + literal(tenant!.mainProjectId) + ";");
+      }
+      if (caseId) exec("DELETE FROM testcases WHERE id=" + literal(caseId) + " AND project_id=" + literal(tenant!.mainProjectId) + ";");
+      for (const id of skillDocs) {
+        exec("DELETE FROM skill_assignments WHERE project_id=" + literal(tenant!.mainProjectId) + " AND skill_document_id=" + literal(id) + ";");
+        exec("UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=" + literal(id) + ";");
+        exec("DELETE FROM knowledge_documents WHERE id=" + literal(id) + " AND project_id=" + literal(tenant!.mainProjectId) + ";");
+      }
+    }
+  }
+
+  test("activation recovery retains two uncertain ordered groups and verifies their exact native outcomes", async ({ browser }) => {
+    await withActivationFixture(async f => {
+      const coverageUrl = base() + "/requirements/" + f.requirementId + "/coverage";
+      const coveragePattern = "**" + coverageUrl;
+      const beforeResponse = await ownerApi.get(coverageUrl);
+      expect(beforeResponse.ok(), await beforeResponse.text()).toBe(true);
+      const before = await beforeResponse.json();
+      const reversedBefore = scalar("SELECT to_jsonb(l)::text FROM requirement_case_links l WHERE requirement_id=" +
+        literal(f.requirementId) + " AND criterion_keys=ARRAY['AC-2','AC-1']::text[];");
+      const page = await open(browser, "/agents/tasks/" + f.taskId);
+      for (const group of Object.values(f.groups)) await expect(page.getByTestId("requirement-link-activate-" + group)).toBeEnabled();
+      // Deliver the already captured REAL native response to model a delayed/stale read. Only
+      // delivery is controlled: actual activation writes and subsequent verification are native.
+      await page.route(coveragePattern, route => route.fulfill({ response: beforeResponse }));
+      const payloads: Record<string, unknown>[] = [];
+      for (const [index, group] of [f.groups.selected, f.groups.other].entries()) {
+        const keys = group === f.groups.selected ? ["AC-1", "AC-2"] : ["AC-3"];
+        const link = before.cases.find((entry: { criterionKeys: string[]; requirementVersionId: string }) =>
+          entry.requirementVersionId === f.approvedVersionId && JSON.stringify(entry.criterionKeys) === JSON.stringify(keys));
+        expect(link).toBeTruthy();
+        await page.route("**" + base() + "/requirements/" + f.requirementId + "/links/" + link.linkId + "/reapply", async route => {
+          payloads.push(route.request().postDataJSON());
+          const actual = await route.fetch();
+          expect(actual.ok(), await actual.text()).toBe(true);
+          if (index === 0) await route.abort("failed");
+          else await route.fulfill({ status: 503, json: { error: "Response lost after native commit" } });
+        });
+        await page.getByTestId("requirement-link-activate-" + group).click();
+        await expect(page.getByTestId("requirement-link-error-" + group)).toContainText("could not be confirmed");
+        await expect(page.getByTestId("requirement-link-notice-" + group)).toHaveCount(0);
+        await expect(page.getByTestId("requirement-link-activate-" + f.groups.reversed)).toBeEnabled();
+      }
+      await expect(page.getByTestId("requirement-link-error-" + f.groups.selected)).toContainText("could not be confirmed");
+      await expect(page.getByTestId("requirement-link-error-" + f.groups.other)).toContainText("could not be confirmed");
+      await page.unroute(coveragePattern);
+      await page.getByRole("button", { name: "Verify activation outcomes", exact: true }).click();
+      for (const group of [f.groups.selected, f.groups.other]) {
+        await expect(page.getByTestId("requirement-link-notice-" + group)).toContainText("verified after an unconfirmed response");
+        await expect(page.getByTestId("requirement-link-error-" + group)).toHaveCount(0);
+      }
+      for (const payload of payloads) expect(payload).toMatchObject({
+        expectedRequirementVersionId: f.approvedVersionId,
+        expectedCaseRevision: f.caseBasis.editRevision, expectedApprovalRevision: f.caseBasis.approvalRevision,
+      });
+      const after = await (await ownerApi.get(coverageUrl)).json();
+      for (const keys of [["AC-1", "AC-2"], ["AC-3"]]) {
+        const links = after.cases.filter((entry: { criterionKeys: string[] }) => JSON.stringify(entry.criterionKeys) === JSON.stringify(keys));
+        expect(links).toHaveLength(1);
+        expect(links[0]).toMatchObject({ approved: true, requirementVersionId: f.approvedVersionId,
+          testcaseRevision: f.caseBasis.editRevision, testcaseApprovalRevision: f.caseBasis.approvalRevision });
+      }
+      expect(scalar("SELECT to_jsonb(l)::text FROM requirement_case_links l WHERE requirement_id=" +
+        literal(f.requirementId) + " AND criterion_keys=ARRAY['AC-2','AC-1']::text[];")).toBe(reversedBefore);
+      await expect(page.getByTestId("requirement-link-activate-" + f.groups.reversed)).toBeEnabled();
+    });
+  });
+
+  for (const movedBasis of ["case", "requirement"] as const) {
+    test("activation recovery does not confirm an earlier 503 from a different " + movedBasis + " approval basis", async ({ browser }) => {
+      await withActivationFixture(async f => {
+        const coverageUrl = base() + "/requirements/" + f.requirementId + "/coverage";
+        const initial = await (await ownerApi.get(coverageUrl)).json();
+        const link = initial.cases.find((entry: { requirementVersionId: string; criterionKeys: string[] }) =>
+          entry.requirementVersionId === f.approvedVersionId && entry.criterionKeys.join("::") === "AC-1::AC-2");
+        expect(link).toBeTruthy();
+        const page = await open(browser, "/agents/tasks/" + f.taskId);
+        const reapplyUrl = base() + "/requirements/" + f.requirementId + "/links/" + link.linkId + "/reapply";
+        const beforeRows = scalar("SELECT jsonb_agg(to_jsonb(l) ORDER BY id)::text FROM requirement_case_links l WHERE requirement_id=" + literal(f.requirementId) + ";");
+        // This 503 never reaches the service; verify no commit before the other actor proceeds.
+        await page.route("**" + reapplyUrl, route => route.fulfill({ status: 503, json: { error: "Activation service unavailable" } }));
+        await page.getByTestId("requirement-link-activate-" + f.groups.selected).click();
+        await expect(page.getByTestId("requirement-link-error-" + f.groups.selected)).toContainText("could not be confirmed");
+        await expect(page.getByTestId("requirement-link-notice-" + f.groups.selected)).toHaveCount(0);
+        expect(scalar("SELECT jsonb_agg(to_jsonb(l) ORDER BY id)::text FROM requirement_case_links l WHERE requirement_id=" + literal(f.requirementId) + ";")).toBe(beforeRows);
+
+        let requirementVersionId = f.approvedVersionId, caseBasis = f.caseBasis;
+        if (movedBasis === "case") {
+          const changed = await ownerApi.put(base() + "/testcases/" + f.caseId,
+            { data: { title: "Later approved activation case " + randomUUID(), expectedRevision: caseBasis.editRevision } });
+          expect(changed.ok(), await changed.text()).toBe(true);
+          const current = await (await ownerApi.get(base() + "/testcases/" + f.caseId)).json();
+          const approved = await ownerApi.post(base() + "/testcases/" + f.caseId + "/approve",
+            { data: { expectedRevision: current.editRevision, expectedApprovalRevision: current.approvalRevision } });
+          expect(approved.ok(), await approved.text()).toBe(true);
+          caseBasis = await (await ownerApi.get(base() + "/testcases/" + f.caseId)).json();
+          expect(caseBasis.editRevision).not.toBe(f.caseBasis.editRevision);
+        } else {
+          const doc = await (await ownerApi.get(base() + "/knowledge-base/documents/" + f.requirementId)).json();
+          const stagedResponse = await ownerApi.post(base() + "/requirements/proposals", { data: {
+            requestKey: "newer-activation-basis-" + randomUUID(), title: "Newer activation requirement",
+            operations: [{ opType: "requirement_revision", operationId: randomUUID(), documentId: f.requirementId,
+              expectedRevision: doc.editRevision, title: "Newer activation requirement " + randomUUID(),
+              criteria: ["AC-1", "AC-2", "AC-3"].map(key => ({ key, text: "Updated obligation " + key })) }],
+          } });
+          expect(stagedResponse.ok(), await stagedResponse.text()).toBe(true);
+          const staged = await stagedResponse.json();
+          f.extraTaskIds.push(staged.id);
+          const applied = await ownerApi.post(base() + "/requirements/proposals/" + staged.id + "/apply",
+            { data: { expectedProposalRevision: staged.proposalRevision } });
+          expect(applied.ok(), await applied.text()).toBe(true);
+          const appliedBody = await applied.json();
+          const approved = await ownerApi.post(base() + "/requirements/" + f.requirementId + "/approve",
+            { data: { versionId: appliedBody.receipt.requirement.versionId } });
+          expect(approved.ok(), await approved.text()).toBe(true);
+          requirementVersionId = String((await approved.json()).approvedVersionId);
+          expect(requirementVersionId).not.toBe(f.approvedVersionId);
+        }
+        // A separate actual human API action activates the NEW basis. It must never prove that
+        // the earlier browser request committed on its captured requirement/case revisions.
+        const activated = await ownerApi.post(reapplyUrl, { data: { expectedRequirementVersionId: requirementVersionId,
+          expectedCaseRevision: caseBasis.editRevision, expectedApprovalRevision: caseBasis.approvalRevision } });
+        expect(activated.ok(), await activated.text()).toBe(true);
+        const activatedBody = await activated.json();
+        await page.getByRole("button", { name: "Verify activation outcomes", exact: true }).click();
+        await expect(page.getByTestId("requirement-link-state-" + f.groups.selected)).toContainText("active on the approved requirement version");
+        await expect(page.getByTestId("requirement-link-error-" + f.groups.selected)).toContainText("could not be confirmed");
+        await expect(page.getByTestId("requirement-link-notice-" + f.groups.selected)).toHaveCount(0);
+        const after = await (await ownerApi.get(coverageUrl)).json();
+        expect(after.cases.find((entry: { linkId: string }) => entry.linkId === activatedBody.link.id))
+          .toMatchObject({ approved: true, requirementVersionId, testcaseRevision: caseBasis.editRevision,
+            testcaseApprovalRevision: caseBasis.approvalRevision });
+      });
+    });
+  }
+
+  test("activation affordance preserves server refusal for legacy project role aliases", async ({ browser }) => {
+    await withActivationFixture(async f => {
+      const snapshot = () => scalar("SELECT jsonb_agg(to_jsonb(l) ORDER BY id)::text FROM requirement_case_links l WHERE requirement_id=" + literal(f.requirementId) + ";");
+      const beforeRows = snapshot();
+      try {
+        for (const role of ["admin", "test_manager"]) {
+          exec("UPDATE project_members SET role=" + literal(role) + " WHERE project_id=" +
+            literal(tenant!.mainProjectId) + " AND user_id=" + literal(tenant!.qa.userId) + ";");
+          const page = await open(browser, "/agents/tasks/" + f.taskId, "qa");
+          await expect(page.getByTestId("requirement-link-readonly-" + f.groups.selected)).toBeVisible();
+          await expect(page.getByTestId("requirement-link-activate-" + f.groups.selected)).toHaveCount(0);
+          const coverage = await (await qaApi.get(base() + "/requirements/" + f.requirementId + "/coverage")).json();
+          const link = coverage.cases.find((entry: { requirementVersionId: string; criterionKeys: string[] }) =>
+            entry.requirementVersionId === f.approvedVersionId && entry.criterionKeys.join("::") === "AC-1::AC-2");
+          const refused = await qaApi.post(base() + "/requirements/" + f.requirementId + "/links/" + link.linkId + "/reapply",
+            { data: { expectedRequirementVersionId: f.approvedVersionId,
+              expectedCaseRevision: f.caseBasis.editRevision, expectedApprovalRevision: f.caseBasis.approvalRevision } });
+          expect(refused.status()).toBe(403);
+          expect(snapshot()).toBe(beforeRows);
+          await page.close();
+        }
+      } finally {
+        exec("UPDATE project_members SET role='qa_engineer' WHERE project_id=" + literal(tenant!.mainProjectId) +
+          " AND user_id=" + literal(tenant!.qa.userId) + ";");
+      }
+    });
+  });
+
   test("owner reopens, approves and reads coverage from the task surface while QA, stale and lost responses stay truthful", async ({ browser }) => {
     const suffix = Date.now();
     const title = `Task review requirement ${suffix}`;
