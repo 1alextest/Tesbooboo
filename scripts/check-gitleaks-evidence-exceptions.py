@@ -36,6 +36,17 @@ NATIVE_PROSE_SHA256 = "b084c144d6ba7f150c692b6065132cfd45e94309871c4182164044ec7
 # fragments so the test control itself is not mistaken for another unreviewed receipt.
 NATIVE_PROSE_FRAGMENT = "".join(("new-key 404, ", "anonymous/foreign "))
 
+# Canonical originals remain byte-for-byte intact. Only these two ordinary prose
+# matches are excepted, under their exact paths and the generic-api-key rule.
+CANONICAL_PROSE = [
+    ("technical", Path("docs/qa-orchestration/03_TECHNICAL_DESIGN.md"),
+     "277c8b115ca23904df521ee56df211766217e2b8f09ff488773450978a6ccf9e",
+     "".join(("auth, ", "finalization/", "merge ")), "merge", "merge2"),
+    ("contracts", Path("docs/qa-orchestration/04_MCP_API_CONTRACTS.md"),
+     "fbe715ec8dc8f21a668d0c8dadfc25b374991a949892d123c17ecbfe218cbfbd",
+     "".join(("token. Reject cycles, ", "missing/foreign/", "unapproved ")), "unapproved", "unapproved2"),
+]
+
 
 def scan(image, config, root, files, label):
     case = root / label
@@ -176,6 +187,38 @@ def main():
                         raise AssertionError(f"{label}-{mode}: unexpected same-line suppression")
         print("PASS: 7 exact hash mappings, 1 exact prose match, and 16 denied neighbors; "
               "each checked with both configurations")
+
+        for label, path, digest, fragment, original_word, changed_word in CANONICAL_PROSE:
+            original = (repo / path).read_bytes()
+            if hashlib.sha256(original).hexdigest() != digest:
+                raise AssertionError(f"{label}: canonical original changed; exception needs review")
+            matching = [line for line in original.decode("utf-8").splitlines() if fragment in line]
+            if len(matching) != 1:
+                raise AssertionError(f"{label}: expected one reviewed canonical prose line")
+            prose = matching[0] + "\n"
+            exact_path = str(path)
+            baseline = scan(args.image, default_config, root, {exact_path: prose}, f"canonical-{label}-default")
+            if baseline != [(exact_path, "generic-api-key")]:
+                raise AssertionError(f"{label}: default must reproduce the single observed prose finding")
+            if scan(args.image, config, root, {exact_path: prose}, f"canonical-{label}-corrected"):
+                raise AssertionError(f"{label}: exact canonical prose exception did not match")
+            denied_prose = [
+                ("outside", f"src/{path.name}", prose, "generic-api-key"),
+                ("nested", "src/" + exact_path, prose, "generic-api-key"),
+                ("suffix", exact_path + ".extra", prose, "generic-api-key"),
+                ("altered", exact_path, prose.replace(fragment, fragment.replace(original_word, changed_word)), "generic-api-key"),
+                ("generic", exact_path, json.dumps({"service_api_key": generic}), "generic-api-key"),
+                ("provider", exact_path, json.dumps({"credential": provider}), "github-pat"),
+                ("same-line", exact_path, prose.rstrip("\n") + " " + json.dumps({"service_api_key": generic}) + "\n", "generic-api-key"),
+            ]
+            for neighbor, candidate_path, content, rule in denied_prose:
+                for mode, selected_config in (("default", default_config), ("corrected", config)):
+                    name = f"canonical-{label}-{neighbor}-{mode}"
+                    actual = scan(args.image, selected_config, root, {candidate_path: content}, name)
+                    require_findings(actual, {(candidate_path, rule): 1}, name)
+                    if neighbor == "same-line" and actual.count((candidate_path, rule)) != (2 if mode == "default" else 1):
+                        raise AssertionError(f"{name}: unexpected same-line suppression")
+        print("PASS: 2 exact canonical prose matches and 14 denied neighbors; both configurations", flush=True)
 
 
         # Protect the frozen original Blue receipt without changing any reviewer

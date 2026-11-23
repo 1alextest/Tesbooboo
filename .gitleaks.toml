@@ -36,6 +36,22 @@ paths = ['''^(?:/repo/)?docs/specs/agent-synchronized-engineering/reviews/2026-1
 regexTarget = "match"
 regexes = ['''^new-key 404, anonymous[/]foreign $''']
 
+[[allowlists]]
+description = "Exact non-secret failure-monitoring prose in the canonical v1.4.45 technical design"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^(?:/repo/)?docs/qa-orchestration/03_TECHNICAL_DESIGN\.md$''']
+regexTarget = "match"
+regexes = ['''^auth, finalization[/]merge $''']
+
+[[allowlists]]
+description = "Exact non-secret dependency-refusal prose in the canonical v1.4.45 API contracts"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^(?:/repo/)?docs/qa-orchestration/04_MCP_API_CONTRACTS\.md$''']
+regexTarget = "match"
+regexes = ['''^token\. Reject cycles, missing[/]foreign[/]unapproved $''']
+
 # These two 40-character values are separately verified Git commit objects,
 # not Sourcegraph access tokens. Preserve the immutable original Blue receipt.
 # A rule-local secret allowlist avoids suppressing unrelated Sourcegraph-pattern matches.
