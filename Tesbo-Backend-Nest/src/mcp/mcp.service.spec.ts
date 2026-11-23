@@ -2,7 +2,7 @@ import { proposalReviewPreviewEnabled } from "../common/testcase-publication.pol
 import { ForbiddenException } from "@nestjs/common";
 import { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
 import { previewDraftModel } from "../behavior-graph/model-studio-preview.core";
-import { onlyReducesMcpAccess, readMcpAccess, validateMcpAccess, type ProjectMcpAccess } from "./mcp-access";
+import { hasApprovedMcpToolPermission, onlyReducesMcpAccess, readMcpAccess, validateMcpAccess, type ProjectMcpAccess } from "./mcp-access";
 import { McpController } from "./mcp.controller";
 import { McpService } from "./mcp.service";
 import { DatabaseService } from "../database/database.service";
@@ -2228,3 +2228,46 @@ describe("MCP consent validation and transport bypass regression", () => {
     }
   });
 });
+
+/**
+ * OAuth preparation only: these are credential-agnostic permission intersection
+ * regression cases. They deliberately do NOT create or authenticate OAuth tokens.
+ * Existing client-grant provenance and live authorization stay in McpService.
+ */
+describe("MCP credential/grant intersection — reusable OAuth policy seam", () => {
+  const readGrant = { scopes: ["read"] as Array<"read" | "write">, allowedTools: null };
+  const fullGrant = { scopes: ["read", "write"] as Array<"read" | "write">, allowedTools: null };
+
+  it("permits read only when BOTH credential and approved grant contain read", () => {
+    expect(hasApprovedMcpToolPermission(["read"], readGrant, "read", "list_testcases")).toBe(true);
+    expect(hasApprovedMcpToolPermission([], readGrant, "read", "list_testcases")).toBe(false);
+    expect(hasApprovedMcpToolPermission(["read"], { scopes: [], allowedTools: null }, "read", "list_testcases")).toBe(false);
+  });
+
+  it("does not upgrade an API or future OAuth credential with a broader grant", () => {
+    expect(hasApprovedMcpToolPermission(["read"], fullGrant, "write", "stage_requirement_change_bundle")).toBe(false);
+    expect(hasApprovedMcpToolPermission(["write"], readGrant, "write", "stage_requirement_change_bundle")).toBe(false);
+    expect(hasApprovedMcpToolPermission(["read", "write"], fullGrant, "write", "stage_requirement_change_bundle")).toBe(true);
+  });
+
+  it("honors a named-tool allowlist even when both sides have write", () => {
+    const restricted = { ...fullGrant, allowedTools: ["list_testcases"] };
+    expect(hasApprovedMcpToolPermission(["read", "write"], restricted, "write", "stage_requirement_change_bundle")).toBe(false);
+    expect(hasApprovedMcpToolPermission(["read", "write"], restricted, "read", "list_testcases")).toBe(true);
+  });
+
+  it("fails closed for an empty allowlist and never infers scope from a tool name", () => {
+    expect(hasApprovedMcpToolPermission(["read", "write"], { ...fullGrant, allowedTools: [] }, "write", "stage_requirement_change_bundle")).toBe(false);
+    expect(hasApprovedMcpToolPermission(["read"], fullGrant, "write", "list_testcases")).toBe(false);
+  });
+
+  it("does not mutate permission sources during evaluation", () => {
+    const scopes = Object.freeze(["read", "write"]);
+    const allowedTools = Object.freeze(["list_testcases"]);
+    const grant = { scopes: Object.freeze(["read"] as Array<"read" | "write">), allowedTools };
+    expect(hasApprovedMcpToolPermission(scopes, grant, "read", "list_testcases")).toBe(true);
+    expect(scopes).toEqual(["read", "write"]);
+    expect(allowedTools).toEqual(["list_testcases"]);
+  });
+});
+
