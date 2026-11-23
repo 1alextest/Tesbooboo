@@ -6,7 +6,7 @@ import { BUILD_GIT_SHA } from "../build-provenance";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
-import { MCP_ACCESS_KEY, onlyReducesMcpAccess, projectSettingsObject, readMcpAccess, validateMcpAccess, type McpClientGrant } from "./mcp-access";
+import { MCP_ACCESS_KEY, hasApprovedMcpToolPermission, onlyReducesMcpAccess, projectSettingsObject, readMcpAccess, validateMcpAccess, type McpClientGrant } from "./mcp-access";
 import type { ApiTokenContext, AuthenticatedRequest } from "../common/request.types";
 import { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
 import { ModelStudioRepository } from "../behavior-graph/model-studio-repository";
@@ -210,8 +210,7 @@ export class McpService {
 
   private clientCanUseTool(principal: ApiTokenContext, grant: McpClientGrant, name: string): boolean {
     const tool = this.toolsByName.get(name);
-    return !!tool && principal.scopes.includes(tool.requiredScope) && grant.scopes.includes(tool.requiredScope) &&
-      (grant.allowedTools === null || grant.allowedTools.includes(name));
+    return !!tool && hasApprovedMcpToolPermission(principal.scopes, grant, tool.requiredScope, name);
   }
 
   private async humanProjectManager(req: AuthenticatedRequest, projectId: string) {
