@@ -24,7 +24,7 @@ export const WORKFLOW_SOURCES=[
   contexts:['sdk-quality','frontend-quality','backend-quality','architecture-quality']},
  {path:'.github/workflows/behavioral-quality.yml',sha:'39161db0ed9758a7c4161555a0b26d7679438fa7',
   contexts:['api-mcp-contracts','database-integrity','transactional-concurrency']},
- {path:'.github/workflows/smoke-security-quality.yml',sha:'b554af6daa18f0dd69fb7a3f2ab7cb6a59cbd890',
+ {path:'.github/workflows/smoke-security-quality.yml',sha:'e44dc5ddd0c6c0f4ae53515636a1df0a69572297',
   contexts:['playwright-smoke','dependency-audit','container-security']},
  {path:'.github/workflows/security-analysis.yml',sha:'39249b3ae3702887e51bafbd5d26ea4d7b6befad',
   contexts:['codeql-javascript-typescript','dependency-lock-integrity (sdk/playwright-reporter)',

@@ -371,7 +371,9 @@ test.describe("custom tags", () => {
     expect(qa.status()).toBe(403);
     expect((await qa.json()).error).toContain("QA Engineers cannot manage custom tags");
     expect((await rename(tag.id, tagName("Guest"), asGuest)).status()).toBe(404);
-    expect([401, 403, 404]).toContain((await rename(tag.id, tagName("Anon"), anon)).status());
+    const anonymous = await rename(tag.id, tagName("Anon"), anon);
+    expect(anonymous.status()).toBe(400);
+    expect(await anonymous.json()).toEqual({ error: "Authentication required" });
     expect(storedName(tag.id)).toBe(afterManager);
   });
 
@@ -553,8 +555,9 @@ test.describe("custom tags", () => {
   test("the tag-filtered list refuses a caller with no session or no project access", async () => {
     const smoke = await createTag({ name: tagName("smoke") });
     const anonRes = await anon.get(testcasesUrl(), { params: { customTagIds: smoke.id }, failOnStatusCode: false });
-    // Same allowance as "every route refuses a caller with no session" above: refused, whatever the code.
-    expect([401, 403]).toContain(anonRes.status());
+    // Legacy requireUser refuses the request before project data is read.
+    expect(anonRes.status()).toBe(400);
+    expect(await anonRes.json()).toEqual({ error: "Authentication required" });
     const guestRes = await asGuest.get(testcasesUrl(), { params: { customTagIds: smoke.id }, failOnStatusCode: false });
     expect(guestRes.status()).toBe(404);
   });
