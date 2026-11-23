@@ -22,7 +22,7 @@ export const WORKFLOW_SOURCES=[
   contexts:['workflow-lint','migration-names','mbt-symbolic-pilot']},
  {path:'.github/workflows/core-quality.yml',sha:'65082b4edda7cd5dc7194ae0c0f590d0b04f7a8f',
   contexts:['sdk-quality','frontend-quality','backend-quality','architecture-quality']},
- {path:'.github/workflows/behavioral-quality.yml',sha:'39161db0ed9758a7c4161555a0b26d7679438fa7',
+ {path:'.github/workflows/behavioral-quality.yml',sha:'b2f9ce02a06a7a688591b03e555008246df9e985',
   contexts:['api-mcp-contracts','database-integrity','transactional-concurrency']},
  {path:'.github/workflows/smoke-security-quality.yml',sha:'e44dc5ddd0c6c0f4ae53515636a1df0a69572297',
   contexts:['playwright-smoke','dependency-audit','container-security']},
