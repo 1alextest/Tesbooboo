@@ -656,7 +656,15 @@ type Body=Record<string,any>;
           await blocker.query("SELECT id FROM ai_generation_requests WHERE id=$1 FOR UPDATE",[waitBundle.id]);
           pending=service().applyRequirementProposal(project,legacyId,waitBundle.id,
             {expectedProposalRevision:waitBundle.proposalRevision},human).then(v=>({v}),e=>({e}));
-          expect(await waitUntil(()=>waitingOn("%ai_generation_requests%FOR UPDATE%"))).toBe(true);
+          // The suite shares a busy disposable PostgreSQL instance; wait longer than the generic
+          // polling helper so we observe the actual post-initial-lock wait, then release promptly.
+          const lockDeadline=Date.now()+15000;
+          let sawWait=false;
+          while(Date.now()<lockDeadline){
+            if(await waitingOn("%ai_generation_requests%FOR UPDATE%")){sawWait=true;break;}
+            await new Promise(resolve=>setTimeout(resolve,50));
+          }
+          expect(sawWait).toBe(true);
           await admin.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2",[project,legacyId]);
           await blocker.query("COMMIT");
           expect((await pending).e).toMatchObject({status:403});
@@ -676,7 +684,7 @@ type Body=Record<string,any>;
         }
         await cleanupSkills(skillIds);
       }
-    });
+    },60000);
 
     it("refuses activation until the requirement version is approved",async()=>{
       const skills=await publishSkills();
