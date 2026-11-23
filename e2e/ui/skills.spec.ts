@@ -541,8 +541,33 @@ test.describe("governed skills operator journey (UI)", () => {
         await page.getByTestId("skill-assignment-subtype").fill(subtype);
         await page.getByTestId("skill-assignment-operation").fill(operation);
         await page.getByTestId("skill-assignment-add-target").click();
+        const skillDocumentId = await page.getByTestId("skill-assignment-skill").inputValue();
+        const versionId = await page.getByTestId("skill-assignment-version").inputValue();
+        // Ledger rows also say "Assigned by". Confirm this command's receipt, so neither
+        // a neighboring assignment nor the previous helper call can acknowledge this save.
+        const saved = page.waitForResponse((response) => response.request().method() === "POST"
+          && new URL(response.url()).pathname === `${base()}/skill-assignment-batches`);
         await page.getByTestId("skill-assign").click();
-        await expect(page.getByText(/Assigned /)).toBeVisible();
+        const response = await saved;
+        expect(response.ok(), await response.text()).toBe(true);
+        const command = response.request().postDataJSON();
+        expect(command).toMatchObject({ skillDocumentId, versionId, targets: [{ module, subtype, operation }] });
+        expect(command.targets).toHaveLength(1);
+        const { receipt, replayed } = await response.json();
+        expect(replayed).toBe(false);
+        expect(receipt).toMatchObject({
+          requestKey: command.requestKey, projectId: tenant!.mainProjectId, actorId: tenant!.owner.userId,
+          principalKind: "human_session", skillDocumentId, skillVersionId: versionId,
+          targets: [{ target: { module, subtype, operation }, after: { skillDocumentId, skillVersionId: versionId, status: "active" } }]
+        });
+        expect(receipt.targets).toHaveLength(1);
+        const target = receipt.targets[0];
+        expect(["added", "replaced", "already_satisfied"]).toContain(target.outcome);
+        const displayed = page.getByTestId("skill-assignment-receipt");
+        await expect(displayed).toBeVisible();
+        await expect(displayed).toContainText(`Request: ${command.requestKey} · version: ${versionId}`);
+        await expect(displayed).toContainText(`Content digest: ${receipt.contentDigest}`);
+        await expect(displayed).toContainText(`${module} / ${subtype} / ${operation}: ${target.outcome.replaceAll("_", " ")} · generation ${target.after.id}`);
       };
       await assign(requirementKey, "requirements", "functional", "requirement_revision");
       await assign(requirementKey, "requirements", "functional", "requirement_case_link");
