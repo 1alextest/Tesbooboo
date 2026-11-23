@@ -766,12 +766,49 @@ the real execution evidence without inventing a second coverage model.
 
 ### 16.4 Verification boundary
 
-Backend coverage: `testcase-proposal-review.db.spec.ts` exercises the apply receipt projection and the
-execution/cycle evidence identities against migrated PostgreSQL. API coverage: `api/requirements.spec.ts` exercises
-the persisted receipt, stale approval refusal, exact-version approval, reapply and Passed/Failed readings. Browser
-coverage: `ui/skills.spec.ts` exercises reload, reader permissions, stale review, a lost approval response, coverage
-after case/execution changes, successful zero, unavailable coverage and the supporting-case/execution links.
+Backend coverage: `testcase-proposal-review.db.spec.ts` exercises the apply receipt projection, the execution/cycle
+evidence identities, and activation refusals for an unapproved or changed case without changing the active link.
+API coverage: `api/requirements.spec.ts` exercises the persisted receipt, stale approval refusal, exact-version
+approval, reapply and Passed/Failed readings. Browser coverage: `ui/skills.spec.ts` exercises reload, reader
+permissions, stale review, a lost approval response, failed content load, exact-version activation, stale case
+revision refusal, a lost activation response, resulting link/coverage reload, successful zero, unavailable coverage
+and the supporting-case/execution links.
 
-Native Tesbo execution remains **UNRUN**. The REQ-WPA-10 acceptance bundle is staged as a review task until a human
-applies it, approves the requirement/case and creates the intended suite; publication and execution are not inferred
-from these automated checks.
+Native Tesbo execution remains **UNRUN**. REQ-WPA-10 was staged and the implementation PR was merged after the owner
+recorded merge authorization; the positive native journey still requires a human to apply/approve the requirement,
+case and link and to create the intended suite. REQ-WPA-11 stages the activation acceptance cases; publication and
+execution are not inferred from these automated checks.
+
+### 16.5 Explicit approved link activation
+
+- After requirement approval and case approval, coverage can still show `approved: false` because the earlier link
+  targets the submitted requirement version or a pre-approval case revision. Activation is a separate owner/manager
+  action through the existing `POST /requirements/:documentId/links/:linkId/reapply` endpoint, quoting the exact
+  current case edit revision and approval revision.
+- The surface shows the exact requirement version, the case edit/approval revisions, why activation is needed, and
+  the current link. Approval copies links onto the approved version; the panel shows one row per case, prefers the
+  approved-version generation, and says the earlier generation will be retired.
+- Activation is offered only when the requirement has an approved version and the case is currently approved. The
+  backend still enforces the owner/manager rule, the exact revisions and the approved target; the UI gate is an
+  affordance, not authority.
+- On success the earlier link is retired and one active link is created on the approved requirement version, and
+  coverage `approved` moves true. A lost response is reported as unconfirmed, then reconciled from coverage; a retry
+  uses the same link and revisions and the backend replays the single active link.
+- A stale case revision, an unapproved case, an inactive link, a permission refusal, a missing link and a 5xx/network
+  failure are each reported without claiming activation; the authoritative coverage and case revisions are re-read.
+- Requirement approval, case approval, activation and execution remain separately labelled. External-provider
+  requirements remain read-only.
+
+### 16.6 PR #219 findings carried forward
+
+| Finding | Disposition |
+| --- | --- |
+| L1 static coverage-basis footer could disagree with the dynamic label | Fixed: the footer is neutral and the dynamic basis plus the approved version ID are shown. |
+| L2 approved snapshot without `sourceVersionId` is blocked only in the renderer | Tracked follow-up: the UI blocks approval, but the API could still create a duplicate approved snapshot for a legacy approved row. |
+| L3 blocked missing-source state also showed the newer-basis warning | Fixed: the warning is suppressed while approval is blocked. |
+| L4 applied copy assumed the version remains readable | Adjusted: the copy says the persisted receipt points to the version. |
+| L5 supporting-case link is a title search, not an exact case id | Tracked follow-up: no case-id deep link exists; the link is a search seed. |
+| L6 newer-basis warning and submitted-version criterion text lacked dedicated tests | Core paths are tested; an explicit newer-submission test remains a follow-up. |
+| L7 external approve/coverage refusal has no direct endpoint test | Code-enforced; direct external-provider test remains a follow-up. |
+| L8 positive applied-banner branch was not asserted | Asserted in the activation UI journey. |
+| L9 PR body wording | Corrected. |

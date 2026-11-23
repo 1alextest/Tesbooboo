@@ -8,10 +8,13 @@ import {
   getKnowledgeDocument,
   getKnowledgeDocumentVersion,
   getRequirementCoverage,
+  getTestCaseRevisionBasis,
+  reapplyRequirementCaseLink,
   type KnowledgeDocument,
   type KnowledgeDocumentVersionDetail,
   type RequirementCoverage,
   type RequirementCoverageCase,
+  type TestCaseRevisionBasis,
 } from "@/lib/api";
 import { Button, Card, StatusChip } from "@/components/ui";
 import { VersionContent } from "@/components/knowledge-base/GovernedVersionContent";
@@ -73,6 +76,22 @@ function versionBasisLabel(item: RequirementCoverageCase, coverage: RequirementC
   return "linked version";
 }
 
+/**
+ * Approval copies active links onto the approved version; the submitted-version generation remains
+ * readable. Show one row per case, preferring the current approved basis, so the activation control
+ * has one exact link and one set of case revisions. Activation retires the older generations.
+ */
+function currentCaseRows(cases: RequirementCoverageCase[], coverage: RequirementCoverage): RequirementCoverageCase[] {
+  const byCase = new Map<string, RequirementCoverageCase>();
+  const rank = (row: RequirementCoverageCase) => row.requirementVersionId === coverage.approvedVersionId ? 2
+    : row.requirementVersionId === coverage.latestSubmittedVersionId ? 1 : 0;
+  for (const item of cases) {
+    const existing = byCase.get(item.testcaseId);
+    if (!existing || rank(item) > rank(existing)) byCase.set(item.testcaseId, item);
+  }
+  return [...byCase.values()];
+}
+
 export function RequirementReviewPanel({ projectId, documentId, versionId, canApprove }: {
   projectId: string;
   documentId: string;
@@ -90,6 +109,16 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
   const [coverageLoading, setCoverageLoading] = useState(true);
   const [coverageError, setCoverageError] = useState<string | null>(null);
   const [coverageNonce, setCoverageNonce] = useState(0);
+
+  // Exact case revisions are read separately from coverage: the coverage row deliberately carries
+  // the linked basis, not the current case revisions an activation must quote.
+  type CaseBasisState = { basis: TestCaseRevisionBasis | null; loading: boolean; error: string | null };
+  const [caseBases, setCaseBases] = useState<Record<string, CaseBasisState>>({});
+  const [caseBasesNonce, setCaseBasesNonce] = useState(0);
+  const [activatingLinkId, setActivatingLinkId] = useState<string | null>(null);
+  const [activationErrors, setActivationErrors] = useState<Record<string, string>>({});
+  const [activationNotice, setActivationNotice] = useState<{ testcaseId: string; linkId: string; retiredLinkId: string; replayed: boolean } | null>(null);
+  const [unconfirmedActivation, setUnconfirmedActivation] = useState<string | null>(null);
 
   const [approving, setApproving] = useState(false);
   const [approvalError, setApprovalError] = useState<string | null>(null);
@@ -150,6 +179,42 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
   useEffect(() => { void loadContent(); }, [loadContent, contentNonce]);
   useEffect(() => { void loadCoverage(); }, [loadCoverage, coverageNonce]);
 
+  useEffect(() => {
+    if (!coverage || coverage.cases.length === 0) { setCaseBases({}); return; }
+    let active = true;
+    const ids = [...new Set(coverage.cases.map((item) => item.testcaseId))];
+    setCaseBases((previous) => Object.fromEntries(ids.map((id) => [id, {
+      basis: previous[id]?.basis ?? null, loading: true, error: null
+    }])));
+    void Promise.all(ids.map(async (id) => {
+      try {
+        return { id, basis: await getTestCaseRevisionBasis(projectId, id), error: null };
+      } catch (err) {
+        return { id, basis: null, error: err instanceof Error ? err.message : "The case revision could not be read." };
+      }
+    })).then((rows) => {
+      if (!active) return;
+      setCaseBases(Object.fromEntries(rows.map((row) => [row.id, { basis: row.basis, loading: false, error: row.error }])));
+    });
+    return () => { active = false; };
+  }, [coverage, projectId, caseBasesNonce]);
+
+  // An activation whose response was lost is reconciled from coverage: if the same case is now
+  // active on the approved version, the commit is verified and the unconfirmed message is cleared.
+  useEffect(() => {
+    if (!coverage || !unconfirmedActivation) return;
+    const item = coverage.cases.find((entry) => entry.testcaseId === unconfirmedActivation);
+    if (!item?.approved) return;
+    setActivationErrors((previous) => {
+      if (!previous[unconfirmedActivation]) return previous;
+      const next = { ...previous };
+      delete next[unconfirmedActivation];
+      return next;
+    });
+    setActivationNotice({ testcaseId: unconfirmedActivation, linkId: item.linkId, retiredLinkId: "", replayed: true });
+    setUnconfirmedActivation(null);
+  }, [coverage, unconfirmedActivation]);
+
   // An approved snapshot names the exact submission it came from. A different approved
   // submission must never render as if this reviewed version were approved.
   const approvedAs = reviewedVersion && reviewedVersion.snapshotKind === "approved"
@@ -202,6 +267,57 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
     }
   }
 
+  async function activate(item: RequirementCoverageCase) {
+    const basisState = caseBases[item.testcaseId];
+    const basis = basisState?.basis;
+    if (!canApprove || activatingLinkId || !coverage?.approvedVersionId || !basis || !basis.approvalCurrent
+      || !basis.approvalRevision || basis.editRevision.length !== 64 || item.approved) return;
+    setActivatingLinkId(item.linkId);
+    setActivationErrors((previous) => {
+      const next = { ...previous };
+      delete next[item.testcaseId];
+      return next;
+    });
+    setActivationNotice(null);
+    try {
+      const result = await reapplyRequirementCaseLink(projectId, documentId, item.linkId, basis.editRevision, basis.approvalRevision);
+      if (!mounted.current) return;
+      setActivationNotice({ testcaseId: item.testcaseId, linkId: result.link.id, retiredLinkId: result.retiredLinkId, replayed: result.replayed });
+      setUnconfirmedActivation(null);
+      setCoverageNonce((value) => value + 1);
+      setCaseBasesNonce((value) => value + 1);
+    } catch (err) {
+      if (!mounted.current) return;
+      let message = "The link activation failed.";
+      let uncertain = false;
+      if (err instanceof ApiError) {
+        if (err.status === 403) message = err.message || "Only project owners and managers can activate a requirement link.";
+        else if (err.status === 404) message = "The requirement, link or case no longer exists.";
+        else if (err.status === 409 && err.code === "CASE_REVISION_CONFLICT") {
+          message = "The case changed since this revision was read. Reload and review the current approved revision before activating.";
+        } else if (err.status === 409 && err.code === "CASE_NOT_APPROVED") {
+          message = "The case is not currently approved at the revision on screen. Approve the case first.";
+        } else if (err.status === 409 && err.code === "LINK_NOT_ACTIVE") {
+          message = "That link is no longer active. Reload the current coverage and choose the current link.";
+        } else if (err.status >= 500) {
+          message = "The activation outcome could not be confirmed. Refresh to verify; retrying the same link and revisions is safe and idempotent.";
+          uncertain = true;
+        } else {
+          message = err.message;
+        }
+      } else {
+        message = "The activation outcome could not be confirmed. Refresh to verify; retrying the same link and revisions is safe and idempotent.";
+        uncertain = true;
+      }
+      setActivationErrors((previous) => ({ ...previous, [item.testcaseId]: message }));
+      if (uncertain) setUnconfirmedActivation(item.testcaseId);
+      setCoverageNonce((value) => value + 1);
+      setCaseBasesNonce((value) => value + 1);
+    } finally {
+      if (mounted.current) setActivatingLinkId(null);
+    }
+  }
+
   const criteria = criteriaOf(version);
   const description = descriptionOf(version);
   // The criterion text is the exact submitted version's, not the current mutable document's.
@@ -214,6 +330,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
         passing: reading?.passing ?? false, mixed: reading?.mixed ?? false };
     })
     : [];
+  const linkedCases = coverage ? currentCaseRows(coverage.cases, coverage) : [];
   const coverageMatchesReviewedVersion = Boolean(coverage && (
     approvedAs
     || (coverage.latestSubmittedVersionId && coverage.latestSubmittedVersionId === versionId)));
@@ -282,7 +399,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
               Approved as v{approvedAs.versionNumber}. The submitted version and its links were not rewritten.
             </p>
           )}
-          {review.approved === false && review.currentBasis === false && (
+          {review.approved === false && review.currentBasis === false && !review.blocked && (
             <p className="text-sm text-[var(--warning-foreground)]" data-testid="requirement-review-superseded">
               This submitted version is not the current approved basis. Approving it does not approve the newer version.
             </p>
@@ -343,6 +460,12 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
               {coverage.readings.mixed && <StatusChip tone="warning">Mixed PASS/FAIL attempts</StatusChip>}
             </div>
 
+            {coverage.approvedVersionId && (
+              <p className="mt-2 break-all text-xs text-[var(--muted)]" data-testid="requirement-coverage-approved-version">
+                Approved requirement version <span className="font-mono">{coverage.approvedVersionId}</span>
+              </p>
+            )}
+
             {!coverageMatchesReviewedVersion && (
               <p className="mt-2 text-xs text-[var(--warning-foreground)]" data-testid="requirement-coverage-other-basis">
                 The current coverage basis is a newer version. These readings describe that basis, not the version under review.
@@ -387,12 +510,25 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
 
             <div className="mt-4 space-y-2">
               <h4 className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Linked cases</h4>
-              {coverage.cases.length === 0 ? (
+              {coverage.cases.length > linkedCases.length && (
+                <p className="text-xs text-[var(--muted)]">An earlier link generation is hidden here. Activation retires it and creates one active link on the approved basis.</p>
+              )}
+              {linkedCases.length === 0 ? (
                 <p className="text-sm text-[var(--muted)]" data-testid="requirement-coverage-empty">
                   Coverage loaded successfully: no case is linked on the coverage basis shown above. That is a truthful zero, not an unavailable read.
                 </p>
               ) : (
-                coverage.cases.map((item) => (
+                linkedCases.map((item) => {
+                  const basisState = caseBases[item.testcaseId];
+                  const basis = basisState?.basis ?? null;
+                  const activationError = activationErrors[item.testcaseId];
+                  const notice = activationNotice?.testcaseId === item.testcaseId ? activationNotice : null;
+                  const requirementApproved = Boolean(coverage.approvedVersionId);
+                  const activationReady = canApprove && !activatingLinkId && requirementApproved
+                    && basis?.approvalCurrent === true && Boolean(basis.approvalRevision) && !item.approved;
+                  const needsActivation = !item.approved && item.reasons.some((reason) =>
+                    reason === "REQUIREMENT_VERSION_SUPERSEDED" || reason === "CASE_REVISION_CHANGED_OR_NOT_APPROVED");
+                  return (
                   <div key={item.linkId} className="rounded-lg border border-[var(--border)] p-3" data-testid={`requirement-coverage-case-${item.testcaseId}`}>
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div className="min-w-0">
@@ -405,6 +541,9 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
                         </Link>
                         <p className="mt-1 text-xs text-[var(--muted)]">
                           Criteria {item.criterionKeys.join(", ")} · {versionBasisLabel(item, coverage)}
+                        </p>
+                        <p className="mt-1 break-all font-mono text-[11px] text-[var(--muted-soft)]" data-testid="requirement-coverage-link-id">
+                          Link {item.linkId}
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-1.5 text-xs">
@@ -430,16 +569,88 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
                         </>
                       )}
                     </p>
+
+                    {basisState?.loading && <p className="mt-1 text-xs text-[var(--muted)]" data-testid="requirement-link-case-revision-loading">Loading the exact case revision…</p>}
+                    {basisState?.error && (
+                      <div className="mt-1 rounded-lg border border-[var(--warning-border)] p-2" data-testid="requirement-link-case-revision-error">
+                        <p className="text-xs text-[var(--warning-foreground)]">{basisState.error}</p>
+                        <Button size="sm" variant="secondary" className="mt-1" onClick={() => setCaseBasesNonce((value) => value + 1)}>
+                          Retry case revision
+                        </Button>
+                      </div>
+                    )}
+                    {basis && (
+                      <p className="mt-1 break-all font-mono text-[11px] text-[var(--muted-soft)]" data-testid="requirement-link-case-revision">
+                        Case edit {basis.editRevision || "not available"} · approval {basis.approvalRevision || "not approved"}
+                      </p>
+                    )}
+
+                    <div className="mt-2 rounded-lg border border-[var(--border)] p-2" data-testid={`requirement-link-state-${item.testcaseId}`}>
+                      <p className="text-xs text-[var(--muted)]">
+                        <span className="font-medium text-[var(--foreground)]">Link activation:</span>{" "}
+                        {item.approved
+                          ? `active on the approved requirement version (link ${item.linkId.slice(0, 8)}…).`
+                          : "not active on the approved requirement version."}
+                      </p>
+                      {needsActivation && (
+                        <p className="mt-1 text-xs text-[var(--muted)]">
+                          Activation is needed because {item.reasons.includes("REQUIREMENT_VERSION_SUPERSEDED")
+                            ? "the link still targets the submitted requirement version"
+                            : "the case was approved after the link was authored"}.
+                        </p>
+                      )}
+                      {activationError && (
+                        <p className="mt-1 rounded-lg border border-[var(--error)]/40 bg-[var(--error-soft)] px-2 py-1 text-xs text-[var(--error-foreground)]" role="alert" data-testid={`requirement-link-error-${item.testcaseId}`}>
+                          {activationError}
+                        </p>
+                      )}
+                      {notice && (
+                        <p className="mt-1 text-xs text-[var(--success-foreground)]" role="status" data-testid={`requirement-link-notice-${item.testcaseId}`}>
+                          Active link {notice.linkId}{notice.retiredLinkId ? ` (retired ${notice.retiredLinkId})` : ""}{notice.replayed ? " — verified after an unconfirmed response." : "."}
+                        </p>
+                      )}
+                      {!item.approved && (
+                        requirementApproved ? (
+                          !canApprove ? (
+                            <p className="mt-1 text-xs text-[var(--muted)]" data-testid={`requirement-link-readonly-${item.testcaseId}`}>
+                              Only a project owner or manager can activate this link.
+                            </p>
+                          ) : !basisState || basisState.loading ? (
+                            <p className="mt-1 text-xs text-[var(--muted)]">Loading the exact case revision before activation…</p>
+                          ) : basisState.error ? null : !basis?.approvalCurrent || !basis.approvalRevision ? (
+                            <p className="mt-1 text-xs text-[var(--muted)]" data-testid={`requirement-link-case-unapproved-${item.testcaseId}`}>
+                              The case is not currently approved at its edit revision. Approve the case first; activation stays unavailable.
+                            </p>
+                          ) : (
+                            <Button
+                              size="sm"
+                              className="mt-2"
+                              onClick={() => void activate(item)}
+                              disabled={!activationReady || Boolean(activatingLinkId)}
+                              data-testid={`requirement-link-activate-${item.testcaseId}`}
+                            >
+                              {activatingLinkId === item.linkId ? "Activating…" : "Activate approved case on approved version"}
+                            </Button>
+                          )
+                        ) : (
+                          <p className="mt-1 text-xs text-[var(--muted)]" data-testid={`requirement-link-requirement-unapproved-${item.testcaseId}`}>
+                            Approve the exact requirement version first; activation binds the case to the approved version.
+                          </p>
+                        )
+                      )}
+                    </div>
+
                     {item.reasons.length > 0 && (
                       <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-[var(--muted)]">
                         {item.reasons.map((reason) => <li key={reason}>{REASON_LABELS[reason] || reason}</li>)}
                       </ul>
                     )}
                   </div>
-                ))
+                  );
+                })
               )}
             </div>
-            <p className="mt-3 text-xs text-[var(--muted)]">{coverage.basis}</p>
+            <p className="mt-3 text-xs text-[var(--muted)]">Historical links and attempts remain readable; current readings use the basis shown above.</p>
           </>
         )}
       </div>
