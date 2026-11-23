@@ -665,3 +665,19 @@ lost response, unavailable reconciliation, and a late draft read followed by ide
 native PR records actual failing-before and passing-after execution; this text does not claim those runs
 have happened. Native Tesbo record synchronization remains separately required when its connector is
 available.
+
+### 15.3 Idempotent initial candidate creation
+
+Candidate creation and submission are separate native writes. A client can lose the creation response
+after the document committed; retrying without an identity could create a second candidate. `V161` adds
+an optional producer-supplied `requestKey` scoped to the authenticated project principal, with a digest
+of the exact candidate content.
+
+- The same principal/project/key/content returns the existing candidate (`replayed: true`) and does not
+  re-create the document or enqueue a second indexing job.
+- Reusing the key with different content is refused as `SKILL_REQUEST_CONFLICT`; the request identity is
+  never treated as approval, assignment or authority.
+- A missing key preserves the existing non-idempotent behaviour for older clients.
+- The Skills form keeps one key across an uncertain creation response and clears it only after creation
+  is acknowledged or the candidate content changes, so an ordinary retry resumes the same native draft.
+  A failed reconciliation read still exposes no false success.

@@ -1136,4 +1136,71 @@ test.describe("governed skills operator journey (UI)", () => {
       await cleanupSkill(doc.id);
     }
   });
+
+  test("candidate creation retries by requestKey without duplicating a candidate", async () => {
+    const suffix = randomUUID();
+    const title = `Idempotent creation ${suffix}`;
+    const skillKey = `IDEMP-${suffix.replaceAll("-", "").slice(0, 8).toUpperCase()}`;
+    const requestKey = randomUUID();
+    let documentId = "";
+    try {
+      const payload = { title, module: "requirements", subtype: "functional", skillKey,
+        instructions: "RULE-IDEMP: require one observable outcome.", requestKey };
+      const first = await ownerApi.post(`${base()}/skills`, { data: payload });
+      expect(first.ok(), await first.text()).toBe(true);
+      const created = await first.json();
+      documentId = created.id;
+      expect(created.replayed).toBe(false);
+
+      const retry = await ownerApi.post(`${base()}/skills`, { data: payload });
+      expect(retry.ok(), await retry.text()).toBe(true);
+      const replayed = await retry.json();
+      expect(replayed.id).toBe(documentId);
+      expect(replayed.replayed).toBe(true);
+
+      const changed = await ownerApi.post(`${base()}/skills`, { data: { ...payload, instructions: "RULE-IDEMP: different content under the same key." } });
+      expect(changed.status()).toBe(409);
+      expect(await changed.json()).toMatchObject({ code: "SKILL_REQUEST_CONFLICT" });
+      expect(scalar(`SELECT COUNT(*)::int FROM skill_profiles WHERE project_id=${literal(tenant!.mainProjectId)} AND skill_key=${literal(skillKey)};`)).toBe("1");
+      expect(scalar(`SELECT COUNT(*)::int FROM knowledge_documents WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(title)};`)).toBe("1");
+    } finally {
+      if (documentId) await cleanupSkill(documentId);
+    }
+  });
+
+  test("a lost creation response is recovered by retrying the same form request", async ({ browser }) => {
+    const suffix = randomUUID();
+    const title = `Lost creation response ${suffix}`;
+    const skillKey = `LOST-${suffix.replaceAll("-", "").slice(0, 8).toUpperCase()}`;
+    let dropped = false;
+    let documentId = "";
+    try {
+      const page = await open(browser, "/settings/skills");
+      const endpoint = `**/api/projects/${tenant!.mainProjectId}/skills`;
+      await page.route(endpoint, async (route) => {
+        if (route.request().method() !== "POST" || dropped) return route.continue();
+        dropped = true;
+        await route.fetch(); // the native creation commits
+        await route.abort(); // ...but the client never receives the response
+      });
+      await page.getByTestId("skill-title").fill(title);
+      await page.getByTestId("skill-key").fill(skillKey);
+      await page.getByTestId("skill-subtype").fill("functional");
+      await page.getByTestId("skill-instructions").fill("RULE-LOST: preserve one candidate across an uncertain creation response.");
+      await page.getByTestId("skill-create-submit").click();
+      await expect(page.getByTestId("skill-create-submit")).toBeEnabled();
+      await expect(page.getByTestId("skill-title")).toHaveValue(title);
+      await page.unroute(endpoint);
+      await page.getByTestId("skill-create-submit").click();
+      await expect(page.getByText(/Skill candidate submitted as version/)).toBeVisible();
+      expect(dropped).toBe(true);
+      documentId = scalar(`SELECT id FROM knowledge_documents WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(title)};`);
+      expect(documentId).not.toBe("");
+      expect(scalar(`SELECT COUNT(*)::int FROM skill_profiles WHERE project_id=${literal(tenant!.mainProjectId)} AND skill_key=${literal(skillKey)};`)).toBe("1");
+      expect(scalar(`SELECT COUNT(*)::int FROM knowledge_documents WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(title)};`)).toBe("1");
+      expect(scalar(`SELECT COUNT(*)::int FROM knowledge_document_versions WHERE document_id=${literal(documentId)} AND snapshot_kind='submitted';`)).toBe("1");
+    } finally {
+      if (documentId) await cleanupSkill(documentId);
+    }
+  });
 });

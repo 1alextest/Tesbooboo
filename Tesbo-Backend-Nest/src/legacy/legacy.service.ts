@@ -16250,7 +16250,8 @@ export class LegacyService implements OnModuleInit {
   // ─── Work Package A Slice 2: governed Skills + protected publication ───────────────────────
 
   /** Create an inert skill candidate in the native KB identity/version owner. */
-  async createSkillCandidate(projectId: string, userId: string | null | undefined, body: Body): Promise<Body> {
+  async createSkillCandidate(projectId: string, userId: string | null | undefined, body: Body,
+    principal?: { kind: "human_session" | "api_token"; tokenId?: string }): Promise<Body> {
     const uid = this.requireUser(userId);
     const project = await this.requireProjectAccess(uid, projectId);
     const title = String(body.title || "").trim();
@@ -16264,10 +16265,43 @@ export class LegacyService implements OnModuleInit {
     if (!instructions || instructions.length > 20000) throw new BadRequestException({ error: "Skill instructions must contain 1–20000 characters" });
     const skillKey = String(body.skillKey || `SKL-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`).trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$/.test(skillKey)) throw new BadRequestException({ error: "skillKey must be 2–64 safe characters" });
+    const requestKey = body.requestKey === undefined ? null : String(body.requestKey).trim();
+    if (requestKey !== null && (!requestKey || requestKey.length > 160)) {
+      throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
+    }
+    const principalKey = principal?.kind === "api_token"
+      ? `api_token:${principal.tokenId || ""}`
+      : `human_session:${uid}`;
+    const requestDigest = requestKey
+      ? createHash("sha256").update(JSON.stringify({ title, module, subtype, skillKey, instructions })).digest("hex")
+      : null;
     const contentJson = { schemaVersion: "tesbo-skill/1", module, subtype, instructions };
     const contentText = `${title}\n\n${instructions}`;
     const contentHtml = `<h1>${this.escapeProposalHtml(title)}</h1><pre>${this.escapeProposalHtml(instructions)}</pre>`;
-    const inserted = await this.db.transaction(async client => {
+    const result = await this.db.transaction(async client => {
+      let replayed = false;
+      if (requestKey) {
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`skill-create:${projectId}:${principalKey}:${requestKey}`]);
+        const prior = await client.query(
+          `SELECT sp.document_id, sp.creation_request_digest
+             FROM skill_profiles sp
+            WHERE sp.project_id=$1 AND sp.creation_principal=$2 AND sp.creation_request_key=$3`,
+          [projectId, principalKey, requestKey]
+        );
+        if (prior.rows[0]) {
+          if (prior.rows[0].creation_request_digest !== requestDigest) {
+            throw new ConflictException({ code: "SKILL_REQUEST_CONFLICT", error: "This requestKey already belongs to different candidate content" });
+          }
+          const existingDoc = (await client.query(
+            `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
+              WHERE id=$1 AND project_id=$2 AND is_deleted=false`, [prior.rows[0].document_id, projectId]
+          )).rows[0];
+          if (!existingDoc) {
+            throw new ConflictException({ code: "SKILL_REQUEST_CONFLICT", error: "The candidate for this requestKey is no longer available; choose a new requestKey" });
+          }
+          return { doc: existingDoc, replayed: true };
+        }
+      }
       // A skillKey identifies the project's stable skill identity. A duplicate is a refusal, not a
       // generic 500 from the profile's unique index. Check before the document insert so the
       // ordinary path never creates and then rolls back a second KB row.
@@ -16282,7 +16316,11 @@ export class LegacyService implements OnModuleInit {
         [project.organization_id, projectId, folderId, title, JSON.stringify(contentJson), contentHtml, contentText, uid]
       )).rows[0];
       try {
-        await client.query("INSERT INTO skill_profiles(document_id,project_id,skill_key,module,subtype) VALUES ($1,$2,$3,$4,$5)", [doc.id, projectId, skillKey, module, subtype]);
+        await client.query(
+          `INSERT INTO skill_profiles(document_id,project_id,skill_key,module,subtype,creation_principal,creation_request_key,creation_request_digest)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [doc.id, projectId, skillKey, module, subtype, requestKey ? principalKey : null, requestKey, requestDigest]
+        );
       } catch (error) {
         // Two concurrent candidates can both pass the pre-check; the unique index decides. The
         // transaction rolls back the loser's document, and the caller receives the same refusal.
@@ -16292,10 +16330,10 @@ export class LegacyService implements OnModuleInit {
         throw error;
       }
       await this.logProjectActivity(projectId, uid, "skill_candidate_created", "knowledge_document", doc.id, title, { skillKey, module, subtype }, client);
-      return doc;
+      return { doc, replayed };
     });
-    this.enqueueEmbedding(String(inserted.organization_id), projectId, "document", String(inserted.id), "created");
-    return { ...toCamel(inserted), skillKey, module, subtype, state: "draft", effective: false };
+    if (!result.replayed) this.enqueueEmbedding(String(result.doc.organization_id), projectId, "document", String(result.doc.id), "created");
+    return { ...toCamel(result.doc), skillKey, module, subtype, state: "draft", effective: false, replayed: result.replayed };
   }
 
   /** Human-only approval of the exact submitted skill version. Approval stays separate from assignment. */
