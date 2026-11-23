@@ -18,7 +18,7 @@ const EMBEDDING_TRIM_CHARACTERS_SQL = "U&'\\0009\\000A\\000B\\000C\\000D\\0020\\
  * The optional chunk hash fences asynchronous ANN indexes to the same currently reviewed text.
  */
 export function knowledgeDocumentAiContextSql(alias: "knowledge_documents" | "d" = "knowledge_documents", chunkHash?: "c.content_hash"): string {
-  return `(${alias}.document_type != 'ai_memory' OR (
+  return `((${alias}.document_type != 'ai_memory' AND ${alias}.document_type NOT IN ('user_manual','policy')) OR (
     ${alias}.status = 'approved' AND ${alias}.reviewed_by IS NOT NULL AND ${alias}.reviewed_at IS NOT NULL
     AND EXISTS (
       SELECT 1 FROM knowledge_document_versions reviewed
@@ -58,6 +58,12 @@ function canonical(value: unknown): unknown {
 /** Exact relied-on content and semantic/source metadata, independent of mutable review fields. */
 export function knowledgeDocumentContentDigest(doc: Record<string, unknown>): string {
   const keys = ["project_id", "folder_id", "title", "content_json", "content_html", "content_text", "document_type", "source_provider", "source_external_id", "source_url", "source_role", "is_read_only"];
+  // Legacy/non-governed rows have an empty object; including it would change every historical
+  // digest. A governed document always has non-empty metadata, so its exact metadata is bound.
+  const governed = doc.governed_metadata;
+  if (governed && typeof governed === "object" && !Array.isArray(governed) && Object.keys(governed as Record<string, unknown>).length) {
+    keys.push("governed_metadata");
+  }
   const value = Object.fromEntries(keys.map((key) => [key, doc[key] ?? null]));
   return createHash("sha256").update(JSON.stringify(canonical(value)), "utf8").digest("hex");
 }

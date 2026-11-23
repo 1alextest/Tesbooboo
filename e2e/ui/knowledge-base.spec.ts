@@ -2739,6 +2739,48 @@ test.describe("knowledge base (UI)", () => {
     expect(storedDocument(documentId).text).toBe(MEMORY_TEXT);
   });
 
+  test("KBU-64 a governed manual saves typed metadata, submits an exact version and records an owner decision", async ({ browser }) => {
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+      distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+      effectivity: { from: "2026-01-01", to: null }, enforcementRefs: [],
+    };
+    const created = await api.post(kbUrl("/documents"), {
+      data: { title: stamp("Governed manual"), folderId: rootFolderId, documentType: "user_manual", contentText: "Manual body", contentHtml: "<p>Manual body</p>", governedMetadata: metadata },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const documentId = (await created.json()).id;
+    const page = await openDocument(browser, documentId);
+
+    const panel = page.getByTestId("governed-document-panel");
+    await expect(panel).toBeVisible();
+    await expect(page.getByTestId("governed-audience")).toHaveValue("internal");
+    await page.getByTestId("governed-audience").selectOption("external");
+    await page.getByTestId("governed-confidentiality").selectOption("confidential");
+    await page.getByTestId("governed-save-metadata").click();
+    await expect(panel).toContainText("Governance metadata saved");
+    const saved = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(saved.governedMetadata).toMatchObject({ audience: "external", confidentiality: "confidential" });
+
+    await page.reload();
+    await expect(page.getByTestId("governed-document-panel")).toBeVisible();
+    await page.getByTestId("governed-submit").click();
+    await expect(page.getByTestId("governed-submitted-version")).toContainText("Submitted v");
+    await expect(page.getByTestId("governed-submitted-metadata")).toContainText("Audience: external");
+    await page.getByTestId("governed-approve").click();
+    await expect(page.getByTestId("governed-decision")).toContainText("approved");
+
+    const approved = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(approved.status).toBe("approved");
+    expect(approved.reviewedVersionId).toBeTruthy();
+    await page.reload();
+    await expect(page.getByTestId("governed-decision")).toContainText("approved");
+    await expect(page.getByTestId("governed-submitted-metadata")).toContainText("Audience: external");
+
+    const qaPage = await openDocument(browser, documentId, "qa");
+    await expect(qaPage.getByTestId("governed-approve")).toHaveCount(0);
+  });
+
   test("KBU-63 an ordinary document keeps its editor, editable title, Save and Delete", async ({ browser }) => {
     const created = await api.post(kbUrl("/documents"), {
       data: { title: stamp("Ordinary editable"), folderId: rootFolderId, documentType: "general", contentText: `## ${MEMORY_ISO_1}\nnot memory` },
