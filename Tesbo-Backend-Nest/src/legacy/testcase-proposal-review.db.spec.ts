@@ -55,6 +55,43 @@ type Body=Record<string,any>;
   const save=(review:Body,indexes:number[],extra:Body={},svc=service())=>svc.zyraSave(project,user,review.id,{expectedProposalRevision:review.proposalRevision,selectedDraftIndexes:indexes,...extra},human);
   const suite=async(name:string)=>(await admin.query("INSERT INTO suites(project_id,name) VALUES ($1,$2) RETURNING id",[project,`${name} ${randomUUID()}`])).rows[0].id as string;
 
+  it("refuses a producer revoked while its staging request waits for the suite-write boundary", async () => {
+    const tokenId=(await admin.query(
+      "INSERT INTO api_tokens(user_id,project_id,name,token_hash,scopes) VALUES ($1,$2,'Revocation barrier producer',$3,'read,write') RETURNING id",
+      [user,project,randomUUID().replaceAll("-","").repeat(2)]
+    )).rows[0].id as string;
+    const blocker=new Client({connectionString:url});
+    let attempt:Promise<unknown>|undefined;
+    await blocker.connect();
+    const before=(await tasks()).rows;
+    const caseRows=(await nativeCases()).rows;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT pg_advisory_xact_lock(hashtext($1))",[`suite-tree:${project}`]);
+      attempt=stage([{opType:"create",draft:{title:"Revoked token cannot stage"}}],randomUUID(),
+        {kind:"api_token",tokenId,transport:"rest"}).then(()=>null,(error:unknown)=>error);
+      const deadline=Date.now()+5000;let waiting=false;
+      while(Date.now()<deadline){
+        waiting=!!(await admin.query(
+          "SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%pg_advisory_xact_lock%'",
+          [applicationName])).rowCount;
+        if(waiting)break;
+        await new Promise(resolve=>setTimeout(resolve,20));
+      }
+      expect(waiting).toBe(true);
+      await admin.query("DELETE FROM api_tokens WHERE id=$1 AND project_id=$2",[tokenId,project]);
+      await blocker.query("COMMIT");
+      expect(await attempt).toMatchObject({status:403});
+      expect((await tasks()).rows).toEqual(before);
+      expect((await nativeCases()).rows).toEqual(caseRows);
+    } finally {
+      await blocker.query("ROLLBACK");
+      if(attempt)await attempt;
+      await blocker.end();
+      await admin.query("DELETE FROM api_tokens WHERE id=$1 AND project_id=$2",[tokenId,project]);
+    }
+  },15000);
+
   it("default-off preview has no persisted effects and same-key content replay is bounded",async()=>{
     const before=(await tasks()).rows,casesBefore=(await nativeCases()).rows;
     process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED="0";
@@ -261,6 +298,28 @@ type Body=Record<string,any>;
       cases:(await admin.query("SELECT id FROM testcases WHERE project_id=$1 ORDER BY id",[project])).rows,
       approvals:(await admin.query("SELECT r.id FROM testcase_approval_receipts r JOIN testcases t ON t.id=r.testcase_id WHERE t.project_id=$1 ORDER BY r.id",[project])).rows
     });
+
+    it("serializes a shared producer requestKey across testcase and requirement proposal inlets",async()=>{
+      const key=randomUUID();
+      const principal={kind:"api_token",tokenId:token,transport:"rest"};
+      const before=(await tasks()).rows;
+      const beforeOfficial=await docCounts();
+      const outcomes=await Promise.allSettled([
+        stage([{opType:"create",draft:{title:"Case inlet competing for shared request key"}}],key,principal),
+        stageBundle(ops(),key,principal)
+      ]);
+      const committed=outcomes.filter(item=>item.status==="fulfilled");
+      const refused=outcomes.filter(item=>item.status==="rejected") as PromiseRejectedResult[];
+      expect(committed).toHaveLength(1);
+      expect(refused).toHaveLength(1);
+      expect(refused[0].reason).toMatchObject({status:409});
+      const added=(await tasks()).rows.filter(row=>!before.some(previous=>previous.id===row.id));
+      expect(added).toHaveLength(1);
+      expect(added[0].proposal_provenance).toMatchObject({
+        kind:"api_token",principalKey:`api_token:${token}`,issuerId:user,tokenId:token
+      });
+      expect(await docCounts()).toEqual(beforeOfficial);
+    },15000);
 
     it("stages one inert, idempotent bundle whose reviewed revision cannot drift",async()=>{
       const before=await docCounts();
