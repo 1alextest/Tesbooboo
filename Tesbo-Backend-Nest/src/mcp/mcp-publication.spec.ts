@@ -4,8 +4,40 @@ import { DIRECT_TESTCASE_PUBLISHERS } from "../common/testcase-publication.polic
 import type { DatabaseService } from "../database/database.service";
 import type { LegacyService } from "../legacy/legacy.service";
 import type { PlanLimitsService } from "../plan-limits/plan-limits.service";
+import { apiTokenStagingProducer } from "./mcp-producer";
 import { McpService } from "./mcp.service";
 import { RpcCode } from "./mcp.types";
+
+describe("MCP native staging producer provenance", () => {
+  it("creates the existing immutable API-token producer receipt from server context only", () => {
+    const source = { tokenId: "server-token", actorId: "server-actor" };
+    expect(apiTokenStagingProducer(source, { requireAgentActor: true, operation: "testcase" })).toEqual({
+      kind: "api_token", transport: "mcp", tokenId: "server-token", actorId: "server-actor"
+    });
+    expect(source).toEqual({ tokenId: "server-token", actorId: "server-actor" });
+  });
+
+  it("allows a requirement proposal without an agent actor while preserving the existing receipt", () => {
+    expect(apiTokenStagingProducer({ tokenId: "server-token", actorId: null }, { requireAgentActor: false, operation: "requirement" }))
+      .toEqual({ kind: "api_token", transport: "mcp", tokenId: "server-token" });
+  });
+
+  it("refuses an absent real API token before any native staging operation", () => {
+    for (const actorId of [null, "server-actor"]) {
+      expect(() => apiTokenStagingProducer({ tokenId: undefined, actorId }, { requireAgentActor: false, operation: "requirement" }))
+        .toThrow("An authenticated credential is required");
+    }
+  });
+
+  it("requires the actual MCP agent identity for testcase staging", () => {
+    try {
+      apiTokenStagingProducer({ tokenId: "server-token", actorId: null }, { requireAgentActor: true, operation: "testcase" });
+      throw new Error("Expected the missing-actor refusal");
+    } catch (error) {
+      expect(error).toMatchObject({ code: RpcCode.ToolExecutionError, data: { code: "AGENT_IDENTITY_UNAVAILABLE" } });
+    }
+  });
+});
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 const tokenId = "22222222-2222-4222-8222-222222222222";
