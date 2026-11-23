@@ -685,7 +685,10 @@ test.describe("governed skills operator journey (UI)", () => {
         requestKey: `ui-task-review-${suffix}`, title: `UI task review bundle ${suffix}`,
         operations: [
           { opType: "requirement_revision", operationId: requirementOperationId, title,
-            description: "Fixture for the task review surface.", criteria: [{ key: "AC-1", text: "The obligation is observable" }] },
+            description: "Fixture for the task review surface.", criteria: [
+              { key: "AC-1", text: "The obligation is observable" },
+              { key: "AC-2", text: "The second obligation is observable" }
+            ] },
           { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle } },
           { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] }
         ]
@@ -900,6 +903,57 @@ test.describe("governed skills operator journey (UI)", () => {
       await expect(page.getByTestId("requirement-coverage-readings")).toContainText("Executed: yes");
       await expect(page.getByTestId("requirement-coverage-readings")).toContainText("Passing: yes");
       await expect(page.getByTestId("requirement-coverage-execution-link")).toHaveAttribute("href", new RegExp(`cycles/${runId}/execute/${executionId}`));
+
+      // Multiple criterion groups, including a reversed array order, are distinct. A 5xx on one
+      // group must stay associated with that group, leave the others untouched, and a retry must
+      // activate only its own exact group.
+      const groupBLink = scalar(`INSERT INTO requirement_case_links
+        (project_id,requirement_id,requirement_version_id,criterion_keys,testcase_id,testcase_revision,testcase_approval_revision,state,proposed_by,applied_by,applied_at)
+        VALUES (${literal(tenant!.mainProjectId)},${literal(requirementId)},${literal(linkBefore.approvedVersionId)},
+          ARRAY['AC-1','AC-2']::text[],${literal(caseId)},${literal("0".repeat(64))},NULL,'active',
+          ${literal(tenant!.owner.userId)},${literal(tenant!.owner.userId)},now()) RETURNING id;`);
+      const groupCLink = scalar(`INSERT INTO requirement_case_links
+        (project_id,requirement_id,requirement_version_id,criterion_keys,testcase_id,testcase_revision,testcase_approval_revision,state,proposed_by,applied_by,applied_at)
+        VALUES (${literal(tenant!.mainProjectId)},${literal(requirementId)},${literal(linkBefore.approvedVersionId)},
+          ARRAY['AC-2','AC-1']::text[],${literal(caseId)},${literal("0".repeat(64))},NULL,'active',
+          ${literal(tenant!.owner.userId)},${literal(tenant!.owner.userId)},now()) RETURNING id;`);
+      const groupB = `${caseId}::AC-1::AC-2`;
+      const groupC = `${caseId}::AC-2::AC-1`;
+      const groupBEndpoint = `**/api/projects/${tenant!.mainProjectId}/requirements/${requirementId}/links/${groupBLink}/reapply`;
+      const groupCEndpoint = `**/api/projects/${tenant!.mainProjectId}/requirements/${requirementId}/links/${groupCLink}/reapply`;
+      await page.reload();
+      await expect(page.getByTestId(`requirement-link-state-${groupB}`)).toContainText("not active on the approved requirement version");
+      await expect(page.getByTestId(`requirement-link-state-${groupC}`)).toContainText("not active on the approved requirement version");
+      await expect(page.getByTestId(`requirement-link-state-${groupB}`)).toContainText("Activation is needed because");
+      await expect(page.getByTestId(`requirement-link-activate-${groupB}`)).toBeVisible();
+      await expect(page.getByTestId(`requirement-link-activate-${groupC}`)).toBeVisible();
+
+      await page.route(groupBEndpoint, (route) => route.fulfill({ status: 503, json: { error: "Activation service unavailable" } }));
+      await page.route(groupCEndpoint, (route) => route.fulfill({ status: 503, json: { error: "Activation service unavailable" } }));
+      await page.getByTestId(`requirement-link-activate-${groupB}`).click();
+      await expect(page.getByTestId(`requirement-link-error-${groupB}`)).toContainText("could not be confirmed");
+      await page.getByTestId(`requirement-link-activate-${groupC}`).click();
+      await expect(page.getByTestId(`requirement-link-error-${groupC}`)).toContainText("could not be confirmed");
+      // The first group's uncertain outcome is still present after the second group errors.
+      await expect(page.getByTestId(`requirement-link-error-${groupB}`)).toBeVisible();
+      await expect(page.getByTestId(`requirement-link-notice-${groupB}`)).toHaveCount(0);
+      await expect(page.getByTestId(`requirement-link-notice-${groupC}`)).toHaveCount(0);
+      expect(scalar(`SELECT COUNT(*)::int FROM requirement_case_links WHERE id IN (${literal(groupBLink)},${literal(groupCLink)}) AND state='active';`)).toBe("2");
+
+      await page.unroute(groupBEndpoint);
+      await page.unroute(groupCEndpoint);
+      await page.getByTestId(`requirement-link-activate-${groupB}`).click();
+      await expect(page.getByTestId(`requirement-link-notice-${groupB}`)).toBeVisible();
+      await page.getByTestId(`requirement-link-activate-${groupC}`).click();
+      await expect(page.getByTestId(`requirement-link-notice-${groupC}`)).toBeVisible();
+      await expect(page.getByTestId(`requirement-link-notice-${groupB}`)).toBeVisible();
+      await expect(page.getByTestId(`requirement-link-state-${caseGroup}`)).toContainText("active on the approved requirement version");
+      const groupBActive = scalar(`SELECT id FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)} AND testcase_id=${literal(caseId)} AND criterion_keys=ARRAY['AC-1','AC-2']::text[] AND state='active';`);
+      const groupCActive = scalar(`SELECT id FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)} AND testcase_id=${literal(caseId)} AND criterion_keys=ARRAY['AC-2','AC-1']::text[] AND state='active';`);
+      expect(groupBActive).not.toBe(groupBLink);
+      expect(groupCActive).not.toBe(groupCLink);
+      expect(scalar(`SELECT state FROM requirement_case_links WHERE id=${literal(active)};`)).toBe("active");
+      expect(scalar(`SELECT COUNT(*)::int FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)} AND state='active';`)).toBe("3");
 
       // A successful zero and an unavailable read are different states.
       exec(`UPDATE requirement_case_links SET state='retired' WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)};`);

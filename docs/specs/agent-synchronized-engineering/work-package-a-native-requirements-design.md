@@ -852,18 +852,20 @@ the real execution evidence without inventing a second coverage model.
 ### 16.4 Verification boundary
 
 Backend coverage: `testcase-proposal-review.db.spec.ts` exercises the apply receipt projection, the execution/cycle
-evidence identities, and activation refusals for an unapproved requirement, an unapproved case, a changed case
-revision, a reader, a missing link and an inactive link without changing the active link.
+evidence identities, activation refusals for an unapproved requirement, an unapproved case, a changed case revision,
+a reader, a legacy normalized role, a missing link and an inactive link, version-constrained replay after a newer
+requirement approval, and exact criterion-array groups including reversed order.
 API coverage: `api/requirements.spec.ts` exercises the persisted receipt, stale approval refusal, exact-version
 approval, reapply and Passed/Failed readings. Browser coverage: `ui/skills.spec.ts` exercises reload, reader
 permissions, stale review, a lost approval response, failed content load, exact-version activation, stale case
-revision refusal, a lost activation response, resulting link/coverage reload, successful zero, unavailable coverage
-and the supporting-case/execution links.
+revision refusal, a lost activation response, multiple criterion groups with reversed order, per-group 503
+association and independent retry, resulting link/coverage reload, successful zero, unavailable coverage and the
+supporting-case/execution links.
 
 Native Tesbo execution remains **UNRUN**. REQ-WPA-10 was staged and the implementation PR was merged after the owner
 recorded merge authorization; the positive native journey still requires a human to apply/approve the requirement,
-case and link and to create the intended suite. REQ-WPA-11 stages the activation acceptance cases; publication and
-execution are not inferred from these automated checks.
+case and link and to create the intended suite. REQ-WPA-11 staged the activation acceptance cases; REQ-WPA-12 stages
+the reliability acceptance cases; publication and execution are not inferred from these automated checks.
 
 ### 16.5 Explicit approved link activation
 
@@ -876,16 +878,24 @@ execution are not inferred from these automated checks.
   criterion set** (the live-link group), prefers the approved-version generation within that group, and says the
   earlier generation will be retired. Distinct criterion groups for the same case remain separate rows.
 - Activation requires the requirement's current approved version and a currently approved case. The backend
-  enforces the owner/manager rule, the exact case revisions and `REQUIREMENT_NOT_APPROVED` for an unapproved
-  requirement; the surface never offers the action without both approvals. The UI gate is an affordance, not the
-  authority.
-- Lost-response reconciliation matches the same case + criterion group on the approved version, not merely the same
-  case, so another approved group can never be reported as this activation's result.
-- On success the earlier link is retired and one active link is created on the approved requirement version, and
-  coverage `approved` moves true. A lost response is reported as unconfirmed, then reconciled from coverage; a retry
-  uses the same link and revisions and the backend replays the single active link.
+  enforces the normalized owner/manager rule (legacy `admin`/`test_manager` values map to manager, as approval and
+  the surface do), the exact case revisions and `REQUIREMENT_NOT_APPROVED` for an unapproved requirement; the
+  surface never offers the action without both approvals. The UI gate is an affordance, not the authority.
+- Replay is constrained to the requirement's current approved version. A lost activation followed by a newer
+  requirement approval cannot return a superseded-version link as replayed; it is refused as inactive, and a
+  subsequent intentional activation creates a new identity on the current approved version.
+- Lost-response reconciliation matches the same case + criterion group, the current approved version and the exact
+  case edit/approval revisions captured at request time, not merely the same case. Uncertain outcomes are held per
+  group, so several rapid activations cannot overwrite one another; each is reconciled independently from
+  authoritative coverage.
+- On success the selected exact criterion group is retired and one active link is created on the approved requirement
+  version; other criterion groups, including the same keys in a different order, remain active. Coverage `approved`
+  moves true. A lost response is reported as unconfirmed, then reconciled from coverage; a retry uses the same link
+  and revisions.
 - A stale case revision, an unapproved case, an inactive link, a permission refusal, a missing link and a 5xx/network
   failure are each reported without claiming activation; the authoritative coverage and case revisions are re-read.
+  The 5xx/network path is exercised with two groups, and the DB fixtures remove reader/legacy users and memberships
+  even when assertions fail.
 - Requirement approval, case approval, activation and execution remain separately labelled. External-provider
   requirements remain read-only.
 
@@ -903,9 +913,16 @@ execution are not inferred from these automated checks.
 | L8 positive applied-banner branch was not asserted | Asserted in the activation UI journey. |
 | L9 PR body wording | Corrected. |
 
-Activation review dispositions: a live link is grouped by case **and** criterion set, so distinct criterion groups
-remain separate and activation retires only the selected group; lost-response reconciliation matches the same group
-on the approved version, so another approved group cannot be reported as this activation. Unapproved-requirement,
-unapproved-case, reader, missing-link, inactive-link and case-revision refusals are exercised in the DB spec. A
-browser fixture with two criterion groups for one case, rapid multi-group uncertain reconciliation (the current
-notice/unconfirmed slot is single-per-view), and a dedicated 5xx activation-mapping test remain follow-ups.
+Activation reliability dispositions (REQ-WPA-12):
+
+| Finding | Disposition and evidence |
+| --- | --- |
+| Replay lookup was not constrained to the current approved requirement version | Fixed: the replay query requires `requirement_version_id` and the approval guard runs before either branch. DB test: lost activation, newer approval, old-link retry refuses the superseded generation; an intentional active-link activation returns the new current-version identity and retires the old generation. |
+| Multiple criterion groups / array order were not fixture-exercised | Fixed: exact-order grouping in the surface and exact-array retirement in the backend. DB test activates `["AC-1","AC-2"]` and preserves `["AC-2","AC-1"]`; browser test inserts both orders, activates each group, and preserves the other plus the original group. |
+| Uncertain outcomes used one notice/unconfirmed slot | Fixed: notices and unconfirmed attempts are maps keyed by case + criterion group. Browser test triggers 5xx on two groups, verifies both errors remain group-scoped, then retries each independently. Simultaneous committed-uncertain reconciliation for two groups remains a code-level edge covered by the same map/reconcile path. |
+| Affordance and endpoint normalized roles differently | Fixed: the endpoint uses `normalizeRole`, matching approval and the surface. DB test gives a legacy `test_manager` member a missing-link 404 (authorization passed) while raw `qa_engineer` receives 403. |
+| No dedicated activation 5xx test | Fixed: browser routes two groups to 503, verifies unconfirmed errors and no writes, then retries both successfully. |
+| DB reader/legacy fixture cleanup was partial | Fixed: the refusal test deletes reader and legacy users, organization memberships and project memberships in `finally`, so failed assertions do not leave residue. |
+
+Remaining #219 items: L2 (backend missing-source guard), L5 (exact case-id deep link), L6 (explicit newer-basis test)
+and L7 (direct external-provider refusal test) remain tracked follow-ups; L1/L3/L4/L8/L9 are fixed or asserted.
