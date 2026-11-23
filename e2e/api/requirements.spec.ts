@@ -263,17 +263,18 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
     const title = `E2E governed requirement ${suffix}`;
     const caseTitle = `E2E governed case ${suffix}`;
     const requirementOperationId = randomUUID(), testcaseOperationId = randomUUID();
+    const regressionSteps = [
+      { stepNumber: 1, action: "Stage a requirement and case bundle through project-bound MCP",
+        expectedResult: "One unpublished review task is returned without an official test case" },
+      { stepNumber: 2, action: "Review and apply the exact proposal as an authorized human",
+        expectedResult: "One native Draft case is linked to the reviewed requirement revision" }
+    ];
     const operations = [
       { opType: "requirement_revision", operationId: requirementOperationId, title, description: "Published through the governed path.", criteria: [{ key: "AC-1", text: "The obligation is observable" }, { key: "AC-2", text: "The second obligation is observable" }] },
       { opType: "testcase_create", operationId: testcaseOperationId, draft: {
         title: caseTitle, description: "Regression case authored alongside application automated tests.",
         preconditions: "Project-owned agent grant and approved requirement/test-case methods are available.",
-        steps: [
-          { stepNumber: 1, action: "Stage a requirement and case bundle through project-bound MCP",
-            expectedResult: "One unpublished review task is returned without an official test case" },
-          { stepNumber: 2, action: "Review and apply the exact proposal as an authorized human",
-            expectedResult: "One native Draft case is linked to the reviewed requirement revision" }
-        ],
+        steps: regressionSteps,
         postconditions: "Published case identity persists; no result or Passed claim is invented.",
         automationRepo: "1alextest/Tesbooboo",
         automationPath: "e2e/api/requirements.spec.ts",
@@ -358,7 +359,7 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
 
     const caseBefore = await (await request.get(`${base}/testcases/${caseId}`)).json();
     expect(caseBefore.status).toBe("Draft");
-    expect(JSON.parse(caseBefore.steps)).toEqual(operations[1].draft.steps);
+    expect(JSON.parse(caseBefore.steps)).toEqual(regressionSteps);
     expect(caseBefore.automationRepo).toBe("1alextest/Tesbooboo");
     expect(caseBefore.automationPath).toBe("e2e/api/requirements.spec.ts");
     const approvedCase = await request.post(`${base}/testcases/${caseId}/approve`, {
