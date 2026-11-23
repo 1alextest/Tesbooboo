@@ -17,7 +17,7 @@ const MAX_CHANGED_FILES = 100;
 export function isProtectedCandidatePath(path) {
   return path === ".gitmodules" || path === "AGENTS.md" || path === "CLAUDE.md" ||
     path.startsWith(".github/") ||
-    /^scripts\/(?:agent-pr-|assurance-pr-gate|publish-assurance-status)/.test(path);
+    /^scripts\/(?:agent-pr-|assurance-pr-gate|publish-assurance-status|branch-rulesets)/.test(path);
 }
 
 export function validateHandoff(input) {
@@ -92,7 +92,7 @@ export function stageExactCandidate(request, { cwd = process.cwd(), runGit = git
     throw new Error("Candidate change-set is empty or outside the bounded file count");
   }
   if (changed.some(isProtectedCandidatePath)) {
-    throw new Error("Candidate changes trusted policy/workflow files; use the separately reviewed security PR path");
+    throw new Error("Candidate changes protected trusted policy/workflow files; use the separately reviewed security PR path");
   }
 
   // Work exclusively on a disposable local development checkout. Never push the
