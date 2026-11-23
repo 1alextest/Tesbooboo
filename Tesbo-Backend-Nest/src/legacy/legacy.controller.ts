@@ -1745,7 +1745,9 @@ export class LegacyController {
   // Governed Skills: agents may create candidates; only a human session can approve or assign.
   @Post("/api/projects/:projectId/skills")
   createSkillCandidate(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
-    return this.legacy.createSkillCandidate(projectId, req.userId, body);
+    return this.legacy.createSkillCandidate(projectId, req.userId, body, {
+      kind: req.apiToken ? "api_token" : "human_session", tokenId: req.apiToken?.tokenId
+    });
   }
 
   @Get("/api/projects/:projectId/skills")

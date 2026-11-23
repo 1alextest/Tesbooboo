@@ -1602,8 +1602,8 @@ export async function listSkillAssignments(projectId: string): Promise<{ list: S
 }
 
 export async function createSkillCandidate(projectId: string, data: {
-  title: string; module: SkillModule; subtype?: string; skillKey?: string; instructions: string;
-}): Promise<SkillRecord & { skillKey: string; module: SkillModule; subtype: string; state: string }> {
+  title: string; module: SkillModule; subtype?: string; skillKey?: string; instructions: string; requestKey?: string;
+}): Promise<SkillRecord & { skillKey: string; module: SkillModule; subtype: string; state: string; replayed?: boolean }> {
   return api(`/api/projects/${projectId}/skills`, { method: "POST", body: data });
 }
 

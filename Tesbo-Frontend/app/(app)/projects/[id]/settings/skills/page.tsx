@@ -146,6 +146,9 @@ export default function SkillsSettingsPage() {
   const [newModule, setNewModule] = useState<SkillModule>("requirements");
   const [newSubtype, setNewSubtype] = useState("functional");
   const [newInstructions, setNewInstructions] = useState("");
+  // Stable across an uncertain create response; cleared only after creation is acknowledged or the
+  // candidate content changes, so a retry reads the same native candidate instead of creating one.
+  const creationRequestKey = useRef<string | null>(null);
 
   const [assignSkillId, setAssignSkillId] = useState("");
   const [assignModule, setAssignModule] = useState("requirements");
@@ -446,15 +449,19 @@ export default function SkillsSettingsPage() {
   function createAndSubmit() {
     if (!currentUserId) return;
     void run(async (isCurrent) => {
+      const requestKey = creationRequestKey.current ?? crypto.randomUUID();
+      creationRequestKey.current = requestKey;
       const created = await createSkillCandidate(projectId, {
         title: newTitle.trim(), module: newModule, subtype: newSubtype.trim() || "*",
         ...(newKey.trim() ? { skillKey: newKey.trim() } : {}),
-        instructions: newInstructions.trim()
+        instructions: newInstructions.trim(), requestKey
       });
       if (!isCurrent()) return;
+      creationRequestKey.current = null;
       // Creation has committed. Never present the old form as another create attempt when the
       // separate submission fails; the native library owns recovery of this exact draft.
       setNewTitle(""); setNewKey(""); setNewInstructions("");
+      if (created.replayed) setMessage("Recovered the candidate saved by the earlier creation request.");
       await submitSavedDraft(created, currentUserId, isCurrent);
     }, true);
   }
@@ -733,11 +740,11 @@ export default function SkillsSettingsPage() {
           <h2 className="text-base font-semibold flex items-center gap-2"><IconPlus size={18} /> New skill candidate</h2>
           <p className="text-sm text-[var(--muted)]">Creating and submitting a candidate does not approve or assign it.</p>
           <div className="grid gap-3 md:grid-cols-2" data-testid="skill-candidate-form">
-            <Field><FieldLabel>Title</FieldLabel><Input data-testid="skill-title" value={newTitle} onChange={(event) => setNewTitle(event.target.value)} maxLength={512} disabled={busy} /></Field>
-            <Field><FieldLabel>Skill key (optional)</FieldLabel><Input data-testid="skill-key" value={newKey} onChange={(event) => setNewKey(event.target.value)} placeholder="REQ-AUTHORING" maxLength={64} disabled={busy} /></Field>
-            <Field><FieldLabel>Module</FieldLabel><Select data-testid="skill-module" value={newModule} onChange={(event) => setNewModule(event.target.value as SkillModule)} disabled={busy}>{MODULES.map((module) => <option key={module} value={module}>{module}</option>)}</Select></Field>
-            <Field><FieldLabel>Subtype</FieldLabel><Input data-testid="skill-subtype" value={newSubtype} onChange={(event) => setNewSubtype(event.target.value)} placeholder="functional" maxLength={32} disabled={busy} /></Field>
-            <div className="md:col-span-2"><Field><FieldLabel>Instructions</FieldLabel><Textarea data-testid="skill-instructions" value={newInstructions} onChange={(event) => setNewInstructions(event.target.value)} rows={4} maxLength={20000} disabled={busy} /></Field></div>
+            <Field><FieldLabel>Title</FieldLabel><Input data-testid="skill-title" value={newTitle} onChange={(event) => { creationRequestKey.current = null; setNewTitle(event.target.value); }} maxLength={512} disabled={busy} /></Field>
+            <Field><FieldLabel>Skill key (optional)</FieldLabel><Input data-testid="skill-key" value={newKey} onChange={(event) => { creationRequestKey.current = null; setNewKey(event.target.value); }} placeholder="REQ-AUTHORING" maxLength={64} disabled={busy} /></Field>
+            <Field><FieldLabel>Module</FieldLabel><Select data-testid="skill-module" value={newModule} onChange={(event) => { creationRequestKey.current = null; setNewModule(event.target.value as SkillModule); }} disabled={busy}>{MODULES.map((module) => <option key={module} value={module}>{module}</option>)}</Select></Field>
+            <Field><FieldLabel>Subtype</FieldLabel><Input data-testid="skill-subtype" value={newSubtype} onChange={(event) => { creationRequestKey.current = null; setNewSubtype(event.target.value); }} placeholder="functional" maxLength={32} disabled={busy} /></Field>
+            <div className="md:col-span-2"><Field><FieldLabel>Instructions</FieldLabel><Textarea data-testid="skill-instructions" value={newInstructions} onChange={(event) => { creationRequestKey.current = null; setNewInstructions(event.target.value); }} rows={4} maxLength={20000} disabled={busy} /></Field></div>
           </div>
           {(!newTitle.trim() || !newInstructions.trim()) && <FieldError>A title and instructions are required.</FieldError>}
           <Button onClick={createAndSubmit} disabled={busy || !currentUserId || !newTitle.trim() || !newInstructions.trim()} data-testid="skill-create-submit">Create and submit candidate</Button>
