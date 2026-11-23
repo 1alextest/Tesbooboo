@@ -577,3 +577,11 @@ test("native pilot failure never reflects server token or private result",()=>{
     }
   }
 });
+
+test("native pilot accepts the same project-path trailing slash as the approved-origin guard",()=>{
+  const result=invokeSyntheticMcp({mode:"pilot-readonly",
+    endpoint:"https://trusted.example.test/api/projects/example/mcp/"});
+  assert.equal(result.status,0,result.stdout+result.stderr);
+  assert.deepEqual(result.requests.filter(x=>x.method==="tools/call").map(x=>x.tool),
+    ["list_testcases","list_suites"]);
+});
