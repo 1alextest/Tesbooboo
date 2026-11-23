@@ -4,6 +4,16 @@
 
 **Authority:** current existing API-token/MCP services and their owner-reviewed policies control deployed behavior; this document proposes changes and does not amend ASER's eight canonical specifications by itself. Any incompatible change to canonical policy requires a separate governed review. No active OAuth provider, actual ChatGPT handshake, connected Tesbo MCP in this session, or native Tesbo QA execution is claimed.
 
+## Protocol-era safety increment (implementation candidate, not OAuth)
+
+**Source scope:** `mcp-protocol-compat.ts`, existing `McpController.respond`, and existing `e2e/api/mcp.spec.ts` MCP-P07 smoke selection. Tesbo currently advertises only legacy `2025-06-18` and `2024-11-05` from `mcp.types.ts`. Before attempting any stateless tool routing, the authenticated HTTP controller now rejects requests declaring unsupported per-request protocol versions and `server/discover` with HTTP 400 and JSON-RPC `UnsupportedProtocolVersionError` (`-32022`) naming the actual supported legacy versions. It runs after project/credential grant authorization and before session validation or tool dispatch. All legacy initialize/session APIs retain their existing responses and HTTP statuses.
+
+This is **a fail-closed compatibility signal, not modern MCP or OAuth support**. The 2026-07-28 stateless request metadata, `Mcp-Method`/`Mcp-Name` header validation, `resultType`, `server/discover` success path, HTTP 200 response semantics, AS discovery, OAuth token issuance and user/client consent are **not** implemented by this increment. A client that requires modern protocol support must still treat Tesbo as incompatible; recognized error details are not proof of automatic successful legacy fallback. Verify actual client behavior separately. The candidate keeps OAuth disabled and does not alter `TESBOPROJECT` records. Unit and disposable real HTTP regressions must pass at their final head before this scope is accepted.
+
+Standards basis: [MCP 2026-07-28 versioning](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning), [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports), and [legacy initialization contract](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle).
+
+---
+
 ## Assurance review reconciliation — 2026-11-23 (changes required)
 
 The [full eleven-lens challenge](../reviews/MCP-OAUTH-ASSURANCE-2026-11-23.md) exposes **19 tracked findings (OA-01–OA-19)**. Review performed as distinct analytical lenses by one agent; **not** independently delegated-team output, human approval, or acceptance. This document remains **DRAFT**. Findings from the current implementation and protocol standards take precedence over ambiguous language below until they are resolved.
