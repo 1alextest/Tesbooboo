@@ -1582,6 +1582,9 @@ export interface RequirementCoverageCase {
   criterionKeys: string[];
   /** The exact requirement version this link was applied against. */
   requirementVersionId: string;
+  /** The exact case revision the link was applied against. */
+  testcaseRevision: string;
+  testcaseApprovalRevision: string | null;
   authored: boolean;
   approved: boolean;
   executed: boolean;

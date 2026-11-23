@@ -17017,6 +17017,8 @@ export class LegacyService implements OnModuleInit {
       return {
         linkId: String(row.id), testcaseId: String(row.testcase_id), title: String(row.title),
         criterionKeys: normalizeJsonArray(row.criterion_keys).map(String), requirementVersionId: String(row.requirement_version_id),
+        testcaseRevision: String(row.testcase_revision),
+        testcaseApprovalRevision: row.testcase_approval_revision ? String(row.testcase_approval_revision) : null,
         authored: true, approved, executed, passing: executed && row.latest_status === "Passed",
         latestAttempt: row.latest_status ? {
           status: String(row.latest_status), executedAt: row.latest_at,

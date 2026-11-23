@@ -217,7 +217,9 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
       // Reconcile each attempt independently. Only this case + criterion group on the approved
       // version can verify it; another approved group must never be presented as this result.
       const item = coverage.cases.find((entry) => linkGroupKey(entry) === groupKey
-        && entry.approved && entry.requirementVersionId === coverage.approvedVersionId);
+        && entry.approved && entry.requirementVersionId === coverage.approvedVersionId
+        && entry.testcaseRevision === attempt.caseRevision
+        && entry.testcaseApprovalRevision === attempt.approvalRevision);
       if (!item) continue;
       delete remaining[groupKey];
       setActivationErrors((previous) => {
