@@ -65,7 +65,7 @@ function coverageReadingTone(value: boolean): "success" | "neutral" {
 function versionBasisLabel(item: RequirementCoverageCase, coverage: RequirementCoverage): string {
   if (coverage.approvedVersionId && item.requirementVersionId === coverage.approvedVersionId) return "approved version";
   if (coverage.latestSubmittedVersionId && item.requirementVersionId === coverage.latestSubmittedVersionId) return "submitted version";
-  return "historical version";
+  return "linked version";
 }
 
 export function RequirementReviewPanel({ projectId, documentId, versionId, canApprove }: {
@@ -196,6 +196,18 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
 
   const criteria = criteriaOf(version);
   const description = descriptionOf(version);
+  // The criterion text is the exact submitted version's, not the current mutable document's.
+  // Readings still come from the coverage endpoint, joined by criterion key.
+  const coverageCriteria = coverage
+    ? (criteria.length
+      ? criteria.map((criterion) => {
+        const reading = coverage.criteria.find((item) => item.key === criterion.key);
+        return { ...criterion, caseCount: reading?.caseCount ?? 0, authored: reading?.authored ?? false,
+          approved: reading?.approved ?? false, executed: reading?.executed ?? false,
+          passing: reading?.passing ?? false, mixed: reading?.mixed ?? false };
+      })
+      : coverage.criteria)
+    : [];
   const review = reviewState(document, reviewedVersion, versionId);
   const approvalReady = canApprove && !contentLoading && !contentError && Boolean(version) && Boolean(document) && !review.approved && !approving;
   const approvedAs = reviewedVersion?.snapshotKind === "approved" ? reviewedVersion : null;
@@ -332,7 +344,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
                   </tr>
                 </thead>
                 <tbody>
-                  {coverage.criteria.map((criterion) => (
+                  {coverageCriteria.map((criterion) => (
                     <tr key={criterion.key} className="border-t border-[var(--border)]" data-testid={`requirement-coverage-criterion-${criterion.key}`}>
                       <td className="px-2 py-2 align-top">
                         <span className="font-mono text-xs text-[var(--muted)]">{criterion.key}</span>

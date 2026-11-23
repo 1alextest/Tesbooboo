@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useParams } from "@/lib/routeParams";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -325,6 +325,7 @@ function automationTone(a: string) {
 export default function TestCasesPage() {
   const params = useParams();
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const { currentUser } = useAppData();
   const projectId = params.id as string;
@@ -775,10 +776,11 @@ export default function TestCasesPage() {
     return Math.max(0, repositoryTotalCount - suiteCaseCountSum);
   }, [repoSummary, repositoryTotalCount, suiteCaseCountSum]);
 
-  // A new deep-linked search (for example, another requirement's supporting case) replaces the
-  // current query while this page stays mounted. An empty param never clears text the user typed.
+  // The URL is the authoritative deep-link seed. A new search replaces the current query while
+  // this page stays mounted, and navigating back to a URL without one clears the box; ordinary
+  // typing never changes the param, so it is not overwritten.
   useEffect(() => {
-    if (activeSearch) setSuiteSearch(activeSearch);
+    setSuiteSearch(activeSearch);
   }, [activeSearch]);
 
   useEffect(() => {
@@ -1250,6 +1252,15 @@ export default function TestCasesPage() {
     }
   }
 
+  function clearSearch() {
+    setSuiteSearch("");
+    if (!searchParams.get("search")) return;
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("search");
+    const qs = next.toString();
+    router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+  }
+
   function clearSuiteFilters() {
     setSuiteSearch("");
     setSuiteStatusFilter("all");
@@ -1262,7 +1273,14 @@ export default function TestCasesPage() {
     setCustomFieldFilters([]);
     setSuiteTagFilter([]);
     setSuiteCasesPage(1);
-    if (activeJiraIssueKey) router.replace(`/projects/${projectId}/testcases`);
+    if (activeJiraIssueKey) {
+      router.replace(`/projects/${projectId}/testcases`);
+    } else if (searchParams.get("search")) {
+      const next = new URLSearchParams(searchParams.toString());
+      next.delete("search");
+      const qs = next.toString();
+      router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+    }
   }
 
   function addStep() {
@@ -2266,7 +2284,7 @@ export default function TestCasesPage() {
                     {suiteSearch && (
                       <button
                         type="button"
-                        onClick={() => setSuiteSearch("")}
+                        onClick={clearSearch}
                         aria-label="Clear search"
                         className="shrink-0 rounded-full p-0.5 text-[var(--muted-soft)] transition-colors hover:bg-[var(--surface-secondary)] hover:text-[var(--foreground)]"
                       >

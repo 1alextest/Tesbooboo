@@ -410,6 +410,17 @@ test.describe("governed skills operator journey (UI)", () => {
       expect(qaApprove.status()).toBe(403);
       await qaPage.close();
 
+      // A failed exact-version load disables approval and offers a retry; approval returns only
+      // after the required content loads successfully.
+      const versionEndpoint = `**/api/projects/${tenant!.mainProjectId}/knowledge-base/documents/${requirementId}/versions/${requirementVersionId}`;
+      await page.route(versionEndpoint, (route) => route.fulfill({ status: 503, json: { error: "Version read unavailable" } }));
+      await page.reload();
+      await expect(page.getByTestId("requirement-review-error")).toBeVisible();
+      await expect(page.getByTestId("requirement-review-approve")).toHaveCount(0);
+      await page.unroute(versionEndpoint);
+      await page.getByTestId("requirement-review-retry").click();
+      await expect(page.getByTestId("requirement-review-approve")).toBeVisible();
+
       // Stale: the document moved on after the version was submitted. The old version is refused,
       // and the UI does not claim approval.
       const changed = await ownerApi.patch(`${base()}/knowledge-base/documents/${requirementId}`, { data: { title: `${title} changed` } });
@@ -450,6 +461,7 @@ test.describe("governed skills operator journey (UI)", () => {
       await expect(page.getByTestId("requirement-review-approved")).toHaveCount(0);
       releaseContent();
       await expect(page.getByTestId("requirement-review-approved")).toBeVisible();
+      await expect(page.getByTestId("requirement-review-approval-error")).toHaveCount(0);
       expect(scalar(`SELECT COUNT(*)::int FROM knowledge_document_versions WHERE document_id=${literal(requirementId)} AND snapshot_kind='approved' AND snapshot_metadata->>'sourceVersionId'=${literal(requirementVersionId)};`)).toBe("1");
       await page.unroute(documentEndpoint);
       await page.unroute(approveEndpoint);
@@ -501,6 +513,9 @@ test.describe("governed skills operator journey (UI)", () => {
       await page.goto(`/projects/${tenant!.mainProjectId}/testcases?search=${search}`);
       await expect(page.getByPlaceholder("Search by ID, title, or type")).toHaveValue(caseTitle);
       await expect(page.getByText(caseTitle).first()).toBeVisible();
+      await page.getByRole("button", { name: "Clear search" }).click();
+      await expect(page.getByPlaceholder("Search by ID, title, or type")).toHaveValue("");
+      await expect(page).not.toHaveURL(/[?&]search=/);
     } finally {
       if (taskId) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(taskId)} AND project_id=${literal(tenant!.mainProjectId)};`);
       if (requirementId) {

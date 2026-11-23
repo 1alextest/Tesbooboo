@@ -212,11 +212,11 @@ A single human “Apply selected” action on the exact proposal revision runs o
 - Requirement and test-case skills are **required** for guarded publication under Work Package A (WP-A lines 178–180; R-ASE-25/26).
 - The effective-skill resolver and the native project-scoped Skills operator surface are implemented (§14, §15). Guarded publication proceeds only with a **resolved, pinned, conflict-free** assignment set for the three Work Package A targets.
 - Staging, reading, diff review and **rejection/withdrawal** remain available without a resolved context.
-- **Protected apply, requirement approval, link re-application and any claim of approved/executed/passing coverage** are refused, with no native publication writes, when:
+- **Protected apply, requirement approval and link re-application** are refused, with no native publication writes, when:
   - a required approved skill is unassigned → `SKILL_CONTEXT_UNAVAILABLE`;
   - the pinned basis changed after review → `SKILL_CONTEXT_STALE`;
   - the effective assignment is ambiguous → `SKILL_ASSIGNMENT_CONFLICT`.
-- The refusal code and the pinned/current bases are returned to the review surface; `skill_context` is recorded on every staged operation. Raw observations and evidence intake remain independently permitted.
+- The refusal code and the pinned/current bases are returned to the review surface; `skill_context` is recorded on every staged operation. Coverage reads remain available and report the persisted state; they cannot create a new approved/executed/passing reading that the blocked approval would have enabled. Raw observations and evidence intake remain independently permitted.
 - Consequence: the positive half of Work Package A (apply → approve → coverage) is implemented and exercised when the targets are assigned. It remains **blocked in TESBOPROJECT** until a human approves/assigns the required Skill versions and applies the staged bundles; that is a governance state, not a missing capability.
 
 ---
@@ -717,8 +717,8 @@ link identity). The Zyra task page uses that receipt to reopen the exact version
 `GET /knowledge-base/documents/:documentId/versions/:versionId` endpoint and the document through the existing
 document detail endpoint.
 
-- The version's stored content, acceptance criteria, version number/id, author/time, snapshot digest, document
-  review status and linked cases are shown.
+- The version's stored content, acceptance criteria, version number/id, submission time, snapshot digest,
+  document review status and linked cases are shown.
 - The reviewed approved snapshot is read separately, so approval status is derived from
   `snapshot_metadata.sourceVersionId`, not guessed from a status label or from the link.
 - A reload reconstructs the panel from persisted task and requirement state; the document id is never recovered by
@@ -749,13 +749,15 @@ readings and basis. `latestAttempt` now also carries the persisted `executionId`
 the real execution evidence without inventing a second coverage model.
 
 - Readings are shown as authored, approved, executed and passing, with mixed PASS/FAIL attempts called out.
-- Per-criterion counts and the linked-case rows show the exact requirement version each link targets (approved,
-  submitted or historical) and the qualifying-attempt basis.
+- Per-criterion text is taken from the exact submitted version under review and joined to the coverage readings by
+  criterion key; per-criterion counts and the linked-case rows show the requirement version each link targets
+  (approved or currently submitted) and the qualifying-attempt basis.
 - Supporting cases link to the test-case repository with the case search applied; qualifying attempts link to the
   native execution page when an execution and cycle are present.
 - A successful empty result renders as an authored zero. An unavailable coverage read renders as unavailable with a
   retry and is never presented as zero.
-- Coverage is re-read after approval and after case/execution state changes; no reading is cached as authority.
+- Coverage is re-read on load, after approval and on an explicit retry; changes made in another surface (case
+  approval, a re-applied link, a new execution) appear after a reload or retry. No reading is cached as authority.
 
 ### 16.4 Verification boundary
 
