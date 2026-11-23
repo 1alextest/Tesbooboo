@@ -749,7 +749,7 @@ export default function ZyraTaskDetailPage() {
                 <h2 className="text-lg font-semibold text-[var(--foreground)]">Requirement change bundle</h2>
                 <p className="mt-1 text-sm text-[var(--muted)]">
                   {requirementApplied
-                    ? "Applied. The exact submitted requirement version is available in the review panel below; approval, case activation and execution remain separate human decisions."
+                    ? "Applied. The persisted apply receipt points to the exact submitted requirement version in the review panel below; approval, case activation and execution remain separate human decisions."
                     : done
                       ? "This bundle closed without publication. The recorded outcome below is authoritative; no requirement version, case or link was created."
                       : "Staging only. No requirement version, test case, active link or approval exists until a human publishes it."}

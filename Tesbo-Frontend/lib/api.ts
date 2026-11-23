@@ -1607,6 +1607,37 @@ export async function getRequirementCoverage(projectId: string, documentId: stri
   return api(`/api/projects/${projectId}/requirements/${documentId}/coverage`);
 }
 
+export interface RequirementCaseLinkRecord {
+  id: string;
+  projectId: string;
+  requirementId: string;
+  requirementVersionId: string;
+  criterionKeys: string[];
+  testcaseId: string;
+  testcaseRevision: string;
+  testcaseApprovalRevision: string | null;
+  state: string;
+  appliedAt: string | null;
+}
+
+/**
+ * Human-only activation of the exact approved case revision against the approved requirement
+ * version. The backend retires the earlier link, creates one active link, and replays the exact
+ * retry when the same link and revisions are presented again.
+ */
+export async function reapplyRequirementCaseLink(
+  projectId: string,
+  documentId: string,
+  linkId: string,
+  expectedCaseRevision: string,
+  expectedApprovalRevision: string
+): Promise<{ link: RequirementCaseLinkRecord; retiredLinkId: string; replayed: boolean }> {
+  return api(`/api/projects/${projectId}/requirements/${documentId}/links/${linkId}/reapply`, {
+    method: "POST",
+    body: { expectedCaseRevision, expectedApprovalRevision },
+  });
+}
+
 // ─── Governed Skills (human-managed library and assignments) ───────────────────────────────
 
 export type SkillModule = "requirements" | "test_cases" | "user_manuals" | "policies" | "tasks_issues" | "files_evidence" | "skills";
@@ -1998,6 +2029,28 @@ export async function listTestCases(
 
 export async function getTestCase(projectId: string, testcaseId: string): Promise<Record<string, unknown>> {
   return api(`/api/projects/${projectId}/testcases/${testcaseId}`);
+}
+
+export interface TestCaseRevisionBasis {
+  id: string;
+  title: string;
+  status: string;
+  editRevision: string;
+  approvalRevision: string | null;
+  approvalCurrent: boolean;
+}
+
+/** The exact case revisions a requirement link must be activated against. */
+export async function getTestCaseRevisionBasis(projectId: string, testcaseId: string): Promise<TestCaseRevisionBasis> {
+  const data = await api<Record<string, unknown>>(`/api/projects/${projectId}/testcases/${testcaseId}`);
+  return {
+    id: String(data.id ?? testcaseId),
+    title: String(data.title ?? ""),
+    status: String(data.status ?? ""),
+    editRevision: typeof data.editRevision === "string" ? data.editRevision : "",
+    approvalRevision: typeof data.approvalRevision === "string" && data.approvalRevision ? data.approvalRevision : null,
+    approvalCurrent: data.approvalCurrent === true,
+  };
 }
 
 export async function approveTestCase(

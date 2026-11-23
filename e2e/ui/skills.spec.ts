@@ -700,10 +700,14 @@ test.describe("governed skills operator journey (UI)", () => {
       requirementId = applied.receipt.requirement.documentId;
       requirementVersionId = applied.receipt.requirement.versionId;
       caseId = applied.receipt.testcase.id;
+      const caseGroup = `${caseId}::AC-1`;
 
       const page = await open(browser, `/agents/tasks/${taskId}`);
+      await expect(page.getByTestId("requirement-change-bundle")).toContainText("Applied. The persisted apply receipt");
       const review = page.getByTestId("requirement-review-panel");
       await expect(review).toBeVisible();
+      // Activation is not offered until the exact requirement version is approved.
+      await expect(page.getByTestId(`requirement-link-requirement-unapproved-${caseGroup}`)).toBeVisible();
       await expect(review.getByTestId("requirement-review-version")).toContainText(requirementVersionId);
       await expect(review.getByTestId("requirement-review-criteria")).toContainText("The obligation is observable");
       await expect(review.getByTestId("requirement-review-approve")).toBeVisible();
@@ -780,23 +784,113 @@ test.describe("governed skills operator journey (UI)", () => {
       await page.unroute(documentEndpoint);
       await page.unroute(approveEndpoint);
 
-      // Coverage follows the persisted state: approving the case and re-applying its exact basis
-      // turns approved/executed/passing on, with a link to the real execution evidence.
+      // Case approval is a separate human action. Keep it via the API in this fixture, then use
+      // the review surface for the explicitly separate link activation.
       const caseBefore = await (await ownerApi.get(`${base()}/testcases/${caseId}`)).json();
       const approvedCase = await ownerApi.post(`${base()}/testcases/${caseId}/approve`, {
         data: { expectedRevision: caseBefore.editRevision, expectedApprovalRevision: caseBefore.approvalRevision }
       });
       expect(approvedCase.ok(), await approvedCase.text()).toBe(true);
       const caseAfter = await (await ownerApi.get(`${base()}/testcases/${caseId}`)).json();
-      const beforeReapply = await (await ownerApi.get(`${base()}/requirements/${requirementId}/coverage`)).json();
-      const link = beforeReapply.cases.find((item: Record<string, any>) => item.requirementVersionId === beforeReapply.approvedVersionId) || beforeReapply.cases[0];
-      const reapplied = await ownerApi.post(`${base()}/requirements/${requirementId}/links/${link.linkId}/reapply`, {
-        data: { expectedCaseRevision: caseAfter.editRevision, expectedApprovalRevision: caseAfter.approvalRevision }
+      await page.reload();
+      const caseLinkState = page.getByTestId(`requirement-link-state-${caseGroup}`);
+      await expect(caseLinkState).toContainText("not active on the approved requirement version");
+      await expect(page.getByTestId(`requirement-link-case-revision-${caseGroup}`)).toContainText(caseAfter.editRevision);
+      await expect(page.getByTestId(`requirement-link-case-revision-${caseGroup}`)).toContainText(caseAfter.approvalRevision);
+      await expect(page.getByTestId(`requirement-link-activate-${caseGroup}`)).toBeVisible();
+
+      // A reader can inspect the exact revisions but cannot activate.
+      const qaActivation = await open(browser, `/agents/tasks/${taskId}`, "qa");
+      await expect(qaActivation.getByTestId(`requirement-link-readonly-${caseGroup}`)).toBeVisible();
+      await expect(qaActivation.getByTestId(`requirement-link-activate-${caseGroup}`)).toHaveCount(0);
+      await qaActivation.close();
+
+      // Stale case revision: change the case after the exact revision was read; activation is
+      // refused and the surface re-reads the current state.
+      const changedCase = await ownerApi.put(`${base()}/testcases/${caseId}`, {
+        data: { title: `${caseTitle} changed`, expectedRevision: caseAfter.editRevision }
       });
-      expect(reapplied.ok(), await reapplied.text()).toBe(true);
+      expect(changedCase.ok(), await changedCase.text()).toBe(true);
+      await page.getByTestId(`requirement-link-activate-${caseGroup}`).click();
+      await expect(page.getByTestId(`requirement-link-error-${caseGroup}`)).toContainText("changed since this revision");
+      // Requirement approval copies the link onto the approved version; both generations stay
+      // active until a successful activation retires them. A refused activation writes neither.
+      expect(scalar(`SELECT COUNT(*)::int FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)} AND state='active';`)).toBe("2");
+
+      // Restore the exact title and, if the edit invalidated approval, re-approve the current case
+      // revision before the real activation.
+      const changedAfter = await (await ownerApi.get(`${base()}/testcases/${caseId}`)).json();
+      const restoredCase = await ownerApi.put(`${base()}/testcases/${caseId}`, {
+        data: { title: caseTitle, expectedRevision: changedAfter.editRevision }
+      });
+      expect(restoredCase.ok(), await restoredCase.text()).toBe(true);
+      let restoredCaseRecord = await (await ownerApi.get(`${base()}/testcases/${caseId}`)).json();
+      if (!restoredCaseRecord.approvalCurrent) {
+        const reapproved = await ownerApi.post(`${base()}/testcases/${caseId}/approve`, {
+          data: { expectedRevision: restoredCaseRecord.editRevision, expectedApprovalRevision: restoredCaseRecord.approvalRevision }
+        });
+        expect(reapproved.ok(), await reapproved.text()).toBe(true);
+        restoredCaseRecord = await (await ownerApi.get(`${base()}/testcases/${caseId}`)).json();
+      }
+      const caseReady = restoredCaseRecord;
+      await page.reload();
+      await expect(page.getByTestId(`requirement-link-case-revision-${caseGroup}`)).toContainText(caseReady.editRevision);
+      await expect(page.getByTestId(`requirement-link-activate-${caseGroup}`)).toBeVisible();
+
+      // Lost activation response: hold the reconciliation coverage read, prove no success is
+      // claimed, then reconcile the single active link from authoritative coverage.
+      const linkBefore = await (await ownerApi.get(`${base()}/requirements/${requirementId}/coverage`)).json();
+      // The surface prefers the link generation on the approved requirement version.
+      const activeLink = linkBefore.cases.find((item: Record<string, any>) =>
+        item.testcaseId === caseId && item.requirementVersionId === linkBefore.approvedVersionId)
+        || linkBefore.cases.find((item: Record<string, any>) => item.testcaseId === caseId);
+      expect(activeLink, "active link before activation").toBeTruthy();
+      const reapplyEndpoint = `**/api/projects/${tenant!.mainProjectId}/requirements/${requirementId}/links/${activeLink.linkId}/reapply`;
+      const coverageHoldEndpoint = `**/api/projects/${tenant!.mainProjectId}/requirements/${requirementId}/coverage`;
+      let holdCoverage = false;
+      let releaseCoverage!: () => void;
+      let coverageHeld!: () => void;
+      const activationHeld = new Promise<void>((resolve) => { coverageHeld = resolve; });
+      const activationRelease = new Promise<void>((resolve) => { releaseCoverage = resolve; });
+      await page.route(coverageHoldEndpoint, async (route) => {
+        if (!holdCoverage) return route.continue();
+        holdCoverage = false;
+        coverageHeld();
+        await activationRelease;
+        return route.continue();
+      });
+      await page.route(reapplyEndpoint, async (route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        const actual = await route.fetch();
+        expect(actual.ok(), await actual.text()).toBe(true);
+        holdCoverage = true;
+        await route.abort("failed");
+      });
+      await page.getByTestId(`requirement-link-activate-${caseGroup}`).click();
+      await activationHeld;
+      await expect(page.getByTestId(`requirement-link-error-${caseGroup}`)).toContainText("could not be confirmed");
+      await expect(page.getByTestId(`requirement-link-notice-${caseGroup}`)).toHaveCount(0);
+      releaseCoverage();
+      await expect(page.getByTestId(`requirement-link-notice-${caseGroup}`)).toContainText("verified after an unconfirmed response");
+      await expect(page.getByTestId(`requirement-link-error-${caseGroup}`)).toHaveCount(0);
+      await expect(page.getByTestId("requirement-coverage-readings")).toContainText("Approved: yes");
+      expect(scalar(`SELECT COUNT(*)::int FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)} AND state='active';`)).toBe("1");
+      const active = scalar(`SELECT id FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)} AND state='active';`);
+      expect(scalar(`SELECT testcase_revision FROM requirement_case_links WHERE id=${literal(active)};`)).toBe(caseReady.editRevision);
+      expect(scalar(`SELECT testcase_approval_revision FROM requirement_case_links WHERE id=${literal(active)};`)).toBe(caseReady.approvalRevision);
+      await page.unroute(coverageHoldEndpoint);
+      await page.unroute(reapplyEndpoint);
+
+      // Reload reads the resulting link and coverage state back.
+      await page.reload();
+      await expect(page.getByTestId(`requirement-link-state-${caseGroup}`)).toContainText("active on the approved requirement version");
+      await expect(page.getByTestId(`requirement-link-activate-${caseGroup}`)).toHaveCount(0);
+      await expect(page.getByTestId("requirement-coverage-link-id")).toContainText(active);
+      await expect(page.getByTestId("requirement-coverage-readings")).toContainText("Approved: yes");
+
       const runId = scalar(`INSERT INTO cycles(project_id,name) VALUES (${literal(tenant!.mainProjectId)},${literal(`UI review coverage ${suffix}`)}) RETURNING id;`);
       cycleIds.push(runId);
-      const itemId = scalar(`INSERT INTO cycle_items(cycle_id,testcase_id,snapshot_approval_revision) VALUES (${literal(runId)},${literal(caseId)},${literal(caseAfter.approvalRevision)}) RETURNING id;`);
+      const itemId = scalar(`INSERT INTO cycle_items(cycle_id,testcase_id,snapshot_approval_revision) VALUES (${literal(runId)},${literal(caseId)},${literal(caseReady.approvalRevision)}) RETURNING id;`);
       const executionId = scalar(`INSERT INTO executions(cycle_item_id,status,executed_by,executed_at)
         SELECT ${literal(itemId)},'Passed',pm.user_id,now() FROM project_members pm
          WHERE pm.project_id=${literal(tenant!.mainProjectId)}
