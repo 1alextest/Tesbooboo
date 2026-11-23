@@ -10,10 +10,13 @@ export const REPO='1alextest/Tesbooboo';
 // selection on development f456af1b. PR209 adds the reviewed runtime-migrator contract
 // to the existing container-security job. Contexts are defined here once.
 // A workflow edit (including a same-name job edit) requires source review and pin reconciliation.
+// PR #223 proposes a new, separately tested agent-pr-handoff-contracts job. The existing
+// required 24 CI contexts remain intact; adding this job to live required checks is a
+// separate administrator-reviewed activation, not an incidental source-pin update.
 // Pins/active metadata establish installed configuration, not successful live check publication,
 // a unique GitHub Actions producer identity, or proof that GitHub denies an unauthorized merge.
 export const WORKFLOW_SOURCES=[
- {path:'.github/workflows/ci-hygiene.yml',sha:'a7b62c3ca45e0de84fb083b90c4500e1e4bc619f',
+ {path:'.github/workflows/ci-hygiene.yml',sha:'d97a06ddf56485af6dd57c5b86fc2d7dcf94bea1',
   contexts:['workflow-lint','migration-names','mbt-symbolic-pilot']},
  {path:'.github/workflows/core-quality.yml',sha:'65082b4edda7cd5dc7194ae0c0f590d0b04f7a8f',
   contexts:['sdk-quality','frontend-quality','backend-quality','architecture-quality']},
