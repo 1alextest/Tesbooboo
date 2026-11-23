@@ -109,6 +109,92 @@ use isolated CI fixtures, while persistent native definitions and attempts stay 
 | Files / Evidence | Retain original full red logs, exact source/tree/parents and complete author/independent/White reports with methods on the existing PR. | Current implementation CI and admission receive their own observed receipts; CI is not an official native run. |
 | Skills Governance | Reuse KB versions, assignments, resolver and human transitions; no live approval or assignment performed. | Current live effective Skill discovery is unavailable through a callable connector; earlier snapshots are historical. |
 
+## Testcase list consistency repair — authorized regression handoff
+
+The owner authorized the recommended cache repair on 23 November after the activation handoff
+recorded two successful testcase creations followed by stale unfiltered list responses. This is a
+separate bounded correction at the existing `TestcasesListCacheService` and `LegacyService.listTestCases`
+owners, before PR228 integration. It does not alter testcase publication, permissions, approval,
+filters, sorting, pagination contracts or the canonical specification package.
+
+The preserved original diagnostic reproduced against unchanged development
+`c2561acbe16ac3031178ec9b02a5788342049054`: one selected, one executed, one semantic failure. An older
+query finished after completed invalidation and populated a later request with the old rows. The
+two earlier CI traces establish the stale-response symptom; they do not establish the exact Redis
+interleaving. Original reports and methods remain in
+[PR228's final evidence receipt](https://github.com/1alextest/Tesbooboo/pull/228#pullrequestreview-6029017176).
+Current repair execution belongs to its own exact-source PR/CI receipts, not to these case definitions.
+
+### Reused contract and implementation boundary
+
+The writer audit also found that the dedicated custom-field value endpoint changes the list
+projection without invalidating it. Its standalone write owner must invalidate after the completed
+write attempt, including a later error after an autocommitted value change. Existing access, ownership
+and plan checks remain before that attempt; an explicit transaction runner leaves invalidation to its
+outer commit owner. This preserves the existing error and transaction semantics.
+The same audit traced V155 custom-field definition triggers to testcase approval/status changes;
+all eight existing definition mutation families therefore invalidate after their completed write or
+whole transaction. A requirement bundle that creates a testcase invalidates the existing list and
+suite projections after its own commit; true replay and requirement-only bundles do not rotate them.
+
+The authoritative database query remains unchanged. An eligible unfiltered read captures a random
+project generation and page atomically before loading rows. It may publish those rows only while
+that exact generation still exists. A completed invalidation rotates the generation atomically,
+making every pagination variant obsolete without a separate key-index enumeration. A pre-write
+request may finish its existing database snapshot; it cannot repopulate the cache for later readers.
+Uppercase/lowercase forms of the same UUID share a cache identity, matching PostgreSQL project identity.
+
+Page envelopes retain the existing ten-second TTL and 200 KiB stored-size bound. The generation has
+a bounded twenty-second TTL, refreshed after a valid population; expiry, eviction or missing state
+requires a fresh token and refuses old fills. A failed or disabled cache read cannot acquire a token
+after the authoritative load. Redis remains best-effort: failed invalidation and restoration of older
+Redis state are not made transactional with the database by this repair. Query errors still propagate.
+
+The v2 namespace prevents old unversioned pages being interpreted as current envelopes. Deployment
+must replace/drain every serving old worker before claiming this protocol across the fleet; old
+invalidators cannot rotate the new namespace. No configuration change or deployment is authorized by
+this document. Rollback restores prior code/protocol with its prior consistency limitation; stale
+cache keys expire under their own bounded lifetimes. No schema, migration, dependency or parallel
+cache service is introduced.
+
+### Native regression proposals
+
+**Tesbo sync not performed. Native definitions, approval and official execution remain UNRUN.**
+Search TESBOPROJECT for the existing testcase repository requirement and equivalent regression cases
+before staging. Reuse the actual requirement revision/criteria, suite and case identities; the titles
+below are purposes, not fabricated native IDs. Keep persistent definitions and attempts in that
+project, while destructive automated fixtures remain in the existing isolated CI tenants.
+
+| Proposed stable case purpose / risk | Preconditions and repeatable actions | Observable expected result / cleanup | Automated owner |
+| --- | --- | --- | --- |
+| Prevent a read crossing invalidation from seeding later readers / high | Controlled authoritative rows; start and pause an older unfiltered read after it selects rows. Commit the modeled change, complete real cache invalidation, then release the older read and issue a new request. Repeat with a newer valid page already populated. | Later request returns current rows; old fill does not overwrite the newer page. Confirm a following healthy hit avoids another authoritative load. Release every barrier in finally; no production timing injection. | Existing `legacy/testcase-list-cache-consistency.spec.ts` and real-Redis integration. |
+| Invalidate all pages for one canonical project identity / high | Populate first and later pages, a different page size and a neighboring project through independent cache clients. Alternate uppercase/lowercase UUID reads and invalidations. | Every page of the changed project becomes a miss; the other project retains its valid page. Fresh population and subsequent hit succeed. Delete only the test's exact unique keys. | Cache unit and `cache/testcases-list-cache.redis.integration.spec.ts`. |
+| Reject stale generations after missing state and repeated changes / high | Capture a token, remove/expire its generation while retaining a page, then initialize a fresh generation. Also rotate twice before releasing an old fill. | No old token or envelope is accepted or recreated; a fresh load can populate and hit normally. Verify bounded page/generation TTLs on real Redis without claiming durable failover guarantees. | Cache unit and real-Redis integration. |
+| Refresh a warmed list after a dedicated custom-field value write / high | Warm an unfiltered page with an existing value, then use the authorized dedicated value endpoint to change and clear it. In isolated unit coverage, allow the value SQL to commit and fail a later audit; also supply an explicit transaction runner and refuse access/plan before the write attempt. | A subsequent list reflects the committed value; a partial-write failure keeps its original error while invalidating stale data. Nested writes do not rotate before their outer commit, and pre-write authority/plan refusals do not rotate. Restore only scenario-owned definitions/cases and injections. | Existing cache consistency spec and `e2e/api/custom-field-values.spec.ts`. |
+| Reflect definition-triggered approval changes in a warmed repository / high | For each native definition create, edit, option add/toggle, reorder, status, delete and restore, approve the controlled testcase and warm two unfiltered pages before that operation. | Exact-case GET and persisted dependency revision/status show the V155 transition; both list pages show In Review and approvalCurrent=false before any next approval/write. Existing authority/plan refusals remain selected. | Existing `e2e/api/custom-fields.spec.ts` plus the actual public setStatus/cache semantic unit regression. |
+| Refresh the repository after a reviewed requirement bundle creates a case / high | Warm a repository page before exact reviewed bundle apply. In a separate unit seam, hold transaction completion and exercise successful case creation, true replay, requirement-only apply and rollback. | No invalidation occurs before commit; the created case appears immediately afterward and a healthy cache hit remains possible. Replay/requirement-only/rollback retain the current page; original rollback error propagates. | Existing `e2e/api/requirements.spec.ts`, migrated-DB requirement publication tests and `legacy/testcase-requirement-cache.spec.ts`. |
+| Preserve authoritative fallback and query eligibility / high | Disable caching or fail its read/write/invalidation; exercise malformed envelopes and oversized multibyte values. Issue searched, filtered, sorted, archived and ID-selected queries. Separately fail the authoritative loader. | Responses retain the real query's shape and data; filters never receive the unfiltered page. Missing read authority prevents late population. Loader error remains an error. Redis failures retain their documented best-effort/TTL boundary. Restore all injected doubles after each case. | Legacy/cache unit selection; existing API filter, sorting and boundary cases. |
+| Keep a warmed repository current through native testcase writes / high | Authorized human in a scenario-owned CI project; warm lowercase and uppercase unfiltered pages. Create, update, archive/restore and delete through existing native endpoints; read the list after each successful operation. | Current content, membership and totals match the committed operation, with original response and authorization contracts. Clean only scenario-owned records/project in finally. | Existing `e2e/api/testcases.spec.ts`, neighboring suite/tag/import owners and `e2e/ui/testcases.spec.ts`. |
+
+The real-Redis tests use two independent clients against the existing disposable CI Redis service,
+require an explicit safe loopback test URL, and clean exact random project keys. No global flush,
+shared database mutation, local deployment or test-only product endpoint is required. The original
+Notes editor test, assertions, timeout and retry settings remain intact; a recovered retry must still
+be reported separately from a clean first attempt. Actual selection counts and results are recorded
+before/after execution in the repair's PR evidence.
+
+### Seven-domain disposition for the cache repair
+
+| Domain | Disposition and existing owner |
+| --- | --- |
+| Requirements | Preserve the existing testcase repository read/write contract; discover its actual native requirement and criterion revision before proposing the concurrency/identity clarification. Native synchronization blocked by absent callable Tesbo tools. |
+| Test Cases | Reuse existing unit, API/UI and native regression owners; add discriminating late-fill and real-Redis controls. Native proposals above remain unpublished/UNRUN until actual governed staging and review. |
+| User Manual / Docs | Internal freshness, fallback, rollout and rollback semantics are recorded here at the existing handoff owner. External UI/actions are unchanged; no new native manual publication claimed. |
+| Policy / Rules | Unchanged authentication, tenant/project access, publication, approvals and Skills gates. The cache remains derived and optional; no stronger durable cross-system consistency policy is invented. |
+| Tasks / Issues | Continue the separately authorized cache repair in its focused feature PR, retain the original finding on PR228, then reconcile activation. Repository Issues are disabled; no issue/native Bug identity is fabricated. |
+| Files / Evidence | Preserve original red, exact source/tree/CI identity and complete author/independent/White reports with methods. Unit doubles, actual Redis, API/UI and native official results stay distinguishable. |
+| Skills Governance | Unchanged. No assignment, approval, policy mapping or new Skill is introduced. Live discovery is blocked by the unavailable connector; historical observations are not current effective authority. |
+
 ## Release dependencies (separate)
 
 - #191: eligible nonauthor native approval of exact bootstrap head, trusted main installation, observed publisher write and denied-merge enforcement; no admin bypass.

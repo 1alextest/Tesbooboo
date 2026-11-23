@@ -158,6 +158,38 @@ test.describe("custom field values", () => {
 
   // ─── The round trip ────────────────────────────────────────────────────────
 
+  test("a dedicated value PUT refreshes every warmed unfiltered list page without another testcase mutation", async () => {
+    const field = await defineField({ fieldType: "text" });
+    const testcase = await createdTestCase({ customFieldValues: { [field.id]: "before dedicated write" } });
+    const listUrl = `/api/projects/${tenant!.mainProjectId}/testcases`;
+    const pages = async (expected: Record<string, unknown>) => {
+      for (const limit of [25, 1]) {
+        const response = await asOwner.get(listUrl, { params: { limit, offset: 0 } });
+        expect(response.status(), await response.text()).toBe(200);
+        expect(response.headers()["x-total-count"]).toBe("1");
+        const rows = await response.json();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({ id: testcase.id, title: testcase.title });
+        expect(rows[0].customFieldValues).toEqual(expected);
+      }
+    };
+
+    await pages({ [field.id]: "before dedicated write" });
+    const auditBefore = customFieldAuditCount(testcase.id);
+    await putValuesOk(testcase.id, { [field.id]: "after dedicated write" });
+    expect(storedValue(field.id, testcase.id)).toBe('"after dedicated write"');
+    expect(customFieldAuditCount(testcase.id)).toBe(auditBefore + 1);
+    expect(valueOf(await readValues(testcase.id), field.id)).toBe("after dedicated write");
+    // No ordinary testcase edit/approval/create is allowed between this PUT and the list reads:
+    // such a write has its own invalidation and would hide a missing standalone-values hook.
+    await pages({ [field.id]: "after dedicated write" });
+
+    await putValuesOk(testcase.id, { [field.id]: "" });
+    expect(valueRowCount(testcase.id)).toBe(0);
+    expect(customFieldAuditCount(testcase.id)).toBe(auditBefore + 2);
+    await pages({});
+  });
+
   test("stores and reads back a value of every field type", { tag: '@tesbo.testId("TES-TC-102")' }, async () => {
     const text = await defineField({ fieldType: "text" });
     const longText = await defineField({ fieldType: "long_text" });
