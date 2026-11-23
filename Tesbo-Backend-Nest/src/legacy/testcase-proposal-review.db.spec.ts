@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Client, Pool } from "pg";
 import { DatabaseService } from "../database/database.service";
 import { CustomFieldsService } from "../custom-fields/custom-fields.service";
@@ -907,6 +907,79 @@ type Body=Record<string,any>;
           await admin.query("DELETE FROM knowledge_documents WHERE id=$1",[requirementId]);
         }
         await cleanupSkills([skills.requirement.doc.id,skills.cases.doc.id]);
+      }
+    });
+
+    it("replays omitted and explicit-key creation requests while preserving V161 rows",async()=>{
+      const created:string[]=[];
+      try{
+        const firstTitle=`Omitted key ${randomUUID()}`, firstKey=randomUUID();
+        const firstOps={title:firstTitle,module:"requirements",subtype:"functional",instructions:"RULE-OMIT: one observable outcome.",requestKey:firstKey};
+        const first=await service().createSkillCandidate(project,user,firstOps,{kind:"human_session"} as never);
+        created.push(first.id);
+        const retried=await service().createSkillCandidate(project,user,firstOps,{kind:"human_session"} as never);
+        expect(retried.id).toBe(first.id);
+        expect(retried.replayed).toBe(true);
+        expect(retried.skillKey).toBe(first.skillKey);
+        expect(first.skillKey).not.toBe("null");
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM skill_profiles WHERE project_id=$1 AND creation_request_key=$2",[project,firstKey])).rows[0].n).toBe(1);
+        await expect(service().createSkillCandidate(project,user,{...firstOps,instructions:"RULE-OMIT: changed content."},{kind:"human_session"} as never)).rejects.toMatchObject({status:409,response:{code:"SKILL_REQUEST_CONFLICT"}});
+
+        const explicitKey=randomUUID(), explicitTitle=`Explicit key ${randomUUID()}`;
+        const explicitOps={title:explicitTitle,module:"requirements",subtype:"functional",skillKey:`EXPLICIT-${explicitKey.slice(0,8)}`,instructions:"RULE-EXPLICIT: one outcome.",requestKey:explicitKey};
+        const explicit=await service().createSkillCandidate(project,user,explicitOps,{kind:"human_session"} as never);
+        created.push(explicit.id);
+        const explicitReplay=await service().createSkillCandidate(project,user,explicitOps,{kind:"human_session"} as never);
+        expect(explicitReplay.id).toBe(explicit.id);
+        expect(explicitReplay.skillKey).toBe(explicit.skillKey);
+        await expect(service().createSkillCandidate(project,user,{...explicitOps,skillKey:undefined},{kind:"human_session"} as never)).rejects.toMatchObject({status:409,response:{code:"SKILL_REQUEST_CONFLICT"}});
+
+        await expect(service().createSkillCandidate(project,user,{title:`Empty request ${randomUUID()}`,module:"requirements",subtype:"functional",instructions:"RULE-EMPTY-REQUEST: one outcome.",requestKey:""},{kind:"human_session"} as never)).rejects.toMatchObject({status:400});
+        await expect(service().createSkillCandidate(project,user,{title:`Blank key ${randomUUID()}`,module:"requirements",subtype:"functional",skillKey:"   ",instructions:"RULE-BLANK-KEY: one outcome.",requestKey:randomUUID()},{kind:"human_session"} as never)).rejects.toMatchObject({status:400});
+        await expect(service().createSkillCandidate(project,user,{title:`Empty key ${randomUUID()}`,module:"requirements",subtype:"functional",skillKey:"",instructions:"RULE-EMPTY-KEY: one outcome.",requestKey:randomUUID()},{kind:"human_session"} as never)).rejects.toMatchObject({status:400});
+
+        const falsyKey=randomUUID(), falsyTitle=`Falsy key ${randomUUID()}`;
+        const falsy=await service().createSkillCandidate(project,user,{title:falsyTitle,module:"requirements",subtype:"functional",skillKey:false as never,instructions:"RULE-FALSY: one outcome.",requestKey:falsyKey},{kind:"human_session"} as never);
+        created.push(falsy.id);
+        expect(falsy.skillKey).not.toBe("false");
+        const falsyReplay=await service().createSkillCandidate(project,user,{title:falsyTitle,module:"requirements",subtype:"functional",instructions:"RULE-FALSY: one outcome.",requestKey:falsyKey},{kind:"human_session"} as never);
+        expect(falsyReplay.id).toBe(falsy.id);
+        expect(falsyReplay.skillKey).toBe(falsy.skillKey);
+
+        const nullKey=randomUUID(), nullTitle=`Null key ${randomUUID()}`;
+        const nullOps={title:nullTitle,module:"requirements",subtype:"functional",skillKey:null as unknown as string,instructions:"RULE-NULL: one outcome.",requestKey:nullKey};
+        const nullCandidate=await service().createSkillCandidate(project,user,nullOps,{kind:"human_session"} as never);
+        created.push(nullCandidate.id);
+        expect(nullCandidate.skillKey).not.toBe("null");
+        const nullReplay=await service().createSkillCandidate(project,user,{...nullOps,skillKey:undefined},{kind:"human_session"} as never);
+        expect(nullReplay.id).toBe(nullCandidate.id);
+        expect(nullReplay.skillKey).toBe(nullCandidate.skillKey);
+
+        const concurrentKey=randomUUID();
+        const concurrentOps={title:`Concurrent omitted ${randomUUID()}`,module:"requirements",subtype:"functional",instructions:"RULE-CONCURRENT: one outcome.",requestKey:concurrentKey};
+        const [left,right]=await Promise.all([
+          service().createSkillCandidate(project,user,concurrentOps,{kind:"human_session"} as never),
+          service().createSkillCandidate(project,user,concurrentOps,{kind:"human_session"} as never)
+        ]);
+        created.push(left.id);
+        expect(left.id).toBe(right.id);
+        expect(left.skillKey).toBe(right.skillKey);
+        expect([left.replayed,right.replayed].filter(Boolean)).toHaveLength(1);
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM skill_profiles WHERE project_id=$1 AND creation_request_key=$2",[project,concurrentKey])).rows[0].n).toBe(1);
+
+        const legacyTitle=`Legacy V161 ${randomUUID()}`, legacyKey=randomUUID();
+        const legacyOps={title:legacyTitle,module:"requirements",subtype:"functional",instructions:"RULE-LEGACY: one outcome."};
+        const legacy=await service().createSkillCandidate(project,user,legacyOps,{kind:"human_session"} as never);
+        created.push(legacy.id);
+        const generated=(await admin.query("SELECT skill_key FROM skill_profiles WHERE document_id=$1",[legacy.id])).rows[0].skill_key;
+        const legacyDigest=createHash("sha256").update(JSON.stringify({title:legacyTitle,module:"requirements",subtype:"functional",skillKey:generated,instructions:legacyOps.instructions})).digest("hex");
+        await admin.query("UPDATE skill_profiles SET creation_principal=$2,creation_request_key=$3,creation_request_digest=$4,creation_basis_version=1 WHERE document_id=$1",[legacy.id,`human_session:${user}`,legacyKey,legacyDigest]);
+        const legacyReplay=await service().createSkillCandidate(project,user,{...legacyOps,requestKey:legacyKey},{kind:"human_session"} as never);
+        expect(legacyReplay.id).toBe(legacy.id);
+        expect(legacyReplay.replayed).toBe(true);
+        expect(legacyReplay.skillKey).toBe(generated);
+      }finally{
+        await cleanupSkills(created);
       }
     });
   });

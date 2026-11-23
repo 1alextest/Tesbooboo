@@ -681,3 +681,19 @@ of the exact candidate content.
 - The Skills form keeps one key across an uncertain creation response and clears it only after creation
   is acknowledged or the candidate content changes, so an ordinary retry resumes the same native draft.
   A failed reconciliation read still exposes no false success.
+
+#### Omitted optional Skill key
+
+The request digest covers the **requested** content, not an automatically generated identity. When
+`skillKey` is omitted, the digest uses `null`; two identical retries therefore match and the first
+candidate's generated key is returned. Explicit keys remain part of the digest.
+
+Rows written by the original V161 algorithm hashed the generated key. V162 marks the basis version:
+new rows store `creation_basis_version=2`, and only pre-marker rows may use the legacy digest computed
+from their stored key. A new explicit-key row can therefore never replay as an omitted retry. For V161
+rows the original request cannot be reconstructed, so an explicit-origin row and a generated-origin row
+are indistinguishable; an omitted-key retry on such a row may replay when content matches. That
+compatibility ambiguity is limited to pre-V162 rows and never creates a second candidate, approval or
+assignment. Null/false/0/undefined `skillKey` values mean omitted and generate an identity. An explicitly supplied empty or whitespace-only string is deliberately refused (400) rather than generating an identity: an empty field cannot silently disable retry identity. `requestKey` null is omitted; empty/whitespace and oversized values are 400.
+
+Concurrent omitted-key retries serialize on the request lock and converge on one candidate.
