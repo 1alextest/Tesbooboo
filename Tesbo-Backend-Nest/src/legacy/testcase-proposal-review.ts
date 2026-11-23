@@ -50,6 +50,10 @@ export function nativeProposalProducerIdentity(principal: TestcaseProposalPrinci
   if (principal.kind !== "human_session" && principal.kind !== "api_token") {
     throw new ForbiddenException({ error: "A trusted proposal producer identity is required" });
   }
+  // Match the existing native staging UUID guard, even if a future caller bypasses it.
+  if (principal.kind === "api_token" && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(principal.tokenId ?? "")) {
+    throw new ForbiddenException({ error: "A trusted proposal producer identity is required" });
+  }
   const principalKey = principal.kind === "api_token" ? `api_token:${principal.tokenId}` : `human_session:${issuerId}`;
   const producerActorId = principal.kind === "human_session" ? issuerId : principal.actorId ?? null;
   const provenance = {
