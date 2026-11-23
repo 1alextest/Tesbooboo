@@ -874,6 +874,22 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
         expect(listed.error).toBeUndefined();
         expect(listed.result.tools.length).toBeGreaterThan(0);
       }
+
+      // Authentication and project consent retain precedence over protocol-era
+      // diagnostics. An anonymous modern request never learns the project catalog.
+      const anon = await api.post("/api/mcp", {
+        headers: { "MCP-Protocol-Version": "2026-07-28" },
+        data: { jsonrpc: "2.0", id: 104, method: "server/discover" },
+        failOnStatusCode: false
+      });
+      expect(anon.status()).toBe(401);
+
+      const otherProject = await api.post("/api/projects/00000000-0000-4000-8000-000000000000/mcp", {
+        headers: { Authorization: `Bearer ${token}`, "MCP-Protocol-Version": "2026-07-28" },
+        data: { jsonrpc: "2.0", id: 105, method: "server/discover" },
+        failOnStatusCode: false
+      });
+      expect((await otherProject.json()).error.code, "scope denial precedes version disclosure").toBe(-32001);
     });
   });
 
